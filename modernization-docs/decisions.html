@@ -27,6 +27,7 @@
       <a class="nav-link" href="roadmap.html">Roadmap</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link active" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
       <a class="nav-link" href="issues.html">Upstream Issues</a>
       <a class="nav-link" href="prs.html">Upstream PRs</a>
     </nav>
@@ -230,6 +231,34 @@
       </div>
     </section>
 
+    <!-- ADR-009 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-009</span>
+        <span class="adr-title">How we treat the upstream branches</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>A commit-and-diff deep-dive of every upstream branch (see <a href="branches.html">Upstream Branches</a>).
+        <code>development</code> has been frozen since 2026-04-06; the branches are unmerged, mostly single-author
+        WIP, and none is mergeable as-is.</p>
+        <h4>Decision</h4>
+        <p><b>Track, don't duplicate</b> &mdash; <code>gpu-renderer</code>, <code>box2d-emscripten</code> and
+        <code>dynamic-two-stage-fow</code>: watch them, and adopt if/when they stabilise rather than building our
+        own. <b>Reference</b> &mdash; re-execute <code>sol3</code> as the template for T2-02, and mine the original
+        <code>interpolated-render</code> for T2-01 design (single-threaded scope only). <b>Ignore</b> &mdash;
+        <code>interpolated-render-redux</code> (no interpolation code), <code>hot-reloading</code>,
+        <code>gles-v2</code>, <code>read-write-fog-of-war</code>. <code>save-load-semantics-overhaul</code> is a
+        Tier-3 reference only (sound idea, buggy hashing).</p>
+        <h4>Consequences</h4>
+        <p>T2-01 (render interpolation) must be written by us &mdash; no usable branch exists. T2-02
+        (luabind&rarr;sol2) has a strong head start. We do not fork or merge any upstream branch wholesale; we
+        harvest selectively onto a clean base.</p>
+      </div>
+    </section>
+
     <h2>Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
@@ -241,7 +270,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log started 2026-05-16 &middot; 8 decisions recorded &middot; ADRs are append-only.
+      Decision log started 2026-05-16 &middot; 9 decisions recorded &middot; ADRs are append-only.
     </div>
   </main>
 

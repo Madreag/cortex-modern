@@ -287,6 +287,20 @@ pre code { background: none; border: 0; padding: 0; color: var(--text); font-siz
 .pstate-draft { background: rgba(110,122,136,.16); color: #aab3bf;      border: 1px solid rgba(110,122,136,.4); }
 .row-desc { margin-top: 4px; line-height: 1.55; }
 
+/* branch status / verdict badges */
+.bs-active  { background: rgba(69,196,104,.14);  color: var(--green);  border: 1px solid rgba(69,196,104,.36); }
+.bs-dormant { background: rgba(233,162,59,.14);  color: var(--accent); border: 1px solid rgba(233,162,59,.4); }
+.bs-stale   { background: rgba(110,122,136,.16); color: #aab3bf;       border: 1px solid rgba(110,122,136,.4); }
+.bv-track   { background: rgba(90,167,255,.14);  color: var(--blue);   border: 1px solid rgba(90,167,255,.36); }
+.bv-wait    { background: rgba(233,162,59,.12);  color: var(--accent); border: 1px solid rgba(233,162,59,.32); }
+.bv-ref     { background: rgba(189,141,255,.14); color: var(--purple); border: 1px solid rgba(189,141,255,.36); }
+.bv-ignore  { background: rgba(241,90,78,.12);   color: var(--red);    border: 1px solid rgba(241,90,78,.32); }
+.branch-facts { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); margin: 6px 0 12px; }
+.branch-card h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.branch-card h3 .bn { font-family: var(--mono); font-size: 15px; }
+.branch-card p { margin: 7px 0; }
+.branch-card p b { color: var(--text-bright); }
+
 /* ---------- Tables ---------- */
 .tbl { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.6px; }
 .tbl th {

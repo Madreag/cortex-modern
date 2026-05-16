@@ -14,6 +14,7 @@ A self-contained HTML wiki. No build step, no server — just open the files.
 | `roadmap.html` | Tiered modernization roadmap |
 | `tracker.html` | Work-item tracker (status board) |
 | `decisions.html` | Architecture/strategy decision log (ADR style) |
+| `branches.html` | Per-branch deep-dive of the upstream feature branches |
 | `issues.html` | Snapshot of open issues on the upstream repo |
 | `prs.html` | Snapshot of open pull requests on the upstream repo |
 | `assets/style.css` | Shared stylesheet |

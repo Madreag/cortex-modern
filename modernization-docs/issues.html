@@ -27,6 +27,7 @@
       <a class="nav-link" href="roadmap.html">Roadmap</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
       <a class="nav-link active" href="issues.html">Upstream Issues</a>
       <a class="nav-link" href="prs.html">Upstream PRs</a>
     </nav>
@@ -52,6 +53,13 @@
       <p><b>Snapshot &mdash; 2026-05-16.</b> This is a static capture of the upstream issue tracker, not a live
       feed. Titles link to the issue on GitHub. To refresh, re-fetch the open issues and update the
       <code>ISSUES</code> array near the bottom of this file.</p>
+    </div>
+
+    <div class="callout callout-ok">
+      <p><b>Cross-references from our branch &amp; PR analysis:</b> #210 and #267 are already fixed in
+      <code>development</code>; #242 is addressed by open PR&nbsp;#277. The highest-value fork targets &mdash; the
+      cross-platform <code>Turret</code> crash (#175) and the long-ignored Lua-engine bug cluster (#85 / #88 / #90)
+      &mdash; are discussed in the <a href="roadmap.html">Roadmap</a>.</p>
     </div>
 
     <div class="summary" id="summary"></div>
@@ -83,13 +91,13 @@ const ISSUES = [
   { num:278, title:"Game not working in macOS Tahoe.", type:"bug", updated:"2026-05-06",
     desc:"The game refuses to launch on macOS 26 (Tahoe) even after clearing it from quarantine — it reports an unsupported-OS error." },
   { num:267, title:"The UI from the gamepad is not working", type:"bug", updated:"2026-03-22",
-    desc:"With a gamepad, the radial pie menu never appears and there is no target highlight when switching between units." },
+    desc:"With a gamepad, the radial pie menu never appears and there is no target highlight when switching units. Reported already fixed in development — only stable 6.2.2 is affected." },
   { num:242, title:"Glows not rotating with MOPixels", type:"bug", updated:"2025-12-03",
     desc:"Weapon and shield glow effects no longer rotate to match their MOPixels — a regression from the old Lua-driven behaviour. PR #277 addresses this." },
   { num:214, title:"Can we enable BlastDoors in version 7.0?", type:"other", updated:"2025-08-30",
     desc:"Feature request to bring back enable-able heavy BlastDoors for longer base-defence battles; also asks about unlocking the hidden Annihilator weapon." },
   { num:210, title:"[6.2.2] Mod Manager crashes if no Mods present", type:"bug", updated:"2025-08-03",
-    desc:"On Linux, scrolling the Mod Manager window crashes the game when no mods are installed; mods placed in the data directory are not detected." },
+    desc:"On Linux, scrolling the Mod Manager window crashes the game when no mods are installed. Upstream reports this is already fixed in development — only stable 6.2.2 is affected." },
   { num:208, title:"Improve squad logic", type:"enhancement", updated:"2025-12-22",
     desc:"When a squad leader dies the whole squad disbands — request to keep squads intact after a death." },
   { num:196, title:"Unstable Aim Bug", type:"bug", updated:"2025-04-25",

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Upstream Branches — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link active" href="branches.html">Upstream Branches</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Upstream Tracking</div>
+      <h1>Upstream Branches</h1>
+      <p class="page-lead">Deep-dive on the upstream feature branches &mdash; what each one actually did, what's
+      left, whether it's alive, and what we should do with it. Built from a commit-and-diff analysis of every
+      branch, not just its name.</p>
+    </header>
+
+    <div class="callout callout-key">
+      <div class="callout-title">The headline</div>
+      <p>Upstream <code>development</code> has been <b>frozen since 2026-04-06</b> (the <code>nightly</code> tag has
+      not moved in ~6 weeks). The "upstream roadmap" is <b>not</b> a coordinated plan &mdash; it is a scatter of
+      <b>unmerged, mostly single-author WIP branches</b>, several of them AI-assisted spikes. <b>None is mergeable
+      as-is.</b> The three live-ish ones are all paused or mid-development.</p>
+    </div>
+
+    <div class="callout callout-info">
+      <p><b>Snapshot &mdash; 2026-05-16.</b> Static capture; "behind/ahead" and dates are vs <code>upstream/development</code>
+      at <code>41e6b7010</code>. Verdict tags: <span class="tag bv-track">TRACK</span> watch it, don't merge &middot;
+      <span class="tag bv-wait">WAIT</span> too unfinished to judge &middot; <span class="tag bv-ref">REFERENCE</span>
+      mine it for design/code, don't merge the branch &middot; <span class="tag bv-ignore">IGNORE</span> no value.</p>
+    </div>
+
+    <div class="summary" id="summary"></div>
+    <div class="filters" id="filters"></div>
+
+    <div id="cards"></div>
+
+    <div class="page-foot">
+      Branch analysis &middot; captured 2026-05-16 from <code>upstream/*</code> &middot;
+      see the <a href="roadmap.html">Roadmap</a> for how this feeds our plan.
+    </div>
+  </main>
+
+</div>
+
+<script>
+/* ============================================================
+   BRANCHES — deep-dive snapshot of upstream branches (2026-05-16).
+   To refresh: re-analyse the branches and rewrite this array.
+   status: "active" | "dormant" | "stale"
+   verdict: "track" | "wait" | "ref" | "ignore"
+   ============================================================ */
+const REPO = "https://github.com/cortex-command-community/Cortex-Command-Community-Project";
+
+const BRANCHES = [
+  { name:"gpu-renderer", status:"dormant", verdict:"track",
+    facts:"134 commits · HeliumAnt (solo) · last work 2026-03-28 · ~7 weeks idle",
+    what:"A ground-up rewrite of the rendering primitive layer — a new Source/Renderer/ batch renderer (RenderMan / RenderBatch / Camera / Shapes) replacing raylib's immediate-mode API, with camera-driven drawing and an elegant 9-camera scene-wrap model.",
+    state:"Roughly 60-70% done. The core renderer, MO sprite GPU draws and scene-wrap work. But the GPU HUD, Activity/GUI rendering and Lua primitive drawing are all empty stubs, raylib is not actually removed (two render APIs coexist), and it paused exactly at the start of the HUD phase. It does NOT decouple the 8-bit palette — it entrenches it, just moving the lookup to a shader.",
+    take:"Track. The most likely future home of CC's real renderer, but not mergeable (stub HUD/GUI, dual draw paths, debug cruft). Don't adopt; don't wait on it for our palette work. The 9-camera wrap model is worth borrowing conceptually." },
+
+  { name:"box2d-emscripten", status:"dormant", verdict:"track",
+    facts:"51 commits · single author, 100% AI-assisted · last work 2026-04-02 · ~6 weeks idle",
+    what:"Two things in one branch: (1) a full WebAssembly/browser port — an Allegro-compat shim, a from-scratch FMOD software mixer, IndexedDB saves — and (2) a Box2D v3.1.0 integration for object-to-object physics.",
+    state:"The WASM port is substantially done: the game boots, renders, plays and has audio in a browser, including iOS. The Box2D layer is a 2-day prototype — one of its five phases is dead code, debug draw ships on, it hard-caps at 200 bodies, and the branch does not even build natively (Box2D is mis-scoped to the web build only).",
+    take:"Track the web-port half — genuinely valuable, worth harvesting later onto a clean base. Wait on the Box2D half — an unfinished, unreviewed prototype, not something to pull into our physics." },
+
+  { name:"dynamic-two-stage-fow", status:"active", verdict:"track",
+    facts:"70 commits · getcetc + Causeless · last work 2026-02-24 · the most active branch",
+    what:"Replaces CC's static fog-of-war with a dynamic, GPU-accelerated two-stage system — what you see now plus a darkened 'memory' layer of terrain you previously saw — using a Jump-Flood-Algorithm signed-distance field for smooth fog edges, dynamic actor vision and time decay.",
+    state:"The core loop is playable and this was the single most actively-developed branch (daily commits through late Feb 2026). But it is mid-development: ~30 'GTODO' markers, broken splitscreen, a stub function, a known memory leak, debug cruft — the last commits are literally titled ':(' and 'didn't work'.",
+    take:"Track closely. A genuine, well-designed feature improvement. If it reaches a stable point, adopt it rather than building our own fog-of-war — with a cleanup pass required first. Re-check whether commits resumed after the snapshot date." },
+
+  { name:"save-load-semantics-overhaul", status:"dormant", verdict:"ref",
+    facts:"54 commits · single author · last work 2026-01-15 · 31 commits behind",
+    what:"A rewrite of the save/serialization layer to delta-encode — write only the properties that differ from an entity's preset, collapsing 500,000-line save files to roughly 17,000.",
+    state:"The Writer infrastructure and ~80 entity Hash() implementations are done. But ~9 Hash() functions are stubs, the hashing has a latent float-truncation data-loss bug, there is no mod-format converter, and the format change breaks all existing saves and mods.",
+    take:"Reference. The idea is sound and worth doing eventually, but do not merge — the hashing must be reimplemented properly first. A late-stage (Tier-3) candidate, not near-term." },
+
+  { name:"sol3", status:"stale", verdict:"ref",
+    facts:"37 source-file changes · 1685 commits behind · dead since 2024-01",
+    what:"A COMPLETE, build-verified migration of the Lua binding layer from the abandoned luabind to sol2 v3.3.0 — exactly our roadmap item T2-02.",
+    state:"Dead as a branch (1685 behind), but the migration itself is finished and was build-tested: every LuaBindings*.cpp converted, a SolObjectWrapper in place, ownership semantics preserved in comments.",
+    take:"The highest-value reference here. We can't merge it, but it is a perfect worked example — re-execute T2-02 on current development using this branch as the template. A big head start on the hardest Tier-2 item." },
+
+  { name:"interpolated-render", status:"stale", verdict:"ref",
+    facts:"120 commits · 2023–2024 · 923 commits behind · abandoned 2024-09",
+    what:"The real (original) render-interpolation effort — a full sim/render decoupling with proper lerp primitives, previous-state snapshots, and teleport / scene-wrap handling.",
+    state:"Abandoned. A two-year instability graveyard (commit messages like 'Very broken' and 'Better to be crashy than laggy'); 923 commits behind and unrebasable. It failed on an over-ambitious sim/render thread split.",
+    take:"Reference only. Mine it for the lerp primitives and the teleport/wrap fixes — but scope our T2-01 to single-threaded interpolation and avoid the thread split that sank it." },
+
+  { name:"interpolated-render-redux", status:"stale", verdict:"ignore",
+    facts:"3 real commits (Aug 2025) · abandoned ~9 months · the rest is merge-commit noise",
+    what:"Despite the name, this branch contains ZERO render-interpolation code — just three minor refactors (a sprite frustum-cull, a draw-call relocation, a dead-variable removal).",
+    state:"A false lead. Its 'ahead 7 / last 2026-02-05' figures are merge commits; real work stopped 2025-08-12 and interpolation was never started.",
+    take:"Ignore. Our render-interpolation work (T2-01) gets nothing from this branch — use the original interpolated-render for design lessons instead." },
+
+  { name:"emscripten-port", status:"stale", verdict:"ignore",
+    facts:"22 commits · a strict ancestor of box2d-emscripten",
+    what:"An older snapshot of the box2d-emscripten line — the WebAssembly port without the later Box2D commits.",
+    state:"Fully contained within box2d-emscripten (zero unique commits).",
+    take:"Ignore as a separate branch — everything here is already in box2d-emscripten." },
+
+  { name:"zipped-modules", status:"stale", verdict:"ref",
+    facts:"1 commit · 186 commits behind · 2025-07 · the freshest stale branch",
+    what:"A proof-of-concept for loading .rte modules directly from .zip archives.",
+    state:"Only the Reader read-path is zip-aware (~42 lines); ContentFile and DataModule loading are not, so a zipped module would not fully load. Roughly 20% done.",
+    take:"A viable seed if module-zipping is ever wanted — small and only 186 behind — but most of the work remains. Not a current priority." },
+
+  { name:"hot-reloading", status:"stale", verdict:"ignore",
+    facts:"6 commits · 1692 commits behind · demo-only · 2024-01",
+    what:"A proof-of-concept for C++/DLL hot-reloading — reload a DLL when its file changes.",
+    state:"Demo-only (~155 lines of skeleton). The hard part — splitting the engine into a stable host plus a reloadable module — was never attempted.",
+    take:"Ignore. Nothing salvageable; faster to rewrite than revive." },
+
+  { name:"gles-v2", status:"stale", verdict:"ignore",
+    facts:"3 commits · 1313 commits behind · 2024-02",
+    what:"A minimal OpenGL ES port — adds precision qualifiers to six shaders plus an ES context request.",
+    state:"Abandoned, tiny and incomplete. The renderer has been heavily reworked since.",
+    take:"Ignore. Reproducible in minutes if OpenGL ES support is ever wanted." },
+
+  { name:"read-write-fog-of-war", status:"stale", verdict:"ignore",
+    facts:"1 commit · 486 commits behind · 2025-01",
+    what:"A trivial change exposing a Lua-writable FogOfWarEnabled property.",
+    state:"Superseded by dynamic-two-stage-fow. The actual engine change is about three lines.",
+    take:"Ignore. A 3-line reimplementation if it is ever needed." },
+];
+
+const STATUS_META = {
+  active:  { label:"Active",  cls:"bs-active"  },
+  dormant: { label:"Dormant", cls:"bs-dormant" },
+  stale:   { label:"Stale",   cls:"bs-stale"   },
+};
+const VERDICT_META = {
+  track:  { label:"Track",     cls:"bv-track"  },
+  wait:   { label:"Wait",      cls:"bv-wait"   },
+  ref:    { label:"Reference", cls:"bv-ref"    },
+  ignore: { label:"Ignore",    cls:"bv-ignore" },
+};
+let statusFilter = "all";
+
+function renderSummary() {
+  const c = { active:0, dormant:0, stale:0 };
+  BRANCHES.forEach(b => c[b.status]++);
+  document.getElementById("summary").innerHTML =
+    '<span><b style="color:var(--green)">'  + c.active  + '</b> active</span>' +
+    '<span><b style="color:var(--accent)">' + c.dormant + '</b> dormant</span>' +
+    '<span><b style="color:var(--text-dim)">' + c.stale + '</b> stale</span>' +
+    '<span><b>' + BRANCHES.length + '</b> branches</span>';
+}
+function renderFilters() {
+  const opts = [["all","All"],["active","Active"],["dormant","Dormant"],["stale","Stale"]];
+  document.getElementById("filters").innerHTML = opts.map(([v,l]) =>
+    '<button class="filter-btn' + (statusFilter==v?' active':'') + '" data-val="'+v+'">'+l+'</button>').join("");
+}
+function renderCards() {
+  const rows = BRANCHES.filter(b => statusFilter==="all" || b.status===statusFilter);
+  document.getElementById("cards").innerHTML = rows.map(b => {
+    const s = STATUS_META[b.status], v = VERDICT_META[b.verdict];
+    const url = REPO + "/tree/" + b.name;
+    return '<div class="card branch-card">' +
+      '<h3><a class="bn" href="'+url+'" target="_blank" rel="noopener">'+b.name+'</a>' +
+        '<span class="tag '+s.cls+'">'+s.label+'</span>' +
+        '<span class="tag '+v.cls+'">'+v.label+'</span></h3>' +
+      '<div class="branch-facts">'+b.facts+'</div>' +
+      '<p><b>What:</b> '+b.what+'</p>' +
+      '<p><b>State:</b> '+b.state+'</p>' +
+      '<p><b>Our take:</b> '+b.take+'</p>' +
+    '</div>';
+  }).join("");
+}
+function render() { renderSummary(); renderFilters(); renderCards(); }
+
+document.addEventListener("click", e => {
+  const btn = e.target.closest(".filter-btn");
+  if (!btn) return;
+  statusFilter = btn.dataset.val;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
