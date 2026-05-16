@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Technical Analysis — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link active" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort-start</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Knowledge Base</div>
+      <h1>Technical Analysis</h1>
+      <p class="page-lead">The engine dissected: five cross-cutting architectural issues, ten subsystems,
+      the dependency audit, and the mod-vs-engine boundary. Findings come from a full read of the
+      ~220K-LOC <code>development</code> branch.</p>
+    </header>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Tag legend</div>
+      <p>
+      <span class="tag tag-mod">[MOD]</span> pure INI / Lua / asset work, no recompile &nbsp;
+      <span class="tag tag-code">[CODE]</span> bounded C++ engine change &nbsp;
+      <span class="tag tag-arch">[ARCH]</span> large multi-month rework &nbsp;
+      <span class="tag tag-dep">[DEP]</span> dependency swap/upgrade &nbsp;
+      <span class="tag tag-build">[BUILD]</span> build-system change
+      </p>
+    </div>
+
+    <!-- ============ CROSS-CUTTING ISSUES ============ -->
+    <h2>1 &nbsp;&middot;&nbsp; <span class="h-accent">Five cross-cutting issues</span></h2>
+    <p>These are not subsystem bugs &mdash; they are architectural properties that touch many systems at once.
+    Everything in the <a href="roadmap.html">Roadmap</a> traces back to one of these.</p>
+
+    <h3>1.1 &nbsp; The 8-bit palette &mdash; the keystone knot</h3>
+    <div class="card">
+      <p>Everything is <b>256-color indexed</b>. The single hardest fact in the codebase:</p>
+      <div class="callout callout-warn" style="margin:8px 0">
+        <p>A terrain pixel's byte value <b>is</b> its material ID, which <b>is</b> a palette index.
+        Material, colour and physics all collapse onto one 8-bit number.</p>
+      </div>
+      <ul>
+        <li><b>256-material hard cap</b> and <b>256-colour hard cap</b> on all sprites and terrain (banding, no gradients, one shared palette).</li>
+        <li>Terrain is three 8bpp Allegro <code>BITMAP</code>s; <code>SceneLayer</code> literally asserts <code>color_depth == 8</code>.</li>
+        <li>Glow / post-processing detection is a <b>CPU pixel-scan for magic palette indices</b> (117, 98, 120).</li>
+        <li>Blend modes need CPU-built 64&nbsp;KB colour lookup tables, pruned by a 5-minute timer to stop runaway memory.</li>
+      </ul>
+      <p>Decoupling the material map from the palette index is the <b>pivot point</b> &mdash; it is a <i>simulation</i>
+      data structure masquerading as a <i>rendering</i> one, and nearly every 32-bit-colour ambition blocks on it.
+      Highest leverage in the codebase; also <span class="tag tag-arch">[ARCH]</span>-scale and high-risk.</p>
+    </div>
+
+    <h3>1.2 &nbsp; Single-threaded simulation &mdash; the performance ceiling</h3>
+    <div class="card">
+      <p>The GPU renderer already made <i>drawing</i> cheap. The bottleneck is now the <b>simulation, and it runs on one core.</b></p>
+      <ul>
+        <li><code>MovableMan::Travel()</code> is a plain serial loop over every actor, item and particle.</li>
+        <li>A <code>BS::thread_pool</code> exists and <i>is</i> used &mdash; but only for Lua scripts, AI vision rays and MOID-layer drawing. <b>The physics integrator itself is strictly serial.</b></li>
+        <li>On a modern 8&ndash;16 core CPU ~90% of cores idle during the physics phase. A source comment admits it:
+          <span class="evidence">"...unnecessary when multithreaded-sim-and-render is in."</span></li>
+        <li>Collision is <b>per-pixel</b>: every object is a bag of "atoms" that Bresenham-walk every pixel of their path, doing 2+ palettized <code>getpixel</code> reads per step. <code>dynamic_cast</code> appears in the hot loop.</li>
+      </ul>
+    </div>
+
+    <h3>1.3 &nbsp; Simulation resolution &mdash; locked to pixels</h3>
+    <div class="card">
+      <p><b>The simulation is locked 1:1 to pixels. There is no sub-pixel physics and no scalable "sim resolution."</b></p>
+      <ul>
+        <li>Object positions are floats, but <b>every collision query truncates to integer pixels</b> &mdash; the Bresenham stepper <i>is</i> the integrator.</li>
+        <li><code>c_PPM = 20.0</code> (pixels-per-metre) is the only bridge between physical units and pixels, and it is a compile-time constant.</li>
+        <li>You <b>cannot "scale" the simulation resolution</b> &mdash; it is a property of the data model (atom offsets authored in pixels, terrain-bitmap dimensions = scene size), not a tunable.</li>
+        <li>Fixed <b>60&nbsp;Hz</b>. No continuous collision detection &mdash; objects faster than 500&nbsp;m/s are simply deleted/gibbed instead of tunnelling.</li>
+      </ul>
+      <p>Realistic levers: render interpolation (&sect;1.4) and the Box2D rigid-body path. Genuinely raising sim
+      resolution is <span class="tag tag-arch">[ARCH]</span> and arguably wrong &mdash; the pixel grid <i>is</i> Cortex Command's identity.</p>
+    </div>
+
+    <h3>1.4 &nbsp; No render interpolation</h3>
+    <div class="card">
+      <p>Rendering draws objects at their raw discrete <code>m_Pos</code>. If the monitor is not exactly 60&nbsp;Hz,
+      motion <b>stutters</b> (positions jump a whole timestep) or frames are redrawn identically. <code>m_PrevPos</code>
+      already exists (used for rest detection) but is never fed to the renderer. Well-scoped
+      <span class="tag tag-code">[CODE]</span> win &mdash; the maintainers' <code>interpolated-render-redux</code> branch is exactly this, unmerged.</p>
+    </div>
+
+    <h3>1.5 &nbsp; The abandoned-dependency trio</h3>
+    <div class="card">
+      <table class="tbl">
+        <thead><tr><th>Dependency</th><th>Vendored</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Allegro 4</td><td>4.4.3.1 custom fork (~2011 base)</td><td>Officially abandoned; Allegro is on 5.2.x. Now used only as a headless software-bitmap library.</td></tr>
+          <tr><td>RakNet</td><td>4.081 (dated 2014)</td><td>Repo is <code>facebookarchive/RakNet</code> &mdash; archived, read-only, zero security fixes.</td></tr>
+          <tr><td>luabind</td><td>0.7.1 (~2010)</td><td>Abandoned; only compiles because the build re-enables C++17-<i>removed</i> features.</td></tr>
+        </tbody>
+      </table>
+      <p><b>The tell:</b> <code>Main.cpp:65</code> manually re-creates a CRT symbol &mdash;
+      <code>FILE __iob_func[3] = {*stdin,*stdout,*stderr};</code> &mdash; a classic hack for linking
+      pre-2015-MSVC prebuilt static libs against a modern UCRT. Building all deps from source kills the hack.</p>
+    </div>
+
+    <!-- ============ SUBSYSTEMS ============ -->
+    <h2>2 &nbsp;&middot;&nbsp; <span class="h-accent">Subsystem findings</span></h2>
+    <div class="card-grid">
+
+      <div class="card">
+        <h3>Rendering</h3>
+        <p class="small">GPU side is <b>done</b> &mdash; FBOs, shaders, <code>BigTexture</code> PBO streaming, vertex
+        batching. But the world surface is still <b>CPU-software-rasterized into 8bpp bitmaps</b>: every MO sprite
+        draws via Allegro <code>draw_sprite</code> into a shared indexed buffer, then a <code>Blit8</code> shader
+        palette-decodes it. Dead code: stubbed <code>CompileShader</code>, commented-out <code>m_Blit8</code>.</p>
+      </div>
+
+      <div class="card">
+        <h3>Physics / Simulation</h3>
+        <p class="small">Atom-based per-pixel collision; single-threaded (&sect;1.2). <code>AtomGroup::Travel</code> is
+        self-described in comments as a "trainwreck" / "dumpsterfire". MO-vs-MO collision is <i>hard-disabled</i>
+        in the limb-push path (<span class="evidence">// TODO: Fix HitMOs issue!!</span>). The maintainers'
+        <code>box2d-emscripten</code> branch is the in-flight answer here.</p>
+      </div>
+
+      <div class="card">
+        <h3>Scripting</h3>
+        <p class="small">luabind 0.7.1 is the worst dependency &mdash; so fragile the build cannot use precompiled
+        headers on binding files. The code even works around its call cost by building Lua source strings at runtime
+        and compiling them per call. <b>sol2/sol3</b> is the modern replacement; LuaJIT 2.1 itself is fine &mdash; <i>keep it</i>.</p>
+      </div>
+
+      <div class="card">
+        <h3>AI</h3>
+        <p class="small">~95% Lua (~5,800 lines in <code>Base.rte/AI/</code>). C++ gives an actor a <code>Controller</code>
+        (the AI "presses the same virtual buttons" a human would), an <code>AIMode</code> enum and async A* pathfinding.
+        Combat is tactically solid (velocity-led aim, hearing senses); <b>squad / strategic AI is shallow</b> &mdash;
+        squadmates just copy the leader's inputs. Most AI work is <span class="tag tag-mod">[MOD]</span>.</p>
+      </div>
+
+      <div class="card">
+        <h3>Audio</h3>
+        <p class="small">Modern-ish FMOD Core: bus routing, a compressor/limiter DSP chain, per-player 3D listeners,
+        a real adaptive-music system (<code>MusicMan</code> / <code>DynamicSong</code>). Gaps: <b>no terrain
+        occlusion</b> (you can't hear gunfire muffled through dirt), no reverb, no sidechain ducking.</p>
+      </div>
+
+      <div class="card">
+        <h3>Input</h3>
+        <p class="small">Solid SDL3 &mdash; 4-player, hot-plug, remap wizard, 1,798-line controller DB. But
+        <b>zero rumble/haptics and no gyro</b>: <code>SDL_RumbleGamepad</code> is never called. Allegro input
+        headers still linger &mdash; an unfinished migration.</p>
+      </div>
+
+      <div class="card">
+        <h3>UI / UX</h3>
+        <p class="small">Two GUI systems: a ~50-file <b>legacy retained-mode toolkit</b> (all menus, BuyMenu, the
+        6 editors) and Dear ImGui (used minimally, for dev/debug). The <code>PieMenu</code> is genuinely well-built.
+        BuyMenu (2,459 lines), the editors, and the Metagame (a 5,999-line GUI file) are the dated UX.</p>
+      </div>
+
+      <div class="card">
+        <h3>Networking</h3>
+        <p class="small">Old multiplayer was a <b>screen-streaming</b> model (server compresses each client's
+        viewport to UDP &mdash; not real netcode; hard 4-player cap, unhideable latency). Changelog says it was
+        "removed" &mdash; confirmed: nothing in <code>Main.cpp</code>/<code>ActivityMan</code> references it, yet
+        ~5,000 LOC + the abandoned RakNet dep are still compiled in. Orphaned dead weight.</p>
+      </div>
+
+      <div class="card">
+        <h3>Build &amp; Deps</h3>
+        <p class="small">Two parallel, already-diverged build systems (Meson + MSBuild). The vcxproj's
+        <code>PlatformToolset</code> is <b>empty</b> (non-reproducible builds). Linux builds use system libs,
+        Windows uses bundled &mdash; different dependency versions per platform. See the audit below.</p>
+      </div>
+
+    </div>
+
+    <!-- ============ MOD BOUNDARY ============ -->
+    <h2>3 &nbsp;&middot;&nbsp; <span class="h-accent">The mod boundary</span></h2>
+    <p>The central question: what can be done as a mod vs. what needs an engine change. In one sentence:</p>
+    <div class="callout callout-key">
+      <p><b>Modders own <i>instances, behaviour and rules</i>. The engine owns <i>types, properties,
+      the API surface and the simulation core</i>.</b></p>
+    </div>
+    <p>The codebase is extremely data-driven &mdash; <b>576 INI files and 53,000 lines of Lua</b> already ship in
+    <code>Data/</code>, proving the surface is huge.</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Zero recompile</h3>
+        <ul class="small">
+          <li>Any new <b>content</b> &mdash; weapons, actors, craft, materials, scenes, sounds &mdash; as presets of existing types (<code>CopyOf</code> inheritance).</li>
+          <li>Whole new <b>factions</b> (the shipped <code>Ronin.rte</code> etc. are exactly this).</li>
+          <li>All <b>balance / tuning</b> &mdash; any property that already exists.</li>
+          <li><b>Per-entity behaviour</b> via Lua (13 lifecycle hooks).</li>
+          <li><b>New game modes</b> (<code>GAScripted</code> &mdash; a 9-callback Lua contract; 18 modes already ship).</li>
+          <li><b>Global rules</b> (<code>GlobalScript</code>), <b>new/replacement AI</b> (all Lua), custom HUDs, custom shaders.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="tag tag-code">[CODE]</span> &nbsp;Needs a recompile</h3>
+        <ul class="small">
+          <li><b>Adding a new INI property to an existing class</b> &mdash; there is no custom-property system; an unknown property is a fatal error. (Workaround modders use: runtime <code>SetNumberValue</code> tag maps.)</li>
+          <li><b>A new C++ <code>Entity</code> type</b> &mdash; modders make new <i>presets</i>, never new <i>types</i>.</li>
+          <li><b>Exposing anything new to Lua</b> &mdash; if a method is not in <code>LuaBindings*.cpp</code>, scripts cannot call it.</li>
+          <li>The simulation core, the INI parser, the fixed set of script hooks.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout callout-info">
+      <p><b>Strategic insight:</b> binding more of the engine to Lua is a one-time <span class="tag tag-code">[CODE]</span>
+      cost that permanently converts future features into <span class="tag tag-mod">[MOD]</span> territory.
+      Widening the Lua API and adding a real custom-property mechanism are the two changes that most expand what
+      the community can do without us.</p>
+    </div>
+
+    <!-- ============ DEPENDENCY AUDIT ============ -->
+    <h2>4 &nbsp;&middot;&nbsp; <span class="h-accent">Dependency audit</span></h2>
+    <p>20 vendored libraries. The security-sensitive parsers (they process untrusted mod files) are the
+    cheapest, highest-value upgrades.</p>
+    <table class="tbl">
+      <thead><tr><th>Library</th><th>Vendored</th><th>Concern</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Allegro 4</td><td>4.4.3.1 fork</td><td><span class="status status-blocked">CRITICAL</span> abandoned, ~15 yrs old</td><td><span class="tag tag-arch">[ARCH]</span> retire entirely</td></tr>
+        <tr><td>RakNet</td><td>4.081 (2014)</td><td><span class="status status-blocked">CRITICAL</span> abandoned</td><td><span class="tag tag-dep">[DEP]</span> remove or replace</td></tr>
+        <tr><td>luabind</td><td>0.7.1 (~2010)</td><td><span class="status status-blocked">HIGH</span> abandoned, blocks toolchain upgrades</td><td><span class="tag tag-dep">[DEP]</span> &rarr; sol2/sol3</td></tr>
+        <tr><td>libpng</td><td>1.6.40</td><td><span class="status status-doing">SECURITY</span> &rarr; 1.6.58</td><td><span class="tag tag-dep">[DEP]</span> bump</td></tr>
+        <tr><td>zlib-ng</td><td>2.1.3</td><td><span class="status status-doing">SECURITY</span> &rarr; 2.2.x</td><td><span class="tag tag-dep">[DEP]</span> bump</td></tr>
+        <tr><td>LZ4</td><td>1.9.3</td><td><span class="status status-doing">SECURITY</span> &rarr; 1.10.0</td><td><span class="tag tag-dep">[DEP]</span> bump</td></tr>
+        <tr><td>minizip-ng</td><td>4.0.0</td><td><span class="status status-doing">SECURITY</span> &rarr; 4.0.10</td><td><span class="tag tag-dep">[DEP]</span> bump</td></tr>
+        <tr><td>LuaJIT</td><td>2.1 beta3 (pinned)</td><td><span class="status status-doing">SECURITY</span> CVE-2024-25176</td><td><span class="tag tag-dep">[DEP]</span> bump to rolling; keep LuaJIT</td></tr>
+        <tr><td>boost</td><td>1.75 (2020)</td><td>5+ yrs stale; header-only here</td><td><span class="tag tag-dep">[DEP]</span> bump or drop for <code>std</code></td></tr>
+        <tr><td>fmod</td><td>2.2.13</td><td>proprietary blob; 1 minor behind</td><td><span class="tag tag-dep">[DEP]</span> bump 2.03.x</td></tr>
+        <tr><td>SDL3 / SDL3_image / glm</td><td>3.2.10 / 3.2.4 / 0.9.9.8</td><td>modern, just stale patch level</td><td><span class="tag tag-dep">[DEP]</span> routine bumps</td></tr>
+      </tbody>
+    </table>
+
+    <h2>5 &nbsp;&middot;&nbsp; <span class="h-accent">The process reality</span></h2>
+    <div class="callout callout-warn">
+      <p>This shapes what is realistic. The upstream project is a <b>very small team</b> &mdash; ~3 active
+      contributors, ~5 commits to <code>development</code> in the last 90 days. Long-stuck PRs (one core refactor
+      open <b>2.3 years</b>) reveal the constraints: <b>mod-compatibility paralysis</b> (breaking changes freeze
+      over fear of breaking <a href="https://cccp.mod.io">cccp.mod.io</a>), bus-factor reviewer gaps, and bitrot
+      from a fast-moving branch.</p>
+      <p><b>Implication:</b> our modernization work must be <b>incremental, mod-compatible, individually
+      shippable, and not dependent on heroic review.</b> Big-bang <span class="tag tag-arch">[ARCH]</span> PRs die
+      in this environment &mdash; the branch graveyard proves it.</p>
+    </div>
+
+    <div class="page-foot">
+      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-05-16 &middot;
+      see the <a href="roadmap.html">Roadmap</a> for what to do about all this.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

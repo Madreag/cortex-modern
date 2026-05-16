@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Overview — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link active" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort-start</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="hero">
+      <h1>Cortex&#8209;Modern Modernization Effort</h1>
+      <p class="tagline">A working wiki, plan and decision tracker for modernizing our fork of the Cortex Command Community Project.</p>
+    </div>
+
+    <div class="callout callout-key">
+      <div class="callout-title">The headline finding</div>
+      <p>This is <b>not</b> a 2007 codebase. The <code>development</code> branch we forked is an unreleased <b>v7.0</b>
+      carrying ~2 years of un-shipped modernization: SDL3, a new OpenGL/raylib GPU renderer, multithreaded Lua
+      scripting, a new adaptive-music engine, a pathfinding overhaul, compressed saves, and the removal of the old multiplayer.</p>
+      <p>So the real task is not "modernize an old game" — it is <b>"finish a modernization that is already ~70% done."</b>
+      The remaining 30% is a small set of deeply-rooted architectural cores, mapped precisely in the
+      <a href="analysis.html">Technical Analysis</a>.</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-num">~220K</div><div class="stat-label">C++ LOC analyzed (excl. vendored ImGui)</div></div>
+      <div class="stat"><div class="stat-num">5</div><div class="stat-label">Cross-cutting architectural issues</div></div>
+      <div class="stat"><div class="stat-num">20</div><div class="stat-label">Work items tracked</div></div>
+      <div class="stat"><div class="stat-num">7</div><div class="stat-label">Decisions logged</div></div>
+      <div class="stat"><div class="stat-num">53K</div><div class="stat-label">Lua LOC — the moddable surface</div></div>
+    </div>
+
+    <h2>Project context</h2>
+    <div class="card">
+      <div class="meta-row"><b>Working fork:</b> <a href="https://github.com/Madreag/cortex-modern">Madreag/cortex-modern</a> &mdash; default branch <code>development</code></div>
+      <div class="meta-row"><b>Upstream:</b> <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">cortex-command-community/Cortex-Command-Community-Project</a> (tracked as the <code>upstream</code> remote for pulling updates)</div>
+      <div class="meta-row"><b>Working branch:</b> <code>modernization-effort-start</code>, cut from <code>development</code> @ <code>41e6b7010</code></div>
+      <div class="meta-row"><b>Build status:</b> verified building &amp; running on Windows 11 (VS 2022 Build Tools, v143 toolset, <code>Final|x64</code>)</div>
+      <div class="meta-row"><b>License:</b> GNU AGPL v3 &mdash; any modernization work inherits this</div>
+      <hr>
+      <p class="small muted">Related: <a href="https://github.com/Madreag/corefall">corefall</a> is a parallel game project in early development.
+      It is a likely source of two-way cross-pollination (shared tech, design ideas) and will be revisited once it matures &mdash;
+      see <a href="decisions.html">ADR-007</a>.</p>
+    </div>
+
+    <h2>Three layers of "old"</h2>
+    <p>Every recommendation in this wiki sorts into one of three layers. The effort should target Layer 3 and avoid Layer 2.</p>
+    <table class="tbl">
+      <thead><tr><th>Layer</th><th>State</th><th>Examples</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="nowrap"><b>1 &mdash; Already modern</b></td>
+          <td><span class="status status-done">DONE</span></td>
+          <td>SDL3, GPU renderer (draw is "negligible"), multithreaded Lua/AI, MusicMan, navigation overhaul, compressed <code>.ccsave</code>, Tracy profiling, C++20</td>
+        </tr>
+        <tr>
+          <td class="nowrap"><b>2 &mdash; In-flight on branches</b></td>
+          <td><span class="status status-doing">MAINTAINERS</span></td>
+          <td>Box2D physics + WebAssembly port, next-gen GPU renderer, render interpolation, two-stage fog-of-war &mdash; <i>do not duplicate this work</i></td>
+        </tr>
+        <tr>
+          <td class="nowrap"><b>3 &mdash; Untouched 2007 DNA</b></td>
+          <td><span class="status status-todo">OUR TARGET</span></td>
+          <td>8-bit palette model, single-threaded atom physics, Allegro 4 as a bitmap library, luabind, RakNet, the legacy GUI toolkit</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Navigate the wiki</h2>
+    <div class="card-grid">
+      <a class="qnav" href="analysis.html"><div class="card">
+        <h3>Technical Analysis &rarr;</h3>
+        <p class="small muted">The engine, dissected. Five cross-cutting issues, ten subsystems, the dependency audit, and the all-important mod-vs-engine boundary.</p>
+      </div></a>
+      <a class="qnav" href="roadmap.html"><div class="card">
+        <h3>Roadmap &rarr;</h3>
+        <p class="small muted">Modernization work in three tiers — quick wins, medium efforts, strategic reworks — each item tagged by type and risk.</p>
+      </div></a>
+      <a class="qnav" href="tracker.html"><div class="card">
+        <h3>Work Tracker &rarr;</h3>
+        <p class="small muted">Live status board of every work item. Filter by status, tier and type.</p>
+      </div></a>
+      <a class="qnav" href="decisions.html"><div class="card">
+        <h3>Decision Log &rarr;</h3>
+        <p class="small muted">Architecture &amp; strategy decisions, ADR-style — what we chose, why, and the consequences.</p>
+      </div></a>
+    </div>
+
+    <h2>How to use this wiki</h2>
+    <div class="callout callout-info">
+      <p>This is <b>git-tracked plain HTML</b> &mdash; no build step, no server. The git history of <code>modernization-docs/</code> <i>is</i> the change history of the plan.</p>
+      <ul>
+        <li>Add a work item &rarr; edit the <code>WORK_ITEMS</code> array in <code>tracker.html</code>, commit.</li>
+        <li>Record a decision &rarr; add an ADR card to <code>decisions.html</code>, commit.</li>
+        <li>Update findings &rarr; edit <code>analysis.html</code> / <code>roadmap.html</code>, commit.</li>
+      </ul>
+      <p>Keep edits small and commit often.</p>
+    </div>
+
+    <div class="page-foot">
+      Cortex-Modern modernization wiki &middot; created 2026-05-16 &middot; branch <code>modernization-effort-start</code>
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

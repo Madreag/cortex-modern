@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Work Tracker — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link active" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort-start</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Status Board</div>
+      <h1>Work Tracker</h1>
+      <p class="page-lead">Every modernization work item and its status. The data lives in the
+      <code>WORK_ITEMS</code> array in this file &mdash; edit it and commit; the git history is the audit trail.</p>
+    </header>
+
+    <div class="callout callout-info">
+      <p><b>To update:</b> open <code>tracker.html</code>, edit the <code>WORK_ITEMS</code> array near the bottom
+      (change a <code>status</code>, add a row, fill in <code>notes</code>), then commit. Statuses:
+      <code>todo</code> &middot; <code>doing</code> &middot; <code>blocked</code> &middot; <code>done</code> &middot; <code>proposed</code>.</p>
+    </div>
+
+    <div class="summary" id="summary"></div>
+
+    <div class="filters" id="statusFilters"></div>
+    <div class="filters" id="tierFilters"></div>
+
+    <table class="tbl" id="trackerTable">
+      <thead>
+        <tr>
+          <th>ID</th><th>Item</th><th>Subsystem</th><th>Type</th><th>Tier</th><th>Status</th><th>Notes</th>
+        </tr>
+      </thead>
+      <tbody id="trackerBody"></tbody>
+    </table>
+    <p class="small muted" id="emptyMsg" style="display:none">No items match the current filter.</p>
+
+    <div class="page-foot">
+      Tracker rendered client-side from inline data &middot; updated 2026-05-16 &middot;
+      see the <a href="roadmap.html">Roadmap</a> for the full rationale behind each item.
+    </div>
+  </main>
+
+</div>
+
+<script>
+/* ============================================================
+   WORK_ITEMS — the single source of truth for the tracker.
+   Edit this array and commit to update the board.
+   status: 'todo' | 'doing' | 'blocked' | 'done' | 'proposed'
+   tier:   0 (setup) | 1 | 2 | 3
+   tags:   any of MOD, CODE, ARCH, DEP, BUILD
+   ============================================================ */
+const WORK_ITEMS = [
+  { id:'T0-01', title:'Fork upstream as cortex-modern',           sub:'Setup',          tags:['BUILD'],        tier:0, status:'done',     notes:'Fork of cortex-command-community/Cortex-Command-Community-Project.' },
+  { id:'T0-02', title:'Create modernization-effort-start branch', sub:'Setup',          tags:['BUILD'],        tier:0, status:'done',     notes:'Cut from development @ 41e6b7010.' },
+  { id:'T0-03', title:'Create modernization-docs wiki',           sub:'Docs',           tags:['BUILD'],        tier:0, status:'done',     notes:'This site. Living plan + decision log.' },
+
+  { id:'T1-01', title:'Bump security-sensitive dependencies',     sub:'Build / Deps',   tags:['DEP'],          tier:1, status:'todo',     notes:'libpng, zlib-ng, LZ4, minizip-ng, LuaJIT (CVE-2024-25176).' },
+  { id:'T1-02', title:'Gamepad rumble / haptics',                 sub:'Input',          tags:['CODE'],         tier:1, status:'todo',     notes:'SDL_RumbleGamepad into UInputMan; expose to Lua.' },
+  { id:'T1-03', title:'Resolve orphaned multiplayer island',      sub:'Networking',     tags:['CODE','DEP'],   tier:1, status:'todo',     notes:'~5K LOC dead code + RakNet. Delete or commit to rebuild — needs an ADR.' },
+  { id:'T1-04', title:'Delete dead GL code',                      sub:'Rendering',      tags:['CODE'],         tier:1, status:'todo',     notes:'Stubbed CompileShader, commented m_Blit8, vestigial constants.' },
+  { id:'T1-05', title:'Audio terrain occlusion',                  sub:'Audio',          tags:['CODE'],         tier:1, status:'todo',     notes:'Strength-ray driven FMOD lowpass. Big immersion win.' },
+  { id:'T1-06', title:'Smarter squad AI & difficulty depth',      sub:'AI',             tags:['MOD'],          tier:1, status:'todo',     notes:'Pure Lua in Base.rte/AI/. Squad roles, suppression, scaled difficulty.' },
+  { id:'T1-07', title:'Build reproducibility fixes',              sub:'Build',          tags:['BUILD'],        tier:1, status:'todo',     notes:'Pin PlatformToolset=v143; fix stale SDL2 in CI.' },
+
+  { id:'T2-01', title:'Render interpolation',                     sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'Lerp transforms by accumulator/dt. Reference interpolated-render-redux.' },
+  { id:'T2-02', title:'luabind → sol2/sol3 migration',            sub:'Scripting',      tags:['DEP'],          tier:2, status:'todo',     notes:'Removes worst dep + Boost. Stale sol3 branch is a reference.' },
+  { id:'T2-03', title:'Build all dependencies from source',       sub:'Build',          tags:['BUILD'],        tier:2, status:'todo',     notes:'use_prebuilt_libraries=false — eliminates the __iob_func hack.' },
+  { id:'T2-04', title:'GPU sprite drawing for MOs',               sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'DrawTexturePro instead of software draw_sprite. Partly gated by T3-02.' },
+  { id:'T2-05', title:'Profile multithreaded Lua scripts',        sub:'Scripting',      tags:['CODE'],         tier:2, status:'todo',     notes:'Threaded MO script timings are invisible to PerformanceMan.' },
+
+  { id:'T3-01', title:'Multithread the physics travel loop',      sub:'Physics',        tags:['ARCH'],         tier:3, status:'todo',     notes:'The performance ceiling. Or adopt the upstream box2d-emscripten direction.' },
+  { id:'T3-02', title:'Decouple material map from palette index', sub:'Rendering',      tags:['ARCH'],         tier:3, status:'todo',     notes:'The keystone. Unblocks 32-bit colour, >256 materials, retiring Allegro.' },
+  { id:'T3-03', title:'Rebuild BuyMenu / editors / Metagame UI',  sub:'UI / UX',        tags:['ARCH'],         tier:3, status:'todo',     notes:'Off the legacy Allegro GUIControlManager onto a modern toolkit.' },
+  { id:'T3-04', title:"Decide multiplayer's future",              sub:'Networking',     tags:['ARCH'],         tier:3, status:'proposed', notes:'State-sync netcode, not screen-streaming. Needs a decision record first.' },
+  { id:'T3-05', title:'Retire Allegro 4',                         sub:'Rendering',      tags:['ARCH'],         tier:3, status:'blocked',  notes:'Blocked on T3-02. ~56 files / 477 call sites.' },
+];
+
+const STATUS_META = {
+  todo:     { label:'Not started', cls:'status-todo' },
+  doing:    { label:'In progress', cls:'status-doing' },
+  blocked:  { label:'Blocked',     cls:'status-blocked' },
+  done:     { label:'Done',        cls:'status-done' },
+  proposed: { label:'Proposed',    cls:'status-proposed' },
+};
+const TAG_CLS = { MOD:'tag-mod', CODE:'tag-code', ARCH:'tag-arch', DEP:'tag-dep', BUILD:'tag-build' };
+
+let statusFilter = 'all';
+let tierFilter = 'all';
+
+function tierBadge(t) {
+  if (t === 0) return '<span class="status status-todo">SETUP</span>';
+  return '<span class="tier tier-' + t + '">TIER ' + t + '</span>';
+}
+function tagBadges(tags) {
+  return tags.map(t => '<span class="tag ' + TAG_CLS[t] + '">[' + t + ']</span>').join(' ');
+}
+
+function renderSummary() {
+  const counts = { done:0, doing:0, blocked:0, todo:0, proposed:0 };
+  WORK_ITEMS.forEach(i => counts[i.status]++);
+  document.getElementById('summary').innerHTML =
+    '<span><b style="color:var(--green)">'   + counts.done     + '</b> done</span>' +
+    '<span><b style="color:var(--accent)">'  + counts.doing    + '</b> in progress</span>' +
+    '<span><b style="color:var(--red)">'     + counts.blocked  + '</b> blocked</span>' +
+    '<span><b style="color:var(--blue)">'    + counts.proposed + '</b> proposed</span>' +
+    '<span><b style="color:var(--text-dim)">'+ counts.todo     + '</b> not started</span>' +
+    '<span><b>' + WORK_ITEMS.length + '</b> total</span>';
+}
+
+function renderFilters() {
+  const sWrap = document.getElementById('statusFilters');
+  const tWrap = document.getElementById('tierFilters');
+  const statuses = [['all','All statuses'],['todo','Not started'],['doing','In progress'],['blocked','Blocked'],['proposed','Proposed'],['done','Done']];
+  const tiers = [['all','All tiers'],[0,'Setup'],[1,'Tier 1'],[2,'Tier 2'],[3,'Tier 3']];
+  sWrap.innerHTML = statuses.map(([v,l]) =>
+    '<button class="filter-btn' + (statusFilter==v?' active':'') + '" data-kind="status" data-val="'+v+'">'+l+'</button>').join('');
+  tWrap.innerHTML = tiers.map(([v,l]) =>
+    '<button class="filter-btn' + (String(tierFilter)==String(v)?' active':'') + '" data-kind="tier" data-val="'+v+'">'+l+'</button>').join('');
+}
+
+function renderTable() {
+  const body = document.getElementById('trackerBody');
+  const rows = WORK_ITEMS.filter(i =>
+    (statusFilter === 'all' || i.status === statusFilter) &&
+    (tierFilter === 'all' || String(i.tier) === String(tierFilter))
+  );
+  document.getElementById('emptyMsg').style.display = rows.length ? 'none' : 'block';
+  body.innerHTML = rows.map(i => {
+    const s = STATUS_META[i.status];
+    return '<tr>' +
+      '<td class="id nowrap">' + i.id + '</td>' +
+      '<td><b>' + i.title + '</b></td>' +
+      '<td class="nowrap muted small">' + i.sub + '</td>' +
+      '<td class="nowrap">' + tagBadges(i.tags) + '</td>' +
+      '<td class="nowrap">' + tierBadge(i.tier) + '</td>' +
+      '<td class="nowrap"><span class="status ' + s.cls + '">' + s.label + '</span></td>' +
+      '<td class="small muted">' + i.notes + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function render() { renderSummary(); renderFilters(); renderTable(); }
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.filter-btn');
+  if (!btn) return;
+  if (btn.dataset.kind === 'status') statusFilter = btn.dataset.val;
+  else { const v = btn.dataset.val; tierFilter = (v==='all') ? 'all' : Number(v); }
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

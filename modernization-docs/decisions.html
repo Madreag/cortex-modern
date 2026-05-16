@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Decision Log — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link active" href="decisions.html">Decision Log</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort-start</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">ADR</div>
+      <h1>Decision Log</h1>
+      <p class="page-lead">Architecture &amp; strategy decisions, ADR-style &mdash; the context, the decision, and
+      the consequences. New decisions get the next number and never get deleted; superseded ones are marked, not removed.</p>
+    </header>
+
+    <div class="callout callout-info">
+      <p><b>To add a decision:</b> copy the last <code>&lt;section class="adr"&gt;</code> block, give it the next
+      <code>ADR-NNN</code> number, set the status (<code>Proposed</code> &rarr; <code>Accepted</code> /
+      <code>Rejected</code> / <code>Superseded</code>), fill in the four fields, then commit.</p>
+    </div>
+
+    <!-- ADR-001 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-001</span>
+        <span class="adr-title">Fork strategy &mdash; cortex-modern + modernization-effort-start</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>We need an independent working repository to modernize the engine without disrupting upstream, and a
+        clear, named starting point.</p>
+        <h4>Decision</h4>
+        <p>Fork <code>cortex-command-community/Cortex-Command-Community-Project</code> to
+        <code>Madreag/cortex-modern</code>. The official repo is tracked as the <code>upstream</code> git remote;
+        our fork is <code>origin</code>. All initial work happens on branch <code>modernization-effort-start</code>,
+        cut from <code>development</code> @ <code>41e6b7010</code>.</p>
+        <h4>Consequences</h4>
+        <p>We can pull upstream changes via <code>git fetch upstream</code> and still open PRs back upstream later.
+        The branch name was corrected from a typo in the original request (<code>effor</code> &rarr; <code>effort</code>).</p>
+      </div>
+    </section>
+
+    <!-- ADR-002 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-002</span>
+        <span class="adr-title">Keep LuaJIT 2.1 &mdash; do not migrate to Luau or Lua 5.4</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>The engine is on LuaJIT 2.1 (Lua 5.1.4 dialect, frozen language). Luau (typed Lua) and Lua 5.4 are
+        tempting modern targets.</p>
+        <h4>Decision</h4>
+        <p>Stay on LuaJIT 2.1. Bump it to the current rolling release for the CVE-2024-25176 fix, but keep the runtime.</p>
+        <h4>Consequences</h4>
+        <p>We retain JIT + FFI performance and do not fracture the existing mod ecosystem &mdash; ~53K LOC of
+        community Lua is all 5.1-dialect. The real scripting liability is <b>luabind</b>, not LuaJIT (see ADR-003).</p>
+      </div>
+    </section>
+
+    <!-- ADR-003 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-003</span>
+        <span class="adr-title">Replace luabind 0.7.1 with sol2/sol3</span>
+        <span class="status status-proposed">Proposed</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>luabind 0.7.1 is abandoned, Boost-dependent, blocks toolchain upgrades, and forces build hacks (no PCH,
+        re-enabling C++17-removed features).</p>
+        <h4>Decision <span class="muted small">(proposed &mdash; pending an effort spike)</span></h4>
+        <p>Migrate the Lua binding layer to sol2/sol3. Use the stalled upstream <code>sol3</code> branch as a
+        <i>reference</i> for the shape of the work, not as a merge base.</p>
+        <h4>Consequences</h4>
+        <p>Removes the worst dependency and the Boost requirement. ~5,100 LOC of bindings + the execution core.
+        Main risk is binding-semantics / ownership parity. Tracked as <code>T2-02</code>.</p>
+      </div>
+    </section>
+
+    <!-- ADR-004 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-004</span>
+        <span class="adr-title">Modernization is incremental and mod-compatible by default</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>Upstream is a very small team with documented mod-compatibility paralysis; large breaking PRs sit for
+        years and rot. We must not reproduce that failure mode.</p>
+        <h4>Decision</h4>
+        <p>Every change ships as a small, independently-mergeable unit. Any change to the mod-facing INI/Lua
+        surface that breaks existing mods requires its own ADR and a migration path. <span class="tag tag-arch">[ARCH]</span>
+        items are sliced into shippable increments before work starts.</p>
+        <h4>Consequences</h4>
+        <p>Slower headline progress, but work actually lands and stays mergeable. This is the governing principle
+        for the whole <a href="roadmap.html">Roadmap</a>.</p>
+      </div>
+    </section>
+
+    <!-- ADR-005 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-005</span>
+        <span class="adr-title">Do not duplicate upstream's active branches</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p><code>box2d-emscripten</code>, <code>gpu-renderer</code>, <code>emscripten-port</code> and
+        <code>interpolated-render-redux</code> are active upstream branches (commits Feb&ndash;Apr 2026).</p>
+        <h4>Decision</h4>
+        <p>Do not start competing implementations of Box2D physics, the next-gen renderer, or the web port. For
+        physics multithreading (<code>T3-01</code>), prefer aligning with or contributing to the Box2D effort.
+        We <i>may</i> revive stalled, un-owned branches (<code>sol3</code>, <code>hot-reloading</code>).</p>
+        <h4>Consequences</h4>
+        <p>Avoids wasted effort and merge conflicts. Focuses our work on genuinely un-owned gaps.</p>
+      </div>
+    </section>
+
+    <!-- ADR-006 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-006</span>
+        <span class="adr-title">Render interpolation is the first flagship engine change</span>
+        <span class="status status-proposed">Proposed</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>We need an early, user-visible, low-controversy win to validate the contribution workflow before tackling
+        anything heavier.</p>
+        <h4>Decision <span class="muted small">(proposed)</span></h4>
+        <p>After Tier&nbsp;1, <code>T2-01</code> (render interpolation) is the first non-trivial engine change. It is
+        visible (smoother motion), self-contained, and mod-compatible.</p>
+        <h4>Consequences</h4>
+        <p>Establishes the contribution pattern (small branch &rarr; PR). Risk: an interpolation alpha must be
+        threaded through every <code>Draw</code> path; teleports and scene-wrap need special handling.</p>
+      </div>
+    </section>
+
+    <!-- ADR-007 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-007</span>
+        <span class="adr-title">corefall cross-pollination &mdash; note now, act later</span>
+        <span class="status status-proposed">Proposed</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p><a href="https://github.com/Madreag/corefall">Madreag/corefall</a> is a parallel game project in early
+        development. The two efforts share concerns &mdash; 2D physics, rendering, a modding/data pipeline &mdash;
+        and may benefit from two-way idea and tech transfer.</p>
+        <h4>Decision <span class="muted small">(proposed)</span></h4>
+        <p>Do not couple the two projects technically right now. Revisit once corefall has a defined engine and
+        architecture. Until then, simply keep shared concerns in mind when making structural decisions here.</p>
+        <h4>Consequences</h4>
+        <p>No action now. A future ADR will decide on any concrete sharing (a shared library, lifted patterns, or
+        nothing). This entry exists so the relationship is not forgotten.</p>
+      </div>
+    </section>
+
+    <h2>Open questions &mdash; decisions still needed</h2>
+    <div class="card">
+      <ul>
+        <li><b>Multiplayer:</b> delete the orphaned networking code entirely (and drop RakNet), or formally commit
+        to rebuilding multiplayer with modern netcode? Blocks <code>T1-03</code> / <code>T3-04</code>.</li>
+        <li><b>Tier-3 sequencing:</b> if/when we take on an <span class="tag tag-arch">[ARCH]</span> item, which
+        first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>
+        <li><b>Upstreaming:</b> do we aim to merge our work back into the official repo via PRs, or maintain
+        cortex-modern as a long-lived independent fork?</li>
+        <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
+      </ul>
+    </div>
+
+    <div class="page-foot">
+      Decision log started 2026-05-16 &middot; 7 decisions recorded &middot; ADRs are append-only.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>
