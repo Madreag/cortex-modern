@@ -30,7 +30,7 @@
       <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
       <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
       <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
-      <div class="foot-meta">branch: modernization-effort-start</div>
+      <div class="foot-meta">branch: modernization-effort</div>
     </div>
   </aside>
 
@@ -52,7 +52,7 @@
     <section class="adr">
       <div class="adr-head">
         <span class="adr-id">ADR-001</span>
-        <span class="adr-title">Fork strategy &mdash; cortex-modern + modernization-effort-start</span>
+        <span class="adr-title">Fork strategy &mdash; cortex-modern + modernization-effort</span>
         <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
@@ -63,11 +63,11 @@
         <h4>Decision</h4>
         <p>Fork <code>cortex-command-community/Cortex-Command-Community-Project</code> to
         <code>Madreag/cortex-modern</code>. The official repo is tracked as the <code>upstream</code> git remote;
-        our fork is <code>origin</code>. All initial work happens on branch <code>modernization-effort-start</code>,
+        our fork is <code>origin</code>. All initial work happens on branch <code>modernization-effort</code>,
         cut from <code>development</code> @ <code>41e6b7010</code>.</p>
         <h4>Consequences</h4>
         <p>We can pull upstream changes via <code>git fetch upstream</code> and still open PRs back upstream later.
-        The branch name was corrected from a typo in the original request (<code>effor</code> &rarr; <code>effort</code>).</p>
+        The working branch is <code>modernization-effort</code>.</p>
       </div>
     </section>
 
@@ -198,21 +198,45 @@
       </div>
     </section>
 
+    <!-- ADR-008 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-008</span>
+        <span class="adr-title">Fork-first development &mdash; upstreaming is opportunistic, never a gate</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>Upstream (CCCP) merges PRs very slowly &mdash; some sit open for years. Gating our progress on
+        upstream review would stall the effort indefinitely.</p>
+        <h4>Decision</h4>
+        <p><code>cortex-modern</code> is the primary product. All work happens continuously on the
+        <code>modernization-effort</code> integration branch (features via short <code>feature/*</code> branches,
+        merged in at our own review bar). <code>development</code> is kept as a clean mirror of
+        <code>upstream/development</code> and is never committed to directly. Upstreaming is optional and
+        downstream: to offer a feature we cut a <code>pr/*</code> branch from <code>upstream/development</code>,
+        cherry-pick that feature's commits, and open a small self-contained PR &mdash; only when we choose to.
+        We never block ongoing work waiting on upstream, and we sync <code>upstream/development</code> into the
+        integration branch regularly to avoid drift.</p>
+        <h4>Consequences</h4>
+        <p>We are never blocked on the maintainers; upstream merges become a bonus, not a dependency. The cost
+        is our own review discipline and periodic upstream syncs. This resolves the former "Upstreaming" open question.</p>
+      </div>
+    </section>
+
     <h2>Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
         <li><b>Multiplayer:</b> delete the orphaned networking code entirely (and drop RakNet), or formally commit
         to rebuilding multiplayer with modern netcode? Blocks <code>T1-03</code> / <code>T3-04</code>.</li>
         <li><b>Tier-3 sequencing:</b> if/when we take on an <span class="tag tag-arch">[ARCH]</span> item, which
-        first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>
-        <li><b>Upstreaming:</b> do we aim to merge our work back into the official repo via PRs, or maintain
-        cortex-modern as a long-lived independent fork?</li>
-        <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
+        first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>        <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
       </ul>
     </div>
 
     <div class="page-foot">
-      Decision log started 2026-05-16 &middot; 7 decisions recorded &middot; ADRs are append-only.
+      Decision log started 2026-05-16 &middot; 8 decisions recorded &middot; ADRs are append-only.
     </div>
   </main>
 

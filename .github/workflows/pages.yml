@@ -6,7 +6,7 @@ name: Deploy modernization wiki
 
 on:
   push:
-    branches: [modernization-effort-start]
+    branches: [modernization-effort]
     paths:
       - 'modernization-docs/**'
       - '.github/workflows/pages.yml'
