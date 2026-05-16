@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Upstream Issues — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link active" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Upstream Tracking</div>
+      <h1>Upstream Issues</h1>
+      <p class="page-lead">Open issues on the official Cortex Command Community Project repository &mdash;
+      number, title, type and a plain-language summary. Useful context for what's broken or wanted upstream,
+      and a source of work items for our fork.</p>
+    </header>
+
+    <div class="callout callout-info">
+      <p><b>Snapshot &mdash; 2026-05-16.</b> This is a static capture of the upstream issue tracker, not a live
+      feed. Titles link to the issue on GitHub. To refresh, re-fetch the open issues and update the
+      <code>ISSUES</code> array near the bottom of this file.</p>
+    </div>
+
+    <div class="summary" id="summary"></div>
+    <div class="filters" id="filters"></div>
+
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Issue</th><th>Type</th><th>Updated</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p class="small muted" id="emptyMsg" style="display:none">No issues match the current filter.</p>
+
+    <div class="page-foot">
+      Snapshot of <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/issues">cortex-command-community/Cortex-Command-Community-Project/issues</a>
+      &middot; captured 2026-05-16 &middot; summaries are editorial.
+    </div>
+  </main>
+
+</div>
+
+<script>
+/* ============================================================
+   ISSUES — snapshot of upstream open issues (2026-05-16).
+   To refresh: re-fetch open issues and rewrite this array.
+   type: "bug" | "enhancement" | "other"
+   ============================================================ */
+const REPO = "https://github.com/cortex-command-community/Cortex-Command-Community-Project";
+
+const ISSUES = [
+  { num:278, title:"Game not working in macOS Tahoe.", type:"bug", updated:"2026-05-06",
+    desc:"The game refuses to launch on macOS 26 (Tahoe) even after clearing it from quarantine — it reports an unsupported-OS error." },
+  { num:267, title:"The UI from the gamepad is not working", type:"bug", updated:"2026-03-22",
+    desc:"With a gamepad, the radial pie menu never appears and there is no target highlight when switching between units." },
+  { num:242, title:"Glows not rotating with MOPixels", type:"bug", updated:"2025-12-03",
+    desc:"Weapon and shield glow effects no longer rotate to match their MOPixels — a regression from the old Lua-driven behaviour. PR #277 addresses this." },
+  { num:214, title:"Can we enable BlastDoors in version 7.0?", type:"other", updated:"2025-08-30",
+    desc:"Feature request to bring back enable-able heavy BlastDoors for longer base-defence battles; also asks about unlocking the hidden Annihilator weapon." },
+  { num:210, title:"[6.2.2] Mod Manager crashes if no Mods present", type:"bug", updated:"2025-08-03",
+    desc:"On Linux, scrolling the Mod Manager window crashes the game when no mods are installed; mods placed in the data directory are not detected." },
+  { num:208, title:"Improve squad logic", type:"enhancement", updated:"2025-12-22",
+    desc:"When a squad leader dies the whole squad disbands — request to keep squads intact after a death." },
+  { num:196, title:"Unstable Aim Bug", type:"bug", updated:"2025-04-25",
+    desc:"An offhand firearm can get stuck rotated incorrectly (e.g. pointing straight down) if reloading finishes while the actor is unstable." },
+  { num:195, title:"Can we add lighting effects to our scene, such as battles at night or in the evening, to create a gaming atmosphere", type:"other", updated:"2025-04-21",
+    desc:"Feature request for scene lighting effects — night or evening battles — to add atmosphere." },
+  { num:188, title:"Tutorial should be moved to GAScripted", type:"enhancement", updated:"2025-02-25",
+    desc:"The tutorial is partly hardcoded as its own Activity type; it should be rebuilt as a Lua GAScripted mode (blocked partly on GPU-primitive depth support)." },
+  { num:180, title:"Wrapping draw code is inconsistent", type:"bug", updated:"2025-01-23",
+    desc:"Scene-edge wrapping in the draw code is inconsistent and broken across terrain objects, primitives, small scenes, editors and the HUD." },
+  { num:175, title:"macos crash", type:"bug", updated:"2024-12-22",
+    desc:"A crash on macOS (SIGABRT / abort) with the fault reported through MovableMan::Update." },
+  { num:170, title:"Mac release broken", type:"bug", updated:"2024-12-20",
+    desc:"The packaged macOS release is non-functional — it links against unbundled libraries, segfaults on launch, and is not built for Apple Silicon." },
+  { num:137, title:"Spacebar problem", type:"bug", updated:"2024-08-18",
+    desc:"In the metagame, pressing Space to return to the map opens the pause menu instead, and rebinding the key does not help." },
+  { num:131, title:"On Saved Game Load, Return Focus to Last Focused Unit", type:"enhancement", updated:"2024-06-07",
+    desc:"Loading a save snaps camera focus to the brain instead of returning it to the unit you last controlled." },
+  { num:125, title:"Sorry guys, bot how I can start Cortex Command on MacOS Sonora?", type:"other", updated:"2024-04-01",
+    desc:"A user asking for clear instructions on how to run the game on macOS Sonoma." },
+  { num:121, title:"Pre-6 AI bugs", type:"bug", updated:"2024-11-09",
+    desc:"The pre-6 AI rework introduced bugs — sentry actors twitch and aim randomly, and AI does not stop properly while fighting; traced to HumanBehaviors.lua." },
+  { num:120, title:"Palette is mismatched between game and Data", type:"bug", updated:"2024-03-06",
+    desc:"Base.rte/palette.bmp does not match the palettes baked into the sprites, and the sprites themselves use inconsistent palettes." },
+  { num:118, title:"Convert Crab Bombs into a Global Script", type:"enhancement", updated:"2025-05-31",
+    desc:"The legacy crab-bomb effect is still hardcoded in C++ and should be removed from the engine and reimplemented as a Lua GlobalScript. Marked good-first-issue." },
+  { num:116, title:"Some grenades have weird interactions...", type:"bug", updated:"2024-02-25",
+    desc:"AI units holding an impulse grenade auto-switch weapons, but the grenade arms in their inventory and detonates instantly when re-equipped or dropped." },
+  { num:100, title:"Squad firing gatling-like guns doesn't work properly", type:"bug", updated:"2024-02-19",
+    desc:"When a squad fires gatling-type guns, only the controlled unit actually fires while the others merely spin up." },
+  { num:90, title:"Operation could not be performed because specified sound/DSP connection is not ready", type:"bug", updated:"2024-02-19",
+    desc:"AudioMan logs sound/DSP-not-ready errors when playing sounds, caused by FMOD's asynchronous loading even for mods with few sound containers." },
+  { num:88, title:"self.Magazine is nil in Create()", type:"bug", updated:"2024-02-18",
+    desc:"A weapon's self.Magazine reference can randomly be nil inside the Lua Create() callback, breaking scripts that read it on construction." },
+  { num:85, title:"Yielding from a coroutine seems to clear a local table", type:"bug", updated:"2024-02-19",
+    desc:"Calling coroutine.yield() inside a Lua script appears to wipe the contents of a local table — a luabind/Lua-state quirk." },
+  { num:55, title:"Changing Min/MaxVelocity of Emissions gets reset every frame", type:"bug", updated:"2024-02-11",
+    desc:"Changing an AEmitter emission's Min/MaxVelocity from Lua is silently reset every frame, so the change never affects emitted particles." },
+  { num:54, title:"Weapons can be held past solid terrain if the middle of the gun ends up being held there", type:"bug", updated:"2024-02-05",
+    desc:"Terrain clipping for held weapons fails when the middle of the gun ends up past solid terrain, letting actors fire through walls." },
+  { num:39, title:"AEmitters that push can delete their parents", type:"bug", updated:"2024-02-22",
+    desc:"An AEmitter whose particles push, when attached to a parent, eventually deletes itself and its parent — likely accumulated forces never being cleared." },
+];
+
+const TYPE_META = {
+  bug:         { label:"Bug",         cls:"itype-bug" },
+  enhancement: { label:"Enhancement", cls:"itype-enh" },
+  other:       { label:"Other",       cls:"itype-other" },
+};
+let typeFilter = "all";
+
+function renderSummary() {
+  const c = { bug:0, enhancement:0, other:0 };
+  ISSUES.forEach(i => c[i.type]++);
+  document.getElementById("summary").innerHTML =
+    '<span><b style="color:var(--red)">'      + c.bug         + '</b> bug</span>' +
+    '<span><b style="color:var(--blue)">'     + c.enhancement + '</b> enhancement</span>' +
+    '<span><b style="color:var(--text-dim)">' + c.other       + '</b> other</span>' +
+    '<span><b>' + ISSUES.length + '</b> total open</span>';
+}
+function renderFilters() {
+  const opts = [["all","All"],["bug","Bug"],["enhancement","Enhancement"],["other","Other"]];
+  document.getElementById("filters").innerHTML = opts.map(([v,l]) =>
+    '<button class="filter-btn' + (typeFilter==v?' active':'') + '" data-val="'+v+'">'+l+'</button>').join("");
+}
+function renderTable() {
+  const rows = ISSUES.filter(i => typeFilter==="all" || i.type===typeFilter);
+  document.getElementById("emptyMsg").style.display = rows.length ? "none" : "block";
+  document.getElementById("tbody").innerHTML = rows.map(i => {
+    const t = TYPE_META[i.type];
+    const url = REPO + "/issues/" + i.num;
+    return '<tr>' +
+      '<td class="nowrap"><a class="id" href="'+url+'" target="_blank" rel="noopener">#'+i.num+'</a></td>' +
+      '<td><a href="'+url+'" target="_blank" rel="noopener"><b>'+i.title+'</b></a>' +
+        '<div class="row-desc muted small">'+i.desc+'</div></td>' +
+      '<td class="nowrap"><span class="tag '+t.cls+'">'+t.label+'</span></td>' +
+      '<td class="nowrap muted small">'+i.updated+'</td>' +
+    '</tr>';
+  }).join("");
+}
+function render() { renderSummary(); renderFilters(); renderTable(); }
+
+document.addEventListener("click", e => {
+  const b = e.target.closest(".filter-btn");
+  if (!b) return;
+  typeFilter = b.dataset.val;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

@@ -279,6 +279,14 @@ pre code { background: none; border: 0; padding: 0; color: var(--text); font-siz
 .tier-2 { background: rgba(233,162,59,.12);  color: var(--accent); border: 1px solid rgba(233,162,59,.32); }
 .tier-3 { background: rgba(241,90,78,.11);   color: var(--red);    border: 1px solid rgba(241,90,78,.32); }
 
+/* issue / PR badges */
+.itype-bug    { background: rgba(241,90,78,.13);   color: var(--red);   border: 1px solid rgba(241,90,78,.36); }
+.itype-enh    { background: rgba(90,167,255,.14);  color: var(--blue);  border: 1px solid rgba(90,167,255,.36); }
+.itype-other  { background: rgba(110,122,136,.16); color: #aab3bf;      border: 1px solid rgba(110,122,136,.4); }
+.pstate-ready { background: rgba(69,196,104,.14);  color: var(--green); border: 1px solid rgba(69,196,104,.36); }
+.pstate-draft { background: rgba(110,122,136,.16); color: #aab3bf;      border: 1px solid rgba(110,122,136,.4); }
+.row-desc { margin-top: 4px; line-height: 1.55; }
+
 /* ---------- Tables ---------- */
 .tbl { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.6px; }
 .tbl th {

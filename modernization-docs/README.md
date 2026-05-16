@@ -14,6 +14,8 @@ A self-contained HTML wiki. No build step, no server — just open the files.
 | `roadmap.html` | Tiered modernization roadmap |
 | `tracker.html` | Work-item tracker (status board) |
 | `decisions.html` | Architecture/strategy decision log (ADR style) |
+| `issues.html` | Snapshot of open issues on the upstream repo |
+| `prs.html` | Snapshot of open pull requests on the upstream repo |
 | `assets/style.css` | Shared stylesheet |
 
 ## How to view
@@ -27,6 +29,7 @@ This wiki is **git-tracked plain HTML** — the git history *is* the change hist
 - **Add a work item:** edit the `WORK_ITEMS` array near the bottom of `tracker.html`, then commit.
 - **Record a decision:** add an `<section class="adr">` card to `decisions.html`, then commit.
 - **Update analysis/roadmap:** edit the HTML directly, then commit.
+- **Refresh upstream issues/PRs:** re-fetch the open items and rewrite the `ISSUES` / `PULLS` arrays in `issues.html` / `prs.html`, then commit. These pages are dated snapshots, not live feeds.
 
 Keep edits small and commit often so the history stays useful.
 
