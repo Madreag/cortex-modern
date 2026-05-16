@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Roadmap — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link active" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort-start</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Plan</div>
+      <h1>Modernization Roadmap</h1>
+      <p class="page-lead">Work sorted into three tiers by effort and risk. Tier&nbsp;1 ships independently and
+      fast; Tier&nbsp;3 is strategic and slow. Each item maps to a row in the <a href="tracker.html">Work Tracker</a>.</p>
+    </header>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Tag legend</div>
+      <p>
+      <span class="tag tag-mod">[MOD]</span> no recompile &nbsp;
+      <span class="tag tag-code">[CODE]</span> C++ change &nbsp;
+      <span class="tag tag-arch">[ARCH]</span> large rework &nbsp;
+      <span class="tag tag-dep">[DEP]</span> dependency &nbsp;
+      <span class="tag tag-build">[BUILD]</span> build system
+      </p>
+    </div>
+
+    <!-- ====== DON'T DUPLICATE ====== -->
+    <h2><span class="h-accent">What the maintainers already own</span> &mdash; do not duplicate</h2>
+    <div class="callout callout-warn">
+      <p>The upstream branch list is an unwritten roadmap. These efforts are <b>active</b> (commits Feb&ndash;Apr 2026).
+      Competing with them wastes effort and creates merge conflicts.</p>
+      <ul>
+        <li><code>box2d-emscripten</code> &mdash; phased <b>Box2D v3.1.0</b> integration for object physics + a WebAssembly port.</li>
+        <li><code>emscripten-port</code> &mdash; a working <b>browser / iOS</b> build.</li>
+        <li><code>gpu-renderer</code> &mdash; the <i>next</i> renderer iteration (HUD on GPU, split-screen).</li>
+        <li><code>interpolated-render-redux</code> &mdash; render interpolation.</li>
+      </ul>
+      <p><b>Stalled &amp; un-owned</b> (1,600+ commits behind &mdash; effectively dead): <code>sol3</code> (luabind
+      replacement), <code>hot-reloading</code>, <code>gles-v2</code>. These gaps are where an outside contributor
+      has the most room &mdash; we can pick them up.</p>
+    </div>
+
+    <!-- ====== TIER 1 ====== -->
+    <h2><span class="tier tier-1">TIER 1</span> &nbsp; Quick wins &mdash; low risk, ship independently</h2>
+
+    <div class="card">
+      <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T1-01 &nbsp; Bump security-sensitive dependencies</h3>
+      <p class="small">libpng 1.6.40&rarr;1.6.58, zlib-ng&rarr;2.2.x, LZ4&rarr;1.10, minizip-ng&rarr;4.0.10, LuaJIT
+      (pinned beta3 has CVE-2024-25176). These parse untrusted mod and (formerly) network data. Drop-in upgrades.</p>
+      <p class="small muted">Effort: low &middot; Risk: low &middot; minizip-ng has one known API break (<code>mz_compat.h</code>).</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-02 &nbsp; Gamepad rumble / haptics</h3>
+      <p class="small">Wire <code>SDL_RumbleGamepad</code> into <code>UInputMan</code>, expose to Lua so weapons,
+      explosions and damage trigger feedback. SDL3 is already in place; nothing calls rumble today. High game-feel payoff, purely additive.</p>
+      <p class="small muted">Effort: low-medium &middot; Risk: low</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> <span class="tag tag-dep">[DEP]</span> &nbsp;T1-03 &nbsp; Resolve the orphaned multiplayer island</h3>
+      <p class="small">~5,000 LOC of <code>NetworkServer/Client</code> + <code>Multiplayer*</code> activities is
+      compiled in but unreachable, and it drags in the abandoned RakNet dependency. Either delete it cleanly
+      (removing RakNet) or formally decide to rebuild it &mdash; today it is the worst of both.</p>
+      <p class="small muted">Effort: low-medium &middot; Risk: low &middot; see <a href="decisions.html">ADR &mdash; pending</a></p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-04 &nbsp; Delete dead GL code</h3>
+      <p class="small">Stubbed <code>GLResourceMan::CompileShader</code>, commented-out <code>m_Blit8</code> shader,
+      the vestigial 16bpp MOID-layer constant. Clarifies the renderer with zero behaviour change.</p>
+      <p class="small muted">Effort: trivial &middot; Risk: none</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-05 &nbsp; Audio terrain occlusion</h3>
+      <p class="small">A 2D destructible-terrain game where dirt does not muffle gunfire. Reuse the existing AI
+      strength-ray to drive an FMOD lowpass + volume per channel. Big immersion win, isolated and additive.</p>
+      <p class="small muted">Effort: medium &middot; Risk: low</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;T1-06 &nbsp; Smarter squad AI &amp; difficulty depth</h3>
+      <p class="small">Squad AI only copies the leader's controls. Add real squad roles (point / flank / support),
+      coordinated suppression, and difficulty that scales reaction time and target priority &mdash; all in
+      <code>Base.rte/AI/*.lua</code>. No engine change, fully mod-overridable.</p>
+      <p class="small muted">Effort: high (pure Lua) &middot; Risk: low</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-build">[BUILD]</span> &nbsp;T1-07 &nbsp; Build reproducibility fixes</h3>
+      <p class="small">Pin the empty <code>PlatformToolset</code> to <code>v143</code>; remove stale SDL2 packages
+      from the Meson CI workflow (it installs SDL2 while the build uses bundled SDL3).</p>
+      <p class="small muted">Effort: trivial &middot; Risk: low</p>
+    </div>
+
+    <!-- ====== TIER 2 ====== -->
+    <h2><span class="tier tier-2">TIER 2</span> &nbsp; Medium &mdash; bounded, high value</h2>
+
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-01 &nbsp; Render interpolation</h3>
+      <p class="small">Store previous transform, lerp by <code>accumulator / deltaTime</code> at draw time. Kills
+      motion stutter when refresh &ne; 60&nbsp;Hz. <code>m_PrevPos</code> already exists. Revive the
+      <code>interpolated-render-redux</code> work as a reference.</p>
+      <p class="small muted">Effort: medium &middot; Risk: medium (thread an alpha through every <code>Draw</code>; handle teleports/wrapping)</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T2-02 &nbsp; luabind &rarr; sol2/sol3</h3>
+      <p class="small">Removes the worst dependency <i>and</i> the Boost requirement. The stale upstream
+      <code>sol3</code> branch shows the shape (<code>SolObjectWrapper</code>, split binding files) &mdash;
+      re-execution, not invention. ~5,100 LOC of bindings + the execution core.</p>
+      <p class="small muted">Effort: high &middot; Risk: high (binding-semantics parity) &mdash; highest-value single change</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-build">[BUILD]</span> &nbsp;T2-03 &nbsp; Build all deps from source</h3>
+      <p class="small">Set <code>use_prebuilt_libraries=false</code> everywhere, stop committing <code>.lib</code>
+      blobs. This <b>eliminates the <code>__iob_func</code> hack</b> at its root.</p>
+      <p class="small muted">Effort: medium &middot; Risk: medium</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-04 &nbsp; GPU sprite drawing for MOs</h3>
+      <p class="small">Make <code>MOSprite::Draw</code> / <code>MOSRotating::Draw</code> use <code>DrawTexturePro</code>
+      (already proven in <code>BitmapPrimitive::Draw</code>) instead of software <code>draw_sprite</code> into the
+      shared 8bpp layer. Recolour modes become shader uniforms.</p>
+      <p class="small muted">Effort: large &middot; Risk: high (touches every MO subclass) &mdash; partly gated by &sect;1.1</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-05 &nbsp; Profile multithreaded Lua scripts</h3>
+      <p class="small">Script timings are only recorded for the master Lua state; the bulk of per-frame scripting
+      (threaded MO updates) is invisible to <code>PerformanceMan</code>. Make timings thread-safe / merge per-state.</p>
+      <p class="small muted">Effort: low &middot; Risk: low</p>
+    </div>
+
+    <!-- ====== TIER 3 ====== -->
+    <h2><span class="tier tier-3">TIER 3</span> &nbsp; Strategic &mdash; the real modernization</h2>
+
+    <div class="card">
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-01 &nbsp; Multithread the physics travel loop</h3>
+      <p class="small"><i>The</i> performance ceiling. Particles travel near-independently &mdash; parallelize them
+      against a read-only terrain snapshot with deferred-write command buffers. <b>Or</b> adopt the maintainers'
+      <code>box2d-emscripten</code> direction rather than competing with it (see <a href="decisions.html">ADR-005</a>).</p>
+      <p class="small muted">Effort: very high &middot; Risk: very high</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-02 &nbsp; Decouple the material map from the palette</h3>
+      <p class="small">The keystone (&sect;1.1). Give terrain a dedicated single-channel material-ID buffer
+      independent of an RGBA colour layer. Unblocks 32-bit colour, &gt;256 materials, and ultimately retiring Allegro.</p>
+      <p class="small muted">Effort: very high &middot; Risk: very high &mdash; the single highest-leverage change</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-03 &nbsp; Rebuild BuyMenu / editors / Metagame UI</h3>
+      <p class="small">The dated UX all rides the legacy Allegro <code>GUIControlManager</code>. A unified modern UI
+      toolkit (the <code>PieMenu</code> shows the team can build good UI) modernizes purchasing + editing + campaign together.</p>
+      <p class="small muted">Effort: very high &middot; Risk: high</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Decide multiplayer's future</h3>
+      <p class="small">If multiplayer returns, it should be real server-authoritative <b>state-replication</b>
+      netcode with client-side prediction &mdash; not the old screen-streaming model. Requires an entity-replication
+      layer the engine does not have.</p>
+      <p class="small muted">Effort: very high &middot; Risk: very high</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-05 &nbsp; Retire Allegro 4</h3>
+      <p class="small">Once material map, terrain, sprites and blends are off indexed <code>BITMAP</code>s, replace
+      <code>BITMAP</code> with an engine-owned surface type and drop the abandoned Allegro fork. Depends on T3-02.</p>
+      <p class="small muted">Effort: very high &middot; Risk: very high &middot; ~56 files / 477 call sites</p>
+    </div>
+
+    <!-- ====== SWEET SPOT ====== -->
+    <h2><span class="h-accent">The contributor sweet spot</span></h2>
+    <div class="callout callout-ok">
+      <p>Given a tiny upstream team and mod-compatibility fears, the highest-return work is:
+      <b>all of Tier&nbsp;1, plus render interpolation (T2-01) and the luabind&rarr;sol migration (T2-02).</b></p>
+      <p>It is real modernization, it is <b>un-owned</b> (not on an active upstream branch), every item is
+      <b>individually mergeable</b>, and none of it fights the team's mod-compatibility constraints. Tier&nbsp;3 is
+      where the deep wins are &mdash; but each Tier-3 item is a project in itself and should only start once a
+      Tier-3 <a href="decisions.html">decision record</a> commits to it.</p>
+    </div>
+
+    <div class="page-foot">
+      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-05-16 &middot;
+      track execution in the <a href="tracker.html">Work Tracker</a>.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>
