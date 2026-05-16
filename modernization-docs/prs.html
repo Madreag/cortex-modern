@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Upstream PRs — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link active" href="prs.html">Upstream PRs</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Upstream Tracking</div>
+      <h1>Upstream Pull Requests</h1>
+      <p class="page-lead">Open pull requests on the official Cortex Command Community Project repository &mdash;
+      number, title, state, size and a plain-language summary. Several have been open a very long time; see the
+      <a href="analysis.html">Technical Analysis</a> for why upstream PRs tend to stall.</p>
+    </header>
+
+    <div class="callout callout-info">
+      <p><b>Snapshot &mdash; 2026-05-16.</b> Static capture of the upstream PR queue, not a live feed. Titles link
+      to the PR on GitHub. To refresh, re-fetch the open PRs and update the <code>PULLS</code> array near the
+      bottom of this file.</p>
+    </div>
+
+    <div class="summary" id="summary"></div>
+    <div class="filters" id="filters"></div>
+
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Pull request</th><th>State</th><th>Size</th><th>Updated</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p class="small muted" id="emptyMsg" style="display:none">No pull requests match the current filter.</p>
+
+    <div class="page-foot">
+      Snapshot of <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/pulls">cortex-command-community/Cortex-Command-Community-Project/pulls</a>
+      &middot; captured 2026-05-16 &middot; summaries are editorial.
+    </div>
+  </main>
+
+</div>
+
+<script>
+/* ============================================================
+   PULLS — snapshot of upstream open pull requests (2026-05-16).
+   To refresh: re-fetch open PRs and rewrite this array.
+   state: "ready" | "draft"
+   ============================================================ */
+const REPO = "https://github.com/cortex-command-community/Cortex-Command-Community-Project";
+
+const PULLS = [
+  { num:277, title:"Fix post effect rotation", state:"ready", add:12, del:7, updated:"2026-04-17",
+    desc:"Fixes the rotation of post-process glow effects and snaps post-effect coordinates to integers. Addresses issue #242." },
+  { num:272, title:"Extra BrowncoatLight Hat", state:"ready", add:0, del:0, updated:"2026-03-04",
+    desc:"Adds an alternative hat sprite for the Browncoat Light actor — a small content addition." },
+  { num:271, title:"Mu-Ilaak faction.", state:"ready", add:7414, del:36, updated:"2026-02-17",
+    desc:"Adds an entire new faction, the Mu-Ilaak (based on old Cortex Command concept art): one infantry unit, a brain, seven weapons, a grenade and a buy-menu skin." },
+  { num:270, title:"Separate thread module loading", state:"ready", add:381, del:110, updated:"2026-02-13",
+    desc:"Moves data-module loading onto a worker thread so the window no longer freezes during launch and can be closed with Alt+F4; groundwork for parallel loading." },
+  { num:269, title:"ScenarioGUI redo", state:"ready", add:368, del:148, updated:"2026-02-15",
+    desc:"Reworks the scenario / scene-select screen — scenes sharing a map position are grouped, with a dropdown variant selector; adds a VariantName INI field." },
+  { num:268, title:"ModManagerGUI redo v2", state:"ready", add:439, del:130, updated:"2026-02-13",
+    desc:"Continues the Mod Manager overhaul — scripts grouped into collapsible module categories, plus extra title-screen font glyphs for module names." },
+  { num:198, title:"Enhance Grapple Gun with unhook functionality and modular improvements", state:"ready", add:3176, del:554, updated:"2025-07-25",
+    desc:"Adds an unhook option to the Grapple Gun's pie menu and refactors the grapple system (rope physics, rendering, input handling) into dedicated modules." },
+  { num:186, title:"Pvs studio fixes", state:"ready", add:43, del:81, updated:"2025-07-06",
+    desc:"A batch of bug fixes surfaced by the PVS-Studio static analyzer. Stalled on changes-requested over edits to fragile legacy code." },
+  { num:173, title:"Macos Arm build", state:"draft", add:84, del:6, updated:"2025-07-26",
+    desc:"Fixes the macOS build and adds Apple Silicon (ARM) CI builds. Long-running draft." },
+  { num:156, title:"Attachables: Radius Effect", state:"draft", add:22, del:1, updated:"2025-11-14",
+    desc:"Lets decorative attachables (hair, wounds, flashes) opt out of contributing to their parent's collision radius, so actors stop crouching or clipping unnecessarily." },
+  { num:40, title:"OpenGL ES", state:"draft", add:51, del:36, updated:"2026-03-18",
+    desc:"Adds an OpenGL ES rendering path for mobile and Raspberry-Pi-class hardware; still has unresolved text-rendering glitches on some ARM GPUs. Open since Jan 2024." },
+  { num:8, title:"ModuleMan Refactoring and Improvements", state:"ready", add:1188, del:1355, updated:"2024-11-15",
+    desc:"Extracts module handling out of PresetMan into a new ModuleMan and enables runtime enabling/disabling of mods — a large, long-stalled refactor (open since Jan 2024)." },
+];
+
+const STATE_META = {
+  ready: { label:"Ready", cls:"pstate-ready" },
+  draft: { label:"Draft", cls:"pstate-draft" },
+};
+let stateFilter = "all";
+
+function renderSummary() {
+  const c = { ready:0, draft:0 };
+  PULLS.forEach(p => c[p.state]++);
+  document.getElementById("summary").innerHTML =
+    '<span><b style="color:var(--green)">'    + c.ready + '</b> ready</span>' +
+    '<span><b style="color:var(--text-dim)">' + c.draft + '</b> draft</span>' +
+    '<span><b>' + PULLS.length + '</b> total open</span>';
+}
+function renderFilters() {
+  const opts = [["all","All"],["ready","Ready"],["draft","Draft"]];
+  document.getElementById("filters").innerHTML = opts.map(([v,l]) =>
+    '<button class="filter-btn' + (stateFilter==v?' active':'') + '" data-val="'+v+'">'+l+'</button>').join("");
+}
+function renderTable() {
+  const rows = PULLS.filter(p => stateFilter==="all" || p.state===stateFilter);
+  document.getElementById("emptyMsg").style.display = rows.length ? "none" : "block";
+  document.getElementById("tbody").innerHTML = rows.map(p => {
+    const s = STATE_META[p.state];
+    const url = REPO + "/pull/" + p.num;
+    return '<tr>' +
+      '<td class="nowrap"><a class="id" href="'+url+'" target="_blank" rel="noopener">#'+p.num+'</a></td>' +
+      '<td><a href="'+url+'" target="_blank" rel="noopener"><b>'+p.title+'</b></a>' +
+        '<div class="row-desc muted small">'+p.desc+'</div></td>' +
+      '<td class="nowrap"><span class="tag '+s.cls+'">'+s.label+'</span></td>' +
+      '<td class="nowrap evidence">+'+p.add+' / -'+p.del+'</td>' +
+      '<td class="nowrap muted small">'+p.updated+'</td>' +
+    '</tr>';
+  }).join("");
+}
+function render() { renderSummary(); renderFilters(); renderTable(); }
+
+document.addEventListener("click", e => {
+  const b = e.target.closest(".filter-btn");
+  if (!b) return;
+  stateFilter = b.dataset.val;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
