@@ -36,4 +36,4 @@ Keep edits small and commit often so the history stays useful.
 - **Upstream:** https://github.com/cortex-command-community/Cortex-Command-Community-Project
 - **Related project:** https://github.com/Madreag/corefall — a parallel game project; a likely source of cross-pollination later.
 
-Working branch: `modernization-effort-start`.
+Working branch: `modernization-effort`.
