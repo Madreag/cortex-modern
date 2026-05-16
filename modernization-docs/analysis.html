@@ -27,6 +27,7 @@
       <a class="nav-link" href="roadmap.html">Roadmap</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
       <a class="nav-link" href="issues.html">Upstream Issues</a>
       <a class="nav-link" href="prs.html">Upstream PRs</a>
     </nav>
@@ -43,7 +44,7 @@
     <header class="page-header">
       <div class="crumb">Knowledge Base</div>
       <h1>Technical Analysis</h1>
-      <p class="page-lead">The engine dissected: five cross-cutting architectural issues, ten subsystems,
+      <p class="page-lead">The engine dissected: five cross-cutting architectural issues, nine subsystems,
       the dependency audit, and the mod-vs-engine boundary. Findings come from a full read of the
       ~220K-LOC <code>development</code> branch.</p>
     </header>
@@ -112,7 +113,10 @@
       <p>Rendering draws objects at their raw discrete <code>m_Pos</code>. If the monitor is not exactly 60&nbsp;Hz,
       motion <b>stutters</b> (positions jump a whole timestep) or frames are redrawn identically. <code>m_PrevPos</code>
       already exists (used for rest detection) but is never fed to the renderer. Well-scoped
-      <span class="tag tag-code">[CODE]</span> win &mdash; the maintainers' <code>interpolated-render-redux</code> branch is exactly this, unmerged.</p>
+      <span class="tag tag-code">[CODE]</span> win &mdash; but upstream tried twice and failed: the original
+      <code>interpolated-render</code> branch collapsed under an over-ambitious sim/render thread split, and
+      <code>interpolated-render-redux</code>, despite the name, never wrote any interpolation code at all
+      (see <a href="branches.html">Upstream Branches</a>).</p>
     </div>
 
     <h3>1.5 &nbsp; The abandoned-dependency trio</h3>
@@ -146,8 +150,9 @@
         <h3>Physics / Simulation</h3>
         <p class="small">Atom-based per-pixel collision; single-threaded (&sect;1.2). <code>AtomGroup::Travel</code> is
         self-described in comments as a "trainwreck" / "dumpsterfire". MO-vs-MO collision is <i>hard-disabled</i>
-        in the limb-push path (<span class="evidence">// TODO: Fix HitMOs issue!!</span>). The maintainers'
-        <code>box2d-emscripten</code> branch is the in-flight answer here.</p>
+        in the limb-push path (<span class="evidence">// TODO: Fix HitMOs issue!!</span>). A single-author,
+        AI-assisted <code>box2d-emscripten</code> branch prototypes a Box2D physics layer, but it is an unfinished,
+        dormant spike (see <a href="branches.html">Upstream Branches</a>).</p>
       </div>
 
       <div class="card">
@@ -265,11 +270,12 @@
 
     <h2>5 &nbsp;&middot;&nbsp; <span class="h-accent">The process reality</span></h2>
     <div class="callout callout-warn">
-      <p>This shapes what is realistic. The upstream project is a <b>very small team</b> &mdash; ~3 active
-      contributors, ~5 commits to <code>development</code> in the last 90 days. Long-stuck PRs (one core refactor
-      open <b>2.3 years</b>) reveal the constraints: <b>mod-compatibility paralysis</b> (breaking changes freeze
-      over fear of breaking <a href="https://cccp.mod.io">cccp.mod.io</a>), bus-factor reviewer gaps, and bitrot
-      from a fast-moving branch.</p>
+      <p>This shapes what is realistic. The upstream project is a <b>very small team</b> &mdash; a handful of
+      contributors. <code>development</code> has been <b>frozen since 2026-04-06</b>; all activity is scattered
+      across unmerged, mostly single-author branches (see <a href="branches.html">Upstream Branches</a>).
+      Long-stuck PRs (one core refactor open <b>2.3 years</b>) reveal the constraints: <b>mod-compatibility
+      paralysis</b> (breaking changes freeze over fear of breaking <a href="https://cccp.mod.io">cccp.mod.io</a>),
+      bus-factor reviewer gaps, and long-lived branches that never land.</p>
       <p><b>Implication:</b> our modernization work must be <b>incremental, mod-compatible, individually
       shippable, and not dependent on heroic review.</b> Big-bang <span class="tag tag-arch">[ARCH]</span> PRs die
       in this environment &mdash; the branch graveyard proves it.</p>

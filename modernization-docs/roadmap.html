@@ -27,6 +27,7 @@
       <a class="nav-link active" href="roadmap.html">Roadmap</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
       <a class="nav-link" href="issues.html">Upstream Issues</a>
       <a class="nav-link" href="prs.html">Upstream PRs</a>
     </nav>
@@ -58,20 +59,22 @@
       </p>
     </div>
 
-    <!-- ====== DON'T DUPLICATE ====== -->
-    <h2><span class="h-accent">What the maintainers already own</span> &mdash; do not duplicate</h2>
+    <!-- ====== UPSTREAM BRANCHES ====== -->
+    <h2><span class="h-accent">Upstream branches</span> &mdash; what's already in flight</h2>
     <div class="callout callout-warn">
-      <p>The upstream branch list is an unwritten roadmap. These efforts are <b>active</b> (commits Feb&ndash;Apr 2026).
-      Competing with them wastes effort and creates merge conflicts.</p>
+      <p>Upstream <code>development</code> is <b>frozen since 2026-04-06</b>; the real work lives in unmerged,
+      mostly single-author WIP branches &mdash; <b>none mergeable as-is</b>. Full per-branch analysis is on the
+      <a href="branches.html">Upstream Branches</a> page. In short:</p>
       <ul>
-        <li><code>box2d-emscripten</code> &mdash; phased <b>Box2D v3.1.0</b> integration for object physics + a WebAssembly port.</li>
-        <li><code>emscripten-port</code> &mdash; a working <b>browser / iOS</b> build.</li>
-        <li><code>gpu-renderer</code> &mdash; the <i>next</i> renderer iteration (HUD on GPU, split-screen).</li>
-        <li><code>interpolated-render-redux</code> &mdash; render interpolation.</li>
+        <li><b>Track, don't duplicate</b> &mdash; <code>gpu-renderer</code> (renderer-layer rewrite, ~60-70% done,
+        paused mid-HUD), <code>box2d-emscripten</code> (web port + a Box2D prototype, dormant),
+        <code>dynamic-two-stage-fow</code> (GPU fog-of-war &mdash; the one actively-developed branch).</li>
+        <li><b>Mine as a reference</b> &mdash; <code>sol3</code> is a complete, build-verified luabind&rarr;sol2
+        migration (a head start for T2-02); the original <code>interpolated-render</code> holds the real
+        interpolation work (design lessons for T2-01).</li>
+        <li><b>Ignore</b> &mdash; <code>interpolated-render-redux</code> (misleading name &mdash; zero interpolation
+        code), <code>hot-reloading</code>, <code>gles-v2</code>, <code>read-write-fog-of-war</code> (demos or superseded).</li>
       </ul>
-      <p><b>Stalled &amp; un-owned</b> (1,600+ commits behind &mdash; effectively dead): <code>sol3</code> (luabind
-      replacement), <code>hot-reloading</code>, <code>gles-v2</code>. These gaps are where an outside contributor
-      has the most room &mdash; we can pick them up.</p>
     </div>
 
     <!-- ====== TIER 1 ====== -->
@@ -128,15 +131,17 @@
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-01 &nbsp; Render interpolation</h3>
       <p class="small">Store previous transform, lerp by <code>accumulator / deltaTime</code> at draw time. Kills
-      motion stutter when refresh &ne; 60&nbsp;Hz. <code>m_PrevPos</code> already exists. Revive the
-      <code>interpolated-render-redux</code> work as a reference.</p>
+      motion stutter when refresh &ne; 60&nbsp;Hz. <code>m_PrevPos</code> already exists. Note: the
+      <code>interpolated-render-redux</code> branch is a false lead (no interpolation code) &mdash; mine the original
+      <code>interpolated-render</code> branch instead, and scope this to <b>single-threaded</b> interpolation only
+      (the sim/render thread split sank both prior attempts).</p>
       <p class="small muted">Effort: medium &middot; Risk: medium (thread an alpha through every <code>Draw</code>; handle teleports/wrapping)</p>
     </div>
     <div class="card">
       <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T2-02 &nbsp; luabind &rarr; sol2/sol3</h3>
-      <p class="small">Removes the worst dependency <i>and</i> the Boost requirement. The stale upstream
-      <code>sol3</code> branch shows the shape (<code>SolObjectWrapper</code>, split binding files) &mdash;
-      re-execution, not invention. ~5,100 LOC of bindings + the execution core.</p>
+      <p class="small">Removes the worst dependency <i>and</i> the Boost requirement. The upstream
+      <code>sol3</code> branch is a <b>complete, build-verified</b> luabind&rarr;sol2 migration &mdash; re-execute it
+      on current <code>development</code> as a template (re-execution, not invention). ~5,100 LOC of bindings + the execution core.</p>
       <p class="small muted">Effort: high &middot; Risk: high (binding-semantics parity) &mdash; highest-value single change</p>
     </div>
     <div class="card">
