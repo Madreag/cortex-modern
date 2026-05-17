@@ -68,9 +68,10 @@
     <div class="callout callout-warn">
       <p>Upstream <code>development</code> is <b>frozen since 2026-04-06</b>; the real work lives in unmerged,
       mostly single-author WIP branches, <b>none mergeable as-is</b>. The full per-branch deep-dive is on the
-      <a href="branches.html">Upstream Branches</a> page. Two branches feed this plan directly: <code>sol3</code> is
-      a complete, build-verified luabind&rarr;sol2 migration and a head start for <b>T2-02</b>; the original
-      <code>interpolated-render</code> holds the real interpolation work and is design reference for <b>T2-01</b>.</p>
+      <a href="branches.html">Upstream Branches</a> page. One branch feeds this plan directly: the original
+      <code>interpolated-render</code> holds the real interpolation work and is design reference for <b>T2-01</b>.
+      The <code>sol3</code> branch <i>compiles</i> a luabind&rarr;sol2 port but &mdash; per upstream-dev review &mdash;
+      is <b>not</b> a re-executable template: it breaks vanilla and modded Lua (see <b>T2-02</b>).</p>
     </div>
 
     <!-- ====== TIER 1 ====== -->
@@ -112,10 +113,10 @@
     <div class="card">
       <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;T1-06 &nbsp; Squad AI &mdash; absorbed into the AI flagship</h3>
       <p class="small">Originally scoped here as a Tier-1 pure-Lua squad-AI tweak. It has since been
-      <b>promoted</b>: AI is cortex-modern's flagship, and "smarter squads" is one milestone of a full
-      layered-hybrid AI rebuild &mdash; incremental pathfinding, influence maps, a utility decision brain, a
-      behaviour-tree engine and a real squad commander. The committed plan, the seven milestones and the
-      automated test suite are on the dedicated <a href="ai.html">AI</a> page.</p>
+      <b>promoted</b>: AI is cortex-modern's flagship, and "smarter squads" is one milestone (M3) of a
+      <b>locomotion-first AI overhaul</b> &mdash; fix path-following and stuck-recovery first, then squads, then a
+      perception &amp; decision pass, mostly in Lua. The committed plan, the seven milestones and the automated
+      test suite are on the dedicated <a href="ai.html">AI</a> page.</p>
       <p class="small muted">Status: superseded by the AI flagship &middot; see the <a href="ai.html">AI</a> page &amp; <a href="decisions.html">ADR-014</a></p>
     </div>
     <div class="card">
@@ -131,18 +132,23 @@
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-01 &nbsp; Render interpolation</h3>
       <p class="small">Store previous transform, lerp by <code>accumulator / deltaTime</code> at draw time. Kills
-      motion stutter when refresh &ne; 60&nbsp;Hz. <code>m_PrevPos</code> already exists. Note: the
-      <code>interpolated-render-redux</code> branch is a false lead (no interpolation code) &mdash; mine the original
-      <code>interpolated-render</code> branch instead, and scope this to <b>single-threaded</b> interpolation only
-      (the sim/render thread split sank both prior attempts).</p>
-      <p class="small muted">Effort: medium &middot; Risk: medium (thread an alpha through every <code>Draw</code>; handle teleports/wrapping)</p>
+      motion stutter when refresh &ne; 60&nbsp;Hz. <code>m_PrevPos</code> already exists, and HeliumAnt's renderer
+      work made the draw phase near-free. Scope it to <b>single-threaded</b> interpolation &mdash;
+      <code>interpolated-render-redux</code> had exactly this premise (interpolation without the thread split that
+      sank the original) but barely started; mine the original <code>interpolated-render</code> for the lerp and
+      teleport/wrap code. Per the upstream lead the real difficulty is making <b>input handling async</b> &mdash;
+      inputs must be processed at the display framerate independent of the sim-tick rate.</p>
+      <p class="small muted">Effort: medium &middot; Risk: medium &mdash; thread an alpha through every <code>Draw</code>, handle teleports/wrapping, and design the async-input model</p>
     </div>
     <div class="card">
       <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T2-02 &nbsp; luabind &rarr; sol2/sol3</h3>
-      <p class="small">Removes the worst dependency <i>and</i> the Boost requirement. The upstream
-      <code>sol3</code> branch is a <b>complete, build-verified</b> luabind&rarr;sol2 migration &mdash; re-execute it
-      on current <code>development</code> as a template (re-execution, not invention). ~5,100 LOC of bindings + the execution core.</p>
-      <p class="small muted">Effort: high &middot; Risk: high (binding-semantics parity) &mdash; highest-value single change</p>
+      <p class="small">Removes the worst dependency <i>and</i> the Boost requirement. The upstream <code>sol3</code>
+      branch <i>compiles</i> a luabind&rarr;sol2 port &mdash; but per the upstream lead it is not a re-executable
+      template: sol2 changes usertype property and constructor semantics in ways that break vanilla Lua and the
+      entire mod corpus (sol2 issue #1513). The real work is solving that compatibility break, which collides with
+      <a href="decisions.html">ADR-004</a>'s mod-compatibility rule &mdash; a compatibility shim may be larger than
+      the ~5,100-LOC port itself.</p>
+      <p class="small muted">Effort: high &middot; Risk: high &mdash; the sol2 mod-compatibility break is the real problem, not the port; reassess whether it is worth doing at all</p>
     </div>
     <div class="card">
       <h3><span class="tag tag-build">[BUILD]</span> &nbsp;T2-03 &nbsp; Build all deps from source</h3>
@@ -158,10 +164,13 @@
       <p class="small muted">Effort: large &middot; Risk: high (touches every MO subclass) &mdash; partly gated by &sect;1.1</p>
     </div>
     <div class="card">
-      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-05 &nbsp; Profile multithreaded Lua scripts</h3>
-      <p class="small">Script timings are only recorded for the master Lua state; the bulk of per-frame scripting
-      (threaded MO updates) is invisible to <code>PerformanceMan</code>. Make timings thread-safe / merge per-state.</p>
-      <p class="small muted">Effort: low &middot; Risk: low</p>
+      <h3><span class="status status-doing">CORRECTED</span> &nbsp;T2-05 &nbsp; Profile multithreaded Lua scripts</h3>
+      <p class="small">An earlier read claimed threaded MO script timings were invisible to
+      <code>PerformanceMan</code>. Per the upstream lead that is wrong &mdash; <code>PerformanceMan</code> already
+      tracks them (<code>ScriptTiming</code> / <code>UpdateSortedScriptTimings</code>), as wall-clock time across all
+      scripts rather than per-core CPU-time, and that is by design. The item is effectively closed; a per-core
+      breakdown would be a minor optional add, not a needed fix.</p>
+      <p class="small muted">Status: corrected / closed &mdash; the premise was inaccurate</p>
     </div>
 
     <!-- ====== TIER 3 ====== -->
@@ -170,8 +179,10 @@
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-01 &nbsp; Multithread the physics travel loop</h3>
       <p class="small"><i>The</i> performance ceiling. Particles travel near-independently &mdash; parallelize them
-      against a read-only terrain snapshot with deferred-write command buffers. <b>Or</b> adopt the maintainers'
-      <code>box2d-emscripten</code> direction rather than competing with it (see <a href="decisions.html">ADR-005</a>).</p>
+      against a read-only terrain snapshot with deferred-write command buffers. (An earlier version suggested
+      adopting the <code>box2d-emscripten</code> direction; the upstream lead advises against a Box2D physics switch
+      &mdash; CC's atom physics is core identity and that branch never matured. Parallelizing the atom-travel loop is
+      the path.)</p>
       <p class="small muted">Effort: very high &middot; Risk: very high</p>
     </div>
     <div class="card">
@@ -213,15 +224,17 @@
       engine fork, so it does not compete with Tier&nbsp;1&ndash;3 for engine work; <code>T1-06</code> is already its
       first item. The full catalogue, the rationale, and what to leave alone are on the
       <a href="corefall.html">Corefall Ideas</a> page and in <a href="decisions.html">ADR-010</a>.</p>
-      <p>The <b>flagship</b> of that track is a real strategic <a href="campaign.html">Campaign</a> &mdash; finishing
-      the "Conquest" mode upstream officially abandoned. It assembles the Corefall mission / faction / storyteller
-      ideas and wires up engine primitives that have sat unused since v6.0. See the
-      <a href="campaign.html">Campaign</a> page and <a href="decisions.html">ADR-012</a>.</p>
+      <p>The <b>flagship</b> of that track is a real strategic <a href="campaign.html">Campaign</a> &mdash; now a
+      <b>committed plan</b> (<a href="decisions.html">ADR-012</a>): "The Frontier", a strategic war map evolved from
+      the abandoned "Conquest" mode plus a persistent tactical company campaign that finishes Cortex Command's own
+      unfinished story. The committed plan &mdash; six ranked visions, the architecture, seven milestones
+      (M0&ndash;M6) and the validation suite &mdash; is the dedicated <a href="campaign.html">Campaign</a> page.</p>
       <p>And the <b>foundational flagship</b> &mdash; the one the Campaign and co-op
       <a href="multiplayer.html">Multiplayer</a> both stand on &mdash; is the <a href="ai.html">AI overhaul</a>.
-      Unlike the rest of the feature track it is not pure <span class="tag tag-mod">[MOD]</span> work: it is a
-      layered-hybrid rebuild that gives the engine an incremental pathfinder, influence maps and a decision brain.
-      It has its own committed milestone plan and is recorded as <a href="decisions.html">ADR-014</a>.</p>
+      It is a <b>locomotion-first</b> overhaul: mostly <span class="tag tag-mod">[MOD]</span> work fixing the AI's
+      Lua &mdash; path-following, stuck-recovery, squads, perception &mdash; with a small set of
+      <span class="tag tag-code">[CODE]</span> engine hooks. It has its own committed milestone plan and is
+      recorded as <a href="decisions.html">ADR-014</a>.</p>
     </div>
 
     <!-- ====== SWEET SPOT ====== -->
@@ -236,7 +249,7 @@
     </div>
 
     <div class="page-foot">
-      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-05-16 &middot;
+      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-05-17 &middot;
       track execution in the <a href="tracker.html">Work Tracker</a>.
     </div>
   </main>

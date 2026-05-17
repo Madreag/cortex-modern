@@ -103,7 +103,7 @@ const BRANCHES = [
     facts:"51 commits · single author, 100% AI-assisted · last work 2026-04-02 · ~6 weeks idle",
     what:"Two things in one branch: (1) a full WebAssembly/browser port — an Allegro-compat shim, a from-scratch FMOD software mixer, IndexedDB saves — and (2) a Box2D v3.1.0 integration for object-to-object physics.",
     state:"The WASM port is substantially done: the game boots, renders, plays and has audio in a browser, including iOS. The Box2D layer is a 2-day prototype — one of its five phases is dead code, debug draw ships on, it hard-caps at 200 bodies, and the branch does not even build natively (Box2D is mis-scoped to the web build only).",
-    take:"Track the web-port half — genuinely valuable, worth harvesting later onto a clean base. Wait on the Box2D half — an unfinished, unreviewed prototype, not something to pull into our physics." },
+    take:"Track the web-port half — genuinely valuable, worth harvesting later onto a clean base. Drop the Box2D-physics half: an unfinished prototype, and the upstream lead advises against a Box2D physics switch outright — CC's atom physics is core to its identity, and Box2D would need extensive CC-specific work to fit." },
 
   { name:"dynamic-two-stage-fow", status:"active", verdict:"track",
     facts:"70 commits · getcetc + Causeless · last work 2026-02-24 · the most active branch",
@@ -119,9 +119,9 @@ const BRANCHES = [
 
   { name:"sol3", status:"stale", verdict:"ref",
     facts:"37 source-file changes · 1685 commits behind · dead since 2024-01",
-    what:"A COMPLETE, build-verified migration of the Lua binding layer from the abandoned luabind to sol2 v3.3.0 — exactly our roadmap item T2-02.",
-    state:"Dead as a branch (1685 behind), but the migration itself is finished and was build-tested: every LuaBindings*.cpp converted, a SolObjectWrapper in place, ownership semantics preserved in comments.",
-    take:"The highest-value reference here. We can't merge it, but it is a perfect worked example — re-execute T2-02 on current development using this branch as the template. A big head start on the hardest Tier-2 item." },
+    what:"A migration of the Lua binding layer from abandoned luabind to sol2 v3.3.0 — the shape of roadmap item T2-02.",
+    state:"It compiles and was build-tested — but per the upstream lead it is NOT functional. sol2 changes usertype semantics: it rejects assignment to undefined properties (luabind let those fall through to plain Lua tables) and changes constructor syntax. That breaks every vanilla Lua script and the whole mod corpus (sol2 issue #1513).",
+    take:"Reference, with a heavy caveat. It shows the binding mechanics, but it is not a 'port that just works' — the compatibility break IS the real T2-02 problem, and it collides head-on with ADR-004's mod-compatibility rule. Do not re-execute it as a template; treat the compat break as the work." },
 
   { name:"interpolated-render", status:"stale", verdict:"ref",
     facts:"120 commits · 2023–2024 · 923 commits behind · abandoned 2024-09",
@@ -131,9 +131,9 @@ const BRANCHES = [
 
   { name:"interpolated-render-redux", status:"stale", verdict:"ignore",
     facts:"3 real commits (Aug 2025) · abandoned ~9 months · the rest is merge-commit noise",
-    what:"Despite the name, this branch contains ZERO render-interpolation code — just three minor refactors (a sprite frustum-cull, a draw-call relocation, a dead-variable removal).",
-    state:"A false lead. Its 'ahead 7 / last 2026-02-05' figures are merge commits; real work stopped 2025-08-12 and interpolation was never started.",
-    take:"Ignore. Our render-interpolation work (T2-01) gets nothing from this branch — use the original interpolated-render for design lessons instead." },
+    what:"The intended retry of interpolated-render — render interpolation WITHOUT the sim/render thread split that sank the original. The right direction; it just never got past three minor refactors (a sprite frustum-cull, a draw-call relocation, a dead-variable removal).",
+    state:"Barely started. The interpolation itself was never written here; real work stopped 2025-08-12.",
+    take:"Ignore the branch — there is no code to harvest — but its premise is correct and is exactly the T2-01 plan: do the interpolation single-threaded. Mine the original interpolated-render for the lerp and teleport/wrap code." },
 
   { name:"emscripten-port", status:"stale", verdict:"ignore",
     facts:"22 commits · a strict ancestor of box2d-emscripten",

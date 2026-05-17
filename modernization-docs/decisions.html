@@ -109,7 +109,11 @@
         <span class="status status-proposed">Proposed</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>dev-review correction (2026-05-17):</b> the upstream lead
+        confirms the <code>sol3</code> branch compiles but is not functional &mdash; sol2 changes usertype
+        property/constructor semantics (sol2 issue #1513) and breaks vanilla <i>and</i> modded Lua. Re-executing it
+        as-is collides with ADR-004; the real cost is a compatibility shim. Reassess whether this migration is worth
+        doing at all.</p>
         <h4>Context</h4>
         <p>luabind 0.7.1 is abandoned, Boost-dependent, blocks toolchain upgrades, and forces build hacks (no PCH,
         re-enabling C++17-removed features).</p>
@@ -152,7 +156,10 @@
         <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>dev-review correction (2026-05-17):</b> the upstream lead
+        advises <i>against</i> a Box2D physics switch outright &mdash; CC's atom physics is core identity, the
+        <code>box2d-emscripten</code> physics layer never matured, and a real port would need extensive CC-specific
+        work. T3-01 should parallelize the existing atom-travel loop, not adopt Box2D.</p>
         <h4>Context</h4>
         <p><code>box2d-emscripten</code>, <code>gpu-renderer</code> and <code>dynamic-two-stage-fow</code> are the
         upstream branches with the most recent activity. A later per-branch deep-dive &mdash; see
@@ -160,7 +167,8 @@
         <code>emscripten-port</code> / <code>interpolated-render-redux</code> proved stale.</p>
         <h4>Decision</h4>
         <p>Do not start competing implementations of Box2D physics, the next-gen renderer, or the web port. For
-        physics multithreading (<code>T3-01</code>), prefer aligning with or contributing to the Box2D effort.
+        physics multithreading (<code>T3-01</code>), parallelize the existing atom-travel loop &mdash; not a Box2D
+        switch (see the dev-review correction above).
         We <i>may</i> revive stalled, un-owned branches (<code>sol3</code>, <code>hot-reloading</code>).</p>
         <h4>Consequences</h4>
         <p>Avoids wasted effort and merge conflicts. Focuses our work on genuinely un-owned gaps.</p>
@@ -328,28 +336,50 @@
     <section class="adr">
       <div class="adr-head">
         <span class="adr-id">ADR-012</span>
-        <span class="adr-title">A real campaign is cortex-modern's flagship</span>
-        <span class="status status-proposed">Proposed</span>
+        <span class="adr-title">The campaign &mdash; a committed strategic + tactical flagship</span>
+        <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-17 &middot; accepted (was Proposed, 2026-05-16)</p>
         <h4>Context</h4>
-        <p>Cortex Command's built-in "Conquest" campaign is officially "very INCOMPLETE and flawed" (the shipping
-        game's own notice), and upstream's promised ground-up rework has no code behind it and is realistically not
-        happening. The engine already carries unused campaign primitives from v6.0 (capture points, buy doors,
-        dropship docks, item dispensers, AI tactics). The <a href="corefall.html">Corefall Ideas</a> page catalogues
-        a complete campaign-grade design that is almost entirely <span class="tag tag-mod">[MOD]</span>. Full case on
-        the <a href="campaign.html">Campaign</a> page.</p>
-        <h4>Decision <span class="muted small">(proposed)</span></h4>
-        <p>Make a real strategic campaign cortex-modern's flagship feature: a fresh, clean-room
-        <code>GAScripted</code> campaign that supersedes the abandoned Conquest, assembled from the Corefall
-        mission / faction / storyteller ideas and wiring up the dormant v6.0 primitives. Designed from first
-        principles, not copied from Void Wanderers. AI depth (<code>T1-06</code> + the Corefall AI cluster) runs
-        alongside as essential supporting work.</p>
+        <p>Cortex Command ships one campaign &mdash; "Conquest", the Metagame &mdash; and the shipping game's own
+        notice (<code>MainMenuGUI.cpp</code>, <code>ShowMetaGameNoticeScreen()</code>) calls it "very INCOMPLETE and
+        flawed", promises a ground-up rework that has no code behind it, and redirects players to the Void Wanderers
+        mod. The campaign is the #2 community complaint after AI. With the AI overhaul (ADR-014) and Multiplayer
+        (ADR-015) committed, the campaign was the last open flagship question.</p>
+        <p>A full investigation produced the <a href="campaign.html">Campaign</a> page: a direct source read of the
+        Metagame (rules welded into a ~6,000-line <code>MetagameGUI</code>, coin-flip auto-resolution, no
+        persistence, no content format); a study of Void Wanderers, the community's de-facto campaign; the in-game
+        lore and the Android Arts / Data fluff doc &mdash; which revealed a <b>dev-canonical but unfinished story
+        arc</b> (the Bombies, the sentient Orange Dummy CPU, "Star System Death", Uzira, the Mu-ilaak finale) marked
+        "Awaiting cleanup!" and never shipped; and the Corefall campaign design. Ten campaign designs were narrowed
+        to six combined visions and ranked.</p>
+        <h4>Decision</h4>
+        <p>Make the campaign cortex-modern's <b>third committed flagship</b>. The chosen design is <b>"The
+        Frontier"</b>: a hybrid &mdash; Conquest's strategic war map, fixed and evolved, with a persistent tactical
+        <b>mercenary-company campaign</b> hanging off it; a RimWorld-style <b>storyteller</b> pacing it; <b>neutral
+        factions</b> (a five-step disposition track) and <b>neutral bosses</b> as first-class actors; and the game's
+        own unfinished story, finished, as the <b>anchor-mission spine</b>. It is built as a new
+        <code>Data/Campaign.rte/</code> on the <code>GAScripted</code> + <code>GlobalScript</code> contract &mdash;
+        overwhelmingly <span class="tag tag-mod">[MOD]</span>, no engine fork for layers L0&ndash;L5. The build is
+        seven dependency-ordered milestones (M0&ndash;M6), agent-driven, gated by the CMP campaign-trust suite, no
+        human-time estimates. Binding points: <b>M0</b> extracts the metagame model out of <code>MetagameGUI</code>
+        before anything else; <b>M1 ships "Conquest, Rebuilt" as a standalone release</b> that retires the in-game
+        apology notice; the anchor missions use the dev-canonical lore; neutral factions and bosses are first-class;
+        Void Wanderers is <b>not forked</b> &mdash; it is mined and kept green in the AI flagship's CI mod corpus;
+        the grand-strategy depth is opt-in, off by default; progression is horizontal; the campaign save rides
+        <code>.ccsave</code> on the determinism-island contract. The <a href="campaign.html">Campaign</a> page is
+        the living plan and the artifact an implementer builds from.</p>
         <h4>Consequences</h4>
-        <p>A large but mostly-<span class="tag tag-mod">[MOD]</span> effort that needs no engine fork and gives the
-        fork a clear identity &mdash; an officially-sanctioned gap, not a turf war with upstream. Pending the owner's
-        go-ahead before work begins.</p>
+        <p>The campaign is the <b>capstone</b> flagship &mdash; it consumes the other two. It rides ADR-014's order
+        vocabulary, squad coordination, decision-event channel and replay (the AI makes its battles worth fighting);
+        co-op campaign <i>is</i> Multiplayer's M4; and it shares the AI / Multiplayer M0 harness, the
+        <code>.ccsave</code> path and the determinism contract &mdash; one harness, three flagships. It is mostly
+        <span class="tag tag-mod">[MOD]</span> and needs no engine fork. It finishes Cortex Command's scrapped
+        story, which is the campaign's identity differentiator. Void Wanderers continues as a separate, CI-tracked
+        mod. This supersedes ADR-012's own Proposed form and resolves the last open flagship decision; the
+        six-vision analysis, the architecture, the milestones and the validation suite live on the
+        <a href="campaign.html">Campaign</a> page.</p>
       </div>
     </section>
 
@@ -390,36 +420,44 @@
     <section class="adr">
       <div class="adr-head">
         <span class="adr-id">ADR-014</span>
-        <span class="adr-title">The AI overhaul &mdash; a committed layered-hybrid architecture</span>
+        <span class="adr-title">The AI overhaul &mdash; a committed, locomotion-first plan</span>
         <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>re-scoped 2026-05-17</b> after upstream-dev (Causeless)
+        review and a full read of the AI source. The original draft mis-diagnosed the AI &mdash; it proposed a
+        layered-hybrid decision architecture (utility AI, HTN, influence maps, a D* Lite pathfinder rewrite) for
+        what is really an <i>execution</i> problem, and it proposed navigation work the v7 development branch had
+        already shipped. The decision below is the corrected, source-verified plan; the <a href="ai.html">AI</a>
+        page is the living artifact.</p>
         <h4>Context</h4>
         <p>AI quality is the #1 community complaint and has been for twenty years; the upstream lead has openly
         called it "garbage". It is also the foundation under the other two flagship efforts &mdash; the
         <a href="campaign.html">Campaign</a> is only as good as its battles, and co-op
-        <a href="multiplayer.html">Multiplayer</a> runs enemy AI server-side. A full source read (the ~5,830-line
-        Lua AI plus the C++ pathfinder, controller and harness), an ~80-source survey of game-AI architecture, and
-        a grounded diagnosis produced a complete design. The owner has committed to building it in full, no
-        compromise. The detailed, build-from plan lives on the dedicated <a href="ai.html">AI</a> page.</p>
+        <a href="multiplayer.html">Multiplayer</a> runs enemy AI server-side. A full read of the AI source (the
+        ~5,830-line Lua AI plus the C++ pathfinder, controller and harness) and an upstream-dev review produced a
+        verified diagnosis: the player-visible failures &mdash; actors flying into walls, jamming on terrain,
+        killing themselves &mdash; are failures of <b>execution</b> (locomotion, path-following, stuck-recovery),
+        not of high-level decision-making, which is adequate. The pathfinder is async, jump-aware and capable, and
+        was recently overhauled; it is not the problem.</p>
         <h4>Decision</h4>
-        <p>Make the AI overhaul cortex-modern's flagship and first major build. Architecture: a <b>layered
-        hybrid</b> &mdash; the engine owns the machinery (an incremental D* Lite pathfinder replacing MicroPather,
-        influence maps, a per-actor blackboard, a perception / spatial-query API, an adaptive AI scheduler, a
-        decision-event channel, and utility + behaviour-tree kernels); Lua keeps the judgement and stays the mod
-        surface. The work is sequenced as seven dependency-ordered milestones (M0&ndash;M6), beginning with the
-        validation harness, gated by an automated trust suite. No human-time estimates &mdash; the build is
-        agent-driven, sequenced by dependency and validation. Mod compatibility is a hard requirement; "done" is
-        the machine-measured definition on the AI page.</p>
+        <p>Make the AI overhaul cortex-modern's flagship and first major build. Approach: <b>locomotion-first</b>
+        &mdash; improve the existing Lua AI rather than replace it. Rework the path-follower (<code>GoToWpt</code>),
+        add diagnosed stuck-recovery and a hazard-reflex layer, build real squad coordination, and make a focused
+        perception / weapon-choice / orders pass. The engine work is small and bounded: an emergency-interrupt, a
+        danger query, a decision-event channel for observability, a wider order vocabulary. <b>No</b> pathfinder
+        rewrite (MicroPather stays); <b>no</b> utility-AI / HTN / influence-map / behaviour-tree tower. Seven
+        dependency-ordered milestones (M0&ndash;M6), beginning with the validation harness, gated by an automated
+        trust suite. The build is agent-driven, sequenced by dependency and validation; "done" is the
+        machine-measured definition on the AI page.</p>
         <h4>Consequences</h4>
         <p>The AI is the substrate beneath ADR-012 (the Campaign) and ADR-015 (Multiplayer) &mdash; both depend on
-        competent AI. It is mostly engine <span class="tag tag-code">[CODE]</span> /
-        <span class="tag tag-arch">[ARCH]</span> work plus the Lua brain; MicroPather is removed, dropping a
-        vendored dependency. <code>T1-06</code> is superseded &mdash; it becomes the roadmap's pointer to this
-        flagship rather than a standalone Tier-1 item. Existing mods keep working through a preserved
-        compatibility surface. The <a href="ai.html">AI</a> page is the living plan and the artifact an
-        implementer builds from.</p>
+        competent AI. It is mostly <span class="tag tag-mod">[MOD]</span> (Lua) work with a small set of
+        <span class="tag tag-code">[CODE]</span> engine additions; MicroPather and the existing pathfinder are
+        kept. <code>T1-06</code> is superseded &mdash; it becomes the roadmap's pointer to this flagship rather
+        than a standalone Tier-1 item. Existing mods keep working through a preserved compatibility surface (the
+        command-API facade plus an opt-in legacy AI profile). The <a href="ai.html">AI</a> page is the living plan
+        and the artifact an implementer builds from.</p>
       </div>
     </section>
 
@@ -431,7 +469,13 @@
         <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>dev-review note (2026-05-17):</b> the upstream lead's review
+        finds full determinism materially more reachable than this decision first assumed &mdash; the RNG is
+        constant-seeded, the threading has the <code>SyncedUpdate</code> boundary, modern FP is consistent. That
+        re-prices the determinism retrofit (M5) and rollback PvP (M6) downward; it does <i>not</i> change the staged
+        architecture &mdash; state-replication co-op still ships first, since it needs only the terrain island while
+        lockstep needs the whole mod corpus deterministic. The M0 determinism spike measures the remaining cost. See
+        the <a href="multiplayer.html">Multiplayer</a> page.</p>
         <h4>Context</h4>
         <p>ADR-013 reopened the multiplayer question and commissioned the full option analysis on the
         <a href="multiplayer.html">Multiplayer</a> page. Cortex Command's old networking &mdash; server-side
@@ -473,7 +517,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 15 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
+      Decision log &middot; 15 decisions recorded &middot; updated 2026-05-17 &middot; ADRs are append-only.
     </div>
   </main>
 

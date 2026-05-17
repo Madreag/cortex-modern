@@ -74,7 +74,7 @@
     <p class="small muted" id="emptyMsg" style="display:none">No items match the current filter.</p>
 
     <div class="page-foot">
-      Tracker rendered client-side from inline data &middot; updated 2026-05-16 &middot;
+      Tracker rendered client-side from inline data &middot; updated 2026-05-17 &middot;
       see the <a href="roadmap.html">Roadmap</a> for the full rationale behind each item.
     </div>
   </main>
@@ -99,7 +99,7 @@ const WORK_ITEMS = [
   { id:'T1-03', title:'Multiplayer code & RakNet — absorbed',      sub:'Networking',     tags:['DEP'],          tier:1, status:'blocked',  notes:'Absorbed into the Multiplayer flagship (ADR-015): the removed networking code stays as reference; flagship milestone M1 rebuilds the server spine and retires RakNet.' },
   { id:'T1-04', title:'Delete dead GL code',                      sub:'Rendering',      tags:['CODE'],         tier:1, status:'todo',     notes:'Stubbed CompileShader, commented m_Blit8, vestigial constants.' },
   { id:'T1-05', title:'Audio terrain occlusion',                  sub:'Audio',          tags:['CODE'],         tier:1, status:'todo',     notes:'Strength-ray driven FMOD lowpass. Big immersion win.' },
-  { id:'T1-06', title:'The AI overhaul (flagship)',               sub:'AI',             tags:['MOD','CODE','ARCH'], tier:1, status:'todo',  notes:'Promoted to cortex-modern flagship (ADR-014). Full layered-hybrid AI rebuild -- the AI page has the M0-M6 milestone plan.' },
+  { id:'T1-06', title:'AI overhaul — committed flagship',          sub:'AI',             tags:['MOD','CODE'], tier:1, status:'todo',  notes:'Superseded as a standalone item -- promoted to cortex-modern flagship (ADR-014). Locomotion-first AI overhaul: fix path-following and stuck-recovery first, then squads, perception, orders; mostly Lua. The AI page has the M0-M6 milestone plan.' },
   { id:'T1-07', title:'Build reproducibility fixes',              sub:'Build',          tags:['BUILD'],        tier:1, status:'todo',     notes:'Pin PlatformToolset=v143; fix stale SDL2 in CI.' },
 
   { id:'T2-01', title:'Render interpolation',                     sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'Lerp transforms by accumulator/dt. Mine the original interpolated-render branch (single-threaded scope).' },
@@ -108,7 +108,7 @@ const WORK_ITEMS = [
   { id:'T2-04', title:'GPU sprite drawing for MOs',               sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'DrawTexturePro instead of software draw_sprite. Partly gated by T3-02.' },
   { id:'T2-05', title:'Profile multithreaded Lua scripts',        sub:'Scripting',      tags:['CODE'],         tier:2, status:'todo',     notes:'Threaded MO script timings are invisible to PerformanceMan.' },
 
-  { id:'T3-01', title:'Multithread the physics travel loop',      sub:'Physics',        tags:['ARCH'],         tier:3, status:'todo',     notes:'The performance ceiling. Or adopt the upstream box2d-emscripten direction.' },
+  { id:'T3-01', title:'Multithread the physics travel loop',      sub:'Physics',        tags:['ARCH'],         tier:3, status:'todo',     notes:'The performance ceiling. Parallelize the atom-travel loop against a read-only terrain snapshot -- not a Box2D switch (ADR-005).' },
   { id:'T3-02', title:'Decouple material map from palette index', sub:'Rendering',      tags:['ARCH'],         tier:3, status:'todo',     notes:'The keystone. Unblocks 32-bit colour, >256 materials, retiring Allegro.' },
   { id:'T3-03', title:'Rebuild BuyMenu / editors / Metagame UI',  sub:'UI / UX',        tags:['ARCH'],         tier:3, status:'todo',     notes:'Off the legacy Allegro GUIControlManager onto a modern toolkit.' },
   { id:'T3-04', title:'Bring networked multiplayer back',         sub:'Networking',     tags:['ARCH'],         tier:3, status:'todo',     notes:'Committed flagship (ADR-015): server-authoritative state replication, staged. The Multiplayer page has the M0-M6 milestone plan -- Remote Play stopgap, co-op via state replication, then rollback PvP.' },

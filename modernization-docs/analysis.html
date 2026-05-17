@@ -99,17 +99,19 @@
       </ul>
     </div>
 
-    <h3>1.3 &nbsp; Simulation resolution &mdash; locked to pixels</h3>
+    <h3>1.3 &nbsp; The pixel-locked simulation &mdash; a deliberate property</h3>
     <div class="card">
       <p><b>The simulation is locked 1:1 to pixels. There is no sub-pixel physics and no scalable "sim resolution."</b></p>
       <ul>
         <li>Object positions are floats, but <b>every collision query truncates to integer pixels</b> &mdash; the Bresenham stepper <i>is</i> the integrator.</li>
         <li><code>c_PPM = 20.0</code> (pixels-per-metre) is the only bridge between physical units and pixels, and it is a compile-time constant.</li>
         <li>You <b>cannot "scale" the simulation resolution</b> &mdash; it is a property of the data model (atom offsets authored in pixels, terrain-bitmap dimensions = scene size), not a tunable.</li>
-        <li>Fixed <b>60&nbsp;Hz</b>. No continuous collision detection &mdash; objects faster than 500&nbsp;m/s are simply deleted/gibbed instead of tunnelling.</li>
+        <li>Fixed <b>60&nbsp;Hz</b>. The pixel-stepping <i>is</i> continuous collision detection &mdash; the integrator advances one pixel at a time regardless of speed, so fast objects cannot tunnel through terrain. CCD is inherent and free here, not missing.</li>
       </ul>
-      <p>Realistic levers: render interpolation (&sect;1.4) and the Box2D rigid-body path. Genuinely raising sim
-      resolution is <span class="tag tag-arch">[ARCH]</span> and arguably wrong &mdash; the pixel grid <i>is</i> Cortex Command's identity.</p>
+      <p>Read this as a <b>design property, not a defect</b> &mdash; the upstream lead's words: pixel-locked sim is
+      &ldquo;really more of a feature than a bug.&rdquo; The realistic lever for smoother motion is render
+      interpolation (&sect;1.4); genuinely raising sim resolution is <span class="tag tag-arch">[ARCH]</span> and
+      arguably wrong &mdash; the pixel grid <i>is</i> Cortex Command's identity.</p>
     </div>
 
     <h3>1.4 &nbsp; No render interpolation</h3>
@@ -117,10 +119,12 @@
       <p>Rendering draws objects at their raw discrete <code>m_Pos</code>. If the monitor is not exactly 60&nbsp;Hz,
       motion <b>stutters</b> (positions jump a whole timestep) or frames are redrawn identically. <code>m_PrevPos</code>
       already exists (used for rest detection) but is never fed to the renderer. Well-scoped
-      <span class="tag tag-code">[CODE]</span> win &mdash; but upstream tried twice and failed: the original
-      <code>interpolated-render</code> branch collapsed under an over-ambitious sim/render thread split, and
-      <code>interpolated-render-redux</code>, despite the name, never wrote any interpolation code at all
-      (see <a href="branches.html">Upstream Branches</a>).</p>
+      <span class="tag tag-code">[CODE]</span> win &mdash; the original <code>interpolated-render</code> branch holds
+      real interpolation work but collapsed under an over-ambitious sim/render thread split;
+      <code>interpolated-render-redux</code> was the intended retry &mdash; interpolation <i>without</i> the threading
+      &mdash; but barely started. Per the upstream lead the harder part is not the lerp itself (HeliumAnt's renderer
+      work made the draw phase near-free) but making input handling <b>async</b> &mdash; inputs must be processed at
+      the display framerate regardless of sim-tick rate (see <a href="branches.html">Upstream Branches</a>).</p>
     </div>
 
     <h3>1.5 &nbsp; The abandoned-dependency trio</h3>
@@ -162,8 +166,12 @@
       <div class="card">
         <h3>Scripting</h3>
         <p class="small">luabind 0.7.1 is the worst dependency &mdash; so fragile the build cannot use precompiled
-        headers on binding files. The code even works around its call cost by building Lua source strings at runtime
-        and compiling them per call. <b>sol2/sol3</b> is the modern replacement; LuaJIT 2.1 itself is fine &mdash; <i>keep it</i>.</p>
+        headers on binding files. (An earlier read here mis-described the runtime <code>RunScriptString</code> calls as
+        a luabind speed workaround; per the upstream lead they are ordinary C++/Lua glue &mdash; binding entities into
+        Lua states and dispatching script calls &mdash; unrelated to luabind's cost.) <b>sol2/sol3</b> is the obvious
+        modern replacement, but <i>not</i> a clean swap: it changes property and constructor semantics in ways that
+        break vanilla and modded Lua (see <a href="branches.html">Upstream Branches</a>). LuaJIT 2.1 itself is fine
+        &mdash; <i>keep it</i>.</p>
       </div>
 
       <div class="card">
@@ -171,8 +179,9 @@
         <p class="small">~95% Lua (~5,800 lines in <code>Base.rte/AI/</code>). C++ gives an actor a <code>Controller</code>
         (the AI "presses the same virtual buttons" a human would), an <code>AIMode</code> enum and async A* pathfinding.
         Combat is tactically solid (velocity-led aim, hearing senses); <b>squad / strategic AI is shallow</b> &mdash;
-        squadmates just copy the leader's inputs. The full overhaul &mdash; an incremental pathfinder, influence
-        maps and a decision brain &mdash; is the flagship on the <a href="ai.html">AI</a> page.</p>
+        squadmates just copy the leader's inputs. The full overhaul &mdash; a <b>locomotion-first</b> rework of the
+        AI's Lua, leading with path-following and stuck-recovery &mdash; is the flagship on the
+        <a href="ai.html">AI</a> page.</p>
       </div>
 
       <div class="card">
@@ -203,7 +212,7 @@
         (commit "RIP Multiplayer 2019-2025", Jan 2025): all four networking files &mdash; <code>NetworkServer</code>,
         <code>NetworkClient</code>, <code>MultiplayerGame</code>, <code>MultiplayerServerLobby</code> &mdash; are
         commented out of the Meson build and no longer compile. Only the RakNet library is still built and linked, a
-        pure dead dependency. Reviving multiplayer is under active study &mdash; see the <a href="multiplayer.html">Multiplayer</a> page.</p>
+        pure dead dependency. Rebuilding multiplayer is a committed flagship (<a href="decisions.html">ADR-015</a>) &mdash; see the <a href="multiplayer.html">Multiplayer</a> page.</p>
       </div>
 
       <div class="card">
@@ -289,7 +298,7 @@
     </div>
 
     <div class="page-foot">
-      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-05-16 &middot;
+      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-05-17 &middot;
       see the <a href="roadmap.html">Roadmap</a> for what to do about all this.
     </div>
   </main>
