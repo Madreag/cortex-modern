@@ -30,6 +30,7 @@
       <a class="nav-link" href="branches.html">Upstream Branches</a>
       <a class="nav-link" href="issues.html">Upstream Issues</a>
       <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link" href="corefall.html">Corefall Ideas</a>
     </nav>
     <div class="sidebar-foot">
       <div class="foot-label">Repositories</div>
@@ -94,9 +95,12 @@
     </div>
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> <span class="tag tag-dep">[DEP]</span> &nbsp;T1-03 &nbsp; Resolve the orphaned multiplayer island</h3>
-      <p class="small">~5,000 LOC of <code>NetworkServer/Client</code> + <code>Multiplayer*</code> activities is
-      compiled in but unreachable, and it drags in the abandoned RakNet dependency. Either delete it cleanly
-      (removing RakNet) or formally decide to rebuild it &mdash; today it is the worst of both.</p>
+      <p class="small">The old multiplayer was a screen-streaming model (the server compresses each client's viewport
+      to UDP) over <code>RakNet</code>, with a hard 4-player cap. It is now dead weight: the <code>MultiplayerGame</code>
+      and <code>MultiplayerServerLobby</code> activities are commented out of <code>Source/Activities/meson.build</code>
+      &mdash; not even compiled &mdash; and nothing reachable references them, yet the <code>NetworkServer/Client</code>
+      code and the abandoned RakNet dependency are still dragged into the build. Either delete it cleanly (dropping
+      RakNet) or formally decide to rebuild it (see <code>T3-04</code>) &mdash; today it is the worst of both.</p>
       <p class="small muted">Effort: low-medium &middot; Risk: low &middot; see <a href="decisions.html">ADR &mdash; pending</a></p>
     </div>
     <div class="card">
@@ -198,6 +202,24 @@
       <p class="small">Once material map, terrain, sprites and blends are off indexed <code>BITMAP</code>s, replace
       <code>BITMAP</code> with an engine-owned surface type and drop the abandoned Allegro fork. Depends on T3-02.</p>
       <p class="small muted">Effort: very high &middot; Risk: very high &middot; ~56 files / 477 call sites</p>
+    </div>
+
+    <!-- ====== COREFALL FEATURE TRACK ====== -->
+    <h2><span class="h-accent">Beyond modernization</span> &mdash; the Corefall feature track</h2>
+    <div class="callout callout-info">
+      <p>The three tiers above are <b>engine modernization</b>. Running alongside them is a second, independent axis:
+      <b>feature and content expansion</b>, mined from the sister project <a href="corefall.html">Corefall</a>. The
+      <a href="corefall.html">Corefall Ideas</a> page maps ~145 design ideas, each split into what ships as a
+      <span class="tag tag-mod">[MOD]</span> (Lua/INI, no engine change) versus what needs
+      <span class="tag tag-code">[CODE]</span> or <span class="tag tag-arch">[ARCH]</span> engine work.</p>
+      <p>The key property: the entire <span class="tag tag-mod">[MOD]</span> tier &mdash; deeper AI and squad command,
+      causal damage and afflictions, loot and perks, factions, a mission-director / storyteller layer, the
+      traits / morale / memory colony layer &mdash; can be built as ordinary <code>.rte</code> mods, <b>with no engine
+      fork and no recompile</b>. That makes it a low-risk track that runs in parallel with Tier&nbsp;1&ndash;3 rather
+      than competing for the same engine work. <code>T1-06</code> (smarter squad AI) is already its first item.</p>
+      <p>The <span class="tag tag-arch">[ARCH]</span> Corefall ideas &mdash; atmospherics, material cellular-automata,
+      vehicle physics &mdash; are deliberately <b>not</b> adopted: they are Corefall's reason to exist, and rebuilding
+      them here would just be a weaker Corefall. See <a href="decisions.html">ADR-010</a>.</p>
     </div>
 
     <!-- ====== SWEET SPOT ====== -->

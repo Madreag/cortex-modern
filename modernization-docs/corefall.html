@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Corefall Ideas — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  /* page-local: cross-pollination board */
+  .area-head {
+    font-family: var(--display); font-size: 18px; font-weight: 600;
+    color: var(--text-bright); margin: 34px 0 4px; padding-left: 13px;
+    position: relative; display: flex; align-items: baseline; gap: 10px;
+  }
+  .area-head::before {
+    content: ""; position: absolute; left: 0; top: 3px; bottom: 3px;
+    width: 3px; background: var(--accent); border-radius: 2px;
+  }
+  .area-head .ac { font-family: var(--mono); font-size: 11px; color: var(--text-dim); font-weight: 500; }
+  .xp-card { margin: 10px 0; padding: 14px 18px; }
+  .xp-card h3 { margin: 0 0 5px; font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .xp-card h3 .xn { font-family: var(--display); }
+  .xp-card p { margin: 0; font-size: 13px; color: var(--text); line-height: 1.6; }
+  .xp-card .cc { color: var(--text-dim); }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0 0; font-size: 12.5px; }
+  .legend-row span { display: flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link active" href="corefall.html">Corefall Ideas</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Cross-Pollination</div>
+      <h1>Corefall Ideas</h1>
+      <p class="page-lead">Design ideas mined from <a href="https://github.com/Madreag/corefall">Corefall</a> &mdash;
+      the sister project &mdash; and what each would cost to bring into Cortex Command. Every idea is split into
+      <b>what ships as a Lua/INI mod</b> versus <b>what needs an engine code change</b>. Built from a full read of
+      Corefall's milestone specs and cross-checked against the live Cortex Command engine source.</p>
+    </header>
+
+    <div class="callout callout-warn">
+      <div class="callout-title">Clean-room boundary &mdash; ideas only, one direction</div>
+      <p>Corefall is licensed <b>Apache-2.0 / MIT</b> and is a deliberate <b>clean-room</b> design &mdash; it copies no
+      code or assets from any inspiration game. Cortex Command / cortex-modern is <b>AGPL-3.0</b>. Design <i>ideas</i>
+      may inform either project, and Corefall-inspired features may be implemented <b>fresh</b> in cortex-modern. But
+      <b>no Cortex Command code or assets may ever go into Corefall</b> &mdash; that would breach the licence and
+      destroy its clean-room status. This page is strictly Corefall&nbsp;&rarr;&nbsp;cortex-modern.</p>
+    </div>
+
+    <div class="callout callout-key">
+      <div class="callout-title">The headline &mdash; physics is theirs, design is portable</div>
+      <p>Corefall is a from-scratch deep-simulation game (~170 milestone specs). Mined for Cortex Command, its ideas
+      split sharply along one line:</p>
+      <p><b>Its <i>physics</i> is <span class="tag tag-arch">[ARCH]</span> and is Corefall's whole identity.</b>
+      PV=nRT atmospherics, Noita-grade material cellular-automata, per-tile thermal, fluid and vehicle dynamics &mdash;
+      these are new simulation cores. You cannot mod them into Cortex Command, and rebuilding them just reproduces
+      Corefall in a weaker engine. <b>Leave deep sim to Corefall.</b></p>
+      <p><b>Its <i>design</i> is overwhelmingly <span class="tag tag-mod">[MOD]</span> for Cortex Command.</b> Causal
+      damage, afflictions, AI &amp; squad command, loot, factions, missions, storytellers, traits, progression,
+      morale, memory &mdash; these map onto Cortex Command's existing modding surface (Lua scripts, <code>GAScripted</code>,
+      <code>GlobalScript</code>, the <code>PieMenu</code>, AEmitter wounds, the buy menu) so cleanly that <b>most of it
+      could ship as ordinary <code>.rte</code> mods with no engine fork at all</b>. The classifications below were
+      checked against the actual engine source &mdash; see <a href="analysis.html">Technical Analysis</a>.</p>
+    </div>
+
+    <h2><span class="h-accent">Already in Cortex Command</span></h2>
+    <div class="callout callout-info">
+      <p>Corefall openly takes its core fantasy from Cortex Command and <b>reimplements it clean-room</b>, so several
+      &ldquo;Corefall systems&rdquo; are things Cortex Command <i>already has</i> &mdash; nothing to port:
+      <b>brain-hopping</b>, <b>limb-driven walking</b> (Corefall's <code>LimbPath</code> loop is a port of CC's
+      <code>AHuman</code> walk cycle), <b>per-pixel atom collision</b> and <b>terrain penetration</b>
+      (<code>impulse&sup2; &gt; integrity&sup2;</code>), <b>gibbing</b> and <b>joint-impulse limb detachment</b>,
+      <b>ragdoll-on-death</b>, the <b>buy menu + delivery craft</b>, the <b>painted intro slideshow</b>, an
+      <b>adaptive-music engine</b> (<code>MusicMan</code>), and <b>live script hot-reload</b>
+      (<code>ReloadScripts</code>).</p>
+    </div>
+
+    <h2><span class="h-accent">Cross-pollination board</span></h2>
+    <p>Every Corefall idea worth considering, grouped into eleven design areas and tagged by what it would cost in
+    Cortex Command. Filter by tag to see the split.</p>
+
+    <div class="callout callout-info" style="margin-bottom:14px">
+      <div class="legend-row">
+        <span><span class="tag tag-mod">[MOD]</span> ships as a Lua/INI mod &mdash; no engine change</span>
+        <span><span class="tag tag-code">[CODE]</span> a bounded C++ engine change</span>
+        <span><span class="tag tag-arch">[ARCH]</span> a large rework or new simulation core</span>
+      </div>
+      <p class="small muted" style="margin-top:8px;margin-bottom:0">Some ideas carry two tags: a moddable core plus an
+      optional engine change that makes it cleaner or deeper. The first tag is the primary cost.</p>
+    </div>
+
+    <div class="summary" id="summary"></div>
+    <div class="filters" id="filters"></div>
+    <div id="board"></div>
+
+    <h2><span class="h-accent">The verdict</span> &mdash; what to actually pursue</h2>
+    <div class="callout callout-ok">
+      <p><b>Don't turn cortex-modern into Corefall.</b> The <span class="tag tag-arch">[ARCH]</span> pillars
+      &mdash; atmospherics, material cellular-automata, thermal fields, vehicle and fluid physics, a replay/determinism
+      core, a multiplayer rework &mdash; are multi-year efforts that duplicate Corefall's reason to exist. Track them
+      as inspiration, not as work.</p>
+      <p><b>Harvest the <span class="tag tag-mod">[MOD]</span> tier.</b> It is large, cheap, and fits Cortex Command's
+      identity: deeper <b>AI &amp; squad command</b> (also closes upstream issue&nbsp;#208), <b>causal damage +
+      afflictions</b>, a <b>mission-director / storyteller</b> layer, <b>factions &amp; diplomacy</b>, roguelike
+      <b>loot / perks / weapon modifiers</b>, and the whole <b>traits / morale / memory</b> colony layer. Critically,
+      every <span class="tag tag-mod">[MOD]</span> idea here can be prototyped as a plain Cortex Command
+      <code>.rte</code> mod <b>today</b> &mdash; no fork, no recompile &mdash; which makes this a low-risk content track
+      that runs in parallel with the engine <a href="roadmap.html">Roadmap</a>.</p>
+      <p><b>The one enabling <span class="tag tag-code">[CODE]</span> investment</b> that multiplies everything: widen
+      the Lua API and add a custom-property mechanism. A handful of ideas below are
+      &ldquo;<span class="tag tag-mod">[MOD]</span> <i>given one missing setter or one event hook</i>&rdquo; &mdash;
+      each such binding is a near-trivial change that converts a whole cluster of ideas into pure mod work. See
+      <a href="decisions.html">ADR-010</a> for the standing posture.</p>
+    </div>
+
+    <div class="page-foot">
+      Built from Corefall's milestone specs (<code>specs/active</code> + <code>specs/done</code>, M1&ndash;M49) and a
+      survey of the Cortex Command engine source &middot; 2026-05-16 &middot; ~440 raw systems distilled to the set below.
+    </div>
+  </main>
+
+</div>
+
+<script>
+/* ============================================================
+   Corefall -> Cortex Command cross-pollination board.
+   a = area key · s = system · t = cost tags (first = primary) · d = description+verdict
+   To refresh: re-read Corefall specs + the CC engine survey, rewrite CROSS.
+   ============================================================ */
+const AREAS = [
+  ["dmg",  "Damage, Wounds &amp; Survival"],
+  ["ai",   "AI, Squad &amp; Command"],
+  ["cbt",  "Combat, Weapons &amp; Stealth"],
+  ["wld",  "World, Materials &amp; Environment"],
+  ["msn",  "Missions, Factions &amp; Narrative"],
+  ["eco",  "Economy, Loot &amp; Progression"],
+  ["col",  "Colony, Base &amp; Life-Sim"],
+  ["eqp",  "Equipment &amp; Vehicles"],
+  ["aud",  "Audio &amp; Comms"],
+  ["mp",   "Multiplayer &amp; Online"],
+  ["tool", "Tooling, Modding &amp; UX"]
+];
+
+const CROSS = [
+  /* ---- Damage, Wounds & Survival ---- */
+  { a:"dmg", s:"Causal damage / origin resources", t:["MOD"],
+    d:"Damage routes to origin-specific survival resources (humans bleed out, robots lose power and oil) instead of an abstract HP bar. CC's blood-drain death model already is the human case; a GlobalScript can give robots a power pool and route depletion. A per-actor primary-resource setter would make it clean." },
+  { a:"dmg", s:"Affliction / status-effect system", t:["MOD"],
+    d:"22 stackable status effects (burning, bleeding, poisoned, concussed, hypoxic) with per-tick producers, severity stacking and clear conditions. CC wounds are AEmitters; a per-actor Lua layer plus GlobalScript ticks the registry." },
+  { a:"dmg", s:"Wound-type registry + limb-loss matrix", t:["MOD"],
+    d:"28 typed wounds and a per-zone limb-loss consequence matrix (arm loss drops the weapon; leg loss cuts speed to 40%). CC already detaches limbs and gibs; the consequence rules are Lua event handlers." },
+  { a:"dmg", s:"Concussion / KO accumulator", t:["MOD","CODE"],
+    d:"Head and torso impulse accumulate into five KO bands from dazed to coma. The accumulator is Lua off the OnCollideWithMO hook; the screen-vignette feedback is a small post-process pass (CODE)." },
+  { a:"dmg", s:"Pain scalar from the wound stack", t:["MOD"],
+    d:"A running Pain value summed from active wounds drives aim wobble, slowdown and the auto-triage threshold. Pure Lua over CC's existing wound list." },
+  { a:"dmg", s:"Disease registry + contagion", t:["MOD"],
+    d:"17 diseases with lifecycle FSMs (incubating to manifest to recovering), cure recipes and an R0 spread model. GlobalScript per-actor disease state plus area-proximity contagion checks." },
+  { a:"dmg", s:"Mental-health conditions", t:["MOD"],
+    d:"Eight conditions (PTSD, addiction, panic, insomnia) with trigger events, lifecycle stages and symptom expressions. Lua per-actor state machines; trauma triggers fire off GlobalScript events." },
+  { a:"dmg", s:"Field medic, surgery, scars, aging", t:["MOD"],
+    d:"A treatment catalogue, a surgery flow, and persistent scars and aging debuffs. Lua plus data; long-term persistence rides a GlobalScript and the save system." },
+  { a:"dmg", s:"Time-to-death budget + triage window", t:["MOD"],
+    d:"A per-damage-type and per-origin time-to-death table with an enforced minimum, surfaced as a HUD widget that auto-dispatches a medic. Lua computation drawn with PrimitiveMan." },
+  { a:"dmg", s:"Per-organ internal damage routing", t:["CODE"],
+    d:"Penetrating hits route to a weighted-random internal organ with failure cascades (heart to cardiac arrest). A simplified secondary-effects version is moddable; formal organ routing needs an engine hook." },
+  { a:"dmg", s:"War-Thunder angled armour + round types", t:["MOD","CODE"],
+    d:"Effective armour thickness scales with impact angle; AP/HE/HEAT/APFSDS round tiers behave differently. Angle-scaled damage via Lua on projectile scripts is moddable; true ray-through-internal-modules penetration is an engine change." },
+  { a:"dmg", s:"Layered-armour defendable core", t:["MOD"],
+    d:"A static defendable objective (reactor, command core) with concentric armour HP pools and pressure-state sprites. Pure Lua on a non-mobile actor." },
+
+  /* ---- AI, Squad & Command ---- */
+  { a:"ai", s:"AI archetypes + layered behaviour stack", t:["MOD"],
+    d:"Six archetypes (Rifleman, Sniper, Assault, Engineer, Spotter, Medic) on a reactive / utility / behaviour-tree / HTN stack. CC's AI is ~95% Lua in Base.rte/AI, so this is pure Lua." },
+  { a:"ai", s:"Per-actor priority table", t:["MOD"],
+    d:"A 22-task utility-weight table per actor that drives task selection, with role templates and quick presets. An INI or Lua config read by the AI GlobalScript." },
+  { a:"ai", s:"Squad command grammar + formations", t:["MOD"],
+    d:"50+ named squad verbs, nine formations, per-squad doctrines, and breach-stack-clear chains. The PieMenu is moddable and AI is Lua. Also directly addresses upstream issue #208 (improve squad logic)." },
+  { a:"ai", s:"Auto-triage / auto-repair roles", t:["MOD"],
+    d:"Role-default behaviours: medics auto-dispatch to downed allies, engineers auto-repair structures. CC already has a medic AI concept; deepening it is Lua." },
+  { a:"ai", s:"BotMemory grid + pain memory", t:["MOD"],
+    d:"A per-actor world model: threat cells, last-seen enemies, and a ring buffer of recent damage that biases cover orientation and respawn loadout. Lua tables on actors, fed by wound callbacks." },
+  { a:"ai", s:"Persistent commander adaptation", t:["MOD"],
+    d:"A named enemy commander tracks your tactics across missions and picks a counter-doctrine from a fixed set. GlobalScript state plus save persistence; CC already has a cross-mission metagame." },
+  { a:"ai", s:"Hierarchical pathfinding (3-grain A*)", t:["CODE"],
+    d:"Tile / chunk / region A* with dynamic invalidation on terrain change. CC's pathfinder is flat; replacing the algorithm is a bounded C++ change. CC already exposes async path queries to Lua." },
+  { a:"ai", s:"Cover-finder", t:["MOD","CODE"],
+    d:"Scores nearby tiles by line-of-fire block to all known threats. A Lua cover-finder using CastObstacleRay is moddable; a batched per-tile query for scale is a bounded engine addition." },
+  { a:"ai", s:"Collision avoidance / steering", t:["CODE"],
+    d:"Separation, alignment and cohesion steering so actors stop piling up in corridors. CC has physical collision but no organised steering; new C++ in the locomotion layer." },
+  { a:"ai", s:"Environmental-competence AI", t:["MOD"],
+    d:"AI reads hazards and adapts: hypoxic actors seek oxygen, combustible rooms suppress grenades, low visibility shifts to sensors. Lua AI checking scene and Area flags." },
+  { a:"ai", s:"Reason labels + the Why key", t:["MOD"],
+    d:"Every AI decision emits a human-readable reason; a HUD key surfaces it in-mission. Lua reason strings plus PrimitiveMan text. A strong, near-free debuggability win." },
+  { a:"ai", s:"Wildlife AI + off-screen food chain", t:["MOD"],
+    d:"Non-military fauna with six behaviour archetypes (grazer, apex, pack-hunter, ambush) and a cheap statistical off-screen predation model. CC actors plus Lua AI; GlobalScript population sim." },
+  { a:"ai", s:"LLM mind advisor layer", t:["CODE"],
+    d:"An optional async-LLM tactical advisor that proposes doctrine without ever blocking the sim. CC's Lua sandbox has no network access, so this needs an engine-side async HTTP hook." },
+
+  /* ---- Combat, Weapons & Stealth ---- */
+  { a:"cbt", s:"Noita-style stackable weapon modifiers", t:["MOD"],
+    d:"0-4 modifier slots per weapon; 30+ stacking modifiers (homing, explosive, chain-lightning, ricochet) that combine. CC weapons are data plus Lua, so a modifier system on HDFirearms is a mod." },
+  { a:"cbt", s:"Chassis abilities (time-stop, EMP, cloak)", t:["MOD"],
+    d:"Per-actor active abilities on cooldowns. Lua handles cooldowns and radius effects; time-stop and time-slow use TimerMan.TimeScale, which is Lua-writable." },
+  { a:"cbt", s:"Stealth: light brackets, visibility, detection", t:["MOD","CODE"],
+    d:"Light-level brackets times pose times movement times camo feed an exponential detection roll. The visibility formula and detection model are moddable; sampling the actual scene light level needs an engine change." },
+  { a:"cbt", s:"Sneak-attack damage multipliers", t:["MOD"],
+    d:"Attacking an unaware target multiplies damage by attack type (melee, suppressed, crossbow). Lua, conditioned on an AI awareness flag." },
+  { a:"cbt", s:"Distraction items", t:["MOD"],
+    d:"Throwables that emit a noise event and redirect AI attention to a point. A ThrownDevice plus an AI noise check in Lua." },
+  { a:"cbt", s:"AP/HE/HEAT round-type system", t:["MOD"],
+    d:"Ammo type gates penetration behaviour against armour tiers. Round INI properties plus Lua on projectile scripts; rewards identifying the right ammunition." },
+  { a:"cbt", s:"Mining tool ladder + hardness gate", t:["MOD","CODE"],
+    d:"Tiered mining tools from sampler to core drill. Tools as AEmitter diggers are moddable; blocking a dig unless the tool tier matches the material hardness is a bounded engine change." },
+  { a:"cbt", s:"Grenade arc preview", t:["MOD"],
+    d:"A predicted-trajectory overlay while the throw key is held. A Lua Euler-step arc drawn with PrimitiveMan." },
+  { a:"cbt", s:"Cross-arm effectiveness matrix", t:["MOD"],
+    d:"A shooter-by-target-by-weapon effectiveness table so infantry anti-tank beats vehicles and cannons underperform against infantry in cover. A Lua damage-multiplier table." },
+  { a:"cbt", s:"War-Thunder module hit + ammo cook-off", t:["CODE"],
+    d:"Penetrating rounds ray-trace through internal module AABBs, with ammo-rack cook-off and engine fires. A simplified random-internal-damage version is moddable; the full ray model is an engine change." },
+  { a:"cbt", s:"Heavy-armour archetype (sloped, ricochet)", t:["MOD"],
+    d:"A tank-grade chassis where small arms visibly bounce, rewarding correct ammo choice. CC material armour (StrengthOfMaterial plus Hardness) approximates it; ricochet particles already exist." },
+  { a:"cbt", s:"Game-feel / juice (hit-stop, camera punch)", t:["MOD"],
+    d:"Hit-stop, camera punch, screen shake and glow flashes. CC already has shake and glow; hit-stop uses TimerMan.TimeScale and camera punch uses CameraMan, both Lua-writable." },
+
+  /* ---- World, Materials & Environment ---- */
+  { a:"wld", s:"Atmospherics: PV=nRT gas simulation", t:["ARCH"],
+    d:"Real per-room gas physics, pressure, breaches, pipe networks and combustion stoichiometry. CC has no gas layer; this is a whole new simulation core. A crude sealed-room-loses-pressure feel via Areas is moddable, but the real sim is the heart of Corefall." },
+  { a:"wld", s:"Systemic materials: cellular-automata + reactions", t:["ARCH"],
+    d:"Per-pixel cellular automata (falling sand, flowing liquid, spreading fire) plus a 55-reaction Arrhenius chemistry matrix. CC terrain is a mostly-static bitmap; a reacting material kernel is an engine core." },
+  { a:"wld", s:"Per-tile thermal field + phase change", t:["ARCH"],
+    d:"Per-pixel temperature, heat flow between tiles, and melting / boiling / freezing transitions. A new simulation kernel alongside the terrain bitmap." },
+  { a:"wld", s:"Closed-loop life support", t:["ARCH"],
+    d:"A self-sustaining O2 / H2 / CO2 colony loop (electrolyzer, scrubbers, sieve). Depends on the atmosphere, power and thermal cores all existing first." },
+  { a:"wld", s:"Richer material registry", t:["MOD"],
+    d:"Materials carry thermodynamic, acoustic and affordance fields (conductivity, toxicity, dampening, nine affordance flags). CC material INI takes custom fields read by Lua. The 256-material cap is the hard ceiling." },
+  { a:"wld", s:"Hazard tiles with autonomous spread", t:["MOD","CODE"],
+    d:"Fire, smoke, electric and wet hazards that spread and dissipate on their own. Fire-spread via AEmitter is moddable; a radius material-query and conductor-chain traversal need a bounded engine binding." },
+  { a:"wld", s:"Anomaly zones + artifacts", t:["MOD"],
+    d:"STALKER-style environmental anomaly zones with per-tick effects, plus rarity-tiered artifact loot that grants passive bonuses while carried. Named Areas plus GAScript polling plus GlobalScript." },
+  { a:"wld", s:"Universal / non-uniform gravity", t:["MOD","CODE"],
+    d:"Gravity wells, low-g labs, magnetic boots. CC scene gravity is Lua-writable (Scene.GlobalAcc), so uniform changes are a mod; true non-uniform fields are an engine change, or can be faked with per-frame AddForce." },
+  { a:"wld", s:"Dynamic weather state machine", t:["MOD"],
+    d:"Rain, storm, dust, fog, snow and acid weather with traction, visibility and lightning effects. A GlobalScript weather manager driving particle density, sight-range and lightning-strike spawns." },
+  { a:"wld", s:"24-hour day/night cycle", t:["MOD","CODE"],
+    d:"Time-of-day drives ambient light and AI aggression. Sight-range changes and AI shifts are moddable; modulating actual render brightness needs an engine change." },
+  { a:"wld", s:"Per-world configs + biomes", t:["MOD"],
+    d:"Per-world gravity, atmosphere, hazard and music bundles; biomes as per-scene property packs. CC scenes already carry per-scene properties, so this is data plus Lua." },
+  { a:"wld", s:"Geysers + procedural ore generation", t:["MOD","CODE"],
+    d:"Timed-eruption renewable resource taps and procedural ore-vein placement. Geysers as timed AEmitters are a mod; generating ore veins into the terrain at scene-load is a bounded engine pass." },
+  { a:"wld", s:"Vacuum / oxygen / helmet-breach", t:["MOD","CODE"],
+    d:"Sealed-helmet and O2-tank survival in vacuum, where a helmet hit triples drain. Oxygen counters and drain are moddable; detecting a projectile hit on the helmet attachable needs an engine hook." },
+  { a:"wld", s:"Structural integrity + cave-ins", t:["CODE"],
+    d:"A per-pixel structural-integrity field where unsupported tunnels collapse with a warned wavefront and placeable support beams. CC has unsupported-pixel fall, but a real integrity field is engine work." },
+  { a:"wld", s:"Light / shadow field for stealth", t:["CODE"],
+    d:"A per-pixel light level that stealth and AI can sample. CC has glow post-effects but no sampled light field; this is a renderer-side addition." },
+
+  /* ---- Missions, Factions & Narrative ---- */
+  { a:"msn", s:"Mission director + objective graph", t:["MOD"],
+    d:"A typed, branching objective graph with pacing phases and dynamic reinforcement waves. CC's GAScripted activity contract is exactly the right home for this." },
+  { a:"msn", s:"Storytellers / incident director", t:["MOD"],
+    d:"RimWorld-style pacing personalities (a calm one, a chaotic one, an ironman one) that schedule events against an intensity curve with cooldowns. A GlobalScript incident director." },
+  { a:"msn", s:"Factions + relationship matrix + diplomacy", t:["MOD"],
+    d:"Eight factions with reputation scores, threshold cascades (war, alliance), diplomacy actions and faction territory. A GAScripted / GlobalScript layer on CC's existing team system." },
+  { a:"msn", s:"Procedural quest generator", t:["MOD"],
+    d:"Eight parameterised templates (fetch, escort, assassinate, defend, investigate, sabotage, rescue, surveil) that produce authored-feeling missions with per-faction flavour. Pure GAScripted." },
+  { a:"msn", s:"Boss system (schema, phases, arenas)", t:["MOD","CODE"],
+    d:"Data-driven bosses with multi-phase HP-threshold FSMs, per-phase abilities and arena rules. Phase logic on Lua actor callbacks is moddable; arena terrain-locking leans toward an engine change." },
+  { a:"msn", s:"Stratagem call-ins", t:["MOD"],
+    d:"Helldivers-style airstrike, supply-drop and reinforcement call-ins. CC's delivery craft and PieMenu already supply the machinery, so this is a mod." },
+  { a:"msn", s:"Investigation system (clues + deduction)", t:["MOD"],
+    d:"Crime-scene clue chains where connecting two clues fires a deduction event that unlocks branches. A PieMenu plus GlobalScript clue tracking." },
+  { a:"msn", s:"Prisoner lifecycle", t:["MOD","CODE"],
+    d:"Non-lethal capture, holding cells, interrogation styles and a breakout-planner FSM. KO-and-team-switch is moddable; holding-cell zones, need decay and breakout AI lean toward an engine change." },
+  { a:"msn", s:"NPC dialog trees", t:["MOD","CODE"],
+    d:"Branching conversations with conditional unlocks and per-NPC memory. A 2-4-choice PieMenu approximation is moddable; a proper retained dialogue panel is an engine change." },
+  { a:"msn", s:"Per-NPC dossiers / persistent identity", t:["MOD"],
+    d:"Named NPCs with faction, relationships and memory tags that survive saves. Lua per-actor state plus GlobalScript; turns CC's stateless actors into recurring characters." },
+  { a:"msn", s:"World events (branching choices)", t:["MOD"],
+    d:"Probability-triggered world events with atomic-commitment response choices and graduated consequences. A GlobalScript event roller plus CC's dialog box." },
+  { a:"msn", s:"Campaign + branching unlock tree", t:["MOD"],
+    d:"Multi-mission progression with a branching mission-unlock graph, mid-mission saves and per-mission rewards. GAScripted plus GlobalScript; CC already has a conquest metagame to build on." },
+  { a:"msn", s:"AI commander personas + rivalry", t:["MOD"],
+    d:"One to three named, persistent enemy commanders with personalities who remember player tactics and grow a rivalry. GlobalScript persona state across missions." },
+  { a:"msn", s:"In-engine cinematics + intro slideshow", t:["MOD","CODE"],
+    d:"Scripted camera-and-actor cinematics and a painted intro slideshow. CC already has the slideshow pattern (TitleScreen), so that is a mod; a structured cinematic-script kernel is an engine change." },
+
+  /* ---- Economy, Loot & Progression ---- */
+  { a:"eco", s:"Loot: rarity + affixes + sets", t:["MOD"],
+    d:"Five rarity tiers, 30+ prefix/suffix affixes, set bonuses and removable curses. CC content is data and a GlobalScript can rewrite item stats at spawn, so this is a mod." },
+  { a:"eco", s:"XP / levels / perks / curses", t:["MOD"],
+    d:"Per-actor XP from kills and exploration; leveling unlocks perks that apply stat multipliers or behaviour flags. A GlobalScript per-actor XP table." },
+  { a:"eco", s:"Data-driven loot tables", t:["MOD"],
+    d:"Weighted, conditional drop pools with a per-actor luck stat and unique-item deduplication. GlobalScript weighted rolls, modder-extensible as data." },
+  { a:"eco", s:"Item identification + affix re-roll", t:["MOD"],
+    d:"Items spawn unidentified; an ID station or scroll reveals them; affixes re-roll or transfer at a workshop. Lua item state plus timers." },
+  { a:"eco", s:"Crafting ladder + research tree", t:["MOD","CODE"],
+    d:"Five tiers of station-gated recipes behind a 30-node research tree. Recipes and research flags are moddable; a polished three-pane crafting and research-tree UI wants engine support." },
+  { a:"eco", s:"Fabrication chain", t:["MOD","CODE"],
+    d:"Multi-step processing from ore to ingot to component to item, with material purity and failure modes. A simplified item-transform chain is moddable; temperature and atmosphere gating need an engine change." },
+  { a:"eco", s:"Per-actor crafting skill + quality tiers", t:["MOD"],
+    d:"Per-category crafting skill drives output quality from Awful (0.6x stats) to Legendary (1.6x). A GlobalScript skill counter plus a quality roll." },
+  { a:"eco", s:"Repair / modification / salvage", t:["MOD"],
+    d:"Station repair with max-repair limits, reversible modification slots, and salvage at ~75% material recovery. CC's gib and item-drop system covers salvage." },
+  { a:"eco", s:"Market economy: currencies, vendors, barter", t:["MOD"],
+    d:"Multiple currencies, a live exchange-rate matrix, vendor stock and restock, bartering and contraband. Lua plus data on top of CC's existing gold economy." },
+  { a:"eco", s:"Treasure maps + voyages", t:["MOD"],
+    d:"Coordinate-bearing map items that reveal buried caches, and multi-step voyage chains. Lua spawns a cache at a position when the map is carried there." },
+  { a:"eco", s:"Codex / lore database", t:["MOD"],
+    d:"A browsable lore codex of 600+ entries across categories. Data files plus a GAScripted viewer screen." },
+  { a:"eco", s:"Achievements (multi-condition)", t:["MOD"],
+    d:"Achievements with event-count, streak, cumulative and combo conditions. A GlobalScript event subscriber plus save persistence. CC has basic Steam achievements to extend." },
+  { a:"eco", s:"Veteran actors + scars + dossiers", t:["MOD"],
+    d:"Surviving actors persist across missions with scar timelines, a veteran XP tier and career stats. GlobalScript plus the save system." },
+  { a:"eco", s:"Upkeep economy + bankruptcy cascade", t:["MOD"],
+    d:"Optional multi-resource per-cycle upkeep with a graduated bankruptcy cascade (morale loss to demobilisation to collapse). GlobalScript resource tables; default-off." },
+  { a:"eco", s:"Inter-faction intelligence (spies, codebreaking)", t:["MOD"],
+    d:"Optional hidden-information warfare: spy rings, codebreaking levels, covert-op missions, counter-intelligence. GlobalScript intel state; covert ops as GAScripted missions." },
+  { a:"eco", s:"Inventory grid (Tetris layout)", t:["CODE"],
+    d:"A 2D shape-fit grid inventory where items have authored shapes. CC's inventory is a flat weight-based list; a spatial grid is a UI and inventory-model change." },
+
+  /* ---- Colony, Base & Life-Sim ---- */
+  { a:"col", s:"Personality traits (40+)", t:["MOD"],
+    d:"Each actor spawns with 2-3 traits from a 40+ registry, each applying stat modifiers and behaviour flags. Data blocks plus a Lua actor-init script: one of the strongest direct mod wins." },
+  { a:"col", s:"Mood / stress / morale + breakdowns", t:["MOD"],
+    d:"A mood accumulator affecting aim, speed and retreat; stress over threshold triggers ten breakdown behaviours (berserk, catatonia, pyromania). Lua state overrides on the AI." },
+  { a:"col", s:"Social interactions + relationships", t:["MOD"],
+    d:"Actor pairs in proximity roll social events that move a friendship score through relationship stages. A GlobalScript per-pair table indexed by actor id." },
+  { a:"col", s:"Episodic memory + grudges + gossip", t:["MOD"],
+    d:"A per-actor memory ring of witnessed events with decay, grudge and favor accumulators, and gossip that propagates through conversation. Lua tables; turns squadmates into characters with history." },
+  { a:"col", s:"Sleep need + 24h schedules", t:["MOD"],
+    d:"A sleep accumulator and a per-hour Work / Rest / Recreation / Eat schedule grid that drives AI task selection. GlobalScript floats plus schedule arrays." },
+  { a:"col", s:"Cooking + nutrition + spoilage", t:["MOD"],
+    d:"Recipe cooking at station tiers; meals carry calories, hydration and a morale bonus; food spoils at a rate set by storage temperature. Lua plus data." },
+  { a:"col", s:"Recreation activities", t:["MOD"],
+    d:"Placed recreation objects (chess, gym, bar, arcade) grant morale when used during the Recreation schedule slot. Placed actors plus Lua interaction scripts." },
+  { a:"col", s:"Critter ranching", t:["MOD"],
+    d:"Domestic critters with food, water and grooming needs that produce renewable resources. CC actors plus Lua needs-management scripts." },
+  { a:"col", s:"Base build mode", t:["MOD","CODE"],
+    d:"A grid-snap build palette with ghost-preview placement, room auto-detection and shareable blueprints. Lua placement and room detection are moddable; ghost-preview rendering and blueprint file handling want engine support." },
+  { a:"col", s:"Zoning + access control + pre-fabs", t:["MOD","CODE"],
+    d:"Zone types with AI access rules, plus composable pre-fab base modules. AI respecting zone boundaries is moddable; a full zoning UI is an engine change." },
+  { a:"col", s:"Power grid (generators, cables, IC10 logic)", t:["CODE"],
+    d:"A real power network with nine generator types, cable I-squared-R heating and an IC10 programmable chip. A source-alive-and-in-range approximation is moddable; the real grid is an engine change. Note CC Lua already out-powers IC10 scripting." },
+  { a:"col", s:"Survival needs (hunger, thirst, sanity)", t:["MOD"],
+    d:"Per-actor needs with per-race decay rates, acclimatization curves and cascading debuffs at thresholds. GlobalScript accumulators." },
+  { a:"col", s:"Supply-chain accounting + bottleneck view", t:["CODE"],
+    d:"A per-base resource in/out budget and a Sankey flow diagram with bottleneck detection. Lua can track the counts; the flow visualisation needs an engine UI pass." },
+  { a:"col", s:"Calendar + seasons + holidays", t:["MOD"],
+    d:"An in-game calendar with per-world day length, four seasons with override effects, and faction holidays plus NPC birthdays. GlobalScript counters and tables." },
+
+  /* ---- Equipment & Vehicles ---- */
+  { a:"eqp", s:"Equipment depth: attachments + encumbrance", t:["MOD"],
+    d:"Weapon attachments and carry-weight encumbrance that slows a loaded actor. INI properties plus Lua; CC already has MaxInventoryMass." },
+  { a:"eqp", s:"Tool degradation / durability", t:["MOD"],
+    d:"Held tools accumulate use-cycles and degrade through condition tiers, affecting performance. A Lua use-count script on the device." },
+  { a:"eqp", s:"Drone allies (4 autonomous modes)", t:["MOD"],
+    d:"Deployable helper drones with follow, auto-mine, auto-repair and auto-carry modes. CC custom actors with Lua AI behaviour." },
+  { a:"eqp", s:"Chassis archetypes + body graphs", t:["MOD","CODE"],
+    d:"Five chassis archetypes with per-zone armour and an eleven-stage damage ladder. The archetype data maps to INI; the three-layer armour cascade needs new per-zone accessors (a bounded engine change)." },
+  { a:"eqp", s:"Pilot eject / bail-too-late", t:["MOD"],
+    d:"A timed eject window; the pilot detaches as a real new actor and the chassis becomes a salvageable wreck. CC's actor-spawn Lua API covers it." },
+  { a:"eqp", s:"Personal power / hot-swap battery", t:["MOD"],
+    d:"Equipment draws from a personal battery; low power sheds low-priority gear first. A GlobalScript power variable plus Lua equipment scripts." },
+  { a:"eqp", s:"Mass aggregation (equipment weight to physics)", t:["CODE"],
+    d:"Total actor mass summed each tick from chassis, armour, inventory and fuel, feeding thrust, walk speed, recoil and fall damage. CC mass is mostly static; dynamic aggregation is a bounded engine change." },
+  { a:"eqp", s:"Atmospheric jetpack physics", t:["CODE"],
+    d:"Jetpack thrust scaled by atmospheric density: sluggish in thick air, most efficient in vacuum. A bounded change to AEJetpack thrust." },
+  { a:"eqp", s:"Advanced mobility: grapple / rope / climb", t:["MOD","CODE"],
+    d:"A grapple gun is moddable (upstream PR #198 is exactly a grapple-gun enhancement); Verlet-rope swinging and wall-climb need engine support." },
+  { a:"eqp", s:"Quick-action bar", t:["MOD","CODE"],
+    d:"A 4x4 quick-action grid with multi-action chaining, faster than the pie menu. Pie-menu customisation is moddable; opening at 25% time-slice instead of a full pause is a bounded engine change." },
+  { a:"eqp", s:"Ground vehicles (crew roles, ammo racks)", t:["MOD","ARCH"],
+    d:"Crewed ground vehicles with crew-role schemas and cook-off ammo racks. Crew roles and ammo racks are moddable on existing actors; real tracked-vehicle suspension and rollover physics are a new subsystem." },
+  { a:"eqp", s:"Aircraft / VTOL / helicopters", t:["ARCH"],
+    d:"Rotor physics, VTOL nozzle states, radar modes and missile guidance. A whole physics subsystem, and arguably out of scope for a 2D infantry game." },
+  { a:"eqp", s:"Boats / submarines / underwater combat", t:["ARCH"],
+    d:"Buoyancy, draft, ballast-tank depth control, sonar and dive suits. A new physics subsystem with no CC equivalent." },
+  { a:"eqp", s:"Vehicle component damage", t:["MOD"],
+    d:"Vehicle subsystems as Attachables with independent HP and gib effects (a fire emitter on the fuel tank, a movement penalty on a lost tire). CC's Attachable plus AEmitter system covers it." },
+
+  /* ---- Audio & Comms ---- */
+  { a:"aud", s:"Audio terrain occlusion", t:["MOD","CODE"],
+    d:"Dirt and walls muffle gunfire. A Lua ray plus a volume cut is moddable; proper per-material dB loss and a low-pass filter are an engine change. Also tracked on the Roadmap as T1-05." },
+  { a:"aud", s:"Per-material footsteps + impact SFX", t:["MOD"],
+    d:"Footstep and impact sounds selected by the material under the actor and its damage state. Lua reads the material at foot position and picks from a keyed SFX table." },
+  { a:"aud", s:"Adaptive music: intensity formula + layers", t:["MOD"],
+    d:"A weighted combat/narrative intensity score with IIR smoothing drives a multi-layer music stack. CC's MusicMan / DynamicSong already does adaptive music; this refines the formula in Lua." },
+  { a:"aud", s:"AI chatter / barks", t:["MOD"],
+    d:"Meaningful AI actions emit captioned audio barks (Contact, Reloading, cover me). Lua plus AudioMan plus the caption system, with a per-bot cooldown." },
+  { a:"aud", s:"Caption surface for audio events", t:["MOD","CODE"],
+    d:"Every sound carries a caption for accessibility. CC has a caption system; routing audio events into it cleanly is a small engine bridge plus Lua." },
+  { a:"aud", s:"Radio propagation + comms", t:["CODE"],
+    d:"Friis path-loss radio (range, frequency, terrain occlusion) with vacuum and EMP modifiers, plus radio equipment tiers. CC has no radio; a propagation model is bounded C++." },
+  { a:"aud", s:"Sound propagation kernel", t:["ARCH","MOD"],
+    d:"A BFS sound-propagation field with per-material acoustic dampening and duct conduits that carry sound around corners. The kernel is a new system; the mechanics layered on top (hearing floors, radio range) are moddable." },
+  { a:"aud", s:"HRTF spatial audio + reverb + Doppler", t:["CODE"],
+    d:"Head-related transfer functions, per-room reverb and Doppler shift. New audio-layer code; CC has only distance-based panning today." },
+  { a:"aud", s:"Voice synthesis pipeline", t:["MOD"],
+    d:"An offline LLM / TTS pipeline that bakes actor voice lines, ledgered and regenerable. External tooling; CC consumes the resulting .ogg files normally, no engine change." },
+
+  /* ---- Multiplayer & Online ---- */
+  { a:"mp", s:"Co-op revive + shared squad inventory", t:["MOD"],
+    d:"A downed bleed-out state before death where teammates can revive, plus a shared squad item pool. A Lua actor state machine plus a GlobalScript pool." },
+  { a:"mp", s:"Endgame modes (wave survival, boss rush)", t:["MOD"],
+    d:"Wave survival, boss rush, time attack and similar modes, each a GAScripted activity with its own win logic. Standard CC modding practice." },
+  { a:"mp", s:"State-replication multiplayer rework", t:["ARCH"],
+    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is now disabled and orphaned in the build. A modern entity state-replication rework with client prediction is a major engine effort; tracked as Roadmap T3-04." },
+  { a:"mp", s:"Mod hash sync + lobby discovery", t:["CODE"],
+    d:"Clients exchange mod content hashes before a match and a lobby browser filters by mod compatibility. CC Lua cannot hash files, so this is bounded C++ infrastructure." },
+  { a:"mp", s:"Matchmaking + ranks + tournaments", t:["ARCH","CODE"],
+    d:"Per-mode MMR, rank tiers, seasonal resets and bracket formats. The ladder logic is bounded, but it depends on online persistence infrastructure CC does not have." },
+  { a:"mp", s:"Anti-cheat (heuristics, mod signing)", t:["CODE"],
+    d:"Impossible-input and aimbot-variance heuristics, a graduated ban ladder and mod signing with a cert chain. Server-side C++ validation." },
+  { a:"mp", s:"Dedicated headless server", t:["ARCH"],
+    d:"A render-free server process. CC's main loop is coupled to rendering, so decoupling simulation from the render path is an engine rework." },
+  { a:"mp", s:"Spectator mode + auto-director", t:["MOD","CODE"],
+    d:"A spectator camera that auto-switches between actors by an interest score. The director logic is moddable (CameraMan is Lua-writable); a clean non-combatant spectator slot is a small engine change." },
+  { a:"mp", s:"War-Thunder-style kill cam", t:["CODE"],
+    d:"A rolling replay buffer rendered from a delayed viewpoint after a kill. Needs an engine-side state-history buffer and camera control." },
+
+  /* ---- Tooling, Modding & UX ---- */
+  { a:"tool", s:"Replay system + deterministic event log", t:["ARCH"],
+    d:"Deterministic per-tick event recording for replays. CC's sim is not deterministic and records nothing; a replay subsystem (with the determinism work it implies) is a large effort." },
+  { a:"tool", s:"Show-me-why-you-died debrief", t:["MOD","CODE"],
+    d:"A post-mission cause-chain plus a plain-language death recap. Accumulating events into a GlobalScript and drawing a Lua debrief screen is moddable; an engine event-history ring buffer makes it precise." },
+  { a:"tool", s:"Cause-chain event taxonomy", t:["MOD"],
+    d:"Typed events with parent-cause links, rendered into readable sentences via templates. Lua event tables and a renderer; the foundation for the debrief above." },
+  { a:"tool", s:"Hot-reload of scripts and mods", t:["MOD"],
+    d:"Edit a script and see it live without restarting the scenario. CC already exposes ReloadAllScripts and per-object ReloadScripts to Lua, so this is largely available already." },
+  { a:"tool", s:"In-game scenario editor", t:["MOD","CODE"],
+    d:"Paint terrain, place actors, waypoints and triggers, save and test-play. CC has a scene editor; a smooth in-mission edit-and-test loop and mod packaging are the engine-side gaps." },
+  { a:"tool", s:"Mod load-order resolver + conflict detection", t:["CODE"],
+    d:"Deterministic load order from a dependency graph, five conflict categories surfaced in a panel, and a lockfile for reproducible setups. Bounded mod-loader C++ work." },
+  { a:"tool", s:"Mod packaging + dependency manifests", t:["CODE"],
+    d:"A packed mod-archive format with a manifest and transitive dependency resolution, replacing loose .rte folders. A bounded change to the mod loader." },
+  { a:"tool", s:"Photo mode", t:["MOD","CODE"],
+    d:"Pause plus colour filters plus a keyframed camera path for screenshots. Pause, a filter overlay and CameraMan moves are moddable; polished sequence export wants engine support." },
+  { a:"tool", s:"Modular tutorial labs + adaptive hints", t:["MOD"],
+    d:"Standalone 2-5 minute tutorial activities plus a hint engine that fires when the player is stuck. Pure GAScripted; also addresses upstream issue #188 (rebuild the tutorial as a GAScripted activity)." },
+  { a:"tool", s:"First-run experience wizard", t:["MOD"],
+    d:"A first-launch wizard with a difficulty recommendation and a calibration arena. A GlobalScript that fires on first launch plus a CC Tutorial-style activity." },
+  { a:"tool", s:"Accessibility floor", t:["MOD","CODE"],
+    d:"A wiki-wide accessibility floor: captions, hold-to-confirm, reduce-motion, text scaling, high-contrast palette. Captions and hold-to-confirm are moddable; text scaling and a palette swap need engine changes." },
+  { a:"tool", s:"Settings auto-generation from schema", t:["CODE"],
+    d:"A settings schema that auto-generates the options UI with no hardcoded panels. CC settings are hardcoded in SettingsMan; this is a bounded engine change." },
+  { a:"tool", s:"Telemetry + crash reporting", t:["CODE"],
+    d:"Opt-in anonymous gameplay telemetry and an in-game crash handler with a bug-submit form. Bounded C++ side-channels using existing libraries." },
+  { a:"tool", s:"Asset-generation pipelines", t:["MOD"],
+    d:"LLM, ComfyUI and Stable-Audio pipelines that bake sprites, SFX, voice and music, ledgered and regenerable. External toolchains; CC consumes standard PNG and OGG, so no engine change." },
+  { a:"tool", s:"Localization (keyed strings, ICU, RTL)", t:["CODE"],
+    d:"Keyed strings, ICU MessageFormat, a BiDi algorithm for right-to-left languages, and per-locale font fallback. CC strings are hardcoded; this touches every string callsite." },
+  { a:"tool", s:"HUD: priority ladder + banner taxonomy + squad strip", t:["MOD"],
+    d:"A five-layer attention model, 60+ severity-tagged status banners with auto-dismiss, and a squad strip showing each bot's plain-English intent. All immediate-mode PrimitiveMan drawing." },
+  { a:"tool", s:"Material / affordance overlays", t:["CODE"],
+    d:"Toggleable per-tile overlays that tint terrain by integrity, pathability, mobility or hazard. CC has a debug terrain overlay; a player-facing affordance-cycling overlay needs a renderer pass." }
+];
+
+const TAG_CLS  = { MOD:"tag-mod", CODE:"tag-code", ARCH:"tag-arch" };
+const TAG_NAME = { MOD:"Lua / INI mod", CODE:"Code change", ARCH:"Large rework" };
+let filter = "all";
+
+function counts() {
+  const c = { MOD:0, CODE:0, ARCH:0 };
+  CROSS.forEach(x => c[x.t[0]]++);
+  return c;
+}
+function renderSummary() {
+  const c = counts();
+  document.getElementById("summary").innerHTML =
+    '<span><b>' + CROSS.length + '</b> ideas mapped</span>' +
+    '<span><b style="color:var(--green)">' + c.MOD  + '</b> ship as a Lua/INI mod</span>' +
+    '<span><b style="color:var(--blue)">'  + c.CODE + '</b> need a code change</span>' +
+    '<span><b style="color:var(--red)">'   + c.ARCH + '</b> are a large rework</span>';
+}
+function renderFilters() {
+  const opts = [["all","All ideas"],["MOD","[MOD] Lua mod"],["CODE","[CODE] Code change"],["ARCH","[ARCH] Large rework"]];
+  document.getElementById("filters").innerHTML = opts.map(o =>
+    '<button class="filter-btn' + (filter===o[0]?' active':'') + '" data-f="' + o[0] + '">' + o[1] + '</button>'
+  ).join("");
+}
+function badges(tags) {
+  return tags.map(t => '<span class="tag ' + TAG_CLS[t] + '">[' + t + ']</span>').join(" ");
+}
+function renderBoard() {
+  let html = "";
+  AREAS.forEach(area => {
+    const rows = CROSS.filter(x => x.a === area[0] && (filter === "all" || x.t.indexOf(filter) !== -1));
+    if (!rows.length) return;
+    html += '<div class="area-head">' + area[1] + ' <span class="ac">' + rows.length + '</span></div>';
+    rows.forEach(x => {
+      html += '<div class="card branch-card xp-card">' +
+        '<h3><span class="xn">' + x.s + '</span> ' + badges(x.t) + '</h3>' +
+        '<p>' + x.d + '</p>' +
+      '</div>';
+    });
+  });
+  document.getElementById("board").innerHTML = html;
+}
+function render() { renderSummary(); renderFilters(); renderBoard(); }
+
+document.addEventListener("click", e => {
+  const b = e.target.closest(".filter-btn");
+  if (!b) return;
+  filter = b.dataset.f;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

@@ -17,6 +17,7 @@ A self-contained HTML wiki. No build step, no server — just open the files.
 | `branches.html` | Per-branch deep-dive of the upstream feature branches |
 | `issues.html` | Snapshot of open issues on the upstream repo |
 | `prs.html` | Snapshot of open pull requests on the upstream repo |
+| `corefall.html` | Cross-pollination ideas mined from the sister project Corefall, split into Lua-mod vs engine-code |
 | `assets/style.css` | Shared stylesheet |
 
 ## How to view
@@ -38,6 +39,6 @@ Keep edits small and commit often so the history stays useful.
 
 - **Working fork:** https://github.com/Madreag/cortex-modern (this repo)
 - **Upstream:** https://github.com/cortex-command-community/Cortex-Command-Community-Project
-- **Related project:** https://github.com/Madreag/corefall — a parallel game project; a likely source of cross-pollination later.
+- **Related project:** https://github.com/Madreag/corefall — a parallel game project; cross-pollination ideas are catalogued in `corefall.html`.
 
 Working branch: `modernization-effort`.
