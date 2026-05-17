@@ -64,18 +64,10 @@
     <h2><span class="h-accent">Upstream branches</span> &mdash; what's already in flight</h2>
     <div class="callout callout-warn">
       <p>Upstream <code>development</code> is <b>frozen since 2026-04-06</b>; the real work lives in unmerged,
-      mostly single-author WIP branches &mdash; <b>none mergeable as-is</b>. Full per-branch analysis is on the
-      <a href="branches.html">Upstream Branches</a> page. In short:</p>
-      <ul>
-        <li><b>Track, don't duplicate</b> &mdash; <code>gpu-renderer</code> (renderer-layer rewrite, ~60-70% done,
-        paused mid-HUD), <code>box2d-emscripten</code> (web port + a Box2D prototype, dormant),
-        <code>dynamic-two-stage-fow</code> (GPU fog-of-war &mdash; the one actively-developed branch).</li>
-        <li><b>Mine as a reference</b> &mdash; <code>sol3</code> is a complete, build-verified luabind&rarr;sol2
-        migration (a head start for T2-02); the original <code>interpolated-render</code> holds the real
-        interpolation work (design lessons for T2-01).</li>
-        <li><b>Ignore</b> &mdash; <code>interpolated-render-redux</code> (misleading name &mdash; zero interpolation
-        code), <code>hot-reloading</code>, <code>gles-v2</code>, <code>read-write-fog-of-war</code> (demos or superseded).</li>
-      </ul>
+      mostly single-author WIP branches, <b>none mergeable as-is</b>. The full per-branch deep-dive is on the
+      <a href="branches.html">Upstream Branches</a> page. Two branches feed this plan directly: <code>sol3</code> is
+      a complete, build-verified luabind&rarr;sol2 migration and a head start for <b>T2-02</b>; the original
+      <code>interpolated-render</code> holds the real interpolation work and is design reference for <b>T2-01</b>.</p>
     </div>
 
     <!-- ====== TIER 1 ====== -->
@@ -101,7 +93,7 @@
       &mdash; not even compiled &mdash; and nothing reachable references them, yet the <code>NetworkServer/Client</code>
       code and the abandoned RakNet dependency are still dragged into the build. Either delete it cleanly (dropping
       RakNet) or formally decide to rebuild it (see <code>T3-04</code>) &mdash; today it is the worst of both.</p>
-      <p class="small muted">Effort: low-medium &middot; Risk: low &middot; see <a href="decisions.html">ADR &mdash; pending</a></p>
+      <p class="small muted">Effort: low-medium &middot; Risk: low &middot; see <a href="decisions.html#open-questions">Decision Log &mdash; open questions</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-04 &nbsp; Delete dead GL code</h3>
@@ -207,19 +199,13 @@
     <!-- ====== COREFALL FEATURE TRACK ====== -->
     <h2><span class="h-accent">Beyond modernization</span> &mdash; the Corefall feature track</h2>
     <div class="callout callout-info">
-      <p>The three tiers above are <b>engine modernization</b>. Running alongside them is a second, independent axis:
-      <b>feature and content expansion</b>, mined from the sister project <a href="corefall.html">Corefall</a>. The
-      <a href="corefall.html">Corefall Ideas</a> page maps ~145 design ideas, each split into what ships as a
-      <span class="tag tag-mod">[MOD]</span> (Lua/INI, no engine change) versus what needs
-      <span class="tag tag-code">[CODE]</span> or <span class="tag tag-arch">[ARCH]</span> engine work.</p>
-      <p>The key property: the entire <span class="tag tag-mod">[MOD]</span> tier &mdash; deeper AI and squad command,
-      causal damage and afflictions, loot and perks, factions, a mission-director / storyteller layer, the
-      traits / morale / memory colony layer &mdash; can be built as ordinary <code>.rte</code> mods, <b>with no engine
-      fork and no recompile</b>. That makes it a low-risk track that runs in parallel with Tier&nbsp;1&ndash;3 rather
-      than competing for the same engine work. <code>T1-06</code> (smarter squad AI) is already its first item.</p>
-      <p>The <span class="tag tag-arch">[ARCH]</span> Corefall ideas &mdash; atmospherics, material cellular-automata,
-      vehicle physics &mdash; are deliberately <b>not</b> adopted: they are Corefall's reason to exist, and rebuilding
-      them here would just be a weaker Corefall. See <a href="decisions.html">ADR-010</a>.</p>
+      <p>The three tiers above are <b>engine modernization</b>. A second, independent axis runs in parallel:
+      <b>feature and content expansion</b>, mined from the sister project <a href="corefall.html">Corefall</a>. Its
+      large <span class="tag tag-mod">[MOD]</span> tier &mdash; deeper AI and squad command, causal damage, loot,
+      factions, a mission-director / storyteller layer &mdash; ships as ordinary <code>.rte</code> mods with no
+      engine fork, so it does not compete with Tier&nbsp;1&ndash;3 for engine work; <code>T1-06</code> is already its
+      first item. The full catalogue, the rationale, and what to leave alone are on the
+      <a href="corefall.html">Corefall Ideas</a> page and in <a href="decisions.html">ADR-010</a>.</p>
     </div>
 
     <!-- ====== SWEET SPOT ====== -->

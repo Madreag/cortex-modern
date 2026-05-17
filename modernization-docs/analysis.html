@@ -194,10 +194,12 @@
 
       <div class="card">
         <h3>Networking</h3>
-        <p class="small">Old multiplayer was a <b>screen-streaming</b> model (server compresses each client's
-        viewport to UDP &mdash; not real netcode; hard 4-player cap, unhideable latency). Changelog says it was
-        "removed" &mdash; confirmed: nothing in <code>Main.cpp</code>/<code>ActivityMan</code> references it, yet
-        ~5,000 LOC + the abandoned RakNet dep are still compiled in. Orphaned dead weight.</p>
+        <p class="small">The old multiplayer was a <b>screen-streaming</b> model (the server compresses each client's
+        viewport to UDP &mdash; not real netcode; hard 4-player cap, unhideable latency). It is now dead weight: the
+        <code>MultiplayerGame</code> / <code>MultiplayerServerLobby</code> activities are commented out of
+        <code>Source/Activities/meson.build</code> and unreachable, yet the underlying <code>NetworkServer</code> /
+        <code>NetworkClient</code> code and the abandoned RakNet dependency still compile into the build. Orphaned
+        &mdash; see <a href="roadmap.html">roadmap T1-03</a>.</p>
       </div>
 
       <div class="card">

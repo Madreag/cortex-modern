@@ -99,7 +99,7 @@ const WORK_ITEMS = [
   { id:'T1-06', title:'Smarter squad AI & difficulty depth',      sub:'AI',             tags:['MOD'],          tier:1, status:'todo',     notes:'Pure Lua in Base.rte/AI/. Squad roles, suppression, scaled difficulty.' },
   { id:'T1-07', title:'Build reproducibility fixes',              sub:'Build',          tags:['BUILD'],        tier:1, status:'todo',     notes:'Pin PlatformToolset=v143; fix stale SDL2 in CI.' },
 
-  { id:'T2-01', title:'Render interpolation',                     sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'Lerp transforms by accumulator/dt. Reference interpolated-render-redux.' },
+  { id:'T2-01', title:'Render interpolation',                     sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'Lerp transforms by accumulator/dt. Mine the original interpolated-render branch (single-threaded scope).' },
   { id:'T2-02', title:'luabind → sol2/sol3 migration',            sub:'Scripting',      tags:['DEP'],          tier:2, status:'todo',     notes:'Removes worst dep + Boost. Stale sol3 branch is a reference.' },
   { id:'T2-03', title:'Build all dependencies from source',       sub:'Build',          tags:['BUILD'],        tier:2, status:'todo',     notes:'use_prebuilt_libraries=false — eliminates the __iob_func hack.' },
   { id:'T2-04', title:'GPU sprite drawing for MOs',               sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'DrawTexturePro instead of software draw_sprite. Partly gated by T3-02.' },
