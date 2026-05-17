@@ -30,6 +30,7 @@
       <a class="nav-link" href="branches.html">Upstream Branches</a>
       <a class="nav-link" href="issues.html">Upstream Issues</a>
       <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link" href="corefall.html">Corefall Ideas</a>
     </nav>
     <div class="sidebar-foot">
       <div class="foot-label">Repositories</div>
@@ -259,6 +260,36 @@
       </div>
     </section>
 
+    <!-- ADR-010 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-010</span>
+        <span class="adr-title">Corefall cross-pollination posture &mdash; harvest the mod tier, leave the sim</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>A full read of Corefall's milestone specs (M1&ndash;M49), cross-checked against the Cortex Command engine
+        source, produced ~145 candidate ideas &mdash; see <a href="corefall.html">Corefall Ideas</a>. ADR-007 deferred
+        this decision until Corefall had a defined architecture; it now does.</p>
+        <h4>Decision</h4>
+        <p>Adopt Corefall ideas <b>only as fresh, clean-room implementations</b>, and concentrate on the moddable
+        side. Pursue the <span class="tag tag-mod">[MOD]</span> tier &mdash; AI/squad depth, causal damage and
+        afflictions, loot and perks, factions, missions and storytellers, the traits/morale/memory colony layer
+        &mdash; as ordinary Cortex Command <code>.rte</code> mods, forming a feature track parallel to the engine
+        <a href="roadmap.html">Roadmap</a>. Do <b>not</b> adopt the <span class="tag tag-arch">[ARCH]</span>
+        deep-simulation pillars (atmospherics, material cellular-automata, thermal, vehicle/fluid physics) &mdash;
+        they are Corefall's identity and rebuilding them here is wasted effort. The one enabling
+        <span class="tag tag-code">[CODE]</span> investment worth making is widening the Lua API and adding a
+        custom-property mechanism, which converts further clusters of ideas into pure mod work.</p>
+        <h4>Consequences</h4>
+        <p>cortex-modern gains a large, low-risk content backlog that needs no engine fork. The clean-room boundary
+        is strict and one-directional: ideas may flow Corefall&nbsp;&rarr;&nbsp;cortex-modern, but no Cortex Command
+        (AGPL) code or assets may ever enter Corefall (Apache/MIT). Extends and closes ADR-007.</p>
+      </div>
+    </section>
+
     <h2>Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
@@ -270,7 +301,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log started 2026-05-16 &middot; 9 decisions recorded &middot; ADRs are append-only.
+      Decision log started 2026-05-16 &middot; 10 decisions recorded &middot; ADRs are append-only.
     </div>
   </main>
 
