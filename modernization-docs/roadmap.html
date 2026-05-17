@@ -89,13 +89,13 @@
       <p class="small muted">Effort: low-medium &middot; Risk: low</p>
     </div>
     <div class="card">
-      <h3><span class="status status-doing">ON HOLD</span> &nbsp;T1-03 &nbsp; Multiplayer code &amp; RakNet</h3>
-      <p class="small">Previously slated for deletion. Now <b>on hold</b>: the multiplayer question has been reopened
-      (<a href="decisions.html">ADR-013</a>). The ~5,900 lines of networking code and the RakNet dependency are
-      <b>retained as the reference implementation</b> for a possible revival &mdash; see the
-      <a href="multiplayer.html">Multiplayer</a> page for the option analysis. Nothing is deleted until a multiplayer
-      direction is chosen; RakNet is dropped only when a Tier-1/2 build picks its replacement transport.</p>
-      <p class="small muted">Status: held pending the Multiplayer decision &middot; see <a href="multiplayer.html">Multiplayer</a></p>
+      <h3><span class="status status-doing">ABSORBED</span> &nbsp;T1-03 &nbsp; Multiplayer code &amp; RakNet</h3>
+      <p class="small">Once a standalone &ldquo;delete the dead networking code&rdquo; task, then held pending the
+      multiplayer decision. That decision is made (<a href="decisions.html">ADR-015</a>): the ~5,900 lines of removed
+      networking code and RakNet are <b>kept as the reference implementation</b>, and milestone <b>M1</b> of the
+      <a href="multiplayer.html">Multiplayer</a> flagship rebuilds the server spine and retires RakNet for a modern
+      transport. No longer a standalone item.</p>
+      <p class="small muted">Status: absorbed into the Multiplayer flagship &middot; see the <a href="multiplayer.html">Multiplayer</a> page &amp; <a href="decisions.html">ADR-015</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-04 &nbsp; Delete dead GL code</h3>
@@ -187,14 +187,14 @@
       <p class="small muted">Effort: very high &middot; Risk: high</p>
     </div>
     <div class="card">
-      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Multiplayer &mdash; bring networked play back</h3>
-      <p class="small">Reopened by <a href="decisions.html">ADR-013</a>. The dedicated <a href="multiplayer.html">Multiplayer</a>
-      page lays out the full option menu &mdash; from a one-call Steam Remote Play stopgap, through modernizing the
-      old screen-streaming model, to a real server-authoritative state-replication build (the Teardown model, the
-      recommended target). A full determinism rewrite is ruled out as effectively a new engine. Near-term: the
-      zero-effort stopgap; the real build is flagship-scale, best sequenced with the <a href="campaign.html">Campaign</a>
-      as co-op.</p>
-      <p class="small muted">Effort: trivial (stopgap) to very high (state replication) &middot; see <a href="multiplayer.html">Multiplayer</a></p>
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Multiplayer &mdash; the networked-play flagship</h3>
+      <p class="small">Reopened by <a href="decisions.html">ADR-013</a>, now a <b>committed flagship</b>
+      (<a href="decisions.html">ADR-015</a>): <b>server-authoritative state replication, staged</b>. A Steam Remote
+      Play stopgap ships immediately; co-op is built via state replication with terrain sent as semantic commands
+      over a determinism island (M1&ndash;M4); the island then grows whole-tick toward rollback PvP (M5&ndash;M6).
+      The committed plan &mdash; seven milestones (M0&ndash;M6) with file touch-points, the engine work, and the
+      automated sync harness &mdash; is the dedicated <a href="multiplayer.html">Multiplayer</a> page.</p>
+      <p class="small muted">Status: committed plan &mdash; see the <a href="multiplayer.html">Multiplayer</a> page &amp; <a href="decisions.html">ADR-015</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-05 &nbsp; Retire Allegro 4</h3>
