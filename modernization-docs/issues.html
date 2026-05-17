@@ -54,9 +54,10 @@
     </header>
 
     <div class="callout callout-info">
-      <p><b>Snapshot &mdash; 2026-05-16.</b> This is a static capture of the upstream issue tracker, not a live
-      feed. Titles link to the issue on GitHub. To refresh, re-fetch the open issues and update the
-      <code>ISSUES</code> array near the bottom of this file.</p>
+      <p><b>Re-verified live 2026-05-17.</b> All 26 open issues below were confirmed against the upstream tracker
+      via <code>gh</code> on 2026-05-17 &mdash; still current. But this page is a <b>cache, not a live feed</b>:
+      before acting on it, re-check the tracker (<code>gh issue list</code>). To refresh, re-fetch the open
+      issues and update the <code>ISSUES</code> array near the bottom of this file.</p>
     </div>
 
     <div class="callout callout-ok">
@@ -64,6 +65,35 @@
       <code>development</code>; #242 is addressed by open PR&nbsp;#277. The highest-value fork targets are the
       cross-platform crash (#175) and the long-ignored Lua-engine bug cluster (#85 / #88 / #90) &mdash; strong
       candidates to fix in our fork.</p>
+    </div>
+
+    <div class="callout callout-warn">
+      <div class="callout-title">Found by cortex-modern build-test (2026-05-17) &mdash; the two-stage FoW branch crashes on game start</div>
+      <p><b>Not an upstream-filed issue</b> &mdash; a bug <b>we discovered</b> by building and running the
+      two-stage Fog-of-War branch (<code>dynamic-fow-negative-distance-test</code>; see
+      <a href="branches.html">Upstream Branches</a>). The branch builds clean (0 errors), but starting any
+      Fog-of-War match crashes on the first simulation frame.</p>
+      <ul>
+        <li><b>Symptom:</b> <code>EXCEPTION_ACCESS_VIOLATION</code> in <code>RTE::SceneLayer::GetBitmap</code>; the
+        game aborts and dumps <code>AbortLog.txt</code> / <code>AbortScreen.png</code>.</li>
+        <li><b>Repro:</b> build the branch (<code>Debug Full</code> / x64), then Scenario Battle &rarr; Skirmish
+        Defense &rarr; Metra Plains with Fog of War enabled &rarr; crash on start.</li>
+        <li><b>Callstack:</b> <code>MovableMan::Update</code> (MovableMan.cpp:1327) &rarr;
+        <code>SceneMan::CommitToLastSeenTerrainWithFowMask</code> (SceneMan.cpp:939) &rarr;
+        <code>Scene::GetUnseenLayerMask(team)</code> returns <code>nullptr</code> &rarr; <code>-&gt;GetBitmap()</code>
+        dereferences null.</li>
+        <li><b>Root cause:</b> the activity reports Fog of War <i>enabled</i>, so <code>MovableMan::Update</code>
+        runs the per-player FoW commit &mdash; but the per-team unseen layer (<code>m_apUnseenLayerMask[team]</code>)
+        was never created for that human player's team. <code>CommitToLastSeenTerrainWithFowMask</code> has <b>no
+        null-guard</b>, although its sibling <code>MakeAllUnseen</code> does. Same root as the branch's splitscreen
+        gap &mdash; per-team FoW setup is only half-wired.</li>
+        <li><b>Fix:</b> <i>minimal</i> &mdash; null-guard <code>CommitToLastSeenTerrainWithFowMask</code>
+        (early-return when the layer is null), matching <code>MakeAllUnseen</code>'s existing style.
+        <i>Proper</i> &mdash; ensure the per-team unseen layers are created, with a valid resolution, for every
+        team participating in a Fog-of-War-enabled activity.</li>
+        <li><b>Impact:</b> the <b>#1 blocker</b> to shipping two-stage FoW &mdash; the branch is not playable for a
+        standard FoW match as it stands, so this must be fixed before the feature can land for Release 7.</li>
+      </ul>
     </div>
 
     <div class="summary" id="summary"></div>
@@ -77,7 +107,7 @@
 
     <div class="page-foot">
       Snapshot of <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/issues">cortex-command-community/Cortex-Command-Community-Project/issues</a>
-      &middot; captured 2026-05-16 &middot; summaries are editorial.
+      &middot; re-verified live 2026-05-17 &middot; summaries are editorial.
     </div>
   </main>
 
@@ -85,7 +115,7 @@
 
 <script>
 /* ============================================================
-   ISSUES — snapshot of upstream open issues (2026-05-16).
+   ISSUES — snapshot of upstream open issues (re-verified live 2026-05-17).
    To refresh: re-fetch open issues and rewrite this array.
    type: "bug" | "enhancement" | "other"
    ============================================================ */

@@ -55,15 +55,22 @@
 
     <div class="callout callout-key">
       <div class="callout-title">The headline</div>
-      <p>Upstream <code>development</code> has been <b>frozen since 2026-04-06</b> (the <code>nightly</code> tag has
-      not moved in ~6 weeks). The "upstream roadmap" is <b>not</b> a coordinated plan &mdash; it is a scatter of
-      <b>unmerged, mostly single-author WIP branches</b>, several of them AI-assisted spikes. <b>None is mergeable
-      as-is.</b> The three live-ish ones are all paused or mid-development.</p>
+      <p>Upstream <code>development</code> has been <b>frozen since 2026-04-06</b> (verified &mdash; its last
+      commit is dated 2026-04-06). The "upstream roadmap" is <b>not</b> a coordinated plan &mdash; it is a scatter
+      of <b>45 branches</b>, mostly unmerged single-author WIP, several of them AI-assisted spikes, <b>none
+      mergeable as-is</b>. As of the live re-check below, <b>exactly two are actively maintained</b>: the lead dev
+      touched <code>dynamic-fow-negative-distance-test</code> (two-stage fog-of-war) and
+      <code>interpolated-render-redux</code> on 2026-05-17, both bound for Release 7. The cards below analyse the
+      <b>14 branches</b> that matter for engine modernization or rendering; the remaining 31 are the two mainlines
+      plus small single-feature content, faction and bug-fix branches (several are the open
+      <a href="prs.html">pull requests</a>).</p>
     </div>
 
     <div class="callout callout-info">
-      <p><b>Snapshot &mdash; 2026-05-16.</b> Static capture; "behind/ahead" and dates are vs <code>upstream/development</code>
-      at <code>41e6b7010</code>. Verdict tags: <span class="tag bv-track">TRACK</span> watch it, don't merge &middot;
+      <p><b>Re-verified live 2026-05-17.</b> The branch list, dates and ahead/behind counts below were pulled
+      fresh from the upstream repo via <code>gh</code> on 2026-05-17. This page is a <b>cache, not a live feed</b>
+      &mdash; before acting on it, re-check the repo (<code>gh api .../branches</code>); upstream state can move
+      any day. Verdict tags: <span class="tag bv-track">TRACK</span> watch it, don't merge &middot;
       <span class="tag bv-ref">REFERENCE</span> mine it for design/code, don't merge the branch &middot;
       <span class="tag bv-ignore">IGNORE</span> no value.</p>
     </div>
@@ -76,8 +83,8 @@
     <p class="small muted" id="emptyMsg" style="display:none">No branches match the current filter.</p>
 
     <div class="page-foot">
-      Branch analysis &middot; captured 2026-05-16 from <code>upstream/*</code> &middot;
-      see the <a href="roadmap.html">Roadmap</a> for how this feeds our plan.
+      Branch analysis &middot; 14 of 45 branches analysed &middot; re-verified live 2026-05-17 from
+      <code>upstream/*</code> &middot; see the <a href="roadmap.html">Roadmap</a> for how this feeds our plan.
     </div>
   </main>
 
@@ -85,14 +92,20 @@
 
 <script>
 /* ============================================================
-   BRANCHES — deep-dive snapshot of upstream branches (2026-05-16).
-   To refresh: re-analyse the branches and rewrite this array.
+   BRANCHES — deep-dive of the significant upstream branches (re-verified live 2026-05-17).
+   To refresh: re-fetch the branch list from gh, re-analyse, and rewrite this array.
    status: "active" | "dormant" | "stale"
    verdict: "track" | "ref" | "ignore"
    ============================================================ */
 const REPO = "https://github.com/cortex-command-community/Cortex-Command-Community-Project";
 
 const BRANCHES = [
+  { name:"dynamic-fow-negative-distance-test", status:"active", verdict:"track",
+    facts:"87 commits · getcetc + Causeless · last touched 2026-05-17 (development merged in) · FoW work itself paused since 2026-03 · 0 behind development · the live FoW branch",
+    what:"The active continuation of the two-stage fog-of-war work — it supersedes dynamic-two-stage-fow. Replaces CC's static fog with a dynamic, GPU-accelerated two-stage system: what a team sees now, plus a darkened 'memory' layer of terrain it previously saw ('unseen' became 'ever unseen, not current FoW'). Built on a Jump-Flood-Algorithm signed-distance-field shader pipeline (SDF_1_SeedTexture → SDF_2_JFA → SDF_3_UnsignedSDF) for smooth fog edges, with dynamic per-actor vision and time decay.",
+    state:"The JFA SDF shader pipeline is complete and stable, and the branch is current with development (0 behind). But per-team Fog-of-War setup is incomplete: building and running the branch (cortex-modern build-test, 2026-05-17) shows it CRASHES on starting a standard FoW match — a null-deref in SceneMan::CommitToLastSeenTerrainWithFowMask, because a participating team's unseen layer is never created (detailed on the Upstream Issues page). It is genuinely mid-development — its own recent commits read ':(' and 'didn't work'. What's left: fix that crash first, then splitscreen (the FoW currently wires only player 1), scene-reentry, a pending 'double-buffering' hack, a settings toggle, ~30 'GTODO' markers, and a cleanup pass.",
+    take:"Track closely — the most important live branch, and the upstream lead has openly asked for help finishing two-stage FoW for Release 7. The hard rendering invention (the SDF shaders) is done; what remains is bounded engineering, starting with the game-start crash — the #1 blocker (see Upstream Issues). A strong candidate for the fork to help land, once that crash is fixed." },
+
   { name:"gpu-renderer", status:"dormant", verdict:"track",
     facts:"134 commits · HeliumAnt (solo) · last work 2026-03-28 · ~7 weeks idle",
     what:"A ground-up rewrite of the rendering primitive layer — a new Source/Renderer/ batch renderer (RenderMan / RenderBatch / Camera / Shapes) replacing raylib's immediate-mode API, with camera-driven drawing and an elegant 9-camera scene-wrap model.",
@@ -105,11 +118,11 @@ const BRANCHES = [
     state:"The WASM port is substantially done: the game boots, renders, plays and has audio in a browser, including iOS. The Box2D layer is a 2-day prototype — one of its five phases is dead code, debug draw ships on, it hard-caps at 200 bodies, and the branch does not even build natively (Box2D is mis-scoped to the web build only).",
     take:"Track the web-port half — genuinely valuable, worth harvesting later onto a clean base. Drop the Box2D-physics half: an unfinished prototype, and the upstream lead advises against a Box2D physics switch outright — CC's atom physics is core to its identity, and Box2D would need extensive CC-specific work to fit." },
 
-  { name:"dynamic-two-stage-fow", status:"active", verdict:"track",
-    facts:"70 commits · getcetc + Causeless · last work 2026-02-24 · the most active branch",
-    what:"Replaces CC's static fog-of-war with a dynamic, GPU-accelerated two-stage system — what you see now plus a darkened 'memory' layer of terrain you previously saw — using a Jump-Flood-Algorithm signed-distance field for smooth fog edges, dynamic actor vision and time decay.",
-    state:"The core loop is playable and this was the single most actively-developed branch (daily commits through late Feb 2026). But it is mid-development: ~30 'GTODO' markers, broken splitscreen, a stub function, a known memory leak, debug cruft — the last commits are literally titled ':(' and 'didn't work'.",
-    take:"Track closely. A genuine, well-designed feature improvement. If it reaches a stable point, adopt it rather than building our own fog-of-war — with a cleanup pass required first. Re-check whether commits resumed after the snapshot date." },
+  { name:"dynamic-two-stage-fow", status:"stale", verdict:"ref",
+    facts:"70 commits · getcetc + Causeless · last work 2026-02-24 · superseded",
+    what:"The original two-stage fog-of-war branch — the JFA signed-distance-field FoW described above, from before the work moved branches.",
+    state:"Superseded. The FoW work continued on dynamic-fow-negative-distance-test (above), which contains and extends it; this branch was left at 2026-02-24.",
+    take:"Reference / superseded — look at dynamic-fow-negative-distance-test instead. Kept here only to disambiguate the two similarly-named FoW branches: an earlier snapshot of this page tracked this one as the active FoW branch, which is no longer correct." },
 
   { name:"save-load-semantics-overhaul", status:"dormant", verdict:"ref",
     facts:"54 commits · single author · last work 2026-01-15 · 31 commits behind",
@@ -129,11 +142,17 @@ const BRANCHES = [
     state:"Abandoned. A two-year instability graveyard (commit messages like 'Very broken' and 'Better to be crashy than laggy'); 923 commits behind and unrebasable. It failed on an over-ambitious sim/render thread split.",
     take:"Reference only. Mine it for the lerp primitives and the teleport/wrap fixes — but scope our T2-01 to single-threaded interpolation and avoid the thread split that sank it." },
 
-  { name:"interpolated-render-redux", status:"stale", verdict:"ignore",
-    facts:"3 real commits (Aug 2025) · abandoned ~9 months · the rest is merge-commit noise",
-    what:"The intended retry of interpolated-render — render interpolation WITHOUT the sim/render thread split that sank the original. The right direction; it just never got past three minor refactors (a sprite frustum-cull, a draw-call relocation, a dead-variable removal).",
-    state:"Barely started. The interpolation itself was never written here; real work stopped 2025-08-12.",
-    take:"Ignore the branch — there is no code to harvest — but its premise is correct and is exactly the T2-01 plan: do the interpolation single-threaded. Mine the original interpolated-render for the lerp and teleport/wrap code." },
+  { name:"interpolated-render-redux", status:"dormant", verdict:"track",
+    facts:"8 commits · Causeless · last touched 2026-05-17 (development merged in) · 0 behind · kept current",
+    what:"The intended retry of interpolated-render — render interpolation WITHOUT the sim/render thread split that sank the original. The right direction; the real code is still just three minor refactors (a sprite frustum-cull in MOSRotating::Draw, moving the MO draw into SceneMan, a dead-variable removal).",
+    state:"Still barely started — the interpolation itself is unwritten. But Causeless merged development into it on 2026-05-17, keeping it current (0 behind): this is a live, intended branch, not abandoned, and the upstream lead has said he wants to implement render interpolation. Its single-threaded premise is exactly roadmap T2-01.",
+    take:"Track. There is still almost no code to harvest here — mine the original interpolated-render for the lerp and teleport/wrap primitives — but the branch is alive and the direction is right. (An earlier snapshot of this page wrongly marked this 'stale / ignore'.)" },
+
+  { name:"draw-mos-to-screen", status:"stale", verdict:"ignore",
+    facts:"2 commits ahead / 167 behind · Causeless · last work 2025-08-09",
+    what:"A small 2025 experiment — drawing MOs directly to the screen, plus a sprite frustum-cull — early groundwork toward removing the scene-sized intermediate MO colour layer that builds draw every object into.",
+    state:"Two commits ahead, 167 behind development; the direct-to-screen test never matured. The same 'move the MO draw into the scene' and frustum-cull groundwork reappears on interpolated-render-redux.",
+    take:"Ignore the branch — superseded by interpolated-render-redux's groundwork — but its premise (kill the scene-sized intermediate MO colour layer and draw direct to screen) is a real long-term rendering goal." },
 
   { name:"emscripten-port", status:"stale", verdict:"ignore",
     facts:"22 commits · a strict ancestor of box2d-emscripten",
@@ -142,7 +161,7 @@ const BRANCHES = [
     take:"Ignore as a separate branch — everything here is already in box2d-emscripten." },
 
   { name:"zipped-modules", status:"stale", verdict:"ref",
-    facts:"1 commit · 186 commits behind · 2025-07 · the freshest stale branch",
+    facts:"1 commit · 186 commits behind · last work 2025-07-30",
     what:"A proof-of-concept for loading .rte modules directly from .zip archives.",
     state:"Only the Reader read-path is zip-aware (~42 lines); ContentFile and DataModule loading are not, so a zipped module would not fully load. Roughly 20% done.",
     take:"A viable seed if module-zipping is ever wanted — small and only 186 behind — but most of the work remains. Not a current priority." },
@@ -162,7 +181,7 @@ const BRANCHES = [
   { name:"read-write-fog-of-war", status:"stale", verdict:"ignore",
     facts:"1 commit · 486 commits behind · 2025-01",
     what:"A trivial change exposing a Lua-writable FogOfWarEnabled property.",
-    state:"Superseded by dynamic-two-stage-fow. The actual engine change is about three lines.",
+    state:"Superseded by the two-stage FoW line (now the active dynamic-fow-negative-distance-test branch). The actual engine change is about three lines.",
     take:"Ignore. A 3-line reimplementation if it is ever needed." },
 ];
 

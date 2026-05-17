@@ -180,10 +180,15 @@
       <div class="adr-head">
         <span class="adr-id">ADR-006</span>
         <span class="adr-title">Render interpolation is the first flagship engine change</span>
-        <span class="status status-proposed">Proposed</span>
+        <span class="status status-superseded">Superseded</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>superseded 2026-05-17:</b> this proposal predates the three
+        committed flagships. cortex-modern's flagships are now the AI overhaul (ADR-014), Multiplayer (ADR-015) and
+        the Campaign (ADR-012), and the AI overhaul is the first major build. Render interpolation remains a sound
+        early, low-controversy contribution-workflow win &mdash; but as ordinary roadmap item <code>T2-01</code>,
+        not &ldquo;the flagship engine change&rdquo;. The small-branch&nbsp;&rarr;&nbsp;PR contribution pattern
+        this ADR proposed still stands.</p>
         <h4>Context</h4>
         <p>We need an early, user-visible, low-controversy win to validate the contribution workflow before tackling
         anything heavier.</p>
@@ -253,7 +258,13 @@
         <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>updated 2026-05-17</b> after a live branch re-check (see the
+        refreshed <a href="branches.html">Upstream Branches</a> page). Two corrections: (1) per the dev-review
+        correction to ADR-003, the <code>sol3</code> branch is <b>not</b> a re-executable template &mdash; T2-02
+        treats it as a reference only, and the vanilla/mod compatibility break is the real work; (2) the two-stage
+        fog-of-war work has moved to a newer, active branch (<code>dynamic-fow-negative-distance-test</code>), and
+        <code>interpolated-render-redux</code> is being kept current by the lead dev rather than abandoned &mdash;
+        it is no longer &ldquo;ignore&rdquo;.</p>
         <h4>Context</h4>
         <p>A commit-and-diff deep-dive of every upstream branch (see <a href="branches.html">Upstream Branches</a>).
         <code>development</code> has been frozen since 2026-04-06; the branches are unmerged, mostly single-author
@@ -308,7 +319,7 @@
       <div class="adr-head">
         <span class="adr-id">ADR-011</span>
         <span class="adr-title">Multiplayer &mdash; accept upstream's removal; do not revive netcode</span>
-        <span class="status status-todo">Superseded</span>
+        <span class="status status-superseded">Superseded</span>
       </div>
       <div class="adr-body">
         <p class="small muted">2026-05-16 &middot; <b>Superseded by ADR-013</b> &mdash; the multiplayer question was

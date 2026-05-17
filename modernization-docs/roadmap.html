@@ -241,11 +241,14 @@
     <h2><span class="h-accent">The contributor sweet spot</span></h2>
     <div class="callout callout-ok">
       <p>Given a tiny upstream team and mod-compatibility fears, the highest-return work is:
-      <b>all of Tier&nbsp;1, plus render interpolation (T2-01) and the luabind&rarr;sol migration (T2-02).</b></p>
+      <b>all of Tier&nbsp;1, plus render interpolation (T2-01).</b></p>
       <p>It is real modernization, it is <b>un-owned</b> (not on an active upstream branch), every item is
-      <b>individually mergeable</b>, and none of it fights the team's mod-compatibility constraints. Tier&nbsp;3 is
-      where the deep wins are &mdash; but each Tier-3 item is a project in itself and should only start once a
-      Tier-3 <a href="decisions.html">decision record</a> commits to it.</p>
+      <b>individually mergeable</b>, and none of it fights the team's mod-compatibility constraints. The
+      luabind&rarr;sol migration (<code>T2-02</code>) was once on this list &mdash; but the dev-review correction
+      to <a href="decisions.html">ADR-003</a> reframed it: the sol2 compatibility break makes it high-risk and
+      possibly not worth doing, so it needs an effort spike before it can be recommended. Tier&nbsp;3 is where the
+      deep wins are &mdash; but each Tier-3 item is a project in itself and should only start once a Tier-3
+      <a href="decisions.html">decision record</a> commits to it.</p>
     </div>
 
     <div class="page-foot">
