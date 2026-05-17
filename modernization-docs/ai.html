@@ -9,6 +9,68 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
 <title>AI — Cortex-Modern Modernization Wiki</title>
 <link rel="stylesheet" href="assets/style.css">
+<style>
+  /* page-local: AI page */
+  .toc {
+    display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 0;
+    font-family: var(--mono); font-size: 12px;
+  }
+  .toc a { color: var(--text-dim); white-space: nowrap; }
+  .toc a:hover { color: var(--accent-soft); text-decoration: none; }
+  .toc a::before { content: "// "; color: var(--accent-dim); }
+
+  /* execution pipeline */
+  .pipeline { margin: 18px 0; counter-reset: plstep; }
+  .pl-step {
+    position: relative; background: var(--bg-elev); border: 1px solid var(--border);
+    border-left: 2px solid var(--accent-dim); border-radius: 7px;
+    padding: 10px 16px 10px 48px; margin: 0 0 7px;
+  }
+  .pl-step::before {
+    counter-increment: plstep; content: counter(plstep);
+    position: absolute; left: 12px; top: 11px;
+    width: 23px; height: 23px; border-radius: 50%;
+    background: var(--bg-inset); border: 1px solid var(--accent-dim);
+    color: var(--accent); font-family: var(--mono); font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pl-step .pl-loc { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+  .pl-step .pl-side {
+    font-family: var(--mono); font-size: 9px; text-transform: uppercase;
+    letter-spacing: 1.2px; float: right; padding: 1px 6px; border-radius: 3px;
+  }
+  .pl-cpp { color: var(--blue); border: 1px solid rgba(90,167,255,.36); }
+  .pl-lua { color: var(--green); border: 1px solid rgba(69,196,104,.36); }
+  .pl-step .pl-what { font-size: 12.7px; color: var(--text-dim); margin-top: 2px; }
+
+  /* layered architecture stack */
+  .stack { margin: 18px 0; }
+  .layer {
+    display: flex; align-items: stretch; margin-bottom: 5px;
+    border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    background: var(--bg-elev);
+  }
+  .layer .lyr-id {
+    flex: 0 0 62px; display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-weight: 700; font-size: 14px;
+    background: var(--bg-elev2); color: var(--accent);
+    border-right: 1px solid var(--border);
+  }
+  .layer .lyr-main { flex: 1; padding: 11px 16px; min-width: 0; }
+  .layer .lyr-name {
+    font-family: var(--display); font-weight: 600; color: var(--text-bright); font-size: 14px;
+  }
+  .layer .lyr-desc { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; }
+  .layer .lyr-fix { font-size: 12px; color: var(--text); margin-top: 5px; }
+  .layer .lyr-fix b { color: var(--green); font-weight: 600; }
+  .layer.cross { border-style: dashed; }
+  .layer.cross .lyr-id { color: var(--purple); }
+
+  /* fit rating dots */
+  .rate { font-family: var(--mono); white-space: nowrap; letter-spacing: 1.5px; font-size: 12px; }
+  .rate .on { color: var(--accent); }
+  .rate .off { color: var(--border-bright); }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -47,133 +109,563 @@
   <main class="main">
     <header class="page-header">
       <div class="crumb">Foundations</div>
-      <h1>Smarter AI</h1>
-      <p class="page-lead">Cortex Command's AI is the single most-cited weakness in the game &mdash; and the upstream
-      lead says so himself. It is also the <b>foundation</b> under everything else: the <a href="campaign.html">Campaign</a>
-      is only as good as its battles, and co-op <a href="multiplayer.html">Multiplayer</a> runs enemy AI server-side.
-      And it is <b>~95% Lua</b> &mdash; so fixing it is almost pure mod work.</p>
+      <h1>The AI Overhaul</h1>
+      <p class="page-lead">Cortex Command's AI is the game's most-cited weakness &mdash; and the one the upstream
+      lead has openly called <i>garbage</i>. This page is the full picture: <b>exactly how the AI works today</b>
+      from a direct read of the source, <b>what is broken and why</b>, and <b>the complete menu of solutions</b>
+      &mdash; easy Lua wins, hybrid engine work, and the deep refactors &mdash; for building an AI that is
+      actually fun to play against.</p>
     </header>
 
     <div class="callout callout-key">
       <div class="callout-title">The headline</div>
-      <p>AI quality is the <b>#1 complaint</b> across Steam reviews, the forums and mod.io &mdash; "units stuck in
-      terrain", weak bunker navigation, shallow squad coordination. Upstream has an open issue for it (#208,
-      "improve squad logic"). And the project lead, Causeless, put it bluntly in the dev Discord (2025-08-09):
+      <p>AI quality is the <b>#1 complaint</b> across Steam reviews, the forums and mod.io, and it has been for
+      twenty years &mdash; old reviews still bite (<i>GameSpy</i>: "terrible AI"; <i>NoobFeed</i>: "units will get
+      stuck or mess up or even die due to a flaw in the AI"). The live upstream tracker carries it now:
+      <a href="issues.html">#208</a> squad logic, <a href="issues.html">#121</a> post-rework sentries that twitch
+      and aim randomly, <a href="issues.html">#100</a> squads that can't fire gatling guns.</p>
+      <p>And the project lead, Causeless, said it himself in the dev Discord (2025-08-09):
       <i>"the AI is such garbage. it's very frustrating. I want to just fucking delete all the path following code."</i></p>
-      <p>That is a rare thing: a major subsystem that the people who own it openly consider broken, have sketched a
-      fix for, and have not executed. It is the most clearly <b>un-owned, sanctioned gap</b> in the whole project
-      &mdash; and because CC's AI is overwhelmingly Lua, almost all of the fix is <span class="tag tag-mod">[MOD]</span>.</p>
+      <p>That is a rare thing &mdash; a major subsystem the people who own it openly call broken, have sketched a
+      fix for, and have not built. Almost all of the <i>tactical</i> fix is Lua and ships as a
+      <span class="tag tag-mod">[MOD]</span>. But making the AI genuinely <i>good</i> also means giving the engine
+      new senses and a new spine. Both paths are mapped below.</p>
+      <div class="toc">
+        <a href="#how">1 How it works</a>
+        <a href="#broken">2 What's broken</a>
+        <a href="#space">3 Solution space</a>
+        <a href="#arch">4 Recommended architecture</a>
+        <a href="#wins">5 Easy / medium / hard wins</a>
+        <a href="#engine">6 What the engine needs</a>
+        <a href="#order">7 Build order</a>
+        <a href="#avoid">8 What not to do</a>
+        <a href="#plan">9 The phased plan</a>
+      </div>
     </div>
 
-    <h2><span class="h-accent">What the code shows</span></h2>
+    <!-- ============ 1 · HOW IT WORKS ============ -->
+    <h2 id="how">1 &nbsp;&middot;&nbsp; <span class="h-accent">How the AI works today</span></h2>
+    <p>Before fixing it, see it clearly. Everything below is from a direct read of the AI source on our branch:
+    <b>~5,830 lines of Lua</b> under <code>Data/Base.rte/AI/</code>, plus the C++ pathfinder, the controller
+    abstraction and the invocation harness. The shape that emerges is unusual &mdash; and it explains both why the
+    AI is so moddable and why it is so hard to make good.</p>
+
+    <h3>1.1 &nbsp; The execution pipeline</h3>
+    <p>Every AI actor is ticked through the same seven-step path each sim frame:</p>
+    <div class="pipeline">
+      <div class="pl-step"><span class="pl-side pl-cpp">C++</span>
+        <span class="pl-loc">Controller::ShouldUpdateAIThisFrame()</span>
+        <div class="pl-what">Throttle. An actor's AI only runs every <code>AIUpdateInterval</code> sim frames, and
+        actors are spread across frames by ID so the cost is even. There is <b>no emergency interrupt</b> &mdash;
+        a falling actor waits its turn like everyone else.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-cpp">C++</span>
+        <span class="pl-loc">MovableMan::UpdateControllers()</span>
+        <div class="pl-what">Dispatch. Runs <code>ThreadedUpdateAI</code> across the thread pool &mdash; one worker
+        thread per Lua state &mdash; then a serial <code>UpdateAI</code> pass. Most AI runs <b>multithreaded</b>.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-lua">LUA</span>
+        <span class="pl-loc">HumanAI.lua &rarr; NativeHumanAI:Update()</span>
+        <div class="pl-what">A ~10-line entry script hands off to the real controller object. (Crabs, turrets,
+        dropships and rockets each have their own equivalent.)</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-lua">LUA</span>
+        <span class="pl-loc">behaviour coroutines</span>
+        <div class="pl-what">The dispatcher watches the actor's <code>AIMode</code> and runs up to two behaviour
+        coroutines, drawing on the <code>HumanBehaviors</code> / <code>SharedBehaviors</code> libraries.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-lua">LUA</span>
+        <span class="pl-loc">Controller:SetState(...)</span>
+        <div class="pl-what">The behaviour's only output: it sets the actor's <code>Controller</code> &mdash; the
+        same buttons and analog sticks a human holds.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-cpp">C++</span>
+        <span class="pl-loc">Actor locomotion / physics update</span>
+        <div class="pl-what">The engine reads that Controller and moves the actor &mdash; exactly as if a gamepad
+        had sent the input.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-cpp">C++</span>
+        <span class="pl-loc">PathFinder (background thread pool)</span>
+        <div class="pl-what">In parallel, path requests the Lua AI raised resolve on a background pool and the
+        result is handed back for the next tick.</div>
+      </div>
+    </div>
+
+    <h3>1.2 &nbsp; The C++ / Lua split</h3>
+    <p>The single most important fact about CC's AI: <b>the AI never moves an actor.</b> It does exactly one thing
+    each frame &mdash; set the actor's <code>Controller</code>, the same buttons and sticks a human holds. The
+    engine then reads that Controller. The AI literally plays the game through the gamepad. That is why it is so
+    moddable, and why so much of it is Lua:</p>
+    <table class="tbl">
+      <thead><tr><th>The engine (C++) owns</th><th>The Lua scripts own</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>The threaded per-frame invocation harness; the <code>Controller</code> input abstraction; the
+          <code>AIMode</code> enum and waypoint storage.</td>
+          <td><b>Every tactical decision.</b> Which behaviour to run, and when to switch.</td>
+        </tr>
+        <tr>
+          <td>Sensing <i>primitives</i> &mdash; <code>CastMORay</code>, <code>CastStrengthRay</code>,
+          <code>LookForMOs</code> &mdash; and the alarm-event list.</td>
+          <td>Target acquisition, threat scoring, the "have I lost my target?" logic.</td>
+        </tr>
+        <tr>
+          <td>Pathfinding: the MicroPather A*, the node grid, the async request API.</td>
+          <td>Path-following, locomotion, the jetpack-jump predictor, stuck handling, digging decisions.</td>
+        </tr>
+        <tr>
+          <td>Terrain-change tracking that feeds the pathfinder.</td>
+          <td>All combat &mdash; aiming, target leading, fire / hold-fire, reloading, throwing, weapon choice.</td>
+        </tr>
+        <tr>
+          <td>The actor's own physics, locomotion gaits and damage model.</td>
+          <td>Squad behaviour, alarm processing, tool / medikit use, gold-digging, brain-hunting.</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout callout-info">
+      <p><b>The implication.</b> The expensive, low-level parts &mdash; pathfinding, sensing, threading &mdash; are
+      already in C++. The <i>brain</i> &mdash; all judgement &mdash; is Lua. So the tactical fix is moddable. But the
+      AI is only as good as the senses and tools the engine hands it, and today those are thin (see &sect;2). A
+      genuinely good AI needs work on <i>both</i> sides of this line.</p>
+    </div>
+
+    <h3>1.3 &nbsp; AI modes &mdash; the entire order vocabulary</h3>
+    <p>The C++ <code>AIMode</code> enum (<code>Actor.h</code>) is the AI's <b>whole vocabulary</b>. A player's
+    pie-menu order, an activity's spawn script &mdash; all any of them can say to an actor is one of these:</p>
+    <table class="tbl">
+      <thead><tr><th>Mode</th><th>Applies to</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td class="nowrap"><code>SENTRY</code></td><td class="nowrap muted small">actors</td><td>Hold position and facing; sweep aim; react to threats and alarms.</td></tr>
+        <tr><td class="nowrap"><code>PATROL</code></td><td class="nowrap muted small">actors</td><td>Walk back and forth between obstacle-bounded extents.</td></tr>
+        <tr><td class="nowrap"><code>GOTO</code></td><td class="nowrap muted small">actors</td><td>Move to a waypoint, then revert to <code>SENTRY</code> on arrival.</td></tr>
+        <tr><td class="nowrap"><code>BRAINHUNT</code></td><td class="nowrap muted small">actors</td><td>Seek and destroy the nearest enemy brain.</td></tr>
+        <tr><td class="nowrap"><code>GOLDDIG</code></td><td class="nowrap muted small">humans</td><td>Scan for gold and dig toward it.</td></tr>
+        <tr><td class="nowrap"><code>SQUAD</code></td><td class="nowrap muted small">actors</td><td>Follow a leader (see &sect;1.8).</td></tr>
+        <tr><td class="nowrap"><code>RETURN / STAY</code></td><td class="nowrap muted small">craft</td><td>Return to orbit / stay landed and hover.</td></tr>
+        <tr><td class="nowrap"><code>DELIVER / BOMB</code></td><td class="nowrap muted small">craft</td><td>Descend &amp; unload cargo / make a bombing run.</td></tr>
+        <tr><td class="nowrap"><code>SCUTTLE</code></td><td class="nowrap muted small">craft</td><td>Self-destruct immediately.</td></tr>
+      </tbody>
+    </table>
+    <p class="small muted">Plus two sentinels (<code>NONE</code>, <code>COUNT</code>). Six modes apply to fighting
+    actors. That is the entire set of intentions a player or designer can express &mdash; there is no "hold this
+    line", "breach here", "retreat", "rescue him", "mine that vein". Widening this vocabulary is itself a
+    significant part of the overhaul.</p>
+
+    <h3>1.4 &nbsp; The behaviour engine &mdash; coroutine soup</h3>
+    <p>Within a mode, behaviour is run by <b>Lua coroutines</b> &mdash; not a behaviour tree, not a formal state
+    machine. <code>NativeHumanAI</code> runs <b>two coroutines at once</b>: a main <code>Behavior</code> slot
+    (combat, sentry, gold-dig) and a <code>GoToBehavior</code> slot (movement), so an actor can walk toward a
+    target and shoot at the same time. A behaviour does one frame of work, calls <code>coroutine.yield()</code>,
+    and after every yield checks an abort flag. When the AI wants to drop a behaviour it resumes it once more with
+    that flag set &mdash; a cooperative protocol that exists, the source says repeatedly, "to avoid memory leaks".</p>
+    <table class="tbl">
+      <thead><tr><th>Behaviour</th><th>Library</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td><code>GoToWpt</code></td><td class="nowrap muted small">SharedBehaviors</td><td>The ~650-line path-follower &mdash; the single most complex function in the AI. Walking, jumping, crawling, digging, stuck handling.</td></tr>
+        <tr><td><code>ShootTarget</code></td><td class="nowrap muted small">HumanBehaviors</td><td>The main ranged-combat behaviour &mdash; aim, lead, fire decisions, weapon juggling.</td></tr>
+        <tr><td><code>Sentry</code></td><td class="nowrap muted small">HumanBehaviors</td><td>Guard: face the likely approach, sweep aim, periodically sharp-aim, return to post.</td></tr>
+        <tr><td><code>AttackTarget</code> / <code>ThrowTarget</code></td><td class="nowrap muted small">HumanBehaviors</td><td>Melee / digger attack; grenade throwing with a ballistic solver.</td></tr>
+        <tr><td><code>WeaponSearch</code> / <code>ToolSearch</code></td><td class="nowrap muted small">HumanBehaviors</td><td>Find a dropped weapon or digger, score it via async pathing, go pick it up.</td></tr>
+        <tr><td><code>GoldDig</code> / <code>BrainSearch</code></td><td class="nowrap muted small">Human / Shared</td><td>Scan a fan of rays for gold; enumerate enemy brains and route to the easiest-reached one.</td></tr>
+        <tr><td><code>ProcessAlarmEvent</code> / <code>FaceAlarm</code></td><td class="nowrap muted small">SharedBehaviors</td><td>Hearing &mdash; turn toward, or suppress, a heard noise.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>1.5 &nbsp; Perception &mdash; two sets of eyes</h3>
+    <p>CC's AI has <b>two completely separate spotters, and which one an actor gets is decided once, at spawn:</b></p>
+    <ul>
+      <li><b><code>LookForTargets</code></b> &mdash; the default. Casts <i>one ray, in a random direction, per AI
+      tick.</i> An enemy can stand in the open and not be seen for many frames in a row. This is not a bug &mdash;
+      it is the design for ordinary actors.</li>
+      <li><b><code>CheckEnemyLOS</code></b> &mdash; the good one. Enumerates every enemy in a screen-sized box and
+      checks line-of-sight to one each frame, so it reliably sees anything on screen. Only brains, snipers, bosses
+      and high-skill (Nuts difficulty) actors are given it.</li>
+    </ul>
+    <p>So AI competence is <b>bimodal</b>: most enemies you fight are running the random-ray spotter. Hearing is
+    separate &mdash; weapons fire and explosions push <code>AlarmEvent</code>s that <code>ProcessAlarmEvent</code>
+    range-checks and occludes against terrain. When more than one target is in view, <code>CalculateThreatLevel</code>
+    scores them by distance, whether they are armed, and damage taken &mdash; and a new target only displaces the
+    current one if it out-scores it by a margin.</p>
+
+    <h3>1.6 &nbsp; Locomotion &amp; path-following</h3>
+    <p>All ground movement runs through <code>GoToWpt</code>. It reads the engine-built path (<code>MovePath</code>),
+    walks toward the next point, and pops points as it arrives. For jetpack actors it runs a genuine
+    <b>trajectory predictor</b>: it estimates thrust, simulates four candidate jump arcs plus a "do nothing and
+    fall" arc, casts obstacle rays along each, and jumps only if a jump beats falling by a margin. If the actor
+    carries a digger and terrain blocks the path, it sweeps the digger across the obstacle.</p>
+    <p>Its weak point is <b>stuck recovery</b>. A <code>StuckTimer</code> notices the actor has stopped moving
+    &mdash; and the "recovery" is to <i>flail</i>: random lateral-direction swaps, a random chance per tick to
+    drop prone, a random chance to refuel. There is no diagnosis, no re-path, no "step back and try another way".
+    The code around it is openly distrusted by its own authors (see &sect;2).</p>
+
+    <h3>1.7 &nbsp; Pathfinding &mdash; the deepest tech debt</h3>
+    <p>Pathfinding is A* over a uniform grid of <code>PathNode</code>s, via the third-party <b>MicroPather</b>
+    library. Edge cost is the strongest material between two nodes; terrain too hard for the actor to dig is
+    multiplied by 1000 &mdash; effectively a wall. The pather is "jump-aware" &hellip; in theory. In practice:</p>
+    <ul>
+      <li><b>Jump height is faked.</b> <code>Actor::EstimateJumpHeight()</code> returns <code>FLT_MAX</code>
+      &mdash; the comment calls it a "Sentinel value that is explicitly checked for within pathfinder code". The
+      pather therefore assumes every actor can jump <i>infinitely high</i> and plans routes the actor's real
+      locomotion then cannot follow.</li>
+      <li><b>It is not incremental.</b> MicroPather has no incremental update &mdash; any terrain change forces a
+      fresh A*. <code>Scene::UpdatePathFinding</code> reconciles changed terrain every 100&nbsp;ms, capped at 100
+      nodes per call, and the code itself warns this "can indefinitely block updates if pathing requests are made
+      every frame".</li>
+      <li><b>It is rebuilt constantly.</b> A pather is created <i>per worker thread</i> and reset on essentially
+      every request (dig strength varies per actor). The source carries the TODOs
+      <code>"&hellip; (or write our own pather)!"</code> and <code>"&hellip; we create a new pather for every
+      thread!"</code>.</li>
+    </ul>
+    <p>In a game whose <i>entire identity</i> is terrain that changes every second, a pathfinder that cannot cheaply
+    react to terrain changing is the root cause of more visible failures than any other single thing.</p>
+
+    <h3>1.8 &nbsp; Squad AI &mdash; there isn't any</h3>
+    <p>There is exactly one squad mechanic, and it is not coordination. A squadmate standing near its leader
+    <b>literally copies the leader's controller states</b> &mdash; move, jump, prone &mdash; and fires when the
+    leader fires. That is the whole of it. No roles. No formation. No spreading out. No deciding who shoots whom.
+    No shared knowledge of the battlefield. "Squad" means <i>"stand near the leader and press the same buttons."</i>
+    When the leader dies, squadmates fall back to a cached waypoint or just stop. This is why squads clump,
+    friendly-fire, and stall on each other &mdash; and it is upstream issue <a href="issues.html">#208</a>.</p>
+
+    <h3>1.9 &nbsp; The size of it</h3>
+    <table class="tbl">
+      <thead><tr><th>File</th><th class="nowrap">Lua LOC</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td><code>HumanBehaviors.lua</code></td><td class="nowrap">1,762</td><td>Human behaviour library</td></tr>
+        <tr><td><code>SharedBehaviors.lua</code></td><td class="nowrap">1,133</td><td>Shared behaviours incl. <code>GoToWpt</code></td></tr>
+        <tr><td><code>NativeHumanAI.lua</code></td><td class="nowrap">878</td><td>Human AI dispatcher</td></tr>
+        <tr><td><code>CrabBehaviors.lua</code></td><td class="nowrap">533</td><td>Crab behaviours &mdash; a hand-copied fork of the human library</td></tr>
+        <tr><td><code>NativeCrabAI.lua</code></td><td class="nowrap">455</td><td>Crab AI dispatcher</td></tr>
+        <tr><td><code>NativeDropShipAI</code> / <code>RocketAI</code> / <code>NativeTurretAI</code></td><td class="nowrap">925</td><td>Vehicle &amp; turret AI (PID-controlled)</td></tr>
+        <tr><td class="muted small">PID, PathFinder util, turret patrol, 4 entry-point scripts</td><td class="nowrap">146</td><td class="muted small">glue</td></tr>
+        <tr><td><b>Total Lua AI</b></td><td class="nowrap"><b>5,832</b></td><td>~82% of it in the five core human/crab files</td></tr>
+      </tbody>
+    </table>
+    <p class="small muted">The C++ side is small by comparison &mdash; roughly 1,500&ndash;2,500 lines of
+    project-authored AI-specific code (the pathfinder, the controller, scattered actor hooks) plus the vendored
+    MicroPather library. The decision-making is essentially 100% Lua.</p>
+
+    <!-- ============ 2 · WHAT'S BROKEN ============ -->
+    <h2 id="broken">2 &nbsp;&middot;&nbsp; <span class="h-accent">What's broken &mdash; and why</span></h2>
+    <p>The symptoms players report all trace to a small number of structural causes. This is the diagnosis &mdash;
+    each row is a player-visible failure mapped to its root in the code.</p>
+    <table class="tbl">
+      <thead><tr><th>Weakness</th><th>What the player sees</th><th>Root cause</th></tr></thead>
+      <tbody>
+        <tr><td><b>Non-incremental pathfinding</b></td><td>Bots take absurd routes, run into walls that were rebuilt, freeze after an explosion reshapes the map.</td><td>MicroPather has no incremental search; every change is a full re-A*. Terrain reconciliation is throttled and can be starved entirely by a flood of requests.</td></tr>
+        <tr><td><b>Faked jump height</b></td><td>Bots commit to a route, then can't climb it &mdash; stuck at a ledge the path said was fine.</td><td><code>EstimateJumpHeight()</code> returns <code>FLT_MAX</code>; the pather assumes infinite jump and is never reconciled with real locomotion.</td></tr>
+        <tr><td><b>Bimodal perception</b></td><td>An enemy stands in the open and the bot just&hellip; doesn't see it.</td><td>Ordinary actors run <code>LookForTargets</code> &mdash; one random vision ray per tick. Only elites get the reliable <code>CheckEnemyLOS</code>.</td></tr>
+        <tr><td><b>Stuck "recovery" is flailing</b></td><td>Bots jitter against an obstacle, drop prone for no reason, give up.</td><td><code>GoToWpt</code>'s dislodge logic is random direction and prone toggles &mdash; not a recovery strategy.</td></tr>
+        <tr><td><b>No squad coordination</b></td><td>Squads clump into one pixel, friendly-fire, stall on each other, never flank.</td><td>Squad AI is "copy the leader's controller states." No roles, no formation, no shared state (issue&nbsp;#208).</td></tr>
+        <tr><td><b>No self-preservation</b></td><td>Units stand in a grenade's blast radius, in lava, in a friendly's line of fire.</td><td>No reflex layer and no danger model. "Cover" is incidental &mdash; only the side-effect of not shooting through terrain.</td></tr>
+        <tr><td><b>No explainable intent</b></td><td>"The AI did something stupid" &mdash; and nobody, player or developer, can tell why.</td><td>Behaviour state lives in coroutine locals. Nothing is logged. The AI is a black box even to us.</td></tr>
+        <tr><td><b>Coroutine soup</b></td><td>(Developer-facing.) Fixes are slow, risky, and have to be made three times.</td><td>The abort protocol exists only to stop coroutine memory leaks; <code>NativeHuman/Crab/Turret</code> duplicate large blocks; <code>CrabBehaviors</code> is a hand-copied fork.</td></tr>
+        <tr><td><b>Crude tool &amp; weapon choice</b></td><td>Bots waste explosives, bring a pistol to a tank, shoot doors they can't dent.</td><td>String-group heuristics (<code>EquipDeviceInGroup</code>) with no scoring. The source itself says <code>-- TODO: switch weapon properly</code>.</td></tr>
+        <tr><td><b>Over-suppression</b></td><td>Bots turn to face every distant gunshot, abandoning what they were doing.</td><td><code>ProcessAlarmEvent</code> reacts to every audible event; there is no alarm decay or confidence model.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout callout-warn">
+      <div class="callout-title">The code's own confession</div>
+      <p>The clearest evidence the AI needs an overhaul is in the source comments. Verbatim, from our branch:</p>
+      <ul>
+        <li><code>// Sentinel value that is explicitly checked for within pathfinder code. return FLT_MAX;</code>
+        &mdash; <code>Actor.cpp</code>, jump height is faked.</li>
+        <li><code>// TODO: Enhance MicroPather to add that capability (or write our own pather)!</code> &mdash;
+        <code>PathFinder.cpp</code>.</li>
+        <li><code>// TODO: &hellip; For async pathfinding right now we create a new pather for every thread!</code></li>
+        <li><code>// I hate this copy, but fuck it.</code> &mdash; <code>PathFinder.cpp</code>, beside a busy-wait
+        spin-loop.</li>
+        <li>The comment <code>-- Tell the coroutines to abort to avoid memory leaks</code> appears <b>more than a dozen times</b>
+        across the AI scripts.</li>
+      </ul>
+      <p>This is not a subsystem that needs tuning. It needs an architecture.</p>
+    </div>
+
+    <!-- ============ 3 · SOLUTION SPACE ============ -->
+    <h2 id="space">3 &nbsp;&middot;&nbsp; <span class="h-accent">The solution space</span></h2>
+    <p>There is a mature, well-documented body of game-AI engineering for exactly these problems. The question is
+    not <i>"is this solvable"</i> &mdash; it is <i>which techniques fit a 2D, single-threaded-sim,
+    fully-destructible-terrain game with a Lua modding culture.</i> A survey of ~80 sources &mdash; GDC talks,
+    the <i>Game AI Pro</i> series, shipped-game post-mortems &mdash; scores them like this:</p>
+
+    <h3>3.1 &nbsp; The techniques, scored for Cortex Command</h3>
+    <table class="tbl">
+      <thead><tr><th>Technique</th><th class="nowrap">Fit</th><th>Role it should play here</th></tr></thead>
+      <tbody>
+        <tr><td><b>Utility AI / IAUS</b></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;&#9679;</span></span></td><td>The <b>tactical decision-maker.</b> Score every option by weighted "considerations"; pick the best. Replaces the <code>AIMode</code>-enum dispatch &mdash; and every score is a loggable reason.</td></tr>
+        <tr><td><b>Influence maps</b></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;&#9679;</span></span></td><td>The shared <b>spatial world-model.</b> Threat / alarm / friendly-density / danger grids. Biases pathfinding and feeds utility scores. Fixes clumping, over-suppression, self-preservation.</td></tr>
+        <tr><td><b>D* Lite + HPA*</b></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;&#9679;</span></span></td><td>The <b>incremental pathfinder.</b> Repairs only the changed region instead of a full re-A*. HPA* regions for long hauls. Built for exactly this problem.</td></tr>
+        <tr><td><b>Behaviour trees</b></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;</span><span class="off">&#9679;</span></span></td><td>The <b>behaviour-execution</b> layer. A tick model that maps cleanly onto today's coroutines &mdash; wrap each Lua behaviour as a tree leaf. Visualizable. Not a decision-maker on its own.</td></tr>
+        <tr><td><b>HTN planning</b></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></td><td>The <b>squad / commander</b> layer only. Decompose "hold the brain" into squad goals. Too brittle for per-actor use under per-frame chaos.</td></tr>
+        <tr><td><b>GOAP planning</b></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></td><td>A <b>sub-planner</b> for bounded sequences &mdash; breach-and-enter, dig-to-goal. Destructible terrain invalidates plans too fast for it to be top-level.</td></tr>
+        <tr><td><b>Machine learning (RL)</b></td><td><span class="rate"><span class="on">&#9679;</span><span class="off">&#9679;&#9679;&#9679;&#9679;</span></span></td><td>Offline only &mdash; QA, regression testing, tuning utility weights. Never at runtime: opacity, non-determinism, retraining cost when a mod adds content.</td></tr>
+        <tr><td><b>LLMs</b></td><td><span class="rate"><span class="on">&#9679;</span><span class="off">&#9679;&#9679;&#9679;&#9679;</span></span></td><td>Flavour dialogue and an optional async "coach" only. Never in the tactical loop &mdash; latency, cost, determinism, offline play.</td></tr>
+      </tbody>
+    </table>
+    <p>No single technique wins. The answer the survey, the shipped-game evidence (Halo, Killzone&nbsp;2, Horizon
+    Zero Dawn) and our own code all point to is a <b>layered hybrid</b> &mdash; each technique doing the one job it
+    is best at. That architecture is &sect;4.</p>
+
+    <h3>3.2 &nbsp; Three ways to build it</h3>
+    <p>The owner has put every option on the table, including refactoring the engine. So, honestly, the three
+    implementation strategies:</p>
+    <div class="card-grid">
+      <div class="card">
+        <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Pure Lua</h3>
+        <p class="small">Fix the behaviour layer in place &mdash; better behaviours, real stuck recovery, reason
+        labels &mdash; touching no C++.</p>
+        <p class="small"><b>Reaches:</b> all the easy wins in &sect;5. <b>Cannot reach:</b> the incremental
+        pathfinder, influence maps, a true per-tick reflex, a real blackboard. Its ceiling is a tidier version of
+        today's coroutine soup. <b>Verdict:</b> necessary, not sufficient.</p>
+      </div>
+      <div class="card" style="border-color:var(--accent)">
+        <h3><span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span> &nbsp;Hybrid &mdash; recommended</h3>
+        <p class="small">C++ gains the new machinery &mdash; incremental pathfinder, influence-map grids, a
+        blackboard, a decision-event channel, a utility/BT kernel. Lua stays the brain: which considerations
+        apply, what behaviours exist, the leaf actions.</p>
+        <p class="small"><b>This is what every shipped tactical game does</b>, and it keeps Lua &mdash; the fork's
+        modding moat &mdash; intact. <b>Verdict:</b> the answer.</p>
+      </div>
+      <div class="card">
+        <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;Pure C++</h3>
+        <p class="small">Move the whole AI into the engine for maximum runtime performance and control.</p>
+        <p class="small"><b>The cost:</b> it kills the Lua modding ecosystem &mdash; CC's single biggest
+        competitive advantage. Door Kickers&nbsp;2's un-moddable AI is a documented player complaint.
+        <b>Verdict:</b> rejected &mdash; do not throw away the moat.</p>
+      </div>
+    </div>
+    <div class="callout callout-info">
+      <p><b>So: hybrid.</b> The principle &mdash; <i>the engine owns the machinery, Lua owns the judgement.</i>
+      C++ gives the AI fast senses, memory and a pathfinder; Lua decides what to do with them and stays open to
+      modders. Everything from &sect;4 on assumes this split.</p>
+    </div>
+
+    <!-- ============ 4 · ARCHITECTURE ============ -->
+    <h2 id="arch">4 &nbsp;&middot;&nbsp; <span class="h-accent">The recommended architecture</span></h2>
+    <p>A layered stack &mdash; each layer a separate, shippable piece, each doing one job. Read it bottom-up: the
+    fast, dumb, safety-critical layers at the bottom; the slow, smart, strategic ones at the top; an
+    always-on debug layer across everything.</p>
+    <div class="stack">
+      <div class="layer">
+        <div class="lyr-id">L5</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Squad &amp; Commander &nbsp;<span class="tag tag-arch">[ARCH]</span></div>
+          <div class="lyr-desc">Per faction, ~2&nbsp;Hz. An HTN-style commander reads the influence maps,
+          decomposes objectives into squad goals, hands out positions and breach-synchronisation cues.</div>
+          <div class="lyr-fix"><b>Fixes:</b> clumping, friendly fire, no flanking, no real squads.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L4</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Tactical Decision &nbsp;<span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Per actor, event-driven. Utility AI: each option scored by Lua-registered
+          considerations through response curves; highest score wins, with an inertia bonus against flip-flop.</div>
+          <div class="lyr-fix"><b>Fixes:</b> dumb tool/weapon choice &mdash; and gives every decision a logged reason.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L3</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Behaviour Execution &nbsp;<span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Per actor. A behaviour-tree kernel executes the chosen behaviour. Existing Lua
+          behaviours become tree leaf-actions &mdash; mods keep working.</div>
+          <div class="lyr-fix"><b>Fixes:</b> the leak-prone, un-debuggable coroutine soup.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L2</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Navigation &nbsp;<span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Incremental D* Lite pathfinding + HPA* regions for long hauls + a dig planner for
+          blocked goals + a jetpack-arc planner. Influence-aware cost: "safe path" vs "fast path".</div>
+          <div class="lyr-fix"><b>Fixes:</b> stale paths, absurd routes, the faked jump height.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L1</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Perception &amp; World Model &nbsp;<span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Shared per faction. Influence maps (threat, alarm, friendly-density, danger);
+          a per-actor blackboard (target, last-seen, ammo, order); alarm decay over time and distance.</div>
+          <div class="lyr-fix"><b>Fixes:</b> blind bots, over-suppression, no memory of the battlefield.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L0&prime;</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Reflex &nbsp;<span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Per actor, <i>every</i> tick, sub-millisecond. Interrupts everything above to
+          dive from a live grenade, step out of lava or off a falling-rock arc, out of a friendly's line of fire.</div>
+          <div class="lyr-fix"><b>Fixes:</b> no self-preservation &mdash; units standing in obvious death.</div>
+        </div>
+      </div>
+      <div class="layer cross">
+        <div class="lyr-id">L0</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Replay &amp; Debug &mdash; cross-cutting &nbsp;<span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Always on. A per-agent decision event log; an in-game overlay showing intent,
+          target, path and the chosen behaviour's reason; influence-map overlays; hot-reload of AI tables.</div>
+          <div class="lyr-fix"><b>Fixes:</b> "the AI did something dumb and nobody knows why." Build this first.</div>
+        </div>
+      </div>
+    </div>
+    <p>Each layer is independently useful: the reflex layer alone stops the most embarrassing deaths; influence
+    maps alone fix clumping; D* Lite alone fixes the routing. They do not have to land together &mdash; which is
+    what makes the build order in &sect;7 possible.</p>
+
+    <!-- ============ 5 · THE WORK ============ -->
+    <h2 id="wins">5 &nbsp;&middot;&nbsp; <span class="h-accent">The work &mdash; easy, medium &amp; hard wins</span></h2>
+    <p>Everything here is real and on the table; the owner has confirmed the engine itself can be refactored to get
+    this right. The wins are grouped by <b>cost</b>, not importance &mdash; the build order in &sect;7 interleaves
+    them. Tags: <span class="tag tag-mod">[MOD]</span> Lua only &middot; <span class="tag tag-code">[CODE]</span>
+    bounded C++ &middot; <span class="tag tag-arch">[ARCH]</span> a large rework.</p>
+
+    <h3><span class="tier tier-1">EASY WINS</span> &nbsp; Pure Lua &mdash; days to weeks, low risk, ship now</h3>
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Win</th><th class="nowrap">Type</th><th>Cost &amp; payoff</th></tr></thead>
+      <tbody>
+        <tr><td class="id">E1</td><td><b>Reason labels.</b> Every behaviour writes a plain-English "why" onto the actor. The AI stops being a black box.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Low. The single best first move &mdash; every later fix is measured through it.</td></tr>
+        <tr><td class="id">E2</td><td><b>Real stuck recovery.</b> Replace the random flailing with a deliberate ladder: re-path &rarr; step off &rarr; dig &rarr; jump &rarr; call for help &rarr; report stuck.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Low&ndash;med. Kills the most-reported single failure.</td></tr>
+        <tr><td class="id">E3</td><td><b>One set of eyes.</b> Give every actor the reliable <code>CheckEnemyLOS</code>-grade spotter, scaled by skill, instead of the one-random-ray default.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Low. Ends "enemy in plain sight, unseen."</td></tr>
+        <tr><td class="id">E4</td><td><b>Door sense.</b> When the AI drops an un-penetrable door target, route it to a breaching tool or an alternate path &mdash; not idle.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Low. Fixes a long-standing Void Wanderers / base-assault complaint.</td></tr>
+        <tr><td class="id">E5</td><td><b>De-duplicate the AI.</b> Collapse the copy-pasted <code>NativeHuman/Crab/Turret</code> and the <code>CrabBehaviors</code> fork into shared modules.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Med. Pure debt paydown &mdash; every later fix then lands once, not three times.</td></tr>
+        <tr><td class="id">E6</td><td><b>Difficulty with depth.</b> Scale reaction time, aim-settle, perception range and target priority &mdash; not just actor health.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Low&ndash;med. Makes encounters tunable instead of just spongier.</td></tr>
+        <tr><td class="id">E7</td><td><b>Interim squad roles.</b> Replace pure leader-mirroring with basic point / flank / support spacing in Lua &mdash; a stopgap until the real commander layer (H4).</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Med. Visible improvement to issue&nbsp;#208 now.</td></tr>
+        <tr><td class="id">E8</td><td><b>Smarter gear heuristics.</b> Interim scoring for the <code>EquipDeviceInGroup</code> logic &mdash; gun-for-the-range, tool-for-the-material.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span></td><td class="small muted">Low&ndash;med. Bridges to the full utility layer (M3).</td></tr>
+      </tbody>
+    </table>
+
+    <h3><span class="tier tier-2">MEDIUM WINS</span> &nbsp; Hybrid &mdash; new engine bindings, weeks to months</h3>
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Win</th><th class="nowrap">Type</th><th>Cost &amp; payoff</th></tr></thead>
+      <tbody>
+        <tr><td class="id">M1</td><td><b>Decision log + debug overlay.</b> A C++ event channel the Lua AI emits into; a per-agent overlay showing intent, target, path, behaviour and reason.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span></td><td class="small muted">Med. <b>Build this first</b> &mdash; you cannot fix what you cannot see.</td></tr>
+        <tr><td class="id">M2</td><td><b>Influence maps.</b> A C++ grid subsystem &mdash; threat, alarm, friendly-density, danger-imminent fields &mdash; with a Lua read/registration API.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">Med&ndash;high. Directly fixes clumping, noise-chasing and walking into blast zones.</td></tr>
+        <tr><td class="id">M3</td><td><b>The utility decision layer.</b> Replace the <code>AIMode</code>-enum dispatch with scored considerations; highest score wins, with anti-flip-flop inertia.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span></td><td class="small muted">High. The biggest "the AI feels smart" win &mdash; and every choice is explainable for free.</td></tr>
+        <tr><td class="id">M4</td><td><b>The reflex layer.</b> A sub-millisecond per-tick safety check that interrupts anything: dive from a grenade, off lava, out of a friendly's line of fire.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">Med. Needs an emergency high-priority AI tick &mdash; today's throttle has none.</td></tr>
+        <tr><td class="id">M5</td><td><b>A real blackboard.</b> A typed per-actor world model &mdash; target, last-seen, path, ammo, squad order, threat memory &mdash; both C++ and Lua read it.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">Med. Replaces scattered coroutine locals; the substrate for everything above.</td></tr>
+        <tr><td class="id">M6</td><td><b>A perception query API.</b> Batched, bounded engine queries &mdash; LOS fans, cover scoring, "nearest safe cell." Real senses instead of one random ray.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">Med. Removes the bimodal-perception hack at the root.</td></tr>
+        <tr><td class="id">M7</td><td><b>Cover-finder.</b> Using M6: score nearby tiles by how well they block fire from known threats; move to genuine cover.</td><td class="nowrap"><span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span></td><td class="small muted">Med. Turns "cover" from an accident into a decision.</td></tr>
+      </tbody>
+    </table>
+
+    <h3><span class="tier tier-3">HARD WINS</span> &nbsp; Engine refactor &mdash; months, high value</h3>
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Win</th><th class="nowrap">Type</th><th>Cost &amp; payoff</th></tr></thead>
+      <tbody>
+        <tr><td class="id">H1</td><td><b>Incremental pathfinding.</b> Replace MicroPather's core with D* Lite / LPA* incremental search. A blast repairs the affected nodes in microseconds instead of a full re-A*.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">High. The single biggest correctness-and-performance win &mdash; the code's own TODO already asks for it.</td></tr>
+        <tr><td class="id">H2</td><td><b>Hierarchical paths + a dig planner.</b> HPA* regions for long-haul brain-hunts; a planner that returns the minimum digging to open a blocked route. Fix <code>EstimateJumpHeight</code> so jump is modelled, not assumed infinite.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">High. Makes long routes cheap and routes actually followable.</td></tr>
+        <tr><td class="id">H3</td><td><b>The behaviour-tree engine.</b> A C++ behaviour-tree kernel with Lua leaf actions; retire the coroutine soup incrementally while every existing mod keeps working.</td><td class="nowrap"><span class="tag tag-code">[CODE]</span></td><td class="small muted">High. Debuggable, visualizable behaviour; ends the memory-leak protocol.</td></tr>
+        <tr><td class="id">H4</td><td><b>The squad / commander layer.</b> A per-faction commander that reads the influence maps, sets squad goals and hands out positions and breach-sync cues.</td><td class="nowrap"><span class="tag tag-arch">[ARCH]</span></td><td class="small muted">High. Real coordination &mdash; the foundation for the campaign and co-op.</td></tr>
+        <tr><td class="id">H5</td><td><b>A first-class AI subsystem.</b> Fold the invocation harness, blackboard, influence maps, pathfinder, kernels and decision log into one coherent engine module with a documented plugin API.</td><td class="nowrap"><span class="tag tag-arch">[ARCH]</span></td><td class="small muted">Very high. The "do it properly" option &mdash; the clean home for everything above.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ 6 · ENGINE NEEDS ============ -->
+    <h2 id="engine">6 &nbsp;&middot;&nbsp; <span class="h-accent">What the engine needs from us</span></h2>
+    <p>A better AI is not only better Lua. Today the AI is <b>starved</b> &mdash; it has one random ray for eyes, no
+    memory beyond coroutine locals, no map of where danger is, and a pathfinder that cannot keep up with the
+    terrain. The largest gains need the engine to give the AI <i>more to think with</i>. Concretely, the new C++:</p>
+    <table class="tbl">
+      <thead><tr><th>New engine capability</th><th>What it gives the AI</th></tr></thead>
+      <tbody>
+        <tr><td><b>An incremental pathfinder</b> (D* Lite) &mdash; and a real <code>EstimateJumpHeight</code>.</td><td>Routes that survive destructible terrain, and routes the actor can actually walk.</td></tr>
+        <tr><td><b>An influence-map grid subsystem</b> with a Lua API.</td><td>Spatial awareness &mdash; where the threats, allies, alarms and danger are.</td></tr>
+        <tr><td><b>A typed per-actor blackboard.</b></td><td>Memory &mdash; a stable place to remember the target, the plan, what hurt it.</td></tr>
+        <tr><td><b>A perception / spatial-query API</b> &mdash; batched LOS, cover scoring, nearest-safe-cell.</td><td>Real senses, instead of one random ray cast per frame.</td></tr>
+        <tr><td><b>An emergency high-priority AI tick.</b></td><td>The reflex layer &mdash; the ability to react <i>now</i> instead of waiting for the throttle.</td></tr>
+        <tr><td><b>An AI decision-event channel</b> + the debug overlay.</td><td>Explainability &mdash; the AI, and we, can see why it chose what it chose.</td></tr>
+        <tr><td><b>A utility-scoring kernel and a behaviour-tree kernel</b>, both driven by Lua-registered considerations and leaf actions.</td><td>Judgement and structured execution &mdash; kept fully moddable.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout callout-ok">
+      <p>Each item is a bounded <span class="tag tag-code">[CODE]</span> addition; together they <i>are</i> the
+      <span class="tag tag-arch">[ARCH]</span> AI subsystem of H5. <b>None of it removes Lua.</b> Lua stays the
+      surface modders &mdash; and we &mdash; author behaviour in. The engine's job is to give that Lua a brain to
+      run on: senses, memory, a map of danger, and a pathfinder that keeps up.</p>
+    </div>
+
+    <!-- ============ 7 · BUILD ORDER ============ -->
+    <h2 id="order">7 &nbsp;&middot;&nbsp; <span class="h-accent">Build order</span></h2>
+    <p>The layers do not land together &mdash; and the order matters. Each step is independently shippable and is
+    chosen so the <i>next</i> step can be measured:</p>
+    <ol>
+      <li><b>The debug overlay &amp; decision log (M1, E1).</b> First, always. You cannot fix what you cannot see,
+      and "the AI did something dumb for no visible reason" is the root of every complaint.</li>
+      <li><b>The easy Lua wins (E2&ndash;E8).</b> Stop the AI embarrassing itself with what is already moddable.</li>
+      <li><b>Influence maps (M2).</b> Cheap, fast, high-impact &mdash; fixes clumping and over-suppression at once.</li>
+      <li><b>Incremental pathfinding (H1).</b> The largest correctness-and-performance win; everything navigates
+      better the moment it lands.</li>
+      <li><b>The utility decision layer (M3).</b> The largest "the AI feels smart" win.</li>
+      <li><b>The reflex layer (M4).</b> Polish that removes the most player-visible deaths.</li>
+      <li><b>The behaviour-tree engine (H3).</b> Retire the coroutine soup incrementally &mdash; Lua leaves keep
+      mods working throughout.</li>
+      <li><b>The squad / commander layer (H4), then HPA* + the dig planner (H2).</b> Coordination last &mdash; only
+      once individual actors are competent.</li>
+    </ol>
+    <div class="callout callout-info">
+      <p><b>Measure every step.</b> The AI research vault defines a 12-scenario trust suite &mdash; AI-01 defend the
+      brain, AI-02 breach a door, AI-04 recover from a collapsed tunnel, AI-08 hold formation, AI-11 retreat from an
+      unwinnable breach, and so on &mdash; every scenario run on destructible terrain with a replay and a reason
+      log. Each build step is graded against it. That is how an overhaul this large stays honest.</p>
+    </div>
+
+    <!-- ============ 8 · WHAT NOT TO DO ============ -->
+    <h2 id="avoid">8 &nbsp;&middot;&nbsp; <span class="h-accent">What not to do</span></h2>
     <div class="card">
       <ul>
-        <li>CC's AI is <b>~95% Lua</b> &mdash; roughly 5,800 lines in <code>Base.rte/AI/*.lua</code>
-        (<code>NativeHumanAI.lua</code>, <code>HumanBehaviors.lua</code>, <code>SharedBehaviors.lua</code>, etc.).
-        The C++ engine only gives an actor a <code>Controller</code> (the AI "presses the same virtual buttons" a
-        human would), an <code>AIMode</code> enum, and an async, jump-aware A* pathfinder. <b>Everything tactical is
-        Lua</b> &mdash; which means it is moddable.</li>
-        <li><b>What is decent:</b> moment-to-moment combat &mdash; velocity-led aim, hearing-based perception, basic
-        cover use. A solo enemy soldier fights reasonably.</li>
-        <li><b>What is weak:</b> <i>squad and strategic</i> AI &mdash; squadmates essentially <b>copy the leader's
-        inputs</b>; there is no real role coordination. And <b>path-following</b> &mdash; the lead's own assessment is
-        that "there's more issues with path following and AI navigation than in the pathfinding algorithm itself."
-        The A* algorithm is fine; the Lua that <i>consumes</i> the path is the garbage.</li>
-        <li><b>Known specific failures:</b> actors stuck on single-pixel obstacles; broken stuck-detection; crab and
-        human locomotion are duplicated and drift apart (a unified <code>ALocomotable</code> was designed in the
-        Discord but never built); ladders barely work ("you can't climb them 90% of the time"); actors without a
-        breaching tool freeze at hardened doors (see the door analysis in the project notes).</li>
+        <li><b>Don't rip out Lua.</b> The mod ecosystem is the fork's biggest asset; Door Kickers&nbsp;2's
+        un-moddable AI is a documented player complaint. Add structure to Lua &mdash; don't delete it.</li>
+        <li><b>No LLMs or runtime ML in the tactical loop.</b> Latency, cost, non-determinism (it would break
+        replays and any future multiplayer), offline play, and modding breakage. ML and LLMs are fine
+        <i>offline</i> &mdash; tuning, QA &mdash; or for flavour dialogue. Never for deciding a shot.</li>
+        <li><b>GOAP is not the top level.</b> A destructible world invalidates plans every blast. Use GOAP only as
+        a sub-planner for bounded sequences (breach-and-enter, dig-to-goal).</li>
+        <li><b>HTN is not per-actor.</b> Too brittle under per-frame chaos. Use it only at the squad/commander layer.</li>
+        <li><b>Not pure behaviour-tree, not pure utility.</b> Utility decides <i>what</i>; the tree executes
+        <i>how</i>. Either one alone re-discovers the other's problem the hard way.</li>
+        <li><b>No JPS+, no Recast/Detour.</b> JPS+ assumes static, uniform-cost grids; Recast is a 3D navmesh
+        system. Neither fits 2D pixel-destructible terrain.</li>
+        <li><b>No mega-PR.</b> Each win in &sect;5 ships and is measured on its own. Upstream's branch graveyard is
+        what big-bang rewrites become here.</li>
+        <li><b>Don't skip explainability.</b> If only one thing ships, it is the overlay. An AI you cannot see
+        cannot be fixed.</li>
       </ul>
     </div>
 
-    <div class="callout callout-info">
-      <p><b>The key implication:</b> the expensive part &mdash; the pathfinding <i>algorithm</i> &mdash; is already
-      good (async, multithreaded, jump-aware C++). The broken part is the <b>Lua path-following and behaviour
-      layer</b>, and that is <span class="tag tag-mod">[MOD]</span>. CC AI can be dramatically improved with
-      <b>no engine fork</b>.</p>
-    </div>
-
-    <h2><span class="h-accent">Why this is the foundation</span></h2>
+    <!-- ============ 9 · THE PLAN ============ -->
+    <h2 id="plan">9 &nbsp;&middot;&nbsp; <span class="h-accent">The phased plan</span></h2>
     <div class="callout callout-ok">
-      <p>AI is not a side feature &mdash; it sits <b>under</b> the other two flagship efforts. A
-      <a href="campaign.html">campaign</a> is only as compelling as the firefights inside it. Co-op
-      <a href="multiplayer.html">multiplayer</a> runs all the enemy and ally AI on the server, so the AI <i>is</i> a
-      large part of the multiplayer experience. Even the door problem is an AI problem. Fix the AI and every other
-      effort gets better for free. It is the highest-leverage, lowest-risk, most-validated work available &mdash;
-      and the design for a much richer AI is already catalogued on the <a href="corefall.html">Corefall Ideas</a>
-      page (the AI &amp; Squad cluster).</p>
+      <p><b>Phase 0 &mdash; See it, then steady it.</b> The decision log and debug overlay, plus the easy Lua wins
+      (E1&ndash;E8). Stops the AI embarrassing itself with what is already moddable &mdash; and, crucially, lets you
+      <i>watch</i> it. Mostly <span class="tag tag-mod">[MOD]</span>; ships in the near term.</p>
+      <p><b>Phase 1 &mdash; Senses and a spine.</b> Influence maps (M2) and incremental pathfinding (H1) &mdash; the
+      perception/world model and a pathfinder that survives destructible terrain. This is where bots stop walking
+      into walls.</p>
+      <p><b>Phase 2 &mdash; The decision brain.</b> The utility layer (M3), the reflex layer (M4), the blackboard
+      (M5), perception queries (M6), cover (M7) and the behaviour-tree engine (H3). This is where the AI starts to
+      feel smart &mdash; and every choice it makes becomes explainable.</p>
+      <p><b>Phase 3 &mdash; Coordination.</b> The squad/commander layer (H4), hierarchical paths and the dig planner
+      (H2), folded into a first-class AI subsystem (H5). Real squads &mdash; and the foundation the campaign and
+      co-op multiplayer both stand on.</p>
     </div>
-
-    <h2><span class="h-accent">What it's made of</span></h2>
-    <p>The building blocks, mostly drawn from the <a href="corefall.html">Corefall Ideas</a> AI cluster. Nearly all
-    of it is mod work on <code>Base.rte/AI</code>; only one item needs the engine.</p>
-
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Locomotion &amp; path-following overhaul</h3>
-      <p class="small">Rewrite the Lua that follows a path &mdash; the part the lead calls garbage. Fix stuck-detection,
-      unify the duplicated crab/human locomotion behaviours, make ladders and tight terrain reliable. The A* pathfinder
-      underneath is kept as-is. This is the floor everything else stands on.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Squad roles &amp; coordinated tactics</h3>
-      <p class="small">Replace "squadmates copy the leader" with real roles (point / flank / support), coordinated
-      suppression, and bounding movement. This is exactly upstream issue #208 and roadmap item <code>T1-06</code>.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;AI archetypes + layered behaviour stack</h3>
-      <p class="small">Distinct archetypes (Rifleman / Sniper / Assault / Engineer / Medic / Spotter) on a
-      reactive &rarr; utility &rarr; behaviour-tree stack, instead of one generic brain. Pure Lua.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Priority tables &amp; squad doctrines</h3>
-      <p class="small">A per-actor weighted task table and per-squad doctrines (aggressive / defensive / scout) that
-      bias the whole squad's behaviour. Data plus a Lua scorer.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;Cover-finder &amp; tactical positioning</h3>
-      <p class="small">Score nearby tiles by line-of-fire block to known threats and pick real cover. A Lua
-      cover-finder using the existing ray-casts is moddable; a batched per-tile query for scale would want a bounded
-      engine binding.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;BotMemory &mdash; threat &amp; pain memory</h3>
-      <p class="small">Per-actor memory of where threats were last seen and where it was hit, so the AI avoids kill
-      zones and remembers danger. Lua tables on actors, fed by the wound callbacks.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Scaled difficulty</h3>
-      <p class="small">Difficulty that genuinely scales reaction time, aim-settle, miss chance and target priority
-      &mdash; not just actor HP. The other half of <code>T1-06</code>.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Environmental competence &amp; reason labels</h3>
-      <p class="small">AI that reacts to hazards (avoid fire, take cover from explosives, handle the door problem),
-      and a debug "Why?" key that surfaces each bot's current reason &mdash; invaluable for tuning. Pure Lua.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-code">[CODE]</span> &nbsp;Hierarchical pathfinding</h3>
-      <p class="small">The one engine-side item: CC's pathfinder is flat. A tile / chunk / region hierarchy with
-      dynamic invalidation on terrain change is a bounded C++ change &mdash; worthwhile only after the Lua
-      path-following is fixed, since that is where the real pain is.</p>
-    </div>
-
-    <h2><span class="h-accent">Suggested approach</span> &mdash; phased</h2>
-    <div class="callout callout-ok">
-      <p><b>Phase 0 &mdash; fix the floor.</b> The path-following / stuck-detection / locomotion overhaul, ladders,
-      and door behaviour. Make the <i>existing</i> AI stop embarrassing itself. Pure Lua, immediately visible, and it
-      stands on its own regardless of what comes next.</p>
-      <p><b>Phase 1 &mdash; squad depth.</b> Real roles, coordination and scaled difficulty (<code>T1-06</code> /
-      issue #208). The first thing that makes battles feel designed.</p>
-      <p><b>Phase 2 &mdash; the rich stack.</b> Archetypes, priority tables, doctrines, cover-finder, BotMemory &mdash;
-      the AI the campaign and co-op multiplayer actually deserve.</p>
-      <p>This is the recommended <b>first real work</b> for cortex-modern: highest leverage, lowest risk, almost pure
-      <span class="tag tag-mod">[MOD]</span>, and a problem upstream has openly admitted and not fixed. See the
-      <a href="roadmap.html">Roadmap</a> (<code>T1-06</code>) and the <a href="corefall.html">Corefall Ideas</a> AI cluster.</p>
-    </div>
+    <p>Roadmap item <code>T1-06</code> is the Phase&nbsp;0 squad slice. The whole effort is flagship-scale, and it
+    is cortex-modern's recommended <b>first real build</b>: highest leverage, lowest risk to start, almost pure
+    <span class="tag tag-mod">[MOD]</span> at the front, and a problem upstream has openly admitted and not fixed.
+    AI sits <i>under</i> the other two flagships &mdash; the <a href="campaign.html">Campaign</a> is only as good
+    as its battles, and co-op <a href="multiplayer.html">Multiplayer</a> runs enemy AI server-side. Fix the AI and
+    both get better for free.</p>
 
     <div class="page-foot">
-      AI analysis &middot; built from the Cortex Command source (<code>Base.rte/AI</code>), the upstream issue
-      tracker, and the dev-team Discord &middot; updated 2026-05-16 &middot; see <a href="roadmap.html">roadmap T1-06</a>.
+      AI analysis &mdash; built from a full read of the Cortex Command AI source (<code>Data/Base.rte/AI/</code>,
+      <code>Source/System/PathFinder</code>, <code>Controller</code>, <code>Actor</code>), the cortex-modern AI
+      research vault (a source-confirmed deep-dive and an ~80-source survey of game-AI architecture), the upstream
+      issue tracker and the dev-team Discord. Technique references: D* Lite (Koenig &amp; Likhachev, 2002), the
+      Infinite Axis Utility System (Dave Mark), Halo's behaviour trees (Isla, GDC 2005). &middot; updated
+      2026-05-16 &middot; see <a href="roadmap.html">roadmap T1-06</a> and the <a href="corefall.html">Corefall
+      Ideas</a> AI cluster.
     </div>
   </main>
 

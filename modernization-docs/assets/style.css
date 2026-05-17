@@ -292,7 +292,6 @@ pre code { background: none; border: 0; padding: 0; color: var(--text); font-siz
 .bs-dormant { background: rgba(233,162,59,.14);  color: var(--accent); border: 1px solid rgba(233,162,59,.4); }
 .bs-stale   { background: rgba(110,122,136,.16); color: #aab3bf;       border: 1px solid rgba(110,122,136,.4); }
 .bv-track   { background: rgba(90,167,255,.14);  color: var(--blue);   border: 1px solid rgba(90,167,255,.36); }
-.bv-wait    { background: rgba(233,162,59,.12);  color: var(--accent); border: 1px solid rgba(233,162,59,.32); }
 .bv-ref     { background: rgba(189,141,255,.14); color: var(--purple); border: 1px solid rgba(189,141,255,.36); }
 .bv-ignore  { background: rgba(241,90,78,.12);   color: var(--red);    border: 1px solid rgba(241,90,78,.32); }
 .branch-facts { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); margin: 6px 0 12px; }
