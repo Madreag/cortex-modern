@@ -151,8 +151,10 @@
       <div class="adr-body">
         <p class="small muted">2026-05-16</p>
         <h4>Context</h4>
-        <p><code>box2d-emscripten</code>, <code>gpu-renderer</code>, <code>emscripten-port</code> and
-        <code>interpolated-render-redux</code> are active upstream branches (commits Feb&ndash;Apr 2026).</p>
+        <p><code>box2d-emscripten</code>, <code>gpu-renderer</code> and <code>dynamic-two-stage-fow</code> are the
+        upstream branches with the most recent activity. A later per-branch deep-dive &mdash; see
+        <a href="branches.html">Upstream Branches</a> and ADR-009 &mdash; refined this: none is truly active, and
+        <code>emscripten-port</code> / <code>interpolated-render-redux</code> proved stale.</p>
         <h4>Decision</h4>
         <p>Do not start competing implementations of Box2D physics, the next-gen renderer, or the web port. For
         physics multithreading (<code>T3-01</code>), prefer aligning with or contributing to the Box2D effort.
@@ -271,7 +273,7 @@
         <p class="small muted">2026-05-16</p>
         <h4>Context</h4>
         <p>A full read of Corefall's milestone specs (M1&ndash;M49), cross-checked against the Cortex Command engine
-        source, produced ~145 candidate ideas &mdash; see <a href="corefall.html">Corefall Ideas</a>. ADR-007 deferred
+        source, produced 145 candidate ideas &mdash; see <a href="corefall.html">Corefall Ideas</a>. ADR-007 deferred
         this decision until Corefall had a defined architecture; it now does.</p>
         <h4>Decision</h4>
         <p>Adopt Corefall ideas <b>only as fresh, clean-room implementations</b>, and concentrate on the moddable
@@ -290,13 +292,14 @@
       </div>
     </section>
 
-    <h2>Open questions &mdash; decisions still needed</h2>
+    <h2 id="open-questions">Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
         <li><b>Multiplayer:</b> delete the orphaned networking code entirely (and drop RakNet), or formally commit
         to rebuilding multiplayer with modern netcode? Blocks <code>T1-03</code> / <code>T3-04</code>.</li>
         <li><b>Tier-3 sequencing:</b> if/when we take on an <span class="tag tag-arch">[ARCH]</span> item, which
-        first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>        <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
+        first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>
+        <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
       </ul>
     </div>
 
