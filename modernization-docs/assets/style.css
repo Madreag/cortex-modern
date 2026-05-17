@@ -274,6 +274,7 @@ pre code { background: none; border: 0; padding: 0; color: var(--text); font-siz
 .status-done     { background: rgba(69,196,104,.14);  color: var(--green);  border: 1px solid rgba(69,196,104,.36); }
 .status-blocked  { background: rgba(241,90,78,.13);   color: var(--red);    border: 1px solid rgba(241,90,78,.36); }
 .status-proposed { background: rgba(90,167,255,.14);  color: var(--blue);   border: 1px solid rgba(90,167,255,.36); }
+.status-superseded { background: rgba(110,122,136,.16); color: #aab3bf;     border: 1px solid rgba(110,122,136,.4); }
 
 .tier-1 { background: rgba(69,196,104,.12);  color: var(--green);  border: 1px solid rgba(69,196,104,.32); }
 .tier-2 { background: rgba(233,162,59,.12);  color: var(--accent); border: 1px solid rgba(233,162,59,.32); }
