@@ -665,7 +665,8 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
 
     <h3>6.2 &nbsp; Will this break mods?</h3>
     <p>The honest answer: <b>no &mdash; because mod compatibility is a hard requirement with its own validation,
-    not an afterthought.</b> Existing AI mods fall into three categories, and only one carries real risk:</p>
+    not an afterthought.</b> Existing AI mods fall into three categories, only one of which carries real risk;
+    how each is kept working is the three-layer model in &sect;6.3.</p>
     <div class="card-grid">
       <div class="card">
         <h3>A &nbsp; Use the stock AI</h3>
@@ -684,22 +685,69 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
         <h3>C &nbsp; Extend the stock AI</h3>
         <p class="small"><b>The risk category.</b> Mods that <code>require</code> <code>NativeHumanAI</code>,
         override its <code>Create*Behavior</code> factories, or inject custom coroutine behaviours depend on its
-        internal shape. They are kept working by an explicit <b>compatibility layer</b> &mdash; see below.</p>
+        internal shape. They are kept working by the <b>behaviour bridge</b> &mdash; see the compatibility layers
+        below.</p>
       </div>
     </div>
+
+    <h3>6.3 &nbsp; The compatibility layers</h3>
+    <p>A shim can faithfully reproduce an <i>interface</i> &mdash; the functions a mod calls, their arguments,
+    their return shapes. It cannot reproduce an <i>outcome</i>: the whole point of the overhaul is that the AI
+    behaves differently &mdash; better. A translator translates interfaces, not outcomes. So compatibility is
+    built in <b>three cumulative layers</b>. What makes all three cheap: <b>the old AI is just Lua</b> &mdash;
+    5,832 lines under <code>Data/Base.rte/AI/</code>, not compiled into the engine &mdash; so it never has to be
+    deleted.</p>
+    <div class="card-grid">
+      <div class="card">
+        <h3>1 &middot; The API facade</h3>
+        <p class="small">Every rebuilt engine system keeps its <i>old</i> API as an explicit, tested facade. The
+        new pathfinder still exposes <code>CalculatePathAsync</code> and <code>MovePath</code> in the old shape;
+        the <code>AIMODE_*</code> constants survive as aliases the new order system understands; the
+        <code>Controller</code> surface is unchanged. New machinery, old doorways. Built as a discipline
+        <i>within</i> each milestone that touches a system &mdash; not as a separate task &mdash; and covered by
+        old-API tests so it cannot silently drift. <b>Keeps category&nbsp;A working.</b></p>
+      </div>
+      <div class="card">
+        <h3>2 &middot; The behaviour bridge</h3>
+        <p class="small">The behaviour-tree kernel ships a leaf-node type that wraps a legacy
+        <code>function(AI,&nbsp;Owner,&nbsp;Abort)</code> coroutine and ticks it under the tree's Success /
+        Failure / Running protocol &mdash; a clean, well-understood mapping. The <code>Create*Behavior</code>
+        factories and the <code>HumanBehaviors</code> / <code>SharedBehaviors</code> tables are preserved as
+        shims over the new kernels. Built in milestone <b>M4</b>. <b>Keeps category&nbsp;C working.</b></p>
+      </div>
+      <div class="card" style="border-color:var(--accent)">
+        <h3>3 &middot; The legacy profile</h3>
+        <p class="small">The entire old AI &mdash; dispatcher and behaviours, coroutine pattern and all &mdash; is
+        frozen and packaged as an opt-in <b>Legacy</b> AI profile, selectable per-actor via <code>ScriptPath</code>.
+        It runs unchanged on top of layers 1 and 2. A mod that depends on the old AI's <i>exact behaviour</i> pins
+        to it and gets it. The new AI stays the default and stays uncompromised; the legacy profile is a
+        transition courtesy with a published sunset. <b>The escape hatch for any mod.</b></p>
+      </div>
+    </div>
+    <div class="callout callout-warn">
+      <div class="callout-title">The honest limits</div>
+      <ul>
+        <li>A shim keeps a mod <b>working</b>, not <b>better</b>. An actor on the legacy profile runs the old AI;
+        getting the new one means migrating &mdash; the author's choice, never urgent.</li>
+        <li><b>Truly bit-identical</b> behaviour would also need the old pathfinder. The legacy profile runs the
+        old <i>brain</i> on the <i>new</i> pathfinder, so its routes are different &mdash; better. The line is
+        drawn there deliberately; MicroPather is not carried forever for the rare mod that depended on bad
+        routing.</li>
+        <li>Layer&nbsp;3's fidelity rests on layer&nbsp;1's. The old Lua assumes what each engine call <i>does</i>;
+        the facades must honour the documented <i>contract</i>, not merely the signature.</li>
+        <li>A total conversion like <b>Void Wanderers</b> couples to far more than the AI &mdash; activities, the
+        buy menu, the metagame, scenes. This plan guarantees the AI overhaul will not break it; it cannot speak
+        for the rest of cortex-modern's wider modernization.</li>
+      </ul>
+    </div>
     <div class="callout callout-ok">
-      <p><b>The compatibility layer.</b> A legacy coroutine behaviour &mdash; the
-      <code>function(AI, Owner, Abort)</code> + <code>yield</code> protocol &mdash; maps cleanly onto a
-      behaviour-tree leaf action, so the kernel runs old behaviours unchanged. The <code>Create*Behavior</code>
-      factory names and the <code>HumanBehaviors</code> / <code>SharedBehaviors</code> tables are preserved as a
-      shim over the new engine. Category-C mods keep running.</p>
-      <p><b>The honest caveat:</b> a mod that depended on a specific <i>weakness</i> of the old AI &mdash; "it is
-      dumb here, so my mod works" &mdash; may see that behaviour change, because the new AI is smarter. That is
-      "behaves differently", not "unusable" &mdash; and such a mod can always fall back to category&nbsp;B and pin
-      its own AI.</p>
-      <p><b>The guarantee:</b> mod compatibility is a line in the <a href="#done">definition of done</a>. From
-      milestone M4 onward the test harness loads and runs a corpus of real mods on every change; nothing ships
-      that breaks them. Lua is never removed &mdash; it is given a better engine to run on.</p>
+      <p><b>The guarantee &mdash; compatibility is measured, not promised.</b> From milestone <b>M4</b> the
+      validation harness loads and runs a corpus of real community mods &mdash; <b>Void Wanderers explicitly
+      included</b> &mdash; on every CI cycle. The legacy profile is regression-checked against the pre-overhaul
+      behaviour baseline that <a href="#plan">M0</a> records before any AI code is touched. If a mod breaks, the
+      failure report names the exact call &mdash; and the fix is one of: repair the facade, pin the mod to the
+      legacy profile, or help it migrate. "Does Void Wanderers still work" is a line in the
+      <a href="#done">definition of done</a> and a green light on every build &mdash; never a guess.</p>
     </div>
 
     <!-- ============ 7 · THE PLAN ============ -->
@@ -755,10 +803,10 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M4</span><span class="ms-name">Behaviour execution &mdash; retire the coroutines</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Replace the leak-prone coroutine soup with a structured, debuggable execution engine &mdash; without breaking a single mod.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The C++ behaviour-tree kernel (L3); the stock behaviours migrated to behaviour trees with Lua leaf-actions; the live behaviour-tree view in the debug overlay; the mod compatibility layer of &sect;6.2 &mdash; legacy coroutine behaviours run as leaves, the <code>Create*Behavior</code> factories and behaviour tables preserved as a shim.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The C++ behaviour-tree kernel (L3); the stock behaviours migrated to behaviour trees with Lua leaf-actions; the live behaviour-tree view in the debug overlay; the <b>behaviour bridge</b> of &sect;6.3 &mdash; the kernel ships a leaf-node type that runs legacy coroutine behaviours unchanged, and the <code>Create*Behavior</code> factories and behaviour tables are preserved as shims.</span></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/AI/ (BehaviourTree) &middot; Data/Base.rte/AI/*.lua (migrated to trees + leaves) &middot; the compatibility shim &middot; the harness mod-corpus loader</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M3.</span></div>
-        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> every stock behaviour runs as a behaviour tree; the test harness's mod corpus still loads and runs; the "abort to avoid memory leaks" protocol is gone from the codebase; trust-suite scores hold or improve across the swap.</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> every stock behaviour runs as a behaviour tree; the test harness's mod corpus still loads and runs; the "abort to avoid memory leaks" protocol is gone from the <i>stock</i> AI (it survives, frozen, only inside the opt-in legacy profile); trust-suite scores hold or improve across the swap.</span></div>
       </div>
 
       <div class="ms">
@@ -773,7 +821,7 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M6</span><span class="ms-name">The new default &mdash; harden &amp; ship</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make the new AI the stock AI, and prove it is finished.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">Promotion of the new AI to the <code>Base.rte</code> default; the full mod-compatibility pass; difficulty that scales <i>competence</i> (perception, reaction, coordination) not stats; the performance pass for "every unit, every match"; the fairness pass (no cheating as the enemy, no sabotage as the ally); retirement of the legacy coroutine engine &mdash; while the mod-facing compatibility surface of &sect;6.2 stays.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">Promotion of the new AI to the <code>Base.rte</code> default; the full mod-compatibility pass; difficulty that scales <i>competence</i> (perception, reaction, coordination) not stats; the performance pass for "every unit, every match"; the fairness pass (no cheating as the enemy, no sabotage as the ally); the stock AI now runs entirely on the new kernels, and the old AI is frozen and packaged as the opt-in legacy profile of &sect;6.3 with a published sunset.</span></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Data/Base.rte/AI/ &middot; Source/Managers/SettingsMan (difficulty) &middot; full-game performance &amp; balance pass</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M5.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the entire AI-01..AI-12 suite is green at target pass-rates across every difficulty; large-scale AI-vs-AI self-play is stable over long runs and many maps; the fuzz harness finds no invariant violations; the new AI ships as default with the mod corpus intact. This is the <a href="#done">definition of done</a>.</span></div>
@@ -840,8 +888,8 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
     &mdash; across many maps, many times, unattended. Self-play surfaces emergent stupidity that scripted scenarios
     miss (mutual stalemate, suicidal rushes, two sides both stuck). New-vs-old win rate is a single number for "are
     we winning"; new-vs-previous-version catches regressions the moment they appear. From M4 the harness also
-    loads and runs a corpus of real community mods every cycle &mdash; the compatibility guarantee of &sect;6.2 is
-    a test, not a promise.</p>
+    loads and runs a corpus of real community mods &mdash; Void Wanderers among them &mdash; every cycle; the
+    compatibility guarantee of &sect;6.3 is a test, not a promise.</p>
 
     <h3>8.5 &nbsp; Fuzz &amp; invariant testing</h3>
     <p>Beyond the twelve authored scenarios, the harness procedurally generates scenes &mdash; random terrain,
@@ -918,8 +966,9 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
         emergent passivity, no crashes.</li>
         <li>A full side runs autonomously and competently with <b>zero player input</b> &mdash; and a player can
         take direct control of any unit and release it with no loss of intent.</li>
-        <li>The new AI is the <code>Base.rte</code> default, the legacy coroutine engine is retired, and the
-        community mod corpus still loads and runs.</li>
+        <li>The new AI is the <code>Base.rte</code> default and the stock AI runs entirely on the new kernels;
+        the community mod corpus &mdash; Void Wanderers included &mdash; still loads and runs, whether on the new
+        AI or on the preserved opt-in legacy profile.</li>
         <li>Every shipped decision is explainable: it carries a reason, and it can be replayed.</li>
       </ul>
       <p>That is the finish line. It is specific, it is measured by machine, and it does not move.</p>
