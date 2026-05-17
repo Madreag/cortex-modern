@@ -96,7 +96,7 @@ const WORK_ITEMS = [
 
   { id:'T1-01', title:'Bump security-sensitive dependencies',     sub:'Build / Deps',   tags:['DEP'],          tier:1, status:'todo',     notes:'libpng, zlib-ng, LZ4, minizip-ng, LuaJIT (CVE-2024-25176).' },
   { id:'T1-02', title:'Gamepad rumble / haptics',                 sub:'Input',          tags:['CODE'],         tier:1, status:'todo',     notes:'SDL_RumbleGamepad into UInputMan; expose to Lua.' },
-  { id:'T1-03', title:'Multiplayer code & RakNet — on hold',       sub:'Networking',     tags:['DEP'],          tier:1, status:'blocked',  notes:'ON HOLD (ADR-013): the networking code is retained as reference for a multiplayer revival. See the Multiplayer page.' },
+  { id:'T1-03', title:'Multiplayer code & RakNet — absorbed',      sub:'Networking',     tags:['DEP'],          tier:1, status:'blocked',  notes:'Absorbed into the Multiplayer flagship (ADR-015): the removed networking code stays as reference; flagship milestone M1 rebuilds the server spine and retires RakNet.' },
   { id:'T1-04', title:'Delete dead GL code',                      sub:'Rendering',      tags:['CODE'],         tier:1, status:'todo',     notes:'Stubbed CompileShader, commented m_Blit8, vestigial constants.' },
   { id:'T1-05', title:'Audio terrain occlusion',                  sub:'Audio',          tags:['CODE'],         tier:1, status:'todo',     notes:'Strength-ray driven FMOD lowpass. Big immersion win.' },
   { id:'T1-06', title:'The AI overhaul (flagship)',               sub:'AI',             tags:['MOD','CODE','ARCH'], tier:1, status:'todo',  notes:'Promoted to cortex-modern flagship (ADR-014). Full layered-hybrid AI rebuild -- the AI page has the M0-M6 milestone plan.' },
@@ -111,7 +111,7 @@ const WORK_ITEMS = [
   { id:'T3-01', title:'Multithread the physics travel loop',      sub:'Physics',        tags:['ARCH'],         tier:3, status:'todo',     notes:'The performance ceiling. Or adopt the upstream box2d-emscripten direction.' },
   { id:'T3-02', title:'Decouple material map from palette index', sub:'Rendering',      tags:['ARCH'],         tier:3, status:'todo',     notes:'The keystone. Unblocks 32-bit colour, >256 materials, retiring Allegro.' },
   { id:'T3-03', title:'Rebuild BuyMenu / editors / Metagame UI',  sub:'UI / UX',        tags:['ARCH'],         tier:3, status:'todo',     notes:'Off the legacy Allegro GUIControlManager onto a modern toolkit.' },
-  { id:'T3-04', title:'Bring networked multiplayer back',         sub:'Networking',     tags:['ARCH'],         tier:3, status:'todo',     notes:'Reopened (ADR-013). Option menu on the Multiplayer page: Tier 0 stopgap now, Tier 2 state-replication the real target.' },
+  { id:'T3-04', title:'Bring networked multiplayer back',         sub:'Networking',     tags:['ARCH'],         tier:3, status:'todo',     notes:'Committed flagship (ADR-015): server-authoritative state replication, staged. The Multiplayer page has the M0-M6 milestone plan -- Remote Play stopgap, co-op via state replication, then rollback PvP.' },
   { id:'T3-05', title:'Retire Allegro 4',                         sub:'Rendering',      tags:['ARCH'],         tier:3, status:'blocked',  notes:'Blocked on T3-02. ~56 files / 477 call sites.' },
 ];
 

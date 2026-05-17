@@ -361,7 +361,10 @@
         <span class="status status-done">Accepted</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>update:</b> the <a href="multiplayer.html">Multiplayer</a> page
+        has since been expanded from the original four-tier menu into a ranked seven-option solution space, and the
+        determinism / lockstep path is now assessed as a reachable ceiling rather than foreclosed. The multiplayer
+        direction is now decided in <b>ADR-015</b>.</p>
         <h4>Context</h4>
         <p>ADR-011 accepted upstream's removal of multiplayer and proposed deleting the dead networking code. That
         was reconsidered: networked multiplayer is a real, wanted feature, and the option space &mdash; from a
@@ -410,13 +413,53 @@
         agent-driven, sequenced by dependency and validation. Mod compatibility is a hard requirement; "done" is
         the machine-measured definition on the AI page.</p>
         <h4>Consequences</h4>
-        <p>The AI is the substrate beneath ADR-012 (the Campaign) and ADR-013 (Multiplayer) &mdash; both depend on
+        <p>The AI is the substrate beneath ADR-012 (the Campaign) and ADR-015 (Multiplayer) &mdash; both depend on
         competent AI. It is mostly engine <span class="tag tag-code">[CODE]</span> /
         <span class="tag tag-arch">[ARCH]</span> work plus the Lua brain; MicroPather is removed, dropping a
         vendored dependency. <code>T1-06</code> is superseded &mdash; it becomes the roadmap's pointer to this
         flagship rather than a standalone Tier-1 item. Existing mods keep working through a preserved
         compatibility surface. The <a href="ai.html">AI</a> page is the living plan and the artifact an
         implementer builds from.</p>
+      </div>
+    </section>
+
+    <!-- ADR-015 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-015</span>
+        <span class="adr-title">Multiplayer &mdash; server-authoritative state replication, staged</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>ADR-013 reopened the multiplayer question and commissioned the full option analysis on the
+        <a href="multiplayer.html">Multiplayer</a> page. Cortex Command's old networking &mdash; server-side
+        screen-streaming over RakNet &mdash; was removed in January 2025 and cannot be revived: the integration
+        hooks were stripped from five managers, and the per-player 8-bit render path it depended on is gone. The
+        investigation &mdash; a direct read of the engine source and the removal history, the comparable games
+        (Teardown, Terraria, Noita, Factorio), and Corefall's netcode design &mdash; produced a ranked seven-option
+        solution space. The owner has committed to the recommended path, in full.</p>
+        <h4>Decision</h4>
+        <p>Make networked multiplayer cortex-modern's second committed flagship, after the AI overhaul. Architecture:
+        <b>server-authoritative state replication, staged</b>. One authoritative simulation &mdash; a player's host
+        or a headless <code>cortex-server</code>, built into the game and community-hostable; clients send input,
+        predict their own actor, and reconcile. Terrain destruction is replicated as <b>semantic commands</b> over a
+        <b>determinism island</b>, never as pixels. The work is sequenced as seven dependency-ordered milestones
+        (M0&ndash;M6): a Steam Remote Play stopgap and the sync harness; the headless server spine; terrain
+        replication; entity replication and co-op prediction; co-op shipped; the whole-tick determinism island; and
+        rollback PvP. Lockstep / rollback is <i>reached</i> by growing the determinism island, not started cold. No
+        human-time estimates &mdash; the build is agent-driven, sequenced by dependency and gated by an automated
+        per-tick-checksum harness. The <a href="multiplayer.html">Multiplayer</a> page is the living plan and the
+        artifact an implementer builds from.</p>
+        <h4>Consequences</h4>
+        <p>Co-op ships at milestone M4; competitive PvP at M6. RakNet is retired at M1; the ~5,900 lines of removed
+        networking code are kept as a reference until then, and <code>T1-03</code> (delete the dead networking code)
+        is absorbed into this flagship rather than actioned separately. The determinism retrofit &mdash; chiefly the
+        Lua mod corpus and the threaded sim &mdash; is the plan's named risk and is isolated in M5; mod hash sync is
+        mandatory. Multiplayer shares the AI overhaul's M0 observability harness and depends on competent
+        server-side AI (<a href="decisions.html">ADR-014</a>), so it is sequenced to ride that work. This resolves
+        the multiplayer direction ADR-013 left open.</p>
       </div>
     </section>
 
@@ -430,7 +473,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 14 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
+      Decision log &middot; 15 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
     </div>
   </main>
 
