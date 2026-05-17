@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Multiplayer — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
+      <a class="nav-link active" href="multiplayer.html">Multiplayer</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link" href="corefall.html">Corefall Ideas</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Networking</div>
+      <h1>Multiplayer</h1>
+      <p class="page-lead">Cortex Command's networked multiplayer was removed in January 2025. This page is the
+      honest, full-spectrum analysis of bringing it back &mdash; every option from "ships tomorrow" to "rebuild the
+      engine" &mdash; built from a read of the actual code, the removal history, Corefall's netcode design, and the
+      wider netcode landscape.</p>
+    </header>
+
+    <div class="callout callout-warn">
+      <div class="callout-title">Status &mdash; under active investigation; nothing is being deleted</div>
+      <p>The networking code (~5,900 lines) is <b>retained as the reference implementation</b>. The Tier-1 cleanup
+      task that proposed deleting it is <b>on hold</b> until a multiplayer direction is chosen. ADR-011 (which had
+      accepted the removal) is superseded by <a href="decisions.html">ADR-013</a>, which reopens the question.</p>
+    </div>
+
+    <h2><span class="h-accent">What Cortex Command had</span></h2>
+    <div class="card">
+      <p>Networking was <b>retrofitted</b> onto the 2001-era Crush2D engine and shipped only with the 2019
+      open-source release &mdash; the commercial game never had public networked play. The model was
+      <b>server-authoritative screen-streaming</b>, confirmed from the source:</p>
+      <ul>
+        <li>The server runs the entire simulation. It renders a separate per-player 8-bit frame, compresses it into
+        rectangular "boxes" (LZ4 / LZ4-HC, with delta compression), and streams it. Clients are <b>thin display
+        terminals</b> &mdash; they send only input (controller, mouse) and never simulate anything.</li>
+        <li>Cost: <b>6&ndash;10&nbsp;Mbit/s per client</b> and roughly <b>0.75 of a CPU core per client</b>, on top
+        of the simulation itself. Frames streamed at <b>30&nbsp;fps</b>. Hard <b>4-player</b> cap.</li>
+        <li>Transport was <b>RakNet</b> (reliable UDP + NAT punch-through). RakNet was abandoned by its owner
+        (Oculus/Facebook) around 2014 and is unmaintained.</li>
+      </ul>
+      <p>It worked on a LAN and was playable, but it was bandwidth-brutal, latency-poor, single-threaded-bottlenecked,
+      and never tested on Linux. Upstream removed it (commit <code>91fe85dd8</code>, PR&nbsp;#179, "RIP Multiplayer
+      2019-2025 / Don't miss it, write something working instead").</p>
+    </div>
+
+    <h2><span class="h-accent">Why it will not just switch back on</span></h2>
+    <div class="card">
+      <p>The removal did <b>not</b> delete the four networking files &mdash; it commented them out of the Meson
+      build. But it also <b>stripped ~700&ndash;1,000 lines of integration hooks</b> out of <code>FrameMan</code>,
+      <code>UInputMan</code>, <code>PostProcessMan</code>, <code>SceneMan</code> and <code>ActivityMan</code>.
+      Un-commenting the build lines produces an <b>immediate compile failure</b> &mdash; the APIs the network code
+      calls no longer exist.</p>
+      <p>Worse, the model itself is now obsolete: screen-streaming needs a <b>per-player 8-bit rendered frame</b>, and
+      <code>FrameMan</code> has since migrated to SDL3 / 32-bit / OpenGL &mdash; that 8bpp render path is gone. The
+      old code is a <b>useful reference, not a revivable artifact</b>. Reviving the old model verbatim is weeks of
+      work just to compile, and far more to make playable on the modern renderer.</p>
+    </div>
+
+    <div class="callout callout-key">
+      <div class="callout-title">The core constraint &mdash; why this is genuinely hard</div>
+      <p>Cortex Command's simulation is <b>single-threaded</b>, <b>non-deterministic</b> (floating-point, per-pixel
+      atom physics, unordered particle iteration), and <b>CPU-saturating</b> even in single-player. No networking
+      cleverness removes that. It rules out the cheap, elegant models &mdash; deterministic lockstep and rollback
+      both require a <b>bit-identical simulation</b>, which CC's engine is the opposite of. Every realistic option
+      is therefore either a streaming model (host does everything) or a state-replication model (server is
+      authoritative, clients predict) &mdash; not lockstep.</p>
+    </div>
+
+    <h2><span class="h-accent">The options</span> &mdash; four tiers, honest cost</h2>
+
+    <div class="card">
+      <h3><span class="tier tier-1">TIER 0</span> &nbsp; Stream it with Steam Remote Play / Parsec</h3>
+      <p class="small">Not netcode at all &mdash; the host runs the game and streams video+input to guests, the same
+      idea as CC's old multiplayer but using <b>Valve's or Parsec's mature H.264/HEVC codec and relay network</b>
+      instead of a homegrown 30&nbsp;fps LZ4 stream. Steam Remote Play Together needs <b>one Steamworks API call</b>
+      to opt in; Parsec needs <b>zero code</b> and players already use it. Up to ~3&ndash;4 guests, host bears all
+      load, latency-sensitive &mdash; but it is strictly better than what CC shipped, and it works <b>today</b>.</p>
+      <p class="small muted">Effort: trivial (one API call) &middot; Risk: none &middot; The honest near-term answer.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tier tier-1">TIER 1</span> &nbsp; Modernize the screen-streaming model</h3>
+      <p class="small">Rebuild CC's own streaming multiplayer properly: restore the stripped hooks, swap dead RakNet
+      for <b>SLikeNet</b> (a maintained RakNet fork, near drop-in) or <b>Valve GameNetworkingSockets</b> (free Steam
+      relay, solves NAT), replace the homegrown frame compression with real video encoding (libavcodec / H.264),
+      and add a per-player render pass to the modern SDL3 renderer. Result: usable internet friends-play. Still thin
+      clients, still host-CPU-bound, still ~4 players &mdash; the model's ceilings remain.</p>
+      <p class="small muted">Effort: medium (~1&ndash;3 months) &middot; Risk: medium &middot; Largely superseded by Tier&nbsp;2 &mdash; an interim, not a destination.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tier tier-2">TIER 2</span> &nbsp; A real state-replication architecture &mdash; the Teardown model</h3>
+      <p class="small">The genuinely good outcome. A <b>server-authoritative</b> design: the server runs the sim;
+      clients send input, run <b>client-side prediction</b> for their own actor, and reconcile. The key trick &mdash;
+      proven by Teardown for voxel destruction &mdash; is to replicate <b>terrain destruction as deterministic
+      commands</b> ("carve radius R at (x,y)"), not pixel bitmaps, which means only CC's <b>terrain-modification
+      math</b> must be made deterministic (fixed-point), <b>not the whole physics engine</b>. Entities (actors,
+      projectiles, debris) sync via a prioritized snapshot stream. Transport: GameNetworkingSockets or ENet. This is
+      how Terraria, Starbound and LieroX work; it does not need a determinism rewrite, and it pairs naturally with a
+      <a href="campaign.html">co-op campaign</a>.</p>
+      <p class="small muted">Effort: high (~6&ndash;18 months, the flagship-scale build) &middot; Risk: high but bounded &mdash; the recommended real target.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tier tier-3">TIER 3</span> &nbsp; Deterministic lockstep / rollback &mdash; rebuild the engine</h3>
+      <p class="small">The "perfect" netcode (tiny bandwidth, every client simulates from inputs) demands a
+      <b>bit-identical, deterministic simulation</b>: physics rewritten in fixed-point, every RNG seeded and
+      ordered, deterministic container iteration, fast state save/restore. This is exactly what
+      <a href="corefall.html">Corefall</a> gets for free by being built deterministic-first &mdash; and Corefall's
+      own specs cite CC's <code>MovableMan.cpp</code> and <code>Atom.cpp</code> <i>by name</i> as the anti-patterns.
+      Retrofitting it onto CC is a multi-year, near-total engine rewrite. Noita &mdash; a near-identical per-pixel
+      engine &mdash; ruled multiplayer out for exactly this reason.</p>
+      <p class="small muted">Effort: years / effectively a new engine &middot; Risk: extreme &middot; Not recommended &mdash; this <i>is</i> Corefall's domain.</p>
+    </div>
+
+    <h2><span class="h-accent">What the comparable games teach</span></h2>
+    <div class="card">
+      <p><b>Noita</b> &mdash; the cautionary twin. Same per-pixel non-deterministic engine; its developers ruled out
+      multiplayer entirely. <b>Worms, Factorio</b> &mdash; deterministic lockstep, beautiful and cheap, but
+      <i>designed in from day one</i>; not retrofittable. <b>Terraria, Starbound, LieroX</b> &mdash; the realistic
+      2D-sandbox answer: an authoritative host, entity snapshots, terrain sent as patches. <b>Teardown</b> &mdash;
+      the blueprint: it networked full voxel destruction by making <b>only the destruction math</b> deterministic
+      (fixed-point) and leaving everything else to server-authoritative eventual consistency. <b>Corefall</b> &mdash;
+      shows the determinism-first ceiling: QUIC transport, server-authoritative online co-op, GGPO-style rollback
+      PvP, MMO shards &mdash; all of it downstream of a determinism foundation CC does not have and cannot cheaply
+      acquire.</p>
+    </div>
+
+    <h2><span class="h-accent">Recommendation</span></h2>
+    <div class="callout callout-ok">
+      <p><b>Ship Tier&nbsp;0 now.</b> Wire up Steam Remote Play Together &mdash; one API call &mdash; so players have
+      working co-op immediately, and label it honestly as game-streaming, not netcode. This alone beats what CC had.</p>
+      <p><b>Make Tier&nbsp;2 the real multiplayer project.</b> Server-authoritative state replication on the Teardown
+      model is the genuinely good, genuinely achievable outcome &mdash; and it does <b>not</b> require the engine
+      rewrite that lockstep would. It is flagship-scale (6&ndash;18 months) and it should be sequenced with the
+      <a href="campaign.html">Campaign</a>: a co-op campaign is the real prize, and the campaign work also pays down
+      the AI and mission systems multiplayer will lean on. Tier&nbsp;1 is an optional interim if networked play is
+      wanted sooner; skip it if Tier&nbsp;2 can be committed to directly.</p>
+      <p><b>Do not attempt Tier&nbsp;3.</b> A determinism rewrite is a multi-year new engine &mdash; it is what
+      Corefall already is. Reference it; don't reproduce it.</p>
+      <p><b>Keep the old code.</b> The ~5,900 lines stay as the reference for Tier&nbsp;1/2. RakNet can be dropped
+      whenever Tier&nbsp;1/2 picks its replacement transport; until then it is harmless dead weight, not a deletion
+      emergency. The standing decision is <a href="decisions.html">ADR-013</a>.</p>
+    </div>
+
+    <div class="page-foot">
+      Built from the Cortex Command source + git history, Corefall's netcode specs, and a survey of the netcode
+      landscape (Teardown, Factorio, Worms, Noita, Terraria; SLikeNet / GameNetworkingSockets / ENet) &middot;
+      updated 2026-05-16 &middot; see <a href="decisions.html">ADR-013</a>.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

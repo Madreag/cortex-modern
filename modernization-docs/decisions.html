@@ -26,6 +26,7 @@
       <a class="nav-link" href="analysis.html">Technical Analysis</a>
       <a class="nav-link" href="roadmap.html">Roadmap</a>
       <a class="nav-link" href="campaign.html">Campaign</a>
+      <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link active" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -298,10 +299,11 @@
       <div class="adr-head">
         <span class="adr-id">ADR-011</span>
         <span class="adr-title">Multiplayer &mdash; accept upstream's removal; do not revive netcode</span>
-        <span class="status status-done">Accepted</span>
+        <span class="status status-todo">Superseded</span>
       </div>
       <div class="adr-body">
-        <p class="small muted">2026-05-16</p>
+        <p class="small muted">2026-05-16 &middot; <b>Superseded by ADR-013</b> &mdash; the multiplayer question was
+        reopened for full investigation; see the <a href="multiplayer.html">Multiplayer</a> page.</p>
         <h4>Context</h4>
         <p>Upstream removed multiplayer outright &mdash; commit "RIP Multiplayer 2019-2025" (2025-01-11); the
         changelog reads <i>"Removed multiplayer. The existing multiplayer implementation was terrible and broken."</i>
@@ -350,6 +352,36 @@
       </div>
     </section>
 
+    <!-- ADR-013 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-013</span>
+        <span class="adr-title">Multiplayer reopened &mdash; investigate before deleting</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>ADR-011 accepted upstream's removal of multiplayer and proposed deleting the dead networking code. That
+        was reconsidered: networked multiplayer is a real, wanted feature, and the option space &mdash; from a
+        zero-effort streaming stopgap to a full server-authoritative rebuild &mdash; deserved a proper investigation
+        before any code was discarded. A three-part study (the CC source and removal history, Corefall's netcode
+        design, the wider netcode landscape) was carried out; the result is the
+        <a href="multiplayer.html">Multiplayer</a> page.</p>
+        <h4>Decision</h4>
+        <p>Reopen the multiplayer question; ADR-011 is superseded. The ~5,900 lines of removed networking code and the
+        RakNet dependency are <b>retained as the reference implementation</b> &mdash; <code>T1-03</code> (delete the
+        dead code) is placed on hold, not actioned. The <a href="multiplayer.html">Multiplayer</a> page holds the full
+        four-tier option analysis; choosing among those tiers is the next decision and will get its own ADR. The
+        determinism-rewrite tier (lockstep &mdash; the Corefall approach) is noted as effectively a new engine and is
+        not on the table.</p>
+        <h4>Consequences</h4>
+        <p>No networking code is deleted until a direction is set. RakNet stays as a (harmless) build dependency until
+        a revival picks its replacement transport. cortex-modern keeps networked multiplayer as a live, tracked
+        option &mdash; tracked as <code>T3-04</code>.</p>
+      </div>
+    </section>
+
     <h2 id="open-questions">Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
@@ -360,7 +392,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 12 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
+      Decision log &middot; 13 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
     </div>
   </main>
 
