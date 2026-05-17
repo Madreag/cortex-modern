@@ -132,10 +132,11 @@
 
     <h2><span class="h-accent">The verdict</span> &mdash; what to actually pursue</h2>
     <div class="callout callout-ok">
-      <p><b>Don't turn cortex-modern into Corefall.</b> The <span class="tag tag-arch">[ARCH]</span> pillars
-      &mdash; atmospherics, material cellular-automata, thermal fields, vehicle and fluid physics, a replay/determinism
-      core, a multiplayer rework &mdash; are multi-year efforts that duplicate Corefall's reason to exist. Track them
-      as inspiration, not as work.</p>
+      <p><b>Don't turn cortex-modern into Corefall.</b> The deep-simulation <span class="tag tag-arch">[ARCH]</span>
+      pillars &mdash; atmospherics, material cellular-automata, thermal fields, vehicle and fluid physics &mdash; are
+      multi-year efforts that duplicate Corefall's reason to exist. Track them as inspiration, not as work.
+      (Multiplayer and a determinism / replay core have since left that list &mdash; they are the committed
+      <a href="multiplayer.html">Multiplayer</a> flagship, <a href="decisions.html">ADR-015</a>.)</p>
       <p><b>Harvest the <span class="tag tag-mod">[MOD]</span> tier.</b> It is large, cheap, and fits Cortex Command's
       identity: deeper <b>AI &amp; squad command</b> (also closes upstream issue&nbsp;#208), <b>causal damage +
       afflictions</b>, a <b>mission-director / storyteller</b> layer, <b>factions &amp; diplomacy</b>, roguelike
@@ -152,7 +153,7 @@
 
     <div class="page-foot">
       Built from a full read of Corefall's milestone specs (<code>specs/active</code> + <code>specs/done</code>,
-      M1&ndash;M49) and a survey of the Cortex Command engine source &middot; updated 2026-05-16 &middot; funnel:
+      M1&ndash;M49) and a survey of the Cortex Command engine source &middot; updated 2026-05-17 &middot; funnel:
       49 milestones &rarr; ~440 individual systems &rarr; 145 portable ideas below.
     </div>
   </main>
@@ -207,8 +208,8 @@ const CROSS = [
     d:"A static defendable objective (reactor, command core) with concentric armour HP pools and pressure-state sprites. Pure Lua on a non-mobile actor." },
 
   /* ---- AI, Squad & Command ---- */
-  { a:"ai", s:"AI archetypes + layered behaviour stack", t:["MOD"],
-    d:"Six archetypes (Rifleman, Sniper, Assault, Engineer, Spotter, Medic) on a reactive / utility / behaviour-tree / HTN stack. CC's AI is ~95% Lua in Base.rte/AI, so this is pure Lua." },
+  { a:"ai", s:"AI role archetypes", t:["MOD"],
+    d:"Six role archetypes (Rifleman, Sniper, Assault, Engineer, Spotter, Medic) as squad-member templates. CC's AI is ~95% Lua in Base.rte/AI, so this is pure Lua -- and it aligns with the AI flagship's squad-coordination roles (ADR-014). Corefall's deeper behaviour-stack internals are not portable: the AI flagship is locomotion-first and keeps CC's existing decision Lua rather than a utility/HTN tower." },
   { a:"ai", s:"Per-actor priority table", t:["MOD"],
     d:"A 22-task utility-weight table per actor that drives task selection, with role templates and quick presets. An INI or Lua config read by the AI GlobalScript." },
   { a:"ai", s:"Squad command grammar + formations", t:["MOD"],
@@ -220,7 +221,7 @@ const CROSS = [
   { a:"ai", s:"Persistent commander adaptation", t:["MOD"],
     d:"A named enemy commander tracks your tactics across missions and picks a counter-doctrine from a fixed set. GlobalScript state plus save persistence; CC already has a cross-mission metagame." },
   { a:"ai", s:"Hierarchical pathfinding (3-grain A*)", t:["CODE"],
-    d:"Tile / chunk / region A* with dynamic invalidation on terrain change. CC's pathfinder is flat; replacing the algorithm is a bounded C++ change. CC already exposes async path queries to Lua." },
+    d:"Tile / chunk / region A* with dynamic invalidation on terrain change. A Corefall approach -- noted for completeness, but the AI flagship (ADR-014) keeps CC's MicroPather pathfinder, which is already async, jump-aware and capable, and does not rewrite it. Tracked as inspiration only." },
   { a:"ai", s:"Cover-finder", t:["MOD","CODE"],
     d:"Scores nearby tiles by line-of-fire block to all known threats. A Lua cover-finder using CastObstacleRay is moddable; a batched per-tile query for scale is a bounded engine addition." },
   { a:"ai", s:"Collision avoidance / steering", t:["CODE"],
@@ -442,7 +443,7 @@ const CROSS = [
   { a:"mp", s:"Endgame modes (wave survival, boss rush)", t:["MOD"],
     d:"Wave survival, boss rush, time attack and similar modes, each a GAScripted activity with its own win logic. Standard CC modding practice." },
   { a:"mp", s:"State-replication multiplayer rework", t:["ARCH"],
-    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. A modern state-replication rework with client prediction would be a major engine effort; cortex-modern is actively weighing the options on the Multiplayer page (ADR-013)." },
+    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. A modern state-replication rework with client prediction is now cortex-modern's committed Multiplayer flagship (ADR-015) -- staged from a Steam Remote Play stopgap through co-op to rollback PvP; see the Multiplayer page." },
   { a:"mp", s:"Mod hash sync + lobby discovery", t:["CODE"],
     d:"Clients exchange mod content hashes before a match and a lobby browser filters by mod compatibility. CC Lua cannot hash files, so this is bounded C++ infrastructure." },
   { a:"mp", s:"Matchmaking + ranks + tournaments", t:["ARCH","CODE"],

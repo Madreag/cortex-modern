@@ -68,6 +68,8 @@
   .ms-val { flex:1; color:var(--text); min-width:0; }
   .ms-val.gate b { color:var(--green); font-weight:600; }
   .ms-val.touch { font-family:var(--mono); font-size:11.5px; color:var(--text-dim); }
+  .ms-steps { flex:1; min-width:0; margin:1px 0 0; padding-left:18px; color:var(--text); }
+  .ms-steps li { margin:3px 0; }
 </style>
 </head>
 <body>
@@ -219,23 +221,35 @@
     demands that every machine computes <b>bit-identically</b>. That property is <b>determinism</b>, and it is the
     hinge the whole plan turns on.</p>
     <div class="callout callout-warn">
-      <div class="callout-title">Cortex Command is non-deterministic &mdash; in six ways</div>
-      <ol>
-        <li><b>Floating-point math</b> that differs across CPU, compiler and optimization level (fused multiply-add,
-        x87 80-bit intermediates, fast-math reordering).</li>
-        <li><b>Unordered iteration</b> &mdash; <code>MovableMan</code> walks its actors, items and particles in
-        registry order, not a stable, content-defined order.</li>
-        <li><b>RNG ordering</b> &mdash; CC <i>does</i> have a single global generator (<code>g_RandomGenerator</code>
-        in <code>RTETools.h</code>, seeded once at boot by <code>SeedRNG()</code>), but it is seeded from the
-        environment and consumed by threaded code in no fixed order.</li>
-        <li><b>Wall-clock</b> influence in places that should be tick-driven.</li>
-        <li><b>~53,000 lines of community Lua</b>, whose <code>pairs()</code> table iteration has <i>no defined
-        order</i> in the Lua 5.1 / LuaJIT dialect.</li>
-        <li>A <b>multithreaded</b> Lua / AI / MOID-drawing path on the <code>ThreadMan</code> pools &mdash; thread
-        scheduling is nondeterministic by default.</li>
-      </ol>
-      <p>None of this was ever a bug. Single-player never cared. It only becomes a problem the moment a second
-      machine has to agree.</p>
+      <div class="callout-title">Non-deterministic today &mdash; but closer to determinism-ready than it looks</div>
+      <p>Upstream-dev review (Causeless) corrected an earlier, gloomier reading here. CC is not deterministic
+      <i>today</i> &mdash; but the engine was <b>partly built with determinism in mind</b>. Verified against the
+      source, the honest state:</p>
+      <ul>
+        <li><b>The RNG is closer to ready than feared.</b> The global <code>g_RandomGenerator</code> is seeded by
+        <code>SeedRNG()</code> with a <i>constant</i> compile-time seed (its own comment: &ldquo;Use a constant seed
+        for determinism&rdquo; &mdash; <code>RTETools.cpp</code>), re-applied at every activity start; each Lua script
+        state additionally has its own <code>math.random</code> RNG. Per upstream-dev review none is
+        environment-seeded. The residual is call-<i>ordering</i> under threads &mdash; plus one named structural fix,
+        below.</li>
+        <li><b>The threaded sim has a designed determinism boundary.</b> Lua <code>ThreadedUpdate</code> runs in
+        arbitrary thread order, but scripts that touch simulation state are meant to do so through the
+        <code>SyncedUpdate</code> pass (<code>RequestSyncedUpdate()</code> &rarr; <code>MovableMan</code>'s synced
+        pass) &mdash; a boundary the threading was designed around. The fence exists; it is opt-in, so the residual
+        risk is mods that bypass it.</li>
+        <li><b>Floating-point</b> is the classic fear &mdash; but modern x86 is SSE, not x87, and same-build FP is
+        consistent. The residual is cross-compiler / cross-architecture (x86 vs ARM), which only bites if cross-arch
+        play is promised.</li>
+        <li><b>Unordered iteration</b> &mdash; <code>MovableMan</code> walks objects in registry order; anything that
+        feeds a checksum needs a stable order. Mechanical.</li>
+        <li><b>Lua <code>pairs()</code></b> &mdash; ~53,000 lines of community Lua iterate tables in hash order. This
+        is the <i>real</i> residual risk, and it touches mods nobody controls.</li>
+        <li><b>Wall-clock</b> reads in a few sim paths &mdash; mechanical to tick-base.</li>
+      </ul>
+      <p>The engine itself names the one structural blocker &mdash; a TODO in <code>RTETools.h</code>:
+      <i>&ldquo;right now determinism isn't viable because framerate affects sim updates per draw&rdquo;</i>. The sim
+      and render paths share the one global RNG, so draw rate perturbs the sim's RNG stream; the comment's own fix is
+      to split a sim-thread RNG from a render-thread RNG. A narrow, named change &mdash; not a wall.</p>
     </div>
     <div class="callout callout-key">
       <div class="callout-title">The key idea &mdash; the determinism island</div>
@@ -248,6 +262,22 @@
       plan.</b> State replication needs only a <i>small</i> island; lockstep PvP needs a <i>total</i> one &mdash;
       and the plan is built to <b>grow the island</b> from one to the other (&sect;7). State replication and
       lockstep are not rival architectures; they are the same architecture at two island sizes.</p>
+    </div>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Dev-review consequence &mdash; the determinism work is cheaper than first priced</div>
+      <p>Upstream-dev review (Causeless) finds full determinism <b>materially more reachable</b> than
+      <a href="decisions.html">ADR-015</a> first assumed: the RNG is constant-seeded, the threading already has the
+      <code>SyncedUpdate</code> boundary, and FP is a non-issue on same-build modern x86. That is good news, and it
+      lands in two specific places &mdash; the <a href="#engine">&sect;5.4</a> <b>determinism retrofit</b> and
+      <b>rollback PvP</b> (M6) are both cheaper and lower-risk than estimated. It does <b>not</b> invert the staging:
+      state-replication co-op (M1&ndash;M4) needs only the small terrain island and tolerates internally
+      non-deterministic mods, while lockstep needs the whole simulation <i>and</i> the entire ~53,000-line mod corpus
+      bit-identical &mdash; strictly more. State-replication co-op still ships first. What the <b>M0 determinism
+      spike</b> genuinely settles is how cheap the total island actually is &mdash; chiefly the
+      Lua-<code>pairs()</code> exposure across the mod corpus, the one real unknown &mdash; and therefore whether a
+      lockstep LAN mode can be pulled forward as an early bonus. The staged architecture stands; its risk estimate is
+      revised down.</p>
     </div>
 
     <!-- ============ 3 · THE APPROACH ============ -->
@@ -452,7 +482,7 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="pl-step"><span class="pl-side pl-srv">Server</span>
         <span class="pl-loc">collect input &rarr; one authoritative tick</span>
         <div class="pl-what">The server gathers every client's input in a fixed order and runs <b>one</b>
-        authoritative simulation tick &mdash; including all enemy AI (server-side per <a href="ai.html">ADR-014</a>).</div>
+        authoritative simulation tick &mdash; including all enemy AI, computed server-side.</div>
       </div>
       <div class="pl-step"><span class="pl-side pl-srv">Server</span>
         <span class="pl-loc">emit commands + snapshots</span>
@@ -534,8 +564,9 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <li><b>Prediction &amp; reconciliation.</b> The client predicts its own actor from local input each frame;
       when a server snapshot arrives it rewinds to the acknowledged tick and replays local input forward, correcting
       smoothly under a threshold and snapping over it.</li>
-      <li><b>Server-side AI.</b> Enemy and squad AI run only on the authoritative server &mdash; the
-      <a href="ai.html">AI overhaul</a> is already designed server-authoritative-friendly.</li>
+      <li><b>Server-side AI.</b> Enemy and squad AI run only on the authoritative server. The AI sets each
+      actor's <code>Controller</code> and never moves actors directly (<a href="ai.html">AI</a>, &sect;1.2) &mdash;
+      the input-only surface a server-authoritative model needs.</li>
     </ul>
     <p class="evidence">Touch-points: <code>Source/Managers/MovableMan.*</code> (the MO registry, iteration order,
     <code>Update</code>); <code>Source/Entities/MovableObject.*</code> and subclasses (<code>MOSRotating</code>,
@@ -550,19 +581,19 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <thead><tr><th>Source of non-determinism</th><th>What CC does today</th><th>The fix</th><th>Cost</th></tr></thead>
       <tbody>
         <tr><td><b>Timestep</b></td><td><code>RunGameLoop</code> already runs a fixed-step <code>TimeForSimUpdate()</code> accumulator</td><td>Nothing &mdash; already done</td><td><span class="status status-done">FREE</span></td></tr>
-        <tr><td><b>RNG</b></td><td>One global <code>g_RandomGenerator</code> (<code>RTETools.h</code>), seeded once at boot by <code>SeedRNG()</code></td><td>Seed from the shared match seed; guarantee a fixed call-order under the threaded AI/Lua; split a separate cosmetic RNG outside the island</td><td><span class="status status-doing">MECHANICAL</span></td></tr>
-        <tr><td><b>Cross-machine floats</b></td><td><code>float</code> / <code>double</code> throughout the sim; fast-math unaudited</td><td>Disable fast-math, pin SSE2/SSE4.2, single-precision + quantize for the checksum &mdash; <i>or</i> fixed-point &mdash; <i>or</i> run the sim in WASM (M5)</td><td><span class="status status-doing">MECHANICAL*</span></td></tr>
+        <tr><td><b>RNG</b></td><td>The global <code>g_RandomGenerator</code> is <b>constant-seeded</b> by <code>SeedRNG()</code> and re-applied each activity start; each Lua state has its own <code>math.random</code> RNG. Seeding is already deterministic</td><td>Guarantee a fixed call-<i>order</i> under the threaded AI/Lua; split the shared sim/render RNG (the <code>RTETools.h</code> TODO); split a cosmetic RNG outside the island</td><td><span class="status status-doing">MECHANICAL</span></td></tr>
+        <tr><td><b>Cross-machine floats</b></td><td><code>float</code> / <code>double</code> throughout the sim. Modern x86 is SSE, not x87 &mdash; same-build FP is consistent; the residual is cross-compiler / cross-arch (x86 vs ARM)</td><td>Disable fast-math, pin SSE2/SSE4.2, single-precision + quantize for the checksum &mdash; <i>or</i> fixed-point &mdash; <i>or</i> run the sim in WASM. Only hard if cross-arch play is promised</td><td><span class="status status-doing">MECHANICAL*</span></td></tr>
         <tr><td><b>Iteration order</b></td><td><code>MovableMan</code> walks objects in registry / pointer order</td><td>Stable integer IDs; ordered iteration for anything that feeds the checksum</td><td><span class="status status-doing">MECHANICAL</span></td></tr>
         <tr><td><b>Wall clock</b></td><td>Some sim paths read absolute time</td><td>Tick-based timers only, inside the island</td><td><span class="status status-doing">MECHANICAL</span></td></tr>
         <tr><td><b>Atom physics</b></td><td>Per-pixel Bresenham, float math (<code>Atom</code>, <code>AtomGroup</code>, <code>SceneMan</code> penetration)</td><td>Fixed-point carve / penetrate / dislodge / settle &mdash; the island's core, seeded at M2</td><td><span class="status status-doing">MEDIUM</span></td></tr>
         <tr><td><b>Lua <code>pairs()</code></b></td><td>~53K LOC of community Lua iterate tables in hash order; <code>math.random</code></td><td>Deterministic table iteration (ordered <code>pairs</code>, or patched LuaJIT iteration); one seeded Lua RNG</td><td><span class="status status-blocked">RISKY</span></td></tr>
-        <tr><td><b>Threaded sim</b></td><td><code>ThreadMan</code> pools run threaded Lua / AI / MOID-drawing work</td><td>Per-worker buffers + a deterministic merge, or serialise the island</td><td><span class="status status-blocked">RISKY</span></td></tr>
+        <tr><td><b>Threaded sim</b></td><td><code>ThreadMan</code> pools run threaded Lua / AI work &mdash; but sim-state mutation is meant to go through the ordered <code>SyncedUpdate</code> pass, a determinism boundary designed in</td><td>Make the <code>SyncedUpdate</code> fence airtight (it is opt-in today); per-worker buffers + deterministic merge where threads must write shared state</td><td><span class="status status-doing">MEDIUM</span></td></tr>
       </tbody>
     </table>
     <p class="small muted">* Mechanical to <i>apply</i>; the hard part is cross-platform <i>verification</i> &mdash;
-    which is exactly what running the sim in WASM (M5) turns into a solved problem. The two <span class="status status-blocked">RISKY</span>
-    rows &mdash; the Lua mod corpus and the threaded sim &mdash; are the whole irreducible risk of the plan, and both
-    are isolated in M5.</p>
+    which running the sim in WASM (M5) turns into a solved problem. After upstream-dev review only <b>one</b> row is
+    genuinely <span class="status status-blocked">RISKY</span> &mdash; the Lua <code>pairs()</code> exposure across the
+    community mod corpus &mdash; and it is isolated in M5.</p>
 
     <h3>5.5 &nbsp; The ripple &mdash; what else the engine work touches</h3>
     <table class="tbl">
@@ -577,16 +608,15 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
     </table>
     <div class="callout callout-info">
       <div class="callout-title">Coordinate with the AI overhaul (ADR-014)</div>
-      <p>The <a href="ai.html">AI overhaul</a> is cortex-modern's first committed build, and it adds a row of new
-      C++ simulation systems &mdash; an incremental pathfinder, influence maps, a per-actor blackboard, a perception
-      API, an adaptive scheduler, utility and behaviour-tree kernels, persistent orders that serialise into
-      <code>.ccsave</code>. Every one is <b>new simulation state</b> a networked build must sync. Those systems
-      should be built to the determinism-island contract <i>now</i> &mdash; ordered containers, single-precision,
-      one seeded RNG, no wall-clock, a deterministic threaded merge. Built clean they cost nothing; retrofitted later
-      they are pure determinism debt. And the AI overhaul's <a href="ai.html">M0</a> apparatus &mdash; the
-      decision-event channel, replay capture, the headless scenario runner, CI &mdash; is most of the multiplayer
-      sync harness already (M0 here): <b>build the observability and per-tick-checksum harness once</b>, and both
-      flagships share it.</p>
+      <p>The <a href="ai.html">AI overhaul</a> is cortex-modern's first committed build, and it adds a small set of
+      new C++ systems &mdash; a decision-event channel, a lightweight danger query, an AI emergency-interrupt, and
+      a persistent order object that serialises into <code>.ccsave</code>. Each is <b>new simulation-adjacent
+      state</b> a networked build must sync. They should be built to the determinism-island contract <i>now</i>
+      &mdash; ordered containers, single-precision, one seeded RNG, no wall-clock. Built clean they cost nothing;
+      retrofitted later they are pure determinism debt. And the AI overhaul's <a href="ai.html">M0</a> apparatus
+      &mdash; the decision-event channel, replay capture, the headless scenario runner, CI &mdash; is most of the
+      multiplayer sync harness already (M0 here): <b>build the observability and per-tick-checksum harness once</b>,
+      and both flagships share it.</p>
     </div>
 
     <!-- ============ 6 · THE MOD SURFACE ============ -->
@@ -636,7 +666,13 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M0</span><span class="ms-name">Observability, the determinism harness &amp; the stopgap</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make sync measurable before any of it is built &mdash; and give players working co-op this week.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The per-tick state checksum (a BLAKE3 hash of the determinism-island state, terrain first); the first-divergence report with a per-subsystem hash breakdown; the headless scenario runner; the network simulator (latency / loss / jitter injection); the deterministic replay log; CI wiring. <b>And the stopgap:</b> Steam Remote Play Together opt-in &mdash; one Steamworks call, no dependencies, ships immediately and is honestly labelled game-streaming.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The per-tick <b>state checksum</b> &mdash; a BLAKE3 hash of the determinism-island state, terrain first.</li>
+          <li>The <b>first-divergence report</b> with a per-subsystem hash breakdown.</li>
+          <li>The <b>headless scenario runner</b> and the <b>network simulator</b> (latency / loss / jitter injection).</li>
+          <li>The <b>deterministic replay log</b>, and CI wiring.</li>
+          <li><b>The stopgap:</b> Steam Remote Play Together opt-in &mdash; one Steamworks call, no dependencies, ships immediately, honestly labelled game-streaming.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/Network/ (checksum, replay, sim) &middot; Source/System/Hash.h &middot; Source/Main.cpp &middot; Steamworks init &middot; CI config</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">Nothing &mdash; this is the foundation and the starting point. Shares the harness with the <a href="ai.html">AI overhaul</a>'s M0.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the harness runs a scenario headless and emits a per-tick checksum baseline; the network simulator injects latency and loss on demand; a deliberately non-deterministic change turns the divergence report red; Remote Play co-op works in the shipped build.</span></div>
@@ -645,7 +681,12 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M1</span><span class="ms-name">The server spine</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">A headless authoritative server that runs the simulation with no window, and a client that can connect to it.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The <code>-server</code> launch mode and a headless variant of <code>RunGameLoop</code> (&sect;5.1); manager init severed from <code>WindowMan</code> / <code>FrameMan</code> / <code>GLResourceMan</code>; the transport layer (GameNetworkingSockets or ENet behind an adapter), replacing RakNet; the session layer &mdash; connect, lobby, the mandatory mod-hash handshake (&sect;6).</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The <code>-server</code> launch mode and a headless variant of <code>RunGameLoop</code> (&sect;5.1).</li>
+          <li>Manager init severed from <code>WindowMan</code> / <code>FrameMan</code> / <code>GLResourceMan</code>.</li>
+          <li>The transport layer &mdash; GameNetworkingSockets or ENet behind an adapter, replacing RakNet.</li>
+          <li>The session layer &mdash; connect, lobby, and the mandatory mod-hash handshake (&sect;6).</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Main.cpp &middot; Source/Managers/WindowMan, FrameMan, GLResourceMan &middot; Source/Managers/NetworkServer.*, NetworkClient.* &middot; Source/System/NetworkMessages.h &middot; external/sources/RakNet (removed)</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> <code>cortex-server</code> boots a scene and ticks the sim headless at a stable rate; a client connects, completes the mod-hash handshake, and a mismatched mod set is refused with a clear message; the network simulator can degrade the connection.</span></div>
@@ -654,7 +695,11 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M2</span><span class="ms-name">Terrain replication &mdash; the determinism island, seeded</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Destructible terrain stays bit-identical across the network as semantic commands.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The semantic terrain command set (carve / dislodge / settle / scene-change) on the reliable-ordered channel, replacing the bitmap-delta <code>MsgTerrainChange</code>; the terrain-edit math made deterministic in fixed-point (<code>SceneMan</code> penetration / dislodge, <code>SLTerrain</code> carve); the per-tick terrain checksum.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The semantic <b>terrain command set</b> (carve / dislodge / settle / scene-change) on the reliable-ordered channel, replacing the bitmap-delta <code>MsgTerrainChange</code>.</li>
+          <li>The terrain-edit math made <b>deterministic in fixed-point</b> &mdash; <code>SceneMan</code> penetration / dislodge, <code>SLTerrain</code> carve.</li>
+          <li>The per-tick <b>terrain checksum</b>.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/SceneMan.cpp &middot; Source/Entities/SLTerrain.cpp &middot; Source/System/NetworkMessages.h &middot; Source/System/Hash.h</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0, M1.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> two headless clients run a terrain-heavy scenario (sustained digging and explosions) and the terrain checksum matches tick-for-tick across both for the whole run; terrain bandwidth stays bounded &mdash; commands, not pixels &mdash; under injected latency and loss.</span></div>
@@ -663,7 +708,12 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M3</span><span class="ms-name">Entity replication &amp; client prediction</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Actors, projectiles and debris sync; the local player feels responsive; a co-op mission is playable end to end.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The entity snapshot stream &mdash; prioritized, interest-managed, delta-encoded, quantized &mdash; on the unreliable channel; snapshot interpolation for remote entities; client-side prediction and reconciliation for the player's own actor; the Truth / Prediction / Presentation authority split (&sect;4.1); server-side enemy AI.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The <b>entity snapshot stream</b> &mdash; prioritized, interest-managed, delta-encoded, quantized &mdash; on the unreliable channel.</li>
+          <li><b>Snapshot interpolation</b> for remote entities.</li>
+          <li><b>Client-side prediction and reconciliation</b> for the player's own actor.</li>
+          <li>The Truth / Prediction / Presentation authority split (&sect;4.1); server-side enemy AI.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/MovableMan.* &middot; Source/Entities/MovableObject.* + MO subclasses (snapshot serialise/apply) &middot; Source/System/Controller.h &middot; new Source/Network/ replication code</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M2.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> two players complete a co-op campaign mission across the network at 50&ndash;200&nbsp;ms simulated latency; the prediction-correction rate stays below the UX-jarring threshold; entity bandwidth stays within budget under peak particle load.</span></div>
@@ -672,7 +722,13 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M4</span><span class="ms-name">Co-op shipped</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Co-op that works over the real internet, for real groups &mdash; the first true multiplayer release.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">NAT traversal / relay; the built-in host UX (host-from-menu, a server browser / lobby &mdash; no IP entry, no VPN); packet-loss and jitter resilience; interest management tuned for the player-count target; reconnection; the co-op campaign integration; the mid-mission co-op save. Where player count needs it, this draws on roadmap <code>T3-01</code> (multithread the travel loop).</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li><b>NAT traversal / relay.</b></li>
+          <li>The built-in <b>host UX</b> &mdash; host-from-menu, a server browser / lobby; no IP entry, no VPN.</li>
+          <li>Packet-loss and jitter resilience; interest management tuned for the player-count target; reconnection.</li>
+          <li>The <b>co-op campaign integration</b> and the mid-mission co-op save.</li>
+          <li>Where player count needs it, draw on roadmap <code>T3-01</code> (multithread the travel loop).</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Activities/ (state-replication activity, meson.build re-enable) &middot; Source/Menus/ (host/join/lobby UI) &middot; Source/Managers/SettingsMan &middot; the .ccsave path</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M3.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> friends in different cities complete a co-op campaign mission through NAT with no manual networking setup; the match survives a soak run with injected packet loss and jitter and no permanent divergence; the player-count target is met. <b>This is the co-op ship.</b></span></div>
@@ -681,7 +737,12 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M5</span><span class="ms-name">The whole-tick determinism island</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Grow the determinism island from terrain-only to the entire gameplay tick &mdash; the prerequisite for rollback PvP, and a win in its own right.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The remaining determinism-retrofit rows of &sect;5.4 &mdash; ordered iteration, fixed RNG call-order, wall-clock removal, fixed-point or canonicalized floats across the sim, deterministic Lua <code>pairs()</code> for the whole mod corpus, and a deterministic threaded merge for the <code>ThreadMan</code> pools. The <b>WASM determinism harness</b>: compiling the sim to WebAssembly retires cross-platform float divergence outright (the upstream <code>box2d-emscripten</code> branch already proves CC runs in WASM &mdash; see <a href="branches.html">Upstream Branches</a>). Ships deterministic match replay and a leaner co-op netcode as it lands.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The remaining <b>determinism-retrofit</b> rows of &sect;5.4 &mdash; ordered iteration, fixed RNG call-order, wall-clock removal, fixed-point or canonicalized floats across the sim.</li>
+          <li><b>Deterministic Lua <code>pairs()</code></b> for the whole mod corpus, and a deterministic threaded merge for the <code>ThreadMan</code> pools.</li>
+          <li>The <b>WASM determinism harness</b> &mdash; compiling the sim to WebAssembly retires cross-platform float divergence outright (the <code>box2d-emscripten</code> branch already proves CC runs in WASM &mdash; see <a href="branches.html">Upstream Branches</a>).</li>
+          <li>Ship deterministic match replay and a leaner co-op netcode as it lands.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/MovableMan.* &middot; Source/System/RTETools.* (RNG) &middot; Source/Lua/ + external/sources/LuaJIT-2.1 (deterministic pairs) &middot; Source/Managers/ThreadMan.* &middot; Source/Entities/Atom*, AtomGroup &middot; WASM build target</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M4.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> a whole-tick checksum reproduces bit-identically across two machines and across Windows / Linux / macOS for a long scenario; a recorded match replays to the same final checksum 100 times out of 100; the mod corpus still loads and stays in sync.</span></div>
@@ -690,7 +751,12 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M6</span><span class="ms-name">Rollback netcode &amp; PvP</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Competitive player-versus-player on the now-deterministic core.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">GGPO-style rollback &mdash; predict absent remote input, rewind and re-simulate on a mismatch &mdash; built on incremental snapshot/restore (snapshot only what changed; CC's whole-world <code>.ccsave</code> is too slow per frame); CS-style lag compensation for projectile hits; server-side anti-cheat input validation against the per-tick checksum; per-mode netcode on one authoritative core (lockstep LAN, prediction online co-op, rollback PvP); the PvP arena activity.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li><b>GGPO-style rollback</b> &mdash; predict absent remote input, rewind and re-simulate on a mismatch &mdash; built on incremental snapshot/restore (snapshot only what changed; CC's whole-world <code>.ccsave</code> is too slow per frame).</li>
+          <li><b>CS-style lag compensation</b> for projectile hits.</li>
+          <li>Server-side <b>anti-cheat</b> input validation against the per-tick checksum.</li>
+          <li>Per-mode netcode on one authoritative core &mdash; lockstep LAN, prediction online co-op, rollback PvP; the PvP arena activity.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/Network/ (rollback, lag compensation) &middot; Source/Activities/ (PvP arena) &middot; Source/Managers/MovableMan.* (incremental snapshot/restore) &middot; the per-mode transport adapter</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M5.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> a PvP arena match runs at the player-count target with sub-perceptual input latency; rollback recovers cleanly from injected input delay and loss; the anti-cheat rejects impossible inputs; the trust suite and soak tests are green. <b>This is the PvP ship.</b></span></div>
@@ -808,7 +874,7 @@ prediction    --duration 60s                                    # assert the mis
       the cortex-command research vault (the network-terrain-replication audit, the comparable-game audits, Corefall
       DR-005 / DR-052 / DR-034 and the determinism-island contract), and a survey of how comparable games shipped
       multiplayer &mdash; Teardown (Voxagon, 2026-03), Terraria, Noita, Factorio &mdash; plus the netcode references
-      (Gaffer on Games, SnapNet, GameNetworkingSockets). &middot; updated 2026-05-16 &middot; recorded as
+      (Gaffer on Games, SnapNet, GameNetworkingSockets). &middot; updated 2026-05-17 &middot; recorded as
       <a href="decisions.html">ADR-015</a>; coordinates with <a href="ai.html">ADR-014</a>.
     </div>
   </main>

@@ -9,6 +9,100 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
 <title>Campaign — Cortex-Modern Modernization Wiki</title>
 <link rel="stylesheet" href="assets/style.css">
+<style>
+  /* page-local: Campaign page */
+  .toc { display:flex; flex-wrap:wrap; gap:6px 16px; margin:6px 0 0;
+    font-family:var(--mono); font-size:12px; }
+  .toc a { color:var(--text-dim); white-space:nowrap; }
+  .toc a:hover { color:var(--accent-soft); text-decoration:none; }
+  .toc a::before { content:"// "; color:var(--accent-dim); }
+
+  /* phase / loop / arc pipeline */
+  .pipeline { margin:18px 0; counter-reset:plstep; }
+  .pl-step { position:relative; background:var(--bg-elev); border:1px solid var(--border);
+    border-left:2px solid var(--accent-dim); border-radius:7px;
+    padding:10px 16px 10px 48px; margin:0 0 7px; }
+  .pl-step::before { counter-increment:plstep; content:counter(plstep);
+    position:absolute; left:12px; top:11px; width:23px; height:23px; border-radius:50%;
+    background:var(--bg-inset); border:1px solid var(--accent-dim);
+    color:var(--accent); font-family:var(--mono); font-size:11px; font-weight:600;
+    display:flex; align-items:center; justify-content:center; }
+  .pl-step .pl-loc { font-family:var(--display); font-size:13.5px; color:var(--text-bright); font-weight:600; }
+  .pl-step .pl-side { font-family:var(--mono); font-size:9px; text-transform:uppercase;
+    letter-spacing:1.2px; float:right; padding:1px 6px; border-radius:3px; }
+  .pl-gui  { color:var(--red);   border:1px solid rgba(241,90,78,.36); }
+  .pl-man  { color:var(--blue);  border:1px solid rgba(90,167,255,.36); }
+  .pl-hub  { color:var(--accent);border:1px solid var(--accent-dim); }
+  .pl-msn  { color:var(--green); border:1px solid rgba(69,196,104,.36); }
+  .pl-ship { color:var(--green); border:1px solid rgba(69,196,104,.36); }
+  .pl-new  { color:var(--purple);border:1px solid rgba(189,141,255,.36); }
+  .pl-step .pl-what { font-size:12.7px; color:var(--text-dim); margin-top:2px; }
+
+  /* layered architecture stack */
+  .stack { margin:18px 0; }
+  .layer { display:flex; align-items:stretch; margin-bottom:5px;
+    border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg-elev); }
+  .layer .lyr-id { flex:0 0 64px; display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-weight:700; font-size:13.5px;
+    background:var(--bg-elev2); color:var(--accent); border-right:1px solid var(--border); }
+  .layer .lyr-main { flex:1; padding:11px 16px; min-width:0; }
+  .layer .lyr-name { font-family:var(--display); font-weight:600; color:var(--text-bright); font-size:14px; }
+  .layer .lyr-desc { font-size:12.5px; color:var(--text-dim); margin-top:3px; }
+  .layer .lyr-fix { font-size:12px; color:var(--text); margin-top:5px; }
+  .layer .lyr-fix b { color:var(--green); font-weight:600; }
+  .layer.cross { border-style:dashed; }
+  .layer.cross .lyr-id { color:var(--purple); }
+  .layer.strat .lyr-id { color:var(--blue); }
+
+  /* fit rating dots */
+  .rate { font-family:var(--mono); white-space:nowrap; letter-spacing:1.5px; font-size:12px; }
+  .rate .on { color:var(--accent); }
+  .rate .off { color:var(--border-bright); }
+  .rank { font-family:var(--mono); font-weight:700; font-size:12.5px; color:var(--accent); }
+
+  /* option blocks */
+  .opt { border:1px solid var(--border); border-left:3px solid var(--accent-dim);
+    border-radius:9px; padding:15px 20px 16px; margin:14px 0; background:var(--bg-elev); }
+  .opt.rec { border-left-color:var(--accent); box-shadow:0 0 26px rgba(233,162,59,.06); }
+  .opt-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; margin-bottom:3px; }
+  .opt-rank { font-family:var(--mono); font-weight:700; font-size:12.5px; color:#14100a;
+    background:var(--accent); padding:2px 9px; border-radius:4px; }
+  .opt-name { font-family:var(--display); font-weight:600; font-size:16px; color:var(--text-bright); }
+  .opt-pitch { color:var(--accent-soft); font-style:italic; margin:5px 0 9px; font-size:13.5px; }
+  .opt-play { margin:8px 0; font-size:13px; }
+  .opt-meta { font-family:var(--mono); font-size:11px; color:var(--text-dim); margin:9px 0 0;
+    border-top:1px solid var(--border); padding-top:8px; }
+  .opt-meta b { color:var(--text); }
+
+  /* pros / cons table */
+  .pc { table-layout:fixed; }
+  .pc th.pro { color:var(--green); }
+  .pc th.con { color:var(--red); }
+  .pc td { width:50%; vertical-align:top; }
+  .pc ul { margin:0; padding-left:17px; }
+  .pc li { margin:4px 0; font-size:12.6px; line-height:1.5; }
+  .pc tr:hover td { background:none; box-shadow:none; }
+
+  /* milestone plan */
+  .plan { margin:20px 0; }
+  .ms { position:relative; background:var(--bg-elev); border:1px solid var(--border);
+    border-left:3px solid var(--accent); border-radius:9px; padding:15px 18px; margin:0 0 13px; }
+  .ms-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:11px; margin-bottom:9px; }
+  .ms-id { font-family:var(--mono); font-weight:700; font-size:12.5px; color:#14100a;
+    background:var(--accent); padding:2px 9px; border-radius:4px; }
+  .ms-name { font-family:var(--display); font-weight:600; font-size:15.5px; color:var(--text-bright); }
+  .ms-field { display:flex; gap:12px; margin:6px 0; font-size:12.8px; line-height:1.6; }
+  .ms-key { flex:0 0 92px; font-family:var(--mono); font-size:9.5px; text-transform:uppercase;
+    letter-spacing:1.2px; color:var(--accent); padding-top:3px; }
+  .ms-val { flex:1; color:var(--text); min-width:0; }
+  .ms-val.gate b { color:var(--green); font-weight:600; }
+  .ms-val.touch { font-family:var(--mono); font-size:11.5px; color:var(--text-dim); }
+  .ms-steps { flex:1; min-width:0; margin:1px 0 0; padding-left:18px; color:var(--text); }
+  .ms-steps li { margin:3px 0; }
+
+  /* lore faction table accents */
+  .lore-q { font-style:italic; color:var(--text-dim); }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -48,135 +142,1012 @@
     <header class="page-header">
       <div class="crumb">Flagship</div>
       <h1>The Campaign</h1>
-      <p class="page-lead">Cortex Command's built-in strategic campaign &mdash; "Conquest" / the Metagame &mdash; is
-      officially abandoned. This page is the case for making a real campaign <b>cortex-modern's flagship feature</b>:
-      the one big, identity-defining thing the fork exists to build.</p>
+      <p class="page-lead">Cortex Command has one campaign &mdash; <b>Conquest</b>, the Metagame &mdash; and it is
+      officially abandoned. This page is the <b>committed plan</b> for cortex-modern's third flagship: what Conquest
+      becomes &mdash; <b>The Frontier</b>. How Conquest works from a direct read of the source; why it fails; what
+      <b>Void Wanderers</b> proves; the game's <b>unfinished story</b> &mdash; a dev-canonical narrative left
+      half-built &mdash; and why it is the campaign's real differentiator; the <b>six combined campaign visions</b>
+      that were weighed, ranked with pros-and-cons tables; the architecture of the chosen design; how it rides the
+      <a href="ai.html">AI</a> and <a href="multiplayer.html">Multiplayer</a> flagships; the milestones; and how it
+      is validated. The decision is recorded as <a href="decisions.html">ADR-012</a>.</p>
     </header>
 
-    <div class="callout callout-warn">
-      <div class="callout-title">The situation &mdash; upstream said it themselves</div>
-      <p>Open Conquest mode in the shipping game and a notice appears (the text is hard-coded in
-      <code>Source/Menus/MainMenuGUI.cpp</code>, function <code>ShowMetaGameNoticeScreen()</code>):</p>
-      <p style="border-left:2px solid var(--accent-dim);padding-left:14px;color:var(--text);font-style:italic">
-      &ldquo;Please note that Conquest mode is <b>very INCOMPLETE and flawed</b>, and the Cortex Command Community
-      Project team <b>will be remaking it from the ground-up in future</b>. For now though, it's fully playable&hellip;
-      Alternatively, <b>check out Void Wanderers</b> on cccp.mod.io!&rdquo;</p>
-      <p>So the official campaign is, by the team's own admission in the shipping game, unfinished &mdash; and it
-      redirects players to a community mod.</p>
+    <div class="callout callout-key">
+      <div class="callout-title">The headline</div>
+      <p>Open Conquest in the shipping game and a notice appears &mdash; hard-coded in
+      <code>Source/Menus/MainMenuGUI.cpp</code>, <code>ShowMetaGameNoticeScreen()</code>:
+      <i>&ldquo;Conquest mode is <b>very INCOMPLETE and flawed</b>, and the Cortex Command Community Project team
+      <b>will be remaking it from the ground-up</b> in future&hellip; Alternatively, <b>check out Void
+      Wanderers</b>.&rdquo;</i> The campaign is, by the team's own admission in the shipping game, unfinished &mdash;
+      and it redirects players to a community mod. The promised rework has <b>zero code behind it</b>.</p>
+      <p>The campaign is the <b>#2 community complaint, after AI</b>. With the <a href="ai.html">AI overhaul</a>
+      (<a href="decisions.html">ADR-014</a>) and <a href="multiplayer.html">Multiplayer</a>
+      (<a href="decisions.html">ADR-015</a>), it is now cortex-modern's <b>third committed flagship</b>, recorded as
+      <a href="decisions.html">ADR-012</a> &mdash; <span class="status status-done">Accepted</span>. The chosen
+      design is <b>The Frontier</b>; this page is the committed plan.</p>
+      <div class="toc">
+        <a href="#how">1 How Conquest works</a>
+        <a href="#broken">2 What's broken</a>
+        <a href="#vw">3 Void Wanderers</a>
+        <a href="#lore">4 The unfinished story</a>
+        <a href="#options">5 Six visions, ranked</a>
+        <a href="#arch">6 The architecture</a>
+        <a href="#work">7 Engine &amp; mod work</a>
+        <a href="#integrate">8 AI &amp; Multiplayer</a>
+        <a href="#plan">9 The plan</a>
+        <a href="#validation">10 Validation</a>
+        <a href="#avoid">11 What not to do</a>
+      </div>
     </div>
 
-    <h2><span class="h-accent">What the code shows</span></h2>
-    <div class="card">
-      <p>A direct check of the source and git history (2026-05-16):</p>
+    <!-- ============ 1 · HOW CONQUEST WORKS ============ -->
+    <h2 id="how">1 &nbsp;&middot;&nbsp; <span class="h-accent">How the campaign works today</span></h2>
+    <p><b>The campaign is Conquest.</b> Cortex Command ships one campaign &mdash; the <b>Metagame</b>, branded
+    in-game as Conquest &mdash; and everything on this page is about that one thing and what it should become.
+    Everything below is from a direct read of the campaign source on our branch:
+    <code>Source/Managers/MetaMan.cpp</code>, <code>Source/Menus/MetagameGUI.cpp</code>,
+    <code>Source/Entities/MetaPlayer.*</code> / <code>MetaSave.*</code>, and the Lua battle script
+    <code>Data/Base.rte/Activities/MetaFight.lua</code>.</p>
+
+    <h3>1.1 &nbsp; What Conquest is</h3>
+    <p>Conquest is a turn-based, <i>Risk</i>-style map-painting game wrapped around real-time Cortex Command
+    battles. 1&ndash;4 players (human or AI) on up to four teams contest a planet of <b>sites</b> &mdash; each site
+    is a <code>Scene</code> flagged <code>MetagamePlayable&nbsp;=&nbsp;1</code>. You own sites, collect their
+    income, and spend gold to attack, explore or defend. Last team with a brain pool wins. That is the whole of it.</p>
+    <p>There <i>are</i> a handful of hand-scripted missions &mdash; the Doainar exploration run, Signal Hunt,
+    Maginot Defence, Decision Day, Dummy Assault in <code>Data/Missions.rte/</code>, plus the Browncoats' bundled
+    Refinery Assault &mdash; but they are <b>standalone Scenario-menu entries</b>, not chained into anything (see
+    &sect;4). The tutorial (<code>GATutorial</code>) is a hard-coded C++ activity (upstream issue
+    <a href="issues.html">#188</a> asks for it to become a Lua <code>GAScripted</code> mode). Nothing sequences any
+    of it; the field <code>Activity::m_InCampaignStage</code> exists, is saved, is bound to Lua &mdash; and is read
+    by <i>nothing</i> to drive a campaign. It is a hook that was never wired.</p>
+
+    <h3>1.2 &nbsp; One round of Conquest</h3>
+    <p>The metagame is a state machine in <code>MetaMan::Update</code> &mdash; <code>GAMEINTRO &rarr; NEWROUND
+    &rarr; REVEALSCENES &rarr; COUNTINCOME &rarr; PLAYER<i>n</i>TURN &rarr; BUILDBASES &rarr; RUNACTIVITIES &rarr;
+    ENDROUND</code>, looping until <code>GAMEOVER</code>. Each phase hands off to the GUI. The side tag shows
+    <i>where the logic lives</i> &mdash; and that is the story of the next section:</p>
+    <div class="pipeline">
+      <div class="pl-step"><span class="pl-side pl-man">MetaMan</span>
+        <span class="pl-loc">Reveal sites</span>
+        <div class="pl-what">A few more sites on the planet are uncovered each round (<code>m_RevealRate</code>
+        &asymp; 0.3/round).</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-gui">MetagameGUI</span>
+        <span class="pl-loc">Count income</span>
+        <div class="pl-what">Each owned site pays <code>Scene::GetRoundIncome()</code>; a flat station rent is
+        deducted. If a player would go below zero, a brain is <b>auto-liquidated</b> for gold.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-gui">MetagameGUI</span>
+        <span class="pl-loc">Player turn</span>
+        <div class="pl-what">A human allocates a defensive gold budget per owned site with a slider, and may pick
+        <b>one</b> site to attack or explore. The AI turn is a single pass of <code>MetaMan::AIPlayerTurn</code>.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-gui">MetagameGUI</span>
+        <span class="pl-loc">Build bases</span>
+        <div class="pl-what">Defensive budgets are animated being spent; <code>Scene::ApplyBuildBudget</code> stamps
+        bunker pieces into each site's blueprint.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-gui">MetagameGUI</span>
+        <span class="pl-loc">Run the battles</span>
+        <div class="pl-what">Each attacked site becomes a <code>GAScripted</code> "MetaFight". If a human is present
+        it loads as a normal real-time match; otherwise <code>AutoResolveOffensive</code> decides it by a weighted
+        dice roll.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-man">MetaMan</span>
+        <span class="pl-loc">End round</span>
+        <div class="pl-what"><code>IsGameOver()</code> checks brain pools; otherwise the loop repeats. The whole
+        metagame &mdash; <i>including the GUI object</i> &mdash; is auto-saved after every battle.</div>
+      </div>
+    </div>
+
+    <h3>1.3 &nbsp; The battle &mdash; <code>MetaFight.lua</code></h3>
+    <p>Every Conquest battle you actually play is one <code>GAScripted</code> activity:
+    <code>Data/Base.rte/Activities/MetaFight.lua</code>, ~1,900 lines. It sets up invaders and defenders, runs the
+    standard unit AI for non-human teams, handles reinforcement deliveries and brain evacuation. Its objective is
+    always the same: <b>destroy the enemy brain(s)</b>. Terrain damage to the site persists to disk between rounds
+    &mdash; the one genuinely persistent thing in the whole mode.</p>
+
+    <h3>1.4 &nbsp; What works</h3>
+    <p>To be fair to it: Conquest <b>runs</b>, and the notice's word "playable" is honest. The round FSM is sound;
+    sites and their terrain damage round-trip to disk; <code>MetaFight.lua</code> is a genuinely capable,
+    save-aware battle script; hotseat for up to four works. The <i>skeleton</i> of a strategic layer is real
+    &mdash; which matters, because it means Conquest is something to <i>build on or evolve</i>, not only something
+    to throw away. What is missing is everything that would make it a campaign worth being a flagship.</p>
+
+    <!-- ============ 2 · WHAT'S BROKEN ============ -->
+    <h2 id="broken">2 &nbsp;&middot;&nbsp; <span class="h-accent">What's broken &mdash; and why</span></h2>
+    <p>The diagnosis. Each row is a player-visible (or developer-visible) failure and its root in the code. These
+    are the problems <i>any</i> chosen direction in &sect;5 has to answer.</p>
+    <table class="tbl">
+      <thead><tr><th>Weakness</th><th>What the player gets</th><th>Root cause</th></tr></thead>
+      <tbody>
+        <tr><td><b>No fiction</b></td><td>An abstract map. No story, no characters, no reason this war is fought &mdash; nothing to be invested in.</td><td>Conquest is a <i>Risk</i> variant; <code>MetaFight</code>'s only objective is "kill the brain". No narrative layer exists anywhere in the mode &mdash; even though the game has a whole unfinished story (&sect;4).</td></tr>
+        <tr><td><b>No persistence</b></td><td>Soldiers are disposable counters. Nothing you build survives a battle; there is nothing that grows and becomes <i>yours</i>.</td><td><code>MetaPlayer</code> stores only funds and an integer brain-pool count. Winning units are retrieved for the instant, then discarded &mdash; no veterans, XP, unlocks or tech.</td></tr>
+        <tr><td><b>Coin-flip combat</b></td><td>Battles you don't personally fight &mdash; including every AI-vs-AI war &mdash; are decided by a dice roll. Strategy collapses to "bring more gold".</td><td><code>AutoResolveOffensive</code> is a funds-weighted <code>RandomNum()</code>, with a flat 5% chance everyone simply dies.</td></tr>
+        <tr><td><b>Hollow strategy AI</b></td><td>AI rivals don't scheme. They spread gold across their sites and pick a target half at random.</td><td><code>MetaMan::AIPlayerTurn</code> is one greedy heuristic pass &mdash; no lookahead, no memory of prior rounds, no multi-front plan.</td></tr>
+        <tr><td><b>No content format</b></td><td>Every campaign is the same handful of random scenes. There is no way to author a mission, a chain, or a story beat.</td><td>There is no campaign or mission definition format. "Campaign content" <i>is</i> any <code>Scene</code> with <code>MetagamePlayable&nbsp;=&nbsp;1</code> &mdash; nothing more.</td></tr>
+        <tr><td><b>Repetition</b></td><td>Every battle is the same "destroy the brain" fight on a randomly-picked map.</td><td>One battle activity, <code>MetaFight.lua</code>; no objective variety, no escort / sabotage / rescue / timed goals, no per-faction flavour.</td></tr>
+        <tr><td><b>Tedious UX</b></td><td>Slow glowing-line animations crawl a planet between every phase; the new-game screen is a wall of sliders with no presets or scenarios.</td><td><code>MetagameGUI</code> drives 16 <code>LineAnimMode</code> animation states; setup is raw sliders for size / difficulty / gold / "length".</td></tr>
+        <tr><td><b>The model is welded to the GUI</b></td><td>(Developer-facing.) The campaign cannot be evolved, extended or tested.</td><td>The rules &mdash; <code>SetupOffensives</code>, <code>AutoResolveOffensive</code>, income, finalisation &mdash; live <i>inside</i> a ~6,000-line <code>MetagameGUI</code>. The save format literally serializes that GUI object.</td></tr>
+        <tr><td><b>Battles only as good as the AI</b></td><td>Commanding a campaign squad feels like babysitting, not commanding.</td><td>Every battle runs the engine's stock unit AI &mdash; the <b>#1 community complaint</b>. A campaign on bad AI cannot feel good. (This is why AI is the first flagship.)</td></tr>
+      </tbody>
+    </table>
+    <div class="callout callout-warn">
+      <div class="callout-title">The code's own confession</div>
       <ul>
-        <li>The Metagame <b>is present and compiled</b> &mdash; <code>MetaMan</code>, <code>MetaSave</code>,
-        <code>MetaPlayer</code>, <code>MetagameGUI</code>, plus <code>Data/Base.rte/Activities/MetaFight.lua</code>
-        (~68&nbsp;KB). Conquest runs; it is "fully playable" as the notice says.</li>
-        <li>But its git history since 2024 is <b>maintenance-only</b> &mdash; cppcheck lints, compiler-warning
-        cleanups, incidental timer/save touches. <b>No feature work. No rework branch.</b> None of the upstream
-        WIP branches touch it, and <code>development</code> has been frozen since 2026-04-06.</li>
-        <li>The promised "remaking it from the ground-up" has <b>zero code behind it</b> &mdash; it is an aspiration
-        in a UI string, nothing more. Realistically: it is not going to happen upstream.</li>
-        <li>The v6.0 engine overhaul quietly added campaign building blocks &mdash; <b>capture points, buy doors,
-        dropship docks, item dispensers, AI tactics</b> &mdash; described by the team as "fully available to modders
-        and will be used heavily in our next release." That release never shipped. <b>The primitives exist; nothing
-        assembles them.</b></li>
-        <li>Minor tell: the same notice offers Conquest "with the A.I. and/or up to three friends" &mdash; a stale
-        reference, since multiplayer has since been removed (see <a href="decisions.html">ADR-011</a>).</li>
+        <li>The in-game notice itself &mdash; <i>"very INCOMPLETE and flawed&hellip; remaking it from the
+        ground-up"</i> &mdash; hard-coded in <code>MainMenuGUI.cpp</code>. Upstream said it; the git history since
+        2024 is maintenance-only; there is <b>no rework branch</b>.</li>
+        <li><code>Activity::m_InCampaignStage</code> &mdash; a field set in INIs, serialized, and bound to Lua, that
+        <b>nothing reads</b> to sequence a campaign. A campaign hook that was never wired up.</li>
+        <li>The original "own every site" win condition is <b>commented out</b> in <code>MetaMan.cpp</code> &mdash;
+        so a game can drag on with no decisive end.</li>
+        <li><code>MetaMan::Update</code> ends in <code>RTEAbort("Metagame State is out of bounds!?")</code>.</li>
+        <li>The notice still offers Conquest <i>"with the A.I. and/or up to three friends"</i> &mdash; a stale line;
+        multiplayer was removed (<a href="decisions.html">ADR-011</a>).</li>
+      </ul>
+      <p>Conquest is not unsalvageable &mdash; the FSM and <code>MetaFight.lua</code> are real, working code. But
+      it cannot be left as it is. The decision is <i>how far</i> to take it &mdash; that is &sect;5.</p>
+    </div>
+
+    <!-- ============ 3 · VOID WANDERERS ============ -->
+    <h2 id="vw">3 &nbsp;&middot;&nbsp; <span class="h-accent">Void Wanderers</span> &mdash; the campaign that actually works</h2>
+    <p>The shipping game's own notice points players away from Conquest and toward
+    <a href="https://mod.io/g/cccp/m/void-wanderers-by-weegee">Void Wanderers</a>. It is worth understanding
+    <i>exactly</i> why &mdash; it is the existing, community-validated proof that a different campaign shape works
+    on this engine. Analysis below is from a direct read of the mod source in
+    <code>D:\Projects\cccp_mods\VoidWanderers.rte</code>.</p>
+
+    <h3>3.1 &nbsp; What it is</h3>
+    <p>Void Wanderers (by <b>weegee</b>, 2013; folded into the Community Project by <b>4zK</b>, 2020; still
+    actively maintained) is a <b>campaign total-conversion</b> &mdash; ~865&nbsp;KB of Lua across 49 scripts,
+    explicitly inspired by FTL, X-COM, Star Command and Firefly. It is the most-played piece of Cortex Command
+    content that is not the base game (tens of thousands of subscribers); a top community comment simply calls it
+    <i>"a better game than Cortex Command."</i> It <b>ignores the engine's Metagame entirely</b> and builds its own
+    persistent campaign on a single <code>GAScripted</code> activity, swapping scenes and scripts internally.</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>The premise &amp; loop</h3>
+        <p class="small">You are a <b>roving mercenary crew aboard a spaceship</b> &mdash; the "Wanderers" &mdash;
+        drifting a hostile galaxy (the "Void"). Three modes: <b>Vessel</b> (the ship hub &mdash; walk your commander
+        to console "actors" to navigate, manage crew, shop), <b>Mission</b> (deploy an away-team to a planet for a
+        real battle), and <b>Assault</b> (your ship is boarded). Fly the star map &rarr; hit a random encounter
+        &mdash; pirates, a derelict, raiders &rarr; run a contract &rarr; return, bank loot, upgrade &rarr; fly
+        again.</p>
+      </div>
+      <div class="card">
+        <h3>What makes it stick</h3>
+        <p class="small"><b>Persistent crew.</b> Soldiers are bodies in cryo-storage that carry across the <i>whole
+        campaign</i> with inventory, five rank tiers and a <b>Prestige</b> loop (reset for a compounding bonus, then
+        <i>name</i> your veteran). A leveling <b>RPG brain</b> with a skill tree. A <b>reputation</b> matrix &mdash;
+        every contract for one faction angers another; fall far enough and they hunt your ship. A
+        <b>counterattack</b> system, a black market, blueprints, ship upgrades. And it is the de-facto <b>content
+        aggregator</b> of the whole CC mod scene: any installed faction mod becomes campaign content automatically.</p>
+      </div>
+    </div>
+
+    <h3>3.2 &nbsp; Why it beats Conquest &mdash; and what it still lacks</h3>
+    <p>Void Wanderers converts Cortex Command from a tactical sandbox into a <b>persistent roguelite
+    mercenary-campaign RPG</b>. It beats Conquest on every axis the community cares about: a <b>fiction</b> that
+    gives every action a reason; <b>unit-level persistence</b> (the killer feature &mdash; you grow attached to a
+    named veteran); a <b>home base you can lose</b>; real <b>stakes</b> (reputation makes every job a choice);
+    genuine <b>mission variety</b>; and <b>replayability</b>.</p>
+    <div class="callout callout-info">
+      <div class="callout-title">It sets the bar &mdash; and shows the risk</div>
+      <p>Void Wanderers is also a twelve-year-old, heavily-scripted mod, and it shows: a fragile flat-file
+      <code>key=value</code> save with everything stringified; a <code>CF</code>-global metatable hack for
+      cross-script state; a custom bitmap font that spawns one object <i>per glyph</i>; clunky walk-to-a-console
+      UX; constant breakage against engine changes. And by its maintainers' own admission it has <b>no real story
+      and no endgame</b> &mdash; the changelog calls its difficulty curve a "temporary feature until I figure out
+      better endgame mechanics." <b>Void Wanderers proves a shape is possible. It is a reference, not a thing to
+      ship.</b> Mine it, keep it green in the <a href="ai.html">AI flagship</a>'s CI mod corpus &mdash; do not fork
+      it.</p>
+    </div>
+
+    <!-- ============ 4 · THE UNFINISHED STORY ============ -->
+    <h2 id="lore">4 &nbsp;&middot;&nbsp; <span class="h-accent">The unfinished story</span></h2>
+    <p>Conquest has no fiction &mdash; but Cortex Command <i>does</i>. Dan Tabar ("Data") and Arne Niklas Jansson
+    ("Android Arts") built a deep, deliberately half-finished sci-fi universe across 2004&ndash;2010. The planned
+    story mode was cut: after eleven-plus years of development the team shipped only skirmish and Conquest, and the
+    fluff doc's story scenarios were left marked <i>"Awaiting cleanup!"</i> Niklas, in his own words, the lore
+    <i>"got stuck halfway and never sprouted legs because I'm a lazy git."</i> <b>That unfinished story is the
+    campaign's single biggest asset</b> &mdash; and most of it is sitting in the game's own files.</p>
+
+    <h3>4.1 &nbsp; The setting</h3>
+    <p>A few centuries hence, a cybernetic humanity has met aliens and fallen into a <i>"gold rush of galactic
+    proportions."</i> You are the boss of a small gold-mining outfit, newly landed on the frontier planet the
+    game's own scene data names <b>FE-1</b> &mdash; brought down by a <b>TradeStar</b>, the orbital
+    marketplace-and-FTL hub the supercorporate <b>Free Trade</b> monopoly builds and the in-game economy revolves
+    around (<i>"Tradestar Midas"</i>). War is fought brain-first: a commander is a <b>brain in a jar</b>,
+    controlling cloned and robotic bodies through a universal neurotranslator &mdash; destroy the brain and the
+    faction falls. FE-1 itself is haunted: a near-extinction event left only a cocooning native <b>crab</b>; the
+    hexagonal catacombs beneath belong to the <b>Priorus</b>, precursor "giant wasps" who colonised the region
+    ~8,000 years ago and vanished; and the system's star is, on a geological clock, doomed to swell. First contact
+    &mdash; with the nature-worshipping alien <b>S'vaari</b> &mdash; is canon, fully fleshed out in the metagame
+    scene text. The campaign does not invent a universe. It finishes one.</p>
+
+    <h3>4.2 &nbsp; The factions &mdash; in the game's own words</h3>
+    <p>Every faction already ships with an in-game description. These are verbatim from each faction's
+    <code>Index.ini</code>:</p>
+    <table class="tbl">
+      <thead><tr><th>Faction</th><th>The game's own blurb</th><th class="nowrap">Campaign role</th></tr></thead>
+      <tbody>
+        <tr><td><b>Coalition</b></td><td class="lore-q">"A militarized organization&hellip; versatile and powerful, making them a strong ally or a dangerous foe."</td><td class="small">The default power; the "face" faction.</td></tr>
+        <tr><td><b>Ronin</b></td><td class="lore-q">"Rag-tag parties of bandits who prey on weak and unsuspecting explorers&hellip; weapons prehistoric, but they manage to get the job done."</td><td class="small">The human-scale faction; "Space Vikings"; swells when systems die.</td></tr>
+        <tr><td><b>Imperatus</b></td><td class="lore-q">"&hellip;rely on pure brute force and the reliability of their sturdy&hellip; armored units."</td><td class="small">A resource-extraction conglomerate; a heavy rival.</td></tr>
+        <tr><td><b>Techion</b></td><td class="lore-q">"&hellip;elite corporations focusing on high-tech research&hellip; trusted by the TradeStars to do guard and escort duty."</td><td class="small">The elite, expensive faction; a TradeStar contractor.</td></tr>
+        <tr><td><b>Browncoats</b></td><td class="lore-q">"A strong mercenary group who are fearsome when confronted up-close&hellip;"</td><td class="small">A mercenary power; their "Baron" leads a shipped story mission.</td></tr>
+        <tr><td><b>Dummies</b></td><td class="lore-q">"&hellip;test subjects for various lethal experiments, until an AI controller became sentient and broke off from its manufacturers&hellip;"</td><td class="small">The sentient-machine faction &mdash; the canon Orange-CPU arc is theirs.</td></tr>
+        <tr><td><b>Uzira</b></td><td class="lore-q">"&hellip;one of the early explorers and ruler of the undead, has awoken from her cryo-sleep&hellip; she commands an endless army of skeletons."</td><td class="small">A story faction &mdash; the player's late-campaign great ally.</td></tr>
+        <tr><td><b>Mu-Ilaak</b></td><td class="lore-q">"TBA"</td><td class="small">The campaign's final antagonist &mdash; shipped with a one-word description.</td></tr>
+      </tbody>
+    </table>
+    <p>That last row is the whole problem in one cell. <code>Uzira.rte</code> and <code>MuIlaak.rte</code>
+    <b>already exist in the game's data</b> &mdash; the scrapped story arc's two key factions are sitting in the
+    files, Uzira with a full description and a voice, the Mu-ilaak villain shipped with a description that reads,
+    in its entirety, <b>"TBA."</b> Behind it: <b>Free Trade</b> (the supercorporate economy), <b>Alchiral</b> (the
+    organic-body and cloning monopoly), and the wider OSA neighbours the fluff sketches &mdash; the Expatriate, the
+    Silicone Alliance, the unknowable Myskoplex.</p>
+
+    <h3>4.3 &nbsp; The story is half-built &mdash; in two halves</h3>
+    <p>Cortex Command already <b>ships story fragments</b>: five standalone missions &mdash; the Doainar
+    exploration (with an ancient bunker hiding cartesian coordinates to <i>somewhere</i>); <b>Signal Hunt</b>, an
+    Alchiral contract to track an unregistered cloning signal to a tampered Control Chip; the <b>Maginot Defence
+    &rarr; Decision Day</b> two-parter (lose a bunker, vow revenge, assault the enemy fortress &mdash; the missions
+    explicitly cross-reference each other); and Dummy Assault &mdash; plus the Browncoats' cinematic Refinery
+    Assault. They prove the engine carries authored, voiced, save-aware missions. <b>Nothing chains them.</b></p>
+    <p>And the dev's <b>scrapped arc</b>, from the fluff doc, was a clean six-beat story with "intros, midtros and
+    extros" &mdash; never written. The campaign's narrative spine is the obvious move: <b>chain the fragments that
+    shipped, and finish the arc that didn't.</b></p>
+
+    <h3>4.4 &nbsp; The anchor-mission spine</h3>
+    <p>Six chapters, synthesised from Cortex Command's shipped missions and the dev's scrapped fluff &mdash; the
+    campaign's authored backbone, with procedural contracts (&sect;6) filling the space between:</p>
+    <div class="pipeline">
+      <div class="pl-step"><span class="pl-side pl-new">New</span>
+        <span class="pl-loc">1 &middot; Prospect</span>
+        <div class="pl-what">Land on FE-1; the gold-rush brawl; stand up the outfit. The dev's own framing &mdash;
+        a small mining franchisee, not a warlord &mdash; mechanised as the opening.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-ship">Shipped</span>
+        <span class="pl-loc">2 &middot; The Signal</span>
+        <div class="pl-what">An Alchiral contract: hunt an unregistered cloning signal, recover a <i>tampered</i>
+        Control Chip. Built on the shipped <b>Signal Hunt</b> mission &mdash; the chip is the arc's MacGuffin.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-new">To finish</span>
+        <span class="pl-loc">3 &middot; The Bombies</span>
+        <div class="pl-what">Follow the chip to a hijacked Alchiral VAT facility; corrupted half-clones &mdash;
+        "Bombies" &mdash; pour from the tubes (Alchiral's honeypot). Finishes the dev's most-designed scrapped
+        scenario.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-new">To finish</span>
+        <span class="pl-loc">4 &middot; The Sentient Machine</span>
+        <div class="pl-what">An Orange Dummy training-CPU has woken, escaped a TradeStar behind a decoy, and is
+        loose. Finishes the scrapped Orange-Dummy arc &mdash; and it is the Dummy faction's own shipped origin.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-ship">Shipped</span>
+        <span class="pl-loc">5 &middot; The Dying System</span>
+        <div class="pl-what">Free Trade pulls a neighbouring system's TradeStars; desperate Ronin flood FE-1; a
+        bunker falls and is avenged. Built on the shipped <b>Maginot &rarr; Decision Day</b> two-parter.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-new">To finish</span>
+        <span class="pl-loc">6 &middot; The Common Enemy</span>
+        <div class="pl-what">Wake Uzira from her lunar cryo-temple; the Mu-ilaak rise; the factions are forced into
+        one alliance. The reveal: Free Trade wanted the Mu-ilaak gone because they self-replicate off-grid &mdash;
+        "bad for business" &mdash; and Uzira has quietly held Alchiral stock for centuries.</div>
+      </div>
+    </div>
+    <p class="small muted">The dev's scrapped beats are canon at the design-bible level; the chapter structure,
+    names and gating are this campaign's proposal &mdash; the canon supplies the story, the campaign supplies the
+    spine.</p>
+
+    <h3>4.5 &nbsp; Scale, blanks, and how lore is delivered</h3>
+    <div class="callout callout-info">
+      <p><b>The scale is small &mdash; deliberately.</b> The fluff doc is explicit that the player is <i>"acting
+      like something along the lines of the owner of a local restaurant chain"</i> &mdash; a franchise operator,
+      not a galactic warlord; the planet is <i>"a very minor brawl over scanty resources."</i> That is a binding
+      design constraint: the campaign is building a small outfit into a regional power. It is why a persistent
+      mercenary company fits and why galactic 4X does not (&sect;5).</p>
+      <p><b>Fill the blanks.</b> The dev left explicit "ToDo" questions &mdash; OSA culture, which species are
+      common, what backwater worlds look like. The campaign canonises them, extending Cortex Command's universe
+      rather than inventing a new one.</p>
+      <p><b>Lore is woven, never narrated.</b> No cutscene walls. Cortex Command's own voice &mdash; terse,
+      corporate, the player addressed as <i>"Contractor"</i> or <i>"commander,"</i> paid in fees and "year-end
+      performance bonuses" &mdash; is delivered through briefings, debriefs, a codex that unlocks as you play, and
+      encounter dialogue. The codex is a campaign primary surface, not a menu afterthought.</p>
+    </div>
+    <p><b>This is the differentiator.</b> Every indie strategy game has procedural conquest. None of them has
+    Cortex Command's brain-in-a-jar universe with a dev-canonical narrative arc literally waiting in a fluff doc
+    marked "awaiting cleanup," and its villain faction shipped as a folder with the description "TBA." The campaign
+    is not just a system &mdash; it is the act of <b>finishing the story the game was always supposed to have.</b></p>
+
+    <!-- ============ 5 · THE OPTIONS ============ -->
+    <h2 id="options">5 &nbsp;&middot;&nbsp; <span class="h-accent">Six campaign visions &mdash; ranked</span></h2>
+    <p>The 10 designs explored earlier were not 10 whole campaigns &mdash; most were <b>parts</b>. Split them:
+    some are <b>spines</b> (the backbone &mdash; pick one), some are <b>layers</b> (bolt onto any spine &mdash;
+    stack as many as you want). The campaign question is: <i>pick a spine, stack layers.</i> Below are <b>six
+    combined visions</b>, each a coherent fusion, each scored for fit as cortex-modern's flagship campaign, each
+    with a pros-and-cons table. All six bake in three things as standing layers: <b>the lore</b> (&sect;4),
+    <b>neutral factions</b> (a five-step disposition track &mdash; hostile / wary / neutral / friendly / allied,
+    not a friend-or-enemy binary), and <b>neutral bosses</b> (apex threats owned by no side &mdash; the Doainar
+    "mother crab" is the shipped precedent for a telegraphed, multi-phase, non-HP-kill boss).</p>
+
+    <table class="tbl">
+      <thead><tr><th class="nowrap">Rank</th><th>Campaign vision</th><th>Fuses</th><th class="nowrap">Fit</th></tr></thead>
+      <tbody>
+        <tr><td class="nowrap"><span class="rank">1</span></td><td><b>The Frontier</b></td><td class="small">strategy + company + exploration + grand-strategy. <i>Chosen &mdash; ADR-012.</i></td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;&#9679;</span></span></td></tr>
+        <tr><td class="nowrap"><span class="rank">2</span></td><td><b>Last Company</b></td><td class="small">company + survival + exploration; the world is the enemy.</td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;</span><span class="off">&#9679;</span></span></td></tr>
+        <tr><td class="nowrap"><span class="rank">3</span></td><td><b>The Deep</b></td><td class="small">exploration + company; a lore-descent into the Priorus dark.</td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></td></tr>
+        <tr><td class="nowrap"><span class="rank">4</span></td><td><b>The Hunt</b></td><td class="small">neutral bosses as the spine; company + exploration + survival.</td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></td></tr>
+        <tr><td class="nowrap"><span class="rank">5</span></td><td><b>The Living Frontier</b></td><td class="small">the emergent sandbox spine; all of The Frontier's systems.</td><td><span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></td></tr>
+        <tr><td class="nowrap"><span class="rank">6</span></td><td><b>Warlords</b></td><td class="small">grand-strategy as the spine; a war to inherit an empire.</td><td><span class="rate"><span class="on">&#9679;&#9679;</span><span class="off">&#9679;&#9679;&#9679;</span></span></td></tr>
+      </tbody>
+    </table>
+
+    <!-- ---- VISION I ---- -->
+    <div class="opt rec">
+      <div class="opt-head"><span class="opt-rank">1</span><span class="opt-name">The Frontier &mdash; Conquest, Evolved</span>
+        <span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;&#9679;</span></span></div>
+      <p class="opt-pitch">"A strategic war map over a half-charted frontier &mdash; that generates a persistent
+      tactical campaign for the mercenary company you build."</p>
+      <p class="opt-play"><b>How it plays.</b> Two interlocking layers. A <b>strategic layer</b> &mdash; Conquest's
+      bones, fixed: a territorial map of FE-1's sites and factions you and rival commanders contest, half of it
+      starting as unexplored fog you scout outward into. And a <b>tactical layer</b> &mdash; each contested site is
+      a typed campaign <i>mission</i>, fought with a <b>persistent veteran company</b> you recruit, equip, lead and
+      lose. The map gives the company its reasons; the company makes each fight matter. A storyteller paces it;
+      reputation and diplomacy colour it; the six-chapter anchor arc (&sect;4.4) is its spine; the grand-strategy
+      depth is an opt-in deepening, not a wall everyone hits.</p>
+      <table class="tbl pc">
+        <thead><tr><th class="pro">Pros</th><th class="con">Cons</th></tr></thead>
+        <tbody><tr>
+          <td><ul>
+            <li>It <b>is</b> Cortex Command's premise &mdash; the gold-rush prospector outfit on a frontier world is the literal setting (&sect;4.1).</li>
+            <li>It genuinely <b>fixes Conquest</b> &mdash; keeps the territorial fantasy, supersedes the mode by containing it. M1 ships Conquest rebuilt.</li>
+            <li>Serves <b>both audiences</b>: strategy players get the war map; squad players get the persistent company.</li>
+            <li>Highest ceiling; the <b>anchor arc</b> is a free, dev-canonical narrative spine no other indie strategy game can claim.</li>
+            <li>Stages cleanly &mdash; every milestone ships standalone value (&sect;9).</li>
+            <li>Rides the AI and Multiplayer flagships; overwhelmingly <span class="tag tag-mod">[MOD]</span>.</li>
+          </ul></td>
+          <td><ul>
+            <li><b>The most scope</b> of any vision, even staged.</li>
+            <li>Two layers means <b>two UIs and two loops to balance</b>; the seam is an integration risk.</li>
+            <li>If under-built it risks being <b>two mediocre halves</b> instead of one strong whole.</li>
+            <li>Full payoff is <b>back-loaded</b> past M3.</li>
+            <li>Needs a competent <b>strategic AI</b> &mdash; a genuinely hard problem, hard-dependent on the AI flagship.</li>
+          </ul></td>
+        </tr></tbody>
+      </table>
+      <p class="opt-meta">Closest to: Conquest &times; X-COM &times; Battle Brothers &middot; <b>vs Conquest:</b>
+      evolves it &mdash; Conquest is its strategic spine &middot; <b>Verdict:</b> the only vision that honours
+      "fix Conquest," fits the lore exactly, and clears the flagship bar. <b>Chosen</b> (<a href="decisions.html">ADR-012</a>)
+      &mdash; detailed in &sect;6&ndash;&sect;10.</p>
+    </div>
+
+    <!-- ---- VISION II ---- -->
+    <div class="opt">
+      <div class="opt-head"><span class="opt-rank">2</span><span class="opt-name">Last Company</span>
+        <span class="rate"><span class="on">&#9679;&#9679;&#9679;&#9679;</span><span class="off">&#9679;</span></span></div>
+      <p class="opt-pitch">"Not a war for territory &mdash; a war against the world. Your company is the last
+      outfit in a dying region, and it is closing in."</p>
+      <p class="opt-play"><b>How it plays.</b> Survival is the spine: escalating cycles of pressure; you hold and
+      harden a foothold. The persistent company is everything &mdash; every veteran lost is irreplaceable.
+      Exploration is scouting out to scavenge and to uncover <i>why</i> the region is dying; a storyteller is the
+      antagonist's hand. The faction war is gone &mdash; the great powers abandoned this place. FE-1's doomed star
+      and its extinction-haunted past are the canon hook.</p>
+      <table class="tbl pc">
+        <thead><tr><th class="pro">Pros</th><th class="con">Cons</th></tr></thead>
+        <tbody><tr>
+          <td><ul>
+            <li><b>Strongest attachment and tension</b> &mdash; named veterans, real attrition, a world that pushes back.</li>
+            <li>Destructible terrain makes the siege <b>visceral</b> &mdash; your base is genuinely chewed apart.</li>
+            <li>Fits the lore's <b>doomed-planet</b> hook (the swelling star, the extinction event) cleanly.</li>
+            <li>Lore <i>is</i> the goal &mdash; the campaign is the mystery of the cataclysm, discovered.</li>
+            <li>Lower scope than The Frontier; no strategic-map layer to balance.</li>
+          </ul></td>
+          <td><ul>
+            <li><b>Drops the territorial layer</b> &mdash; it does not fix Conquest, it replaces it.</li>
+            <li>Open-ended survival <b>risks aimlessness</b> without a hard arc &mdash; Void Wanderers' admitted failure.</li>
+            <li>Can become a <b>grind</b> of escalating numbers.</li>
+            <li>The anchor arc (&sect;4.4) fits less naturally &mdash; it is a frontier-war story, not a siege story.</li>
+          </ul></td>
+        </tr></tbody>
+      </table>
+      <p class="opt-meta">Closest to: They Are Billions &times; X-COM &times; Stationeers &middot;
+      <b>vs Conquest:</b> replaces it &middot; <b>Verdict:</b> excellent and focused &mdash; and it folds into
+      The Frontier as the "Cataclysm" storyteller personality (&sect;6, L5).</p>
+    </div>
+
+    <!-- ---- VISION III ---- -->
+    <div class="opt">
+      <div class="opt-head"><span class="opt-rank">3</span><span class="opt-name">The Deep</span>
+        <span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></div>
+      <p class="opt-pitch">"A vast dead thing to descend into &mdash; the Priorus catacombs beneath FE-1. The
+      campaign is going in, and the loop is discovery."</p>
+      <p class="opt-play"><b>How it plays.</b> Exploration is the spine: a layered unknown &mdash; the hexagonal
+      Priorus catacombs, derelict bunkers, the dark &mdash; deeper meaning richer and deadlier. A persistent
+      company is your expedition crew; a forward camp is the base you push from. The Doainar mission's ancient
+      bunker and its cartesian coordinates to <i>somewhere</i> is the shipped seed. Lore is the gameplay.</p>
+      <table class="tbl pc">
+        <thead><tr><th class="pro">Pros</th><th class="con">Cons</th></tr></thead>
+        <tbody><tr>
+          <td><ul>
+            <li>Discovery is a powerful, underused hook &mdash; "what is down there" pulls the player on its own.</li>
+            <li>The <b>Priorus</b> precursors are canon and almost entirely unexplored &mdash; pure design space.</li>
+            <li>Fits Cortex Command's fog-of-war (upstream is already building two-stage FoW).</li>
+            <li>Lore-maximal &mdash; every chamber and relic is a story-piece; the codex is the point.</li>
+          </ul></td>
+          <td><ul>
+            <li>Exploration alone is <b>thin</b> as a spine &mdash; it needs a reason (loot, survival, story) to matter.</li>
+            <li>Risks <b>"walking-simulator" pacing</b> without combat stakes.</li>
+            <li>Does not fix or honour Conquest.</li>
+            <li>Hard to make the hundredth discovery feel like the first; needs a deep content pipeline.</li>
+          </ul></td>
+        </tr></tbody>
+      </table>
+      <p class="opt-meta">Closest to: STALKER &times; Subnautica &times; the Doainar mission &middot;
+      <b>vs Conquest:</b> replaces it &middot; <b>Verdict:</b> a superb <i>chapter</i>, a thin <i>spine</i>
+      &mdash; folds into The Frontier as a Priorus-catacomb mission arc inside L2.</p>
+    </div>
+
+    <!-- ---- VISION IV ---- -->
+    <div class="opt">
+      <div class="opt-head"><span class="opt-rank">4</span><span class="opt-name">The Hunt</span>
+        <span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></div>
+      <p class="opt-pitch">"Your company hunts the apex threats no faction will touch. The bosses are not gates
+      &mdash; they are the campaign."</p>
+      <p class="opt-play"><b>How it plays.</b> Neutral bosses elevated to the main loop &mdash; a roster of named,
+      legendary world-threats to track and bring down. A persistent company of specialists; exploration finds the
+      quarry; survival is the long, terrain-wrecking fight. Factions hire you and bid for trophies. FE-1's cocoon
+      crab and its "mother crab," the Priorus wildlife, and the Mu-ilaak are the shipped bestiary seed.</p>
+      <table class="tbl pc">
+        <thead><tr><th class="pro">Pros</th><th class="con">Cons</th></tr></thead>
+        <tbody><tr>
+          <td><ul>
+            <li>A <b>fresh, distinctive</b> identity &mdash; nothing else in the genre is Monster Hunter on destructible terrain.</li>
+            <li>The Doainar "mother crab" is a <b>shipped precedent</b> for a multi-phase, telegraphed boss.</li>
+            <li>Bestiary-as-lore &mdash; every beast has a legend; the codex is a hunter's almanac.</li>
+            <li>Each hunt is a self-contained, screenshot-worthy set-piece.</li>
+          </ul></td>
+          <td><ul>
+            <li><b>Narrow</b> &mdash; a campaign of boss fights and little else risks monotony.</li>
+            <li>Does not fix or honour Conquest; no strategic layer.</li>
+            <li>Bosses are the <b>most content-expensive</b> thing to author well; a thin roster shows fast.</li>
+            <li>The faction war &mdash; CC's core conflict &mdash; becomes set-dressing.</li>
+          </ul></td>
+        </tr></tbody>
+      </table>
+      <p class="opt-meta">Closest to: Monster Hunter &times; Shadow of the Colossus &middot; <b>vs Conquest:</b>
+      replaces it &middot; <b>Verdict:</b> a great <i>system</i>, a narrow <i>spine</i> &mdash; folds into
+      The Frontier as first-class neutral-boss content in L4.</p>
+    </div>
+
+    <!-- ---- VISION V ---- -->
+    <div class="opt">
+      <div class="opt-head"><span class="opt-rank">5</span><span class="opt-name">The Living Frontier</span>
+        <span class="rate"><span class="on">&#9679;&#9679;&#9679;</span><span class="off">&#9679;&#9679;</span></span></div>
+      <p class="opt-pitch">"The Frontier's world &mdash; but run as a living simulation. The frontier wars,
+      explores and falls whether you act or not; you are one company writing your own story in it."</p>
+      <p class="opt-play"><b>How it plays.</b> The emergent sandbox is the spine: a RimWorld-style storyteller and
+      the simulation drive everything; no fixed win. Every system from The Frontier is present &mdash; AI factions
+      conquer, everyone explores the frontier, survival pressure ebbs and flows, you run your company &mdash; but
+      the world owns the story, not an authored arc.</p>
+      <table class="tbl pc">
+        <thead><tr><th class="pro">Pros</th><th class="con">Cons</th></tr></thead>
+        <tbody><tr>
+          <td><ul>
+            <li><b>Infinite emergent replayability</b> &mdash; every playthrough genuinely different.</li>
+            <li>The storyteller is a proven pacing engine; the world feels alive.</li>
+            <li>Mostly <span class="tag tag-mod">[MOD]</span> &mdash; a <code>GlobalScript</code> director.</li>
+          </ul></td>
+          <td><ul>
+            <li><b>"No fixed goal" risks aimlessness</b> &mdash; and it strands the dev's anchor arc, the campaign's best asset.</li>
+            <li>A pure sandbox <b>struggles to feel like a campaign</b> &mdash; a campaign implies a journey.</li>
+            <li>Hard to onboard; intimidating without structure.</li>
+            <li>The storyteller is better as a <i>layer</i> on a spine than as the spine itself.</li>
+          </ul></td>
+        </tr></tbody>
+      </table>
+      <p class="opt-meta">Closest to: RimWorld &times; Dwarf Fortress &middot; <b>vs Conquest:</b> replaces it
+      &middot; <b>Verdict:</b> the storyteller is essential &mdash; but as L5 of The Frontier, not as the spine.
+      Folds in as the "Living Frontier" emergent-pacing presets.</p>
+    </div>
+
+    <!-- ---- VISION VI ---- -->
+    <div class="opt">
+      <div class="opt-head"><span class="opt-rank">6</span><span class="opt-name">Warlords</span>
+        <span class="rate"><span class="on">&#9679;&#9679;</span><span class="off">&#9679;&#9679;&#9679;</span></span></div>
+      <p class="opt-pitch">"Grand strategy as the spine &mdash; diplomacy, economy, supply, the strategic turn.
+      A war to inherit a collapsing power."</p>
+      <p class="opt-play"><b>How it plays.</b> A deep strategic turn &mdash; research, diplomacy, declarations of
+      war, supply lines, alliances &mdash; is the heart; Cortex Command battles resolve the clashes you manoeuvre
+      toward. You experience it through a company, and a storyteller injects crises.</p>
+      <table class="tbl pc">
+        <thead><tr><th class="pro">Pros</th><th class="con">Cons</th></tr></thead>
+        <tbody><tr>
+          <td><ul>
+            <li>The <b>deepest strategic experience</b>; immense replayability for strategy players.</li>
+            <li>Honours and massively extends Conquest's genre.</li>
+            <li>A distinctive identity &mdash; no other action game carries a real wargame layer.</li>
+          </ul></td>
+          <td><ul>
+            <li><b>The lore actively argues against it</b> &mdash; the dev frames the player as a franchise owner, not an empire-inheritor (&sect;4.5). This scale is canon-wrong.</li>
+            <li>The <b>coldest, most abstract</b> vision &mdash; the tactical battle becomes a sideshow.</li>
+            <li>The <b>most build-heavy</b>; the hardest AI problem on the page; the narrowest audience.</li>
+            <li>Weakest on attachment &mdash; no named veteran you grow to love.</li>
+          </ul></td>
+        </tr></tbody>
+      </table>
+      <p class="opt-meta">Closest to: Hearts of Iron &times; the AWAW wargame ruleset &middot; <b>vs Conquest:</b>
+      deepens it &middot; <b>Verdict:</b> deep but cold, niche, and canon-wrong as a spine &mdash; folds into
+      The Frontier as the opt-in grand-strategy depth on L6, off by default.</p>
+    </div>
+
+    <div class="callout callout-ok">
+      <div class="callout-title">Nothing is wasted &mdash; how the five resolve into the one</div>
+      <p>The visions are not rivals; five of them are <b>components of the first</b>. With <b>The Frontier</b> as
+      the chosen spine, the other five become its layers and modes:</p>
+      <ul>
+        <li><b>Last Company</b> &rarr; the <i>"Cataclysm"</i> storyteller personality (L5) &mdash; the dying-region
+        pacing, available to any campaign.</li>
+        <li><b>The Deep</b> &rarr; a Priorus-catacomb mission arc (L2) &mdash; an exploration chapter, and a
+        side-anchor.</li>
+        <li><b>The Hunt</b> &rarr; neutral bosses as first-class L4 content &mdash; the Doainar "mother crab"
+        pattern, productised.</li>
+        <li><b>The Living Frontier</b> &rarr; the storyteller's emergent-pacing presets (L5).</li>
+        <li><b>Warlords</b> &rarr; the opt-in grand-strategy depth on the strategic layer (L6 / milestone M5), off
+        by default.</li>
+      </ul>
+      <p><b>And "fix Conquest" is honoured.</b> The Frontier's first milestone, M1, <i>ships Conquest rebuilt</i>
+      &mdash; the strategic metagame, un-broken, as a standalone release. The decision is only how far past that
+      to go.</p>
+    </div>
+
+    <!-- ============ 6 · THE ARCHITECTURE ============ -->
+    <h2 id="arch">6 &nbsp;&middot;&nbsp; <span class="h-accent">The architecture</span> &mdash; the chosen design</h2>
+    <p>The rest of this page details <b>The Frontier</b> &mdash; the chosen design (<a href="decisions.html">ADR-012</a>)
+    &mdash; in build-from depth; the other five visions are its measuring sticks. It is built as a Cortex Command
+    <code>.rte</code> module (a new
+    <code>Data/Campaign.rte/</code>): a <code>GAScripted</code> activity for missions and the hub, and a
+    <code>GlobalScript</code> that owns the persistent campaign model.</p>
+
+    <h3>6.1 &nbsp; What it is</h3>
+    <p>You run a <b>mercenary company</b> on FE-1 &mdash; not a single hero. Your command brain is the company's
+    anchor, the one unit whose loss ends the run; everything else is crew you recruit, equip, lead, lose and mourn.
+    Above the company sits a <b>strategic war map</b> &mdash; Conquest's territorial contest, rebuilt &mdash; where
+    you and rival commanders fight for sites and factions. Each contested site is a real campaign mission your
+    company deploys to. A <b>storyteller</b> paces the war; <b>reputation and diplomacy</b> colour it; the
+    six-chapter <b>anchor arc</b> is its narrative spine; an opt-in <b>grand-strategy</b> depth is there for
+    players who want the wargame. It keeps every piece of Cortex Command's identity and gives it the long-form
+    structure the base game never had.</p>
+
+    <h3>6.2 &nbsp; The layered model</h3>
+    <p>Each layer is a separately-shippable piece &mdash; which is what makes the milestone plan in &sect;9
+    possible. The tag is the dominant cost: almost all of it is <span class="tag tag-mod">[MOD]</span>.</p>
+    <div class="stack">
+      <div class="layer cross">
+        <div class="lyr-id">UI</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Campaign UI, codex &amp; after-action &nbsp;<span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">Cross-cutting. The strategic map &amp; contract board, the mission briefing, the
+          loadout planning table, the <b>codex</b> (lore woven, never narrated), and the post-mission
+          <b>debrief</b> &mdash; a war-room "what happened and why" on the AI flagship's decision-event channel.</div>
+          <div class="lyr-fix"><b>Answers:</b> Conquest's slider-walls and animation-crawls &mdash; and "you won" with no causal trace.</div>
+        </div>
+      </div>
+      <div class="layer strat">
+        <div class="lyr-id">L6</div>
+        <div class="lyr-main">
+          <div class="lyr-name">The strategic layer &mdash; the war map &nbsp;<span class="tag tag-mod">[MOD]</span></div>
+          <div class="lyr-desc">Conquest reborn: FE-1's territorial map of sites and factions, contested by the
+          player and rival commanders, with real model-based resolution and fog-of-war frontier. An <b>opt-in
+          grand-strategy depth</b> (economy, supply, diplomacy, the strategic turn) sits on top for wargame players.</div>
+          <div class="lyr-fix"><b>Answers:</b> the coin-flip, the hollow strategy AI &mdash; and keeps the conquest fantasy.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L5</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Storyteller / incident director &nbsp;<span class="tag tag-mod">[MOD]</span></div>
+          <div class="lyr-desc">A RimWorld-style pacing personality &mdash; <b>Calm, Chaotic, Ironman, Cataclysm</b>
+          &mdash; that schedules world events and contract pressure against an authored intensity curve, from a
+          plug-in event registry. Pick a storyteller and the shape of the whole campaign changes.</div>
+          <div class="lyr-fix"><b>Answers:</b> Conquest's flat, eventless rounds &mdash; the campaign now feels authored.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L4</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Factions, reputation, neutrals &amp; the rival &nbsp;<span class="tag tag-mod">[MOD]</span></div>
+          <div class="lyr-desc">A five-step <b>disposition track</b> (hostile / wary / neutral / friendly / allied)
+          over Cortex Command's team system; reputation-gated buy access and contracts; faction territory;
+          first-class <b>neutral factions and neutral bosses</b>; and a named, <b>persistent rival commander</b>
+          who remembers your tactics across missions and counters them.</div>
+          <div class="lyr-fix"><b>Answers:</b> the hollow strategy AI, the friend/enemy binary &mdash; the world now reacts.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L3</div>
+        <div class="lyr-main">
+          <div class="lyr-name">The tactical campaign loop &amp; hub &nbsp;<span class="tag tag-mod">[MOD]</span><span class="tag tag-code">[CODE]</span></div>
+          <div class="lyr-desc">The company's persistent base; the contract board; travel; the buy / loadout /
+          deploy loop &mdash; the campaign's "between-missions" space and the diegetic dropship delivery into a
+          mission.</div>
+          <div class="lyr-fix"><b>Answers:</b> nowhere to <i>be</i> a company &mdash; Conquest has only a planet to click.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L2</div>
+        <div class="lyr-main">
+          <div class="lyr-name">The mission engine &amp; the anchor arc &nbsp;<span class="tag tag-mod">[MOD]</span></div>
+          <div class="lyr-desc">A typed <b>mission manifest</b> &mdash; one contract format for hand-authored,
+          procedural and modded missions &mdash; with typed objectives (breach, hold, escort, sabotage, rescue,
+          extract&hellip;), a Left&nbsp;4&nbsp;Dead-style pacing director, destruction-aware authoring rules, and
+          the <b>six-chapter anchor arc</b> (&sect;4.4) seeded here.</div>
+          <div class="lyr-fix"><b>Answers:</b> the no-content-format and one-objective repetition of Conquest.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L1</div>
+        <div class="lyr-main">
+          <div class="lyr-name">The persistent roster &nbsp;<span class="tag tag-mod">[MOD]</span></div>
+          <div class="lyr-desc">Veterans: actors that survive a mission carry forward with XP, traits, named
+          identity and visible scars. Rescue-first permadeath &mdash; a downed soldier can be saved, but once truly
+          gone is gone and remembered. The command brain as the run's anchor.</div>
+          <div class="lyr-fix"><b>Answers:</b> disposable counters &mdash; the campaign now becomes <i>yours</i>.</div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lyr-id">L0</div>
+        <div class="lyr-main">
+          <div class="lyr-name">Activity &amp; persistence substrate &nbsp;<span class="tag tag-mod">[MOD]</span></div>
+          <div class="lyr-desc">A <code>GAScripted</code> activity plus a <code>GlobalScript</code> that owns the
+          campaign model; all campaign state serialised through the engine's compressed <code>.ccsave</code> path
+          with a real typed schema &mdash; not a flat file.</div>
+          <div class="lyr-fix"><b>Answers:</b> the model welded into the GUI; the fragile, stringly-typed mod saves.</div>
+        </div>
+      </div>
+    </div>
+    <p class="small muted">L0&ndash;L5 are the tactical mercenary campaign; L6 (blue) is the strategic war map that
+    drives it &mdash; the two loops of The Frontier. The UI layer is cross-cutting (dashed). Layer order is
+    dependency order &mdash; it is also the milestone order in &sect;9.</p>
+
+    <h3>6.3 &nbsp; The tactical loop</h3>
+    <p>What the player does inside one mission &mdash; the counterpart to Conquest's round in &sect;1.2:</p>
+    <div class="pipeline">
+      <div class="pl-step"><span class="pl-side pl-hub">Hub</span>
+        <span class="pl-loc">Take a contract</span>
+        <div class="pl-what">Pick a job from the contract board &mdash; surfaced by the strategic layer (L6),
+        the storyteller (L5) and the anchor arc &mdash; each a typed mission manifest with a faction, a reward and
+        a reputation consequence.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-hub">Hub</span>
+        <span class="pl-loc">Plan the loadout</span>
+        <div class="pl-what">Compose the squad from the persistent roster; recruit and equip. The loadout screen
+        is a planning table, not just a shop.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-msn">Mission</span>
+        <span class="pl-loc">Deploy</span>
+        <div class="pl-what">The physical dropship delivery into the mission scene &mdash; kept diegetic; the craft
+        can still be shot down. Cortex Command's signature entry, unchanged.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-msn">Mission</span>
+        <span class="pl-loc">Command the battle</span>
+        <div class="pl-what">The real-time fight: direct control and squad command on the new AI, against typed
+        objectives and the rival commander, with the mission director pacing the pressure.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-msn">Mission</span>
+        <span class="pl-loc">Extract</span>
+        <div class="pl-what">Rescue who you can, salvage what you can, get the command brain out. Who lives and who
+        is left behind is decided here.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-hub">Hub</span>
+        <span class="pl-loc">Debrief</span>
+        <div class="pl-what">The after-action report &mdash; what happened and <i>why</i>, drawn from the AI
+        flagship's decision-event log and replay. New codex entries unlock here, woven not narrated.</div>
+      </div>
+      <div class="pl-step"><span class="pl-side pl-hub">Hub</span>
+        <span class="pl-loc">Advance</span>
+        <div class="pl-what">Veterans gain XP and scars; reputation shifts; the strategic map updates; the
+        storyteller schedules what comes next. The board refreshes &mdash; back to step 1.</div>
+      </div>
+    </div>
+    <p>Above this loop, the <b>strategic loop</b> turns more slowly &mdash; the war map advances, rival commanders
+    move, factions rise and fall &mdash; and that is what <i>generates</i> the contracts the tactical loop
+    consumes. The design target: <b>pressure inside the mission, curiosity after it.</b></p>
+
+    <!-- ============ 7 · THE WORK ============ -->
+    <h2 id="work">7 &nbsp;&middot;&nbsp; <span class="h-accent">The engine &amp; mod work</span></h2>
+    <p>The campaign is, deliberately, almost entirely a <span class="tag tag-mod">[MOD]</span> &mdash; a major
+    argument for The Frontier. Cortex Command's engine already ships the surface a campaign needs; most of it has
+    simply never been assembled.</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3><span class="tag tag-mod">[MOD]</span> &nbsp;What ships as Lua / data</h3>
+        <ul class="small">
+          <li>The whole campaign model &mdash; roster, missions, factions, reputation, storyteller, the war map
+          &mdash; on <code>GAScripted</code> + <code>GlobalScript</code>.</li>
+          <li>The typed mission manifest, the procedural generator, and the six anchor missions.</li>
+          <li>The hub, contract board, briefings, codex and debrief, drawn with <code>PrimitiveMan</code>.</li>
+          <li>Faction content &mdash; Cortex Command factions are already <code>.rte</code> modules, <code>Uzira.rte</code> and <code>MuIlaak.rte</code> among them.</li>
+          <li>Campaign persistence through the existing <code>.ccsave</code> path.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="tag tag-code">[CODE]</span> &nbsp;The little that needs the engine</h3>
+        <ul class="small">
+          <li><b>The dormant v6.0 primitives</b> &mdash; capture points, buy doors, dropship docks, item
+          dispensers, AI tactics &mdash; exist but are unused; wiring them in is mostly data and Lua.</li>
+          <li><b>A polished campaign-map screen</b> &mdash; a retained-widget strategic map wants engine UI
+          support; rides roadmap <code>T3-03</code>.</li>
+          <li><b>Save hooks</b> for roster and campaign state &mdash; shared with the AI flagship's
+          persistent-order serialisation (&sect;8).</li>
+          <li>A <b>custom-property</b> mechanism converts further campaign features from
+          <span class="tag tag-code">[CODE]</span> into <span class="tag tag-mod">[MOD]</span> &mdash; see
+          <a href="decisions.html">ADR-010</a>.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout callout-info">
+      <div class="callout-title">First, extract the model from the GUI</div>
+      <p>The one piece of non-campaign work that must happen regardless of the vision chosen is M0's: lift
+      Conquest's rules &mdash; <code>SetupOffensives</code>, <code>AutoResolveOffensive</code>, income,
+      finalisation &mdash; out of the ~6,000-line <code>MetagameGUI</code> into a small, testable model, and stop
+      the save format serialising the GUI object. This is what makes Conquest patchable <i>and</i> what stops the
+      old mode being a millstone under the new one. It is bounded, mechanical <span class="tag tag-code">[CODE]</span>
+      &mdash; and the prerequisite for everything else.</p>
+    </div>
+    <p>Cortex Command's twenty-year <code>.rte</code> ecosystem is the fork's biggest asset, and the campaign is
+    designed around it: factions are already <code>.rte</code> modules; the <b>mission manifest is itself a modding
+    format</b> &mdash; the same typed contract the first-party campaign uses is what a modder authors a mission or
+    a whole faction questline with. Void Wanderers stays in the AI flagship's CI mod corpus, so "does Void
+    Wanderers still load and run" is a measured, every-build guarantee.</p>
+
+    <!-- ============ 8 · INTEGRATION ============ -->
+    <h2 id="integrate">8 &nbsp;&middot;&nbsp; <span class="h-accent">Riding the AI and Multiplayer flagships</span></h2>
+    <p>The campaign is the <b>third</b> flagship by design. It is sequenced last because it is the one that
+    <i>consumes</i> the other two &mdash; and built right, it makes all three add up to more than three features.</p>
+
+    <div class="callout callout-info">
+      <div class="callout-title">Campaign &times; AI &mdash; the AI is the floor the campaign stands on</div>
+      <p>"A campaign is only as good as its battles," and bad AI is the <b>#1 campaign-blocker</b> &mdash; a
+      campaign on today's AI is babysitting, not commanding. The <a href="ai.html">AI overhaul</a>
+      (<a href="decisions.html">ADR-014</a>) &mdash; a <b>locomotion-first</b> rebuild of the AI's Lua &mdash; is a
+      hard dependency, and the two designs interlock milestone-for-milestone:</p>
+      <ul>
+        <li>The AI flagship's <b>M1 (locomotion)</b> &mdash; actors that actually follow the paths they are given
+        &mdash; is the floor: it is the milestone that turns commanding a campaign squad from babysitting into
+        command.</li>
+        <li>The AI flagship's <b>M3 (squad coordination)</b> &mdash; real squads, not "stand near the leader and
+        copy its buttons" &mdash; is what the campaign's tactical battles run on; the campaign's <b>persistent
+        rival commander</b> (L4) is the strategic layer that <i>directs</i> those enemy squads and carries a grudge
+        across missions.</li>
+        <li>The AI flagship's <b>M5 (orders &amp; command)</b> is doubly load-bearing: its wider <b>order
+        vocabulary</b> &mdash; hold, breach, retreat, rescue, mine, escort &mdash; <i>is</i> the campaign's
+        mission-objective vocabulary; its <b>persistent orders serialise into <code>.ccsave</code></b>, which
+        <i>is</i> the campaign's mid-mission save; and its <b>non-destructive direct-control hand-off</b> lets a
+        player take and release a unit without wiping its brain.</li>
+        <li>The AI flagship's <b>M0</b> &mdash; the decision-event channel, replay capture and the headless
+        harness &mdash; <i>is</i> the campaign's after-action debrief and codex-unlock infrastructure: "show me why
+        I lost that squad," the same channel.</li>
+      </ul>
+    </div>
+    <div class="callout callout-info">
+      <div class="callout-title">Campaign &times; Multiplayer &mdash; the campaign is the content co-op ships on</div>
+      <p>The <a href="multiplayer.html">Multiplayer</a> flagship (<a href="decisions.html">ADR-015</a>) is not a
+      separate world &mdash; its milestones <b>M3 and M4 are literally validated by "complete a co-op campaign
+      mission."</b></p>
+      <ul>
+        <li>A <b>co-op campaign must save and resume mid-mission</b> &mdash; the campaign and Multiplayer M4 share
+        one <code>.ccsave</code> path; build it once.</li>
+        <li>Multiplayer is server-authoritative; the campaign's mission, director and storyteller state are
+        <b>"Truth"</b> in that authority model &mdash; server-owned, never client-divergent.</li>
+        <li>The strategic war map (L6) is exactly the <b>async / strategic-layer multiplayer</b> the Multiplayer
+        page flags as "a fine complement for a persistent campaign &mdash; shared meta, no live sync."</li>
+        <li>The campaign's new state &mdash; roster, mission, faction, storyteller &mdash; is built to the
+        <b>determinism-island contract</b> from the start, so Multiplayer inherits it free.</li>
+      </ul>
+    </div>
+    <div class="callout callout-key">
+      <div class="callout-title">One harness, three flagships</div>
+      <p>The AI and Multiplayer flagships <b>already share one M0</b> &mdash; a decision-event channel, replay
+      capture, a headless scenario runner, a per-tick checksum, CI. The campaign uses the <b>same harness</b>: its
+      missions are headless-runnable scenarios, its debrief is the replay, its determinism is the checksum. Build
+      the observability harness once; all three flagships gate on it. The campaign is the capstone &mdash; the AI
+      makes its battles worth fighting, Multiplayer makes them worth fighting together, the campaign is the reason
+      to keep playing.</p>
+    </div>
+
+    <!-- ============ 9 · THE PLAN ============ -->
+    <h2 id="plan">9 &nbsp;&middot;&nbsp; <span class="h-accent">The plan &mdash; milestones</span></h2>
+    <div class="callout callout-info">
+      <div class="callout-title">How this plan is scoped</div>
+      <p>This is the committed plan. Like the AI and Multiplayer flagships it is sequenced
+      by <b>dependency</b> and gated by <b>validation</b>, not calendar time. Every milestone is a complete,
+      shippable improvement &mdash; and the staging keeps the lesser visions reachable too: <b>stopping
+      after M1 is "Conquest, Rebuilt"; the war-map deepening in M5 is the Warlords grand-strategy layer</b>. The
+      campaign depends on the <a href="ai.html">AI flagship</a> reaching its order-system milestone, and on
+      <a href="multiplayer.html">Multiplayer</a> M4 for co-op.</p>
+    </div>
+    <div class="plan">
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M0</span><span class="ms-name">The harness &amp; the model extraction</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make the campaign measurable, and free the metagame model from the GUI &mdash; the prerequisite for every vision, including just patching Conquest.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Reuse the AI / Multiplayer <b>M0 harness</b> &mdash; the headless runner, the decision-event channel, the replay log, CI &mdash; for campaign scenarios.</li>
+          <li>Extract Conquest's rules out of <code>MetagameGUI</code> into a small, unit-tested <b>metagame model</b>; stop the save serialising the GUI object.</li>
+          <li>Define the typed <b>mission-manifest schema</b> and the <b>campaign save schema</b> (on the <code>.ccsave</code> path), both on the determinism-island contract.</li>
+          <li>Record a baseline: the current campaign, run headless, as the regression oracle.</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/MetaMan.* &middot; Source/Menus/MetagameGUI.* &middot; new Data/Campaign.rte/ &middot; the shared M0 harness</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">The shared M0 observability harness.</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the metagame model runs and is unit-tested outside the GUI; a Conquest game still plays start-to-finish; the campaign save schema round-trips headless.</span></div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M1</span><span class="ms-name">Conquest, rebuilt &mdash; the strategic spine</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Ship a fixed Conquest fast &mdash; and retire the in-game "INCOMPLETE and flawed" notice. This milestone is a standalone release: it <i>is</i> "Conquest, Rebuilt," and it is the war map (L6).</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Wire the dormant <b>v6.0 primitives</b> (capture points, buy doors, dropship docks, item dispensers, AI tactics) into the metagame.</li>
+          <li>Replace <code>AutoResolveOffensive</code>'s coin-flip with a real, model-based resolver.</li>
+          <li>Add strategic events and persistence to the war map; cut the worst UX friction; add new-game presets.</li>
+          <li>Fix the stale notice and known metagame bugs (e.g. the spacebar issue, <a href="issues.html">#137</a>).</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/MetaMan.* &middot; Source/Menus/MetagameGUI.*, MainMenuGUI.cpp &middot; Data/Base.rte/Activities/MetaFight.lua</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0.</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> a Conquest battle resolves on the model, not a dice roll; the v6.0 primitives function; new-game setup offers presets. <b>This is a public ship date.</b></span></div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M2</span><span class="ms-name">The mission engine &amp; first anchors</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Turn a contested site from a one-off skirmish into a real campaign mission &mdash; typed, varied, paced, destruction-aware.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The typed <b>mission manifest</b> and a <code>GAScripted</code> runtime &mdash; one format for hand-authored, procedural and modded missions.</li>
+          <li><b>Typed objectives</b> (breach, hold, escort, sabotage, rescue, extract, survive, salvage) expressed through the AI flagship's order system.</li>
+          <li>A Left&nbsp;4&nbsp;Dead-style <b>mission director</b>; <b>destruction-aware authoring</b> rules.</li>
+          <li>The procedural generator, and the <b>first anchor missions</b> &mdash; Prospect, The Signal (&sect;4.4).</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Data/Campaign.rte/ (mission runtime, director, generator) &middot; Source/Activities/GAScripted.* &middot; the AI order system</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0; the <a href="ai.html">AI flagship</a>'s order milestone (its M5).</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> every objective type completes headless with competent AI on both sides; the director keeps intensity in band; the destruction-reroute test passes (&sect;10).</span></div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M3</span><span class="ms-name">The persistent company</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">A roster that becomes <i>yours</i>, a hub to run it from, a campaign that saves and resumes.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The <b>veteran roster</b> &mdash; XP, traits, named identity, visible scars; <b>rescue-first permadeath</b>.</li>
+          <li>The <b>company hub</b> &mdash; the base, the contract board, travel.</li>
+          <li>The <b>buy / loadout / deploy</b> loop, keeping the diegetic dropship delivery.</li>
+          <li>Full <b>campaign persistence</b> through <code>.ccsave</code> &mdash; horizontal progression (each unlock opens a tactic, never erases a role).</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Data/Campaign.rte/ (roster, hub) &middot; the .ccsave path &middot; Source/Activities/GameActivity.cpp</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M2.</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> a veteran survives and carries forward with scars and XP; the campaign saves mid-mission and restores faithfully; a multi-mission run plays end-to-end.</span></div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M4</span><span class="ms-name">Factions, neutrals &amp; the storyteller</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">A world that reacts &mdash; factions that remember, neutrals on a disposition track, a rival who adapts, a campaign that feels authored.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The five-step <b>disposition track</b> over the team system; reputation-gated buy access and contracts; faction territory.</li>
+          <li><b>Neutral factions and neutral bosses</b> as first-class L4 content &mdash; the Doainar "mother crab" pattern, productised.</li>
+          <li>The <b>persistent rival commander</b> &mdash; named, dossier-tracked, carrying a grudge across missions &mdash; the campaign's enemy strategic layer, directing the squads the AI flagship's M3 coordinates.</li>
+          <li>The <b>storyteller</b> &mdash; the Calm / Chaotic / Ironman / Cataclysm personalities &mdash; and the mission briefing &amp; debrief / codex UI.</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Data/Campaign.rte/ (factions, storyteller, rival, codex) &middot; the AI squad layer (M3) &middot; the decision-event channel</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M3; the <a href="ai.html">AI flagship</a>'s squad-coordination milestone (its M3).</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> reputation gates content and cascades without deadlock; the rival visibly counters a repeated tactic; two storytellers on one seed produce measurably different runs (&sect;10).</span></div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M5</span><span class="ms-name">Co-op &amp; the grand-strategy depth</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Play the campaign together &mdash; and, for those who want it, the full grand-strategy deepening of the war map (the Warlords layer).</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li><b>Co-op campaign</b> integration &mdash; the shared mid-mission save, server-authoritative campaign state &mdash; jointly with <a href="multiplayer.html">Multiplayer</a> M4.</li>
+          <li>The opt-in <b>grand-strategy depth</b> on the war map (L6): economy, supply lines, diplomacy, the strategic turn &mdash; off by default.</li>
+          <li><b>Async strategic multiplayer</b> &mdash; a shared faction war on the war map, needing no live sync.</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Data/Campaign.rte/ (grand-strategy layer) &middot; the .ccsave path &middot; the Multiplayer state-replication activity</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M4; <a href="multiplayer.html">Multiplayer</a> M4 (co-op).</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> two players complete a co-op campaign mission across the network; the grand-strategy layer plays a full faction war headless without softlock; it is cleanly off by default.</span></div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><span class="ms-id">M6</span><span class="ms-name">The anchor arc &mdash; harden &amp; ship</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Finish the story &mdash; the full six-chapter anchor arc &mdash; polish, pace, and retire the apology notice for good.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>The <b>full anchor arc</b> (&sect;4.4) &mdash; the Bombies, the Sentient Machine, the Dying System, the Common Enemy &mdash; with the codex woven through.</li>
+          <li>The <b>campaign UI polish pass</b> (the strategic map, briefings, codex, debrief) on a modern toolkit; difficulty that scales competence, not stats.</li>
+          <li>The <b>content pass</b> &mdash; the faction roster, the procedural variety, the neutral bestiary.</li>
+          <li>Remove <code>ShowMetaGameNoticeScreen()</code>; the new campaign is the default.</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Data/Campaign.rte/ &middot; Source/Menus/ &middot; Source/Menus/MainMenuGUI.cpp &middot; full content &amp; balance pass</span></div>
+        <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M5.</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the full campaign-trust suite (&sect;10) is green; the six-chapter arc plays start-to-finish, solo and co-op, with no softlock; the new campaign ships as default.</span></div>
+      </div>
+
+    </div>
+
+    <!-- ============ 10 · VALIDATION ============ -->
+    <h2 id="validation">10 &nbsp;&middot;&nbsp; <span class="h-accent">Validation</span></h2>
+    <p>A campaign cannot be "tested by playing it once" &mdash; it is too long. Like the AI and Multiplayer
+    flagships, it is built so it is <b>proven by machine</b>, on the shared M0 harness, on every CI cycle:</p>
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Check</th><th>What it proves</th></tr></thead>
+      <tbody>
+        <tr><td class="id">CMP-01</td><td>Full campaign, headless</td><td>A whole campaign &mdash; the six-chapter arc &mdash; plays start-to-finish with no softlock, no dead-end, no unwinnable state.</td></tr>
+        <tr><td class="id">CMP-02</td><td>Save round-trip</td><td>The <code>.ccsave</code> captures and restores the entire campaign &mdash; roster, factions, storyteller, war map, mid-mission &mdash; faithfully.</td></tr>
+        <tr><td class="id">CMP-03</td><td>Every mission type</td><td>Each objective template completes when played by competent AI on both sides.</td></tr>
+        <tr><td class="id">CMP-04</td><td>Destruction reroute</td><td>Open a hole between any two named mission regions &mdash; the mission and its AI still complete. Terrain is never the only lock.</td></tr>
+        <tr><td class="id">CMP-05</td><td>Storyteller differentiability</td><td>Two storytellers on one seed produce measurably different runs &mdash; the personality is real, not a label.</td></tr>
+        <tr><td class="id">CMP-06</td><td>Director pacing</td><td>Mission intensity stays inside its authored band &mdash; no flatlines, no unrelenting peaks.</td></tr>
+        <tr><td class="id">CMP-07</td><td>Strategic cascade</td><td>Reputation thresholds, faction shifts and war-map turns resolve cleanly &mdash; no deadlocks, no impossible states.</td></tr>
+        <tr><td class="id">CMP-08</td><td>Co-op mission</td><td>Two players complete a co-op campaign mission across the network &mdash; shared with <a href="multiplayer.html">Multiplayer</a> M4.</td></tr>
+        <tr><td class="id">CMP-09</td><td>Determinism</td><td>The same seed produces the same procedural mission and event stream &mdash; replays reproduce.</td></tr>
+      </tbody>
+    </table>
+    <p>The human role is the irreducible minimum the AI and Multiplayer pages also draw: <b>authoring</b> the
+    anchor missions and tuning the storytellers, <b>spot-checking</b> the saved replay of any failure, and the
+    final <b>"is it fun"</b> judgement. The machine checks against the bar; the human sets it.</p>
+
+    <!-- ============ 11 · WHAT NOT TO DO ============ -->
+    <h2 id="avoid">11 &nbsp;&middot;&nbsp; <span class="h-accent">What not to do</span></h2>
+    <div class="card">
+      <ul>
+        <li><b>Don't leave the rules in the GUI.</b> Extract the metagame model first (M0). Every vision, even
+        just patching Conquest, is blocked behind a 6,000-line god-object until this is done.</li>
+        <li><b>Don't discard Conquest reflexively.</b> Its FSM and battle script are working code; the recommended
+        plan keeps and rebuilds the strategic layer. "Replace" is one path among six, not the default.</li>
+        <li><b>Don't fork Void Wanderers.</b> It proves the shape and stays in the CI corpus &mdash; learn from it,
+        build fresh. Forking means owning its twelve-year-old architecture forever.</li>
+        <li><b>Don't waste the lore.</b> Cortex Command's unfinished story is the differentiator. Don't ship a
+        campaign that ignores the dev-canonical arc &mdash; and don't narrate it in cutscenes; weave it.</li>
+        <li><b>Don't scale up to a galactic 4X.</b> The dev's own framing is a franchise owner, not a warlord. The
+        campaign builds a small outfit into a regional power &mdash; that is the canon scale.</li>
+        <li><b>Don't ship a campaign with no arc.</b> A pure sandbox or pure survival has no destination; the
+        storyteller and survival belong as components and modes, not as the whole.</li>
+        <li><b>Don't ship coin-flip combat.</b> Every battle that matters is played or resolved by a real model
+        &mdash; never a funds-weighted dice roll.</li>
+        <li><b>Don't build the campaign before the AI floor.</b> A campaign on bad AI is babysitting. The AI
+        flagship is a hard dependency.</li>
+        <li><b>Don't invent a flat-file save.</b> Use <code>.ccsave</code> with a typed schema on the determinism
+        contract &mdash; so Multiplayer inherits it free.</li>
+        <li><b>Don't make the grand-strategy layer mandatory.</b> It is the opt-in depth of the war map (L6, M5).
+        Forced on everyone, it rebuilds Conquest's coldness.</li>
+        <li><b>Don't gate fun behind grind or power-creep.</b> Progression is horizontal &mdash; each unlock opens
+        a tactic, never erases a role or inflates a number.</li>
       </ul>
     </div>
 
-    <h2><span class="h-accent">Void Wanderers</span> &mdash; the de-facto campaign</h2>
-    <div class="callout callout-info">
-      <p><a href="https://mod.io/g/cccp/m/void-wanderers-by-weegee">Void Wanderers</a> (originally by Weegee, kept
-      alive by community maintainers) is the campaign the base game points you to. It is a total-conversion mod &mdash;
-      an FTL / X-COM / Firefly-style space roguelite: captain a ship, run faction missions, manage crew and upgrades.
-      It is widely called "better than the main campaign," and it is unambiguously the community's real meta layer.</p>
-      <p>It sets the bar &mdash; but it also shows the risk: Void Wanderers is a heavily-scripted mod tightly coupled
-      to engine quirks, and its bug threads are full of engine-edge problems (AI uselessly shooting doors it can't
-      breach, miner-dropships that never deploy, version-mismatch crashes). cortex-modern should <b>design its own
-      campaign fresh</b> &mdash; from first principles and the <a href="corefall.html">Corefall Ideas</a> &mdash;
-      not copy Void Wanderers. Learn from it; don't fork it.</p>
-    </div>
-
-    <h2><span class="h-accent">Why this is the flagship</span></h2>
-    <div class="callout callout-key">
-      <div class="callout-title">The opportunity</div>
-      <p><b>It is an officially-sanctioned gap.</b> Upstream admitted the campaign is broken, promised a rework, and
-      walked away &mdash; for over two years. Building it is not competing with the team; it is doing the work they
-      publicly deferred.</p>
-      <p><b>The design already exists.</b> The <a href="corefall.html">Corefall Ideas</a> page catalogues a complete
-      campaign-grade design &mdash; mission director, branching objective graphs, factions and diplomacy,
-      storytellers, world events, persistent crew &mdash; and almost all of it is <span class="tag tag-mod">[MOD]</span>:
-      Lua, <code>GAScripted</code> and <code>GlobalScript</code>, no engine fork.</p>
-      <p><b>It addresses the #2 community complaint</b> (after AI), and it gives cortex-modern a clear identity &mdash;
-      a reason for the fork to exist beyond engine cleanup.</p>
-    </div>
-
-    <h2><span class="h-accent">What it's made of</span></h2>
-    <p>The campaign is an assembly of pieces already mapped on the <a href="corefall.html">Corefall Ideas</a> page.
-    Most are pure mod work; the engine primitives needed already exist.</p>
-
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Mission director + branching objective graph</h3>
-      <p class="small">A typed objective graph with pacing phases and dynamic reinforcement, on top of CC's
-      <code>GAScripted</code> activity contract. The spine of the campaign.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Factions, reputation, diplomacy, territory</h3>
-      <p class="small">A relationship matrix, reputation-gated buy access, faction territory. CC factions are already
-      <code>.rte</code> modules; a <code>GlobalScript</code> layer adds the strategic dimension.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Storyteller / incident pacing</h3>
-      <p class="small">A RimWorld-style incident director scheduling events against an intensity curve, so the
-      campaign feels authored rather than random.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Procedural mission generator</h3>
-      <p class="small">Parameterised mission templates (assault, defend, escort, sabotage, rescue&hellip;) that
-      produce authored-feeling missions with per-faction flavour.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Persistent crew &mdash; veterans, scars, XP</h3>
-      <p class="small">Soldiers that survive and carry forward across missions, with progression and visible scars.
-      <code>GlobalScript</code> plus the save system. This is what makes a campaign feel like <i>yours</i>.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Wire up the dormant v6.0 primitives</h3>
-      <p class="small">Capture points, buy doors, dropship docks, item dispensers, AI tactics &mdash; all added in
-      v6.0 and sitting <b>unused in vanilla</b>. Using them is data and Lua; the hard engine work is already done.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;Campaign UI &mdash; map, briefings, debrief</h3>
-      <p class="small">A strategic map, mission briefings and an after-action debrief. Immediate-mode HUD drawing is
-      <span class="tag tag-mod">[MOD]</span>; a polished retained-widget map screen would want some engine support.</p>
-    </div>
-    <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;Smarter AI underneath it all</h3>
-      <p class="small">A campaign is only as good as its battles, and AI is the #1 community complaint. The AI
-      overhaul is its own committed flagship &mdash; a full layered-hybrid rebuild on the <a href="ai.html">AI</a>
-      page (<a href="decisions.html">ADR-014</a>) &mdash; and the campaign is built on top of it.</p>
-    </div>
-
-    <h2><span class="h-accent">Suggested approach</span> &mdash; phased</h2>
-    <div class="callout callout-ok">
-      <p><b>Phase 0 &mdash; the AI floor.</b> Squad and tactical AI (<code>T1-06</code> + the Corefall AI ideas).
-      The campaign cannot be good if the moment-to-moment fights are not; this comes first and stands on its own.</p>
-      <p><b>Phase 1 &mdash; un-break vanilla Conquest.</b> Wire the dormant v6.0 primitives into the existing
-      Metagame and smooth its worst rough edges. Low-risk, ships visible value fast, and makes the in-game
-      "INCOMPLETE and flawed" notice less true.</p>
-      <p><b>Phase 2 &mdash; the real campaign.</b> The full <code>GAScripted</code> campaign: mission director,
-      factions, storytellers, persistent crew &mdash; the flagship. Built fresh, clean-room, from the
-      <a href="corefall.html">Corefall Ideas</a>.</p>
-      <p>The standing decision is recorded as <a href="decisions.html">ADR-012</a>. The design source is the
-      <a href="corefall.html">Corefall Ideas</a> board; supporting engine work is tracked on the
-      <a href="roadmap.html">Roadmap</a>.</p>
+    <!-- ============ THE DECISION ============ -->
+    <div class="callout callout-key" id="decision">
+      <div class="callout-title">The decision &mdash; recorded</div>
+      <p>The campaign is cortex-modern's <b>third committed flagship</b>, alongside the AI overhaul
+      (<a href="decisions.html">ADR-014</a>) and Multiplayer (<a href="decisions.html">ADR-015</a>). It is recorded
+      as <a href="decisions.html">ADR-012</a> &mdash; <span class="status status-done">Accepted</span>.</p>
+      <p>The chosen design is <b>The Frontier</b>: Conquest's strategic war map, fixed and evolved, with a
+      persistent tactical company campaign hanging off it, the storyteller pacing it, and the game's own
+      <b>unfinished story</b> &mdash; the dev-canonical six-chapter arc &mdash; as its spine. It is the one vision
+      that fixes Conquest, fits Cortex Command's literal premise, and clears the flagship bar; it is staged so
+      <b>M1 alone ships a rebuilt Conquest</b> and retires the in-game apology notice, and the five other visions
+      all fold into it as layers and modes (&sect;5).</p>
+      <p>The starting point is <b>M0</b> &mdash; extract the metagame model from the <code>MetagameGUI</code>
+      god-object and stand up the campaign harness. From there the milestone plan in &sect;9 runs M0&ndash;M6, every
+      milestone a shippable release, gated by the CMP campaign-trust suite (&sect;10).</p>
     </div>
 
     <div class="page-foot">
-      Campaign analysis &middot; built from the Cortex Command source and a survey of the project's state &middot;
-      updated 2026-05-16 &middot; see <a href="decisions.html">ADR-012</a> and <a href="corefall.html">Corefall Ideas</a>.
+      Campaign analysis, the ranked vision space, and the lore synthesis &mdash; built from a direct read of the
+      Cortex Command campaign source (<code>MetaMan</code>, <code>MetagameGUI</code>, <code>MetaFight.lua</code>,
+      the <code>Missions.rte</code> activities and faction <code>.rte</code> modules), the <b>Void Wanderers</b>
+      mod, the in-game lore text, the Android Arts / Data fluff doc (<code>androidarts.com/cortexcommand</code>),
+      and the <a href="corefall.html">Corefall</a> campaign design. &middot; updated 2026-05-17 &middot; recorded
+      as <a href="decisions.html">ADR-012</a> (<span class="status status-done">Accepted</span>); rides
+      <a href="decisions.html">ADR-014</a> (AI) and <a href="decisions.html">ADR-015</a> (Multiplayer).
     </div>
   </main>
 
