@@ -66,9 +66,11 @@
     </div>
 
     <div class="summary" id="summary"></div>
-    <div class="filters" id="filters"></div>
+    <div class="filters" id="statusFilters"></div>
+    <div class="filters" id="verdictFilters"></div>
 
     <div id="cards"></div>
+    <p class="small muted" id="emptyMsg" style="display:none">No branches match the current filter.</p>
 
     <div class="page-foot">
       Branch analysis &middot; captured 2026-05-16 from <code>upstream/*</code> &middot;
@@ -172,23 +174,34 @@ const VERDICT_META = {
   ignore: { label:"Ignore",    cls:"bv-ignore" },
 };
 let statusFilter = "all";
+let verdictFilter = "all";
 
 function renderSummary() {
-  const c = { active:0, dormant:0, stale:0 };
-  BRANCHES.forEach(b => c[b.status]++);
+  const s = { active:0, dormant:0, stale:0 };
+  const v = { track:0, ref:0, ignore:0 };
+  BRANCHES.forEach(b => { s[b.status]++; v[b.verdict]++; });
   document.getElementById("summary").innerHTML =
-    '<span><b style="color:var(--green)">'  + c.active  + '</b> active</span>' +
-    '<span><b style="color:var(--accent)">' + c.dormant + '</b> dormant</span>' +
-    '<span><b style="color:var(--text-dim)">' + c.stale + '</b> stale</span>' +
-    '<span><b>' + BRANCHES.length + '</b> branches</span>';
+    '<span><b>' + BRANCHES.length + '</b> branches</span>' +
+    '<span><b style="color:var(--green)">'   + s.active  + '</b> active</span>' +
+    '<span><b style="color:var(--accent)">'  + s.dormant + '</b> dormant</span>' +
+    '<span><b style="color:var(--text-dim)">'+ s.stale   + '</b> stale</span>' +
+    '<span><b style="color:var(--blue)">'    + v.track   + '</b> track</span>' +
+    '<span><b style="color:var(--purple)">'  + v.ref     + '</b> reference</span>' +
+    '<span><b style="color:var(--red)">'     + v.ignore  + '</b> ignore</span>';
 }
 function renderFilters() {
-  const opts = [["all","All"],["active","Active"],["dormant","Dormant"],["stale","Stale"]];
-  document.getElementById("filters").innerHTML = opts.map(([v,l]) =>
-    '<button class="filter-btn' + (statusFilter==v?' active':'') + '" data-val="'+v+'">'+l+'</button>').join("");
+  const statuses = [["all","All statuses"],["active","Active"],["dormant","Dormant"],["stale","Stale"]];
+  const verdicts = [["all","All verdicts"],["track","Track"],["ref","Reference"],["ignore","Ignore"]];
+  document.getElementById("statusFilters").innerHTML = statuses.map(([val,l]) =>
+    '<button class="filter-btn' + (statusFilter==val?' active':'') + '" data-kind="status" data-val="'+val+'">'+l+'</button>').join("");
+  document.getElementById("verdictFilters").innerHTML = verdicts.map(([val,l]) =>
+    '<button class="filter-btn' + (verdictFilter==val?' active':'') + '" data-kind="verdict" data-val="'+val+'">'+l+'</button>').join("");
 }
 function renderCards() {
-  const rows = BRANCHES.filter(b => statusFilter==="all" || b.status===statusFilter);
+  const rows = BRANCHES.filter(b =>
+    (statusFilter === "all" || b.status === statusFilter) &&
+    (verdictFilter === "all" || b.verdict === verdictFilter));
+  document.getElementById("emptyMsg").style.display = rows.length ? "none" : "block";
   document.getElementById("cards").innerHTML = rows.map(b => {
     const s = STATUS_META[b.status], v = VERDICT_META[b.verdict];
     const url = REPO + "/tree/" + b.name;
@@ -208,7 +221,8 @@ function render() { renderSummary(); renderFilters(); renderCards(); }
 document.addEventListener("click", e => {
   const btn = e.target.closest(".filter-btn");
   if (!btn) return;
-  statusFilter = btn.dataset.val;
+  if (btn.dataset.kind === "verdict") verdictFilter = btn.dataset.val;
+  else statusFilter = btn.dataset.val;
   render();
 });
 
