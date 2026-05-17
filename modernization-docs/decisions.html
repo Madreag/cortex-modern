@@ -383,6 +383,43 @@
       </div>
     </section>
 
+    <!-- ADR-014 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-014</span>
+        <span class="adr-title">The AI overhaul &mdash; a committed layered-hybrid architecture</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>AI quality is the #1 community complaint and has been for twenty years; the upstream lead has openly
+        called it "garbage". It is also the foundation under the other two flagship efforts &mdash; the
+        <a href="campaign.html">Campaign</a> is only as good as its battles, and co-op
+        <a href="multiplayer.html">Multiplayer</a> runs enemy AI server-side. A full source read (the ~5,830-line
+        Lua AI plus the C++ pathfinder, controller and harness), an ~80-source survey of game-AI architecture, and
+        a grounded diagnosis produced a complete design. The owner has committed to building it in full, no
+        compromise. The detailed, build-from plan lives on the dedicated <a href="ai.html">AI</a> page.</p>
+        <h4>Decision</h4>
+        <p>Make the AI overhaul cortex-modern's flagship and first major build. Architecture: a <b>layered
+        hybrid</b> &mdash; the engine owns the machinery (an incremental D* Lite pathfinder replacing MicroPather,
+        influence maps, a per-actor blackboard, a perception / spatial-query API, an adaptive AI scheduler, a
+        decision-event channel, and utility + behaviour-tree kernels); Lua keeps the judgement and stays the mod
+        surface. The work is sequenced as seven dependency-ordered milestones (M0&ndash;M6), beginning with the
+        validation harness, gated by an automated trust suite. No human-time estimates &mdash; the build is
+        agent-driven, sequenced by dependency and validation. Mod compatibility is a hard requirement; "done" is
+        the machine-measured definition on the AI page.</p>
+        <h4>Consequences</h4>
+        <p>The AI is the substrate beneath ADR-012 (the Campaign) and ADR-013 (Multiplayer) &mdash; both depend on
+        competent AI. It is mostly engine <span class="tag tag-code">[CODE]</span> /
+        <span class="tag tag-arch">[ARCH]</span> work plus the Lua brain; MicroPather is removed, dropping a
+        vendored dependency. <code>T1-06</code> is superseded &mdash; it becomes the roadmap's pointer to this
+        flagship rather than a standalone Tier-1 item. Existing mods keep working through a preserved
+        compatibility surface. The <a href="ai.html">AI</a> page is the living plan and the artifact an
+        implementer builds from.</p>
+      </div>
+    </section>
+
     <h2 id="open-questions">Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
@@ -393,7 +430,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 13 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
+      Decision log &middot; 14 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
     </div>
   </main>
 
