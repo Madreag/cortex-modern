@@ -25,6 +25,7 @@
       <a class="nav-link" href="index.html">Overview</a>
       <a class="nav-link active" href="analysis.html">Technical Analysis</a>
       <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -195,11 +196,11 @@
       <div class="card">
         <h3>Networking</h3>
         <p class="small">The old multiplayer was a <b>screen-streaming</b> model (the server compresses each client's
-        viewport to UDP &mdash; not real netcode; hard 4-player cap, unhideable latency). It is now dead weight: the
-        <code>MultiplayerGame</code> / <code>MultiplayerServerLobby</code> activities are commented out of
-        <code>Source/Activities/meson.build</code> and unreachable, yet the underlying <code>NetworkServer</code> /
-        <code>NetworkClient</code> code and the abandoned RakNet dependency still compile into the build. Orphaned
-        &mdash; see <a href="roadmap.html">roadmap T1-03</a>.</p>
+        viewport to UDP &mdash; not real netcode; hard 4-player cap, unhideable latency). Upstream removed it outright
+        (commit "RIP Multiplayer 2019-2025", Jan 2025): all four networking files &mdash; <code>NetworkServer</code>,
+        <code>NetworkClient</code>, <code>MultiplayerGame</code>, <code>MultiplayerServerLobby</code> &mdash; are
+        commented out of the Meson build and no longer compile. Only the RakNet library is still built and linked, a
+        pure dead dependency. See <a href="roadmap.html">roadmap T1-03</a> and <a href="decisions.html">ADR-011</a>.</p>
       </div>
 
       <div class="card">

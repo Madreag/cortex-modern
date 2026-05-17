@@ -25,6 +25,7 @@
       <a class="nav-link" href="index.html">Overview</a>
       <a class="nav-link" href="analysis.html">Technical Analysis</a>
       <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link active" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -292,11 +293,66 @@
       </div>
     </section>
 
+    <!-- ADR-011 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-011</span>
+        <span class="adr-title">Multiplayer &mdash; accept upstream's removal; do not revive netcode</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>Upstream removed multiplayer outright &mdash; commit "RIP Multiplayer 2019-2025" (2025-01-11); the
+        changelog reads <i>"Removed multiplayer. The existing multiplayer implementation was terrible and broken."</i>
+        All four networking files (<code>NetworkServer</code>, <code>NetworkClient</code>, <code>MultiplayerGame</code>,
+        <code>MultiplayerServerLobby</code>) are commented out of the Meson build; only RakNet is still linked. The
+        old model was server-authoritative screen-streaming, and the per-pixel atom physics is hostile to
+        deterministic lockstep netcode.</p>
+        <h4>Decision</h4>
+        <p>cortex-modern accepts the removal and will <b>not</b> revive networked multiplayer. Local co-op is covered
+        by upstream's <b>multiseat</b> (multi-mouse / multi-keyboard) work, which arrives on the next upstream sync;
+        remote play is left to Parsec / Steam Remote Play, as upstream intends. The dead networking files and the
+        now-purposeless RakNet dependency are deleted as cleanup &mdash; this is what <code>T1-03</code> becomes.</p>
+        <h4>Consequences</h4>
+        <p><code>T1-03</code> simplifies from a decision into a pure deletion task; <code>T3-04</code> ("decide
+        multiplayer's future") is resolved and closed. Networked multiplayer stays a non-goal unless the physics
+        determinism calculus changes. Resolves the former "Multiplayer" open question.</p>
+      </div>
+    </section>
+
+    <!-- ADR-012 -->
+    <section class="adr">
+      <div class="adr-head">
+        <span class="adr-id">ADR-012</span>
+        <span class="adr-title">A real campaign is cortex-modern's flagship</span>
+        <span class="status status-proposed">Proposed</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-16</p>
+        <h4>Context</h4>
+        <p>Cortex Command's built-in "Conquest" campaign is officially "very INCOMPLETE and flawed" (the shipping
+        game's own notice), and upstream's promised ground-up rework has no code behind it and is realistically not
+        happening. The engine already carries unused campaign primitives from v6.0 (capture points, buy doors,
+        dropship docks, item dispensers, AI tactics). The <a href="corefall.html">Corefall Ideas</a> page catalogues
+        a complete campaign-grade design that is almost entirely <span class="tag tag-mod">[MOD]</span>. Full case on
+        the <a href="campaign.html">Campaign</a> page.</p>
+        <h4>Decision <span class="muted small">(proposed)</span></h4>
+        <p>Make a real strategic campaign cortex-modern's flagship feature: a fresh, clean-room
+        <code>GAScripted</code> campaign that supersedes the abandoned Conquest, assembled from the Corefall
+        mission / faction / storyteller ideas and wiring up the dormant v6.0 primitives. Designed from first
+        principles, not copied from Void Wanderers. AI depth (<code>T1-06</code> + the Corefall AI cluster) runs
+        alongside as essential supporting work.</p>
+        <h4>Consequences</h4>
+        <p>A large but mostly-<span class="tag tag-mod">[MOD]</span> effort that needs no engine fork and gives the
+        fork a clear identity &mdash; an officially-sanctioned gap, not a turf war with upstream. Pending the owner's
+        go-ahead before work begins.</p>
+      </div>
+    </section>
+
     <h2 id="open-questions">Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
-        <li><b>Multiplayer:</b> delete the orphaned networking code entirely (and drop RakNet), or formally commit
-        to rebuilding multiplayer with modern netcode? Blocks <code>T1-03</code> / <code>T3-04</code>.</li>
         <li><b>Tier-3 sequencing:</b> if/when we take on an <span class="tag tag-arch">[ARCH]</span> item, which
         first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>
         <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
@@ -304,7 +360,7 @@
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 10 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
+      Decision log &middot; 12 decisions recorded &middot; updated 2026-05-16 &middot; ADRs are append-only.
     </div>
   </main>
 

@@ -25,6 +25,7 @@
       <a class="nav-link" href="index.html">Overview</a>
       <a class="nav-link" href="analysis.html">Technical Analysis</a>
       <a class="nav-link active" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -86,14 +87,14 @@
       <p class="small muted">Effort: low-medium &middot; Risk: low</p>
     </div>
     <div class="card">
-      <h3><span class="tag tag-code">[CODE]</span> <span class="tag tag-dep">[DEP]</span> &nbsp;T1-03 &nbsp; Resolve the orphaned multiplayer island</h3>
-      <p class="small">The old multiplayer was a screen-streaming model (the server compresses each client's viewport
-      to UDP) over <code>RakNet</code>, with a hard 4-player cap. It is now dead weight: the <code>MultiplayerGame</code>
-      and <code>MultiplayerServerLobby</code> activities are commented out of <code>Source/Activities/meson.build</code>
-      &mdash; not even compiled &mdash; and nothing reachable references them, yet the <code>NetworkServer/Client</code>
-      code and the abandoned RakNet dependency are still dragged into the build. Either delete it cleanly (dropping
-      RakNet) or formally decide to rebuild it (see <code>T3-04</code>) &mdash; today it is the worst of both.</p>
-      <p class="small muted">Effort: low-medium &middot; Risk: low &middot; see <a href="decisions.html#open-questions">Decision Log &mdash; open questions</a></p>
+      <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T1-03 &nbsp; Delete the dead multiplayer code and drop RakNet</h3>
+      <p class="small">Upstream removed multiplayer outright (commit "RIP Multiplayer 2019-2025"). All four networking
+      files &mdash; <code>NetworkServer</code>, <code>NetworkClient</code>, <code>MultiplayerGame</code>,
+      <code>MultiplayerServerLobby</code> &mdash; are already commented out of the Meson build and do not compile;
+      only the RakNet library is still built and linked, for nothing. <a href="decisions.html">ADR-011</a> settles the
+      direction (no netcode revival), so this is now a pure cleanup: delete the four dead files and remove the
+      <code>RakNet</code> subproject from <code>meson.build</code>.</p>
+      <p class="small muted">Effort: low &middot; Risk: low &middot; see <a href="decisions.html">ADR-011</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-04 &nbsp; Delete dead GL code</h3>
@@ -183,11 +184,12 @@
       <p class="small muted">Effort: very high &middot; Risk: high</p>
     </div>
     <div class="card">
-      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Decide multiplayer's future</h3>
-      <p class="small">If multiplayer returns, it should be real server-authoritative <b>state-replication</b>
-      netcode with client-side prediction &mdash; not the old screen-streaming model. Requires an entity-replication
-      layer the engine does not have.</p>
-      <p class="small muted">Effort: very high &middot; Risk: very high</p>
+      <h3><span class="status status-done">DECIDED</span> &nbsp;T3-04 &nbsp; Multiplayer's future &mdash; resolved</h3>
+      <p class="small">Settled by <a href="decisions.html">ADR-011</a>: cortex-modern will <b>not</b> revive networked
+      multiplayer. The per-pixel atom physics is hostile to deterministic lockstep, upstream removed multiplayer
+      deliberately, and local co-op is covered by upstream's multiseat (multi-mouse / keyboard) work, which arrives
+      free on the next upstream sync. Networked play stays a non-goal unless that calculus changes.</p>
+      <p class="small muted">Status: closed &middot; see <a href="decisions.html">ADR-011</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-05 &nbsp; Retire Allegro 4</h3>
@@ -206,6 +208,10 @@
       engine fork, so it does not compete with Tier&nbsp;1&ndash;3 for engine work; <code>T1-06</code> is already its
       first item. The full catalogue, the rationale, and what to leave alone are on the
       <a href="corefall.html">Corefall Ideas</a> page and in <a href="decisions.html">ADR-010</a>.</p>
+      <p>The <b>flagship</b> of that track is a real strategic <a href="campaign.html">Campaign</a> &mdash; finishing
+      the "Conquest" mode upstream officially abandoned. It assembles the Corefall mission / faction / storyteller
+      ideas and wires up engine primitives that have sat unused since v6.0. See the
+      <a href="campaign.html">Campaign</a> page and <a href="decisions.html">ADR-012</a>.</p>
     </div>
 
     <!-- ====== SWEET SPOT ====== -->
