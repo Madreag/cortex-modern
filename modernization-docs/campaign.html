@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Campaign — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link active" href="campaign.html">Campaign</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link" href="corefall.html">Corefall Ideas</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Flagship</div>
+      <h1>The Campaign</h1>
+      <p class="page-lead">Cortex Command's built-in strategic campaign &mdash; "Conquest" / the Metagame &mdash; is
+      officially abandoned. This page is the case for making a real campaign <b>cortex-modern's flagship feature</b>:
+      the one big, identity-defining thing the fork exists to build.</p>
+    </header>
+
+    <div class="callout callout-warn">
+      <div class="callout-title">The situation &mdash; upstream said it themselves</div>
+      <p>Open Conquest mode in the shipping game and a notice appears (the text is hard-coded in
+      <code>Source/Menus/MainMenuGUI.cpp</code>, function <code>ShowMetaGameNoticeScreen()</code>):</p>
+      <p style="border-left:2px solid var(--accent-dim);padding-left:14px;color:var(--text);font-style:italic">
+      &ldquo;Please note that Conquest mode is <b>very INCOMPLETE and flawed</b>, and the Cortex Command Community
+      Project team <b>will be remaking it from the ground-up in future</b>. For now though, it's fully playable&hellip;
+      Alternatively, <b>check out Void Wanderers</b> on cccp.mod.io!&rdquo;</p>
+      <p>So the official campaign is, by the team's own admission in the shipping game, unfinished &mdash; and it
+      redirects players to a community mod.</p>
+    </div>
+
+    <h2><span class="h-accent">What the code shows</span></h2>
+    <div class="card">
+      <p>A direct check of the source and git history (2026-05-16):</p>
+      <ul>
+        <li>The Metagame <b>is present and compiled</b> &mdash; <code>MetaMan</code>, <code>MetaSave</code>,
+        <code>MetaPlayer</code>, <code>MetagameGUI</code>, plus <code>Data/Base.rte/Activities/MetaFight.lua</code>
+        (~68&nbsp;KB). Conquest runs; it is "fully playable" as the notice says.</li>
+        <li>But its git history since 2024 is <b>maintenance-only</b> &mdash; cppcheck lints, compiler-warning
+        cleanups, incidental timer/save touches. <b>No feature work. No rework branch.</b> None of the upstream
+        WIP branches touch it, and <code>development</code> has been frozen since 2026-04-06.</li>
+        <li>The promised "remaking it from the ground-up" has <b>zero code behind it</b> &mdash; it is an aspiration
+        in a UI string, nothing more. Realistically: it is not going to happen upstream.</li>
+        <li>The v6.0 engine overhaul quietly added campaign building blocks &mdash; <b>capture points, buy doors,
+        dropship docks, item dispensers, AI tactics</b> &mdash; described by the team as "fully available to modders
+        and will be used heavily in our next release." That release never shipped. <b>The primitives exist; nothing
+        assembles them.</b></li>
+        <li>Minor tell: the same notice offers Conquest "with the A.I. and/or up to three friends" &mdash; a stale
+        reference, since multiplayer has since been removed (see <a href="decisions.html">ADR-011</a>).</li>
+      </ul>
+    </div>
+
+    <h2><span class="h-accent">Void Wanderers</span> &mdash; the de-facto campaign</h2>
+    <div class="callout callout-info">
+      <p><a href="https://mod.io/g/cccp/m/void-wanderers-by-weegee">Void Wanderers</a> (originally by Weegee, kept
+      alive by community maintainers) is the campaign the base game points you to. It is a total-conversion mod &mdash;
+      an FTL / X-COM / Firefly-style space roguelite: captain a ship, run faction missions, manage crew and upgrades.
+      It is widely called "better than the main campaign," and it is unambiguously the community's real meta layer.</p>
+      <p>It sets the bar &mdash; but it also shows the risk: Void Wanderers is a heavily-scripted mod tightly coupled
+      to engine quirks, and its bug threads are full of engine-edge problems (AI uselessly shooting doors it can't
+      breach, miner-dropships that never deploy, version-mismatch crashes). cortex-modern should <b>design its own
+      campaign fresh</b> &mdash; from first principles and the <a href="corefall.html">Corefall Ideas</a> &mdash;
+      not copy Void Wanderers. Learn from it; don't fork it.</p>
+    </div>
+
+    <h2><span class="h-accent">Why this is the flagship</span></h2>
+    <div class="callout callout-key">
+      <div class="callout-title">The opportunity</div>
+      <p><b>It is an officially-sanctioned gap.</b> Upstream admitted the campaign is broken, promised a rework, and
+      walked away &mdash; for over two years. Building it is not competing with the team; it is doing the work they
+      publicly deferred.</p>
+      <p><b>The design already exists.</b> The <a href="corefall.html">Corefall Ideas</a> page catalogues a complete
+      campaign-grade design &mdash; mission director, branching objective graphs, factions and diplomacy,
+      storytellers, world events, persistent crew &mdash; and almost all of it is <span class="tag tag-mod">[MOD]</span>:
+      Lua, <code>GAScripted</code> and <code>GlobalScript</code>, no engine fork.</p>
+      <p><b>It addresses the #2 community complaint</b> (after AI), and it gives cortex-modern a clear identity &mdash;
+      a reason for the fork to exist beyond engine cleanup.</p>
+    </div>
+
+    <h2><span class="h-accent">What it's made of</span></h2>
+    <p>The campaign is an assembly of pieces already mapped on the <a href="corefall.html">Corefall Ideas</a> page.
+    Most are pure mod work; the engine primitives needed already exist.</p>
+
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Mission director + branching objective graph</h3>
+      <p class="small">A typed objective graph with pacing phases and dynamic reinforcement, on top of CC's
+      <code>GAScripted</code> activity contract. The spine of the campaign.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Factions, reputation, diplomacy, territory</h3>
+      <p class="small">A relationship matrix, reputation-gated buy access, faction territory. CC factions are already
+      <code>.rte</code> modules; a <code>GlobalScript</code> layer adds the strategic dimension.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Storyteller / incident pacing</h3>
+      <p class="small">A RimWorld-style incident director scheduling events against an intensity curve, so the
+      campaign feels authored rather than random.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Procedural mission generator</h3>
+      <p class="small">Parameterised mission templates (assault, defend, escort, sabotage, rescue&hellip;) that
+      produce authored-feeling missions with per-faction flavour.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Persistent crew &mdash; veterans, scars, XP</h3>
+      <p class="small">Soldiers that survive and carry forward across missions, with progression and visible scars.
+      <code>GlobalScript</code> plus the save system. This is what makes a campaign feel like <i>yours</i>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Wire up the dormant v6.0 primitives</h3>
+      <p class="small">Capture points, buy doors, dropship docks, item dispensers, AI tactics &mdash; all added in
+      v6.0 and sitting <b>unused in vanilla</b>. Using them is data and Lua; the hard engine work is already done.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;Campaign UI &mdash; map, briefings, debrief</h3>
+      <p class="small">A strategic map, mission briefings and an after-action debrief. Immediate-mode HUD drawing is
+      <span class="tag tag-mod">[MOD]</span>; a polished retained-widget map screen would want some engine support.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Smarter AI underneath it all</h3>
+      <p class="small">A campaign is only as good as its battles, and squad/tactical AI is the #1 community
+      complaint. This is roadmap <code>T1-06</code> plus the Corefall AI cluster &mdash; essential supporting work,
+      not optional.</p>
+    </div>
+
+    <h2><span class="h-accent">Suggested approach</span> &mdash; phased</h2>
+    <div class="callout callout-ok">
+      <p><b>Phase 0 &mdash; the AI floor.</b> Squad and tactical AI (<code>T1-06</code> + the Corefall AI ideas).
+      The campaign cannot be good if the moment-to-moment fights are not; this comes first and stands on its own.</p>
+      <p><b>Phase 1 &mdash; un-break vanilla Conquest.</b> Wire the dormant v6.0 primitives into the existing
+      Metagame and smooth its worst rough edges. Low-risk, ships visible value fast, and makes the in-game
+      "INCOMPLETE and flawed" notice less true.</p>
+      <p><b>Phase 2 &mdash; the real campaign.</b> The full <code>GAScripted</code> campaign: mission director,
+      factions, storytellers, persistent crew &mdash; the flagship. Built fresh, clean-room, from the
+      <a href="corefall.html">Corefall Ideas</a>.</p>
+      <p>The standing decision is recorded as <a href="decisions.html">ADR-012</a>. The design source is the
+      <a href="corefall.html">Corefall Ideas</a> board; supporting engine work is tracked on the
+      <a href="roadmap.html">Roadmap</a>.</p>
+    </div>
+
+    <div class="page-foot">
+      Campaign analysis &middot; built from the Cortex Command source and a survey of the project's state &middot;
+      updated 2026-05-16 &middot; see <a href="decisions.html">ADR-012</a> and <a href="corefall.html">Corefall Ideas</a>.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

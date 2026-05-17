@@ -25,6 +25,7 @@
       <a class="nav-link" href="index.html">Overview</a>
       <a class="nav-link" href="analysis.html">Technical Analysis</a>
       <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link active" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -93,7 +94,7 @@ const WORK_ITEMS = [
 
   { id:'T1-01', title:'Bump security-sensitive dependencies',     sub:'Build / Deps',   tags:['DEP'],          tier:1, status:'todo',     notes:'libpng, zlib-ng, LZ4, minizip-ng, LuaJIT (CVE-2024-25176).' },
   { id:'T1-02', title:'Gamepad rumble / haptics',                 sub:'Input',          tags:['CODE'],         tier:1, status:'todo',     notes:'SDL_RumbleGamepad into UInputMan; expose to Lua.' },
-  { id:'T1-03', title:'Resolve orphaned multiplayer island',      sub:'Networking',     tags:['CODE','DEP'],   tier:1, status:'todo',     notes:'~5K LOC dead code + RakNet. Delete or commit to rebuild — needs an ADR.' },
+  { id:'T1-03', title:'Delete dead multiplayer code, drop RakNet', sub:'Networking',     tags:['DEP'],          tier:1, status:'todo',     notes:'Networking is already un-compiled. Decided (ADR-011): delete the dead files and drop RakNet from meson.' },
   { id:'T1-04', title:'Delete dead GL code',                      sub:'Rendering',      tags:['CODE'],         tier:1, status:'todo',     notes:'Stubbed CompileShader, commented m_Blit8, vestigial constants.' },
   { id:'T1-05', title:'Audio terrain occlusion',                  sub:'Audio',          tags:['CODE'],         tier:1, status:'todo',     notes:'Strength-ray driven FMOD lowpass. Big immersion win.' },
   { id:'T1-06', title:'Smarter squad AI & difficulty depth',      sub:'AI',             tags:['MOD'],          tier:1, status:'todo',     notes:'Pure Lua in Base.rte/AI/. Squad roles, suppression, scaled difficulty.' },
@@ -108,7 +109,7 @@ const WORK_ITEMS = [
   { id:'T3-01', title:'Multithread the physics travel loop',      sub:'Physics',        tags:['ARCH'],         tier:3, status:'todo',     notes:'The performance ceiling. Or adopt the upstream box2d-emscripten direction.' },
   { id:'T3-02', title:'Decouple material map from palette index', sub:'Rendering',      tags:['ARCH'],         tier:3, status:'todo',     notes:'The keystone. Unblocks 32-bit colour, >256 materials, retiring Allegro.' },
   { id:'T3-03', title:'Rebuild BuyMenu / editors / Metagame UI',  sub:'UI / UX',        tags:['ARCH'],         tier:3, status:'todo',     notes:'Off the legacy Allegro GUIControlManager onto a modern toolkit.' },
-  { id:'T3-04', title:"Decide multiplayer's future",              sub:'Networking',     tags:['ARCH'],         tier:3, status:'proposed', notes:'State-sync netcode, not screen-streaming. Needs a decision record first.' },
+  { id:'T3-04', title:"Decide multiplayer's future",              sub:'Networking',     tags:['ARCH'],         tier:3, status:'done',     notes:'Decided (ADR-011): not reviving netcode; local co-op via upstream multiseat.' },
   { id:'T3-05', title:'Retire Allegro 4',                         sub:'Rendering',      tags:['ARCH'],         tier:3, status:'blocked',  notes:'Blocked on T3-02. ~56 files / 477 call sites.' },
 ];
 

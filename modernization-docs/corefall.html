@@ -45,6 +45,7 @@
       <a class="nav-link" href="index.html">Overview</a>
       <a class="nav-link" href="analysis.html">Technical Analysis</a>
       <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -439,7 +440,7 @@ const CROSS = [
   { a:"mp", s:"Endgame modes (wave survival, boss rush)", t:["MOD"],
     d:"Wave survival, boss rush, time attack and similar modes, each a GAScripted activity with its own win logic. Standard CC modding practice." },
   { a:"mp", s:"State-replication multiplayer rework", t:["ARCH"],
-    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is now disabled and orphaned in the build. A modern entity state-replication rework with client prediction is a major engine effort; tracked as Roadmap T3-04." },
+    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. A modern state-replication rework with client prediction would be a major engine effort; cortex-modern has decided against reviving netcode (see ADR-011)." },
   { a:"mp", s:"Mod hash sync + lobby discovery", t:["CODE"],
     d:"Clients exchange mod content hashes before a match and a lobby browser filters by mod compatibility. CC Lua cannot hash files, so this is bounded C++ infrastructure." },
   { a:"mp", s:"Matchmaking + ranks + tournaments", t:["ARCH","CODE"],
