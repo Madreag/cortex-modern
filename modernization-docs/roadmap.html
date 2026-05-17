@@ -110,11 +110,13 @@
       <p class="small muted">Effort: medium &middot; Risk: low</p>
     </div>
     <div class="card">
-      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;T1-06 &nbsp; Smarter squad AI &amp; difficulty depth</h3>
-      <p class="small">Squad AI only copies the leader's controls. Add real squad roles (point / flank / support),
-      coordinated suppression, and difficulty that scales reaction time and target priority &mdash; all in
-      <code>Base.rte/AI/*.lua</code>. No engine change, fully mod-overridable.</p>
-      <p class="small muted">Effort: high (pure Lua) &middot; Risk: low</p>
+      <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;T1-06 &nbsp; Squad AI &mdash; absorbed into the AI flagship</h3>
+      <p class="small">Originally scoped here as a Tier-1 pure-Lua squad-AI tweak. It has since been
+      <b>promoted</b>: AI is cortex-modern's flagship, and "smarter squads" is one milestone of a full
+      layered-hybrid AI rebuild &mdash; incremental pathfinding, influence maps, a utility decision brain, a
+      behaviour-tree engine and a real squad commander. The committed plan, the seven milestones and the
+      automated test suite are on the dedicated <a href="ai.html">AI</a> page.</p>
+      <p class="small muted">Status: superseded by the AI flagship &middot; see the <a href="ai.html">AI</a> page &amp; <a href="decisions.html">ADR-014</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-build">[BUILD]</span> &nbsp;T1-07 &nbsp; Build reproducibility fixes</h3>
@@ -215,6 +217,11 @@
       the "Conquest" mode upstream officially abandoned. It assembles the Corefall mission / faction / storyteller
       ideas and wires up engine primitives that have sat unused since v6.0. See the
       <a href="campaign.html">Campaign</a> page and <a href="decisions.html">ADR-012</a>.</p>
+      <p>And the <b>foundational flagship</b> &mdash; the one the Campaign and co-op
+      <a href="multiplayer.html">Multiplayer</a> both stand on &mdash; is the <a href="ai.html">AI overhaul</a>.
+      Unlike the rest of the feature track it is not pure <span class="tag tag-mod">[MOD]</span> work: it is a
+      layered-hybrid rebuild that gives the engine an incremental pathfinder, influence maps and a decision brain.
+      It has its own committed milestone plan and is recorded as <a href="decisions.html">ADR-014</a>.</p>
     </div>
 
     <!-- ====== SWEET SPOT ====== -->

@@ -99,7 +99,7 @@ const WORK_ITEMS = [
   { id:'T1-03', title:'Multiplayer code & RakNet — on hold',       sub:'Networking',     tags:['DEP'],          tier:1, status:'blocked',  notes:'ON HOLD (ADR-013): the networking code is retained as reference for a multiplayer revival. See the Multiplayer page.' },
   { id:'T1-04', title:'Delete dead GL code',                      sub:'Rendering',      tags:['CODE'],         tier:1, status:'todo',     notes:'Stubbed CompileShader, commented m_Blit8, vestigial constants.' },
   { id:'T1-05', title:'Audio terrain occlusion',                  sub:'Audio',          tags:['CODE'],         tier:1, status:'todo',     notes:'Strength-ray driven FMOD lowpass. Big immersion win.' },
-  { id:'T1-06', title:'Smarter squad AI & difficulty depth',      sub:'AI',             tags:['MOD'],          tier:1, status:'todo',     notes:'Pure Lua in Base.rte/AI/. Squad roles, suppression, scaled difficulty.' },
+  { id:'T1-06', title:'The AI overhaul (flagship)',               sub:'AI',             tags:['MOD','CODE','ARCH'], tier:1, status:'todo',  notes:'Promoted to cortex-modern flagship (ADR-014). Full layered-hybrid AI rebuild -- the AI page has the M0-M6 milestone plan.' },
   { id:'T1-07', title:'Build reproducibility fixes',              sub:'Build',          tags:['BUILD'],        tier:1, status:'todo',     notes:'Pin PlatformToolset=v143; fix stale SDL2 in CI.' },
 
   { id:'T2-01', title:'Render interpolation',                     sub:'Rendering',      tags:['CODE'],         tier:2, status:'todo',     notes:'Lerp transforms by accumulator/dt. Mine the original interpolated-render branch (single-threaded scope).' },
