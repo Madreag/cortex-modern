@@ -26,6 +26,7 @@
       <a class="nav-link" href="analysis.html">Technical Analysis</a>
       <a class="nav-link active" href="roadmap.html">Roadmap</a>
       <a class="nav-link" href="campaign.html">Campaign</a>
+      <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -87,14 +88,13 @@
       <p class="small muted">Effort: low-medium &middot; Risk: low</p>
     </div>
     <div class="card">
-      <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T1-03 &nbsp; Delete the dead multiplayer code and drop RakNet</h3>
-      <p class="small">Upstream removed multiplayer outright (commit "RIP Multiplayer 2019-2025"). All four networking
-      files &mdash; <code>NetworkServer</code>, <code>NetworkClient</code>, <code>MultiplayerGame</code>,
-      <code>MultiplayerServerLobby</code> &mdash; are already commented out of the Meson build and do not compile;
-      only the RakNet library is still built and linked, for nothing. <a href="decisions.html">ADR-011</a> settles the
-      direction (no netcode revival), so this is now a pure cleanup: delete the four dead files and remove the
-      <code>RakNet</code> subproject from <code>meson.build</code>.</p>
-      <p class="small muted">Effort: low &middot; Risk: low &middot; see <a href="decisions.html">ADR-011</a></p>
+      <h3><span class="status status-doing">ON HOLD</span> &nbsp;T1-03 &nbsp; Multiplayer code &amp; RakNet</h3>
+      <p class="small">Previously slated for deletion. Now <b>on hold</b>: the multiplayer question has been reopened
+      (<a href="decisions.html">ADR-013</a>). The ~5,900 lines of networking code and the RakNet dependency are
+      <b>retained as the reference implementation</b> for a possible revival &mdash; see the
+      <a href="multiplayer.html">Multiplayer</a> page for the option analysis. Nothing is deleted until a multiplayer
+      direction is chosen; RakNet is dropped only when a Tier-1/2 build picks its replacement transport.</p>
+      <p class="small muted">Status: held pending the Multiplayer decision &middot; see <a href="multiplayer.html">Multiplayer</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-code">[CODE]</span> &nbsp;T1-04 &nbsp; Delete dead GL code</h3>
@@ -184,12 +184,14 @@
       <p class="small muted">Effort: very high &middot; Risk: high</p>
     </div>
     <div class="card">
-      <h3><span class="status status-done">DECIDED</span> &nbsp;T3-04 &nbsp; Multiplayer's future &mdash; resolved</h3>
-      <p class="small">Settled by <a href="decisions.html">ADR-011</a>: cortex-modern will <b>not</b> revive networked
-      multiplayer. The per-pixel atom physics is hostile to deterministic lockstep, upstream removed multiplayer
-      deliberately, and local co-op is covered by upstream's multiseat (multi-mouse / keyboard) work, which arrives
-      free on the next upstream sync. Networked play stays a non-goal unless that calculus changes.</p>
-      <p class="small muted">Status: closed &middot; see <a href="decisions.html">ADR-011</a></p>
+      <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Multiplayer &mdash; bring networked play back</h3>
+      <p class="small">Reopened by <a href="decisions.html">ADR-013</a>. The dedicated <a href="multiplayer.html">Multiplayer</a>
+      page lays out the full option menu &mdash; from a one-call Steam Remote Play stopgap, through modernizing the
+      old screen-streaming model, to a real server-authoritative state-replication build (the Teardown model, the
+      recommended target). A full determinism rewrite is ruled out as effectively a new engine. Near-term: the
+      zero-effort stopgap; the real build is flagship-scale, best sequenced with the <a href="campaign.html">Campaign</a>
+      as co-op.</p>
+      <p class="small muted">Effort: trivial (stopgap) to very high (state replication) &middot; see <a href="multiplayer.html">Multiplayer</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-05 &nbsp; Retire Allegro 4</h3>
