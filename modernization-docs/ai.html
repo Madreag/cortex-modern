@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>AI — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
+      <a class="nav-link" href="multiplayer.html">Multiplayer</a>
+      <a class="nav-link active" href="ai.html">AI</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link" href="corefall.html">Corefall Ideas</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Foundations</div>
+      <h1>Smarter AI</h1>
+      <p class="page-lead">Cortex Command's AI is the single most-cited weakness in the game &mdash; and the upstream
+      lead says so himself. It is also the <b>foundation</b> under everything else: the <a href="campaign.html">Campaign</a>
+      is only as good as its battles, and co-op <a href="multiplayer.html">Multiplayer</a> runs enemy AI server-side.
+      And it is <b>~95% Lua</b> &mdash; so fixing it is almost pure mod work.</p>
+    </header>
+
+    <div class="callout callout-key">
+      <div class="callout-title">The headline</div>
+      <p>AI quality is the <b>#1 complaint</b> across Steam reviews, the forums and mod.io &mdash; "units stuck in
+      terrain", weak bunker navigation, shallow squad coordination. Upstream has an open issue for it (#208,
+      "improve squad logic"). And the project lead, Causeless, put it bluntly in the dev Discord (2025-08-09):
+      <i>"the AI is such garbage. it's very frustrating. I want to just fucking delete all the path following code."</i></p>
+      <p>That is a rare thing: a major subsystem that the people who own it openly consider broken, have sketched a
+      fix for, and have not executed. It is the most clearly <b>un-owned, sanctioned gap</b> in the whole project
+      &mdash; and because CC's AI is overwhelmingly Lua, almost all of the fix is <span class="tag tag-mod">[MOD]</span>.</p>
+    </div>
+
+    <h2><span class="h-accent">What the code shows</span></h2>
+    <div class="card">
+      <ul>
+        <li>CC's AI is <b>~95% Lua</b> &mdash; roughly 5,800 lines in <code>Base.rte/AI/*.lua</code>
+        (<code>NativeHumanAI.lua</code>, <code>HumanBehaviors.lua</code>, <code>SharedBehaviors.lua</code>, etc.).
+        The C++ engine only gives an actor a <code>Controller</code> (the AI "presses the same virtual buttons" a
+        human would), an <code>AIMode</code> enum, and an async, jump-aware A* pathfinder. <b>Everything tactical is
+        Lua</b> &mdash; which means it is moddable.</li>
+        <li><b>What is decent:</b> moment-to-moment combat &mdash; velocity-led aim, hearing-based perception, basic
+        cover use. A solo enemy soldier fights reasonably.</li>
+        <li><b>What is weak:</b> <i>squad and strategic</i> AI &mdash; squadmates essentially <b>copy the leader's
+        inputs</b>; there is no real role coordination. And <b>path-following</b> &mdash; the lead's own assessment is
+        that "there's more issues with path following and AI navigation than in the pathfinding algorithm itself."
+        The A* algorithm is fine; the Lua that <i>consumes</i> the path is the garbage.</li>
+        <li><b>Known specific failures:</b> actors stuck on single-pixel obstacles; broken stuck-detection; crab and
+        human locomotion are duplicated and drift apart (a unified <code>ALocomotable</code> was designed in the
+        Discord but never built); ladders barely work ("you can't climb them 90% of the time"); actors without a
+        breaching tool freeze at hardened doors (see the door analysis in the project notes).</li>
+      </ul>
+    </div>
+
+    <div class="callout callout-info">
+      <p><b>The key implication:</b> the expensive part &mdash; the pathfinding <i>algorithm</i> &mdash; is already
+      good (async, multithreaded, jump-aware C++). The broken part is the <b>Lua path-following and behaviour
+      layer</b>, and that is <span class="tag tag-mod">[MOD]</span>. CC AI can be dramatically improved with
+      <b>no engine fork</b>.</p>
+    </div>
+
+    <h2><span class="h-accent">Why this is the foundation</span></h2>
+    <div class="callout callout-ok">
+      <p>AI is not a side feature &mdash; it sits <b>under</b> the other two flagship efforts. A
+      <a href="campaign.html">campaign</a> is only as compelling as the firefights inside it. Co-op
+      <a href="multiplayer.html">multiplayer</a> runs all the enemy and ally AI on the server, so the AI <i>is</i> a
+      large part of the multiplayer experience. Even the door problem is an AI problem. Fix the AI and every other
+      effort gets better for free. It is the highest-leverage, lowest-risk, most-validated work available &mdash;
+      and the design for a much richer AI is already catalogued on the <a href="corefall.html">Corefall Ideas</a>
+      page (the AI &amp; Squad cluster).</p>
+    </div>
+
+    <h2><span class="h-accent">What it's made of</span></h2>
+    <p>The building blocks, mostly drawn from the <a href="corefall.html">Corefall Ideas</a> AI cluster. Nearly all
+    of it is mod work on <code>Base.rte/AI</code>; only one item needs the engine.</p>
+
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Locomotion &amp; path-following overhaul</h3>
+      <p class="small">Rewrite the Lua that follows a path &mdash; the part the lead calls garbage. Fix stuck-detection,
+      unify the duplicated crab/human locomotion behaviours, make ladders and tight terrain reliable. The A* pathfinder
+      underneath is kept as-is. This is the floor everything else stands on.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Squad roles &amp; coordinated tactics</h3>
+      <p class="small">Replace "squadmates copy the leader" with real roles (point / flank / support), coordinated
+      suppression, and bounding movement. This is exactly upstream issue #208 and roadmap item <code>T1-06</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;AI archetypes + layered behaviour stack</h3>
+      <p class="small">Distinct archetypes (Rifleman / Sniper / Assault / Engineer / Medic / Spotter) on a
+      reactive &rarr; utility &rarr; behaviour-tree stack, instead of one generic brain. Pure Lua.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Priority tables &amp; squad doctrines</h3>
+      <p class="small">A per-actor weighted task table and per-squad doctrines (aggressive / defensive / scout) that
+      bias the whole squad's behaviour. Data plus a Lua scorer.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> <span class="tag tag-code">[CODE]</span> &nbsp;Cover-finder &amp; tactical positioning</h3>
+      <p class="small">Score nearby tiles by line-of-fire block to known threats and pick real cover. A Lua
+      cover-finder using the existing ray-casts is moddable; a batched per-tile query for scale would want a bounded
+      engine binding.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;BotMemory &mdash; threat &amp; pain memory</h3>
+      <p class="small">Per-actor memory of where threats were last seen and where it was hit, so the AI avoids kill
+      zones and remembers danger. Lua tables on actors, fed by the wound callbacks.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Scaled difficulty</h3>
+      <p class="small">Difficulty that genuinely scales reaction time, aim-settle, miss chance and target priority
+      &mdash; not just actor HP. The other half of <code>T1-06</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-mod">[MOD]</span> &nbsp;Environmental competence &amp; reason labels</h3>
+      <p class="small">AI that reacts to hazards (avoid fire, take cover from explosives, handle the door problem),
+      and a debug "Why?" key that surfaces each bot's current reason &mdash; invaluable for tuning. Pure Lua.</p>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;Hierarchical pathfinding</h3>
+      <p class="small">The one engine-side item: CC's pathfinder is flat. A tile / chunk / region hierarchy with
+      dynamic invalidation on terrain change is a bounded C++ change &mdash; worthwhile only after the Lua
+      path-following is fixed, since that is where the real pain is.</p>
+    </div>
+
+    <h2><span class="h-accent">Suggested approach</span> &mdash; phased</h2>
+    <div class="callout callout-ok">
+      <p><b>Phase 0 &mdash; fix the floor.</b> The path-following / stuck-detection / locomotion overhaul, ladders,
+      and door behaviour. Make the <i>existing</i> AI stop embarrassing itself. Pure Lua, immediately visible, and it
+      stands on its own regardless of what comes next.</p>
+      <p><b>Phase 1 &mdash; squad depth.</b> Real roles, coordination and scaled difficulty (<code>T1-06</code> /
+      issue #208). The first thing that makes battles feel designed.</p>
+      <p><b>Phase 2 &mdash; the rich stack.</b> Archetypes, priority tables, doctrines, cover-finder, BotMemory &mdash;
+      the AI the campaign and co-op multiplayer actually deserve.</p>
+      <p>This is the recommended <b>first real work</b> for cortex-modern: highest leverage, lowest risk, almost pure
+      <span class="tag tag-mod">[MOD]</span>, and a problem upstream has openly admitted and not fixed. See the
+      <a href="roadmap.html">Roadmap</a> (<code>T1-06</code>) and the <a href="corefall.html">Corefall Ideas</a> AI cluster.</p>
+    </div>
+
+    <div class="page-foot">
+      AI analysis &middot; built from the Cortex Command source (<code>Base.rte/AI</code>), the upstream issue
+      tracker, and the dev-team Discord &middot; updated 2026-05-16 &middot; see <a href="roadmap.html">roadmap T1-06</a>.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

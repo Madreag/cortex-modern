@@ -14,6 +14,7 @@ A self-contained HTML wiki. No build step, no server — just open the files.
 | `roadmap.html` | Tiered modernization roadmap |
 | `campaign.html` | The flagship: the case for a real strategic campaign to replace the abandoned Conquest mode |
 | `multiplayer.html` | Bringing networked multiplayer back — the full four-tier option analysis |
+| `ai.html` | The AI overhaul — the #1 community complaint, the foundation under campaign + multiplayer |
 | `tracker.html` | Work-item tracker (status board) |
 | `decisions.html` | Architecture/strategy decision log (ADR style) |
 | `branches.html` | Per-branch deep-dive of the upstream feature branches |
