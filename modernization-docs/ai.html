@@ -92,6 +92,8 @@
   .ms-val { flex: 1; color: var(--text); min-width: 0; }
   .ms-val.gate b { color: var(--green); font-weight: 600; }
   .ms-val.touch { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+  .ms-steps { flex: 1; min-width: 0; margin: 1px 0 0; padding-left: 18px; color: var(--text); }
+  .ms-steps li { margin: 3px 0; }
 </style>
 </head>
 <body>
@@ -608,6 +610,26 @@
         <tr><td><b>Thread-safety</b></td><td>The AI already runs multithreaded (<code>ThreadedUpdateAI</code> across the pool). The new shared systems &mdash; influence maps, the blackboard, the decision log, the pathfinder searches &mdash; are designed thread-safe and time-sliced from the start, not retrofitted.</td></tr>
       </tbody>
     </table>
+    <div class="callout callout-info">
+      <div class="callout-title">Coordinate with the Multiplayer flagship (ADR-015)</div>
+      <p>Networked multiplayer is cortex-modern's <b>second</b> committed flagship
+      (<a href="multiplayer.html">Multiplayer</a>, <a href="decisions.html">ADR-015</a>), and it is sequenced to
+      <i>ride</i> this AI work. Two things bind the two builds &mdash; get them right here and multiplayer inherits
+      them free:</p>
+      <ul>
+        <li><b>Build the AI's new C++ systems to the determinism-island contract now.</b> The pathfinder,
+        influence maps, blackboard, kernels and persistent orders are all <i>new simulation state</i> the
+        multiplayer build must replicate &mdash; and, for PvP, make bit-identical. Built clean to the contract
+        &mdash; ordered iteration, single-precision or canonical floats, one seeded RNG, no wall-clock, a
+        deterministic threaded merge &mdash; they cost nothing; retrofitted later they are pure determinism debt.
+        (A welcome side effect: once that island exists, the AI's own tests can tighten from statistical to exact
+        &mdash; &sect;8.3.)</li>
+        <li><b>The harness is one apparatus.</b> The Multiplayer flagship's M0 <i>is</i> this flagship's
+        <a href="#plan">M0</a> &mdash; the decision-event channel, replay capture, the headless runner and the
+        per-tick checksum are shared. Build the observability and checksum harness <b>once</b>; both flagships
+        gate on it.</li>
+      </ul>
+    </div>
 
     <h3>5.4 &nbsp; Why the engine work pays off far beyond the AI</h3>
     <div class="callout callout-ok">
@@ -740,14 +762,22 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
         for the rest of cortex-modern's wider modernization.</li>
       </ul>
     </div>
+    <p><b>The corpus, concretely.</b> The CI mod corpus is the local <code>cccp_mods/</code> directory &mdash;
+    <b>Void Wanderers</b> and its author-recommended companions, the <b>Mappack</b> and <b>BB+</b> (~3,500 files
+    in all). It is a hard, real-world exercise of layer&nbsp;1: a scan of the corpus shows Void Wanderers drives the
+    AI through the command API (<code>SetAIMode</code>, <code>AddAISceneWaypoint</code>, <code>UpdateMovePath</code>
+    &hellip;) ~130 times across two dozen mission and tactics scripts, and the Mappack's activities call it too
+    &mdash; yet <i>neither extends the stock AI's internals anywhere</i>. So this corpus leans entirely on the
+    <b>API facade</b> (layer&nbsp;1) and not at all on the behaviour bridge: it is a category-A/B corpus, and it
+    proves that the command-API facade is the surface the real ecosystem actually depends on. The behaviour bridge
+    and the legacy profile remain the insurance for category-C mods beyond it.</p>
     <div class="callout callout-ok">
       <p><b>The guarantee &mdash; compatibility is measured, not promised.</b> From milestone <b>M4</b> the
-      validation harness loads and runs a corpus of real community mods &mdash; <b>Void Wanderers explicitly
-      included</b> &mdash; on every CI cycle. The legacy profile is regression-checked against the pre-overhaul
-      behaviour baseline that <a href="#plan">M0</a> records before any AI code is touched. If a mod breaks, the
-      failure report names the exact call &mdash; and the fix is one of: repair the facade, pin the mod to the
-      legacy profile, or help it migrate. "Does Void Wanderers still work" is a line in the
-      <a href="#done">definition of done</a> and a green light on every build &mdash; never a guess.</p>
+      validation harness loads and runs that corpus on every CI cycle. The legacy profile is regression-checked
+      against the pre-overhaul behaviour baseline that <a href="#plan">M0</a> records before any AI code is
+      touched. If a mod breaks, the failure report names the exact call &mdash; and the fix is one of: repair the
+      facade, pin the mod to the legacy profile, or help it migrate. "Does Void Wanderers still work" is a line in
+      the <a href="#done">definition of done</a> and a green light on every build &mdash; never a guess.</p>
     </div>
 
     <!-- ============ 7 · THE PLAN ============ -->
@@ -760,14 +790,24 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       states what it depends on and the exact, machine-checkable condition that closes it &mdash; and none carries
       a time estimate. Nothing is deferred for being large. <b>An agent picking up this build starts at M0</b>;
       each milestone is a complete, shippable improvement, and the build always contains a working, better AI than
-      the milestone before.</p>
+      the milestone before. Every new C++ system below is built to the determinism-island contract (&sect;5.3) from
+      the start, so the Multiplayer flagship inherits it free.</p>
     </div>
     <div class="plan">
 
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M0</span><span class="ms-name">Observability &amp; the validation harness</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make the AI fully observable, and make "better" a number a machine can read. The measurement apparatus is built <i>before</i> the AI, so every later milestone is graded from its first commit.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The decision-event channel (&sect;8 has the schema); the per-agent in-game debug overlay (intent, target, path, current reason); reason labels across the existing AI; the headless scenario runner; the twelve AI-trust scenarios as scripted activities; the metrics collector; the machine-readable run report (JSON &mdash; per-scenario pass/fail, metrics, failure replays); CI wiring so the suite runs on every change.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Add the C++ <b>decision-event channel</b> &mdash; a per-actor ring buffer; events carry tick, actor, layer, type, chosen, scores, reason and target (the &sect;8.1 schema). Expose an <code>ai.emit(...)</code> Lua binding.</li>
+          <li>Add <b>reason labels</b> across the existing AI &mdash; every behaviour in <code>Data/Base.rte/AI/*.lua</code> emits a plain-language "why" on each decision.</li>
+          <li>Build the per-agent in-game <b>debug overlay</b> &mdash; intent, target, path, current reason &mdash; toggleable per actor.</li>
+          <li>Build the <b>headless scenario runner</b>: load a scripted activity, run it with no window, collect metrics, exit with a report.</li>
+          <li>Author the twelve <b>AI-trust scenarios</b> (&sect;8.2) as scripted <code>GAScripted</code> activities in a new <code>Data/Tests.rte</code>.</li>
+          <li>Build the metrics collector and the machine-readable <b>JSON run report</b> (per-scenario pass/fail, metrics, a saved replay per failure).</li>
+          <li>Run the suite against today's stock AI and record the result as the <b>pre-overhaul baseline</b> &mdash; the regression oracle, and the legacy-profile oracle (&sect;6.3).</li>
+          <li>Wire the suite into <b>CI</b> so it runs on every change.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/MovableMan.cpp &middot; new Source/AI/ event &amp; overlay code &middot; Data/Base.rte/AI/*.lua (emit calls) &middot; new test-scenario .rte &middot; CI config</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">Nothing &mdash; this is the foundation and the starting point.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the harness runs all twelve trust scenarios headless against the <i>current</i> stock AI and emits a baseline report; the overlay shows live cognition for any actor; a deliberately-broken AI change turns the report red.</span></div>
@@ -776,7 +816,14 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M1</span><span class="ms-name">The world model &mdash; senses &amp; memory</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Give the AI real senses and memory. Today it has one random ray and coroutine locals.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The typed per-actor blackboard; the influence-map subsystem (threat / alarm / friendly-density / danger-imminent) with a Lua read+registration API and debug overlays; the unified perception query API (LOS fans, nearest cover / safe cell), retiring the bimodal <code>LookForTargets</code> / <code>CheckEnemyLOS</code> split &mdash; every actor now perceives reliably.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Add the typed per-actor <b>blackboard</b> &mdash; a C++ record (target, last-seen positions, path handle, ammo, standing order, threat memory) with a Lua read/write API.</li>
+          <li>Build the <b>influence-map subsystem</b>: decaying scalar grids (threat, alarm, friendly-density, danger-imminent), updated time-sliced, with a Lua read + layer-register API.</li>
+          <li>Add the influence-map overlays to the M0 debug overlay.</li>
+          <li>Build the <b>perception / spatial-query API</b> &mdash; batched LOS fans, cover scoring, nearest-safe-cell.</li>
+          <li>Route every actor through the new perception API, <b>retiring the bimodal spotter</b> (<code>LookForTargets</code> / <code>CheckEnemyLOS</code>) &mdash; every actor now perceives reliably.</li>
+          <li>Feed alarm events into the alarm influence layer with time-and-distance decay, replacing per-event over-reaction.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/AI/ (InfluenceMap, Blackboard, PerceptionQuery) &middot; Source/Entities/Actor.* &middot; Source/Lua bindings &middot; Data/Base.rte/AI/</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the clumping and noise-chasing metrics drop sharply against the M0 baseline; every actor reliably perceives on-screen threats in the harness; the influence overlays render correctly.</span></div>
@@ -785,7 +832,14 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M2</span><span class="ms-name">Survival &amp; navigation</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">An actor that survives a hostile, changing world and can actually get where it is told. This milestone delivers the pathfinder rebuild of &sect;5.1.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The reflex layer (L0&prime;) on the new adaptive AI scheduler; the incremental pathfinder (D* Lite / LPA*) replacing MicroPather; a real <code>EstimateJumpHeight</code> and capability-annotated edges; the dig planner and HPA* regions; deliberate stuck-recovery replacing the random flailing.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Replace MicroPather's core with a <b>D* Lite / LPA* incremental search</b> in <code>PathFinder.cpp</code> &mdash; keep the <code>PathNode</code> grid; a path becomes a persistent per-actor search (&sect;5.1).</li>
+          <li>Feed dirty-terrain regions as edge-cost updates into the live searches; delete the throttled full-rebuild path and the <code>MicroPather/</code> directory.</li>
+          <li>Fix <code>Actor::EstimateJumpHeight()</code> to return a real value from the actor's jetpack impulse; tag pathfinder edges with the <b>capability</b> they need (walk / jump-N / dig-strength / jetpack).</li>
+          <li>Add <b>HPA*</b>-style region abstraction for long-haul queries, and the <b>dig planner</b> &mdash; the minimum-cost excavation that opens a blocked route.</li>
+          <li>Build the <b>reflex layer</b> (L0&prime;) on the new adaptive AI scheduler &mdash; per-tick danger-field checks with an emergency high-priority tick.</li>
+          <li>Replace <code>GoToWpt</code>'s random stuck-flailing with a deliberate <b>recovery ladder</b>: re-path &rarr; step off &rarr; dig &rarr; jump &rarr; call for help &rarr; report stuck.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/System/PathFinder.* (rewritten) &middot; Source/System/MicroPather/ (removed) &middot; Source/Entities/Scene.cpp &middot; Source/Entities/Actor.cpp &middot; Source/Managers/MovableMan.cpp (scheduler)</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0, M1 (the reflex layer consumes the danger field).</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> AI-04 (recover from a collapsed tunnel) and AI-12 (enemy flanks through a new hole) pass; the self-preservation scenarios pass; the mean time-stuck metric is near zero; path-recompute cost on a terrain change drops by an order of magnitude.</span></div>
@@ -794,7 +848,13 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M3</span><span class="ms-name">The decision brain</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Replace the six-mode enum and coroutine dispatch with real, scored judgement.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The utility-AI tactical layer (L4 &mdash; the C++ scoring kernel + Lua-registered considerations through response curves; highest wins, with an inertia bonus); scored decisions for targeting, tool/weapon choice, positioning, engage/retreat; every decision auto-emits its full score breakdown as a reason. The utility layer runs on the existing coroutine behaviours &mdash; it lands before the M4 swap.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Build the C++ <b>utility-scoring kernel</b>: considerations &times; response curves &rarr; score, an inertia bonus against flip-flop, pick the winner.</li>
+          <li>Expose the <code>ai.consideration</code> / <code>ai.behaviour</code> Lua API (&sect;6.1); author the stock considerations and behaviours against it.</li>
+          <li>Replace the <code>AIMode</code>-enum dispatch with the <b>utility selector</b> &mdash; targeting, tool / weapon choice, positioning, engage / retreat. (It runs on the existing coroutine behaviours, so it lands before the M4 swap.)</li>
+          <li>Auto-emit every decision's full score breakdown as a reason into the M0 event channel.</li>
+          <li>Wire the <b>offline auto-tuner</b>: the harness searching the utility weight-space against the suite score (&sect;8.6).</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/AI/ (UtilityKernel) &middot; Source/Lua bindings (the ai.* API) &middot; Data/Base.rte/AI/ (considerations &amp; behaviour definitions)</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0, M1, M2.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> AI-02 (breach door), AI-09 (use medikit) and AI-10 (weapon pickup) pass; the harness shows the AI consistently choosing sane options with a valid logged reason on every decision; the offline auto-tuner (&sect;8) can search utility weights against the suite score.</span></div>
@@ -803,8 +863,14 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M4</span><span class="ms-name">Behaviour execution &mdash; retire the coroutines</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Replace the leak-prone coroutine soup with a structured, debuggable execution engine &mdash; without breaking a single mod.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The C++ behaviour-tree kernel (L3); the stock behaviours migrated to behaviour trees with Lua leaf-actions; the live behaviour-tree view in the debug overlay; the <b>behaviour bridge</b> of &sect;6.3 &mdash; the kernel ships a leaf-node type that runs legacy coroutine behaviours unchanged, and the <code>Create*Behavior</code> factories and behaviour tables are preserved as shims.</span></div>
-        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/AI/ (BehaviourTree) &middot; Data/Base.rte/AI/*.lua (migrated to trees + leaves) &middot; the compatibility shim &middot; the harness mod-corpus loader</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Build the C++ <b>behaviour-tree kernel</b> (L3) &mdash; the Success / Failure / Running tick protocol, with Lua leaf actions.</li>
+          <li>Build the <b>behaviour bridge</b> (&sect;6.3, layer&nbsp;2): a leaf-node type that runs a legacy <code>function(AI, Owner, Abort)</code> coroutine unchanged; preserve the <code>Create*Behavior</code> factories and the <code>HumanBehaviors</code> / <code>SharedBehaviors</code> tables as shims.</li>
+          <li>Migrate the stock behaviours onto behaviour trees with Lua leaves.</li>
+          <li>Add the live behaviour-tree view to the debug overlay.</li>
+          <li>Build the <b>mod-corpus loader</b>: load and run the <code>cccp_mods</code> corpus (Void Wanderers, Mappack, BB+) every CI cycle &mdash; the &sect;6.3 compatibility test.</li>
+        </ol></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/AI/ (BehaviourTree) &middot; Data/Base.rte/AI/*.lua (migrated to trees + leaves) &middot; the compatibility shim &middot; the harness mod-corpus loader (D:\Projects\cccp_mods)</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M3.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> every stock behaviour runs as a behaviour tree; the test harness's mod corpus still loads and runs; the "abort to avoid memory leaks" protocol is gone from the <i>stock</i> AI (it survives, frozen, only inside the opt-in legacy profile); trust-suite scores hold or improve across the swap.</span></div>
       </div>
@@ -812,7 +878,14 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M5</span><span class="ms-name">Command &amp; coordination</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Real squads &mdash; and seamless command of every unit on the field.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">The per-faction commander (L5 &mdash; reads the influence maps, decomposes objectives into squad goals, assigns positions, slot reservations and breach-sync cues); the persistent order system (orders separated from tactics &mdash; a unit's standing intent survives target loss, path failure, and the player taking and releasing direct control); the expanded order vocabulary that supersedes the six-mode enum, and the matching command UI.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Build the <b>persistent order system</b> &mdash; orders separated from tactics; a unit's standing order is blackboard state that survives target loss, path failure and player hand-off.</li>
+          <li>Make direct player control a <b>non-destructive override</b> &mdash; fix the <code>PlayerInterfered</code> AI-state wipe (&sect;5.3) so a unit resumes its order on release.</li>
+          <li>Build the per-faction <b>commander</b> (L5, HTN-style): reads the influence maps, decomposes objectives into squad goals, assigns positions, slot reservations and breach-sync cues.</li>
+          <li>Widen the <b>order vocabulary</b> beyond the six-mode enum &mdash; hold, mine, breach, rescue, retreat, escort&hellip;</li>
+          <li>Build the matching <b>command UI</b> in the pie menu / <code>GameActivity.cpp</code> &mdash; issue the richer orders, to one unit or several.</li>
+          <li>Serialise orders and blackboard state into the <code>.ccsave</code> path.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">new Source/AI/ (Commander, OrderSystem) &middot; Source/System/Controller.* &middot; Source/Activities/GameActivity.cpp (pie-menu / command UI) &middot; the .ccsave path</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M4.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> AI-08 (hold formation through a bunker) and the squad scenarios pass; a player can take direct control of any unit and release it with <i>no state loss</i> &mdash; it resumes its standing order; a full side runs autonomously and competently with zero player input.</span></div>
@@ -821,7 +894,13 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
       <div class="ms">
         <div class="ms-head"><span class="ms-id">M6</span><span class="ms-name">The new default &mdash; harden &amp; ship</span></div>
         <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make the new AI the stock AI, and prove it is finished.</span></div>
-        <div class="ms-field"><span class="ms-key">Builds</span><span class="ms-val">Promotion of the new AI to the <code>Base.rte</code> default; the full mod-compatibility pass; difficulty that scales <i>competence</i> (perception, reaction, coordination) not stats; the performance pass for "every unit, every match"; the fairness pass (no cheating as the enemy, no sabotage as the ally); the stock AI now runs entirely on the new kernels, and the old AI is frozen and packaged as the opt-in legacy profile of &sect;6.3 with a published sunset.</span></div>
+        <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
+          <li>Promote the new AI to the <code>Base.rte</code> default; freeze the old AI as the opt-in <b>legacy profile</b> (&sect;6.3, layer&nbsp;3) with a published sunset.</li>
+          <li>Run the full <b>mod-compatibility pass</b> against the <code>cccp_mods</code> corpus.</li>
+          <li>Add difficulty that scales <i>competence</i> &mdash; perception, reaction, coordination &mdash; not stats.</li>
+          <li>Run the <b>performance pass</b>: every unit, every match, on the adaptive scheduler.</li>
+          <li>Run the <b>fairness pass</b>: no cheating as the enemy, no sabotage as the ally.</li>
+        </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Data/Base.rte/AI/ &middot; Source/Managers/SettingsMan (difficulty) &middot; full-game performance &amp; balance pass</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0&ndash;M5.</span></div>
         <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the entire AI-01..AI-12 suite is green at target pass-rates across every difficulty; large-scale AI-vs-AI self-play is stable over long runs and many maps; the fuzz harness finds no invariant violations; the new AI ships as default with the mod corpus intact. This is the <a href="#done">definition of done</a>.</span></div>
@@ -888,8 +967,8 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
     &mdash; across many maps, many times, unattended. Self-play surfaces emergent stupidity that scripted scenarios
     miss (mutual stalemate, suicidal rushes, two sides both stuck). New-vs-old win rate is a single number for "are
     we winning"; new-vs-previous-version catches regressions the moment they appear. From M4 the harness also
-    loads and runs a corpus of real community mods &mdash; Void Wanderers among them &mdash; every cycle; the
-    compatibility guarantee of &sect;6.3 is a test, not a promise.</p>
+    loads and runs the <code>cccp_mods</code> corpus (Void Wanderers, the Mappack and BB+ &mdash; &sect;6.3) every
+    cycle; the compatibility guarantee of &sect;6.3 is a test, not a promise.</p>
 
     <h3>8.5 &nbsp; Fuzz &amp; invariant testing</h3>
     <p>Beyond the twelve authored scenarios, the harness procedurally generates scenes &mdash; random terrain,
@@ -937,7 +1016,7 @@ ai.emit("decided", { behaviour = "engage", score = 0.81,
         un-moddable AI is a documented player complaint. The architecture adds structure to Lua &mdash; it never
         deletes it.</li>
         <li><b>No LLMs or runtime ML in the tactical loop.</b> Latency, cost, non-determinism (it would break
-        replays and any future multiplayer), offline play, and modding breakage. ML earns its keep in exactly one
+        replays and the Multiplayer flagship), offline play, and modding breakage. ML earns its keep in exactly one
         place &mdash; the harness's offline auto-tuner (&sect;8.6) &mdash; and never in the runtime loop.</li>
         <li><b>GOAP is not the top level.</b> A destructible world invalidates plans every blast. Use GOAP only as
         a sub-planner for bounded sequences (breach-and-enter, dig-to-goal).</li>
