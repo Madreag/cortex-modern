@@ -1474,11 +1474,16 @@ void FrameMan::Draw() {
 			ClearFowTextures();
 			InitOrReinitFowOglThings(currentScene);
 		}
-		// Background layer rendering is NOT FoW-specific - it renders the parallax/sky
-		// backdrops into m_bgLayersTex, which Background.frag samples for scene composition
-		// regardless of whether FoW compositing is active. Keep it outside the maskReady gate
-		// so the shader always has fresh BG-layer data during the init window.
-		RenderBackgroundLayersBmToTexture();
+		// RenderBackgroundLayersBmToTexture writes to m_bgLayersTex via an FBO + VAO that are
+		// allocated by InitOrReinitFowOglThings - so it must stay gated on maskReady too,
+		// otherwise it binds the default framebuffer with no VAO bound and produces driver-
+		// dependent GL errors (m_bgLayersTex/m_SdfFbo/m_SdfVao are all 0 before init).
+		// Trade-off: for the 1-frame init window, the shader samples a stale or zero
+		// bgLayersTexture. Mitigated by passing fowEnabled && maskReady to the shader below
+		// so it skips FoW compositing entirely during that window.
+		if (maskReady) {
+			RenderBackgroundLayersBmToTexture();
+		}
 
 		// TODO- this needs to be done above, per screen! Right now splitscreen is fucked
 		FogOfWarSetup(backgroundShader);
