@@ -1293,15 +1293,39 @@ void Actor::Update() {
 }
 
 void RTE::Actor::CastSeeRays() {
-	// "See" the location and surroundings of this actor on the unseen map
-	if (m_Status != Actor::INACTIVE) {
-		// GTODO: this was 6. i gutted this, rewrite later
-		// GTODO: constexpr this?
-		const int lookIterations = 1; // How many see rays to cast per frame
-		for (int i = 0; i < lookIterations; ++i) {
-			// TODO: perceptiveness should increase bubble awareness
-			Look(100, g_FrameMan.GetPlayerScreenWidth() * 0.7 * m_Perceptiveness);
-		}
+	// Character-centric FoW reveal: cast a 360-degree fan of see-rays around the actor's eye
+	// position, clearing the per-team unseen mask in a circle around each unit.
+	//
+	// Replaces the previous single Look() call (the "// GTODO: this was 6. i gutted this,
+	// rewrite later" scaffold) - that was transitional code while the dev moved this branch
+	// from CC's stock sky-vision model to the Starcraft-style character-centric two-stage FoW
+	// the commit history points at: bdb3c9bbd "Unseen is now ever unseen, not current FoW" and
+	// 4ae962455 "Killed script sky rays". Coupled with disabling the always-on
+	// CastSeeRaysFromSky dispatch in MovableMan::Update, this gives the proper model:
+	//   - Bright = inside an actor's sight circle right now.
+	//   - Dim (memory) = in an actor's sight circle previously, not now.
+	//   - Black = never in any actor's sight circle.
+	if (m_Status == Actor::INACTIVE || !m_CanRevealUnseen) {
+		return;
+	}
+	if (!g_SceneMan.AnythingUnseen(m_Team)) {
+		return;
+	}
+
+	const Vector eyePos = GetEyePos();
+	const float sightRadius = g_FrameMan.GetPlayerScreenWidth() * 0.35f * m_Perceptiveness;
+	constexpr int rayCount = 36; // 10-degree spacing around the actor
+	const float angleStep = (2.0f * c_PI) / static_cast<float>(rayCount);
+	int step = static_cast<int>(g_SceneMan.GetUnseenResolution(m_Team).GetSmallest()) / 2;
+	if (step < 1) { step = 1; }
+	Vector ignored(0, 0);
+
+	Vector rayVec(sightRadius, 0);
+	for (int i = 0; i < rayCount; ++i) {
+		// Strength 25 matches Look() and the Lua SetupFogOfWar pattern - lets rays through
+		// light debris and corpses but stops them at solid walls.
+		g_SceneMan.CastSeeRay(m_Team, eyePos, rayVec, ignored, 25, step);
+		rayVec.RadRotate(angleStep);
 	}
 }
 
@@ -1320,9 +1344,9 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 		return;
 	}
 
-	// Only draw if the team viewing this is on the same team OR has seen the space where this is located.
+	// Only draw if the team viewing this is on the same team OR currently has line-of-sight to the space where this is located.
 	int viewingTeam = g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen));
-	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam && (!g_SettingsMan.ShowEnemyHUD() || g_SceneMan.IsUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))) {
+	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam && (!g_SettingsMan.ShowEnemyHUD() || g_SceneMan.IsCurrentlyUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))) {
 		return;
 	}
 

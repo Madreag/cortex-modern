@@ -320,6 +320,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, SceneMan) {
 	    .def("AnythingUnseen", &SceneMan::AnythingUnseen)
 	    .def("GetUnseenResolution", &SceneMan::GetUnseenResolution)
 	    .def("IsUnseen", &SceneMan::IsUnseen)
+	    .def("IsCurrentlyUnseen", &SceneMan::IsCurrentlyUnseen)
 	    .def("RevealUnseen", &SceneMan::RevealUnseen)
 	    .def("RevealUnseenBox", &SceneMan::RevealUnseenBox)
 	    .def("RestoreUnseen", &SceneMan::RestoreUnseen)
