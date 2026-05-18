@@ -1314,7 +1314,10 @@ void RTE::Actor::CastSeeRays() {
 
 	const Vector eyePos = GetEyePos();
 	const float sightRadius = g_FrameMan.GetPlayerScreenWidth() * 0.35f * m_Perceptiveness;
-	constexpr int rayCount = 36; // 10-degree spacing around the actor
+	// rayCount scales with sightRadius so the arc gap between adjacent rays stays constant -
+	// keeps the sight-circle perimeter visibly smooth regardless of perceptiveness/screen size.
+	constexpr float gapTargetPixels = 6.0f;
+	const int rayCount = std::max(36, static_cast<int>(2.0f * c_PI * sightRadius / gapTargetPixels));
 	const float angleStep = (2.0f * c_PI) / static_cast<float>(rayCount);
 	int step = static_cast<int>(g_SceneMan.GetUnseenResolution(m_Team).GetSmallest()) / 2;
 	if (step < 1) { step = 1; }
