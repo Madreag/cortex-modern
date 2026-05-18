@@ -258,7 +258,7 @@ bool PostProcessMan::GetPostScreenEffects(Vector boxPos, int boxWidth, int boxHe
 	if (g_SceneMan.GetScene()) {
 		for (PostEffect& scenePostEffect: m_PostSceneEffects) {
 			if (team != Activity::NoTeam) {
-				unseen = g_SceneMan.IsUnseen(scenePostEffect.m_Pos.GetFloorIntX(), scenePostEffect.m_Pos.GetFloorIntY(), team);
+				unseen = g_SceneMan.IsCurrentlyUnseen(scenePostEffect.m_Pos.GetFloorIntX(), scenePostEffect.m_Pos.GetFloorIntY(), team);
 			}
 
 			if (WithinBox(scenePostEffect.m_Pos, boxPos, static_cast<float>(boxWidth), static_cast<float>(boxHeight)) && !unseen) {
@@ -278,7 +278,7 @@ bool PostProcessMan::GetPostScreenEffects(int left, int top, int right, int bott
 
 	for (PostEffect& scenePostEffect: m_PostSceneEffects) {
 		if (team != Activity::NoTeam) {
-			unseen = g_SceneMan.IsUnseen(scenePostEffect.m_Pos.GetFloorIntX(), scenePostEffect.m_Pos.GetFloorIntY(), team);
+			unseen = g_SceneMan.IsCurrentlyUnseen(scenePostEffect.m_Pos.GetFloorIntX(), scenePostEffect.m_Pos.GetFloorIntY(), team);
 		}
 
 		if (WithinBox(scenePostEffect.m_Pos, static_cast<float>(left), static_cast<float>(top), static_cast<float>(right), static_cast<float>(bottom)) && !unseen) {

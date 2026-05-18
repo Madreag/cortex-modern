@@ -276,10 +276,17 @@ function SkirmishDefense:UpdateActivity()
 					end
 				end
 
+				-- Small initial reveal so each starting actor only knows their immediate
+				-- surroundings; the per-frame 360-degree fan in Actor::CastSeeRays expands it
+				-- as units move. Previously this revealed a ~screen-wide radius around every
+				-- starting actor which left most of the map permanently in the "seen-before"
+				-- memory layer (no proper "never seen" black anywhere). Starcraft-style FoW
+				-- wants the player to discover the map by exploring.
+				local initialSightRadius = 250;
 				for Act in MovableMan.AddedActors do
 					if not IsADoor(Act) then
-						for angle = 0, math.pi * 2, 0.05 do
-							SceneMan:CastSeeRay(Act.Team, Act.EyePos, Vector(150+FrameMan.PlayerScreenWidth * 0.5, 0):RadRotate(angle), Vector(), 25, fogResolution);
+						for angle = 0, math.pi * 2, 0.1 do
+							SceneMan:CastSeeRay(Act.Team, Act.EyePos, Vector(initialSightRadius, 0):RadRotate(angle), Vector(), 25, fogResolution);
 						end
 					end
 				end
