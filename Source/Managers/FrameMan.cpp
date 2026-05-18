@@ -1474,9 +1474,11 @@ void FrameMan::Draw() {
 			ClearFowTextures();
 			InitOrReinitFowOglThings(currentScene);
 		}
-		if (maskReady) {
-			RenderBackgroundLayersBmToTexture();
-		}
+		// Background layer rendering is NOT FoW-specific - it renders the parallax/sky
+		// backdrops into m_bgLayersTex, which Background.frag samples for scene composition
+		// regardless of whether FoW compositing is active. Keep it outside the maskReady gate
+		// so the shader always has fresh BG-layer data during the init window.
+		RenderBackgroundLayersBmToTexture();
 
 		// TODO- this needs to be done above, per screen! Right now splitscreen is fucked
 		FogOfWarSetup(backgroundShader);
