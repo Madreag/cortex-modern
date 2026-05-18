@@ -1452,6 +1452,12 @@ void FrameMan::Draw() {
 	Activity* currentActivity = g_ActivityMan.GetActivity();
 	GameActivity* gameActivity = dynamic_cast<GameActivity*>(currentActivity);
 	fowEnabled = gameActivity && gameActivity->GetFogOfWarEnabled();
+	// Hoisted out of the if-block so we can AND it into the shader's fowEnabled below. During
+	// the brief window when fowEnabled is true but the mask isn't ready (first frame of a fresh
+	// activity, scenario restart before MakeAllUnseen has run), the shader must skip FoW
+	// compositing - otherwise it samples FoW textures that still have id=0 from before the
+	// init pass and produces driver-dependent garbage.
+	bool maskReady = false;
 	if (fowEnabled) {
 		Scene* currentScene = g_SceneMan.GetCurrentScene();
 		// Defer FoW OGL init and render passes until the per-team unseen layer exists. On
@@ -1462,7 +1468,7 @@ void FrameMan::Draw() {
 		// un-updated when the mask isn't ready, so the init re-fires once the mask appears.
 		// FogOfWarSetup is still called unconditionally because it now also handles the
 		// general per-frame texture uploads (GUI/MO/terrain) which must happen every frame.
-		bool maskReady = currentScene && currentScene->GetUnseenLayerMask();
+		maskReady = currentScene && currentScene->GetUnseenLayerMask();
 		if (maskReady && currentScene != m_ScenePreviouslyUsedForOglSetup) {
 			m_ScenePreviouslyUsedForOglSetup = currentScene;
 			ClearFowTextures();
@@ -1485,7 +1491,9 @@ void FrameMan::Draw() {
 	backgroundShader.Begin();
 	backgroundShader.Enable();
 
-	BackgroundShaderSetUniforms(backgroundShader, fowEnabled);
+	// Pass fowEnabled && maskReady so the shader skips FoW compositing when textures aren't
+	// initialized yet - see hoisted-maskReady block above for the timing rationale.
+	BackgroundShaderSetUniforms(backgroundShader, fowEnabled && maskReady);
 
 	rlSetUniformSampler(backgroundShader.GetUniformLocation("rtePalette"), g_PostProcessMan.GetPaletteTexture());
 
