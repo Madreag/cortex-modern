@@ -1318,7 +1318,11 @@ void MovableMan::Update() {
 
 	// If fog of war is enabled, then...
 	Activity* currentActivity = g_ActivityMan.GetActivity();
-	if (dynamic_cast<GameActivity*>(currentActivity)->GetFogOfWarEnabled()) {
+	// Guards the dynamic_cast against a non-GameActivity (was a latent null-deref).
+	// init-if scopes `gameActivity` to this block so it doesn't collide with the see-ray
+	// block's own `gameActivity` declaration later in this function.
+	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(currentActivity);
+	    gameActivity && gameActivity->GetFogOfWarEnabled()) {
 		// For each human player...
 		for (int playerIt = PlayerOne; playerIt < MaxPlayerCount; playerIt++) {
 			if (currentActivity->PlayerActive(playerIt) && currentActivity->PlayerHuman(playerIt)) {
@@ -1327,7 +1331,16 @@ void MovableMan::Update() {
 				g_SceneMan.CommitToLastSeenTerrainWithFowMask(team);
 				// Clear what was immediately seen
 				// GTODO: make this not eat a fow resolution, tweak functions accordingly
-				g_SceneMan.MakeAllUnseen(g_SceneMan.GetUnseenResolution(team), team);
+				// Use a sensible default resolution when the per-team mask doesn't exist yet -
+				// the activity's Lua creates it via MakeAllUnseen at gameplay start, but until
+				// then GetUnseenResolution falls back to (1,1) and we'd create a full-scene mask
+				// every frame (16x the intended (4,4) mask), the source of in-editor framerate
+				// drops. Once the Lua sets up FoW, GetUnseenResolution returns the real (4,4).
+				Vector unseenRes = g_SceneMan.GetUnseenResolution(team);
+				if (unseenRes.GetX() < 2 || unseenRes.GetY() < 2) {
+					unseenRes = Vector(4, 4);
+				}
+				g_SceneMan.MakeAllUnseen(unseenRes, team);
 			}
 		}
 	}
@@ -1697,13 +1710,20 @@ void MovableMan::Update() {
 				                                                                         m_Actors[i]->CastSeeRays();
 			                                                                         }
 		                                                                         });
-		// Reveal what's being seen from orbit
-		for (int screenId = 0; screenId < g_FrameMan.GetScreenCount(); ++screenId) {
-			m_ActorsSeeFuture.push_back(
-			    g_ThreadMan.GetPriorityThreadPool().submit([screenId]() {
-					g_SceneMan.CastSeeRaysFromSky(screenId);
-				})
-			);
+		// Sky rays fire ONLY during EDITING (brain placement) so the player can see the terrain
+		// to place their units, but NOT during gameplay - in gameplay Actor::CastSeeRays's
+		// per-actor 360-degree fan drives vision exclusively (Starcraft-style two-stage FoW).
+		// The CommitToLastSeenTerrainWithFowMask call above runs every frame, so areas the
+		// camera shows during EDITING are committed into the lastSeenTerrain memory layer that
+		// gameplay will then render as dim/gray.
+		if (gameActivity->GetActivityState() == Activity::Editing) {
+			for (int screenId = 0; screenId < g_FrameMan.GetScreenCount(); ++screenId) {
+				m_ActorsSeeFuture.push_back(
+				    g_ThreadMan.GetPriorityThreadPool().submit([screenId]() {
+						g_SceneMan.CastSeeRaysFromSky(screenId);
+					})
+				);
+			}
 		}
 
 		// EDIT: Maybe it's not fucked! Might actually just be a timing issue between sim and render
