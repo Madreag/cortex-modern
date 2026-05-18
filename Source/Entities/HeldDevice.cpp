@@ -421,9 +421,9 @@ void HeldDevice::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 				return;
 			}
 
-			// Only draw if the team viewing this has seen the space where this is located.
+			// Only draw if the team viewing this currently has line-of-sight to the space where this is located.
 			int viewingTeam = g_ActivityMan.GetActivity()->GetTeamOfPlayer(viewingPlayer);
-			if (viewingTeam == Activity::NoTeam || g_SceneMan.IsUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam)) {
+			if (viewingTeam == Activity::NoTeam || g_SceneMan.IsCurrentlyUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam)) {
 				return;
 			}
 

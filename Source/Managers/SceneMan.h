@@ -458,11 +458,23 @@ namespace RTE {
 		/// @return A vector witht he factors in each element representing the factors.
 		Vector GetUnseenResolution(const int team) const;
 
-		/// Checks whether a pixel is in an unseen area on of a specific team.
-		/// @param posX The X and Y coords of the scene pixel that is to be checked.
-		/// @param posY The team we're talking about.
-		/// @return A bool indicating whether that point is yet unseen.
+		/// Checks whether a pixel is in an ever-unseen area for a specific team - i.e. has
+		/// NEVER been in any of that team's units' sight cones since the activity started
+		/// (persistent ever-seen mask). Set to this semantic in bdb3c9bbd. Compare to
+		/// IsCurrentlyUnseen() which checks the per-frame current-FoV mask.
+		/// @param posX, posY The X and Y coords of the scene pixel to check.
+		/// @param team The team we're checking history for.
+		/// @return A bool indicating whether that point has yet to be seen.
 		bool IsUnseen(const int posX, const int posY, const int team);
+
+		/// Checks whether a pixel is in the team's currently-unseen area - i.e. NOT in any
+		/// of that team's units' current sight cones right now (per-frame current-FoV mask).
+		/// Used by C++ renderers for Starcraft-model HUD/glow visibility. Compare to
+		/// IsUnseen() which checks whether the pixel has ever been seen at any point.
+		/// @param posX, posY The X and Y coords of the scene pixel to check.
+		/// @param team The team we're checking current vision for.
+		/// @return A bool indicating whether that point is currently outside this team's vision.
+		bool IsCurrentlyUnseen(const int posX, const int posY, const int team);
 
 		/// Reveals a pixel on the unseen map for a specific team, if there is any.
 		/// @param posX The X and Y coord of the scene pixel that is to be revealed.
