@@ -11,6 +11,46 @@ namespace RTE {
 
 	/// The centralized singleton manager of all Timers and overall timekeeping in RTE.
 	/// Uses QueryPerformanceCounter for sub-ms resolution timers and the model described in http://www.gaffer.org/game-physics/fix-your-timestep.
+	///
+	/// ---- M1 Block D — determinism contract for time accessors ----
+	///
+	/// TimerMan exposes two distinct families of "now":
+	///
+	///   * Sim time (deterministic, advanced by the fixed-timestep accumulator):
+	///       - GetSimTickCount()     -> long long ticks since sim started
+	///       - GetSimUpdateCount()   -> long long sim updates since sim started
+	///       - GetSimTimeMS()        -> long long ms since sim started
+	///       - GetDeltaTimeMS/Secs() -> the fixed per-update delta
+	///
+	///   * Real time (wall-clock, NOT deterministic across runs at same seed):
+	///       - GetAbsoluteTime()     -> microsecond timestamp from QPC
+	///       - GetRealTickCount()    -> ticks since sim started, but advanced
+	///                                  by the wall-clock accumulator (so the
+	///                                  rate depends on the host's frame rate)
+	///
+	/// Determinism rule for call sites inside the determinism island
+	/// (Source/Activities/, Source/Entities/ Update/Travel/OnCollide*, MovableMan,
+	/// SceneMan sim paths, Source/System/Controller, PathFinder, Source/AI/*) —
+	/// ONLY use the Sim-time family. Reading the Real-time family from a sim path
+	/// makes the sim's behaviour drift with host frame rate, exactly the failure
+	/// mode the M1 plan's Block D is here to prevent.
+	///
+	/// Block D audit (2026-05-18) finding: the active determinism island is
+	/// already clean — every sim-side timing read uses the Sim-time family or
+	/// reads from a `Timer` instance configured for sim time. The remaining
+	/// `GetRealTickCount` callers live in:
+	///   - Source/Managers/NetworkServer.cpp + NetworkClient.cpp  (deprecated MP
+	///     code; see the WALL-CLOCK-MP-M6 TODO blocks in those files)
+	///   - Source/Managers/FrameMan.cpp                            (color-table
+	///     LRU eviction, render-only, doesn't touch sim state)
+	///   - Source/Managers/PerformanceMan.cpp / LuaMan.cpp         (profiling)
+	///   - Source/Menus/*, Source/GUI/*                            (animation)
+	///   - Source/AI/MetricsCollector.cpp                          (run-duration)
+	///
+	/// New code inside the determinism island that needs "now" should pick
+	/// from GetSimUpdateCount / GetSimTickCount / GetSimTimeMS. If a Timer is
+	/// in play, prefer the SetSimTimeLimit* / IsPastSimTimeLimit accessors
+	/// over the SetRealTimeLimit* / IsPastRealTimeLimit ones.
 	class TimerMan : public Singleton<TimerMan> {
 
 	public:
