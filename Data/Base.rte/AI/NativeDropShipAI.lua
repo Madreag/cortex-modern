@@ -1,5 +1,6 @@
 require("Constants")
 require("AI/PID");
+require("AI/AIEmit");
 
 NativeDropShipAI = {};
 
@@ -68,9 +69,12 @@ function NativeDropShipAI:Update(Owner)
 	end
 
 	if hoverHeightModifierChanged or Owner.AIMode ~= self.LastAIMode then
-	
+		-- M0 observability: dropship mode transitions are coarse but useful — DELIVER/RETURN/BOMB/STAY.
+		AIEmit(Owner, "decision", "mode_changed", tostring(Owner.AIMode),
+		       "DropShip prev=" .. tostring(self.LastAIMode));
+
 		Owner:UpdateMovePath();
-		
+
 		self.LastAIMode = Owner.AIMode;
 
 		if Owner.AIMode == Actor.AIMODE_RETURN then

@@ -2,6 +2,7 @@ require("Constants")
 require("AI/TurretBehaviors");
 require("AI/SharedBehaviors");
 require("AI/CrabBehaviors");
+require("AI/AIEmit");
 
 NativeTurretAI = {};
 
@@ -43,6 +44,22 @@ end
 
 function NativeTurretAI:Update(Owner)
 	self.Ctrl = Owner:GetController();
+
+	-- M0 observability: dispatch-level emit + target acquired/lost transitions.
+	AIEmit(Owner, "decision", "ai_tick", "running", "NativeTurretAI:Update");
+	if self.lastAIMode ~= Owner.AIMode then
+		AIEmit(Owner, "decision", "mode_changed", tostring(Owner.AIMode),
+		       "Turret prev=" .. tostring(self.lastAIMode));
+		self.lastAIMode = Owner.AIMode;
+	end
+	if self.Target ~= self._lastTarget then
+		if self.Target then
+			AIEmit(Owner, "decision", "target_acquired", "Turret", "target=" .. tostring(self.Target.UniqueID), self.Target);
+		else
+			AIEmit(Owner, "decision", "target_lost", "Turret", "no target");
+		end
+		self._lastTarget = self.Target;
+	end
 
 	if self.isPlayerOwned then
 		if self.PlayerInterferedTimer:IsPastSimTimeLimit() then

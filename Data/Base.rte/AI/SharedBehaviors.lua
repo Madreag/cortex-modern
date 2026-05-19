@@ -1,5 +1,7 @@
 SharedBehaviors = {};
 
+if not AIEmit then require("AI/AIEmit"); end
+
 function SharedBehaviors.GetTeamShootingSkill(team)
 	local skill = 80;
 	local Activ = ActivityMan:GetActivity();
@@ -23,6 +25,8 @@ function SharedBehaviors.GetTeamShootingSkill(team)
 end
 
 function SharedBehaviors.ProcessAlarmEvent(AI, Owner)
+	-- M0 observability: alarm scan trigger.
+	AIEmit(Owner, "reflex", "alarm_scan", "ProcessAlarmEvent", "alarm event arrived");
 	AI.AlarmPos = nil;
 
 	local loudness, AlarmVec;
@@ -103,6 +107,8 @@ end
 
 -- look at the alarm event
 function SharedBehaviors.FaceAlarm(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "reflex", "behaviour_selected", "FaceAlarm", "FaceAlarm:enter");
 	if AI.AlarmPos then
 		local AlarmDist = SceneMan:ShortestDistance(Owner.EyePos, AI.AlarmPos, false);
 		AI.AlarmPos = nil;
@@ -120,7 +126,9 @@ function SharedBehaviors.FaceAlarm(AI, Owner, Abort)
 end
 
 -- find the closest enemy brain
-function SharedBehaviors.BrainSearch(AI, Owner, Abort) 
+function SharedBehaviors.BrainSearch(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "BrainSearch", "BrainSearch:enter");
 	if AI.PlayerPreferredHD then
 		Owner:EquipNamedDevice(AI.PlayerPreferredHD, true);
 	end
@@ -232,6 +240,8 @@ function SharedBehaviors.BrainSearch(AI, Owner, Abort)
 end
 
 function SharedBehaviors.Patrol(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "Patrol", "Patrol:enter");
 	while AI.flying or Owner.Vel:MagnitudeIsGreaterThan(4) do	-- wait until we are stationary
 		return true;
 	end
@@ -377,6 +387,8 @@ end
 
 -- move to the next waypoint
 function SharedBehaviors.GoToWpt(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "locomotion", "behaviour_selected", "GoToWpt", "GoToWpt:enter");
 	-- check if we have arrived
 	if not (Owner.AIMode == Actor.AIMODE_SQUAD or Owner:GetWaypointListSize() > 0) then
 		if not Owner.MOMoveTarget then

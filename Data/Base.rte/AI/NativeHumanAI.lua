@@ -1,6 +1,7 @@
 require("Constants")
 require("AI/HumanBehaviors");
 require("AI/SharedBehaviors");
+require("AI/AIEmit");
 
 NativeHumanAI = {};
 
@@ -83,8 +84,27 @@ end
 function NativeHumanAI:Update(Owner)
 	self.Ctrl = Owner:GetController();
 
+	-- M0 observability: dispatch-level emit at the top of every AI tick.
+	AIEmit(Owner, "decision", "ai_tick", "running", "NativeHumanAI:Update");
+	if self.lastAIMode ~= Owner.AIMode then
+		AIEmit(Owner, "decision", "mode_changed", tostring(Owner.AIMode),
+		       "prev=" .. tostring(self.lastAIMode));
+		self.lastAIMode = Owner.AIMode;
+	end
+	-- Target transitions: emit acquired / lost as a separate type so trust scenarios can
+	-- count how often the AI re-acquires or drops a target during a scenario.
+	if self.Target ~= self._m0_lastTarget then
+		if self.Target then
+			AIEmit(Owner, "decision", "target_acquired", "Human",
+			       "id=" .. tostring(self.Target.UniqueID), self.Target);
+		else
+			AIEmit(Owner, "decision", "target_lost", "Human", "target invalid or unseen");
+		end
+		self._m0_lastTarget = self.Target;
+	end
+
 	-- Our jetpack might have thrust balancing enabled, so update for our current mass
-	if Owner.Jetpack then		
+	if Owner.Jetpack then
 		self.jetImpulseFactor = Owner.Jetpack:EstimateImpulse(false) * GetPPM() / TimerMan.DeltaTimeSecs;
 		self.jetBurstFactor = (Owner.Jetpack:EstimateImpulse(true) * GetPPM() / TimerMan.DeltaTimeSecs - self.jetImpulseFactor) * math.pow(TimerMan.DeltaTimeSecs, 2) * 0.5;
 	end

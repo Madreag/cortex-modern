@@ -1,4 +1,5 @@
 require("AI/PID");
+require("AI/AIEmit");
 
 function Create(self)
 	---------------- AI variables start ----------------
@@ -68,15 +69,20 @@ function ThreadedUpdateAI(self)
 	self.PlayerInterferedTimer:Reset();
 
 	if self.AIMode ~= self.LastAIMode then
+		-- M0 observability: rocket AI mode transition (DELIVER -> LAUNCH -> RETURN).
+		AIEmit(self, "decision", "mode_changed", tostring(self.AIMode),
+		       "Rocket prev=" .. tostring(self.LastAIMode));
 		self.LastAIMode = self.AIMode;
 
 		if self.AIMode == Actor.AIMODE_RETURN then
 			self.DeliveryState = ACraft.LAUNCH;
 			self.LZpos.Y = -10000;	-- Go to orbit
 			self:MoveLZ();
+			AIEmit(self, "locomotion", "behaviour_selected", "Launch", "RETURN to orbit");
 		else
 			self.DeliveryState = ACraft.FALL;
 			self:MoveLZ();
+			AIEmit(self, "locomotion", "behaviour_selected", "Fall", "Descend");
 		end
 	end
 
