@@ -367,7 +367,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		static const std::array<std::string, 10> c_OfficialModules; // Array storing the names of all the official modules.
+		static const std::array<std::string, 11> c_OfficialModules; // Array storing the names of all the official modules.
 		static const std::array<std::pair<std::string, std::string>, 3> c_UserdataModules; // Array storing the names of all the userdata modules.
 
 		std::array<std::string, 3> m_LastReloadedEntityPresetInfo; //!< Array storing the last reloaded Entity preset info (ClassName, PresetName and DataModule). Used for quick reloading via key combination.

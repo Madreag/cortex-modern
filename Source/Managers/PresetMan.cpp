@@ -22,7 +22,7 @@
 
 using namespace RTE;
 
-const std::array<std::string, 10> PresetMan::c_OfficialModules = {"Base.rte", "Coalition.rte", "Imperatus.rte", "Techion.rte", "Dummy.rte", "Ronin.rte", "Browncoats.rte", "Uzira.rte", "MuIlaak.rte", "Missions.rte"};
+const std::array<std::string, 11> PresetMan::c_OfficialModules = {"Base.rte", "Coalition.rte", "Imperatus.rte", "Techion.rte", "Dummy.rte", "Ronin.rte", "Browncoats.rte", "Uzira.rte", "MuIlaak.rte", "Missions.rte", "Tests.rte"};
 const std::array<std::pair<std::string, std::string>, 3> PresetMan::c_UserdataModules = {{{c_UserScenesModuleName, "User Scenes"},
                                                                                           {c_UserConquestSavesModuleName, "Conquest Saves"},
                                                                                           {c_UserScriptedSavesModuleName, "Scripted Activity Saves"}}};
