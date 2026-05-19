@@ -117,3 +117,11 @@ scenario.err
 scenario.out
 scn-*.out
 scn-*.err
+
+# M1 determinism-check ephemeral output (run from the M1 worktree)
+audit-*.json
+audit-*.replay
+*-divergence.json
+determinism-report.json
+_build_*.log
+_audit_*.log
