@@ -1710,20 +1710,18 @@ void MovableMan::Update() {
 				                                                                         m_Actors[i]->CastSeeRays();
 			                                                                         }
 		                                                                         });
-		// Sky rays fire ONLY during EDITING (brain placement) so the player can see the terrain
-		// to place their units, but NOT during gameplay - in gameplay Actor::CastSeeRays's
-		// per-actor 360-degree fan drives vision exclusively (Starcraft-style two-stage FoW).
-		// The CommitToLastSeenTerrainWithFowMask call above runs every frame, so areas the
-		// camera shows during EDITING are committed into the lastSeenTerrain memory layer that
-		// gameplay will then render as dim/gray.
-		if (gameActivity->GetActivityState() == Activity::Editing) {
-			for (int screenId = 0; screenId < g_FrameMan.GetScreenCount(); ++screenId) {
-				m_ActorsSeeFuture.push_back(
-				    g_ThreadMan.GetPriorityThreadPool().submit([screenId]() {
-						g_SceneMan.CastSeeRaysFromSky(screenId);
-					})
-				);
-			}
+		// Engine-driven sky rays differentiate outdoor (sky-illuminated) vs bunker (no sky)
+		// terrain - the desaturation + noise + scanline visual on never-seen outdoor areas
+		// comes from the SDF shader sampling tiles that sky rays reached. Causeless's
+		// 4ae962455 "Killed script sky rays" killed only the Lua-script-driven sky-ray spawns
+		// (e.g., SetupFogOfWar in SkirmishDefense.lua); the engine-side dispatch is the
+		// outdoor-vs-bunker mechanic and stays on during both Editing and gameplay.
+		for (int screenId = 0; screenId < g_FrameMan.GetScreenCount(); ++screenId) {
+			m_ActorsSeeFuture.push_back(
+			    g_ThreadMan.GetPriorityThreadPool().submit([screenId]() {
+					g_SceneMan.CastSeeRaysFromSky(screenId);
+				})
+			);
 		}
 
 		// EDIT: Maybe it's not fucked! Might actually just be a timing issue between sim and render

@@ -1293,42 +1293,18 @@ void Actor::Update() {
 }
 
 void RTE::Actor::CastSeeRays() {
-	// Character-centric FoW reveal: cast a 360-degree fan of see-rays around the actor's eye
-	// position, clearing the per-team unseen mask in a circle around each unit.
-	//
-	// Replaces the previous single Look() call (the "// GTODO: this was 6. i gutted this,
-	// rewrite later" scaffold) - that was transitional code while the dev moved this branch
-	// from CC's stock sky-vision model to the Starcraft-style character-centric two-stage FoW
-	// the commit history points at: bdb3c9bbd "Unseen is now ever unseen, not current FoW" and
-	// 4ae962455 "Killed script sky rays". Coupled with disabling the always-on
-	// CastSeeRaysFromSky dispatch in MovableMan::Update, this gives the proper model:
-	//   - Bright = inside an actor's sight circle right now.
-	//   - Dim (memory) = in an actor's sight circle previously, not now.
-	//   - Black = never in any actor's sight circle.
-	if (m_Status == Actor::INACTIVE || !m_CanRevealUnseen) {
-		return;
-	}
-	if (!g_SceneMan.AnythingUnseen(m_Team)) {
-		return;
-	}
-
-	const Vector eyePos = GetEyePos();
-	const float sightRadius = g_FrameMan.GetPlayerScreenWidth() * 0.35f * m_Perceptiveness;
-	// rayCount scales with sightRadius so the arc gap between adjacent rays stays constant -
-	// keeps the sight-circle perimeter visibly smooth regardless of perceptiveness/screen size.
-	constexpr float gapTargetPixels = 6.0f;
-	const int rayCount = std::max(36, static_cast<int>(2.0f * c_PI * sightRadius / gapTargetPixels));
-	const float angleStep = (2.0f * c_PI) / static_cast<float>(rayCount);
-	int step = static_cast<int>(g_SceneMan.GetUnseenResolution(m_Team).GetSmallest()) / 2;
-	if (step < 1) { step = 1; }
-	Vector ignored(0, 0);
-
-	Vector rayVec(sightRadius, 0);
-	for (int i = 0; i < rayCount; ++i) {
-		// Strength 25 matches Look() and the Lua SetupFogOfWar pattern - lets rays through
-		// light debris and corpses but stops them at solid walls.
-		g_SceneMan.CastSeeRay(m_Team, eyePos, rayVec, ignored, 25, step);
-		rayVec.RadRotate(angleStep);
+	// Per-actor vision dispatcher. The actual ray work happens in the virtual Look() override:
+	//   - AHuman::Look() casts a 32-ray body bubble (36px radius) plus a directional aim-cone
+	//     of FOVSpread / 0.5 rays, angle-quantized to avoid flicker as the aim slides.
+	//   - ACrab::Look() casts a single aim-direction ray with random ±FOVSpread/2 spread.
+	//   - Actor::Look() base falls back to a single velocity-direction ray for non-overriding
+	//     subclasses.
+	// One Look() call per frame is sufficient — AHuman::Look() alone fires ~232 rays. The
+	// pre-existing "// GTODO: this was 6. i gutted this, rewrite later" comment referred to
+	// stepping the per-frame iteration count back up; orthogonal to whether vision is
+	// directional, which it already is via the AHuman override.
+	if (m_Status != Actor::INACTIVE) {
+		Look(100, g_FrameMan.GetPlayerScreenWidth() * 0.7f * m_Perceptiveness);
 	}
 }
 
