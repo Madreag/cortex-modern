@@ -172,7 +172,7 @@
         <b>PR branch:</b> <a href="https://github.com/Madreag/cortex-modern/tree/pr/fow-character-centric-2stage"><code>Madreag/cortex-modern:pr/fow-character-centric-2stage</code></a><br>
         <b>Target:</b> <code>cortex-command-community/Cortex-Command-Community-Project:dynamic-fow-negative-distance-test</code><br>
         <b>6 commits</b> on top of upstream <code>975155e72</code> (Merge branch 'development' into dynamic-fow-negative-distance-test) &middot; <b>byte-for-byte equal to cortex-modern's working <code>fow-fixes</code> branch</b><br>
-        <b>Related</b>: cortex-modern fork PR <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a> (working PR, includes bot-review fixes); see also <a href="branches.html">Upstream Branches</a> &middot; <a href="issues.html">Upstream Issues</a>
+        <b>Related</b>: cortex-modern fork PR <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a> (internal fork PR opened for CI + bot-review triage; Causeless's feedback that drove commits #5 and #6 came in on its issue thread); see also <a href="branches.html">Upstream Branches</a> &middot; <a href="issues.html">Upstream Issues</a>
       </div>
     </div>
 
@@ -365,9 +365,9 @@ lookVector *= aimMatrix;
       <code>Actor::CastSeeRays()</code> is the dispatcher; rewriting it without calling <code>Look()</code>
       means AHuman::Look() and ACrab::Look() never run. We disabled the existing directional reveal across
       all actor classes in one stroke.</p>
-      <p><b>What Causeless saw (Discord)</b>: <i>&ldquo;this is a pretty big departure from what we had
-      planned and intended. The intent was only to reveal FoW in the direction that the actor was
-      looking.&rdquo;</i></p>
+      <p><b>What Causeless flagged in Discord</b>: that the change was a departure from the planned and
+      intended design &mdash; vision should reveal only in the direction the actor is looking, not as a
+      360&deg; fan.</p>
       <p><b>Fix (commit #5)</b>: <code>Actor::CastSeeRays()</code> back to its dispatcher form.</p>
     </div>
 
@@ -475,7 +475,7 @@ lookVector *= aimMatrix;
         <tr>
           <td class="state-name">Memory</td>
           <td class="state-trigger">Tile was Visible previously, but is not currently reached</td>
-          <td class="state-visual">Darken=0.68 + desat=0.8 + scanline + noise overlay (the shader's <code>ApplyDarkenAndDesat</code> + <code>ApplyScanlineAndNoise</code> path). With <code>useOneStageFoW = true</code> the current frame is darkened in place; once upstream's SDF-mask-based terrain-commit lands and <code>useOneStageFoW</code> flips to <code>false</code>, <code>rteTextureLastSeen</code> (saved terrain bitmap, no live units) takes over.</td>
+          <td class="state-visual">Darken=0.68 + desat=0.8 + scanline + noise overlay (the shader's <code>ApplyDarkenAndDesat</code> + <code>ApplyScanlineAndNoise</code> path &mdash; the desaturated, noisy, scanline visual treatment Causeless designed for non-Visible areas). With <code>useOneStageFoW = true</code> the current frame is darkened in place; once upstream's SDF-mask-based terrain-commit lands and <code>useOneStageFoW</code> flips to <code>false</code>, <code>rteTextureLastSeen</code> (saved terrain bitmap, no live units) takes over.</td>
           <td class="state-visual">Indoor corridors you walked through then turned away from</td>
         </tr>
         <tr>
@@ -500,12 +500,11 @@ lookVector *= aimMatrix;
     differentiation; commit #5 restored it.</p>
 
     <h3>3.3 &nbsp; Bunker wall calibration is already done</h3>
-    <p>From the March 2 transcript &mdash; Causeless: <i>&ldquo;I pretty specifically tuned this so that
-    the see-through distance was just about the width of a bunker wall.&rdquo;</i> The negative-distance
-    SDF on this branch was chosen explicitly to fix the over-penetration problem that earlier
-    positive-SDF + large-revealsize attempts had. The branch name
-    (<code>dynamic-fow-negative-distance-test</code>) is a settled solution to a known visual problem, not
-    a speculative experiment.</p>
+    <p>The see-through distance through walls was specifically tuned by Causeless to be about the width
+    of a typical bunker wall. The negative-distance SDF on this branch was chosen to fix the
+    over-penetration problem that earlier positive-SDF + large-revealsize attempts had. The branch name
+    (<code>dynamic-fow-negative-distance-test</code>) is a settled solution to a known visual problem,
+    not a speculative experiment.</p>
 
     <h3>3.4 &nbsp; Wrap handling is fixed by our PR</h3>
     <p>One of the real bugs <code>be8734ec4</code> caught and fixed: the SDF shader and sky-ray dispatch
@@ -534,11 +533,10 @@ lookVector *= aimMatrix;
     UI would surface these (per &sect;8.7); for now they're debug-only.</p>
 
     <h3>3.6 &nbsp; Pre-SDF smoothing is acknowledged TBD</h3>
-    <p>Causeless in the March transcript: <i>&ldquo;the solution is to do both: some amount of pushing
-    INTO FoW mask (like in this branch), and also a pre-smoothing step where we sample the FoW mask with
-    bilinear interpolation.&rdquo;</i> The pre-SDF smoothing step is acknowledged as a TBD in his head;
-    the branch as-is uses SDF distance for smoothing rather than a pre-blur pass. Future work in
-    &sect;7.3.</p>
+    <p>Causeless has described the planned approach as combining the current "push into the FoW mask"
+    technique with an additional pre-smoothing step (bilinear interpolation sample of the FoW mask
+    before SDF computation). The branch as-is uses SDF distance for smoothing rather than a pre-blur
+    pass. Future work in &sect;7.3.</p>
 
     <h3 id="underground-limitation">3.7 &nbsp; Known limitation &mdash; enemy sprites visible (dimmed) in memory layer underground</h3>
     <div class="design-call" style="border-color: #f5dbb6;">
@@ -807,27 +805,24 @@ lookVector *= aimMatrix;
     that we'd happily implement to spec once the design lands but won't drive ourselves.</p>
 
     <h3>7.1 &nbsp; Cameras &mdash; stationary vision sources</h3>
-    <p>Naitor: <i>&ldquo;there should be a new building type that lets you see things constantly inside
-    your base&rdquo;</i> &mdash; ooaaaoaoao replied <i>&ldquo;cameras, yes! will be done&rdquo;</i>. The
-    design fit: each camera has its own position, arc, range, and team affiliation. Implementation-wise
-    it'd mirror AHuman::Look() &mdash; same SeeRay primitives, just dispatched from a stationary entity.
-    Could be a new <code>Camera</code> entity class or a property on existing emplaced entities (turrets,
-    sensors).</p>
+    <p>Acknowledged as planned upstream &mdash; community asked about a building type for permanent
+    interior base vision; ooaaaoaoao confirmed cameras are on the roadmap. Implementation-wise it'd
+    mirror AHuman::Look() &mdash; same SeeRay primitives, dispatched from a stationary entity. Could be
+    a new <code>Camera</code> entity class or a property on existing emplaced entities (turrets,
+    sensors). Per-camera arc / range / team would mirror per-actor tunables.</p>
 
     <h3>7.2 &nbsp; Doors as dynamic FoW apertures</h3>
-    <p>Jeff (joking): <i>&ldquo;Every door will now be a new chance to die horribly to something
-    surprising and unforeseen. Suggestion: install more doors.&rdquo;</i> &mdash; Causeless:
-    <i>&ldquo;It should be adjustable in the same way.&rdquo;</i> Doors as opening / closing apertures
-    that affect FoW propagation. Sky rays that pass through an open doorway should illuminate the room
-    beyond. The "adjustable in the same way" line suggests per-door tunable parameters analogous to
-    per-camera / per-actor.</p>
+    <p>Causeless has indicated doors will be tunable in the same way as other vision sources. Doors as
+    opening / closing apertures affecting FoW propagation; sky rays that pass through an open doorway
+    illuminate the room beyond, closing the door cuts that off. Per-door tunable parameters analogous
+    to per-camera / per-actor.</p>
 
     <h3>7.3 &nbsp; Pre-SDF smoothing step</h3>
-    <p>Causeless: <i>&ldquo;the solution is to do both: some amount of pushing INTO FoW mask (like in
-    this branch), and also a pre-smoothing step where we sample the FoW mask with bilinear
-    interpolation.&rdquo;</i> The current branch uses negative-distance SDF for smoothing; Causeless's
-    idea is to add a pre-blur pass that smooths the raw FoW mask before SDF computation. Goal: reduce
-    the "stepping effect" that comes from raw pixel-position distances being discontinuous.</p>
+    <p>Per Causeless's stated approach, the eventual rendering pipeline combines the current
+    push-into-FoW-mask technique with an additional pre-smoothing step (bilinear-interpolation sample of
+    the FoW mask before SDF computation). Goal: reduce the "stepping effect" from raw pixel-position
+    distances being discontinuous. Current branch uses SDF distance for smoothing without the pre-blur
+    pass &mdash; works, the pre-smoothing is a refinement.</p>
 
     <h3>7.4 &nbsp; SDF-mask-based commit to <code>lastSeenTerrain</code></h3>
     <p>The big one Causeless flagged in his GH review &mdash; the current commit-to-<code>lastSeenTerrain</code>
@@ -838,20 +833,17 @@ lookVector *= aimMatrix;
     enemy-visibility issue in &sect;3.7 goes away automatically.</p>
 
     <h3>7.5 &nbsp; Team-owned bunker permanent vision</h3>
-    <p>Causeless's idea from the March transcript &mdash; <i>&ldquo;team-owned bunkers could have
-    permanent vision while enemy bunkers are FoW. The idea being that to breach an enemy bunker would
-    require adequate equipment and tooling.&rdquo;</i> trulythepawn proposed <i>&ldquo;recon
-    grenades&rdquo;</i> as the breach tool. Mechanics-wise: a permanently-revealed region centered on
-    each team-owned bunker module; enemy-bunker FoW behaves normally. New gameplay mechanic, not a
-    rendering fix &mdash; deliberate design.</p>
+    <p>Causeless has floated the idea that team-owned bunkers would have permanent vision while enemy
+    bunkers stay FoW &mdash; breaching an enemy bunker requiring proper tooling (e.g., recon equipment).
+    Mechanics-wise: a permanently-revealed region centered on each team-owned bunker module;
+    enemy-bunker FoW behaves normally. New gameplay mechanic, not a rendering fix &mdash; deliberate
+    design direction.</p>
 
     <h3>7.6 &nbsp; The double-buffering hack</h3>
-    <p>Causeless's <code>031a77b6d</code> <i>&ldquo;hack until double-buffering is in&rdquo;</i> &mdash;
-    the branch currently has a stopgap waiting for proper double-buffered FoW mask updates. ooaaaoaoao
-    noticed in the March transcript that <code>FillUnseenLayerMask</code> was allocating + filling an
-    entirely new bitmap every frame &mdash; Causeless: <i>&ldquo;We have tracked scenelayers btw, where
-    it double-buffers and clears in the background.&rdquo;</i> The double-buffering integration is the
-    proper fix.</p>
+    <p>Causeless's commit <code>031a77b6d</code> (title: "hack until double-buffering is in") flagged
+    that the branch currently has a stopgap waiting for proper double-buffered FoW mask updates. CC
+    already has a tracked-scenelayers mechanism that double-buffers and clears in the background; the
+    plan is to wire FoW into that.</p>
 
     <h3>7.7 &nbsp; Splitscreen FoW</h3>
     <p>The <code>TODO- this needs to be done above, per screen! Right now splitscreen is fucked</code>
@@ -882,11 +874,10 @@ lookVector *= aimMatrix;
     actual state.</p>
 
     <h3>7.11 &nbsp; HUD / FX visibility design calls (P1)</h3>
-    <p>From Bebomonky's question (<i>&ldquo;could just making it a darker color?&rdquo;</i>): the
-    original FoW was just-black; the new branch has texture-aware visual treatment. Per-element
-    visibility rules need to settle: muzzle flashes through dim, explosions, particle effects, sound
-    propagation, HUD indicators, damage numbers, waypoints, aim reticle. Per-element table in
-    <a href="#ship-list">&sect;8.6</a>.</p>
+    <p>Per-element visibility through dim/memory areas needs to settle: muzzle flashes, explosions,
+    particle effects, sound propagation, HUD indicators, damage numbers, waypoints, aim reticle. The
+    original FoW was just-black; the new branch has texture-aware visual treatment that lets these
+    questions be answered case-by-case. Per-element table in <a href="#ship-list">&sect;8.6</a>.</p>
 
     <!-- ============ 8 · SHIP LIST ============ -->
     <h2 id="ship-list">8 &nbsp;&middot;&nbsp; <span class="h-accent">What ship-complete FoW requires &mdash; the full audit</span></h2>
@@ -1072,11 +1063,14 @@ lookVector *= aimMatrix;
       </div>
     </div>
 
-    <!-- ============ 10 · CAUSELESS'S GH REVIEW ============ -->
-    <h2 id="review">10 &nbsp;&middot;&nbsp; <span class="h-accent">Causeless's GH review &mdash; verbatim</span></h2>
-    <p>For transparency, the three issue-thread comments Causeless left on cortex-modern PR
-    <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a> on 2026-05-19. All three addressed in
-    commits #5 and #6.</p>
+    <!-- ============ 10 · FEEDBACK FROM CAUSELESS ============ -->
+    <h2 id="review">10 &nbsp;&middot;&nbsp; <span class="h-accent">Feedback from Causeless on PR #1</span></h2>
+    <p>Three issue-thread comments left on cortex-modern fork PR
+    <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a> on 2026-05-19 &mdash; the fork-internal
+    PR we opened for CI + bot-review triage. These weren't a formal upstream code review (no upstream PR
+    has been opened yet); informal feedback that proved authoritative on design intent. Quoted in full
+    here so the source of each correction is traceable. All three addressed in commits #5 and #6, plus
+    the comment-verbosity observation.</p>
 
     <div class="review-quote">
       <div class="review-quote-meta">Causeless &middot; 2026-05-19 14:06 UTC &middot; mapped to misread #2</div>
@@ -1106,22 +1100,23 @@ lookVector *= aimMatrix;
       visible.
     </div>
 
-    <p>Plus the Discord comment (mapped to misread #1) that triggered the initial pivot:</p>
-
-    <div class="review-quote">
-      <div class="review-quote-meta">Causeless &middot; 2026-05-19 Discord</div>
-      Hey er, this is a pretty big departure from what we had planned and intended. The intent was only to
-      reveal FoW in the direction that the actor was looking. Also the sky rays are intentional, so that
-      there's a difference between outdoors and bunker gameplay.
-    </div>
+    <p>Separately, the conversation that triggered the initial Discord pivot for misread #1 (the
+    directional-cone clarification) is paraphrased rather than quoted verbatim &mdash; covered in
+    &sect;2 misread #1.</p>
 
     <!-- ============ 11 · NEXT STEPS ============ -->
-    <h2 id="next">11 &nbsp;&middot;&nbsp; <span class="h-accent">Next steps &mdash; what we're asking for</span></h2>
+    <h2 id="next">11 &nbsp;&middot;&nbsp; <span class="h-accent">Next steps</span></h2>
     <div class="card">
       <ol>
-        <li><b>Review the narrowed PR at your pace</b> &mdash; commits #5 and #6 are the design-feedback
-        corrections; #1&ndash;#4 are real bug fixes / API split / docs / cosmetic. All three misreads
-        plus the comment-verbosity feedback are addressed.</li>
+        <li><b>Upstream submission</b> &mdash; <code>pr/fow-character-centric-2stage</code> is cut from
+        <code>upstream/dynamic-fow-negative-distance-test</code> and byte-equal to <code>fow-fixes</code>
+        HEAD. Ready to open as a contributor PR on
+        <code>cortex-command-community/Cortex-Command-Community-Project</code> whenever upstream wants
+        it. <b>Open question for Causeless</b>: prefer that we open an upstream PR now, or land it on
+        the branch yourself? Either works.</li>
+        <li><b>Review pace</b> &mdash; commits #5 and #6 are the design-feedback corrections; #1&ndash;#4
+        are real bug fixes / API split / docs / cosmetic. All three misreads plus the comment-verbosity
+        feedback are addressed.</li>
         <li><b>API naming call</b> &mdash; <code>IsUnseen</code> + <code>IsCurrentlyUnseen</code> is the
         shape we chose, but if you'd prefer the names reversed (or a different name for the new one),
         say so. Five-minute change.</li>
