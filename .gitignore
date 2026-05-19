@@ -107,3 +107,13 @@ LogConsole.txt
 Console.dump.log
 Console.input.log
 imgui.ini
+
+# M0 trust-suite ephemeral output (committed baselines live in Data/Tests.rte/baselines/)
+trust-report.json
+trust-report.replay
+trust-report-*.json
+trust-report-*.replay
+scenario.err
+scenario.out
+scn-*.out
+scn-*.err
