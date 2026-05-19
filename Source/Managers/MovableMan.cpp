@@ -1318,9 +1318,6 @@ void MovableMan::Update() {
 
 	// If fog of war is enabled, then...
 	Activity* currentActivity = g_ActivityMan.GetActivity();
-	// Guards the dynamic_cast against a non-GameActivity (was a latent null-deref).
-	// init-if scopes `gameActivity` to this block so it doesn't collide with the see-ray
-	// block's own `gameActivity` declaration later in this function.
 	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(currentActivity);
 	    gameActivity && gameActivity->GetFogOfWarEnabled()) {
 		// For each human player...
@@ -1331,11 +1328,8 @@ void MovableMan::Update() {
 				g_SceneMan.CommitToLastSeenTerrainWithFowMask(team);
 				// Clear what was immediately seen
 				// GTODO: make this not eat a fow resolution, tweak functions accordingly
-				// Use a sensible default resolution when the per-team mask doesn't exist yet -
-				// the activity's Lua creates it via MakeAllUnseen at gameplay start, but until
-				// then GetUnseenResolution falls back to (1,1) and we'd create a full-scene mask
-				// every frame (16x the intended (4,4) mask), the source of in-editor framerate
-				// drops. Once the Lua sets up FoW, GetUnseenResolution returns the real (4,4).
+				// (1,1) sentinel from GetUnseenResolution before the activity's Lua-side FoW setup
+				// has run would make MakeAllUnseen allocate a full-scene mask every frame.
 				Vector unseenRes = g_SceneMan.GetUnseenResolution(team);
 				if (unseenRes.GetX() < 2 || unseenRes.GetY() < 2) {
 					unseenRes = Vector(4, 4);
@@ -1710,12 +1704,7 @@ void MovableMan::Update() {
 				                                                                         m_Actors[i]->CastSeeRays();
 			                                                                         }
 		                                                                         });
-		// Engine-driven sky rays differentiate outdoor (sky-illuminated) vs bunker (no sky)
-		// terrain - the desaturation + noise + scanline visual on never-seen outdoor areas
-		// comes from the SDF shader sampling tiles that sky rays reached. Causeless's
-		// 4ae962455 "Killed script sky rays" killed only the Lua-script-driven sky-ray spawns
-		// (e.g., SetupFogOfWar in SkirmishDefense.lua); the engine-side dispatch is the
-		// outdoor-vs-bunker mechanic and stays on during both Editing and gameplay.
+		// Reveal what's being seen from the sky
 		for (int screenId = 0; screenId < g_FrameMan.GetScreenCount(); ++screenId) {
 			m_ActorsSeeFuture.push_back(
 			    g_ThreadMan.GetPriorityThreadPool().submit([screenId]() {
