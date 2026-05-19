@@ -42,6 +42,31 @@ struct MOXPosComparison {
 	bool operator()(MovableObject* pRhs, MovableObject* pLhs) { return pRhs->GetPos().m_X < pLhs->GetPos().m_X; }
 };
 
+// M1 Block C — stable per-frame iteration order. Sorts MO* containers by the
+// MovableObject's `m_UniqueID` (assigned once at construction via the static
+// `m_UniqueIDCounter` atomic), which is stable for an MO's entire lifetime.
+//
+// Why we sort by GetUniqueID() rather than by container insertion order:
+//   - The mutexed `AddActor`/`AddItem`/`AddParticle` paths protect against data
+//     corruption from threaded Lua callbacks (see m_AddedActorsMutex et al),
+//     but they do NOT guarantee a deterministic *order* — first-thread-to-grab-
+//     the-mutex wins. Two same-seed runs whose Lua callbacks race differently
+//     would end up with different `m_AddedActors` orderings and therefore drift
+//     downstream (sim iteration → controller decisions → physics → terrain).
+//   - GetUniqueID() is assigned at construction time. For single-threaded
+//     scenarios (everything we care about for the M1 baseline), constructions
+//     happen in the same sequence across same-seed runs, so the IDs match
+//     across runs and sorting by them yields the same final order on both.
+//   - When threaded MO construction lands later (MP M4 / engine T3-01), this
+//     sort key may itself become unstable; we'll re-route to a determinism-
+//     friendly ID source then. For Block C the contract is "single-threaded
+//     construction → byte-identical sim iteration across same-seed runs".
+struct MOUniqueIDLess {
+	bool operator()(const MovableObject* a, const MovableObject* b) const noexcept {
+		return a->GetUniqueID() < b->GetUniqueID();
+	}
+};
+
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -1307,6 +1332,19 @@ void MovableMan::Update() {
 	}
 	m_AddedAlarmEvents.clear();
 
+	// M1 Block C — Lock down iteration order before any sim pass runs this frame.
+	// The deques are insertion-ordered which is "mostly" stable, but threaded Lua
+	// callbacks can race on the AddActor mutex (see m_AddedActorsMutex), making
+	// the order at any given iteration sensitive to OS-scheduling rather than to
+	// the scenario script. Sorting by GetUniqueID() once at frame start gives
+	// every iteration pass below (Travel, PreControllerUpdate, UpdateControllers,
+	// Actors/Items/Particles Update, Post Update, settling/death, CastSeeRays)
+	// a single canonical order. Cost is O(N log N) per container per frame; N is
+	// small (~10² actors / ~10³ particles) so the absolute cost is sub-µs.
+	std::sort(m_Actors.begin(), m_Actors.end(), MOUniqueIDLess());
+	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
+	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
+
 	// Travel MOs
 	Travel();
 
@@ -1478,6 +1516,16 @@ void MovableMan::Update() {
 
 	{
 		ZoneScopedN("MO Transfer and Deletion");
+
+		// M1 Block C — sort the just-added queues before the drain so the
+		// DestroyScriptState() / delete() iteration below (and the subsequent
+		// push_back into m_Actors/Items/Particles) is order-stable across runs
+		// regardless of which thread's AddActor / AddItem / AddParticle landed
+		// first. Combined with the frame-start sort above this also means the
+		// settling pass that follows sees the same order across same-seed runs.
+		std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
+		std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
+		std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
 
 		{
 			// Actors
