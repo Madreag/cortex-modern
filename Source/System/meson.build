@@ -28,4 +28,5 @@ sources += files(
 'Serializable.cpp',
 'PieQuadrant.cpp',
 'SpatialPartitionGrid.cpp',
+'ScenarioRunner.cpp',
 )

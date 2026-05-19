@@ -16,19 +16,24 @@ namespace RTE {
 	PER_LUA_BINDING(PathRequest) \
 	/* ManagerLuaBindings */ \
 	PER_LUA_BINDING(ActivityMan) \
+	PER_LUA_BINDING(AIDebugOverlay) \
+	PER_LUA_BINDING(AIDecisionChannel) \
 	PER_LUA_BINDING(AudioMan) \
 	PER_LUA_BINDING(MusicMan) \
 	PER_LUA_BINDING(CameraMan) \
 	PER_LUA_BINDING(ConsoleMan) \
 	PER_LUA_BINDING(FrameMan) \
 	PER_LUA_BINDING(MetaMan) \
+	PER_LUA_BINDING(MetricsCollector) \
 	PER_LUA_BINDING(MovableMan) \
+	PER_LUA_BINDING(NetworkSimulator) \
 	PER_LUA_BINDING(PerformanceMan) \
 	PER_LUA_BINDING(PostProcessMan) \
 	PER_LUA_BINDING(PresetMan) \
 	PER_LUA_BINDING(PrimitiveMan) \
 	PER_LUA_BINDING(SceneMan) \
 	PER_LUA_BINDING(SettingsMan) \
+	PER_LUA_BINDING(SimChecksum) \
 	PER_LUA_BINDING(TimerMan) \
 	PER_LUA_BINDING(UInputMan) \
 	/* EntityLuaBindings */ \
@@ -187,19 +192,24 @@ namespace RTE {
 	/// Struct that contains Lua binding registration functions for Manager classes.
 	struct ManagerLuaBindings {
 		LuaBindingRegisterFunctionDeclarationForType(ActivityMan);
+		LuaBindingRegisterFunctionDeclarationForType(AIDebugOverlay);
+		LuaBindingRegisterFunctionDeclarationForType(AIDecisionChannel);
 		LuaBindingRegisterFunctionDeclarationForType(AudioMan);
 		LuaBindingRegisterFunctionDeclarationForType(MusicMan);
 		LuaBindingRegisterFunctionDeclarationForType(CameraMan);
 		LuaBindingRegisterFunctionDeclarationForType(ConsoleMan);
 		LuaBindingRegisterFunctionDeclarationForType(FrameMan);
 		LuaBindingRegisterFunctionDeclarationForType(MetaMan);
+		LuaBindingRegisterFunctionDeclarationForType(MetricsCollector);
 		LuaBindingRegisterFunctionDeclarationForType(MovableMan);
+		LuaBindingRegisterFunctionDeclarationForType(NetworkSimulator);
 		LuaBindingRegisterFunctionDeclarationForType(PerformanceMan);
 		LuaBindingRegisterFunctionDeclarationForType(PostProcessMan);
 		LuaBindingRegisterFunctionDeclarationForType(PresetMan);
 		LuaBindingRegisterFunctionDeclarationForType(PrimitiveMan);
 		LuaBindingRegisterFunctionDeclarationForType(SceneMan);
 		LuaBindingRegisterFunctionDeclarationForType(SettingsMan);
+		LuaBindingRegisterFunctionDeclarationForType(SimChecksum);
 		LuaBindingRegisterFunctionDeclarationForType(TimerMan);
 		LuaBindingRegisterFunctionDeclarationForType(UInputMan);
 	};
