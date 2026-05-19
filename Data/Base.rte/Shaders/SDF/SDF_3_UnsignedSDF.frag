@@ -5,6 +5,7 @@ out vec4 FragColor;
 uniform sampler2D uSampler;
 uniform vec2 uViewSize;
 uniform float uMaxDist;
+uniform vec2 uWrapsXY;  // x/y = 1 if scene wraps on that axis.
 
 void main() {
     vec4 n = texture(uSampler, textureUV);
@@ -15,9 +16,11 @@ void main() {
     }
     vec2 nearestPx = n.xy * uViewSize;
     vec2 fragPx = gl_FragCoord.xy;
-	
+
     vec2 d = abs(nearestPx - fragPx);
-	d = min(d, uViewSize - d); // toroidal wrap so we done have a seam
+	// Toroidal wrap only on axes the scene actually wraps on.
+	if (uWrapsXY.x > 0.5) d.x = min(d.x, uViewSize.x - d.x);
+	if (uWrapsXY.y > 0.5) d.y = min(d.y, uViewSize.y - d.y);
 
 	float dist = length(d);
 

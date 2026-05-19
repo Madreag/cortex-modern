@@ -192,71 +192,73 @@ void FrameMan::RenderFogOfWarTextureWithTimeDecay() {
 
 void FrameMan::FogOfWarSetup(Shader& backgroundShader) {
 	Scene* currentScene = g_SceneMan.GetCurrentScene();
-	if (!currentScene || !currentScene->GetUnseenLayerMask()) {
+	if (!currentScene) {
 		return;
 	}
 
-	// TODO: HACK
-	int team = g_ActivityMan.GetActivity()->GetTeamOfPlayer(0);
+	if (currentScene->GetUnseenLayerMask()) {
+		// TODO: HACK
+		int team = g_ActivityMan.GetActivity()->GetTeamOfPlayer(0);
 
-	SceneLayer* maskSL = currentScene->GetUnseenLayerMask(team);
-	SceneLayer* lastSeenTerrainMaskSL = currentScene->GetUnseenLayerTerrainMask(team);
-	SceneLayer* lastSeenTerrainSL = currentScene->GetUnseenLayerTerrain(team);
+		SceneLayer* maskSL = currentScene->GetUnseenLayerMask(team);
+		SceneLayer* lastSeenTerrainMaskSL = currentScene->GetUnseenLayerTerrainMask(team);
+		SceneLayer* lastSeenTerrainSL = currentScene->GetUnseenLayerTerrain(team);
 
-	int currentSceneW = currentScene->GetWidth();
-	int currentSceneH = currentScene->GetHeight();
-	int scaleFactorX = maskSL->GetScaleFactor().GetX();
-	int scaleFactorY = maskSL->GetScaleFactor().GetY();
+		int currentSceneW = currentScene->GetWidth();
+		int currentSceneH = currentScene->GetHeight();
+		int scaleFactorX = maskSL->GetScaleFactor().GetX();
+		int scaleFactorY = maskSL->GetScaleFactor().GetY();
 
-	fowMaskBM.Destroy();
-	fowMaskLastSeenBM.Destroy();
-	lastSeenBM.Destroy();
-	fowMaskBM.Create(currentSceneW / scaleFactorX, currentSceneH / scaleFactorY);
-	fowMaskLastSeenBM.Create(currentSceneW / scaleFactorX, currentSceneH / scaleFactorY);
-	lastSeenBM.Create(currentSceneW, currentSceneH);
+		fowMaskBM.Destroy();
+		fowMaskLastSeenBM.Destroy();
+		lastSeenBM.Destroy();
+		fowMaskBM.Create(currentSceneW / scaleFactorX, currentSceneH / scaleFactorY);
+		fowMaskLastSeenBM.Create(currentSceneW / scaleFactorX, currentSceneH / scaleFactorY);
+		lastSeenBM.Create(currentSceneW, currentSceneH);
 
-	AllegroBitmap fowMaskBMOld(maskSL->GetBitmap());
-	AllegroBitmap fowMaskLastSeenBMOld(lastSeenTerrainMaskSL->GetBitmap()); // GTODO
-	AllegroBitmap lastSeenBMOld(lastSeenTerrainSL->GetBitmap());
-	GUIRect srcPosAndSizeRectFowMask =
-	    {0, 0, fowMaskBMOld.GetWidth(), fowMaskBMOld.GetHeight()};
-	GUIRect srcPosAndSizeRectLastSeen =
-	    {0, 0, lastSeenBMOld.GetWidth(), lastSeenBMOld.GetHeight()};
-	fowMaskBMOld.Draw(&fowMaskBM, 0, 0, &srcPosAndSizeRectFowMask);
-	fowMaskLastSeenBMOld.Draw(&fowMaskLastSeenBM, 0, 0, &srcPosAndSizeRectFowMask);
-	lastSeenBMOld.Draw(&lastSeenBM, 0, 0, &srcPosAndSizeRectLastSeen);
+		AllegroBitmap fowMaskBMOld(maskSL->GetBitmap());
+		AllegroBitmap fowMaskLastSeenBMOld(lastSeenTerrainMaskSL->GetBitmap()); // GTODO
+		AllegroBitmap lastSeenBMOld(lastSeenTerrainSL->GetBitmap());
+		GUIRect srcPosAndSizeRectFowMask =
+		    {0, 0, fowMaskBMOld.GetWidth(), fowMaskBMOld.GetHeight()};
+		GUIRect srcPosAndSizeRectLastSeen =
+		    {0, 0, lastSeenBMOld.GetWidth(), lastSeenBMOld.GetHeight()};
+		fowMaskBMOld.Draw(&fowMaskBM, 0, 0, &srcPosAndSizeRectFowMask);
+		fowMaskLastSeenBMOld.Draw(&fowMaskLastSeenBM, 0, 0, &srcPosAndSizeRectFowMask);
+		lastSeenBMOld.Draw(&lastSeenBM, 0, 0, &srcPosAndSizeRectLastSeen);
 
-	// Update/make textures
-	// GTODO: update this on scene reentry (other places too)
-	// clues probably in ClearTextures()
-	{ // Fog of war mask
-		BITMAP* bm = fowMaskBM.GetBitmap();
+		// Update/make textures
+		// GTODO: update this on scene reentry (other places too)
+		// clues probably in ClearTextures()
+		{ // Fog of war mask
+			BITMAP* bm = fowMaskBM.GetBitmap();
 
-		// This is for what is currently actively looked at, non-accumulated
-		if (instantVisibleFowMaskTex.id == 0) {
-			LoadTextureFromBitmap8(&instantVisibleFowMaskTex, bm);
-		} else {
-			rlUpdateTexture(instantVisibleFowMaskTex.id, 0, 0, bm->w, bm->h, instantVisibleFowMaskTex.format, bm->line[0]);
+			// This is for what is currently actively looked at, non-accumulated
+			if (instantVisibleFowMaskTex.id == 0) {
+				LoadTextureFromBitmap8(&instantVisibleFowMaskTex, bm);
+			} else {
+				rlUpdateTexture(instantVisibleFowMaskTex.id, 0, 0, bm->w, bm->h, instantVisibleFowMaskTex.format, bm->line[0]);
+			}
 		}
-	}
-	
-	{ // Fog of war last-seen terrain
-		BITMAP* bm = lastSeenBM.GetBitmap();
 
-		if (lastSeenTex.id == 0) {
-			LoadTextureFromBitmap8(&lastSeenTex, bm);
-		} else {
-			rlUpdateTexture(lastSeenTex.id, 0, 0, bm->w, bm->h, lastSeenTex.format, bm->line[0]);
+		{ // Fog of war last-seen terrain
+			BITMAP* bm = lastSeenBM.GetBitmap();
+
+			if (lastSeenTex.id == 0) {
+				LoadTextureFromBitmap8(&lastSeenTex, bm);
+			} else {
+				rlUpdateTexture(lastSeenTex.id, 0, 0, bm->w, bm->h, lastSeenTex.format, bm->line[0]);
+			}
 		}
-	}
 
-	{ // Fog of war last-seen terrain chunky 1-0 mask
-		BITMAP* bm = fowMaskLastSeenBM.GetBitmap();
+		{ // Fog of war last-seen terrain chunky 1-0 mask
+			BITMAP* bm = fowMaskLastSeenBM.GetBitmap();
 
-		if (fowMaskLastSeenTex.id == 0) {
-			LoadTextureFromBitmap8(&fowMaskLastSeenTex, bm);
-		} else {
-			rlUpdateTexture(fowMaskLastSeenTex.id, 0, 0, bm->w, bm->h, fowMaskLastSeenTex.format, bm->line[0]);
+			if (fowMaskLastSeenTex.id == 0) {
+				LoadTextureFromBitmap8(&fowMaskLastSeenTex, bm);
+			} else {
+				rlUpdateTexture(fowMaskLastSeenTex.id, 0, 0, bm->w, bm->h, fowMaskLastSeenTex.format, bm->line[0]);
+			}
 		}
 	}
 
@@ -400,6 +402,10 @@ void FrameMan::FogOfWarSetup_DoSDF(const GLuint inputTex, GLuint& outputTex) {
 
 	shaderUnsignedSDF.SetFloat("uMaxDist", std::sqrt(m_BackBuffer8->w * m_BackBuffer8->w + m_BackBuffer8->h * m_BackBuffer8->h));
 	shaderUnsignedSDF.SetVector2f("uViewSize", Vector(m_BackBuffer8->w, m_BackBuffer8->h));
+	Scene* sceneForWrap = g_SceneMan.GetCurrentScene();
+	shaderUnsignedSDF.SetVector2f("uWrapsXY", Vector(
+	    (sceneForWrap && sceneForWrap->WrapsX()) ? 1.0f : 0.0f,
+	    (sceneForWrap && sceneForWrap->WrapsY()) ? 1.0f : 0.0f));
 
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 
@@ -550,6 +556,7 @@ void FrameMan::BackgroundShaderSetUniforms(Shader& backgroundShader, bool fowEna
 
 	static bool treatUnseenAsNeverSeen = false;
 	backgroundShader.SetBool("treatUnseenAsNeverSeen", treatUnseenAsNeverSeen);
+
 	backgroundShader.SetBool("fowEnabled", fowEnabled);
 
 	if (fowEnabled) {
@@ -1425,28 +1432,37 @@ void FrameMan::Draw() {
 	// Fog of war things!
 	bool fowEnabled;
 	Activity* currentActivity = g_ActivityMan.GetActivity();
-	fowEnabled = dynamic_cast<GameActivity*>(currentActivity)->GetFogOfWarEnabled();
+	GameActivity* gameActivity = dynamic_cast<GameActivity*>(currentActivity);
+	fowEnabled = gameActivity && gameActivity->GetFogOfWarEnabled();
+	// Tracked so the shader is told fowEnabled=false during the FoW-textures init window.
+	bool maskReady = false;
 	if (fowEnabled) {
 		Scene* currentScene = g_SceneMan.GetCurrentScene();
-		if (currentScene != m_ScenePreviouslyUsedForOglSetup) {
+		maskReady = currentScene && currentScene->GetUnseenLayerMask();
+		if (maskReady && currentScene != m_ScenePreviouslyUsedForOglSetup) {
 			m_ScenePreviouslyUsedForOglSetup = currentScene;
 			ClearFowTextures();
 			InitOrReinitFowOglThings(currentScene);
 		}
-		RenderBackgroundLayersBmToTexture();
+		// Writes to m_bgLayersTex via the FBO+VAO allocated by InitOrReinitFowOglThings; gate accordingly.
+		if (maskReady) {
+			RenderBackgroundLayersBmToTexture();
+		}
 
 		// TODO- this needs to be done above, per screen! Right now splitscreen is fucked
 		FogOfWarSetup(backgroundShader);
-		RenderFogOfWarTextureWithTimeDecay();
-		FogOfWarSetup_DoSDF(m_fowMaskTex, m_SdfResultFowMask);
-		FogOfWarSetup_DoSDF(fowMaskLastSeenTex.id, m_SdfResultFowLastSeenTerrainMask);
+		if (maskReady) {
+			RenderFogOfWarTextureWithTimeDecay();
+			FogOfWarSetup_DoSDF(m_fowMaskTex, m_SdfResultFowMask);
+			FogOfWarSetup_DoSDF(fowMaskLastSeenTex.id, m_SdfResultFowLastSeenTerrainMask);
+		}
 	}
 
 	// Drawing begins!
 	backgroundShader.Begin();
 	backgroundShader.Enable();
 
-	BackgroundShaderSetUniforms(backgroundShader, fowEnabled);
+	BackgroundShaderSetUniforms(backgroundShader, fowEnabled && maskReady);
 
 	rlSetUniformSampler(backgroundShader.GetUniformLocation("rtePalette"), g_PostProcessMan.GetPaletteTexture());
 

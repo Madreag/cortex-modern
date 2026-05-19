@@ -936,6 +936,14 @@ void SceneMan::MakeAllUnseen(Vector pixelSize, const int team) {
 void SceneMan::CommitToLastSeenTerrainWithFowMask(const int team) {
 	// To minimize blit calls we do a greedy vertical merge of the immediately-seeing mask
 	// From that we get rectangles
+
+	// Bail out if this team's fog-of-war layers were never set up - e.g. the first frame
+	// before MakeAllUnseen has run, or an activity that did no FoW setup for this team.
+	// There is nothing seen to commit yet. Mirrors the null-guard the sibling RestoreUnseen* use.
+	if (!m_pCurrentScene || !m_pCurrentScene->GetUnseenLayerMask(team) || !m_pCurrentScene->GetUnseenLayerTerrain(team)) {
+		return;
+	}
+
 	BITMAP* fowMaskBm = m_pCurrentScene->GetUnseenLayerMask(team)->GetBitmap();
 	int fowMaskWidth = fowMaskBm->w;
 	int fowMaskHeight = fowMaskBm->h;
@@ -1071,8 +1079,17 @@ void SceneMan::CastSeeRaysFromSky(const int screenId) {
 	const float strength = c_PathFindingDefaultDigStrength;
 	Vector ignored(0, 0);
 
+	// Wrap rayX only when the scene actually wraps in X; otherwise skip off-scene rays.
+	const bool sceneWrapsX = m_pCurrentScene && m_pCurrentScene->WrapsX();
+	const int sceneWidthForRays = GetSceneWidth();
 	for (int i = 0; i < rayCount; ++i) {
-		rayX = (rayX + static_cast<int>(spacing)) % GetSceneWidth();
+		rayX += spacing;
+		if (sceneWrapsX) {
+			// Modulo that also handles negative rayX (camera panned past the left edge).
+			rayX = ((rayX % sceneWidthForRays) + sceneWidthForRays) % sceneWidthForRays;
+		} else if (rayX < 0 || rayX >= sceneWidthForRays) {
+			continue;  // off-scene start position - nothing to reveal there
+		}
 		CastSeeRay(team, Vector(static_cast<float>(rayX), 0), seeRay, ignored, strength);
 	}
 }
@@ -1116,9 +1133,35 @@ bool SceneMan::IsUnseen(const int posX, const int posY, const int team) {
 	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount)
 		return false;
 
+	// Check the persistent ever-seen mask (cleared by see-rays, never reset by MakeAllUnseen).
+	// Returns true if the position has NEVER been in any of the team's units' sight - "have you
+	// ever seen here?". Set to this layer by Causeless in bdb3c9bbd ("Unseen is now 'ever
+	// unseen', not current FoW"). For the per-frame "currently in sight" check used by
+	// renderers, see IsCurrentlyUnseen() below.
 	SceneLayer* pUnseenLayer = m_pCurrentScene->GetUnseenLayerTerrainMask(team);
 	if (pUnseenLayer) {
 		// Translate to the scaled unseen layer's coordinates
+		Vector scale = pUnseenLayer->GetScaleFactor();
+		int scaledX = posX / scale.m_X;
+		int scaledY = posY / scale.m_Y;
+		return getpixel(pUnseenLayer->GetBitmap(), scaledX, scaledY) != g_MaskColor;
+	}
+
+	return false;
+}
+
+bool SceneMan::IsCurrentlyUnseen(const int posX, const int posY, const int team) {
+	RTEAssert(m_pCurrentScene, "Checking scene before the scene exists when checking if a position is currently unseen!");
+	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount)
+		return false;
+
+	// Check the per-frame current-FoV mask (recreated by MakeAllUnseen, cleared each frame
+	// by each team unit's see-rays). Returns true if the position is NOT in any of this team's
+	// units' current sight cones. Used by C++ renderers (DrawHUD paths, PostProcessMan glow)
+	// for Starcraft-model intel boundaries - HUDs and live glow effects hide outside current
+	// vision, not just outside ever-seen areas.
+	SceneLayer* pUnseenLayer = m_pCurrentScene->GetUnseenLayerMask(team);
+	if (pUnseenLayer) {
 		Vector scale = pUnseenLayer->GetScaleFactor();
 		int scaledX = posX / scale.m_X;
 		int scaledY = posY / scale.m_Y;

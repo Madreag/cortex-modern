@@ -1037,10 +1037,10 @@ void HDFirearm::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whic
 		return;
 	}
 
-	// Only draw if the team viewing this is on the same team OR has seen the space where this is located
+	// Only draw if the team viewing this is on the same team OR currently has line-of-sight to the space where this is located
 	int viewingTeam = g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen));
 	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam) {
-		if (g_SceneMan.IsUnseen(m_Pos.m_X, m_Pos.m_Y, viewingTeam))
+		if (g_SceneMan.IsCurrentlyUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))
 			return;
 	}
 

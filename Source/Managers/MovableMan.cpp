@@ -1318,7 +1318,8 @@ void MovableMan::Update() {
 
 	// If fog of war is enabled, then...
 	Activity* currentActivity = g_ActivityMan.GetActivity();
-	if (dynamic_cast<GameActivity*>(currentActivity)->GetFogOfWarEnabled()) {
+	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(currentActivity);
+	    gameActivity && gameActivity->GetFogOfWarEnabled()) {
 		// For each human player...
 		for (int playerIt = PlayerOne; playerIt < MaxPlayerCount; playerIt++) {
 			if (currentActivity->PlayerActive(playerIt) && currentActivity->PlayerHuman(playerIt)) {
@@ -1327,7 +1328,13 @@ void MovableMan::Update() {
 				g_SceneMan.CommitToLastSeenTerrainWithFowMask(team);
 				// Clear what was immediately seen
 				// GTODO: make this not eat a fow resolution, tweak functions accordingly
-				g_SceneMan.MakeAllUnseen(g_SceneMan.GetUnseenResolution(team), team);
+				// (1,1) sentinel from GetUnseenResolution before the activity's Lua-side FoW setup
+				// has run would make MakeAllUnseen allocate a full-scene mask every frame.
+				Vector unseenRes = g_SceneMan.GetUnseenResolution(team);
+				if (unseenRes.GetX() < 2 || unseenRes.GetY() < 2) {
+					unseenRes = Vector(4, 4);
+				}
+				g_SceneMan.MakeAllUnseen(unseenRes, team);
 			}
 		}
 	}
@@ -1697,7 +1704,7 @@ void MovableMan::Update() {
 				                                                                         m_Actors[i]->CastSeeRays();
 			                                                                         }
 		                                                                         });
-		// Reveal what's being seen from orbit
+		// Reveal what's being seen from the sky
 		for (int screenId = 0; screenId < g_FrameMan.GetScreenCount(); ++screenId) {
 			m_ActorsSeeFuture.push_back(
 			    g_ThreadMan.GetPriorityThreadPool().submit([screenId]() {

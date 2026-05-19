@@ -1293,15 +1293,8 @@ void Actor::Update() {
 }
 
 void RTE::Actor::CastSeeRays() {
-	// "See" the location and surroundings of this actor on the unseen map
 	if (m_Status != Actor::INACTIVE) {
-		// GTODO: this was 6. i gutted this, rewrite later
-		// GTODO: constexpr this?
-		const int lookIterations = 1; // How many see rays to cast per frame
-		for (int i = 0; i < lookIterations; ++i) {
-			// TODO: perceptiveness should increase bubble awareness
-			Look(100, g_FrameMan.GetPlayerScreenWidth() * 0.7 * m_Perceptiveness);
-		}
+		Look(100, g_FrameMan.GetPlayerScreenWidth() * 0.7f * m_Perceptiveness);
 	}
 }
 
@@ -1320,9 +1313,9 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 		return;
 	}
 
-	// Only draw if the team viewing this is on the same team OR has seen the space where this is located.
+	// Only draw if the team viewing this is on the same team OR currently has line-of-sight to the space where this is located.
 	int viewingTeam = g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen));
-	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam && (!g_SettingsMan.ShowEnemyHUD() || g_SceneMan.IsUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))) {
+	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam && (!g_SettingsMan.ShowEnemyHUD() || g_SceneMan.IsCurrentlyUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))) {
 		return;
 	}
 
