@@ -15,6 +15,21 @@
 
 #include "lz4.h"
 
+// ---- M1 Block D — wall-clock-in-sim WALL-CLOCK-MP-M6 follow-up ----
+//
+// Companion to NetworkServer.cpp's same-named block: the two
+// `g_TimerMan.GetRealTickCount()` reads in NetworkClient::SendInputMsg
+// (input-rate throttling, line ~1077) are real-time gated and therefore
+// would corrupt determinism if the legacy RakNet MP code were enabled
+// inside a deterministic-MP context. They are left in place at M1 because
+// the Trust scenarios / M1 determinism baseline don't enter this path, and
+// MP M6 (server-spine rewrite) replaces this whole client. See
+// NetworkServer.cpp's header comment for the rationale.
+//
+// WALL-CLOCK-MP-M6: input rate gating in the new client must use the sim
+// tick counter, not GetRealTickCount, so input arrival rate is identical
+// across clients regardless of their wall-clock framerate.
+
 using namespace RTE;
 
 NetworkClient::NetworkClient() {

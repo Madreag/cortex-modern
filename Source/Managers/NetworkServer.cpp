@@ -24,6 +24,38 @@
 #include "lz4.h"
 #include "lz4hc.h"
 
+// ---- M1 Block D — wall-clock-in-sim WALL-CLOCK-MP-M6 follow-ups ----
+//
+// This file is the legacy RakNet screen-streaming MP server, on the path out
+// (CHANGELOG: "the existing multiplayer implementation was terrible and broken...
+//  we will investigate whether it's feasible to build in a proper and more
+// capable multiplayer solution."). Multiplexer entry points are still wired
+// (MultiplayerServerLobby), so this code is reachable at runtime if the user
+// navigates through the legacy MP menu.
+//
+// The Block D audit flagged 5 `g_TimerMan.GetRealTickCount()` reads in this
+// file as sim-affecting (NetworkServer::SendFrame frame-rate throttling, send-
+// duration measurement, stats reset, vote-restart 3-second throttle). They are
+// preserved as-is in M1 because:
+//
+//   (1) The Trust scenarios + the M1 determinism baseline scenario do NOT
+//       enter the legacy MP code path. The per-tick BLAKE3 trace is therefore
+//       unaffected by these reads at M1, even though they would corrupt
+//       determinism if MP were enabled.
+//
+//   (2) The legacy MP architecture itself is on the chopping block. MP M6
+//       ("Server spine + GNS transport" in multiplayer.html §7) replaces
+//       NetworkServer/Client entirely with the new INetTransport adapter +
+//       deterministic command-replication layer; rewriting these wall-clock
+//       reads in legacy code first would be wasted churn.
+//
+// WALL-CLOCK-MP-M6: when M6's server spine is being written, ensure none of
+// the equivalent throttling logic uses GetRealTickCount inside the per-tick
+// command pipeline. Use GetSimUpdateCount / GetSimTickCount for any decision
+// that must be byte-identical across machines; reserve real-time reads for
+// network-IO-only concerns (bandwidth shaping, keepalive intervals) that
+// never feed back into the sim.
+
 using namespace RTE;
 
 NetworkServer::NetworkServer() {
