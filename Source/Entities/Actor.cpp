@@ -1293,16 +1293,6 @@ void Actor::Update() {
 }
 
 void RTE::Actor::CastSeeRays() {
-	// Per-actor vision dispatcher. The actual ray work happens in the virtual Look() override:
-	//   - AHuman::Look() casts a 32-ray body bubble (36px radius) plus a directional aim-cone
-	//     of FOVSpread / 0.5 rays, angle-quantized to avoid flicker as the aim slides.
-	//   - ACrab::Look() casts a single aim-direction ray with random ±FOVSpread/2 spread.
-	//   - Actor::Look() base falls back to a single velocity-direction ray for non-overriding
-	//     subclasses.
-	// One Look() call per frame is sufficient — AHuman::Look() alone fires ~232 rays. The
-	// pre-existing "// GTODO: this was 6. i gutted this, rewrite later" comment referred to
-	// stepping the per-frame iteration count back up; orthogonal to whether vision is
-	// directional, which it already is via the AHuman override.
 	if (m_Status != Actor::INACTIVE) {
 		Look(100, g_FrameMan.GetPlayerScreenWidth() * 0.7f * m_Perceptiveness);
 	}

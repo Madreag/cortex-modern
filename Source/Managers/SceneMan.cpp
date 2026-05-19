@@ -1079,11 +1079,7 @@ void SceneMan::CastSeeRaysFromSky(const int screenId) {
 	const float strength = c_PathFindingDefaultDigStrength;
 	Vector ignored(0, 0);
 
-	// Only wrap rayX around the scene width when the scene actually wraps in X. Otherwise the
-	// unconditional modulo casts rays at off-screen scene positions when the camera is panned
-	// toward an edge of a non-wrapping scene (rayX overflows past the scene width and wraps to
-	// the opposite edge), leaving the part of the view that needed sky-ray coverage with none
-	// and producing camera-dependent dim/bright bands in the rendered FoW.
+	// Wrap rayX only when the scene actually wraps in X; otherwise skip off-scene rays.
 	const bool sceneWrapsX = m_pCurrentScene && m_pCurrentScene->WrapsX();
 	const int sceneWidthForRays = GetSceneWidth();
 	for (int i = 0; i < rayCount; ++i) {
