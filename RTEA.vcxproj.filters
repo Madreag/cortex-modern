@@ -59,6 +59,18 @@
     <Filter Include="Renderer\raylib">
       <UniqueIdentifier>{5aa83e16-d772-476c-b51a-72480c976207}</UniqueIdentifier>
     </Filter>
+    <Filter Include="AI">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e01}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Network">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e02}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="external\BLAKE3">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e03}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="external\nlohmann_json">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e04}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\System\Box.h">
@@ -1271,6 +1283,71 @@
     <ClCompile Include="Source\Entities\DynamicSong.cpp">
       <Filter>Entities</Filter>
     </ClCompile>
+    <ClCompile Include="Source\AI\AIDecisionChannel.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\AI\AIDebugOverlay.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\AI\MetricsCollector.cpp">
+      <Filter>AI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetworkSimulator.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\ReplayLog.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\SimChecksum.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\System\ScenarioRunner.cpp">
+      <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Lua\LuaBindingsAI.cpp">
+      <Filter>Lua</Filter>
+    </ClCompile>
+    <ClCompile Include="external\sources\BLAKE3-1.8.5\blake3.c">
+      <Filter>external\BLAKE3</Filter>
+    </ClCompile>
+    <ClCompile Include="external\sources\BLAKE3-1.8.5\blake3_dispatch.c">
+      <Filter>external\BLAKE3</Filter>
+    </ClCompile>
+    <ClCompile Include="external\sources\BLAKE3-1.8.5\blake3_portable.c">
+      <Filter>external\BLAKE3</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\AI\AIDecisionChannel.h">
+      <Filter>AI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\AI\AIDebugOverlay.h">
+      <Filter>AI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\AI\MetricsCollector.h">
+      <Filter>AI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetworkSimulator.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\ReplayLog.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\SimChecksum.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\System\ScenarioRunner.h">
+      <Filter>System</Filter>
+    </ClInclude>
+    <ClInclude Include="external\sources\BLAKE3-1.8.5\blake3.h">
+      <Filter>external\BLAKE3</Filter>
+    </ClInclude>
+    <ClInclude Include="external\sources\BLAKE3-1.8.5\blake3_impl.h">
+      <Filter>external\BLAKE3</Filter>
+    </ClInclude>
+    <ClInclude Include="external\sources\nlohmann_json-3.12.0\nlohmann\json.hpp">
+      <Filter>external\nlohmann_json</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Image Include="Resources\ccicon.ico">

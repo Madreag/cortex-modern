@@ -4,20 +4,28 @@ source_libs = []
 source_inc_dirs += [include_directories(
   '.',
   'Activities',
+  'AI',
   'Entities',
   'GUI',
   'GUI/Wrappers',
   'Lua',
   'Managers',
   'Menus',
+  'Network',
   'Renderer',
   'System')]
 
+external_inc_dirs += [include_directories(
+  '../external/sources/BLAKE3-1.8.5',
+  '../external/sources/nlohmann_json-3.12.0')]
+
 subdir('Activities')
+subdir('AI')
 subdir('Entities')
 subdir('GUI')
 subdir('Lua')
 subdir('Managers')
 subdir('Menus')
+subdir('Network')
 subdir('Renderer')
 subdir('System')

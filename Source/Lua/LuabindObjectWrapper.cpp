@@ -7,6 +7,12 @@
 
 #include "SoundSet.h"
 
+#include "AIDebugOverlay.h"
+#include "AIDecisionChannel.h"
+#include "MetricsCollector.h"
+#include "NetworkSimulator.h"
+#include "SimChecksum.h"
+
 using namespace RTE;
 
 // With multithreaded Lua, objects can be destructed from multiple threads at once
