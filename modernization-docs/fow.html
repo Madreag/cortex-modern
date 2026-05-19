@@ -910,6 +910,7 @@ lookVector *= aimMatrix;
         <tr><td>Co-op FoW (2+ humans, same team)</td><td>Shared visibility may not merge correctly</td><td>Should be union of both players' see-rays</td></tr>
         <tr><td>PvP FoW (2+ humans, different teams)</td><td>Either too revealing or too hidden</td><td>Each player sees only own-team FoW</td></tr>
         <tr><td>3-team / 4-team scenarios</td><td>Memory / behavior unknown</td><td>Per-team architecture should scale to N teams</td></tr>
+        <tr><td><code>FogOfWarSetup</code> default-TeamOne mask check vs <code>GetTeamOfPlayer(0)</code> code path</td><td>If player 0 isn't on TeamOne, <code>maskReady</code> guard could mis-evaluate</td><td>Pre-existing <code>// TODO: HACK</code> at <code>FrameMan.cpp:207</code>. Our maskReady check extends the same pattern. Devin bot review caught it; not introduced by this PR but worth fixing class-wide when splitscreen FoW gets a real pass</td></tr>
       </tbody>
     </table>
 
@@ -933,6 +934,7 @@ lookVector *= aimMatrix;
         <tr><td>Scene wrapping (X / Y / both / none)</td><td><b style="color:#f08080;">P0</b></td><td>Fixed by our PR for the SDF + sky-ray paths; broader sweep recommended for other "wrap without checking WrapsX/Y" patterns</td></tr>
         <tr><td>All zoom levels (1x / 2x / 4x)</td><td><b style="color:#f08080;">P0</b></td><td>FoW resolution scales correctly</td></tr>
         <tr><td>Window resize / aspect ratio</td><td><b style="color:#f5dbb6;">P1</b></td><td>FoW re-init on resize without artifacts</td></tr>
+        <tr><td><code>m_bgLayersTex</code> stale during FoW init window</td><td><b style="color:#bcd5f5;">P2</b></td><td>When <code>maskReady=false</code>, <code>InitOrReinitFowOglThings</code> doesn't run so <code>m_bgLayersTex.id=0</code>; shader's <code>bgLayersTexture</code> uniform reads from texture unit 0 (raylib default white pixel) for 1&ndash;2 frames. Mitigated by <code>fowEnabled &amp;&amp; maskReady</code> passed to shader but the fast path still reads <code>bgLayersVal</code>. No visible artifact in our game test (the read only happens for pixels not covered by fg/mo/bg-terrain). Proper fix: initialize <code>m_bgLayersTex</code> outside <code>InitOrReinitFowOglThings</code></td></tr>
       </tbody>
     </table>
 
