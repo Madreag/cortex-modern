@@ -30,6 +30,23 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
   # Build against system libraries on linux
   message('gcc detected')
 
+  # M1 Block E — pin floating-point compilation so the same source produces
+  # byte-identical FP results across same-arch Win/Linux/macOS x86. Disables
+  # the compiler's freedom to rearrange / contract / approximate FP ops, which
+  # is exactly what causes cross-host drift in the determinism island.
+  # See multiplayer.html §7 (M5) for the WASM-canonical cross-platform pass that
+  # adds ARM into the matrix.
+  extra_args += [
+    '-msse2',                       # baseline ISA — no x87 80-bit drift on Windows
+    '-fno-fast-math',               # disable the umbrella "go fast, drift OK" flag
+    '-fno-finite-math-only',        # honor inf/NaN — required for fesetround/IEEE
+    '-fno-associative-math',        # (a+b)+c must equal a+(b+c) at the bit level
+    '-fno-reciprocal-math',         # no a/b -> a*(1/b) rewrites
+    '-fno-unsafe-math-optimizations', # umbrella for several of the above
+    '-frounding-math',              # don't assume the default rounding mode
+    '-fsignaling-nans',             # don't convert signaling NaNs to quiet
+  ]
+
   if host_machine.system() == 'linux'
     build_rpath = '$ORIGIN:$ORIGIN/../external/lib/linux/x86_64' # Set RUNPATH so that CCCP can find libfmod.so without needing to set LD_LIBRARY_PATH
   elif host_machine.system()=='darwin'
@@ -70,7 +87,12 @@ elif compiler.get_argument_syntax()== 'msvc'
 #TODO: add MSVC related arguments and stuff in here
   message('cl detected')
   elfname = 'Cortex Command'
-  extra_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-bigobj']
+  # M1 Block E — pin FP for MSVC. /fp:precise stops the compiler rearranging
+  # FP operations (which Fast does aggressively); /arch:SSE2 ensures Win32
+  # builds don't fall back to x87's 80-bit registers (x64 implies SSE2). The
+  # RTEA.vcxproj also sets both fields on every config; the meson path mirrors
+  # them so a CI matrix that flips between the two build systems is consistent.
+  extra_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-bigobj', '/fp:precise', '/arch:SSE2']
   add_global_arguments('-D_ITERATOR_DEBUG_LEVEL=0', language:'cpp')
   add_project_link_arguments(['winmm.lib', 'ws2_32.lib', 'dinput8.lib', 'ddraw.lib', 'dxguid.lib', 'dsound.lib', 'dbghelp.lib'], language:'cpp')
   if host_machine.cpu_family() == 'x86'
