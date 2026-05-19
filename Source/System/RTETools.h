@@ -76,41 +76,85 @@ namespace RTE {
 		}
 	};
 
-	extern RandomGenerator g_RandomGenerator; //!< The global random number generator used in our simulation thread.
+	// M1 Block B — sim/render RNG split.
+	//
+	// Before M1 there was one global `g_RandomGenerator` shared by sim and render. The
+	// TODO comment that previously sat here (now retired) named exactly why this was
+	// broken: "framerate affects sim updates per draw" — because render-thread RNG
+	// consumption advances the same stream the sim reads from, the sim's RNG sequence
+	// drifts when the draw rate changes. Sim determinism is impossible while that's true.
+	//
+	// The fix is two RNGs:
+	//   - g_SimRNG     — the sim-thread / determinism-island RNG. Used by Update,
+	//                    Travel, OnCollide*, AI dispatch, physics, controller code,
+	//                    spawn timers, etc. Seeded by SeedRNG() with the constant
+	//                    "Bubble"-derived seed. Reseeded on every activity start.
+	//   - g_RenderRNG  — the render-thread / cosmetic RNG. Used by particle visual
+	//                    jitter, screen shake, audio pitch variation, music-track
+	//                    selection, post-process effects, menu animations, title
+	//                    screen visuals. Pulls from this RNG never affect sim hash.
+	//
+	// Routing rule for the call site:
+	//   * Inside the determinism island (anything Source\Activities\, Source\Entities\
+	//     Update/Travel/OnCollide*, Source\Managers\MovableMan/SceneMan sim paths,
+	//     Source\System\Controller / PathFinder) → use the free function
+	//     `RandomNum<T>()`, which defaults to g_SimRNG.
+	//   * Outside the determinism island (Source\Managers\AudioMan / CameraMan /
+	//     PostProcessMan, Source\Menus, any pure-visual Source\Entities\ file,
+	//     audio variation, screen shake, etc.) → call `g_RenderRNG.RandomNum<T>()`
+	//     explicitly so the call site is obvious.
+	//   * When in doubt → use the SIM free function. Per the M1 plan: "better to
+	//     have one cosmetic system mildly deterministic than to leak render
+	//     variation into sim." The migration intentionally errs sim-ward.
+	//
+	// During the transition we keep `g_RandomGenerator` as a deprecated reference
+	// alias to g_SimRNG so any older code still using the name keeps working byte-
+	// identically. New code should reference g_SimRNG / g_RenderRNG directly.
+	extern RandomGenerator g_SimRNG;    //!< Determinism-island RNG. Default for the RandomNum/RandomNormalNum free functions.
+	extern RandomGenerator g_RenderRNG; //!< Cosmetic-side RNG. Used by visual jitter, audio variation, screen shake, etc.
 
-	/// Seed global the global random number generators.
+	/// Deprecated: prefer g_SimRNG or g_RenderRNG directly. Points to g_SimRNG so
+	/// every pre-Block-B usage of g_RandomGenerator (including taking its address
+	/// for Lua bindings) keeps the exact same byte-level behaviour.
+	extern RandomGenerator& g_RandomGenerator;
+
+	/// Seed both global RNGs to the deterministic constant. Called once at engine
+	/// boot from main() and again at every activity start so each scenario begins
+	/// from the same state regardless of how many menu interactions led to it.
 	void SeedRNG();
 
-	// TODO: Maybe remove these passthrough functions and force the user to manually specify if they want the simulation thread random,
-	// Or, in future, a render-thread random, as right now determinism isn't viable because framerate affects sim updates per draw
+	// Free-function form. These were the dominant call style pre-M1 (~170 sites);
+	// to avoid touching all of them in one PR we keep the form but route it through
+	// the sim RNG explicitly. Render-side call sites that want the render RNG must
+	// reach for `g_RenderRNG.RandomNum<T>()` (or `RandomNormalNum<T>()`) by name.
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNormalNum() {
-		return g_RandomGenerator.RandomNormalNum();
+		return g_SimRNG.RandomNormalNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNormalNum() {
-		return g_RandomGenerator.RandomNormalNum();
+		return g_SimRNG.RandomNormalNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum() {
-		return g_RandomGenerator.RandomNum();
+		return g_SimRNG.RandomNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum() {
-		return g_RandomGenerator.RandomNum();
+		return g_SimRNG.RandomNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum(floatType min, floatType max) {
-		return g_RandomGenerator.RandomNum(min, max);
+		return g_SimRNG.RandomNum<floatType>(min, max);
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum(intType min, intType max) {
-		return g_RandomGenerator.RandomNum(min, max);
+		return g_SimRNG.RandomNum<intType>(min, max);
 	}
 #pragma endregion
 

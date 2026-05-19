@@ -113,8 +113,13 @@ int TerrainDebris::Save(Writer& writer) const {
 
 bool TerrainDebris::GetPiecePlacementPosition(SLTerrain* terrain, Box& possiblePiecePosition) const {
 	BITMAP* matBitmap = terrain->GetMaterialBitmap();
-	int posX = RandomNum(0, matBitmap->w);
-	int depth = RandomNum(m_MinDepth, m_MaxDepth);
+	// M1 Block B: scene-decoration RNG. The pieces become terrain pixels that ARE in
+	// the determinism island, but both RNGs are reseeded to the constant at activity
+	// start (see SeedRNG / Activity::Start), so terrain is byte-identical across same-
+	// seed runs regardless of which RNG produced it. Using g_RenderRNG here keeps the
+	// sim RNG's state evolution untouched by terrain-cosmetic decisions.
+	int posX = g_RenderRNG.RandomNum<int>(0, matBitmap->w);
+	int depth = g_RenderRNG.RandomNum<int>(m_MinDepth, m_MaxDepth);
 	int buriedDepthOffset = m_OnlyBuried ? static_cast<int>(possiblePiecePosition.GetHeight() * 0.6F) : 0;
 	int prevMaterialCheckPixel = -1;
 
@@ -194,19 +199,20 @@ void TerrainDebris::DrawToTerrain(SLTerrain* terrain, BITMAP* bitmapToDraw, cons
 	if (m_CanHFlip || m_CanVFlip || m_MinRotation != 0 || m_MaxRotation != 0) {
 		tempFlipAndRotBitmap = create_bitmap_ex(8, dimensions, dimensions);
 
-		if (m_CanHFlip && m_FlipChance >= RandomNum()) {
+		// M1 Block B: debris flip / rotation rolls are visual decoration — g_RenderRNG.
+		if (m_CanHFlip && m_FlipChance >= g_RenderRNG.RandomNum<float>()) {
 			clear_bitmap(tempFlipAndRotBitmap);
 			draw_sprite_h_flip(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0);
 			blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
 		}
-		if (m_CanVFlip && m_FlipChance >= RandomNum()) {
+		if (m_CanVFlip && m_FlipChance >= g_RenderRNG.RandomNum<float>()) {
 			clear_bitmap(tempFlipAndRotBitmap);
 			draw_sprite_v_flip(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0);
 			blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
 		}
 		if (m_MinRotation != 0 || m_MaxRotation != 0) {
 			clear_bitmap(tempFlipAndRotBitmap);
-			rotate_sprite(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, ftofix(GetAllegroAngle(static_cast<float>(RandomNum(m_MinRotation, m_MaxRotation)))));
+			rotate_sprite(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, ftofix(GetAllegroAngle(static_cast<float>(g_RenderRNG.RandomNum<int>(m_MinRotation, m_MaxRotation)))));
 			blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
 		}
 	}
@@ -224,7 +230,8 @@ void TerrainDebris::ScatterOnTerrain(SLTerrain* terrain) {
 
 	int possiblePieceToPlaceCount = static_cast<int>((static_cast<float>(terrain->GetMaterialBitmap()->w) * c_MPP) * m_Density);
 	for (int piece = 0; piece < possiblePieceToPlaceCount; ++piece) {
-		int pieceBitmapIndex = RandomNum(0, m_BitmapCount - 1);
+		// M1 Block B: debris bitmap variant pick is visual decoration — g_RenderRNG.
+		int pieceBitmapIndex = g_RenderRNG.RandomNum<int>(0, m_BitmapCount - 1);
 		RTEAssert(pieceBitmapIndex >= 0 && pieceBitmapIndex < m_BitmapCount, "Bitmap index was out of bounds during TerrainDebris::ScatterOnTerrain!");
 		Box possiblePiecePosition(Vector(), static_cast<float>(m_Bitmaps[pieceBitmapIndex]->w), static_cast<float>(m_Bitmaps.at(pieceBitmapIndex)->h));
 		if (GetPiecePlacementPosition(terrain, possiblePiecePosition)) {

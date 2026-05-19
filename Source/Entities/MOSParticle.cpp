@@ -128,7 +128,14 @@ void MOSParticle::Travel() {
 	if (m_SpriteAnimMode == ONCOLLIDE) {
 		// Change angular velocity after collision.
 		if (hitCount >= 1) {
-			m_AngularVel *= 0.5F * velMag * RandomNormalNum();
+			// M1 Block B: MOSParticle::Travel runs per-tick for every particle. The
+			// post-collision angular-velocity perturbation here only affects the
+			// particle's rotation, which drives `m_Frame` selection — purely visual
+			// (no atom-group rotation, no collision feedback). Routing the RNG draw
+			// to g_RenderRNG keeps the sim stream untouched by per-particle visual
+			// jitter; otherwise the sim RNG state would evolve by how many particles
+			// collided each tick.
+			m_AngularVel *= 0.5F * velMag * g_RenderRNG.RandomNormalNum<float>();
 			m_AngularVel = -m_AngularVel;
 		}
 
