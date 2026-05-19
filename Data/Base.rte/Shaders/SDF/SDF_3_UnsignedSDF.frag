@@ -5,11 +5,7 @@ out vec4 FragColor;
 uniform sampler2D uSampler;
 uniform vec2 uViewSize;
 uniform float uMaxDist;
-// x=1 if scene wraps horizontally, y=1 if scene wraps vertically; 0 otherwise.
-// Previously the toroidal wrap below was applied unconditionally, which treats opposite-edge
-// seeds as nearby on non-wrapping scenes (most CC scenes) and produces bright artifacts when
-// the camera pans toward an edge.
-uniform vec2 uWrapsXY;
+uniform vec2 uWrapsXY;  // x/y = 1 if scene wraps on that axis.
 
 void main() {
     vec4 n = texture(uSampler, textureUV);
