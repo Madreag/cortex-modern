@@ -178,8 +178,9 @@ void SLBackground::Update() {
 					m_Frame = (m_Frame + 1) % m_FrameCount;
 					break;
 				case SpriteAnimMode::ALWAYSRANDOM:
+					// M1 Block B: scene-layer background frame variation is purely visual.
 					while (m_Frame == prevFrame) {
-						m_Frame = RandomNum(0, m_FrameCount - 1);
+						m_Frame = g_RenderRNG.RandomNum<int>(0, m_FrameCount - 1);
 					}
 					break;
 				case SpriteAnimMode::ALWAYSPINGPONG:

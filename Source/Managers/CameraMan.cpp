@@ -246,7 +246,8 @@ void CameraMan::Update(int screenId) {
 		const float screenShakeScale = 0.3F;
 
 		Vector screenShakeOffset(1.0F, 0.0F);
-		screenShakeOffset.RadRotate(RandomNormalNum() * c_PI);
+		// M1 Block B: screen shake is a pure render effect; uses g_RenderRNG.
+		screenShakeOffset.RadRotate(g_RenderRNG.RandomNormalNum<float>() * c_PI);
 		screenShakeOffset *= screen.ScreenShakeMagnitude * m_ScreenShakeStrength * screenShakeScale;
 
 		newOffset += screenShakeOffset;

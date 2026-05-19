@@ -8,7 +8,14 @@
 
 namespace RTE {
 
-	RandomGenerator g_RandomGenerator;
+	// M1 Block B: sim/render RNG split. g_SimRNG carries the determinism-island
+	// consumers; g_RenderRNG carries the cosmetic-side consumers. g_RandomGenerator
+	// is kept as a reference alias so legacy code (and any binding that took its
+	// address, e.g. the Lua m_RandomGenerator wiring in LuaMan) keeps working
+	// byte-identically against the sim RNG.
+	RandomGenerator  g_SimRNG;
+	RandomGenerator  g_RenderRNG;
+	RandomGenerator& g_RandomGenerator = g_SimRNG;
 
 	void SeedRNG() {
 		// Use a constant seed for determinism.
@@ -28,7 +35,12 @@ namespace RTE {
 			return static_cast<uint32_t>(seedResult);
 		}();
 
-		g_RandomGenerator.Seed(constSeed);
+		// M1 Block B: seed both RNGs identically. g_RenderRNG could legitimately
+		// drift to a wall-clock seed in a future block (cosmetic variation across
+		// runs would be a feature, not a bug) but at M1 we keep both deterministic
+		// to keep the determinism-check tool's render-side assertions tractable.
+		g_SimRNG.Seed(constSeed);
+		g_RenderRNG.Seed(constSeed);
 	}
 
 	float Lerp(float scaleStart, float scaleEnd, float startValue, float endValue, float progressScalar) {
