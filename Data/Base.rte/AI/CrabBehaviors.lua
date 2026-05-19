@@ -1,6 +1,8 @@
 
 CrabBehaviors = {};
 
+if not AIEmit then require("AI/AIEmit"); end
+
 function CrabBehaviors.LookForTargets(AI, Owner)
 	local viewAngDeg = RangeRand(35, 85) * Owner.Perceptiveness;
 	if AI.deviceState == AHuman.AIMING then
@@ -73,6 +75,8 @@ end
 
 -- in sentry behavior the agent only looks for new enemies, it sometimes sharp aims to increase spotting range
 function CrabBehaviors.Sentry(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "CrabSentry", "CrabSentry:enter");
 	local sweepUp = true;
 	local sweepDone = false;
 	-- to-do: refer to upper/lower limits!
@@ -259,6 +263,8 @@ end
 
 -- open fire on the selected target
 function CrabBehaviors.ShootTarget(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "CrabShootTarget", "CrabShootTarget:enter", AI.Target);
 	if not MovableMan:ValidMO(AI.Target) then
 		return true;
 	end

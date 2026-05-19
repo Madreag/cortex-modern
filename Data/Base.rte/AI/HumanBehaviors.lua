@@ -1,6 +1,8 @@
 
 HumanBehaviors = {};
 
+if not AIEmit then require("AI/AIEmit"); end
+
 -- spot targets by casting a ray in a random direction
 function HumanBehaviors.LookForTargets(AI, Owner, Skill)
 	local viewAngDeg = RangeRand(50, 120) * Owner.Perceptiveness * (0.5 + Skill/200);
@@ -155,6 +157,8 @@ end
 
 -- in sentry behavior the agent only looks for new enemies, it sometimes sharp aims to increase spotting range
 function HumanBehaviors.Sentry(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "Sentry", "Sentry:enter");
 	local sweepUp = true;
 	local sweepDone = false;
 	local maxAng = math.min(1.4, Owner.AimRange);
@@ -383,6 +387,8 @@ function HumanBehaviors.Sentry(AI, Owner, Abort)
 end
 
 function HumanBehaviors.GoldDig(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "GoldDig", "GoldDig:enter");
 	-- make sure our weapon have ammo before we start to dig, just in case we encounter an enemy while digging
 	if Owner.EquippedItem and (Owner.FirearmNeedsReload or Owner.FirearmIsEmpty) and Owner.EquippedItem:HasObjectInGroup("Weapons") then
 		Owner:ReloadFirearms();
@@ -567,6 +573,8 @@ end
 
 -- find a weapon to pick up
 function HumanBehaviors.WeaponSearch(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "WeaponSearch", "WeaponSearch:enter");
 	local pickupDiggers = not Owner:HasObjectInGroup("Tools - Diggers");
 
 	local maxSearchDistance;
@@ -701,6 +709,8 @@ end
 
 -- find a tool to pick up
 function HumanBehaviors.ToolSearch(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "ToolSearch", "ToolSearch:enter");
 	local maxSearchDistance;
 	if Owner.AIMode == Actor.AIMODE_GOLDDIG then
 		maxSearchDistance = FrameMan.PlayerScreenWidth * 0.5; -- move up to half a screen when digging
@@ -892,6 +902,8 @@ end
 
 -- open fire on the selected target
 function HumanBehaviors.ShootTarget(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "ShootTarget", "ShootTarget:enter", AI.Target);
 	if not MovableMan:ValidMO(AI.Target) then
 		return true;
 	end
@@ -1318,6 +1330,8 @@ end
 -- throw a grenade at the selected target
 --TODO: This behavior should effectively have the actor close in on the target if out of range!
 function HumanBehaviors.ThrowTarget(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "ThrowTarget", "ThrowTarget:enter", AI.Target);
 	local ThrowTimer = Timer();
 	local aimTime = Owner.ThrowPrepTime;
 	local scan = 0;
@@ -1487,6 +1501,8 @@ end
 
 -- attack the target in hand-to-hand
 function HumanBehaviors.AttackTarget(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "AttackTarget", "AttackTarget:enter", AI.Target);
 	if not AI.Target or not MovableMan:ValidMO(AI.Target) then
 		return true;
 	end
@@ -1624,6 +1640,8 @@ end
 
 -- open fire on the area around the selected target
 function HumanBehaviors.ShootArea(AI, Owner, Abort)
+	-- M0 observability: behaviour entry.
+	AIEmit(Owner, "decision", "behaviour_selected", "ShootArea", "ShootArea:enter", AI.UnseenTarget);
 	if not MovableMan:ValidMO(AI.UnseenTarget) or not Owner.FirearmIsReady then
 		return true;
 	end
