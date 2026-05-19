@@ -262,6 +262,11 @@ namespace RTE {
 		/// Whether we need to show MetaScenes in editors and scenario UI.
 		/// @return True if we need to show MetaScenes.
 		bool ShowMetascenes() const { return m_ShowMetaScenes; }
+
+		/// Whether test scenarios (Activity::IsTestActivity()) should be visible in the
+		/// scenarios menu. CLI -scenario launches always work regardless. Defaults to true in
+		/// DEBUG builds, false in Final.
+		bool ShowTestActivities() const { return m_ShowTestActivities; }
 #pragma endregion
 
 #pragma region Mod and Script Management
@@ -387,6 +392,7 @@ namespace RTE {
 
 		bool m_AllowSavingToBase; //!< Whether editors will allow to select Base.rte as a module to save in.
 		bool m_ShowMetaScenes; //!< Show MetaScenes in editors and activities.
+		bool m_ShowTestActivities; //!< Show developer test scenarios (Tests.rte) in the scenarios menu. Default true in DEBUG, false in Final.
 
 		bool m_DisableLuaJIT; //!< Whether to disable LuaJIT or not. Disabling will skip loading the JIT library entirely as just setting 'jit.off()' seems to have no visible effect.
 		bool m_EnableLuaDebugging; //!< Whether the Lua debugger mode is enabled or not. This will disable MT and attempt to connect to a debugger on launch.

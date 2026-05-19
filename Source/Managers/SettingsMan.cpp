@@ -6,6 +6,7 @@
 #include "FrameMan.h"
 #include "PostProcessMan.h"
 #include "AudioMan.h"
+#include "NetworkSimulator.h"
 #include "PerformanceMan.h"
 #include "UInputMan.h"
 #include "System.h"
@@ -40,6 +41,19 @@ void SettingsMan::Clear() {
 	m_AllowSavingToBase = false;
 	m_ShowForeignItems = true;
 	m_ShowMetaScenes = false;
+#if defined(DEBUG_BUILD) || defined(MIN_DEBUG_BUILD) || defined(DEBUG_RELEASE_BUILD)
+	m_ShowTestActivities = true;
+#else
+	m_ShowTestActivities = false;
+#endif
+
+	// NOTE: NetworkSimulator's knobs default to 0 (std::atomic<int>{0}), so SettingsMan::Clear
+	// does NOT need to reset them — and crucially MUST NOT touch g_NetworkSimulator here. This
+	// Clear() runs from SettingsMan's constructor, which runs from SettingsMan::Construct(),
+	// which fires before NetworkSimulator::Construct() in InitializeManagers. Accessing
+	// g_NetworkSimulator before its singleton is constructed dereferences a null s_Instance
+	// and crashes. The MatchProperty / Save hooks below run AFTER InitializeManagers has
+	// constructed all the M0 singletons, so they're safe — but Clear() is not.
 
 	m_DisableLuaJIT = false;
 	m_EnableLuaDebugging = false;
@@ -172,6 +186,10 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("DeltaTime", { g_TimerMan.SetDeltaTimeSecs(std::stof(reader.ReadPropValue())); });
 	MatchProperty("AllowSavingToBase", { reader >> m_AllowSavingToBase; });
 	MatchProperty("ShowMetaScenes", { reader >> m_ShowMetaScenes; });
+	MatchProperty("ShowTestActivities", { reader >> m_ShowTestActivities; });
+	MatchProperty("SimulatedLatencyMs", { int v; reader >> v; g_NetworkSimulator.SetLatencyMs(v); });
+	MatchProperty("SimulatedLossPct",   { int v; reader >> v; g_NetworkSimulator.SetLossPct(v); });
+	MatchProperty("SimulatedJitterMs",  { int v; reader >> v; g_NetworkSimulator.SetJitterMs(v); });
 	MatchProperty("SkipIntro", { reader >> m_SkipIntro; });
 	MatchProperty("ShowToolTips", { reader >> m_ShowToolTips; });
 	MatchProperty("CaseSensitiveFilePaths", { System::EnableFilePathCaseSensitivity(std::stoi(reader.ReadPropValue())); });
@@ -311,6 +329,10 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewLine(false);
 	writer.NewPropertyWithValue("AllowSavingToBase", m_AllowSavingToBase);
 	writer.NewPropertyWithValue("ShowMetaScenes", m_ShowMetaScenes);
+	writer.NewPropertyWithValue("ShowTestActivities", m_ShowTestActivities);
+	writer.NewPropertyWithValue("SimulatedLatencyMs", g_NetworkSimulator.GetLatencyMs());
+	writer.NewPropertyWithValue("SimulatedLossPct",   g_NetworkSimulator.GetLossPct());
+	writer.NewPropertyWithValue("SimulatedJitterMs",  g_NetworkSimulator.GetJitterMs());
 
 	writer.NewLine(false, 2);
 	writer.NewDivider(false);

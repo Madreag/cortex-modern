@@ -169,6 +169,12 @@ namespace RTE {
 		/// Sets whether craft must be considered orbited if they reach the map border on non-wrapped maps.
 		/// @param value Whether to consider orbited or not.
 		void SetCraftOrbitAtTheEdge(bool value) { m_CraftOrbitAtTheEdge = value; }
+
+		/// Whether this is a developer test scenario. Hidden from the scenarios menu unless
+		/// SettingsMan ShowTestActivities is true (default: enabled in DEBUG builds, disabled
+		/// in Final). Always launchable via CLI `-scenario <PresetName>`.
+		bool IsTestActivity() const { return m_IsTestActivity; }
+		void SetIsTestActivity(bool value) { m_IsTestActivity = value; }
 #pragma endregion
 
 #pragma region Virtual Override Methods
@@ -580,6 +586,7 @@ namespace RTE {
 		int m_Difficulty; //!< Current difficulty setting of this Activity.
 		bool m_CraftOrbitAtTheEdge; //!< If true then on non-wrapping maps craft beyond the edge of the map are considered orbited.
 		int m_InCampaignStage; //!< Which stage of the campaign this Activity appears in, if any (-1 means it's not in the campaign).
+		bool m_IsTestActivity; //!< If true this is a developer test scenario; hidden from the regular scenarios menu unless SettingsMan ShowTestActivities is enabled (default: true in DEBUG builds, false in Final). Always launchable via CLI (-scenario).
 
 		int m_PlayerCount; //!< The number of total players in the current Activity, AI and Human.
 		bool m_IsActive[Players::MaxPlayerCount]; //!< Whether a specific player is at all active and playing this Activity.

@@ -40,6 +40,7 @@ void Activity::Clear() {
 	m_Difficulty = 50;
 	m_CraftOrbitAtTheEdge = false;
 	m_InCampaignStage = -1;
+	m_IsTestActivity = false;
 	m_PlayerCount = 1;
 	m_TeamCount = 1;
 
@@ -98,6 +99,7 @@ int Activity::Create(const Activity& reference) {
 	m_Difficulty = reference.m_Difficulty;
 	m_CraftOrbitAtTheEdge = reference.m_CraftOrbitAtTheEdge;
 	m_InCampaignStage = reference.m_InCampaignStage;
+	m_IsTestActivity = reference.m_IsTestActivity;
 	m_PlayerCount = reference.m_PlayerCount;
 	m_TeamCount = reference.m_TeamCount;
 
@@ -143,6 +145,7 @@ int Activity::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("Difficulty", { reader >> m_Difficulty; });
 	MatchProperty("CraftOrbitAtTheEdge", { reader >> m_CraftOrbitAtTheEdge; });
 	MatchProperty("InCampaignStage", { reader >> m_InCampaignStage; });
+	MatchProperty("IsTestActivity", { reader >> m_IsTestActivity; });
 	MatchProperty("ActivityState", { m_ActivityState = static_cast<ActivityState>(std::stoi(reader.ReadPropValue())); });
 	MatchProperty("AllowsUserSaving", { reader >> m_AllowsUserSaving; });
 	MatchForwards("TeamOfPlayer1") MatchForwards("TeamOfPlayer2") MatchForwards("TeamOfPlayer3") MatchProperty("TeamOfPlayer4", {
@@ -245,6 +248,8 @@ int Activity::Save(Writer& writer) const {
 	writer << m_CraftOrbitAtTheEdge;
 	writer.NewProperty("InCampaignStage");
 	writer << m_InCampaignStage;
+	writer.NewProperty("IsTestActivity");
+	writer << m_IsTestActivity;
 	writer.NewProperty("ActivityState");
 	writer << m_ActivityState;
 	writer.NewProperty("AllowsUserSaving");
