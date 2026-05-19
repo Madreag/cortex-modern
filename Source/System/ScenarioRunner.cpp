@@ -40,6 +40,11 @@ namespace RTE {
 			s_Args.maxTicks = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
 			return 2;
 		}
+		if (a == "-tick-hashes") {
+			// Block A (M1): turn on per-tick hash trace recording. Boolean flag — no value.
+			s_Args.tickHashes = true;
+			return 1;
+		}
 		return 0;
 	}
 

@@ -55,6 +55,7 @@
 
 #include "AIDecisionChannel.h"
 #include "AIDebugOverlay.h"
+#include "DeterminismCheck.h"
 #include "MetricsCollector.h"
 #include "NetworkSimulator.h"
 #include "ReplayLog.h"
@@ -207,7 +208,9 @@ void HandleMainArgs(int argCount, char** argValue) {
 		}
 
 		// M0 scenario-runner args (CLI direct-launch into a Trust AI-NN scenario).
-		if (currentArg == "-scenario" || currentArg == "-out" || currentArg == "-seed" || currentArg == "-max-ticks") {
+		// M1 Block A: -tick-hashes added (no-value flag) for the determinism CI scaffold.
+		if (currentArg == "-scenario" || currentArg == "-out" || currentArg == "-seed" ||
+		    currentArg == "-max-ticks" || currentArg == "-tick-hashes") {
 			const int consumed = ScenarioRunner::ParseArgs(argCount, argValue, i);
 			if (consumed > 0) {
 				i += consumed;
@@ -497,10 +500,15 @@ void RunGameLoop() {
 			// M0 observability: feed the terrain subsystem hash with the sim tick number as
 			// the placeholder data (the actual carve/penetrate math hash is wired at MP M2 per
 			// the M0 plan). Then finalize the per-tick hash.
+			//
+			// M1 Block A: hand the tick result to the MetricsCollector for the per-tick hash
+			// trace. The collector silently no-ops when -tick-hashes is not set, so this is
+			// free for normal runs.
 			{
 				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				g_SimChecksum.Update("terrain", &simTick, sizeof(simTick));
-				g_SimChecksum.EndTick();
+				const auto tickResult = g_SimChecksum.EndTick();
+				g_MetricsCollector.RecordTickHash(tickResult);
 			}
 
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
@@ -561,6 +569,15 @@ static const bool RTESetExceptionHandlers = []() {
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
+	// Block A (M1): determinism-check mode is a pre-init orchestrator — it spawns child
+	// game processes and diffs their JSON outputs. It must short-circuit BEFORE
+	// install_allegro / SDL_Init / engine bootstrapping, so concurrent CI invocations
+	// don't fight over the window/audio devices (and so the orchestrator itself stays
+	// lightweight: no module load, no GL context).
+	if (DeterminismCheck::IsRequested(argc, argv)) {
+		return DeterminismCheck::Run(argc, argv);
+	}
+
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
 	loadpng_init();
 

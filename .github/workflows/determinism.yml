@@ -1,0 +1,118 @@
+# M1 Block A — determinism CI scaffold (non-blocking).
+#
+# Builds the game, runs the determinism check tool against the M1Baseline scenario,
+# uploads the divergence report as an artifact, and reports — without failing the
+# overall workflow — whether per-tick BLAKE3 hashes matched across runs.
+#
+# Block F will flip `continue-on-error` off and add the m1_terrain_stress and
+# m1_actor_stress scenarios + the cross-OS diff. At Block A's landing the test will
+# DIVERGE — that is expected. Blocks B-F drive divergence to zero.
+#
+# Local equivalent (Windows):
+#   "Cortex Command.exe" -determinism-check --scenario M1Baseline --ticks 600 \
+#                                           --seed 42 --runs 10 --output report.json
+#
+# Local equivalent (Linux):
+#   ./CortexCommand -determinism-check --scenario M1Baseline --ticks 600 \
+#                                      --seed 42 --runs 10 --output report.json
+
+name: Determinism
+
+on:
+  pull_request:
+    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup]
+  workflow_dispatch:
+
+# Concurrency: one run per branch/PR, cancel in-flight if new commits arrive.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  determinism-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # Block A is non-blocking. Block F flips this off.
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [M1Baseline]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config \
+            libsdl2-dev libsdl2-image-dev libpng-dev libflac-dev \
+            libminizip-dev libtbb-dev liblz4-dev libgl-dev
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Run determinism-check (${{ matrix.scenario }})
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario ${{ matrix.scenario }} \
+              --ticks 600 \
+              --seed 42 \
+              --runs 10 \
+              --output ${{ matrix.scenario }}-divergence.json
+        # Non-blocking at Block A. Block F flips this off.
+        continue-on-error: true
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-${{ matrix.scenario }}-linux
+          path: ${{ matrix.scenario }}-divergence.json
+          if-no-files-found: warn
+
+  determinism-windows:
+    runs-on: windows-latest
+    continue-on-error: true   # Block A is non-blocking. Block F flips this off.
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [M1Baseline]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Release|x64)
+        shell: pwsh
+        run: |
+          msbuild RTEA.sln /p:Configuration="Release" /p:Platform=x64 /m /nologo /v:minimal
+
+      - name: Stage runtime deps
+        shell: pwsh
+        run: |
+          Copy-Item -Path external/lib/win/fmod.dll -Destination fmod.dll -Force
+
+      - name: Run determinism-check (${{ matrix.scenario }})
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario ${{ matrix.scenario }} `
+              --ticks 600 `
+              --seed 42 `
+              --runs 10 `
+              --output "${{ matrix.scenario }}-divergence.json"
+        continue-on-error: true
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-${{ matrix.scenario }}-windows
+          path: ${{ matrix.scenario }}-divergence.json
+          if-no-files-found: warn

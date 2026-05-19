@@ -5,6 +5,7 @@ source_inc_dirs += [include_directories(
   '.',
   'Activities',
   'AI',
+  'CI',
   'Entities',
   'GUI',
   'GUI/Wrappers',
@@ -21,6 +22,7 @@ external_inc_dirs += [include_directories(
 
 subdir('Activities')
 subdir('AI')
+subdir('CI')
 subdir('Entities')
 subdir('GUI')
 subdir('Lua')

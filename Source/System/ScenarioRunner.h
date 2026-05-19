@@ -26,6 +26,9 @@ namespace RTE {
 			std::string outPath;      // JSON output path; empty = no report
 			uint64_t    seed = 0;     // deterministic seed; 0 = use SeedRNG()'s default
 			uint64_t    maxTicks = 0; // 0 = scenario-default safety cap (1800 ticks / 30 sim seconds)
+			bool        tickHashes = false; // -tick-hashes: emit per-tick hash trace into the JSON
+			                                 // report. Block A (M1) — read by cccp-determinism-check
+			                                 // to diff multiple runs of the same scenario+seed.
 		};
 
 		/// True if `-scenario` was supplied on the command line.
