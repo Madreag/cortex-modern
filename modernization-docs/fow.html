@@ -163,7 +163,8 @@
         <span class="pill pill-done">Misread #2 reverted: engine sky rays restored to gameplay</span>
         <span class="pill pill-done">Misread #3 reverted: useOneStageFoW back to GLSL default <code>true</code></span>
         <span class="pill pill-done">Comment-verbosity feedback addressed: ~74 lines trimmed</span>
-        <span class="pill pill-done">Build clean (Debug Minimal, x64)</span>
+        <span class="pill pill-done">Build clean (Debug Minimal + Final, x64)</span>
+        <span class="pill pill-done">Game-tested 2026-05-19: faux-lighting + directional cone verified</span>
         <span class="pill pill-warn">AI callsite updates still pending (&sect;6)</span>
         <span class="pill pill-info">PR now 6 commits</span>
       </div>
@@ -378,9 +379,10 @@ lookVector *= aimMatrix;
       <p><b>What we missed</b>: Causeless's <code>4ae962455</code> <i>&ldquo;Killed <b>script</b> sky
       rays&rdquo;</i> &mdash; the word "script" matters. He killed the Lua-script-driven sky-ray spawns
       (e.g., <code>SetupFogOfWar(...)</code> calls in <code>SkirmishDefense.lua</code>), not the
-      engine-side <code>CastSeeRaysFromSky</code> dispatch. The engine dispatch is the mechanism producing
-      the outdoor desaturation + noise + scanline visual on never-seen sky-illuminated terrain &mdash;
-      without it, outdoor and bunker areas look the same.</p>
+      engine-side <code>CastSeeRaysFromSky</code> dispatch. The engine dispatch is the faux-lighting
+      mechanism: sky rays reach all outdoor tiles every frame, keeping them in the Visible state, while
+      indoor (sky-blocked) tiles fall into Memory or Never-seen. Without it, ALL terrain looks the same
+      &mdash; no outdoor vs. bunker visual distinction.</p>
       <p><b>What Causeless saw (GH issue thread)</b>: <i>&ldquo;CastSeeRaysFromSky() is intended for
       gameplay, not just editing. The intent is to give a clear difference in gameplay between outdoors
       fighting and indoors bunker clearing. When in an enclosed area or tunnel, we'll have the two-stage
@@ -454,44 +456,48 @@ lookVector *= aimMatrix;
     and override an intentional default (misread #3). With both reverts applied, the visual model returns
     to its pre-PR state.</p>
 
-    <h3>3.1 &nbsp; Four FoW states per tile</h3>
-    <p>The branch implements a four-state visibility model. State transitions are driven by sky-ray
-    reachability and per-actor see-ray hits, evaluated tile-by-tile.</p>
+    <h3>3.1 &nbsp; Three FoW states per tile (the faux-lighting model)</h3>
+    <p>Sky rays and actor see-rays feed the same per-team current-FoV mask. The shader samples that
+    mask plus the ever-seen mask, giving three possible states per tile. <b>Outdoor tiles are
+    perpetually in the Visible state</b> because sky rays reveal them every frame &mdash; Memory and
+    Never-seen only really materialize indoors / underground. This is the "faux lighting" Causeless
+    described.</p>
 
     <table class="tbl state-table">
-      <thead><tr><th>State</th><th>Trigger</th><th>Visual treatment</th></tr></thead>
+      <thead><tr><th>State</th><th>Trigger</th><th>Visual treatment</th><th>In practice</th></tr></thead>
       <tbody>
         <tr>
           <td class="state-name">Visible</td>
-          <td class="state-trigger">Tile is currently in any actor's see-ray hit set this frame</td>
+          <td class="state-trigger">Tile currently reached by an actor see-ray OR a sky ray this frame</td>
           <td class="state-visual">Full terrain + MOs render normally; no FoW overlay</td>
+          <td class="state-visual">All outdoor tiles every frame (sky rays); indoor tiles inside an actor's body bubble or aim cone</td>
         </tr>
         <tr>
-          <td class="state-name">Memory (dim)</td>
-          <td class="state-trigger">Tile was in <code>UnseenLayerMask</code> previously, but not this frame</td>
-          <td class="state-visual">With <code>useOneStageFoW = true</code> (Causeless's intent): current frame rendered darkened. Once upstream's SDF-mask-based terrain-commit lands and <code>useOneStageFoW</code> flips to <code>false</code>: <code>rteTextureLastSeen</code> (saved terrain pixels, no live units).</td>
+          <td class="state-name">Memory</td>
+          <td class="state-trigger">Tile was Visible previously, but is not currently reached</td>
+          <td class="state-visual">Darken=0.68 + desat=0.8 + scanline + noise overlay (the shader's <code>ApplyDarkenAndDesat</code> + <code>ApplyScanlineAndNoise</code> path). With <code>useOneStageFoW = true</code> the current frame is darkened in place; once upstream's SDF-mask-based terrain-commit lands and <code>useOneStageFoW</code> flips to <code>false</code>, <code>rteTextureLastSeen</code> (saved terrain bitmap, no live units) takes over.</td>
+          <td class="state-visual">Indoor corridors you walked through then turned away from</td>
         </tr>
         <tr>
-          <td class="state-name">Never-seen, outdoor</td>
-          <td class="state-trigger">Tile never in any see-ray hit set, <b>but</b> sky rays reached it</td>
-          <td class="state-visual">SDF shader applies the desat + noise + scanline outdoor visual (Causeless: <i>"the outside fow is desaturated, has noise, and also a scanline effect"</i>)</td>
-        </tr>
-        <tr>
-          <td class="state-name">Never-seen, bunker</td>
-          <td class="state-trigger">Tile never in any see-ray hit set <b>and</b> no sky ray reached it</td>
-          <td class="state-visual">Black FoW &mdash; the original CC FoW look, the claustrophobic bunker interior</td>
+          <td class="state-name">Never-seen</td>
+          <td class="state-trigger">Tile never reached by any see-ray</td>
+          <td class="state-visual">Darken=0 (full black) + scanline+noise (effectively invisible due to darken). The claustrophobic bunker interior.</td>
+          <td class="state-visual">Indoor areas no actor has ever scouted; covered alcoves below terrain</td>
         </tr>
       </tbody>
     </table>
 
     <h3>3.2 &nbsp; Why the sky-ray dispatch is the differentiator</h3>
-    <p><code>SceneMan::CastSeeRaysFromSky</code> casts rays from the top of the screen downward, clearing
-    the sky-ray mask wherever a ray reaches. Tiles reachable from the sky end up in the "outdoor
-    never-seen" state; tiles unreachable (covered by terrain above) stay in "bunker never-seen". The SDF
-    shader samples this sky-ray mask and switches the visual treatment based on it. <b>This is the
-    mechanism Causeless meant by "difference between outdoors and bunker gameplay"</b> &mdash; not a
-    separate detection pass, but a direct consequence of which tiles sky rays reach. Our misread #2
-    disabled this during gameplay; commit #5 restored it.</p>
+    <p><code>SceneMan::CastSeeRaysFromSky</code> casts rays from the top of the screen downward every
+    frame, calling the same <code>CastSeeRay</code> primitive AHuman::Look() uses. Each ray clears the
+    per-team current-FoV mask wherever it reaches. Outdoor tiles (nothing above to block) get a sky-ray
+    reach + clear every frame, so they're perpetually Visible &mdash; the "outdoors is always bright
+    and visible" Causeless described. Indoor tiles (below terrain) don't get sky-ray coverage, so
+    they're only revealed by actor see-rays and fall into Memory when actors leave, or stay Never-seen
+    if no actor ever reaches them. <b>That's the mechanism behind "difference between outdoors and
+    bunker gameplay"</b> &mdash; not a separate detection pass, just a direct consequence of which
+    tiles sky rays reach. Our misread #2 disabled sky rays during gameplay, collapsing the
+    differentiation; commit #5 restored it.</p>
 
     <h3>3.3 &nbsp; Bunker wall calibration is already done</h3>
     <p>From the March 2 transcript &mdash; Causeless: <i>&ldquo;I pretty specifically tuned this so that
@@ -1135,6 +1141,12 @@ lookVector *= aimMatrix;
         <li><b>Rebase / squash / split / drop dead commit</b> &mdash; happy to do any of these however
         you prefer for review.</li>
       </ol>
+      <p style="margin-top: 12px; font-size: 12.8px;"><b>Game-test status (2026-05-19, Final/x64)</b>:
+      launched the PR build on a SkirmishDefense scenario and verified by direct observation: directional
+      aim-cone visible, body bubble follows actor, outdoor terrain perpetually Visible (faux lighting),
+      indoor bunker properly fogged + revealed by exploration, enemy sprites visible-but-dimmed in
+      memory areas (the documented limitation pending the SDF-mask-based terrain commit). All three
+      reverts confirmed working as designed.</p>
       <p style="margin-top: 12px; font-size: 12.8px;">Beyond this PR, the cortex-modern fork is heading
       into determinism + engine modernization work with an eye toward bringing multiplayer back
       eventually (rough plan: <a href="multiplayer.html">multiplayer.html</a>). Happy to keep helping on
