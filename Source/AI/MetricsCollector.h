@@ -1,10 +1,12 @@
 #pragma once
 
 #include "AIDecisionChannel.h"
+#include "SimChecksum.h"
 #include "Singleton.h"
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -55,6 +57,32 @@ namespace RTE {
 		/// when no run is active (i.e. outside a BeginRun/EndRun bracket).
 		void ConsumeEvents(const std::vector<AIDecisionChannel::Event>& events);
 
+		/// Block A (M1): per-tick hash trace recording for the determinism CI check.
+		///
+		/// When enabled, every call to `RecordTickHash` appends the tick number, the BLAKE3
+		/// `total` hash (hex), and each subsystem hash (hex, sorted by subsystem name) into
+		/// `m_TickHashes`. The trace is then emitted in the JSON report under `tick_hashes`.
+		/// `cccp-determinism-check` parses those traces from N runs and diffs them tick-by-tick
+		/// to surface non-determinism. Disabled by default — only the ScenarioRunner `-tick-hashes`
+		/// flag (or an explicit call to `SetRecordTickHashes(true)`) turns it on so normal runs
+		/// keep the JSON report small.
+		void SetRecordTickHashes(bool enabled) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RecordTickHashes = enabled;
+		}
+
+		/// Append a per-tick hash record. Silently no-op if recording is disabled or no run is
+		/// active. The intended call site is `Main.cpp`'s sim-loop right after
+		/// `g_SimChecksum.EndTick()` — that's when the per-subsystem accumulators are finalized
+		/// for the tick.
+		void RecordTickHash(const SimChecksum::Result& result);
+
+		/// Number of tick-hash records captured this run. For tests and CLI diagnostics.
+		size_t GetTickHashCount() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_TickHashes.size();
+		}
+
 		/// True if a run is currently active (between BeginRun and EndRun).
 		bool IsRunActive() const {
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -70,6 +98,14 @@ namespace RTE {
 		/// Write the run report as a JSON file at the given path. Returns true on success.
 		bool WriteReport(const std::string& path) const;
 
+		/// One per-tick hash record. The subsystem map is `std::map` (sorted by name) so the
+		/// JSON output and any diff is order-stable across runs.
+		struct TickHashRecord {
+			uint64_t                           tick = 0;
+			std::string                        totalHex;
+			std::map<std::string, std::string> subsystemHex;
+		};
+
 		/// Convenience: write a multi-run aggregated report.
 		struct AggregatedRun {
 			std::string                                  scenario;
@@ -80,6 +116,7 @@ namespace RTE {
 			std::unordered_map<std::string, std::string> stringValues;
 			std::unordered_map<std::string, uint64_t>    eventCounts;
 			std::string                                  finalTotalHashHex;
+			std::vector<TickHashRecord>                  tickHashes;
 		};
 		static bool WriteAggregatedReport(const std::string& path,
 		                                  const std::vector<AggregatedRun>& runs,
@@ -104,6 +141,10 @@ namespace RTE {
 		std::unordered_map<std::string, std::string>  m_Strings;
 		std::unordered_map<std::string, uint64_t>     m_EventCounts;
 		std::string                                   m_FinalTotalHashHex;
+
+		// Block A (M1) per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
+		bool                                          m_RecordTickHashes = false;
+		std::vector<TickHashRecord>                   m_TickHashes;
 	};
 
 } // namespace RTE

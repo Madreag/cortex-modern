@@ -65,6 +65,9 @@
     <Filter Include="Network">
       <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e02}</UniqueIdentifier>
     </Filter>
+    <Filter Include="CI">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e05}</UniqueIdentifier>
+    </Filter>
     <Filter Include="external\BLAKE3">
       <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e03}</UniqueIdentifier>
     </Filter>
@@ -1292,6 +1295,9 @@
     <ClCompile Include="Source\AI\MetricsCollector.cpp">
       <Filter>AI</Filter>
     </ClCompile>
+    <ClCompile Include="Source\CI\DeterminismCheck.cpp">
+      <Filter>CI</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetworkSimulator.cpp">
       <Filter>Network</Filter>
     </ClCompile>
@@ -1326,6 +1332,9 @@
     </ClInclude>
     <ClInclude Include="Source\AI\MetricsCollector.h">
       <Filter>AI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\CI\DeterminismCheck.h">
+      <Filter>CI</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetworkSimulator.h">
       <Filter>Network</Filter>

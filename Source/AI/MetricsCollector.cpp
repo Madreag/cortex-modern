@@ -27,6 +27,8 @@ namespace RTE {
 		m_Strings.clear();
 		m_EventCounts.clear();
 		m_FinalTotalHashHex.clear();
+		m_TickHashes.clear();
+		m_RecordTickHashes = false;
 	}
 
 	void MetricsCollector::BeginRun(const std::string& scenario, uint64_t seed) {
@@ -35,6 +37,10 @@ namespace RTE {
 		if (seed == 0 && ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().seed != 0) {
 			seed = ScenarioRunner::GetArgs().seed;
 		}
+		// Block A: the CLI `-tick-hashes` flag arms per-tick hash recording. Setting it here
+		// (in BeginRun) keeps the recording state aligned with the run lifetime; EndRun does
+		// not clear it because the trace is read by WriteReport after EndRun returns.
+		const bool armTickHashes = ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().tickHashes;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_Scenario = scenario;
 		m_Seed = seed;
@@ -44,6 +50,8 @@ namespace RTE {
 		m_Strings.clear();
 		m_EventCounts.clear();
 		m_FinalTotalHashHex.clear();
+		m_TickHashes.clear();
+		m_RecordTickHashes = armTickHashes;
 		m_StartWall = std::chrono::steady_clock::now();
 	}
 
@@ -80,6 +88,22 @@ namespace RTE {
 		}
 	}
 
+	void MetricsCollector::RecordTickHash(const SimChecksum::Result& result) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		// Silently no-op when recording is disabled or no run is active. This makes the
+		// call site in Main.cpp unconditional — same shape as g_SimChecksum.EndTick.
+		if (!m_RecordTickHashes || m_Scenario.empty()) {
+			return;
+		}
+		TickHashRecord rec;
+		rec.tick = result.tick;
+		rec.totalHex = SimChecksum::HashHex(result.total);
+		for (const auto& [name, hash]: result.per_subsystem) {
+			rec.subsystemHex.emplace(name, SimChecksum::HashHex(hash));
+		}
+		m_TickHashes.push_back(std::move(rec));
+	}
+
 	MetricsCollector::AggregatedRun MetricsCollector::GetCurrentRun() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		AggregatedRun r;
@@ -91,6 +115,7 @@ namespace RTE {
 		r.stringValues = m_Strings;
 		r.eventCounts = m_EventCounts;
 		r.finalTotalHashHex = m_FinalTotalHashHex;
+		r.tickHashes = m_TickHashes;
 		return r;
 	}
 
@@ -145,6 +170,25 @@ namespace RTE {
 			json events = json::object();
 			for (const auto& [k, v]: r.eventCounts) events[k] = v;
 			rj["event_counts"] = events;
+
+			// Block A (M1): emit the per-tick hash trace when present. cccp-determinism-check
+			// reads this array to diff multiple runs of the same scenario+seed and surface
+			// the first tick at which divergence appears, plus which subsystem diverged.
+			if (!r.tickHashes.empty()) {
+				json tickHashes = json::array();
+				for (const auto& t: r.tickHashes) {
+					json th;
+					th["tick"] = t.tick;
+					th["total"] = t.totalHex;
+					json subs = json::object();
+					for (const auto& [name, hex]: t.subsystemHex) {
+						subs[name] = hex;
+					}
+					th["subsystems"] = subs;
+					tickHashes.push_back(th);
+				}
+				rj["tick_hashes"] = tickHashes;
+			}
 
 			runsJson.push_back(rj);
 		}
