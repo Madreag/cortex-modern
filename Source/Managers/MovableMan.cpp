@@ -1,5 +1,8 @@
 #include "MovableMan.h"
 
+#include "AIDecisionChannel.h"
+#include "MetricsCollector.h"
+#include "SimChecksum.h"
 #include "PrimitiveMan.h"
 #include "PostProcessMan.h"
 #include "PerformanceMan.h"
@@ -1694,6 +1697,21 @@ void MovableMan::Update() {
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 		if (m_SortTeamRoster[Activity::TeamOne]) {
 			m_ActorRoster[team].sort(MOXPosComparison());
+		}
+	}
+
+	// M0: Drain the AI decision channel at end-of-update and route to subscribers.
+	// SimChecksum + MetricsCollector both silently no-op when no headless run is active,
+	// so this is safe to call unconditionally on every tick.
+	{
+		ZoneScopedN("AIDecisionChannel Drain");
+		std::vector<AIDecisionChannel::Event> events;
+		g_AIDecisionChannel.Drain(events);
+		if (!events.empty()) {
+			g_SimChecksum.Update("decisions",
+			                     events.data(),
+			                     events.size() * sizeof(AIDecisionChannel::Event));
+			g_MetricsCollector.ConsumeEvents(events);
 		}
 	}
 }

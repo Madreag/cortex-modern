@@ -5,6 +5,12 @@
 #include "ThreadMan.h"
 #include "System.h"
 
+#include "AIDebugOverlay.h"
+#include "AIDecisionChannel.h"
+#include "MetricsCollector.h"
+#include "NetworkSimulator.h"
+#include "SimChecksum.h"
+
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
 
@@ -178,19 +184,24 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(GUILuaBindings, BuyMenuGUI),
 	                         RegisterLuaBindingsOfType(GUILuaBindings, SceneEditorGUI),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, ActivityMan),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, AIDebugOverlay),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, AIDecisionChannel),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, AudioMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, MusicMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, CameraMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, ConsoleMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, FrameMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, MetaMan),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, MetricsCollector),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, MovableMan),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, NetworkSimulator),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, PerformanceMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, PostProcessMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, PresetMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, PrimitiveMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SceneMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SettingsMan),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SimChecksum),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, TimerMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, UInputMan),
 	                         RegisterLuaBindingsOfType(PrimitiveLuaBindings, GraphicalPrimitive),
@@ -241,6 +252,11 @@ void LuaStateWrapper::Initialize() {
 	luabind::globals(m_State)["ConsoleMan"] = &g_ConsoleMan;
 	luabind::globals(m_State)["LuaMan"] = this;
 	luabind::globals(m_State)["SettingsMan"] = &g_SettingsMan;
+	luabind::globals(m_State)["AIDebugOverlay"] = &g_AIDebugOverlay;
+	luabind::globals(m_State)["AIDecisionChannel"] = &g_AIDecisionChannel;
+	luabind::globals(m_State)["MetricsCollector"] = &g_MetricsCollector;
+	luabind::globals(m_State)["NetworkSimulator"] = &g_NetworkSimulator;
+	luabind::globals(m_State)["SimChecksum"] = &g_SimChecksum;
 
 	const uint64_t seed = RandomNum<uint64_t>(0, std::numeric_limits<uint64_t>::max());
 	m_RandomGenerator.Seed(seed);

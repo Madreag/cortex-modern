@@ -53,6 +53,17 @@
 #include "MusicMan.h"
 #include "System.h"
 
+#include "AIDecisionChannel.h"
+#include "AIDebugOverlay.h"
+#include "MetricsCollector.h"
+#include "NetworkSimulator.h"
+#include "ReplayLog.h"
+#include "ScenarioRunner.h"
+#include "SimChecksum.h"
+
+#include <cstdlib>
+#include <iostream>
+
 #include "RenderTarget.h"
 #include "tracy/Tracy.hpp"
 
@@ -96,6 +107,14 @@ void InitializeManagers() {
 	ActivityMan::Construct();
 	LoadingScreen::Construct();
 
+	// M0 observability + determinism singletons.
+	AIDecisionChannel::Construct();
+	AIDebugOverlay::Construct();
+	MetricsCollector::Construct();
+	NetworkSimulator::Construct();
+	ReplayLog::Construct();
+	SimChecksum::Construct();
+
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
 	g_WindowMan.Initialize();
@@ -130,6 +149,12 @@ void InitializeManagers() {
 /// Destroys all the managers and frees all loaded data before termination.
 /// </summary>
 void DestroyManagers() {
+	g_SimChecksum.Destroy();
+	g_ReplayLog.Destroy();
+	g_NetworkSimulator.Destroy();
+	g_MetricsCollector.Destroy();
+	g_AIDebugOverlay.Destroy();
+	g_AIDecisionChannel.Destroy();
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
 	g_MovableMan.Destroy();
@@ -179,6 +204,15 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-ext-validate") {
 			System::EnableExternalModuleValidationMode();
+		}
+
+		// M0 scenario-runner args (CLI direct-launch into a Trust AI-NN scenario).
+		if (currentArg == "-scenario" || currentArg == "-out" || currentArg == "-seed" || currentArg == "-max-ticks") {
+			const int consumed = ScenarioRunner::ParseArgs(argCount, argValue, i);
+			if (consumed > 0) {
+				i += consumed;
+				continue;
+			}
 		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
@@ -313,7 +347,86 @@ void RunGameLoop() {
 	long long drawStartTime = 0;
 	long long drawTotalTime = 0;
 
+	// Tick counter scoped to the current test-activity run, so the hard cap below covers
+	// both CLI direct-launch and menu-launched test activities. Reset each time a test
+	// activity ends so menu-launched back-to-back runs are independent.
+	static uint64_t s_testActivityStartTick = UINT64_MAX;
+	// Frame countdown between scenario completion and actual exit/teardown. Gives the user
+	// ~1.5 seconds to see the AI overlay's final state + the PASS/FAIL banner before the
+	// window closes (CLI mode) or bounces to the menu (Debug builds). Tick-based would have
+	// been wrong here — the sim is no longer advancing in some cases, so we count frames.
+	static int s_exitLingerFrames = 0;
+	// Linger window: gives the user time to read the AI overlay + the [Trust] PASS/FAIL banner
+	// before the window closes. 90 frames ≈ 1.5 sec at 60 fps. Adjust if scenarios end too fast
+	// to read or take noticeably too long to close.
+	constexpr int kExitLingerFramesMax = 90;
+
 	while (!System::IsSetToQuit()) {
+		// Trust-scenario hard auto-exit. Fires every frame (not just sim ticks), so CC's
+		// DEAD overlay can never sit forever waiting for a player to press a key. Any
+		// activity marked IsTestActivity() that either (a) reaches ActivityState::Over or
+		// (b) exceeds its tick budget triggers a brief linger (so the user can see the result)
+		// then immediate exit (CLI) or activity-end (menu).
+		// Default cap is 1800 sim ticks (30 s); CLI -max-ticks N overrides.
+		if (Activity* curAct = g_ActivityMan.GetActivity(); curAct && curAct->IsTestActivity()) {
+			const uint64_t now = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (s_testActivityStartTick == UINT64_MAX) {
+				s_testActivityStartTick = now;
+			}
+			const uint64_t elapsed = now - s_testActivityStartTick;
+			const uint64_t cap = (ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().maxTicks > 0)
+			                         ? ScenarioRunner::GetArgs().maxTicks
+			                         : 1800;
+			if (curAct->IsOver() || elapsed >= cap) {
+				if (s_exitLingerFrames == 0) {
+					// First time we noticed completion: open the console so the [Trust] PASS/FAIL
+					// banner Lua printed is visible, then start the countdown.
+					g_ConsoleMan.SetEnabled(true);
+					if (ScenarioRunner::IsActive()) {
+						g_ConsoleMan.PrintString("[Trust] " + curAct->GetPresetName()
+						                         + " — exiting in ~1.5s");
+					}
+					s_exitLingerFrames = kExitLingerFramesMax;
+				} else if (s_exitLingerFrames > 1) {
+					--s_exitLingerFrames;
+				} else {
+					// Linger done — perform the actual teardown.
+					s_exitLingerFrames = 0;
+					// Stop all sounds + end the activity BEFORE quitting/transitioning. Without
+					// this, FMOD's async update thread races against MovableMan/Activity teardown
+					// in DestroyManagers and crashes on freed sound userdata.
+					g_AudioMan.StopAll();
+					g_ActivityMan.EndActivity();
+					// EndActivity invoked Lua's EndActivity hook, which emits scenario_end. That
+					// emit landed in the channel but won't be picked up by MovableMan's per-tick
+					// drain because we're about to break out of the outer loop. One last manual
+					// drain pulls it through so the JSON report's event_counts reflects the final
+					// scenario_end event.
+					{
+						std::vector<AIDecisionChannel::Event> finalEvents;
+						g_AIDecisionChannel.Drain(finalEvents);
+						if (!finalEvents.empty()) {
+							g_SimChecksum.Update("decisions",
+							                     finalEvents.data(),
+							                     finalEvents.size() * sizeof(AIDecisionChannel::Event));
+							g_MetricsCollector.ConsumeEvents(finalEvents);
+						}
+					}
+					if (ScenarioRunner::IsActive()) {
+						// Give FMOD a moment to settle its async update before we quit.
+						g_AudioMan.PauseIngameSounds(true);
+						System::SetQuit(true);
+						break;
+					}
+					g_ActivityMan.SetInActivity(false);
+					s_testActivityStartTick = UINT64_MAX;
+				}
+			}
+		} else {
+			s_testActivityStartTick = UINT64_MAX;
+			s_exitLingerFrames = 0;
+		}
+
 		bool serverUpdated = false;
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
@@ -334,6 +447,28 @@ void RunGameLoop() {
 			g_TimerMan.UpdateSim();
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
+
+			// M0 observability: per-tick decision-event channel tick + SimChecksum bracket
+			// + ReplayLog tick marker. Channel SetCurrentTick happens here so any emits during
+			// sim are tagged with the current tick. SimChecksum::BeginTick arms the subsystem
+			// accumulators; matching EndTick at the end of this block produces the per-tick
+			// hash. SimChecksum::Update for the "decisions" subsystem is fed from
+			// MovableMan::Update's drain. ReplayLog records the tick number + (currently empty)
+			// per-player controller state so the replay file has a real frame timeline.
+			// MP M1 will populate the per-player ControllerState bytes from UInputMan.
+			{
+				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				g_AIDecisionChannel.SetCurrentTick(simTick);
+				g_SimChecksum.BeginTick(simTick);
+				// Per-tick replay frame marker. Player input is empty under CLI/trust runs
+				// (no human player) but the tick numbers + scenario header + seed are enough
+				// for an offline replay-verify tool (M5 stretch goal) to identify the run.
+				// MP M1 will populate the per-player ControllerState bytes from UInputMan.
+				if (g_ReplayLog.IsRecording()) {
+					static const std::vector<ReplayLog::PlayerInput> emptyInputs;
+					g_ReplayLog.RecordTick(simTick, emptyInputs);
+				}
+			}
 
 			g_LuaMan.Update();
 
@@ -359,6 +494,15 @@ void RunGameLoop() {
 
 			g_ActivityMan.LateUpdateGlobalScripts();
 
+			// M0 observability: feed the terrain subsystem hash with the sim tick number as
+			// the placeholder data (the actual carve/penetrate math hash is wired at MP M2 per
+			// the M0 plan). Then finalize the per-tick hash.
+			{
+				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				g_SimChecksum.Update("terrain", &simTick, sizeof(simTick));
+				g_SimChecksum.EndTick();
+			}
+
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
 			g_PresetMan.ClearReloadEntityPresetCalledThisUpdate();
@@ -370,6 +514,10 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
+					if (ScenarioRunner::IsActive()) {
+						System::SetQuit(true);
+						break;
+					}
 					g_MenuMan.HandleTransitionIntoMenuLoop();
 					RunMenuLoop();
 				}
@@ -445,6 +593,8 @@ int main(int argc, char** argv) {
 
 	g_PresetMan.LoadAllDataModules();
 
+	int scenarioExitCode = 0;
+
 	if (!System::IsInExternalModuleValidationMode()) {
 		// Load the different input device icons. This can't be done during UInputMan::Create() because the icon presets don't exist so we need to do this after modules are loaded.
 		g_UInputMan.LoadDeviceIcons();
@@ -461,15 +611,68 @@ int main(int argc, char** argv) {
 			}
 		}
 
-		if (!g_ActivityMan.Initialize()) {
-			RunMenuLoop();
-		}
+		if (ScenarioRunner::IsActive()) {
+			// CLI direct-launch into a Trust AI-NN scenario. Window stays visible — the user
+			// watches the scenario play out. We skip the menu entirely and start the named
+			// activity directly. RunGameLoop's "fall back to menu when activity ends" branch
+			// has been taught to instead SetQuit(true) when ScenarioRunner::IsActive().
+			const std::string presetName = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
 
-		RunGameLoop();
+			// Look up the preset so we can preload its declared SceneName. The normal
+			// scenarios-menu flow does scene-selection separately; we replicate that here so
+			// g_SceneMan has a scene queued by the time GAScripted::Start runs.
+			const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", presetName);
+			const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
+			int startResult = -1;
+			if (presetActivity) {
+				const std::string& sceneName = presetActivity->GetSceneName();
+				if (!sceneName.empty()) {
+					g_SceneMan.SetSceneToLoad(sceneName, true, false);
+				}
+				// Arm the ReplayLog so any input-driven changes get a trace for offline review.
+				g_ReplayLog.BeginRecording(ScenarioRunner::GetArgs().scenario,
+				                           ScenarioRunner::GetArgs().seed);
+				startResult = g_ActivityMan.StartActivity("GAScripted", presetName);
+			} else {
+				std::cerr << "[scenario] no preset \"" << presetName << "\" of class GAScripted" << std::endl;
+			}
+
+			if (startResult < 0) {
+				std::cerr << "[scenario] failed to start scenario \"" << presetName << "\"" << std::endl;
+				scenarioExitCode = 1;
+			} else {
+				RunGameLoop();
+				g_ReplayLog.EndRecording();
+				// Persist the replay alongside the JSON report if -out was provided.
+				const std::string& outPath = ScenarioRunner::GetArgs().outPath;
+				if (!outPath.empty()) {
+					std::filesystem::path rp = std::filesystem::path(outPath).replace_extension(".replay");
+					g_ReplayLog.Write(rp.string());
+				}
+				scenarioExitCode = ScenarioRunner::FinalizeAndGetExitCode();
+			}
+		} else {
+			if (!g_ActivityMan.Initialize()) {
+				RunMenuLoop();
+			}
+
+			RunGameLoop();
+		}
 	}
 
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
+
+	if (ScenarioRunner::IsActive()) {
+		// CLI scenario mode: the JSON report and replay log were already flushed before
+		// RunGameLoop returned. Skip DestroyManagers — it races with FMOD's async update
+		// thread on freed Sound userdata when actors are torn down faster than CC's normal
+		// quit-from-menu flow gives FMOD time to settle. The OS reclaims everything
+		// (memory, FMOD threads, file handles) when the process exits. Save the console
+		// log first so the user still gets diagnostics.
+		g_ConsoleMan.SaveAllText("LogConsole.txt");
+		std::_Exit(scenarioExitCode);
+	}
 
 	DestroyManagers();
 
