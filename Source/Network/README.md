@@ -140,9 +140,10 @@ If runs diverge, RESULT becomes `DIVERGED` and the report lists:
 | `terrain`    | M0       | Sim frame number (placeholder; real carve hash at M2)    | `Main.cpp` end-of-tick block |
 | `decisions`  | M0       | Drained `AIDecisionChannel::Event` records               | `MovableMan::Update` drain   |
 | `actors`     | M1 Block F | Per-actor {uniqueID, pos, vel, health, AIMode}, in MOID order | `MovableMan::Update`     |
-| `sim_rng`    | M1 Block F | Full `g_SimRNG` mt19937 internal state, end-of-tick     | `Main.cpp` end-of-tick block |
+| `particles`  | M1 Block F follow-up | Per-particle {uniqueID, pos, vel}, in MOID order      | `MovableMan::Update`         |
+| `scene`      | M1 Block F follow-up | Tick metadata: actor/item/particle counts + per-team roster size | `MovableMan::Update` |
+| `sim_rng`    | M1 Block F | Full `g_SimRNG` mt19937 internal state, end-of-tick (snapshot inside `MovableMan::Update` before async futures launch) | `MovableMan::Update` |
 | `carve_math` | (M2)     | Deterministic terrain carve / penetrate / dislodge math  | —                            |
-| `particles`  | (M5)     | Per-particle stable state                                | —                            |
 | `controller` | (M5/M6)  | Per-player controller state                              | —                            |
 | `lua_states` | (M5)     | Per-Lua-state math.random RNG state                      | —                            |
 

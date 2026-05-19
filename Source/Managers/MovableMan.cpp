@@ -1766,6 +1766,50 @@ void MovableMan::Update() {
 		}
 	}
 
+	// M1 Block F follow-up: `particles` subsystem. Sibling to `actors` above,
+	// scoped to the sim-relevant particle stream (m_Particles is the sim deque;
+	// rendered-only particle effects don't live here). Block C's frame-start
+	// sort keeps the iteration order canonical. Particles are short-lived and
+	// numerous (10²-10³), so we only feed a compact per-particle fingerprint
+	// — uniqueID + pos + vel — not the full state vector. That's enough to
+	// detect physics-integration drift while keeping the per-tick hash bytes
+	// manageable. The same int64_t / float-by-float field discipline as
+	// `actors` keeps this cross-OS-safe.
+	{
+		for (MovableObject* p: m_Particles) {
+			const int64_t uniqueID = static_cast<int64_t>(p->GetUniqueID());
+			g_SimChecksum.Update("particles", &uniqueID, sizeof(uniqueID));
+			const float posX = p->GetPos().m_X;
+			g_SimChecksum.Update("particles", &posX, sizeof(posX));
+			const float posY = p->GetPos().m_Y;
+			g_SimChecksum.Update("particles", &posY, sizeof(posY));
+			const float velX = p->GetVel().m_X;
+			g_SimChecksum.Update("particles", &velX, sizeof(velX));
+			const float velY = p->GetVel().m_Y;
+			g_SimChecksum.Update("particles", &velY, sizeof(velY));
+		}
+	}
+
+	// M1 Block F follow-up: `scene` subsystem. Lightweight per-tick metadata
+	// that catches "more spawns / more deletes than the other run had this
+	// tick" without paying the per-MO iteration cost again. Same int32_t
+	// fixed-width discipline as the others.
+	{
+		const int32_t actorCount = static_cast<int32_t>(m_Actors.size());
+		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
+		const int32_t itemCount = static_cast<int32_t>(m_Items.size());
+		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
+		const int32_t particleCount = static_cast<int32_t>(m_Particles.size());
+		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
+		// Per-team actor count rounds out the picture (catches actor-team drift
+		// even when the total Actors size stays put — e.g. if an AI mistakenly
+		// switches teams across runs).
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			const int32_t rosterSize = static_cast<int32_t>(m_ActorRoster[team].size());
+			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
+		}
+	}
+
 	// M1 Block F — capture the sim RNG state RIGHT HERE, before the see-ray and
 	// MOID-draw futures launch. Pre-Block-F this was captured in Main.cpp right
 	// before EndTick, but by then the see-ray future for this tick had already
