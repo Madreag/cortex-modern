@@ -28,6 +28,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -121,10 +122,14 @@
       already exists (used for rest detection) but is never fed to the renderer. Well-scoped
       <span class="tag tag-code">[CODE]</span> win &mdash; the original <code>interpolated-render</code> branch holds
       real interpolation work but collapsed under an over-ambitious sim/render thread split;
-      <code>interpolated-render-redux</code> was the intended retry &mdash; interpolation <i>without</i> the threading
-      &mdash; but barely started. Per the upstream lead the harder part is not the lerp itself (HeliumAnt's renderer
-      work made the draw phase near-free) but making input handling <b>async</b> &mdash; inputs must be processed at
-      the display framerate regardless of sim-tick rate (see <a href="branches.html">Upstream Branches</a>).</p>
+      <code>interpolated-render-redux</code> is Causeless's retry &mdash; interpolation <i>without</i> the threading
+      &mdash; and as of 2026-05-17 has substantive starting points (<code>"Basic MO interp"</code> + stable-MOID
+      work). Per the upstream lead the harder part is not the lerp itself (HeliumAnt's renderer work made the draw
+      phase near-free) but making input handling <b>async</b> &mdash; inputs must be processed at the display
+      framerate regardless of sim-tick rate. Now tracked as <b>T-RENDER-INTERP side track</b> on the
+      <a href="engine.html">Engine</a> page, harvested from upstream at full speed per
+      <a href="decisions.html">ADR-017</a>; see <a href="branches.html">Upstream Branches</a> for the full branch
+      audit.</p>
     </div>
 
     <h3>1.5 &nbsp; The abandoned-dependency trio</h3>
@@ -298,7 +303,7 @@
     </div>
 
     <div class="page-foot">
-      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-05-17 &middot;
+      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-05-18 &middot;
       see the <a href="roadmap.html">Roadmap</a> for what to do about all this.
     </div>
   </main>

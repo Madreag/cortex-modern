@@ -114,6 +114,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link active" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -604,16 +605,24 @@
     </div>
 
     <div class="callout callout-info">
-      <div class="callout-title">Coordinate with the Multiplayer flagship (ADR-015)</div>
-      <p>Networked multiplayer is cortex-modern's second committed flagship (<a href="multiplayer.html">Multiplayer</a>,
-      <a href="decisions.html">ADR-015</a>), and it depends on competent server-side AI. Two light couplings:</p>
+      <div class="callout-title">Coordinate with the Multiplayer flagship (ADR-015 + ADR-016) and the Engine modernization plan (ADR-017)</div>
+      <p>Networked multiplayer is cortex-modern's committed flagship (<a href="multiplayer.html">Multiplayer</a>,
+      <a href="decisions.html">ADR-015</a> architecture + <a href="decisions.html">ADR-016</a> sequencing-pivot),
+      and it depends on competent server-side AI. Engine modernization runs as parallel side tracks
+      (<a href="engine.html">Engine</a>, <a href="decisions.html">ADR-017</a>). Three light couplings:</p>
       <ul>
         <li><b>Build the small new C++ systems (&sect;5.2) determinism-friendly.</b> The event channel, the danger
         query and the order object are new simulation-adjacent state. Built with ordered iteration, a seeded RNG
-        and no wall-clock, they cost the multiplayer build nothing; built carelessly they become determinism debt.</li>
+        (the new <code>g_SimRNG</code> from MP M1 Block B) and no wall-clock, they cost the multiplayer build nothing;
+        built carelessly they become determinism debt for MP M5 cross-platform verification.</li>
         <li><b>The harness is one apparatus.</b> This flagship's <a href="#plan">M0</a> &mdash; the decision-event
-        channel, the headless runner, CI &mdash; is most of the Multiplayer flagship's M0 sync harness. Build the
-        observability harness <b>once</b>; both flagships gate on it.</li>
+        channel, the headless runner, CI &mdash; was built shared with the Multiplayer flagship's M0 sync harness
+        (now shipped to <code>modernization-effort</code>, 2026-05-18). Build the observability harness <b>once</b>;
+        both flagships ride on it.</li>
+        <li><b>Coordinate with the engine modernization side tracks.</b> AI behavior depends on stable MOID iteration
+        (MP M1 Block C), deterministic Lua iteration (MP M2 LuaJIT patch), and fixed-point physics (MP M3) for
+        deterministic AI replay. The AI flagship's M1&ndash;M6 milestones depend on these foundation milestones being
+        in place; sequence accordingly.</li>
       </ul>
     </div>
 
@@ -948,8 +957,8 @@
       (<code>Data/Base.rte/AI/</code>, <code>Source/System/PathFinder.cpp</code>, <code>Controller.cpp</code>,
       <code>MovableMan.cpp</code>, <code>CHANGELOG.md</code>), the research vault, the upstream issue tracker and
       the dev-team Discord. &middot; locomotion-first; verified against source and re-scoped 2026-05-17 after
-      upstream-dev (Causeless) review &middot; recorded as <a href="decisions.html">ADR-014</a>; see also the
-      <a href="corefall.html">Corefall Ideas</a> AI cluster.
+      upstream-dev (Causeless) review; coordination with MP/Engine plans noted 2026-05-18 &middot; recorded as
+      <a href="decisions.html">ADR-014</a>; see also the <a href="corefall.html">Corefall Ideas</a> AI cluster.
     </div>
   </main>
 

@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
+<title>Engine Modernization — Cortex-Modern Modernization Wiki</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  /* page-local: Engine page */
+  .toc { display:flex; flex-wrap:wrap; gap:6px 16px; margin:6px 0 0;
+    font-family:var(--mono); font-size:12px; }
+  .toc a { color:var(--text-dim); white-space:nowrap; }
+  .toc a:hover { color:var(--accent-soft); text-decoration:none; }
+  .toc a::before { content:"// "; color:var(--accent-dim); }
+
+  /* subsystem cards */
+  .subsys { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));
+    gap:10px; margin:18px 0; }
+  .sub { background:var(--bg-elev); border:1px solid var(--border); border-radius:8px;
+    padding:13px 16px; }
+  .sub-head { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
+  .sub-id { font-family:var(--mono); font-weight:700; font-size:11px; color:#14100a;
+    background:var(--accent); padding:2px 7px; border-radius:3px; }
+  .sub-name { font-family:var(--display); font-weight:600; color:var(--text-bright); font-size:14px; }
+  .sub-stat { display:flex; gap:8px; font-size:11.5px; line-height:1.5; margin:4px 0; }
+  .sub-stat .label { color:var(--text-dim); flex:0 0 100px; }
+  .sub-stat .val { color:var(--text); }
+  .sub-desc { font-size:12.5px; color:var(--text-dim); margin-top:6px; line-height:1.55; }
+
+  /* side track cards */
+  .track { background:var(--bg-elev); border:1px solid var(--border);
+    border-left:3px solid var(--purple); border-radius:9px;
+    padding:14px 18px; margin:0 0 13px; }
+  .track-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:11px; margin-bottom:9px; }
+  .track-id { font-family:var(--mono); font-weight:700; font-size:12.5px; color:#14100a;
+    background:var(--purple); padding:2px 9px; border-radius:4px; }
+  .track-name { font-family:var(--display); font-weight:600; font-size:15.5px; color:var(--text-bright); }
+  .track-tag { font-family:var(--mono); font-size:9.5px; text-transform:uppercase;
+    letter-spacing:1.2px; padding:2px 7px; border-radius:3px; border:1px solid var(--border-bright); color:var(--text-dim); }
+  .track-field { display:flex; gap:12px; margin:6px 0; font-size:12.8px; line-height:1.6; }
+  .track-key { flex:0 0 92px; font-family:var(--mono); font-size:9.5px; text-transform:uppercase;
+    letter-spacing:1.2px; color:var(--purple); padding-top:3px; }
+  .track-val { flex:1; color:var(--text); min-width:0; }
+  .track-val.touch { font-family:var(--mono); font-size:11.5px; color:var(--text-dim); }
+  .track-val.gate b { color:var(--green); font-weight:600; }
+  .track-steps { flex:1; min-width:0; margin:1px 0 0; padding-left:18px; color:var(--text); }
+  .track-steps li { margin:3px 0; }
+
+  /* timeline visualization */
+  .timeline { background:var(--bg-elev); border:1px solid var(--border); border-radius:9px;
+    padding:18px 22px; margin:18px 0; overflow-x:auto; }
+  .timeline-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; font-family:var(--mono); font-size:11.5px; }
+  .timeline-label { flex:0 0 165px; color:var(--text-dim); font-weight:600; }
+  .timeline-cells { display:flex; gap:2px; }
+  .tc { flex:0 0 60px; height:24px; display:flex; align-items:center; justify-content:center;
+    border-radius:3px; font-size:10px; }
+  .tc-empty { background:transparent; border:1px dashed var(--border); }
+  .tc-fdn { background:rgba(168,85,247,.25); border:1px solid var(--purple); color:#dcc4f5; }
+  .tc-enable { background:rgba(233,162,59,.25); border:1px solid var(--accent); color:#f5dbb6; }
+  .tc-ship { background:rgba(69,196,104,.25); border:1px solid var(--green); color:#bce8c8; }
+  .tc-stretch { background:rgba(90,167,255,.25); border:1px solid var(--blue); color:#bcd5f5; }
+  .tc-track { background:rgba(245,180,201,.18); border:1px solid #c87399; color:#f0bccc; }
+  .tc-done { background:rgba(69,196,104,.45); border:1px solid var(--green); color:#fff; font-weight:600; }
+
+  /* pivot/master-plan callout */
+  .master { background:linear-gradient(135deg, rgba(168,85,247,.10), rgba(69,196,104,.10));
+    border:1px solid var(--purple); border-radius:9px; padding:14px 18px; margin:18px 0; }
+  .master-title { font-family:var(--display); font-weight:700; font-size:14px;
+    color:var(--purple); text-transform:uppercase; letter-spacing:1.4px; margin-bottom:8px; }
+
+  /* ships-at table */
+  .ships { font-size:12.5px; }
+  .ships tr td:first-child { font-family:var(--mono); white-space:nowrap; color:var(--accent); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">CM</span>
+      <div>
+        <div class="brand-title">Cortex&#8209;Modern</div>
+        <div class="brand-sub">Modernization Wiki</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link" href="index.html">Overview</a>
+      <a class="nav-link" href="analysis.html">Technical Analysis</a>
+      <a class="nav-link" href="roadmap.html">Roadmap</a>
+      <a class="nav-link" href="campaign.html">Campaign</a>
+      <a class="nav-link" href="multiplayer.html">Multiplayer</a>
+      <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link active" href="engine.html">Engine</a>
+      <a class="nav-link" href="tracker.html">Work Tracker</a>
+      <a class="nav-link" href="decisions.html">Decision Log</a>
+      <a class="nav-link" href="branches.html">Upstream Branches</a>
+      <a class="nav-link" href="issues.html">Upstream Issues</a>
+      <a class="nav-link" href="prs.html">Upstream PRs</a>
+      <a class="nav-link" href="corefall.html">Corefall Ideas</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot-label">Repositories</div>
+      <a href="https://github.com/Madreag/cortex-modern">cortex-modern (our fork)</a>
+      <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">upstream (official)</a>
+      <a href="https://github.com/Madreag/corefall">corefall (related project)</a>
+      <div class="foot-meta">branch: modernization-effort</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="page-header">
+      <div class="crumb">Foundation · Modernization · Side Tracks</div>
+      <h1>Engine Modernization</h1>
+      <p class="page-lead">The engine work that <i>underpins</i> all three flagships (<a href="ai.html">AI</a>,
+      <a href="multiplayer.html">Multiplayer</a>, <a href="campaign.html">Campaign</a>) plus the parallel side tracks
+      that multiply the ceiling on what those flagships can do. This page is the master plan for how MP main-spine
+      work (M1&ndash;M10) interweaves with rendering, threading, physics, Lua, and build/platform modernization &mdash;
+      including how we harvest from the upstream branches (<code>interpolated-render-redux</code>,
+      <code>gpu-renderer</code>, <code>box2d-emscripten</code>) at full speed without coordination. Written so
+      an engineer or AI coding agent reading this can pick up <i>any</i> milestone or side track and start.</p>
+    </header>
+
+    <div class="callout callout-ok" style="margin-bottom:14px">
+      <div class="callout-title">Status &mdash; 2026-05-18</div>
+      <p><b>MP M0 (observability harness) shipped.</b> All five engine subsystems and five side tracks are
+      now planned in this document. <a href="index.html#active-plan">Active plan timeline on index.html</a>;
+      <a href="multiplayer.html">multiplayer.html</a> is the MP main-spine plan;
+      <code>D:\Projects\M1_PLAN.md</code> is the ultra-detailed M1 execution plan ready for an AI coding agent.</p>
+    </div>
+
+    <div class="master">
+      <div class="master-title">The master plan in one paragraph</div>
+      <p>Five engine subsystems need modernization for the no-compromise multiplayer architecture to land:
+      <b>rendering</b>, <b>threading</b>, <b>physics</b>, <b>Lua</b>, and <b>build/platform</b>. The MP main spine
+      (M0&ndash;M10 in <a href="multiplayer.html">multiplayer.html</a>) handles the determinism-critical subset
+      directly &mdash; the Lua patch (M2), fixed-point atom physics (M3), deterministic threaded sim (M4), WASM
+      cross-platform anchor (M5), GNS transport (M6). Everything outside the determinism island &mdash; render
+      interpolation, GPU cosmetic offload, the Camera/RenderBatch abstraction &mdash; runs as <b>parallel side
+      tracks</b> (T-RENDER-INTERP, T-RENDER-GPU, T-WASM-BUILD, T-COSMETIC, T-VALIDATION) that coordinate with the
+      active upstream branches without blocking MP. The result: <b>online co-op (M7) ships on a deterministic core
+      with multi-threaded sim and render interpolation</b> &mdash; the best possible architecture &mdash;
+      <i>and</i> the side tracks deliver single-player wins (4&ndash;8&times; sim throughput at M4, WASM web build
+      at M5, smooth high-refresh rendering when T-RENDER-INTERP lands).</p>
+    </div>
+
+    <div class="callout callout-key">
+      <div class="callout-title">The headline</div>
+      <p>cortex-modern is not building MP in a vacuum &mdash; we're building it <i>on top of</i> the engine
+      modernization work the community has already partially done. The 2019&ndash;2026 upstream branch list contains
+      <b>five branches with real engine value</b>: <code>interpolated-render-redux</code> (Causeless's active retry
+      of render decoupling), <code>gpu-renderer</code> (HeliumAnt's 60-70%-done renderer rewrite, dormant since
+      2026-03-28), <code>box2d-emscripten</code> (a substantially-working WebAssembly port, dormant since 2026-04-02),
+      <code>sol3</code> (a reference for the future luabind&rarr;sol2 migration), and the original
+      <code>interpolated-render</code> (abandoned 2024 but useful for lerp primitives). <b>None of these are
+      mergeable as-is.</b> The pattern: coordinate where the author is active (Causeless), harvest selectively where
+      dormant (HeliumAnt, box2d-emscripten), avoid wholesale merge of any of them.</p>
+      <div class="toc">
+        <a href="#subsystems">1 The five subsystems</a>
+        <a href="#branches">2 Upstream branches to mine</a>
+        <a href="#tracks">3 The side tracks</a>
+        <a href="#interweave">4 Interweaving with MP</a>
+        <a href="#coord">5 Coordination strategy</a>
+        <a href="#timeline">6 The visualization</a>
+        <a href="#ships">7 What ships when</a>
+        <a href="#risks">8 Risks &amp; fallbacks</a>
+      </div>
+    </div>
+
+    <!-- ============ 1 · THE FIVE SUBSYSTEMS ============ -->
+    <h2 id="subsystems">1 &nbsp;&middot;&nbsp; <span class="h-accent">The five subsystems being modernized</span></h2>
+    <p>Each subsystem has a <i>current state</i>, a <i>modernization target</i>, and an answer to the question "is this
+    in the MP main spine, or a side track?" The split is determined by one question: <b>does this affect the
+    determinism island?</b> If yes, main spine. If no, side track.</p>
+
+    <div class="subsys">
+      <div class="sub">
+        <div class="sub-head">
+          <div class="sub-id">RENDER</div>
+          <div class="sub-name">Rendering pipeline</div>
+        </div>
+        <div class="sub-stat"><span class="label">Current state</span><span class="val">SDL3 + OpenGL + 8-bit palette context still entrenched. <code>FrameMan</code> writes to a software 8bpp <code>BITMAP</code>, then GPU-blits via shader. <code>raylib</code> still in tree.</span></div>
+        <div class="sub-stat"><span class="label">Determinism?</span><span class="val">OUT of island (cosmetic). Uses <code>g_RenderRNG</code> per M1 Block B.</span></div>
+        <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">No &mdash; render perf multiplies actor ceiling but doesn't gate correctness.</span></div>
+        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Side tracks</b> T-RENDER-INTERP + T-RENDER-GPU + T-COSMETIC.</span></div>
+        <div class="sub-desc">Modernization target: render-frame-rate decoupled from sim tick rate (interpolation at 144Hz over 60Hz sim), Camera/RenderBatch abstraction from <code>gpu-renderer</code> harvested selectively, GPU compute for cosmetic systems (particles, screen flashes). 8-bit palette decoupling is a separate Tier-3 issue and not on the MP critical path.</div>
+      </div>
+
+      <div class="sub">
+        <div class="sub-head">
+          <div class="sub-id">THREAD</div>
+          <div class="sub-name">Threading model</div>
+        </div>
+        <div class="sub-stat"><span class="label">Current state</span><span class="val"><code>ThreadMan</code> pool exists; <code>SyncedUpdate</code> boundary in <code>MovableMan</code> is designed-in but opt-in. <code>MovableMan::Travel()</code> runs serial. <code>// TODO: Fix HitMOs issue!!</code> in source.</span></div>
+        <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island. Threading without determinism = Causeless's lost branch (glitchy, killed determinism).</span></div>
+        <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; threading is the actor-count multiplier. Without it, the lockstep ceiling collapses.</span></div>
+        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M4</b>.</span></div>
+        <div class="sub-desc">Modernization target: per-worker buffers, deterministic merge by MOID at end of update phase (the Factorio model + Causeless's "buffered Lua callback" idea). 4-8&times; sim throughput on modern CPUs. Benefits single-player massively, even before MP ships.</div>
+      </div>
+
+      <div class="sub">
+        <div class="sub-head">
+          <div class="sub-id">PHYSICS</div>
+          <div class="sub-name">Atom physics core</div>
+        </div>
+        <div class="sub-stat"><span class="label">Current state</span><span class="val">Float math throughout <code>Atom</code>, <code>AtomGroup</code>, <code>SceneMan</code> penetration. <code>AtomGroup::Travel</code> commented "trainwreck"/"dumpsterfire" in source. Per-pixel Bresenham collision.</span></div>
+        <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island &mdash; the core of the destructible terrain that defines CC's identity.</span></div>
+        <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; terrain replication as semantic commands depends on the math being bit-identical across machines.</span></div>
+        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M3</b>.</span></div>
+        <div class="sub-desc">Modernization target: Q24.8 fixed-point math for the destruction path. Bit-identical by construction across all platforms. Per <a href="decisions.html">ADR-005</a>, the upstream lead explicitly rejected switching to Box2D &mdash; CC's atom physics is identity, not a swappable engine. Fixed-point keeps the design while making it deterministic.</div>
+      </div>
+
+      <div class="sub">
+        <div class="sub-head">
+          <div class="sub-id">LUA</div>
+          <div class="sub-name">Lua runtime</div>
+        </div>
+        <div class="sub-stat"><span class="label">Current state</span><span class="val">LuaJIT 2.1 vendored at <code>external/sources/LuaJIT-2.1/</code>. <code>pairs()</code> iterates in hash order (non-deterministic). <code>math.random</code> per state but seeded inconsistently.</span></div>
+        <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island &mdash; ~53K LOC of community Lua iterates tables and rolls RNG every tick.</span></div>
+        <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; without deterministic Lua, the mod corpus diverges across clients.</span></div>
+        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M2</b>.</span></div>
+        <div class="sub-desc">Modernization target: patch LuaJIT pairs() to iterate sorted-by-key, seed math.random per-state from g_SimRNG. Engine-side patch, invisible to mod authors. Per <a href="decisions.html">ADR-002</a> we keep LuaJIT (do not migrate to Luau/Lua 5.4) &mdash; the binding layer (<a href="decisions.html">ADR-003</a>) is a separate concern (luabind&rarr;sol3, Tier-3, post-MP).</div>
+      </div>
+
+      <div class="sub">
+        <div class="sub-head">
+          <div class="sub-id">BUILD</div>
+          <div class="sub-name">Build &amp; platform</div>
+        </div>
+        <div class="sub-stat"><span class="label">Current state</span><span class="val">MSBuild (Windows, primary), Meson (Linux/macOS, secondary). No WASM target shipped (upstream <code>box2d-emscripten</code> proves it's possible). CI on Windows MSBuild only.</span></div>
+        <div class="sub-stat"><span class="label">Determinism?</span><span class="val">PARTIAL &mdash; compile flags affect FP determinism (M1 Block E). WASM is the cross-platform anchor (M5).</span></div>
+        <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; cross-platform MP requires verified-identical builds.</span></div>
+        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M1 Block E + M5</b>; harvest from <code>box2d-emscripten</code> WASM half.</span></div>
+        <div class="sub-desc">Modernization target: pinned FP flags (M1), Linux + macOS + WASM CI matrix (M5), WASM build of CC as a web target (independent value &mdash; CC playable in browser). The Box2D physics half of that branch is rejected (see <a href="decisions.html">ADR-005</a>); we want the WASM half only.</div>
+      </div>
+    </div>
+
+    <!-- ============ 2 · UPSTREAM BRANCHES ============ -->
+    <h2 id="branches">2 &nbsp;&middot;&nbsp; <span class="h-accent">Upstream branches to mine</span></h2>
+    <p>The <a href="branches.html">Upstream Branches</a> page has the full per-branch audit. This section
+    distills it to the five branches that matter for engine modernization, with a sharper "what to do with it"
+    recommendation per branch.</p>
+
+    <table class="tbl">
+      <thead><tr><th>Branch</th><th>Status</th><th>What's there</th><th>Our move</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>interpolated-render-redux</code></td>
+          <td><span class="status status-doing">ACTIVE</span> Causeless</td>
+          <td>Just started — "Basic MO interp" + "Ensure MOIDs are always up-to-date" committed 2026-05-17. Single-threaded render-frame-rate decoupling (the right direction). Frustum culling + MO-draw moved into Scene.</td>
+          <td><b>Coordinate.</b> Our M1 Block C (stable MOID iteration) overlaps with his MOID-stability work. Offer to share. Track his branch as the upstream home for T-RENDER-INTERP.</td>
+        </tr>
+        <tr>
+          <td><code>gpu-renderer</code></td>
+          <td><span class="status status-todo">DORMANT</span> HeliumAnt, ~7 weeks idle</td>
+          <td>134 commits. New <code>Source/Renderer/</code> directory: <code>RenderMan</code>, <code>RenderBatch</code>, <code>Camera</code>, <code>Shader</code>, <code>BlendMode</code>, <code>GLState</code>, <code>RenderTarget</code>, <code>GraphicalPrimitive</code>, <code>BigTexture</code>. Touches every entity to use new renderer. ~60-70% done. GPU HUD/GUI/Lua-primitive stubs only. Doesn't decouple 8-bit palette (entrenches it via shader).</td>
+          <td><b>Harvest selectively.</b> Mine the Camera + RenderBatch abstraction for T-RENDER-GPU. Don't wholesale-merge (60-70% done by dormant solo author, dual draw paths with raylib still in tree). The 9-camera scene-wrap model is worth borrowing conceptually.</td>
+        </tr>
+        <tr>
+          <td><code>box2d-emscripten</code> (WASM half only)</td>
+          <td><span class="status status-todo">DORMANT</span> ~6 weeks idle</td>
+          <td>WebAssembly port substantially done: CC boots, renders, plays, has audio in browser (including iOS). Allegro-compat shim, from-scratch FMOD software mixer, IndexedDB saves.</td>
+          <td><b>Harvest into M5.</b> The WASM half is the cross-platform determinism anchor in our plan. Mine the build scaffold, the Allegro shim, the FMOD mixer. Drop the Box2D-physics half per <a href="decisions.html">ADR-005</a> (Causeless rejected it; see <a href="multiplayer.html#pivot-rationale">multiplayer.html</a> for the deeper rejection rationale).</td>
+        </tr>
+        <tr>
+          <td><code>interpolated-render</code> (original)</td>
+          <td><span class="status status-todo">ABANDONED</span> 2024-09, 923 commits behind</td>
+          <td>120 commits. Failed on an over-ambitious sim/render thread split ("Very broken" / "Better to be crashy than laggy" commit messages). Has the actual lerp primitives + teleport/wrap fixes that interpolated-render-redux still lacks.</td>
+          <td><b>Reference only.</b> Mine for the lerp primitives + teleport/wrap fixes when T-RENDER-INTERP needs them. Do not re-execute the thread split that sank it.</td>
+        </tr>
+        <tr>
+          <td><code>sol3</code></td>
+          <td><span class="status status-todo">STALE</span> 2024-01, 1685 behind</td>
+          <td>luabind&rarr;sol2 binding migration. Compiles but not functional &mdash; per upstream lead, sol2's stricter usertype semantics break vanilla AND modded Lua.</td>
+          <td><b>Out of scope for MP.</b> ADR-003 (proposed) is post-MP work. The compat break IS the real T2-02 problem, not the binding mechanics. Defer until after M10.</td>
+        </tr>
+        <tr>
+          <td>Causeless's lost MT physics branch</td>
+          <td><span class="status status-blocked">LOST</span> never pushed</td>
+          <td>Parallelized <code>MovableMan::Travel()</code>, commented out Lua callbacks. "Worked relatively well" perf-wise but glitchy + non-deterministic. Source verbatim: "the most frustrating part of it was the Lua collision callback. That could be buffered in some way but it'd likely change behaviour pretty significantly."</td>
+          <td><b>Use as design reference for M4.</b> Our M4 plan implements exactly his "buffered callback" idea, with the M1-M3 foundation that his prototype lacked. Talk to him about the design before implementation.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>What's <b>not</b> in this table: the rest of the upstream branch list per <a href="branches.html">branches.html</a>
+    &mdash; small content / faction / bug-fix branches that don't touch the engine.</p>
+
+    <!-- ============ 3 · THE SIDE TRACKS ============ -->
+    <h2 id="tracks">3 &nbsp;&middot;&nbsp; <span class="h-accent">The side tracks</span></h2>
+    <p>Side tracks are engine modernization work that runs <b>in parallel</b> with the MP main spine. They don't gate
+    MP shipping, but they land independent value and multiply the ceiling on what MP can do once it ships. Each side
+    track has explicit dependencies, an effort estimate, and a clear "when do we pair this with MP?" answer.</p>
+
+    <div class="track">
+      <div class="track-head"><span class="track-id">T-RENDER-INTERP</span><span class="track-name">Render interpolation &mdash; decouple frame rate from sim tick</span><span class="track-tag">collab w/ Causeless</span></div>
+      <div class="track-field"><span class="track-key">Goal</span><span class="track-val">Sim runs at fixed 60Hz; render runs at display refresh (144Hz / 240Hz). Actor positions interpolated between sim ticks for smooth visuals at high refresh rates. No sim/render thread split (that's what sank the 2024 attempt).</span></div>
+      <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
+        <li>Stable MOID iteration in <code>MovableMan</code> (overlaps with M1 Block C &mdash; coordinate to avoid double-work).</li>
+        <li>Per-MO previous-tick state snapshot (<code>m_PrevPos</code>, <code>m_PrevRotAngle</code> already exist; add velocity + visible attachables).</li>
+        <li>Lerp primitives in <code>Vector</code>, <code>Matrix</code> (mine from abandoned <code>interpolated-render</code>).</li>
+        <li>Teleport detection + scene-wrap handling (skip interpolation across discontinuities).</li>
+        <li>Frame-time accumulator integration in <code>RunGameLoop</code>.</li>
+        <li>Per-system interpolation hooks: actor sprites, particle MOs, terrain decals, projectile trails.</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M1 Block C (stable MOID iteration). Otherwise standalone.</span></div>
+      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">M4 (sim threading) &mdash; both land in the M3&ndash;M5 window, mutually reinforcing (threaded sim + smooth render = the modern game-engine architecture).</span></div>
+      <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">Source/Managers/MovableMan.* (coordinate with M1 Block C) &middot; Source/Entities/MOSRotating.* (sprite draw) &middot; Source/Managers/SceneMan.* (MO draw integration) &middot; Source/Main.cpp (accumulator) &middot; possibly Source/System/Matrix.cpp + Vector.cpp (lerp)</span></div>
+      <div class="track-field"><span class="track-key">Coordination</span><span class="track-val">This branch is <b>Causeless's active work</b>. Two options: (a) contribute MOID-stability work to his branch so it lands first, (b) do MOID-stability in our M1 and offer it to him post-merge. Either way, the interp itself stays primarily Causeless's; we benefit when it lands upstream.</span></div>
+      <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> 144Hz monitor shows smooth motion between sim ticks; teleports and scene-wrap don't show interpolation artifacts; the sim tick rate remains exactly 60Hz; CI determinism gate (post-M1) stays green.</span></div>
+    </div>
+
+    <div class="track">
+      <div class="track-head"><span class="track-id">T-RENDER-GPU</span><span class="track-name">GPU renderer abstraction &mdash; harvest from gpu-renderer</span><span class="track-tag">harvest selectively</span></div>
+      <div class="track-field"><span class="track-key">Goal</span><span class="track-val">Adopt the Camera + RenderBatch abstraction from <code>gpu-renderer</code> without merging the whole branch. Replaces the raylib immediate-mode draw API with a batched, camera-driven model. Foundation for T-COSMETIC (GPU compute shaders for cosmetic systems).</span></div>
+      <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
+        <li>Audit <code>Source/Renderer/</code> from <code>gpu-renderer</code> branch &mdash; identify the harvestable subset.</li>
+        <li>Port <code>Camera</code> + <code>RenderBatch</code> + <code>RenderTarget</code> + <code>GLState</code> + <code>Shader</code> onto a clean base (post-modernization-effort).</li>
+        <li>Migrate sprite draws to use the new batch path (one entity class at a time, smoke-tested).</li>
+        <li>Keep raylib in tree but isolated to the legacy path until migration completes.</li>
+        <li>NOT in scope: GPU HUD, GPU GUI, GPU Lua primitives (gpu-renderer left these as stubs; defer).</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M1 complete (compile flag flags + RNG split). Otherwise standalone.</span></div>
+      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">M5&ndash;M6 (cross-platform + server spine) &mdash; rendering abstraction stabilizes before MP user-visible ship at M7.</span></div>
+      <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">new Source/Renderer/* (harvested) &middot; Source/Entities/* (Draw migration, ~50 classes) &middot; Source/Managers/FrameMan.cpp</span></div>
+      <div class="track-field"><span class="track-key">Coordination</span><span class="track-val">HeliumAnt's branch is <b>dormant</b> (~7 weeks idle as of 2026-05-17). Treat as a fixed artifact to mine, not an active collaboration. If HeliumAnt returns, coordinate.</span></div>
+      <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> sprite draw is batched, the new Camera abstracts viewport handling, render perf is equal-or-better than baseline, and the M1 determinism CI gate stays green (render is outside the island but we verify nothing leaked in).</span></div>
+    </div>
+
+    <div class="track">
+      <div class="track-head"><span class="track-id">T-WASM-BUILD</span><span class="track-name">WebAssembly build target &mdash; integrated into M5</span><span class="track-tag">main-spine M5</span></div>
+      <div class="track-field"><span class="track-key">Goal</span><span class="track-val">CC compiles to and runs in WebAssembly (browser + Node.js). Two purposes: (1) cross-platform determinism anchor &mdash; native builds must match WASM checksum or CI fails (M5); (2) independent value &mdash; CC playable in browser.</span></div>
+      <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
+        <li>Harvest WASM build scaffold from <code>box2d-emscripten</code> WASM half: Emscripten CMake/Meson glue, Allegro-compat shim, FMOD software mixer, IndexedDB saves.</li>
+        <li>Drop the Box2D-physics half (ADR-005 rejection).</li>
+        <li>Native builds use real Allegro/FMOD; WASM uses the shims.</li>
+        <li>WASM build runs the M1 CI determinism scenarios; checksums recorded as canonical.</li>
+        <li>CI matrix added: Windows + Linux + macOS x86 + macOS ARM + WASM. All produce identical per-tick checksums.</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M1 (compile flags), M2 (deterministic Lua), M3 (fixed-point physics), M4 (threading optional in WASM &mdash; WebWorkers available but not required for the determinism anchor).</span></div>
+      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">Is M5 itself. Not a side track; main spine.</span></div>
+      <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">meson.build (WASM target) &middot; new Source/WASM/* (build glue) &middot; Source/Audio/FMODManager.cpp (software-mixer fallback for WASM) &middot; possibly Source/Allegro/* shim</span></div>
+      <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> the M1 CI scenarios run in WASM in Node.js and produce checksums identical to Windows/Linux/macOS native builds; the WASM build of CC loads a scene and plays a campaign mission in a browser.</span></div>
+    </div>
+
+    <div class="track">
+      <div class="track-head"><span class="track-id">T-COSMETIC</span><span class="track-name">GPU offload of cosmetic-only systems</span><span class="track-tag">post-M5</span></div>
+      <div class="track-field"><span class="track-key">Goal</span><span class="track-val">Move particle systems, screen flashes, post-processing, audio mixing to GPU compute / async paths. Frees CPU cycles for sim (more actors per machine). Cosmetic systems are outside the determinism island, so GPU non-determinism doesn't matter here.</span></div>
+      <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
+        <li>Particle systems &rarr; GPU compute shader pipeline (using T-RENDER-GPU's abstraction).</li>
+        <li>Audio mixing &rarr; async thread (already partially done; just decouple from sim further).</li>
+        <li>Post-processing effects (bloom, screen flash, blur) &rarr; fragment shaders.</li>
+        <li>HUD widget batching &rarr; reuse RenderBatch.</li>
+        <li>Verify M1 determinism CI gate stays green throughout &mdash; cosmetic system outputs feed <code>g_RenderRNG</code>, not <code>g_SimRNG</code>.</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">T-RENDER-GPU (the Camera/RenderBatch abstraction), M1 Block B (RNG split).</span></div>
+      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">M6&ndash;M7 &mdash; lands as M7 (online co-op) ships so the actor ceiling for MP is multiplied at first user-visible MP release.</span></div>
+      <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">Source/Managers/PostProcessMan.cpp &middot; Source/Entities/MOSParticle.cpp (cosmetic particles) &middot; Source/Audio/AudioMan.cpp &middot; new Source/Renderer/Compute/* (compute shader infrastructure)</span></div>
+      <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> a stress scenario (1000 active actors + sustained explosions + heavy particle systems) sees CPU usage drop measurably (target: 30%+ reduction in PostProcessMan + MOSParticle CPU time), and the M1 determinism CI gate stays green (no leakage into the sim island).</span></div>
+    </div>
+
+    <div class="track">
+      <div class="track-head"><span class="track-id">T-VALIDATION</span><span class="track-name">cccp-ctl &mdash; CLI test surface (corefall's cfctl pattern adapted)</span><span class="track-tag">post-M0, ongoing</span></div>
+      <div class="track-field"><span class="track-key">Goal</span><span class="track-val">A first-class command-line test surface for sim determinism, network sync, replay verification, rollback stress tests. Builds on M0's <code>ScenarioRunner</code>. Pattern lifted from <a href="https://github.com/Madreag/corefall/blob/main/docs/plan/spec/network-sync-rollback-and-determinism.md">corefall's cfctl spec</a>.</span></div>
+      <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
+        <li><code>cccp-ctl test sync-drift --clients N --scenario X --duration T</code> &mdash; multi-client sync verification.</li>
+        <li><code>cccp-ctl test latency-injection --add-ms 200 --loss 5% --jitter 50ms</code> &mdash; network degradation simulation.</li>
+        <li><code>cccp-ctl test rollback-burst --frames 8 --frequency 1hz --duration 60s</code> &mdash; rollback stress test.</li>
+        <li><code>cccp-ctl test replay-determinism --runs 100 --scenario X</code> &mdash; 100-run verification.</li>
+        <li><code>cccp-ctl test cross-platform-determinism --platforms win,lin,mac,wasm</code> &mdash; CI matrix runner.</li>
+        <li><code>cccp-ctl bench replay --bundle X --measure throughput</code> &mdash; replay throughput benchmarking.</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M0 (ScenarioRunner + SimChecksum), grows incrementally with each MP milestone.</span></div>
+      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">Every MP milestone &mdash; each new mode needs new test commands. M7 ships <code>sync-drift</code> + <code>latency-injection</code>; M9 adds <code>rollback-burst</code>; M10 adds <code>multi-shard</code>.</span></div>
+      <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">Source/CI/DeterminismCheck.cpp (M1 already) &middot; new Source/CLI/cccp-ctl.cpp &middot; .github/workflows/* (CI matrix expansion at each milestone)</span></div>
+      <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> every shipping MP milestone has a corresponding cccp-ctl test command that verifies the milestone's behavior under network degradation, and the CI matrix runs all of them on every PR.</span></div>
+    </div>
+
+    <!-- ============ 4 · INTERWEAVING WITH MP ============ -->
+    <h2 id="interweave">4 &nbsp;&middot;&nbsp; <span class="h-accent">Interweaving with the MP main spine</span></h2>
+    <p>The MP main spine has 10 milestones (M0&ndash;M10). The side tracks above have 5 entries (T-XXX). The
+    interweaving is structured so:</p>
+    <ul>
+      <li><b>Each side track lands during the right MP window</b> (not before its deps, not after its consumers).</li>
+      <li><b>No side track gates an MP milestone</b> &mdash; if T-XXX slips, MP continues. The exception is T-WASM-BUILD which is fused into M5 (it's not really a side track).</li>
+      <li><b>Side tracks deliver value independent of MP</b> &mdash; even if MP shipping pauses, single-player benefits ship at each side-track close.</li>
+      <li><b>The user (or AI coding agent) can pick up any track at its appropriate window</b> &mdash; no track requires a context-load of every other track first.</li>
+    </ul>
+
+    <h3>4.1 &nbsp; The dependency graph</h3>
+    <p>Stated as "X must close before Y can start." Arrows are dependency, not chronology.</p>
+    <pre><code>M0 (DONE) &rarr; M1 &rarr; M2 &rarr; M3 &rarr; M4 &rarr; M5 &rarr; M6 &rarr; M7 &rarr; M8 &rarr; M9 &rarr; M10
+                  &darr;        &darr;        &darr;
+              T-RENDER-INTERP (coordinate w/ Causeless after M1 Block C)
+                                       &darr;
+                                  T-RENDER-GPU (harvest from gpu-renderer, after M1)
+                                                  &darr;
+                                            T-COSMETIC (depends on T-RENDER-GPU)
+                                                            &darr;
+                                                      M7 ships with T-COSMETIC's CPU savings
+
+T-WASM-BUILD is M5 (not separable; required for cross-platform determinism)
+T-VALIDATION is incremental, accreted across M0&rarr;M10</code></pre>
+
+    <h3>4.2 &nbsp; When each side track starts and finishes</h3>
+    <table class="tbl">
+      <thead><tr><th>Side track</th><th>Starts at</th><th>Finishes by</th><th>Why this window</th></tr></thead>
+      <tbody>
+        <tr><td>T-RENDER-INTERP (collab)</td><td>M1 Block C complete</td><td>M5 (ideally) or M7</td><td>Needs stable MOIDs (M1 Block C). Causeless is actively working on it now &mdash; the timing is dictated by his cadence, not ours.</td></tr>
+        <tr><td>T-RENDER-GPU</td><td>M1 complete</td><td>M6</td><td>Needs compile flags pinned (M1 Block E). Lands before M7 so MP user-visible ship benefits from the abstraction.</td></tr>
+        <tr><td>T-WASM-BUILD</td><td>M3 complete</td><td>M5 (fused)</td><td>Needs fixed-point physics so WASM checksum is meaningful. Is M5.</td></tr>
+        <tr><td>T-COSMETIC</td><td>T-RENDER-GPU complete</td><td>M7</td><td>Needs the GPU abstraction. Lands as M7 ships for max actor ceiling.</td></tr>
+        <tr><td>T-VALIDATION</td><td>M0 complete (now)</td><td>Ongoing through M10</td><td>Grows incrementally. Each MP mode adds its test commands.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ 5 · HARVEST STRATEGY ============ -->
+    <h2 id="coord">5 &nbsp;&middot;&nbsp; <span class="h-accent">Branch harvest strategy &mdash; no waiting, no coordination</span></h2>
+    <p>cortex-modern is an AGPL fork per <a href="decisions.html">ADR-001</a> and <a href="decisions.html">ADR-008</a>:
+    fork-first, upstreaming opportunistic. We have full legal and architectural authorization to harvest any code
+    from CCCP upstream or any community branch under AGPL. <b>We do not wait for upstream authors. We do not
+    coordinate. We ship.</b> Authors who want our work back can cherry-pick from our fork; that's how the
+    fork-and-merge model is supposed to work.</p>
+
+    <p>This means: an active branch by Causeless is treated identically to a dormant branch by HeliumAnt is treated
+    identically to an abandoned branch by someone who hasn't logged in for 2 years. <b>The branch is the artifact.</b>
+    Whether the author is active is irrelevant to our pace.</p>
+
+    <h3>5.1 &nbsp; The harvest decision flow</h3>
+    <div class="card">
+      <p>For each upstream branch with potential relevance to our work:</p>
+      <ol>
+        <li><b>Study it</b> &mdash; read the diff (<code>git diff origin/development...upstream/&lt;branch-name&gt; -- &lt;paths&gt;</code>), the commit messages, the rationale.</li>
+        <li><b>Decide</b>:
+          <ul>
+            <li><b>Harvest</b> &mdash; if the commits solve our problem, cherry-pick them onto our milestone branch. Credit the original author in commit body. Adapt to our determinism CI gate.</li>
+            <li><b>Reference</b> &mdash; if the design ideas are useful but the implementation isn't, take the design + write fresh code. Document the inspiration source in the PR body.</li>
+            <li><b>Skip</b> &mdash; if neither helps, move on. Write fresh.</li>
+          </ul>
+        </li>
+        <li><b>Ship</b> &mdash; cortex-modern's cadence is ours. No external dependency.</li>
+      </ol>
+      <p>The decision is the agent's. If a branch looks promising during a quick audit, harvest. If it looks like a
+      maze of incomplete prototypes, skip. <b>No discussion with the original author is required at any point.</b></p>
+    </div>
+
+    <h3>5.2 &nbsp; Attribution discipline</h3>
+    <div class="card">
+      <p>When harvesting a commit from an upstream branch, the commit body should read:</p>
+      <pre><code>Block C: stable MOID-ordered iteration in MovableMan
+
+Adapted from upstream/interpolated-render-redux commit 7a2350b80 by Causeless
+(2026-05-17, "Ensure MOIDs are always up-to-date"), adapted for the
+determinism CI gate added in Block A.
+
+[the rest of the commit message]</code></pre>
+      <p>This honors AGPL's attribution requirement and the spirit of the fork-first model. <b>No
+      <code>Co-Authored-By:</code> trailers</b> (per
+      <a href="https://github.com/Madreag/cortex-modern/blob/modernization-effort/CLAUDE.md">CLAUDE.md</a> — all
+      cortex-modern artifacts are solely attributed to the user). The harvested-from line in the commit body is
+      sufficient AGPL attribution.</p>
+    </div>
+
+    <h3>5.3 &nbsp; What this means per side track</h3>
+    <table class="tbl">
+      <thead><tr><th>Side track</th><th>Source branches</th><th>Harvest stance</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>T-RENDER-INTERP</td>
+          <td><code>upstream/interpolated-render-redux</code> (Causeless, active), <code>upstream/interpolated-render</code> (abandoned 2024)</td>
+          <td><b>Harvest what's useful, ship our own.</b> Causeless's MOID-stability work likely cherry-picks cleanly into M1 Block C. His "Basic MO interp" commit is starting work &mdash; we can take it or write our own. The abandoned <code>interpolated-render</code> has lerp primitives + teleport/wrap fixes worth mining. We finish the work ourselves; if it lands upstream eventually, fine.</td>
+        </tr>
+        <tr>
+          <td>T-RENDER-GPU</td>
+          <td><code>upstream/gpu-renderer</code> (HeliumAnt, dormant ~7 weeks)</td>
+          <td><b>Mine selectively, finish the rest.</b> The Camera + RenderBatch + Shader + GLState abstraction is good design. Harvest the foundational classes; rewrite the entity-level integration where their work is partial. Avoid the stubs (GPU HUD, GUI, Lua primitives) until needed. Credit HeliumAnt in commit messages.</td>
+        </tr>
+        <tr>
+          <td>T-WASM-BUILD (= M5)</td>
+          <td><code>upstream/box2d-emscripten</code> (dormant ~6 weeks, WASM half only)</td>
+          <td><b>Harvest the WASM scaffold aggressively.</b> The Emscripten build glue, Allegro shim, FMOD software mixer, IndexedDB save layer are all dormant code we can claim and finish. Drop the Box2D physics half entirely (rejected per <a href="decisions.html">ADR-005</a>).</td>
+        </tr>
+        <tr>
+          <td>T-COSMETIC</td>
+          <td>(none directly; builds on T-RENDER-GPU's abstraction)</td>
+          <td>No direct branches to harvest. Net-new work on our fork once T-RENDER-GPU is in.</td>
+        </tr>
+        <tr>
+          <td>T-VALIDATION</td>
+          <td><a href="https://github.com/Madreag/corefall/blob/main/docs/plan/spec/network-sync-rollback-and-determinism.md">corefall's cfctl spec</a> (separate project, same designer)</td>
+          <td>Lift the cfctl test command structure directly. corefall is your own project, no permission needed. Adapt naming (<code>cccp-ctl</code>) and command set per CC's specifics.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>5.4 &nbsp; The mod community &mdash; one-way disclosure, no coordination</h3>
+    <div class="card">
+      <p>The M2 LuaJIT pairs() patch is engine-side and invisible to mod authors. Most mods get deterministic
+      behavior transparently. Three groups of mods <i>do</i> care:</p>
+      <ul>
+        <li><b>Procgen-heavy mods</b> (VoidWanderers): hash-order randomness may have been a feature. After M2,
+        procgen with the same seed produces the same world every time. <b>Good for MP, surprises solo players.</b></li>
+        <li><b>Mods using FFI</b>: bypass the Lua API. Rare but exist. May not benefit from the M2 patch.</li>
+        <li><b>Mods relying on real-time collision response</b>: M4 shifts Lua collision callbacks from "during
+        collision" to "end of tick." Mod behavior changes deterministically &mdash; mostly imperceptibly, but
+        documented.</li>
+      </ul>
+      <p><b>Disclosure plan:</b> after M2 closes and after M4 closes, draft a forum/Discord post explaining what
+      changed and why. <i>One-way disclosure, not negotiation</i> &mdash; the engine work has shipped on our fork
+      already by then; mod authors who care can adapt. We do not seek pre-approval; we communicate post-fact and
+      accept regression reports.</p>
+    </div>
+
+    <h3>5.5 &nbsp; If an upstream author returns mid-stream</h3>
+    <div class="card">
+      <p>Scenario: we harvest from HeliumAnt's <code>gpu-renderer</code>, ship T-RENDER-GPU, and three weeks later
+      HeliumAnt returns to GitHub and starts committing to <code>gpu-renderer</code> again. <b>What happens?</b></p>
+      <ul>
+        <li><b>Our work is shipped</b> &mdash; on cortex-modern, on modernization-effort, in production. It's not
+        going back.</li>
+        <li><b>If HeliumAnt's new commits are good</b> &mdash; we can harvest those into a follow-up milestone, just
+        like the original harvest.</li>
+        <li><b>If HeliumAnt's direction diverges from ours</b> &mdash; we stay on our path. cortex-modern is its
+        own product.</li>
+        <li><b>If HeliumAnt opens a PR to upstream that conflicts with our fork</b> &mdash; we can choose to
+        adopt or stay independent. ADR-008 makes this a fork-side decision, not an upstream-side blocker.</li>
+      </ul>
+      <p>Same applies to Causeless and any other contributor. Their re-emergence does not gate us.</p>
+    </div>
+
+    <!-- ============ 6 · THE TIMELINE VISUALIZATION ============ -->
+    <h2 id="timeline">6 &nbsp;&middot;&nbsp; <span class="h-accent">The interleaved timeline</span></h2>
+    <p>Each row is a track or milestone. Each column is one milestone-window of progress. Colors:
+    <b style="color:var(--green)">green</b> = shipping milestone (user-visible),
+    <b style="color:var(--purple)">purple</b> = foundation,
+    <b style="color:var(--accent)">orange</b> = enabling,
+    <b style="color:var(--blue)">blue</b> = stretch,
+    <b style="color:#c87399">pink</b> = side track. Dashed = not active in that window.</p>
+
+    <div class="timeline">
+      <div class="timeline-row"><div class="timeline-label">MP main spine</div><div class="timeline-cells">
+        <div class="tc tc-done">M0</div>
+        <div class="tc tc-fdn">M1</div>
+        <div class="tc tc-fdn">M2</div>
+        <div class="tc tc-fdn">M3</div>
+        <div class="tc tc-fdn">M4</div>
+        <div class="tc tc-fdn">M5</div>
+        <div class="tc tc-enable">M6</div>
+        <div class="tc tc-ship">M7</div>
+        <div class="tc tc-ship">M8</div>
+        <div class="tc tc-ship">M9</div>
+        <div class="tc tc-stretch">M10</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-RENDER-INTERP</div><div class="timeline-cells">
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-track">co-or</div>
+        <div class="tc tc-track">co-or</div>
+        <div class="tc tc-track">co-or</div>
+        <div class="tc tc-track">land</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-RENDER-GPU</div><div class="timeline-cells">
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-track">audit</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">migr</div>
+        <div class="tc tc-track">land</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-WASM-BUILD</div><div class="timeline-cells">
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-fdn">=M5</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-COSMETIC</div><div class="timeline-cells">
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-track">start</div>
+        <div class="tc tc-track">land</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-empty">·</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-VALIDATION</div><div class="timeline-cells">
+        <div class="tc tc-empty">·</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+      </div></div>
+    </div>
+
+    <p class="small muted">"co-or" = coordination phase with Causeless; "harv" = harvest from upstream branch;
+    "migr" = migration work; "audit" = read-only review of upstream code; "land" = side track delivered;
+    "grow" = incremental additions as MP milestones close. Each column represents one milestone-window of work
+    (~3&ndash;8 weeks of focused effort), not strict calendar time.</p>
+
+    <!-- ============ 7 · WHAT SHIPS WHEN ============ -->
+    <h2 id="ships">7 &nbsp;&middot;&nbsp; <span class="h-accent">What ships at each milestone</span></h2>
+    <p>One of the architectural commitments of the no-compromise MP plan is that <b>every milestone ships value</b>
+    &mdash; not just at M7 (first MP user-visible). Single-player benefits accrue at each foundation milestone. The
+    plan is value-positive throughout, even if MP work pauses or pivots mid-stream.</p>
+
+    <table class="tbl ships">
+      <thead><tr><th>Milestone</th><th>What ships (user-visible)</th><th>Single-player benefit</th><th>MP benefit</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>M0 ✓</td>
+          <td>Observability harness (DONE 2026-05-18). Closure docs: <code>D:\Projects\M0_PLAN.md</code>, <code>D:\Projects\M0_STATUS.md</code>.</td>
+          <td>Replay capture, debug overlays, scenario test runner. AI debug visualization (shared with AI flagship M0).</td>
+          <td>The measurement apparatus &mdash; nothing about MP works without it.</td>
+        </tr>
+        <tr>
+          <td>M1</td>
+          <td>Better stability + deterministic CI gate</td>
+          <td>Bugs that depended on framerate/iteration order no longer reproduce. RNG drift fixed. Single-player runs are reproducible.</td>
+          <td>The deterministic single-machine baseline. Foundation under M2&ndash;M10.</td>
+        </tr>
+        <tr>
+          <td>M2</td>
+          <td>Deterministic mods + reproducible procgen</td>
+          <td>Mods behave identically across runs given the same seed. Procgen worlds are reproducible. Easier mod debugging.</td>
+          <td>Mods stay in sync across MP clients automatically.</td>
+        </tr>
+        <tr>
+          <td>M3</td>
+          <td>Faster terrain physics + bit-identical destruction</td>
+          <td>Atom physics in fixed-point is often <i>faster</i> than float (no expensive transcendentals on hot paths). Terrain destruction stable across all platforms.</td>
+          <td>Terrain replication as semantic commands becomes possible. Identical destruction on every client.</td>
+        </tr>
+        <tr>
+          <td>M4</td>
+          <td><b>4&ndash;8&times; sim throughput (HUGE)</b></td>
+          <td>This is the biggest single-player perf win in the whole plan. Modern 8-16 core CPUs go from ~12% utilization to ~70-80%. More actors per scene. Smoother frame rates at high actor counts.</td>
+          <td>Lockstep mode (M8) becomes viable &mdash; every client runs full sim on all cores.</td>
+        </tr>
+        <tr>
+          <td>M5</td>
+          <td><b>CC playable in browser</b> (independent value)</td>
+          <td>Web build of Cortex Command. Players can share runs as web links. Mod showcases via WASM.</td>
+          <td>Cross-platform determinism anchor. CI runs the determinism matrix; any platform divergence fails the build.</td>
+        </tr>
+        <tr>
+          <td>M6</td>
+          <td>Dedicated server tooling + GNS transport</td>
+          <td>Community admins get headless server tools. Modders can test mod-hash handshake locally.</td>
+          <td>The transport bridge between deterministic sim and per-mode netcode adapters (M7&ndash;M10).</td>
+        </tr>
+        <tr>
+          <td>M7</td>
+          <td><b>ONLINE CO-OP SHIP &mdash; first user-visible MP</b></td>
+          <td>Friend in another city joins your campaign mission via Steam/IP. Mid-mission save. NAT-traversal works without port forwarding.</td>
+          <td><b>First MP user-visible ship.</b> Server-auth + client prediction + reconciliation + interpolation. T-COSMETIC's CPU offload multiplies actor count.</td>
+        </tr>
+        <tr>
+          <td>M8</td>
+          <td><b>LAN lockstep SHIP &mdash; best feel for co-op</b></td>
+          <td>LAN parties. Two-machine local couch co-op without splitscreen. Input lag = 1 local frame.</td>
+          <td>Lockstep co-op at ~500 kbit/s/client bandwidth. Every client runs full multi-threaded sim in parallel. Max actor count.</td>
+        </tr>
+        <tr>
+          <td>M9</td>
+          <td><b>PvP rollback SHIP &mdash; competitive</b></td>
+          <td>Practice mode against bots with deterministic replay. Skill-based gameplay surfaced.</td>
+          <td>4-player PvP arena with sub-50ms input latency via GGPO rollback. Anti-cheat via per-tick checksum validation.</td>
+        </tr>
+        <tr>
+          <td>M10</td>
+          <td>Public hosting + 8-32 player matches (stretch)</td>
+          <td>Persistent shard mode (optional) saves between sessions.</td>
+          <td>Community-hosted dedicated servers. Server browser. Per-region interest management.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>7.1 &nbsp; The value-shipping insight</h3>
+    <div class="callout callout-ok">
+      <p>Look at the "Single-player benefit" column. Each foundation milestone (M1-M5) delivers <i>real</i> single-player
+      value, not "we made invisible foundation work, please trust us." A community member who downloads cortex-modern
+      after M4 closes gets <b>4-8&times; sim throughput</b> &mdash; the kind of perf win that's normally a flagship-class
+      release in itself. After M5, they get CC <i>in their browser</i>. Even if MP work paused for some reason between
+      M5 and M6, the engine improvements alone justify the work.</p>
+      <p>This is the architectural answer to "what if we get stuck?" Each milestone has independent value, so being
+      stuck at any milestone still means the codebase is better than before.</p>
+    </div>
+
+    <!-- ============ 8 · RISKS & FALLBACKS ============ -->
+    <h2 id="risks">8 &nbsp;&middot;&nbsp; <span class="h-accent">Risks &amp; fallback paths</span></h2>
+    <p>"Don't get stuck" was the user-explicit constraint. Each foundation milestone has a fallback path so MP work
+    can proceed even if the milestone's optimal solution proves infeasible. <b>Only M1 has no fallback</b> &mdash;
+    if we can't measure determinism, we can't build on it. Everything after M1 is degradable.</p>
+
+    <table class="tbl">
+      <thead><tr><th>Milestone</th><th>If the optimal path fails</th><th>Fallback</th><th>Cost of fallback</th></tr></thead>
+      <tbody>
+        <tr><td>M1 (cleanup + CI)</td><td>True blocker. If we can't measure determinism, we can't build it.</td><td><b>None.</b> M1 must succeed.</td><td>If M1 fails, whole plan needs replanning.</td></tr>
+        <tr><td>M2 (LuaJIT patch)</td><td>If LuaJIT 2.1 pairs() can't be patched cleanly (e.g., JIT/interpreter divergence)</td><td>Opt-in mod sandbox API. Mods that want MP compat opt in.</td><td>Mod compat for MP becomes opt-in instead of automatic. Existing mods stay unchanged.</td></tr>
+        <tr><td>M3 (fixed-point physics)</td><td>If Q24.8 precision proves inadequate (visual A/B test fails) or perf regression too large</td><td>Stay on float; pin compile flags rigorously; use WASM as cross-platform anchor for verification.</td><td>Cross-platform determinism harder; slower CI verification. Acceptable.</td></tr>
+        <tr><td>M4 (threaded sim)</td><td>If deterministic merge can't be made to work (Lua collision callback issue insurmountable)</td><td>Ship single-threaded. Online co-op (M7) still works (server CPU handles 4 players fine).</td><td>Max actor count lower. PvP/MMO at scale becomes hard.</td></tr>
+        <tr><td>M5 (WASM cross-platform)</td><td>If WASM perf is unacceptable or build matrix maintenance becomes a burden</td><td>Native-only verification. Skip macOS ARM cross-checking.</td><td>macOS ARM users might have desync. Acceptable for initial ship; revisit when M9 PvP demands it.</td></tr>
+        <tr><td>M6 (GNS)</td><td>If GNS integration proves too complex (build complexity, Steam coupling concerns)</td><td>ENet (simpler library, MIT-licensed).</td><td>Lose encryption + NAT + lanes. Add libsodium for encryption later. NAT becomes "you need to port forward or use Hamachi."</td></tr>
+        <tr><td>M7 (online co-op)</td><td>If server-auth + prediction reveals architectural issue (e.g., interest management too coarse for CC's actor counts)</td><td>Ship listen-server-only (host is server). Skip dedicated server for now.</td><td>Lose dedicated server hosting; community runs from player hosts.</td></tr>
+        <tr><td>M8 (LAN lockstep)</td><td>If determinism still has subtle bugs at lockstep precision</td><td>Ship M7 (online co-op via state-replication) as the LAN mode too. State-replication tolerates more drift than lockstep.</td><td>Higher bandwidth on LAN (uses snapshots not inputs). Worse feel but acceptable.</td></tr>
+        <tr><td>M9 (rollback PvP)</td><td>If incremental snapshot/restore proves too slow for 8-frame rollback at 60Hz</td><td>Reduce rollback window to 4 frames; or ship PvP with no rollback (just lag compensation).</td><td>Worse competitive feel. Probably still acceptable for casual PvP.</td></tr>
+        <tr><td>M10 (public hosting)</td><td>If MMO scale interest management is too complex</td><td>Defer indefinitely. M7-M9 modes are sufficient ship targets.</td><td>No 16+ player public matches. Acceptable.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>8.1 &nbsp; The critical-path argument</h3>
+    <div class="callout callout-warn">
+      <p>Even with all the fallback paths in place, the <b>online co-op MVP at M7</b> only strictly requires M1 to
+      succeed at its optimal path. Everything else (M2-M6) has a degradable fallback. So if you read this and worry
+      "what if we get stuck," the answer is: <b>complete M1, then choose your battles</b>. Online co-op via M7 can
+      ship even if M2-M6 all hit fallbacks &mdash; just with reduced feature completeness.</p>
+      <p>The optimal path delivers the best possible MP. Each fallback reduces the ceiling but never breaks the
+      bottom: online co-op working perfectly.</p>
+    </div>
+
+    <h3>8.2 &nbsp; The side-track risk profile</h3>
+    <p>Side tracks have a separate risk profile because they don't gate MP. Failure modes:</p>
+    <ul>
+      <li><b>T-RENDER-INTERP doesn't land:</b> render stays at sim tick rate (60Hz). High-refresh monitors don't see smooth motion. Acceptable.</li>
+      <li><b>T-RENDER-GPU doesn't land:</b> raylib immediate-mode draw stays in place. Render perf is what it is today. Acceptable.</li>
+      <li><b>T-WASM-BUILD fails (=M5 fallback):</b> see M5 fallback above.</li>
+      <li><b>T-COSMETIC doesn't land:</b> particle/post-process stay on CPU. Actor ceiling lower than ideal but still better than today after M4. Acceptable.</li>
+      <li><b>T-VALIDATION doesn't grow:</b> CI tests stay minimal. Each MP milestone has its own validation regardless. Acceptable.</li>
+    </ul>
+
+    <!-- ============ DEFINITION OF DONE ============ -->
+    <div class="callout callout-key" id="done">
+      <div class="callout-title">Engine modernization &mdash; definition of done</div>
+      <p>Engine modernization is delivered in three proven stages.</p>
+      <p><b>Foundation done (M1&ndash;M5)</b> when:</p>
+      <ul>
+        <li>Determinism CI gate is blocking on every PR.</li>
+        <li>Five-platform (Win/Lin/Mac x86/Mac ARM/WASM) checksum verification produces identical results.</li>
+        <li>Multi-threaded sim runs at 4&ndash;8&times; single-threaded throughput, deterministic across thread counts.</li>
+        <li>LuaJIT pairs() patched and the top-20 mod corpus passes regression.</li>
+        <li>WASM build of CC loads and plays a campaign mission in a browser.</li>
+      </ul>
+      <p><b>Side tracks delivered</b> when:</p>
+      <ul>
+        <li>T-RENDER-INTERP: 144Hz monitors show smooth motion (likely lands via Causeless's upstream branch).</li>
+        <li>T-RENDER-GPU: Camera + RenderBatch abstraction in place, sprite draws batched.</li>
+        <li>T-COSMETIC: cosmetic systems CPU usage down 30%+ in stress scenarios.</li>
+        <li>T-VALIDATION: every MP milestone has a cccp-ctl test command verifying it.</li>
+      </ul>
+      <p><b>MP done</b> when:</p>
+      <ul>
+        <li>Online co-op (M7): friends in different cities complete a mission through NAT at 50-200ms RTT.</li>
+        <li>LAN lockstep (M8): 4 LAN clients run bit-identical sim for the entire match at ~500 kbit/s/client.</li>
+        <li>PvP rollback (M9): 4-player arena at sub-50ms input latency with GGPO rollback.</li>
+        <li>(Stretch) Public hosting (M10): 16+ player community-hosted match for 1 hour without divergence.</li>
+      </ul>
+    </div>
+
+    <div class="page-foot">
+      Engine modernization plan &middot; written 2026-05-18 as the parallel-track companion to
+      <a href="multiplayer.html">multiplayer.html</a>. Built from the upstream branch deep-dive
+      (<a href="branches.html">branches.html</a>), the Box2D rejection rationale
+      (<a href="decisions.html">ADR-005</a>), the MP architectural pivot
+      (<a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;10</a> / proposed ADR-016), the corefall
+      determinism contract (<a href="https://github.com/Madreag/corefall/blob/main/docs/plan/decisions/dr-052-network-sync-rollback-and-cli-testable-determinism.md">corefall DR-052</a>),
+      Causeless's stated direction on Discord (2026-05), and the M1 execution plan
+      (<a href="https://github.com/Madreag/cortex-modern/blob/modernization-effort/M1_PLAN.md">M1_PLAN.md</a>).
+      Recorded as <b>ADR-017 (proposed)</b> &mdash; engine modernization runs as parallel side tracks alongside the
+      MP main spine, coordinated with upstream where authors are active.
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

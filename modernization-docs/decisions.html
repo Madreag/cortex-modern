@@ -28,6 +28,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link active" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -264,7 +265,10 @@
         treats it as a reference only, and the vanilla/mod compatibility break is the real work; (2) the two-stage
         fog-of-war work has moved to a newer, active branch (<code>dynamic-fow-negative-distance-test</code>), and
         <code>interpolated-render-redux</code> is being kept current by the lead dev rather than abandoned &mdash;
-        it is no longer &ldquo;ignore&rdquo;.</p>
+        it is no longer &ldquo;ignore&rdquo;. &middot; <b>Harvest stance amended by <a href="#adr-017">ADR-017</a>
+        (2026-05-18):</b> "track, don't duplicate" is upgraded to <b>"harvest at full speed"</b> &mdash; whether a
+        branch's author is active or dormant is irrelevant to our cadence. We mine selectively, finish ourselves,
+        credit in commit bodies. See <a href="engine.html#coord">engine.html &sect;5</a> for the harvest decision flow.</p>
         <h4>Context</h4>
         <p>A commit-and-diff deep-dive of every upstream branch (see <a href="branches.html">Upstream Branches</a>).
         <code>development</code> has been frozen since 2026-04-06; the branches are unmerged, mostly single-author
@@ -479,6 +483,12 @@
         <span class="adr-title">Multiplayer &mdash; server-authoritative state replication, staged</span>
         <span class="status status-done">Accepted</span>
       </div>
+      <p class="small muted" style="padding:0 18px"><b>Sequencing amended by <a href="#adr-016">ADR-016</a> (2026-05-18):</b>
+      the <i>architectural</i> commitment in this ADR stands &mdash; per-mode netcode on a deterministic core. The
+      <i>order</i> in which the foundation is built changed from M1 server spine + grow-the-island to determinism-first
+      M1&ndash;M5 then per-mode adapters M6&ndash;M10. The text below is the historical 2026-05-17 record; see
+      <a href="#adr-016">ADR-016</a> for the new sequence and rationale (Teardown recantation, corefall lock,
+      Factorio precedent, performance-ceiling argument).</p>
       <div class="adr-body">
         <p class="small muted">2026-05-16 &middot; <b>dev-review note (2026-05-17):</b> the upstream lead's review
         finds full determinism materially more reachable than this decision first assumed &mdash; the RNG is
@@ -518,17 +528,123 @@
       </div>
     </section>
 
+    <!-- ADR-016 -->
+    <section class="adr" id="adr-016">
+      <div class="adr-head">
+        <span class="adr-id">ADR-016</span>
+        <span class="adr-title">Multiplayer sequencing pivot &mdash; determinism foundation first, then per-mode netcode</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-18</p>
+        <h4>Context</h4>
+        <p>ADR-015 committed to server-authoritative state replication with a growing determinism island
+        (M1 server spine &rarr; M2 terrain &rarr; M3 entities &rarr; M4 co-op ship &rarr; M5 determinism &rarr; M6
+        rollback PvP). Deeper research surfaced three pieces of 2026 evidence that the staging optimizes for the
+        wrong thing:</p>
+        <ul>
+          <li>Teardown creator Dennis Gustafsson <b>recanted publicly</b> in the same blog post the wiki cited as
+          architectural blueprint: <i>"Early on, I dismissed the idea of full determinism for the entire engine
+          (a view I have since reevaluated)"</i> &mdash; the Teardown team is moving past their shipped hybrid.</li>
+          <li>The corefall sibling project locked the per-mode-netcode-on-deterministic-core architecture in
+          DR-052 (2026-05-06). cortex-modern was the only one of the two projects deferring determinism.</li>
+          <li>Factorio's deterministic lockstep ships ~500 kbit/s/client at thousands of entities; the cap on
+          actor count becomes the slowest client's CPU rather than one host's, <b>uncapped</b> when M4
+          multi-threads sim across cores.</li>
+        </ul>
+        <h4>Decision</h4>
+        <p>Restructure the MP roadmap to <b>determinism-first ordering with per-mode netcode on top</b>. The new
+        sequence is M1 pre-determinism cleanup &rarr; M2 LuaJIT deterministic iteration &rarr; M3 fixed-point atom
+        physics &rarr; M4 multi-threaded sim with deterministic merge &rarr; M5 cross-platform / WASM canonical
+        anchor &rarr; M6 server spine + GNS transport &rarr; <b>M7 online co-op SHIP</b> (first user-visible)
+        &rarr; M8 LAN lockstep SHIP &rarr; M9 GGPO rollback PvP SHIP &rarr; M10 public hosting (stretch). First
+        MP user-visible ship slips from ~M4 to ~M7 (~6 months); in exchange the performance ceiling on actors,
+        physics, and terrain destruction becomes <b>uncapped</b> (every client runs the full multi-threaded sim
+        in parallel), four MP modes ship instead of two, and the determinism foundation is permanent.</p>
+        <p>The ADR-015 <i>architectural</i> commitment stands &mdash; per-mode netcode (lockstep / prediction /
+        rollback) on a deterministic core. ADR-016 changes the <i>order</i> in which the foundation under that
+        architecture is built.</p>
+        <h4>Consequences</h4>
+        <p>M1&ndash;M5 are foundation work (no user-visible MP); M6 enables; M7&ndash;M9 ship MP modes;
+        M10 is stretch. Every M1&ndash;M5 milestone delivers single-player value (better stability, deterministic
+        replays, fixed-point terrain perf, 4&ndash;8&times; sim throughput from threading, WASM web build), so the
+        pivot is <b>value-positive at every stage</b> even if MP work pauses. Pivot is reversible at any milestone
+        &mdash; M1 work alone strengthens single-player; original ADR-015 ordering remains a viable fallback. See
+        <a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;10</a> for the full reasoning.</p>
+      </div>
+    </section>
+
+    <!-- ADR-017 -->
+    <section class="adr" id="adr-017">
+      <div class="adr-head">
+        <span class="adr-id">ADR-017</span>
+        <span class="adr-title">Engine modernization runs as parallel side tracks alongside MP</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-18</p>
+        <h4>Context</h4>
+        <p>The MP main spine (M1&ndash;M10, per ADR-016) handles the determinism-critical engine work directly:
+        the LuaJIT patch (M2), fixed-point atom physics (M3), deterministic threaded sim (M4), WASM anchor (M5),
+        GNS transport (M6). But several engine modernization concerns sit <b>outside</b> the determinism island
+        and don't gate MP shipping: render-frame-rate decoupling, the Camera/RenderBatch abstraction,
+        GPU-accelerated cosmetic systems, comprehensive CLI test surface. Each of these has a substantial
+        upstream branch (often dormant) that's worth mining: <code>interpolated-render-redux</code> (Causeless,
+        active), <code>gpu-renderer</code> (HeliumAnt, dormant), <code>box2d-emscripten</code> (WASM half,
+        dormant), the original <code>interpolated-render</code> (abandoned but useful reference).</p>
+        <h4>Decision</h4>
+        <p>Run engine modernization as <b>five parallel side tracks</b> alongside the MP main spine, each with
+        explicit dependencies and "pairs with" milestones:</p>
+        <ul>
+          <li><b>T-RENDER-INTERP</b> &mdash; collaborate with Causeless on <code>interpolated-render-redux</code>.
+          M1 Block C (stable MOID iteration) overlaps with his MOID-stability work; coordinate to avoid
+          double-effort.</li>
+          <li><b>T-RENDER-GPU</b> &mdash; harvest Camera + RenderBatch from HeliumAnt's <code>gpu-renderer</code>
+          branch selectively (no wholesale merge; HeliumAnt is dormant).</li>
+          <li><b>T-WASM-BUILD</b> &mdash; fused into M5; harvest the WASM build scaffold from
+          <code>box2d-emscripten</code> (drop the Box2D physics half per ADR-005).</li>
+          <li><b>T-COSMETIC</b> &mdash; GPU offload of particle / post-process / audio mixing systems; lands
+          alongside M7 so first MP ship benefits from the CPU savings.</li>
+          <li><b>T-VALIDATION</b> &mdash; <code>cccp-ctl</code> CLI test surface modeled on
+          <a href="https://github.com/Madreag/corefall/blob/main/docs/plan/spec/network-sync-rollback-and-determinism.md">corefall's cfctl spec</a>;
+          grows incrementally with each MP milestone.</li>
+        </ul>
+        <p>None of these side tracks gate MP. If a side track stalls, MP continues. Each side track delivers
+        independent single-player value when it lands. Full plan, timeline visualization, what-ships-when table,
+        risk/fallback paths, and coordination strategy live in <a href="engine.html">engine.html</a>.</p>
+        <h4>Consequences</h4>
+        <p>The engineering effort can run multiple workstreams in parallel without blocking. MP main spine is
+        well-defined (M1&ndash;M10 per ADR-016). Side tracks can be picked up by other contributors (or AI agents)
+        when the MP main spine is between deliverables. Causeless's active branch is treated as a coordination
+        opportunity (talk before duplicating); HeliumAnt's dormant branch is a fixed artifact to mine. ADR-005
+        (no Box2D physics switch) is honored &mdash; only the WASM half of <code>box2d-emscripten</code> is
+        harvested.</p>
+      </div>
+    </section>
+
     <h2 id="open-questions">Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
-        <li><b>Tier-3 sequencing:</b> if/when we take on an <span class="tag tag-arch">[ARCH]</span> item, which
-        first &mdash; and does the palette decouple (<code>T3-02</code>) justify its risk?</li>
+        <li><b>MP M1 Block C harvest scope:</b> how much of Causeless's <code>interpolated-render-redux</code>
+        MOID-stability work cherry-picks cleanly vs needs rewriting for our determinism CI gate? Decided during
+        execution; see <code>D:\Projects\M1_PLAN.md</code> Block C.</li>
+        <li><b>Transport library lock-in (MP M6):</b> GNS or ENet? Current lean is GNS for the feature set
+        (encryption, NAT, lanes, Steam Datagram Relay when on Steam). Re-confirm before opening the M6 PR.</li>
+        <li><b>Mod-determinism disclosure timing:</b> post the contract on the CCCP forum / Discord <i>after</i>
+        M2 closes (LuaJIT patch invisible to mods) and <i>again</i> after M4 closes (Lua collision callback shift to
+        end-of-tick &mdash; the one mod-visible change). One-way disclosure, not negotiation, per ADR-017.</li>
+        <li><b>T-RENDER-GPU pickup timing:</b> start the harvest from HeliumAnt's <code>gpu-renderer</code> when
+        MP M5 closes (capacity-permitting) or run it in parallel earlier? Side track per ADR-017; flexible by
+        contributor capacity.</li>
+        <li><b>Tier-3 sequencing:</b> if/when we take on an <span class="tag tag-arch">[ARCH]</span> item beyond
+        the MP critical path, which first &mdash; and does the palette decouple (<code>T3-02</code>) justify its
+        risk?</li>
         <li><b>FMOD:</b> keep the proprietary FMOD blob, or move to an open-source audio engine for a fully-FOSS build?</li>
       </ul>
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 15 decisions recorded &middot; updated 2026-05-17 &middot; ADRs are append-only.
+      Decision log &middot; 17 decisions recorded &middot; updated 2026-05-18 &middot; ADRs are append-only.
     </div>
   </main>
 

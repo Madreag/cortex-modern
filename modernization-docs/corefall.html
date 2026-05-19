@@ -48,6 +48,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -153,7 +154,7 @@
 
     <div class="page-foot">
       Built from a full read of Corefall's milestone specs (<code>specs/active</code> + <code>specs/done</code>,
-      M1&ndash;M49) and a survey of the Cortex Command engine source &middot; updated 2026-05-17 &middot; funnel:
+      M1&ndash;M49) and a survey of the Cortex Command engine source &middot; updated 2026-05-18 &middot; funnel:
       49 milestones &rarr; ~440 individual systems &rarr; 145 portable ideas below.
     </div>
   </main>
@@ -443,7 +444,7 @@ const CROSS = [
   { a:"mp", s:"Endgame modes (wave survival, boss rush)", t:["MOD"],
     d:"Wave survival, boss rush, time attack and similar modes, each a GAScripted activity with its own win logic. Standard CC modding practice." },
   { a:"mp", s:"State-replication multiplayer rework", t:["ARCH"],
-    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. A modern state-replication rework with client prediction is now cortex-modern's committed Multiplayer flagship (ADR-015) -- staged from a Steam Remote Play stopgap through co-op to rollback PvP; see the Multiplayer page." },
+    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. The replacement is cortex-modern's committed Multiplayer flagship (ADR-015 architecture, ADR-016 sequencing): per-mode netcode on a fully-deterministic core. Ten milestones M0-M10 — M1-M5 deterministic foundation, M6 server spine + GNS, M7 online co-op SHIP, M8 LAN lockstep, M9 PvP rollback, M10 public hosting. See the Multiplayer page." },
   { a:"mp", s:"Mod hash sync + lobby discovery", t:["CODE"],
     d:"Clients exchange mod content hashes before a match and a lobby browser filters by mod compatibility. CC Lua cannot hash files, so this is bounded C++ infrastructure." },
   { a:"mp", s:"Matchmaking + ranks + tournaments", t:["ARCH","CODE"],
