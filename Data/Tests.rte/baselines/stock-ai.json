@@ -1,0 +1,282 @@
+{
+  "notes": "Pre-AI-overhaul baseline against stock CC AI. Each scenario was run once via Cortex Command.exe -scenario AI-NN with the scenario's own Lua-side max_ticks (1800 = 30 sim sec default). 3/12 PASS (AI-03 dig, AI-04 stuck-recovery, AI-08 squad spacing); 9/12 FAIL — those failures are the targets AI M1-M6 work moves. Diff a future run against this baseline to grade the AI overhaul's progress: every metric in numeric/event_counts that improves measurably is a win.",
+  "cli_args": "-scenario AI-NN -out trust-report-AI-NN.json (no -max-ticks; each scenario's own cap applies)",
+  "generated_at": "2026-05-18T18:44:05Z",
+  "build_config": "Final|x64",
+  "runs": {
+    "AI-07": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 7420,
+        "decision/behaviour_selected": 35,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 15,
+        "decision/target_lost": 10,
+        "locomotion/behaviour_selected": 20,
+        "reflex/alarm_scan": 5433,
+        "reflex/behaviour_selected": 19
+      },
+      "final_total_hash": "8b89288a633485261978539016fe44194a09b0d90f18fa1298f56c681e32b0b5",
+      "numeric": {
+        "__wall_seconds": 9.9840219,
+        "displacement_x": 5.18719482421875,
+        "final_tick": 600.0,
+        "hit_max_ticks": 1.0
+      },
+      "passed": false
+    },
+    "AI-08": {
+      "ticks": 1802,
+      "event_counts": {
+        "decision/ai_tick": 7889,
+        "decision/behaviour_selected": 43,
+        "decision/mode_changed": 13,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 18,
+        "decision/target_lost": 11,
+        "locomotion/behaviour_selected": 26,
+        "reflex/alarm_scan": 5182,
+        "reflex/behaviour_selected": 36
+      },
+      "final_total_hash": "e022c2e13ec22828c66891178d0109f5cec97f5ebaff786b945b46cc5a117505",
+      "numeric": {
+        "__wall_seconds": 7.984245400000001,
+        "final_tick": 480.0,
+        "squad_mean_dist": 145.55066704002073,
+        "tight_ratio": 0.5714285714285714,
+        "tight_seconds": 4.0,
+        "total_seconds": 7.0
+      },
+      "passed": true
+    },
+    "AI-11": {
+      "ticks": 1804,
+      "event_counts": {
+        "decision/ai_tick": 7215,
+        "decision/behaviour_selected": 39,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 21,
+        "decision/target_lost": 16,
+        "locomotion/behaviour_selected": 17,
+        "reflex/alarm_scan": 4875,
+        "reflex/behaviour_selected": 22
+      },
+      "final_total_hash": "6e91e254946e32632282513c16794fa826790f6137914b3ce7058b4454745303",
+      "numeric": {
+        "__wall_seconds": 5.9840814,
+        "ai_mode": 3.0,
+        "final_tick": 360.0,
+        "retreat_dx": -1247.6101989746094
+      },
+      "passed": false
+    },
+    "AI-06": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 6687,
+        "decision/behaviour_selected": 41,
+        "decision/mode_changed": 10,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 21,
+        "decision/target_lost": 14,
+        "locomotion/behaviour_selected": 35,
+        "reflex/alarm_scan": 3786,
+        "reflex/behaviour_selected": 45
+      },
+      "final_total_hash": "e8aa0ae2d344e11b582639b09852145695b94ff93e4581dc136dd2d68f1f8cf0",
+      "numeric": {
+        "__wall_seconds": 7.300954000000001,
+        "final_tick": 439.0,
+        "rescuer_distance": 555.4003688340387
+      },
+      "passed": false
+    },
+    "AI-01": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 7591,
+        "decision/behaviour_selected": 33,
+        "decision/mode_changed": 10,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 12,
+        "decision/target_lost": 9,
+        "locomotion/behaviour_selected": 18,
+        "reflex/alarm_scan": 5943,
+        "reflex/behaviour_selected": 27
+      },
+      "final_total_hash": "7e182f542ff1070fabb006723853e880f8971459adb1364c34146640277c104e",
+      "numeric": {
+        "__wall_seconds": 14.3671924,
+        "defender_alive_count": 0.0,
+        "defender_start_count": 2.0,
+        "final_tick": 863.0
+      },
+      "passed": false
+    },
+    "AI-09": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 7009,
+        "decision/behaviour_selected": 31,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 13,
+        "decision/target_lost": 9,
+        "locomotion/behaviour_selected": 14,
+        "reflex/alarm_scan": 5882,
+        "reflex/behaviour_selected": 25
+      },
+      "final_total_hash": "845538910af1c7629615bbf84da2a4f3b43fd824c93fe642461254f75251a5e7",
+      "numeric": {
+        "__wall_seconds": 9.9839128,
+        "final_tick": 600.0,
+        "health": -0.6999959945678711,
+        "hit_max_ticks": 1.0
+      },
+      "passed": false
+    },
+    "AI-05": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 7071,
+        "decision/behaviour_selected": 32,
+        "decision/mode_changed": 9,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 13,
+        "decision/target_lost": 8,
+        "locomotion/behaviour_selected": 11,
+        "reflex/alarm_scan": 5350,
+        "reflex/behaviour_selected": 25
+      },
+      "final_total_hash": "",
+      "numeric": {
+        "hit_max_ticks": 1.0
+      },
+      "passed": false
+    },
+    "AI-10": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 7417,
+        "decision/behaviour_selected": 43,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 17,
+        "decision/target_lost": 13,
+        "locomotion/behaviour_selected": 22,
+        "reflex/alarm_scan": 5923,
+        "reflex/behaviour_selected": 75
+      },
+      "final_total_hash": "ec7410d52dbd63e41fc46c1180400f5bf79b9a43cebb105e8e1b8e1811c75164",
+      "numeric": {
+        "__wall_seconds": 9.467171500000001,
+        "final_tick": 569.0,
+        "has_weapon": 0.0
+      },
+      "passed": false
+    },
+    "AI-12": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 7414,
+        "decision/behaviour_selected": 37,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 21,
+        "decision/target_lost": 16,
+        "decision/terrain_carved": 1,
+        "locomotion/behaviour_selected": 18,
+        "reflex/alarm_scan": 5056,
+        "reflex/behaviour_selected": 33
+      },
+      "final_total_hash": "59aa0fecb2d6c66c376fc1529ebd05409441cc6b75c08d65d0ebcab6162d4394",
+      "numeric": {
+        "__wall_seconds": 7.817211400000001,
+        "actor_x": 1219.095458984375,
+        "carve_tick": 300.0,
+        "final_tick": 470.0
+      },
+      "passed": false
+    },
+    "AI-02": {
+      "ticks": 1804,
+      "event_counts": {
+        "decision/ai_tick": 7004,
+        "decision/behaviour_selected": 27,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 13,
+        "decision/target_lost": 8,
+        "locomotion/behaviour_selected": 18,
+        "reflex/alarm_scan": 6182,
+        "reflex/behaviour_selected": 19
+      },
+      "final_total_hash": "28f8b129484111b74c1574ea852c4275f3181e448044399aa2ec9f7de8c219e6",
+      "numeric": {
+        "__wall_seconds": 8.6673366,
+        "attacker_dx": 197.3306884765625,
+        "final_tick": 521.0
+      },
+      "passed": false
+    },
+    "AI-04": {
+      "ticks": 1803,
+      "event_counts": {
+        "decision/ai_tick": 6992,
+        "decision/behaviour_selected": 39,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 22,
+        "decision/target_lost": 19,
+        "locomotion/behaviour_selected": 20,
+        "reflex/alarm_scan": 5748,
+        "reflex/behaviour_selected": 32
+      },
+      "final_total_hash": "3a62fc65960c645d944fc6004f50337bd1a81f3b242199adf2dc627b18aa8844",
+      "numeric": {
+        "__wall_seconds": 7.683796600000001,
+        "final_tick": 462.0,
+        "moving_ratio": 1.0,
+        "moving_seconds": 7.0,
+        "total_seconds": 7.0
+      },
+      "passed": true
+    },
+    "AI-03": {
+      "ticks": 1804,
+      "event_counts": {
+        "decision/ai_tick": 7895,
+        "decision/behaviour_selected": 52,
+        "decision/mode_changed": 9,
+        "decision/scenario_end": 1,
+        "decision/scenario_start": 1,
+        "decision/target_acquired": 31,
+        "decision/target_lost": 28,
+        "locomotion/behaviour_selected": 25,
+        "reflex/alarm_scan": 5550,
+        "reflex/behaviour_selected": 59
+      },
+      "final_total_hash": "e4805c7302ca51825bdaf281c7bc64efd3d5c1dbd933997a81222e7b61b32820",
+      "numeric": {
+        "__wall_seconds": 29.983453100000002,
+        "digger_dy": 420.72332763671875,
+        "final_tick": 1800.0,
+        "hit_max_ticks": 1.0
+      },
+      "passed": true
+    }
+  },
+  "suite_version": "M0"
+}
