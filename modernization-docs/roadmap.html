@@ -28,6 +28,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -130,15 +131,19 @@
     <h2><span class="tier tier-2">TIER 2</span> &nbsp; Medium &mdash; bounded, high value</h2>
 
     <div class="card">
-      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-01 &nbsp; Render interpolation</h3>
+      <h3><span class="tag tag-code">[CODE]</span> &nbsp;T2-01 &nbsp; Render interpolation &mdash; now T-RENDER-INTERP side track</h3>
       <p class="small">Store previous transform, lerp by <code>accumulator / deltaTime</code> at draw time. Kills
       motion stutter when refresh &ne; 60&nbsp;Hz. <code>m_PrevPos</code> already exists, and HeliumAnt's renderer
       work made the draw phase near-free. Scope it to <b>single-threaded</b> interpolation &mdash;
-      <code>interpolated-render-redux</code> had exactly this premise (interpolation without the thread split that
-      sank the original) but barely started; mine the original <code>interpolated-render</code> for the lerp and
-      teleport/wrap code. Per the upstream lead the real difficulty is making <b>input handling async</b> &mdash;
-      inputs must be processed at the display framerate independent of the sim-tick rate.</p>
-      <p class="small muted">Effort: medium &middot; Risk: medium &mdash; thread an alpha through every <code>Draw</code>, handle teleports/wrapping, and design the async-input model</p>
+      <code>interpolated-render-redux</code> has the right premise (interpolation without the thread split that sank
+      the original) and as of 2026-05-17 Causeless committed <code>"Basic MO interp"</code> and
+      <code>"Ensure MOIDs are always up-to-date"</code> &mdash; substantive starting points to harvest from. Also
+      mine the abandoned original <code>interpolated-render</code> for the lerp primitives + teleport/wrap fixes
+      it ships. The real difficulty per upstream review is making <b>input handling async</b> &mdash; inputs
+      processed at display framerate independent of sim-tick rate.</p>
+      <p class="small muted">Promoted to <b>T-RENDER-INTERP side track</b> in the engine modernization plan
+      (<a href="engine.html#tracks">engine.html</a>); pairs with MP M3&ndash;M5. Harvest from upstream branches at
+      full speed per <a href="decisions.html">ADR-017</a> &mdash; no waiting on upstream authors.</p>
     </div>
     <div class="card">
       <h3><span class="tag tag-dep">[DEP]</span> &nbsp;T2-02 &nbsp; luabind &rarr; sol2/sol3</h3>
@@ -199,13 +204,20 @@
     </div>
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Multiplayer &mdash; the networked-play flagship</h3>
-      <p class="small">Reopened by <a href="decisions.html">ADR-013</a>, now a <b>committed flagship</b>
-      (<a href="decisions.html">ADR-015</a>): <b>server-authoritative state replication, staged</b>. A Steam Remote
-      Play stopgap ships immediately; co-op is built via state replication with terrain sent as semantic commands
-      over a determinism island (M1&ndash;M4); the island then grows whole-tick toward rollback PvP (M5&ndash;M6).
-      The committed plan &mdash; seven milestones (M0&ndash;M6) with file touch-points, the engine work, and the
-      automated sync harness &mdash; is the dedicated <a href="multiplayer.html">Multiplayer</a> page.</p>
-      <p class="small muted">Status: committed plan &mdash; see the <a href="multiplayer.html">Multiplayer</a> page &amp; <a href="decisions.html">ADR-015</a></p>
+      <p class="small">Reopened by <a href="decisions.html">ADR-013</a>, committed as a flagship by
+      <a href="decisions.html">ADR-015</a>, and sequencing-pivoted by <a href="decisions.html">ADR-016</a> on
+      2026-05-18: <b>per-mode netcode on a fully deterministic core</b>. M0 observability is shipped; M1&ndash;M5
+      build the deterministic foundation (RNG split &rarr; LuaJIT patch &rarr; fixed-point atom physics &rarr;
+      multi-threaded sim &rarr; cross-platform/WASM anchor); M6 ships the server spine + GNS transport;
+      <b>M7 ships online co-op</b> (first MP user-visible); M8 LAN lockstep; M9 GGPO rollback PvP; M10 public
+      hosting (stretch). Ten milestones M0&ndash;M10. <i>No Remote Play stopgap</i> (rejected per user direction
+      2026-05). The committed plan &mdash; file touch-points, engine work, side-track interweaving, automated sync
+      harness &mdash; is on the dedicated <a href="multiplayer.html">Multiplayer</a> page; the engine work
+      interweaving (parallel side tracks T-RENDER-INTERP / T-RENDER-GPU / T-WASM-BUILD / T-COSMETIC /
+      T-VALIDATION) is on the <a href="engine.html">Engine</a> page.</p>
+      <p class="small muted">Status: committed plan &mdash; see the <a href="multiplayer.html">Multiplayer</a>
+      page, the <a href="engine.html">Engine</a> page, <a href="decisions.html">ADR-015</a> +
+      <a href="decisions.html">ADR-016</a> + <a href="decisions.html">ADR-017</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-05 &nbsp; Retire Allegro 4</h3>
@@ -252,7 +264,7 @@
     </div>
 
     <div class="page-foot">
-      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-05-17 &middot;
+      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-05-18 &middot;
       track execution in the <a href="tracker.html">Work Tracker</a>.
     </div>
   </main>

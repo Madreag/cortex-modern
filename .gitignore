@@ -107,3 +107,8 @@ LogConsole.txt
 Console.dump.log
 Console.input.log
 imgui.ini
+
+# Claude Code / AI assistant local files (not for upstream)
+CLAUDE.md
+.claude/
+*.pr-body.md

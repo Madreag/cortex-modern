@@ -28,6 +28,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link active" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -74,7 +75,7 @@
     <p class="small muted" id="emptyMsg" style="display:none">No items match the current filter.</p>
 
     <div class="page-foot">
-      Tracker rendered client-side from inline data &middot; updated 2026-05-17 &middot;
+      Tracker rendered client-side from inline data &middot; updated 2026-05-18 &middot;
       see the <a href="roadmap.html">Roadmap</a> for the full rationale behind each item.
     </div>
   </main>
@@ -93,13 +94,14 @@ const WORK_ITEMS = [
   { id:'T0-01', title:'Fork upstream as cortex-modern',           sub:'Setup',          tags:['BUILD'],        tier:0, status:'done',     notes:'Fork of cortex-command-community/Cortex-Command-Community-Project.' },
   { id:'T0-02', title:'Create modernization-effort branch', sub:'Setup',          tags:['BUILD'],        tier:0, status:'done',     notes:'Cut from development @ 41e6b7010.' },
   { id:'T0-03', title:'Create modernization-docs wiki',           sub:'Docs',           tags:['BUILD'],        tier:0, status:'done',     notes:'This site. Living plan + decision log.' },
+  { id:'T0-04', title:'MP M0 — observability harness',            sub:'Networking/AI',  tags:['CODE'],         tier:0, status:'done',     notes:'Shared M0 across MP + AI flagships. Ships SimChecksum (BLAKE3 per-tick), NetworkSimulator stub, ScenarioRunner. Merged to modernization-effort 2026-05-18. See M0_STATUS.md, M0_PLAN.md.' },
 
   { id:'T1-01', title:'Bump security-sensitive dependencies',     sub:'Build / Deps',   tags:['DEP'],          tier:1, status:'todo',     notes:'libpng, zlib-ng, LZ4, minizip-ng, LuaJIT (CVE-2024-25176).' },
   { id:'T1-02', title:'Gamepad rumble / haptics',                 sub:'Input',          tags:['CODE'],         tier:1, status:'todo',     notes:'SDL_RumbleGamepad into UInputMan; expose to Lua.' },
   { id:'T1-03', title:'Multiplayer code & RakNet — absorbed',      sub:'Networking',     tags:['DEP'],          tier:1, status:'blocked',  notes:'Absorbed into the Multiplayer flagship (ADR-015): the removed networking code stays as reference; flagship milestone M1 rebuilds the server spine and retires RakNet.' },
   { id:'T1-04', title:'Delete dead GL code',                      sub:'Rendering',      tags:['CODE'],         tier:1, status:'todo',     notes:'Stubbed CompileShader, commented m_Blit8, vestigial constants.' },
   { id:'T1-05', title:'Audio terrain occlusion',                  sub:'Audio',          tags:['CODE'],         tier:1, status:'todo',     notes:'Strength-ray driven FMOD lowpass. Big immersion win.' },
-  { id:'T1-06', title:'AI overhaul — committed flagship',          sub:'AI',             tags:['MOD','CODE'], tier:1, status:'todo',  notes:'Superseded as a standalone item -- promoted to cortex-modern flagship (ADR-014). Locomotion-first AI overhaul: fix path-following and stuck-recovery first, then squads, perception, orders; mostly Lua. The AI page has the M0-M6 milestone plan.' },
+  { id:'T1-06', title:'AI overhaul — committed flagship',          sub:'AI',             tags:['MOD','CODE'], tier:1, status:'doing',  notes:'Promoted to cortex-modern flagship (ADR-014). Locomotion-first AI overhaul: fix path-following and stuck-recovery first, then squads, perception, orders; mostly Lua. M0 shipped 2026-05-18 (shared with MP M0; see T0-04). M1-M6 deferred pending MP fast-track. See the AI page.' },
   { id:'T1-07', title:'Build reproducibility fixes',              sub:'Build',          tags:['BUILD'],        tier:1, status:'todo',     notes:'Pin PlatformToolset=v143; fix stale SDL2 in CI.' },
   { id:'T1-08', title:'Campaign overhaul — committed flagship',    sub:'Campaign',       tags:['MOD','CODE'], tier:1, status:'todo',  notes:'Committed flagship (ADR-012): "The Frontier" -- Conquest rebuilt into a strategic war map plus a persistent mercenary-company campaign that finishes the story the base game left unfinished. The Campaign page has the M0-M6 milestone plan.' },
 
@@ -112,8 +114,15 @@ const WORK_ITEMS = [
   { id:'T3-01', title:'Multithread the physics travel loop',      sub:'Physics',        tags:['ARCH'],         tier:3, status:'todo',     notes:'The performance ceiling. Parallelize the atom-travel loop against a read-only terrain snapshot -- not a Box2D switch (ADR-005).' },
   { id:'T3-02', title:'Decouple material map from palette index', sub:'Rendering',      tags:['ARCH'],         tier:3, status:'todo',     notes:'The keystone. Unblocks 32-bit colour, >256 materials, retiring Allegro.' },
   { id:'T3-03', title:'Rebuild BuyMenu / editors / Metagame UI',  sub:'UI / UX',        tags:['ARCH'],         tier:3, status:'todo',     notes:'Off the legacy Allegro GUIControlManager onto a modern toolkit.' },
-  { id:'T3-04', title:'Bring networked multiplayer back',         sub:'Networking',     tags:['ARCH'],         tier:3, status:'todo',     notes:'Committed flagship (ADR-015): server-authoritative state replication, staged. The Multiplayer page has the M0-M6 milestone plan -- Remote Play stopgap, co-op via state replication, then rollback PvP.' },
+  { id:'T3-04', title:'Bring networked multiplayer back',         sub:'Networking',     tags:['ARCH'],         tier:3, status:'doing',    notes:'Committed flagship (ADR-015 architecture; ADR-016 sequencing). Per-mode netcode on a deterministic core. The Multiplayer page has the M0-M10 plan: M0 observability (DONE), M1-M5 deterministic foundation, M6 server spine + GNS, M7 online co-op SHIP, M8 LAN lockstep, M9 PvP rollback, M10 public hosting. Engine work interleaved as parallel side tracks (engine.html). No Remote Play stopgap.' },
   { id:'T3-05', title:'Retire Allegro 4',                         sub:'Rendering',      tags:['ARCH'],         tier:3, status:'blocked',  notes:'Blocked on T3-02. ~56 files / 477 call sites.' },
+
+  // ===== Engine modernization side tracks (ADR-017) — parallel to MP main spine =====
+  { id:'TR-INTERP', title:'T-RENDER-INTERP — render frame-rate decoupling',    sub:'Rendering',    tags:['CODE'],       tier:2, status:'todo',     notes:'Side track per ADR-017. Render decoupled from sim tick rate (144Hz visuals on 60Hz sim). Harvest from Causeless\'s active interpolated-render-redux + abandoned interpolated-render. Pairs with MP M3-M5. Full plan: engine.html.' },
+  { id:'TR-GPU',    title:'T-RENDER-GPU — Camera/RenderBatch abstraction',     sub:'Rendering',    tags:['CODE'],       tier:3, status:'todo',     notes:'Side track per ADR-017. Harvest selectively from HeliumAnt\'s dormant gpu-renderer (60-70% done). Mine Camera + RenderBatch + Shader; finish entity-level migration ourselves. Pairs with MP M5-M6. Full plan: engine.html.' },
+  { id:'TR-WASM',   title:'T-WASM-BUILD — WebAssembly build (= MP M5 fused)',  sub:'Build',        tags:['BUILD'],      tier:2, status:'todo',     notes:'Side track per ADR-017. Cross-platform determinism anchor + CC playable in browser. Harvest WASM scaffold from box2d-emscripten (drop Box2D physics half per ADR-005). Fused into MP M5. Full plan: engine.html.' },
+  { id:'TR-COSMETIC', title:'T-COSMETIC — GPU offload of cosmetic systems',    sub:'Rendering',    tags:['CODE'],       tier:2, status:'todo',     notes:'Side track per ADR-017. Move particles, screen flashes, post-processing, audio mixing to GPU compute/async. Frees CPU for sim — multiplies actor ceiling. Depends on TR-GPU. Lands alongside MP M7. Full plan: engine.html.' },
+  { id:'TR-VALID',  title:'T-VALIDATION — cccp-ctl CLI test surface',          sub:'CI/Testing',   tags:['CODE','BUILD'], tier:1, status:'todo',  notes:'Side track per ADR-017. cccp-ctl test sync-drift / latency-injection / rollback-burst / replay-determinism / cross-platform-determinism — modeled on corefall\'s cfctl spec. Grows incrementally with each MP milestone. Full plan: engine.html.' },
 ];
 
 const STATUS_META = {

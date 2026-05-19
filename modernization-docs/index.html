@@ -9,6 +9,51 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M16 5L25.5 10.5L25.5 21.5L16 27L6.5 21.5L6.5 10.5Z' fill='none' stroke='%23e9a23b' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%23e9a23b'/%3E%3C/svg%3E">
 <title>Overview — Cortex-Modern Modernization Wiki</title>
 <link rel="stylesheet" href="assets/style.css">
+<style>
+  /* page-local: index active-plan overview */
+  .active-banner { background:linear-gradient(135deg, rgba(168,85,247,.10), rgba(69,196,104,.10));
+    border:1px solid var(--accent); border-radius:9px; padding:14px 18px; margin:18px 0; }
+  .active-banner-headline { font-family:var(--display); font-weight:700; font-size:16px;
+    color:var(--text-bright); margin-bottom:10px; }
+  .active-banner-stats { display:flex; flex-wrap:wrap; gap:18px; font-size:12.8px; color:var(--text-dim); }
+  .active-banner-stats b { color:var(--accent); font-size:15px; font-family:var(--mono); }
+
+  /* timeline (reused from engine.html style) */
+  .timeline { background:var(--bg-elev); border:1px solid var(--border); border-radius:9px;
+    padding:18px 22px; margin:14px 0; overflow-x:auto; }
+  .timeline-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; font-family:var(--mono); font-size:11.5px; }
+  .timeline-label { flex:0 0 165px; color:var(--text-dim); font-weight:600; }
+  .timeline-cells { display:flex; gap:2px; }
+  .tc { flex:0 0 60px; height:24px; display:flex; align-items:center; justify-content:center;
+    border-radius:3px; font-size:10px; }
+  .tc-empty { background:transparent; border:1px dashed var(--border); }
+  .tc-fdn { background:rgba(168,85,247,.25); border:1px solid var(--purple); color:#dcc4f5; }
+  .tc-enable { background:rgba(233,162,59,.25); border:1px solid var(--accent); color:#f5dbb6; }
+  .tc-ship { background:rgba(69,196,104,.25); border:1px solid var(--green); color:#bce8c8; }
+  .tc-stretch { background:rgba(90,167,255,.25); border:1px solid var(--blue); color:#bcd5f5; }
+  .tc-track { background:rgba(245,180,201,.18); border:1px solid #c87399; color:#f0bccc; }
+  .tc-done { background:rgba(69,196,104,.55); border:1px solid var(--green); color:#fff; font-weight:600; }
+  .tc-current { background:rgba(233,162,59,.55); border:1px solid var(--accent); color:#fff; font-weight:600; box-shadow:0 0 8px rgba(233,162,59,.4); }
+
+  /* phase labels strip — aligned with timeline cells (gap:2px, cell=60px) */
+  .phase-bar { display:flex; gap:2px; margin:-6px 0 18px; padding-left:171px; font-family:var(--mono); font-size:9px;
+    text-transform:uppercase; letter-spacing:1.4px; }
+  .phase-bar > div { padding:3px 4px; border-radius:3px; text-align:center; line-height:1.3;
+    border-top:none; border-radius:0 0 3px 3px; }
+  .pb-done { background:rgba(69,196,104,.35); color:#fff; border:1px solid var(--green); flex:0 0 60px; }
+  .pb-fdn { background:rgba(168,85,247,.20); color:#dcc4f5; border:1px solid var(--purple); flex:0 0 308px; }
+  .pb-enable { background:rgba(233,162,59,.20); color:#f5dbb6; border:1px solid var(--accent); flex:0 0 60px; }
+  .pb-ship { background:rgba(69,196,104,.20); color:#bce8c8; border:1px solid var(--green); flex:0 0 184px; }
+  .pb-stretch { background:rgba(90,167,255,.20); color:#bcd5f5; border:1px solid var(--blue); flex:0 0 60px; }
+
+  /* flagship status table */
+  .flagship-status td:first-child { font-weight:700; color:var(--text-bright); }
+  .flagship-status td:nth-child(2) { font-family:var(--mono); font-size:11px; color:var(--text-dim); }
+  .flagship-status .status-cell { font-family:var(--mono); font-size:11px; }
+  .flagship-status .status-cell.s-active { color:var(--accent); font-weight:600; }
+  .flagship-status .status-cell.s-paused { color:var(--text-dim); }
+  .flagship-status .status-cell.s-done { color:var(--green); font-weight:600; }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -28,6 +73,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link" href="branches.html">Upstream Branches</a>
@@ -60,11 +106,168 @@
       <a href="analysis.html">Technical Analysis</a>.</p>
     </div>
 
+    <!-- ============ ACTIVE PLAN OVERVIEW ============ -->
+    <h2 id="active-plan">Active plan &mdash; what's happening now</h2>
+
+    <div class="active-banner">
+      <div class="active-banner-headline">
+        MP M0 (observability harness) shipped 2026-05-18 &mdash; <a href="multiplayer.html">MP M1</a>
+        (pre-determinism cleanup) is the next milestone, ready for execution
+      </div>
+      <div class="active-banner-stats">
+        <div><b>3</b> committed flagships (MP / AI / Campaign)</div>
+        <div><b>5</b> engine side tracks (T-RENDER-INTERP / GPU / WASM / COSMETIC / VALIDATION)</div>
+        <div><b>17</b> ADRs (with ADR-016 + ADR-017 as the 2026-05-18 pivot)</div>
+        <div><b>1 of 10</b> MP milestones shipped</div>
+      </div>
+    </div>
+
+    <h3>Multiplayer roadmap &mdash; the main spine + engine side tracks</h3>
+    <p class="small muted">Each column is one milestone window of work. Foundation (M1&ndash;M5) builds the
+    deterministic core; enabling (M6) bridges to network; shipping (M7&ndash;M9) delivers per-mode netcode
+    (online co-op / LAN lockstep / PvP rollback); stretch (M10) is public hosting at scale. Side tracks run
+    parallel; "co-or" = coordinate-with-upstream harvest, "harv" = harvest branch, "land" = side track delivers,
+    "grow" = incremental. Full plan: <a href="multiplayer.html">Multiplayer</a> + <a href="engine.html">Engine</a>.</p>
+
+    <div class="timeline">
+      <div class="timeline-row"><div class="timeline-label">MP main spine</div><div class="timeline-cells">
+        <div class="tc tc-done">M0&#10003;</div>
+        <div class="tc tc-current">M1</div>
+        <div class="tc tc-fdn">M2</div>
+        <div class="tc tc-fdn">M3</div>
+        <div class="tc tc-fdn">M4</div>
+        <div class="tc tc-fdn">M5</div>
+        <div class="tc tc-enable">M6</div>
+        <div class="tc tc-ship">M7</div>
+        <div class="tc tc-ship">M8</div>
+        <div class="tc tc-ship">M9</div>
+        <div class="tc tc-stretch">M10</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-RENDER-INTERP</div><div class="timeline-cells">
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">land</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-RENDER-GPU</div><div class="timeline-cells">
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-track">audit</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">harv</div>
+        <div class="tc tc-track">migr</div>
+        <div class="tc tc-track">land</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-WASM-BUILD</div><div class="timeline-cells">
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-fdn">=M5</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-COSMETIC</div><div class="timeline-cells">
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-track">start</div>
+        <div class="tc tc-track">land</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-empty">&middot;</div>
+      </div></div>
+      <div class="timeline-row"><div class="timeline-label">T-VALIDATION</div><div class="timeline-cells">
+        <div class="tc tc-empty">&middot;</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+        <div class="tc tc-track">grow</div>
+      </div></div>
+    </div>
+
+    <div class="phase-bar">
+      <div class="pb-done">DONE</div>
+      <div class="pb-fdn">FOUNDATION (M1&ndash;M5)</div>
+      <div class="pb-enable">ENABLE</div>
+      <div class="pb-ship">SHIPPING MP MODES (M7&ndash;M9)</div>
+      <div class="pb-stretch">STRETCH</div>
+    </div>
+
+    <h3>The three flagships</h3>
+    <p class="small muted">All committed via ADRs. MP is the current focus (per the 2026-05 fast-track decision);
+    AI and Campaign are deferred but already on plan.</p>
+    <table class="tbl flagship-status">
+      <thead><tr><th>Flagship</th><th>Plan / ADR</th><th>Status</th><th>Current / next</th><th>Done when</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><a href="multiplayer.html">Multiplayer</a></td>
+          <td>ADR-015 + ADR-016</td>
+          <td class="status-cell s-active">ACTIVE</td>
+          <td>M0 done &middot; M1 next</td>
+          <td>M7 online co-op SHIP (then M8 LAN lockstep, M9 PvP rollback, M10 public hosting)</td>
+        </tr>
+        <tr>
+          <td><a href="ai.html">AI overhaul</a></td>
+          <td>ADR-014</td>
+          <td class="status-cell s-paused">DEFERRED</td>
+          <td>M0 done (shared with MP) &middot; M1 (locomotion) paused for MP fast-track</td>
+          <td>M6 closes &mdash; full locomotion + squad + perception + decision pass; mod corpus stays green</td>
+        </tr>
+        <tr>
+          <td><a href="campaign.html">Campaign</a></td>
+          <td>ADR-012</td>
+          <td class="status-cell s-paused">DEFERRED</td>
+          <td>M0 prep paused for MP fast-track</td>
+          <td>M6 closes &mdash; The Frontier strategic map + persistent company campaign that finishes the unfinished story</td>
+        </tr>
+        <tr>
+          <td><a href="engine.html">Engine modernization</a></td>
+          <td>ADR-017 + 5 side tracks</td>
+          <td class="status-cell s-active">ACTIVE (parallel)</td>
+          <td>Side tracks run alongside MP main spine (see timeline above)</td>
+          <td>All 5 side tracks landed &mdash; render interpolation, GPU abstraction, WASM build, cosmetic offload, cccp-ctl test surface</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-info">
+      <p><b>Where to start as an AI coding agent:</b> read <a href="multiplayer.html">multiplayer.html</a> for
+      the MP architecture, <a href="engine.html">engine.html</a> for the engine work + side tracks, then open
+      <code>D:\Projects\M1_PLAN.md</code> (the M1 execution plan, ultra-detailed, branch harvest references
+      included). M0 closure docs live at <code>D:\Projects\M0_PLAN.md</code> and
+      <code>D:\Projects\M0_STATUS.md</code>. Master handoff: <code>D:\Projects\HANDOFF.md</code>.</p>
+    </div>
+
     <div class="stats">
       <div class="stat"><div class="stat-num">~220K</div><div class="stat-label">C++ LOC analyzed (excl. vendored ImGui)</div></div>
       <div class="stat"><div class="stat-num">5</div><div class="stat-label">Cross-cutting architectural issues</div></div>
-      <div class="stat"><div class="stat-num">21</div><div class="stat-label">Work items tracked</div></div>
-      <div class="stat"><div class="stat-num">15</div><div class="stat-label">Decisions logged</div></div>
+      <div class="stat"><div class="stat-num">28</div><div class="stat-label">Work items tracked</div></div>
+      <div class="stat"><div class="stat-num">17</div><div class="stat-label">Decisions logged</div></div>
       <div class="stat"><div class="stat-num">53K</div><div class="stat-label">Lua LOC — the moddable surface</div></div>
     </div>
 
@@ -120,11 +323,15 @@
       </div></a>
       <a class="qnav" href="multiplayer.html"><div class="card">
         <h3>Multiplayer &rarr;</h3>
-        <p class="small muted">Networked play, rebuilt — now a committed plan (ADR-015): server-authoritative state replication, staged from a Steam Remote Play stopgap through co-op to competitive PvP, with seven milestones and an automated sync harness.</p>
+        <p class="small muted">Networked play, rebuilt — now a committed plan (ADR-015, sequencing pivot ADR-016): per-mode netcode on a fully deterministic core. Ten milestones M0-M10 — determinism foundation (M1-M5), server spine (M6), online co-op SHIP (M7), LAN lockstep (M8), GGPO rollback PvP (M9), public hosting (M10).</p>
       </div></a>
       <a class="qnav" href="ai.html"><div class="card">
         <h3>AI &rarr;</h3>
         <p class="small muted">The flagship — the #1 community complaint, now a committed plan (ADR-014): a locomotion-first overhaul — fix path-execution and stuck-recovery first, then squads, then a perception &amp; decision pass — every milestone gated by an automated test harness.</p>
+      </div></a>
+      <a class="qnav" href="engine.html"><div class="card">
+        <h3>Engine &rarr;</h3>
+        <p class="small muted">Engine modernization master plan (ADR-017) — five subsystems (rendering, threading, physics, Lua, build/platform) and five parallel side tracks (T-RENDER-INTERP / T-RENDER-GPU / T-WASM-BUILD / T-COSMETIC / T-VALIDATION) interleaved with the MP roadmap. Harvest from upstream branches at full speed.</p>
       </div></a>
       <a class="qnav" href="tracker.html"><div class="card">
         <h3>Work Tracker &rarr;</h3>
@@ -164,7 +371,7 @@
     </div>
 
     <div class="page-foot">
-      Cortex-Modern modernization wiki &middot; updated 2026-05-17 &middot; branch <code>modernization-effort</code>
+      Cortex-Modern modernization wiki &middot; updated 2026-05-18 &middot; branch <code>modernization-effort</code>
     </div>
   </main>
 

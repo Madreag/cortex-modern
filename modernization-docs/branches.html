@@ -28,6 +28,7 @@
       <a class="nav-link" href="campaign.html">Campaign</a>
       <a class="nav-link" href="multiplayer.html">Multiplayer</a>
       <a class="nav-link" href="ai.html">AI</a>
+      <a class="nav-link" href="engine.html">Engine</a>
       <a class="nav-link" href="tracker.html">Work Tracker</a>
       <a class="nav-link" href="decisions.html">Decision Log</a>
       <a class="nav-link active" href="branches.html">Upstream Branches</a>
@@ -110,13 +111,13 @@ const BRANCHES = [
     facts:"134 commits · HeliumAnt (solo) · last work 2026-03-28 · ~7 weeks idle",
     what:"A ground-up rewrite of the rendering primitive layer — a new Source/Renderer/ batch renderer (RenderMan / RenderBatch / Camera / Shapes) replacing raylib's immediate-mode API, with camera-driven drawing and an elegant 9-camera scene-wrap model.",
     state:"Roughly 60-70% done. The core renderer, MO sprite GPU draws and scene-wrap work. But the GPU HUD, Activity/GUI rendering and Lua primitive drawing are all empty stubs, raylib is not actually removed (two render APIs coexist), and it paused exactly at the start of the HUD phase. It does NOT decouple the 8-bit palette — it entrenches it, just moving the lookup to a shader.",
-    take:"Track. The most likely future home of CC's real renderer, but not mergeable (stub HUD/GUI, dual draw paths, debug cruft). Don't adopt; don't wait on it for our palette work. The 9-camera wrap model is worth borrowing conceptually." },
+    take:"Harvest. Now the source of the <b>T-RENDER-GPU side track</b> in the engine modernization plan — we mine the Camera + RenderBatch + Shader + GLState abstraction selectively (it's good design) and finish the rest ourselves at our own cadence. HeliumAnt's dormancy is not a blocker; per ADR-017 we proceed without waiting. Credit HeliumAnt in harvested commits." },
 
   { name:"box2d-emscripten", status:"dormant", verdict:"track",
     facts:"51 commits · single author, 100% AI-assisted · last work 2026-04-02 · ~6 weeks idle",
     what:"Two things in one branch: (1) a full WebAssembly/browser port — an Allegro-compat shim, a from-scratch FMOD software mixer, IndexedDB saves — and (2) a Box2D v3.1.0 integration for object-to-object physics.",
     state:"The WASM port is substantially done: the game boots, renders, plays and has audio in a browser, including iOS. The Box2D layer is a 2-day prototype — one of its five phases is dead code, debug draw ships on, it hard-caps at 200 bodies, and the branch does not even build natively (Box2D is mis-scoped to the web build only).",
-    take:"Track the web-port half — genuinely valuable, worth harvesting later onto a clean base. Drop the Box2D-physics half: an unfinished prototype, and the upstream lead advises against a Box2D physics switch outright — CC's atom physics is core to its identity, and Box2D would need extensive CC-specific work to fit." },
+    take:"Harvest the WASM half aggressively — it's the source for MP M5 (cross-platform determinism anchor; see <a href='engine.html#tracks'>T-WASM-BUILD on engine.html</a>) and an independent ship target (CC playable in browser). Mine the Emscripten build glue, the Allegro shim, the FMOD software mixer, the IndexedDB save layer. Drop the Box2D-physics half — explicitly rejected by Causeless per ADR-005 (CC's atom physics is core identity, not swappable). See multiplayer.html for the deep rejection rationale." },
 
   { name:"dynamic-two-stage-fow", status:"stale", verdict:"ref",
     facts:"70 commits · getcetc + Causeless · last work 2026-02-24 · superseded",
@@ -140,13 +141,13 @@ const BRANCHES = [
     facts:"120 commits · 2023–2024 · 923 commits behind · abandoned 2024-09",
     what:"The real (original) render-interpolation effort — a full sim/render decoupling with proper lerp primitives, previous-state snapshots, and teleport / scene-wrap handling.",
     state:"Abandoned. A two-year instability graveyard (commit messages like 'Very broken' and 'Better to be crashy than laggy'); 923 commits behind and unrebasable. It failed on an over-ambitious sim/render thread split.",
-    take:"Reference only. Mine it for the lerp primitives and the teleport/wrap fixes — but scope our T2-01 to single-threaded interpolation and avoid the thread split that sank it." },
+    take:"Harvest for primitives. Mine the lerp + teleport/wrap fixes for T-RENDER-INTERP — but avoid the thread split that sank it (T-RENDER-INTERP is explicitly single-threaded; the new interpolated-render-redux is the upstream home, this one is the parts archive)." },
 
-  { name:"interpolated-render-redux", status:"dormant", verdict:"track",
-    facts:"8 commits · Causeless · last touched 2026-05-17 (development merged in) · 0 behind · kept current",
-    what:"The intended retry of interpolated-render — render interpolation WITHOUT the sim/render thread split that sank the original. The right direction; the real code is still just three minor refactors (a sprite frustum-cull in MOSRotating::Draw, moving the MO draw into SceneMan, a dead-variable removal).",
-    state:"Still barely started — the interpolation itself is unwritten. But Causeless merged development into it on 2026-05-17, keeping it current (0 behind): this is a live, intended branch, not abandoned, and the upstream lead has said he wants to implement render interpolation. Its single-threaded premise is exactly roadmap T2-01.",
-    take:"Track. There is still almost no code to harvest here — mine the original interpolated-render for the lerp and teleport/wrap primitives — but the branch is alive and the direction is right. (An earlier snapshot of this page wrongly marked this 'stale / ignore'.)" },
+  { name:"interpolated-render-redux", status:"active", verdict:"track",
+    facts:"8+ commits · Causeless · actively committing as of 2026-05-17 · 0 behind · live work",
+    what:"The retry of interpolated-render — render interpolation WITHOUT the sim/render thread split that sank the original. As of 2026-05-17 it has the early refactors (sprite frustum-cull in MOSRotating::Draw, MO draw moved into SceneMan, dead-variable removal) AND newly-committed substantive work: `dc2961177 Basic MO interp` (the start of the actual interpolation logic) and `7a2350b80 Ensure MOIDs are always up-to-date` (stable MOID iteration).",
+    state:"Now has real harvestable content. The MOID-stability commit directly addresses MP M1 Block C requirements; the Basic MO interp commit is the foundational interpolation hook. Single-threaded premise is exactly what we want (avoiding the thread split that sank the original).",
+    take:"Harvest. Per ADR-017 (engine modernization side tracks), this branch is the upstream source for <b>T-RENDER-INTERP</b> and the MOID-stability portion of MP M1 Block C. Cherry-pick the relevant commits onto our milestone branches at full speed — no need to coordinate with Causeless. Credit him in commit bodies (no Co-Authored-By trailers per CLAUDE.md). Also mine the abandoned original `interpolated-render` for lerp + teleport/wrap primitives." },
 
   { name:"draw-mos-to-screen", status:"stale", verdict:"ignore",
     facts:"2 commits ahead / 167 behind · Causeless · last work 2025-08-09",
