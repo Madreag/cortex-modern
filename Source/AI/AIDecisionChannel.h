@@ -91,6 +91,25 @@ namespace RTE {
 		/// Returned in tick-descending order.
 		void PeekRecent(int actor_id, size_t maxEvents, std::vector<Event>& out) const;
 
+		/// M1 Block F — feed a vector of (drained-and-sorted) events into a
+		/// SimChecksum subsystem accumulator deterministically.
+		///
+		/// A naive `g_SimChecksum.Update("decisions", events.data(),
+		/// events.size() * sizeof(Event))` leaks two non-deterministic things
+		/// into the hash:
+		///   (1) `Event::sequence` — a process-lifetime atomic counter,
+		///       race-prone across threads.
+		///   (2) `Event::type / chosen / reason` — `StringId`s assigned by
+		///       insertion order into the intern table; the order itself is
+		///       a function of which thread interned which string first, so
+		///       same-content strings can land on different IDs across runs.
+		/// This method serializes each event field-by-field with fixed-width
+		/// types (matches Block F's actors subsystem feed) and resolves the
+		/// StringIds to their content strings, producing a byte stream that's
+		/// byte-identical across same-seed same-OS runs and identical
+		/// modulo-endianness across same-arch OSes.
+		void FeedToChecksum(const std::vector<Event>& events, const char* subsystemName) const;
+
 		/// Set the current sim tick. Called once per tick by the runner.
 		void SetCurrentTick(uint64_t tick) { m_CurrentTick.store(tick, std::memory_order_relaxed); }
 

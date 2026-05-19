@@ -61,13 +61,40 @@ already at Block A — that's the sanity check that the hash trace is plumbed
 correctly. If `tick` ever diverges, the M1Baseline JSON didn't carry the
 expected schema; investigate before chasing real determinism work.
 
-## What "good" looks like (post-Block-F)
+## What "good" looks like (post-Block-F at M1, fully deterministic at M4)
 
 ```text
 [determinism-check] RESULT: MATCHED (600 ticks across 100 runs)
 ```
 
-When Block F lands, the M1 PR is shipped.
+At M1 Block F's landing, the M1Baseline trace is **close** to this — but a
+residual thread-race in `MovableMan::Update`'s `ThreadedUpdate` /
+`SyncedUpdate` paths (Lua-called C++ helpers transitively touching
+`g_SimRNG` from worker threads) keeps the M1Baseline test from MATCHED on
+every single run. Empirically the first divergence has been pushed out from
+tick 1 (Block A baseline) to tick ~16 in roughly 1 of 5 runs.
+
+The Block F changes that bought that improvement:
+  * `actors` + `sim_rng` subsystem feeds (catches the drift directly).
+  * Content-based decisions sort + field-by-field hash (drops the
+    process-lifetime `sequence` atomic and the intern-order-dependent
+    `StringId`s out of the hash bytes).
+  * Wait for the previous frame's see-ray future BEFORE Travel() (closes
+    the most obvious see-ray ↔ sim-thread race).
+  * Snapshot `sim_rng` state inside `MovableMan::Update`, before the next
+    frame's see-ray + MOID-draw futures launch (closes the same-tick race).
+
+The remaining race is genuine threading non-determinism in code paths Lua
+reaches through. MP M4 (multiplayer.html §7) is the milestone that
+restructures the threaded-sim path to deterministic-merge; that's when the
+last drops fall out of the trace and the CI gate flips to blocking.
+
+If you're picking up M4: the failing-with-low-frequency tick is the smoking
+gun. Capture a `--keep-runs` trace and bisect on the first diverging
+subsystem. `sim_rng` diverging while `actors` matches at the same tick
+indicates a "consumer that doesn't affect actor state" (e.g.,
+cosmetic-classified sim path); `actors` diverging without prior `sim_rng`
+divergence indicates a non-RNG state path (probably also threading).
 
 ## How to run locally
 

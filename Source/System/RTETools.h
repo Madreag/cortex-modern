@@ -7,6 +7,8 @@
 
 #include <random>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -22,6 +24,19 @@ namespace RTE {
 	public:
 		/// Seed the random number generator.
 		void Seed(uint64_t seed) { m_RNG.seed(seed); };
+
+		/// M1 Block F — serialize the RNG's internal state to a string so the
+		/// determinism check's per-tick `sim_rng` subsystem hash can capture it.
+		/// std::mt19937 supports `operator<<` for its full internal state (the
+		/// 624 32-bit words of the Mersenne-twister state vector + position), so
+		/// this is a complete fingerprint, not a lossy summary. Across same-seed
+		/// runs this string is byte-identical at the same tick once Blocks B-E
+		/// have settled.
+		std::string SerializeStateForHashing() const {
+			std::ostringstream oss;
+			oss << m_RNG;
+			return oss.str();
+		}
 
 		/// Function template which returns a uniformly distributed random number in the range [-1, 1].
 		/// @return Uniformly distributed random number in the range [-1, 1].
