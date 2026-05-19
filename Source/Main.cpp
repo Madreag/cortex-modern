@@ -409,9 +409,8 @@ void RunGameLoop() {
 						std::vector<AIDecisionChannel::Event> finalEvents;
 						g_AIDecisionChannel.Drain(finalEvents);
 						if (!finalEvents.empty()) {
-							g_SimChecksum.Update("decisions",
-							                     finalEvents.data(),
-							                     finalEvents.size() * sizeof(AIDecisionChannel::Event));
+							// M1 Block F: deterministic feed; see MovableMan.cpp's same-named site.
+							g_AIDecisionChannel.FeedToChecksum(finalEvents, "decisions");
 							g_MetricsCollector.ConsumeEvents(finalEvents);
 						}
 					}
@@ -504,6 +503,12 @@ void RunGameLoop() {
 			// M1 Block A: hand the tick result to the MetricsCollector for the per-tick hash
 			// trace. The collector silently no-ops when -tick-hashes is not set, so this is
 			// free for normal runs.
+			//
+			// M1 Block F: the `actors` and `sim_rng` subsystem feeds happen inside
+			// MovableMan::Update (right after the actors-feed block + before the see-ray and
+			// MOID-draw async futures launch) so the sim_rng snapshot captures only the
+			// main-thread sim consumption and isn't racy against the parallel see-ray
+			// workers. See MovableMan.cpp's Block F section for the rationale.
 			{
 				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				g_SimChecksum.Update("terrain", &simTick, sizeof(simTick));

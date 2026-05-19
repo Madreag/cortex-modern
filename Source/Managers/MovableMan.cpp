@@ -1345,6 +1345,19 @@ void MovableMan::Update() {
 	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
 	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
+	// M1 Block F — wait for the previous frame's see-ray future BEFORE running
+	// Travel(). Pre-Block-F the wait happened a few lines later (after Travel),
+	// which let the see-ray workers (Actor::CastSeeRays → Look() → free-function
+	// RandomNum/RandomNormalNum, which after Block B route to g_SimRNG) run
+	// concurrently with Travel()'s own g_SimRNG consumers (Atom::Travel particle
+	// stickiness rolls and similar). The two RNG streams interleaved differently
+	// per OS scheduling, so same-seed runs ended up with different g_SimRNG
+	// states even though every sim decision before that point was identical —
+	// exactly the divergence Block A's tool surfaces. Forcing the wait to
+	// completion *before* any new sim-thread RNG draws makes the per-frame
+	// consumption sequential and deterministic.
+	m_ActorsSeeFuture.wait();
+
 	// Travel MOs
 	Travel();
 
@@ -1352,9 +1365,6 @@ void MovableMan::Update() {
 	if (g_SettingsMan.GetForceImmediatePathingRequestCompletion() && g_SceneMan.GetScene()) {
 		g_SceneMan.GetScene()->BlockUntilAllPathingRequestsComplete();
 	}
-
-	// Finish our Seeing rays from last frame
-	m_ActorsSeeFuture.wait();
 
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
@@ -1717,6 +1727,60 @@ void MovableMan::Update() {
 		}
 	}
 
+	// M1 Block F — feed the `actors` subsystem of the per-tick checksum with each
+	// actor's stable end-of-tick state. Sorted iteration of m_Actors is guaranteed
+	// by Block C's frame-start sort; settling/death and the just-completed drain
+	// preserve relative order. The five fields below are the smallest set that
+	// catches the four classes the M1 blocks fix:
+	//   * UniqueID    — identity drift (Block C territory)
+	//   * Pos / Vel   — RNG / iteration / wall-clock drift (Blocks B-D)
+	//   * Health      — combat-outcome drift (downstream of all four)
+	//   * AIMode      — controller / Lua-callback drift
+	// Pos/Vel/Health are full float bit patterns (memcpy via struct), not floored
+	// approximations, so Block E's FP-flag pinning shows up here too. Particles
+	// and items are excluded — only actors at this point; expanding to particles
+	// is a follow-up if Block F's CI gate proves the contract holds for actors.
+	{
+		// Feed fields individually with fixed-width types so the byte stream is
+		// cross-OS-stable. A naively-memcpy'd struct of {long, float, float, ...}
+		// would differ between Windows MSVC (long = 4 bytes, LLP64) and Linux gcc
+		// (long = 8 bytes, LP64) at every actor — which would mean the `actors`
+		// subsystem hash diverged cross-OS even when the sim is byte-identical.
+		// IEEE-754 single is identical across both targets (and pinned to that
+		// by Block E's compile flags), so the floats go in directly.
+		for (Actor* a: m_Actors) {
+			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
+			const float posX = a->GetPos().m_X;
+			g_SimChecksum.Update("actors", &posX, sizeof(posX));
+			const float posY = a->GetPos().m_Y;
+			g_SimChecksum.Update("actors", &posY, sizeof(posY));
+			const float velX = a->GetVel().m_X;
+			g_SimChecksum.Update("actors", &velX, sizeof(velX));
+			const float velY = a->GetVel().m_Y;
+			g_SimChecksum.Update("actors", &velY, sizeof(velY));
+			const float health = a->GetHealth();
+			g_SimChecksum.Update("actors", &health, sizeof(health));
+			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
+			g_SimChecksum.Update("actors", &aiMode, sizeof(aiMode));
+		}
+	}
+
+	// M1 Block F — capture the sim RNG state RIGHT HERE, before the see-ray and
+	// MOID-draw futures launch. Pre-Block-F this was captured in Main.cpp right
+	// before EndTick, but by then the see-ray future for this tick had already
+	// been spawned (line below) and its workers — calling Actor::CastSeeRays ->
+	// Look() -> RandomNum/RandomNormalNum (sim free-functions, route to g_SimRNG
+	// after Block B) — were already mutating g_SimRNG's internal state on the
+	// thread pool. The race-window between future launch and EndTick is OS-
+	// scheduling-dependent, which gave same-seed runs different per-tick
+	// `sim_rng` hashes even when every preceding sim decision was identical.
+	// Snapshotting the state here drains the race.
+	{
+		const std::string rngState = g_SimRNG.SerializeStateForHashing();
+		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
+	}
+
 	// Run seeing rays for all actors
 	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
 	                                                                         [&](int start, int end) {
@@ -1756,9 +1820,10 @@ void MovableMan::Update() {
 		std::vector<AIDecisionChannel::Event> events;
 		g_AIDecisionChannel.Drain(events);
 		if (!events.empty()) {
-			g_SimChecksum.Update("decisions",
-			                     events.data(),
-			                     events.size() * sizeof(AIDecisionChannel::Event));
+			// M1 Block F: deterministic feed (string content + fixed-width fields, no
+			// sequence number). Pre-Block-F this raw-struct-memcpy leaked StringId
+			// drift and the race-prone sequence atomic into the per-tick hash.
+			g_AIDecisionChannel.FeedToChecksum(events, "decisions");
 			g_MetricsCollector.ConsumeEvents(events);
 		}
 	}
