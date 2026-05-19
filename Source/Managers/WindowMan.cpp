@@ -10,6 +10,7 @@
 #include "PostProcessMan.h"
 #include "RenderTarget.h"
 #include "GLResourceMan.h"
+#include "AIDebugOverlay.h"
 
 #include "GLCheck.h"
 #include <SDL3/SDL.h>
@@ -805,6 +806,7 @@ void WindowMan::UploadFrame() {
 			rlDrawRenderBatchActive();
 		}
 	}
+	g_AIDebugOverlay.Draw(nullptr);
 	ImGui::Render();
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 	Present();
