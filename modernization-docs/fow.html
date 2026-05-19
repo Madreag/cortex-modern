@@ -81,6 +81,13 @@
   .state-table .state-trigger { color:var(--text); }
   .state-table .state-visual { color:var(--text-dim); font-size:11.8px; }
 
+  /* causeless review transcript */
+  .review-quote { background:var(--bg-elev); border-left:3px solid var(--blue);
+    border-radius:0 6px 6px 0; padding:10px 14px; margin:12px 0;
+    font-style:italic; color:var(--text); line-height:1.55; font-size:12.8px; }
+  .review-quote-meta { font-family:var(--mono); font-size:10.5px; color:var(--blue);
+    text-transform:uppercase; letter-spacing:1.4px; margin-bottom:6px; font-style:normal; }
+
   /* mod compat data table */
   .callsite-table th, .callsite-table td { font-size:12.5px; }
   .callsite-table .count { font-family:var(--mono); color:var(--accent); font-weight:600; text-align:right; }
@@ -141,28 +148,29 @@
       <h1>FoW &mdash; design state &amp; corrected PR</h1>
       <p class="page-lead">cortex-modern's contribution to upstream's
       <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/tree/dynamic-fow-negative-distance-test"><code>dynamic-fow-negative-distance-test</code></a> branch.
-      After Causeless flagged a misread in our headline commit (<i>&ldquo;the intent was only to reveal FoW in the
-      direction that the actor was looking&rdquo;</i>), digging into the engine source revealed the directional
-      reveal he wanted is <b>already implemented in <code>AHuman::Look()</code></b> &mdash; we'd accidentally
-      bypassed it by rewriting <code>Actor::CastSeeRays()</code> as a hardcoded 360&deg; fan that skipped the
-      virtual dispatch. <b>PR narrowed in response with a 5th commit reverting the two design-misread changes.</b>
-      This page documents what was found, what was fixed, what still holds, and the genuine future-design TBDs.</p>
+      After Causeless flagged three design-intent misreads in our review (one on Discord, two on the PR
+      issue thread), digging into the engine surfaced that <b>the directional reveal he wanted is already
+      implemented in <code>AHuman::Look()</code></b> &mdash; we'd accidentally bypassed it. The PR has been
+      narrowed across two follow-up commits (now 6 total) addressing all three misreads plus the
+      comment-verbosity feedback. This page documents what was found, what was fixed, what still holds, and
+      the genuine future-design TBDs.</p>
     </header>
 
     <div class="status-banner">
       <div class="status-row">
-        <span class="pill pill-pending">Design feedback received from Causeless</span>
-        <span class="pill pill-done">Two design-misread reverts applied</span>
-        <span class="pill pill-done">AHuman::Look() restored as reveal dispatch target</span>
-        <span class="pill pill-done">Engine sky rays restored to gameplay</span>
+        <span class="pill pill-pending">3 design misreads called out by Causeless on GH review</span>
+        <span class="pill pill-done">Misread #1 reverted: AHuman::Look() restored as dispatcher target</span>
+        <span class="pill pill-done">Misread #2 reverted: engine sky rays restored to gameplay</span>
+        <span class="pill pill-done">Misread #3 reverted: useOneStageFoW back to GLSL default <code>true</code></span>
+        <span class="pill pill-done">Comment-verbosity feedback addressed: ~74 lines trimmed</span>
         <span class="pill pill-done">Build clean (Debug Minimal, x64)</span>
         <span class="pill pill-warn">AI callsite updates still pending (&sect;6)</span>
-        <span class="pill pill-info">PR now 5 commits</span>
+        <span class="pill pill-info">PR now 6 commits</span>
       </div>
       <div class="links">
         <b>PR branch:</b> <a href="https://github.com/Madreag/cortex-modern/tree/pr/fow-character-centric-2stage"><code>Madreag/cortex-modern:pr/fow-character-centric-2stage</code></a><br>
         <b>Target:</b> <code>cortex-command-community/Cortex-Command-Community-Project:dynamic-fow-negative-distance-test</code><br>
-        <b>5 commits</b> on top of upstream <code>975155e72</code> (Merge branch 'development' into dynamic-fow-negative-distance-test) &middot; <b>byte-for-byte equal to cortex-modern's working <code>fow-fixes</code> branch</b><br>
+        <b>6 commits</b> on top of upstream <code>975155e72</code> (Merge branch 'development' into dynamic-fow-negative-distance-test) &middot; <b>byte-for-byte equal to cortex-modern's working <code>fow-fixes</code> branch</b><br>
         <b>Related</b>: cortex-modern fork PR <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a> (working PR, includes bot-review fixes); see also <a href="branches.html">Upstream Branches</a> &middot; <a href="issues.html">Upstream Issues</a>
       </div>
     </div>
@@ -171,69 +179,85 @@
       <div class="callout-title">tl;dr &mdash; the corrected story</div>
       <p><b>What we missed</b>: the directional reveal Causeless wanted is already implemented in
       <code>AHuman::Look()</code> &mdash; a 32-ray body bubble (36&nbsp;px radius) plus a directional aim-cone
-      (<code>FOVSpread / 0.5</code> rays centered on <code>m_AimAngle</code>, angle-quantized to avoid flicker as
-      the aim slides). ooaaaoaoao's February commit <code>32f667559</code> "ahuman vision bubble now centered on
-      body, not aimpos" set up the bubble; Causeless's <code>e5d6b0e11</code> "Stop flickering when changing aim
-      angle..." added the angle quantization on the cone. Both already in the branch we built on.</p>
-      <p><b>What we did wrong</b>: our headline commit <code>be8734ec4</code> rewrote
-      <code>Actor::CastSeeRays()</code> as a 36-ray 360&deg; fan calling <code>CastSeeRay</code> directly &mdash;
-      bypassing the virtual <code>Look()</code> dispatch entirely. AHuman::Look() and ACrab::Look() <i>never ran</i>
-      when our code was in place. Same commit also gated engine <code>CastSeeRaysFromSky</code> to Editing-only,
-      misreading <code>4ae962455</code> "Killed <i>script</i> sky rays" as "all sky rays unwanted" &mdash; the
-      "script" qualifier meant Lua-script-driven sky-ray spawns (e.g., <code>SetupFogOfWar</code> in
-      <code>SkirmishDefense.lua</code>), not the engine dispatch that produces the outdoor-vs-bunker
-      differentiation.</p>
-      <p><b>What we fixed</b>: a 5th commit on the PR reverts both. <code>Actor::CastSeeRays()</code> goes back
-      to its <code>Look(...)</code> dispatcher form (now that we understand AHuman::Look() does the right thing).
-      <code>MovableMan::Update</code>'s sky-ray dispatch is restored to fire during both Editing and gameplay.
-      <b>Everything else in the PR still holds</b> &mdash; the crash fix, the wrap-class-of-bug fixes, the
-      <code>IsUnseen</code> /<code>IsCurrentlyUnseen</code> split, the C++ DrawHUD callsite switches, the
-      <code>useOneStageFoW = false</code> render path, the <code>MakeAllUnseen</code> sentinel fallback, and the
-      bg-layer <code>maskReady</code> gating are all real fixes independent of the reveal direction.</p>
+      (<code>FOVSpread / 0.5</code> rays centered on <code>m_AimAngle</code>, angle-quantized to avoid flicker
+      as the aim slides). ooaaaoaoao's February commit <code>32f667559</code> "ahuman vision bubble now
+      centered on body, not aimpos" set up the bubble; Causeless's <code>e5d6b0e11</code> "Stop flickering
+      when changing aim angle..." added the angle quantization on the cone. Both already in the branch we
+      built on.</p>
+      <p><b>The three design misreads (now all reverted)</b>:</p>
+      <ol style="margin: 4px 0 10px 22px; padding-left: 0;">
+        <li><b>360&deg; fan in <code>Actor::CastSeeRays()</code></b> &mdash; we rewrote the function body
+        instead of calling <code>Look()</code>, bypassing the virtual dispatch and disabling AHuman/ACrab
+        directional vision entirely. Reverted in commit #5 &mdash; back to the <code>Look(...)</code>
+        dispatcher.</li>
+        <li><b><code>CastSeeRaysFromSky</code> gated to Editing-only</b> &mdash; we misread
+        <code>4ae962455</code> "Killed <i>script</i> sky rays" as "all sky rays unwanted." Causeless on GH:
+        <i>"the script rays deletion was a different thing entirely really."</i> Reverted in commit #5
+        &mdash; engine sky rays fire during both Editing and gameplay, producing the outdoor desat + noise +
+        scanline visual differentiation.</li>
+        <li><b><code>useOneStageFoW = false</code></b> &mdash; we overrode the GLSL default <code>true</code>
+        thinking it would hide live MOs from the memory layer. Causeless on GH:
+        <i>"useOneStageFoW = true is set because right now the committing of currently-seen to the terrain
+        mask isn't great... the intent was to move this over to where we can use the actual SDF mask."</i>
+        Reverted in commit #6 &mdash; back to the GLSL default until upstream's SDF-mask-based terrain
+        commit lands.</li>
+      </ol>
+      <p><b>Plus the comment-verbosity feedback</b>: Causeless on GH:
+      <i>"AI comments WAY too much... in-depth comments actually confuse the situation further."</i>
+      Commit #6 trims ~74 lines of explanatory comments throughout the touched files; only the briefest
+      notes for non-obvious invariants remain.</p>
+      <p><b>What still holds</b>: the crash fix (<code>CommitToLastSeenTerrainWithFowMask</code> null guard),
+      the MovableMan dynamic_cast null guards, the SDF + sky-ray wrap-class-of-bug fixes
+      (<code>uWrapsXY</code> uniform + sky-ray X-wrap guard), the <code>IsUnseen</code>/<code>IsCurrentlyUnseen</code>
+      split with C++ DrawHUD callsite switches, the <code>MakeAllUnseen</code> (1,1) sentinel fallback,
+      the bg-layer <code>maskReady</code> gating, and the FrameMan FogOfWarSetup palette-stripe fix are all
+      real fixes independent of the reveal direction or render path.</p>
       <p><b>What's still ahead</b>: the headline P0 (vanilla AI Lua callsites still call <code>IsUnseen</code>
       and get the new ever-unseen semantic &mdash; AI shoots through dimmed memory) survives the redesign and
-      needs the ~30 callsite rewrite. Plus genuine future design work that the March transcript and Causeless's
-      recent hints make explicit: cameras (stationary vision sources), doors as dynamic apertures, splitscreen
-      FoW, the pre-SDF smoothing step Causeless wants, the double-buffering hack, and team-owned bunker
+      needs the ~30 callsite rewrite. Plus genuine future design work the March transcript and Causeless's
+      recent hints make explicit: cameras (stationary vision sources), doors as dynamic apertures,
+      splitscreen FoW, the pre-SDF smoothing step, the double-buffering hack, the SDF-mask-based
+      terrain-commit (which will then unlock <code>useOneStageFoW = false</code>), and team-owned bunker
       permanent vision. Full audit in &sect;7&ndash;&sect;8.</p>
       <div class="toc">
         <a href="#existing">1 AHuman::Look() &mdash; what we missed</a>
-        <a href="#reverts">2 Our misreads &amp; the fix</a>
+        <a href="#reverts">2 The misreads &amp; the fix</a>
         <a href="#visual-model">3 Visual model</a>
-        <a href="#commits">4 The 5 commits</a>
+        <a href="#commits">4 The 6 commits</a>
         <a href="#isunseen">5 IsUnseen split</a>
         <a href="#ai-callsite">6 AI callsite P0</a>
         <a href="#future">7 Genuine future design</a>
         <a href="#ship-list">8 Full ship list</a>
         <a href="#credit">9 Credit</a>
-        <a href="#next">10 Next steps</a>
+        <a href="#review">10 Causeless's GH review</a>
+        <a href="#next">11 Next steps</a>
       </div>
     </div>
 
     <!-- ============ 1 · WHAT WE MISSED — AHuman::Look() ============ -->
     <h2 id="existing">1 &nbsp;&middot;&nbsp; <span class="h-accent"><code>AHuman::Look()</code> &mdash; the directional reveal already exists</span></h2>
 
-    <p>This is the section that changes everything about how to read the rest of the PR. The implementation
-    Causeless described in his review (<i>&ldquo;reveal FoW in the direction the actor was looking&rdquo;</i>)
-    is already on the branch &mdash; we just didn't see it because we were reading <code>Actor::CastSeeRays()</code>,
-    which is the <b>dispatcher</b>, not the implementation. The real work happens in the virtual
-    <code>Look()</code> override, which <code>AHuman</code> implements with two distinct ray-cast passes.</p>
+    <p>The implementation Causeless described in his Discord review (<i>&ldquo;reveal FoW in the direction the
+    actor was looking&rdquo;</i>) is already on the branch &mdash; we just didn't see it because we were
+    reading <code>Actor::CastSeeRays()</code>, which is the <b>dispatcher</b>, not the implementation. The
+    real work happens in the virtual <code>Look()</code> override, which <code>AHuman</code> implements with
+    two distinct ray-cast passes.</p>
 
     <div class="recovered">
       <div class="recovered-title">The two-pass design in <code>AHuman::Look()</code></div>
-      <p>Located in <code>Source/Entities/AHuman.cpp</code> at line 1347. Fires once per actor per frame via the
-      <code>Actor::CastSeeRays()</code> &rarr; <code>Look(FOVSpread, range)</code> dispatch chain. Both passes use
-      <code>strength = c_PathFindingDefaultDigStrength</code> (matches the pathfinding dig-strength so see-rays pass
-      through light debris and corpses but stop at solid walls).</p>
+      <p>Located in <code>Source/Entities/AHuman.cpp</code> at line 1347. Fires once per actor per frame via
+      the <code>Actor::CastSeeRays()</code> &rarr; <code>Look(FOVSpread, range)</code> dispatch chain. Both
+      passes use <code>strength = c_PathFindingDefaultDigStrength</code> (matches the pathfinding dig-strength
+      so see-rays pass through light debris and corpses but stop at solid walls).</p>
     </div>
 
     <h3>1.1 &nbsp; The body bubble &mdash; 32 rays in 360&deg; at 36&nbsp;px around body</h3>
-    <p>Short-range omnidirectional reveal around the actor's <i>body</i> position (not eye, not aim). Gives the
-    actor immediate awareness of the space they physically occupy, regardless of where they're facing.
-    ooaaaoaoao introduced this with commit <code>32f667559</code> <i>&ldquo;ahuman vision bubble now centered on
-    body, not aimpos. fix for prev&rdquo;</i> &mdash; they'd briefly tried aim-position-centered and switched to
-    body-centered. Earlier commit <code>be8889316</code> framed it: <i>&ldquo;less rays, wider fow, removed
-    see-through-terrain box around ahumans, now a bubble of rays&rdquo;</i>.</p>
+    <p>Short-range omnidirectional reveal around the actor's <i>body</i> position (not eye, not aim). Gives
+    the actor immediate awareness of the space they physically occupy, regardless of where they're facing.
+    ooaaaoaoao introduced this with commit <code>32f667559</code> <i>&ldquo;ahuman vision bubble now centered
+    on body, not aimpos. fix for prev&rdquo;</i> &mdash; they'd briefly tried aim-position-centered and
+    switched to body-centered. Earlier commit <code>be8889316</code> framed it: <i>&ldquo;less rays, wider
+    fow, removed see-through-terrain box around ahumans, now a bubble of rays&rdquo;</i>.</p>
 
     <div class="code-excerpt-caption">AHuman.cpp:1393&ndash;1400 &mdash; the body bubble</div>
     <div class="code-excerpt"><span class="key">const float</span> bubblePixelRadius = <span class="lit">36.0f</span>;
@@ -246,14 +270,14 @@ Vector bubbleAroundActorLookVector(bubblePixelRadius, <span class="lit">0</span>
 }</div>
 
     <h3>1.2 &nbsp; The directional aim-cone &mdash; <code>FOVSpread / 0.5</code> rays, angle-quantized</h3>
-    <p>The directional reveal Causeless was asking us to preserve. Cast from <code>aimPos</code> (eye position
-    if a head attachable exists, else body), extending <code>m_AimDistance + range</code> pixels (further when
-    aiming sharp through a barrel). Cone is centered on <code>m_AimAngle</code>, spans <code>FOVSpread</code>
-    degrees, contains <code>FOVSpread / degreesPerRotationSegment</code> rays (with
-    <code>degreesPerRotationSegment = 0.5</code> &rarr; <b>200 rays for a 100&deg; spread</b>). The aim angle is
-    quantized to fixed angular divisions per Causeless's <code>e5d6b0e11</code> <i>&ldquo;Stop flickering when
-    changing aim angle by ensuring that rays are cast at the same angle divisions&rdquo;</i> &mdash; so the rays
-    don't shift visibly as the actor's aim slides smoothly.</p>
+    <p>The directional reveal Causeless was asking us to preserve. Cast from <code>aimPos</code> (eye
+    position if a head attachable exists, else body), extending <code>m_AimDistance + range</code> pixels
+    (further when aiming sharp through a barrel). Cone is centered on <code>m_AimAngle</code>, spans
+    <code>FOVSpread</code> degrees, contains <code>FOVSpread / degreesPerRotationSegment</code> rays (with
+    <code>degreesPerRotationSegment = 0.5</code> &rarr; <b>200 rays for a 100&deg; spread</b>). The aim
+    angle is quantized to fixed angular divisions per Causeless's <code>e5d6b0e11</code> <i>&ldquo;Stop
+    flickering when changing aim angle by ensuring that rays are cast at the same angle divisions&rdquo;</i>
+    &mdash; so the rays don't shift visibly as the actor's aim slides smoothly.</p>
 
     <div class="code-excerpt-caption">AHuman.cpp:1369&ndash;1407 &mdash; the directional cone (condensed)</div>
     <div class="code-excerpt"><span class="key">float</span> aimDistance = m_AimDistance + range;
@@ -261,10 +285,8 @@ Vector bubbleAroundActorLookVector(bubblePixelRadius, <span class="lit">0</span>
     aimDistance += m_pFGArm-&gt;GetHeldDevice()-&gt;GetSharpLength();   <span class="com">// extend when aiming sharp</span>
 }
 
-<span class="com">// Cone span = FOVSpread degrees, centered on m_AimAngle (H-flip handled).</span>
 <span class="key">float</span> aimAngle = m_AimAngle - RTE::DegreesToRadians(FOVSpread * (m_HFlipped ? -<span class="lit">0.5f</span> : <span class="lit">0.5f</span>));
 
-<span class="com">// Angle-quantize so rays don't flicker as the aim slides smoothly (Causeless's e5d6b0e11).</span>
 <span class="key">static float</span> degreesPerRotationSegment = <span class="lit">0.5f</span>;
 <span class="key">const float</span> numRotationalSegmentsPerSide = <span class="lit">180.0f</span> / degreesPerRotationSegment;
 <span class="key">const float</span> quantization = numRotationalSegmentsPerSide / c_PI;
@@ -282,9 +304,9 @@ lookVector *= aimMatrix;
 }</div>
 
     <h3>1.3 &nbsp; Per-subclass dispatch</h3>
-    <p>Different actor types have different <code>Look()</code> overrides. <code>Actor::CastSeeRays()</code> calls
-    <code>Look(100, screenWidth * 0.7 * m_Perceptiveness)</code> once per frame; virtual dispatch routes to the
-    appropriate override based on actor class.</p>
+    <p>Different actor types have different <code>Look()</code> overrides. <code>Actor::CastSeeRays()</code>
+    calls <code>Look(100, screenWidth * 0.7 * m_Perceptiveness)</code> once per frame; virtual dispatch
+    routes to the appropriate override based on actor class.</p>
 
     <table class="tbl">
       <thead><tr><th>Class</th><th>What <code>Look()</code> does</th><th>Rays/frame (FOVSpread=100)</th></tr></thead>
@@ -312,91 +334,129 @@ lookVector *= aimMatrix;
       </tbody>
     </table>
 
-    <p class="small muted">Asymmetry note: ACrab's vision is much weaker than AHuman's per-frame (1 ray vs ~232).
-    That's consistent with the design framing &mdash; crabs are creatures, humans are intel-gathering soldiers
-    with proper situational awareness. Tuning this further (more crab rays? wider crab arc?) is open design
-    territory.</p>
+    <p class="small muted">Asymmetry note: ACrab's vision is much weaker than AHuman's per-frame (1 ray vs
+    ~232). That's consistent with the design framing &mdash; crabs are creatures, humans are intel-gathering
+    soldiers with proper situational awareness. Tuning this further (more crab rays? wider crab arc?) is open
+    design territory.</p>
 
     <h3>1.4 &nbsp; The clue we missed in the source itself</h3>
-    <p><code>SceneMan::CastSeeRaysFromSky</code> in <code>SceneMan.cpp</code> at line 1070 has an explicit comment:
-    <i>&ldquo;These are the same as for AHuman::Look()&rdquo;</i> &mdash; referring to the strength and skip
-    values. The sky-ray system literally treats AHuman::Look() as the canonical see-ray reference. Had we read
-    that comment, we'd have followed the breadcrumb to AHuman.cpp:1347 and avoided the whole misread. Process
-    lesson for next time: when overriding a virtual function in a base class, grep all subclass overrides before
-    rewriting the base.</p>
+    <p><code>SceneMan::CastSeeRaysFromSky</code> in <code>SceneMan.cpp</code> at line 1070 has an explicit
+    comment: <i>&ldquo;These are the same as for AHuman::Look()&rdquo;</i> &mdash; referring to the strength
+    and skip values. The sky-ray system literally treats AHuman::Look() as the canonical see-ray reference.
+    Had we read that comment, we'd have followed the breadcrumb to AHuman.cpp:1347 and avoided the whole
+    misread. Process lesson: when overriding a virtual function in a base class, grep all subclass overrides
+    before rewriting the base.</p>
 
-    <!-- ============ 2 · OUR MISREADS & THE FIX ============ -->
-    <h2 id="reverts">2 &nbsp;&middot;&nbsp; <span class="h-accent">Our misreads &amp; the fix</span></h2>
+    <!-- ============ 2 · MISREADS & THE FIX ============ -->
+    <h2 id="reverts">2 &nbsp;&middot;&nbsp; <span class="h-accent">The misreads &amp; the fix</span></h2>
 
-    <p>Two specific changes inside the headline commit <code>be8734ec4</code> went against the upstream design.
-    Both fixed by the 5th commit on the PR branch. Everything else in <code>be8734ec4</code> is intact &mdash;
-    crash fixes, wrap fixes, IsUnseen split, render-path fixes, all real bugs unrelated to reveal direction.</p>
+    <p>Causeless flagged three design-intent misreads in our PR &mdash; one on Discord (the directional
+    reveal), two on GH (sky rays + useOneStageFoW). Plus a fourth piece of feedback (excessive comment
+    verbosity). All addressed in two follow-up commits (#5 and #6).</p>
 
     <div class="misread">
       <div class="misread-title">Misread #1 &mdash; rewrote <code>Actor::CastSeeRays()</code> as a 360&deg; fan</div>
-      <p><b>What we wrote</b>: replaced the function body (which was <code>Look(100, ...)</code> calling once per
-      frame) with a hardcoded 36-ray (later scaled with radius via <code>cd17a0466</code>) 360&deg; fan calling
-      <code>CastSeeRay</code> directly. Bypassed the virtual <code>Look()</code> dispatch entirely.</p>
+      <p><b>What we wrote</b>: replaced the function body (which was <code>Look(100, ...)</code> calling
+      once per frame) with a hardcoded 36-ray (later scaled with radius via <code>cd17a0466</code>) 360&deg;
+      fan calling <code>CastSeeRay</code> directly. Bypassed the virtual <code>Look()</code> dispatch
+      entirely.</p>
       <p><b>What we missed</b>: <code>AHuman::Look()</code> is the directional implementation (&sect;1).
-      <code>Actor::CastSeeRays()</code> is the dispatcher; rewriting it without calling <code>Look()</code> means
-      AHuman::Look() and ACrab::Look() never run. We disabled the existing directional reveal across all actor
-      classes in one stroke.</p>
-      <p><b>What Causeless saw</b>: <i>&ldquo;this is a pretty big departure from what we had planned and intended.
-      The intent was only to reveal FoW in the direction that the actor was looking.&rdquo;</i> He was looking at
-      our 360&deg; fan replacement and pointing out we'd thrown out the directional cone in AHuman::Look(). Not
-      asking us to design a new system &mdash; asking us to call the one already there.</p>
+      <code>Actor::CastSeeRays()</code> is the dispatcher; rewriting it without calling <code>Look()</code>
+      means AHuman::Look() and ACrab::Look() never run. We disabled the existing directional reveal across
+      all actor classes in one stroke.</p>
+      <p><b>What Causeless saw (Discord)</b>: <i>&ldquo;this is a pretty big departure from what we had
+      planned and intended. The intent was only to reveal FoW in the direction that the actor was
+      looking.&rdquo;</i></p>
+      <p><b>Fix (commit #5)</b>: <code>Actor::CastSeeRays()</code> back to its dispatcher form.</p>
     </div>
 
     <div class="misread">
       <div class="misread-title">Misread #2 &mdash; gated engine <code>CastSeeRaysFromSky</code> to Editing-only</div>
       <p><b>What we wrote</b>: in <code>MovableMan::Update</code>, wrapped the <code>CastSeeRaysFromSky</code>
-      thread-pool dispatch in <code>if (gameActivity-&gt;GetActivityState() == Activity::Editing)</code>. During
-      gameplay, sky rays no longer fired. The commit message framed this as <i>&ldquo;During RUNNING,
-      Actor::CastSeeRays drives all vision exclusively&rdquo;</i> &mdash; making sky rays an Editing-mode helper
-      for brain placement only.</p>
-      <p><b>What we missed</b>: Causeless's <code>4ae962455</code> <i>&ldquo;Killed <b>script</b> sky rays&rdquo;</i>
-      &mdash; the word "script" matters. He killed the Lua-script-driven sky-ray spawns (e.g.,
-      <code>SetupFogOfWar(...)</code> calls in <code>SkirmishDefense.lua</code>), not the engine-side
-      <code>CastSeeRaysFromSky</code> dispatch. The engine dispatch is the mechanism producing the outdoor
-      desaturation + noise + scanline visual on never-seen sky-illuminated terrain &mdash; without it,
-      outdoor and bunker areas look the same (both black).</p>
-      <p><b>What Causeless saw</b>: <i>&ldquo;Also the sky rays are intentional, so that there's a difference
-      between outdoors and bunker gameplay.&rdquo;</i> He was pointing out exactly this &mdash; the
-      differentiation mechanism we'd removed.</p>
+      thread-pool dispatch in <code>if (gameActivity-&gt;GetActivityState() == Activity::Editing)</code>.
+      During gameplay, sky rays no longer fired.</p>
+      <p><b>What we missed</b>: Causeless's <code>4ae962455</code> <i>&ldquo;Killed <b>script</b> sky
+      rays&rdquo;</i> &mdash; the word "script" matters. He killed the Lua-script-driven sky-ray spawns
+      (e.g., <code>SetupFogOfWar(...)</code> calls in <code>SkirmishDefense.lua</code>), not the
+      engine-side <code>CastSeeRaysFromSky</code> dispatch. The engine dispatch is the mechanism producing
+      the outdoor desaturation + noise + scanline visual on never-seen sky-illuminated terrain &mdash;
+      without it, outdoor and bunker areas look the same.</p>
+      <p><b>What Causeless saw (GH issue thread)</b>: <i>&ldquo;CastSeeRaysFromSky() is intended for
+      gameplay, not just editing. The intent is to give a clear difference in gameplay between outdoors
+      fighting and indoors bunker clearing. When in an enclosed area or tunnel, we'll have the two-stage
+      FoW whereas outdoors is always bright and visible... a faux lighting system (as underground areas are
+      naturally darker when unseen). The script rays deletion was a different thing entirely really.&rdquo;</i></p>
+      <p><b>Fix (commit #5)</b>: <code>MovableMan::Update</code>'s sky-ray dispatch restored to fire during
+      both Editing and gameplay.</p>
     </div>
 
-    <div class="recovered">
-      <div class="recovered-title">The fix &mdash; the 5th commit on the PR branch</div>
-      <p>Both reverts are in a single follow-up commit. <code>Actor::CastSeeRays()</code> goes back to its
-      dispatcher form (single <code>Look(100, screenWidth * 0.7f * m_Perceptiveness)</code> call), now with an
-      explanatory comment naming the AHuman/ACrab overrides so the next reader doesn't repeat our mistake.
-      <code>MovableMan::Update</code>'s <code>CastSeeRaysFromSky</code> dispatch is restored to fire during both
-      Editing and gameplay, with a comment naming the "script-only" qualifier on Causeless's kill commit.</p>
-      <p><b>Result</b>: AHuman vision is now directional aim-cone + body bubble (~232 rays/frame), ACrab vision
-      is single aim-directed ray, sky rays fire engine-side during gameplay producing the outdoor desat+noise+
-      scanline visual on never-seen sky-illuminated terrain. Same as the state of the branch before our PR
-      &mdash; the design Causeless and ooaaaoaoao iterated on in February-March.</p>
+    <div class="misread">
+      <div class="misread-title">Misread #3 &mdash; <code>useOneStageFoW = false</code> override</div>
+      <p><b>What we wrote</b>: in <code>FrameMan::BackgroundShaderSetUniforms</code>, added
+      <code>static bool useOneStageFoW = false; backgroundShader.SetBool("useOneStageFoW", useOneStageFoW);</code>
+      &mdash; flipping the shader from "darken current frame in memory area" to "render saved
+      <code>lastSeenTerrain</code> in memory area." Framing in our commit message: <i>"so live MOs no longer
+      bleed through the dim memory layer."</i></p>
+      <p><b>What we missed</b>: the saved <code>lastSeenTerrain</code> bitmap is built from the CPU mask,
+      but the CPU mask doesn't reflect what the SDF actually renders. The SDF "digs into the terrain"
+      &mdash; meaning the visible sight area extends further than the CPU mask records. So when our
+      <code>useOneStageFoW = false</code> kicked in, the memory layer rendered incomplete/wrong terrain
+      pixels. Causeless's `= true` default was intentional precisely because the SDF-mask-based commit
+      hasn't landed yet.</p>
+      <p><b>What Causeless saw (GH issue thread)</b>: <i>&ldquo;useOneStageFoW = true is set because right
+      now the committing of currently-seen to the terrain mask isn't great. This is being done with the raw
+      CPU mask, which doesn't properly update everything in the sight area (as the actual rendered sight
+      area digs into the terrain). The intent was to move this over to where we can use the actual SDF
+      mask to copy the exact pixels that are currently visible.&rdquo;</i></p>
+      <p><b>Fix (commit #6)</b>: removed our override entirely; the GLSL default
+      <code>uniform bool useOneStageFoW = true;</code> in <code>Background.frag</code> takes effect.
+      <b>Side effect to know about</b>: with <code>useOneStageFoW = true</code>, live enemy actor sprites
+      will render through the memory layer (darkened) until upstream's SDF-mask-based terrain-commit lands
+      &mdash; this is the limitation Causeless observed in his underground screenshot ("actor looking left,
+      enemies still showing up in dimmed FoW"). Documented in &sect;3.7 as a known limitation pending
+      upstream's planned commit; not something for our PR to "fix."</p>
     </div>
 
-    <p>What <code>cd17a0466</code> "<code>Actor::CastSeeRays</code>: scale rayCount with sightRadius for smooth
-    perimeter" becomes after the revert: <b>dead code</b>. The <code>rayCount</code> field it adjusted is gone
-    now that we're back to calling <code>Look()</code>. The commit itself is harmless (it doesn't compile any
-    code that runs), and removing it cleanly would mean rebasing. For the PR we're leaving it in place; if you'd
-    prefer it dropped, that's a force-push away and we'll iterate.</p>
+    <div class="misread">
+      <div class="misread-title">Feedback #4 &mdash; excessive comment verbosity</div>
+      <p><b>What we wrote</b>: 112 added comment lines across the PR delta, including multi-paragraph
+      blocks explaining null-deref guards, dispatcher functions, maskReady-gated calls, and sky-ray
+      dispatch.</p>
+      <p><b>What Causeless saw (GH issue thread)</b>: <i>&ldquo;AI comments WAY too much. It very much
+      confused and muddies the code when the AI feels the need to add several paragraphs explaining things
+      as mundane as a null dereference fix or other minor adjustments. These things are self-explanatory
+      and if anything, the in-depth comments actually confuse the situation further (especially when it's
+      unclear if the comment is referring to an old problem or an extant one).&rdquo;</i></p>
+      <p><b>Fix (commit #6)</b>: aggressive trim &mdash; ~74 lines of comments removed across
+      <code>Actor.cpp</code>, <code>FrameMan.cpp</code>, <code>MovableMan.cpp</code>, <code>SceneMan.cpp</code>,
+      and the SDF shader. Kept only short single-line notes for the non-obvious invariants (the bg-layer
+      FBO gate one-liner, the (1,1) sentinel rationale, the wrap-class-of-bug short note). Multi-paragraph
+      explanations of self-evident code are gone.</p>
+    </div>
+
+    <p>Two minor housekeeping items rolled into commit #6:</p>
+    <ul>
+      <li><b><code>SkirmishDefense.lua</code> initial-reveal radius shrink reverted</b>. The rationale was
+      tied to the 360&deg; fan we reverted in misread #1; with <code>AHuman::Look()</code> driving
+      directional vision, leave upstream Lua content alone.</li>
+      <li><code>cd17a0466</code> "CastSeeRays scaling" is now dead code (the <code>rayCount</code> field
+      it scaled is gone with misread #1's revert). Commit kept in history for traceability; runtime cost
+      zero. Easy to drop via force-push if you'd prefer a tighter diff.</li>
+    </ul>
 
     <!-- ============ 3 · THE VISUAL MODEL ============ -->
     <h2 id="visual-model">3 &nbsp;&middot;&nbsp; <span class="h-accent">The visual model &mdash; mostly already implemented</span></h2>
 
-    <p>The other thing the misread obscured: the visual completeness Causeless described in his review
-    (outdoor differentiated from bunker via sky rays + desat + noise + scanline) is largely <i>already in place</i>
-    on the branch. The March transcript between Causeless and ooaaaoaoao spent hours tuning it &mdash; SDF
-    thresholds, smoothing distances, bunker-wall calibration, scanline blend. What our PR did was accidentally
-    break the differentiation (misread #2). With the sky-ray dispatch restored, the visual model returns to its
-    pre-PR state.</p>
+    <p>The visual completeness Causeless described (outdoor differentiated from bunker via sky rays + desat
+    + noise + scanline) is largely <i>already in place</i> on the branch. The March transcript between
+    Causeless and ooaaaoaoao spent hours tuning it &mdash; SDF thresholds, smoothing distances, bunker-wall
+    calibration, scanline blend. What our PR did was accidentally break the differentiation (misread #2)
+    and override an intentional default (misread #3). With both reverts applied, the visual model returns
+    to its pre-PR state.</p>
 
     <h3>3.1 &nbsp; Four FoW states per tile</h3>
-    <p>The branch implements a four-state visibility model. State transitions are driven by sky-ray reachability
-    and per-actor see-ray hits, evaluated tile-by-tile.</p>
+    <p>The branch implements a four-state visibility model. State transitions are driven by sky-ray
+    reachability and per-actor see-ray hits, evaluated tile-by-tile.</p>
 
     <table class="tbl state-table">
       <thead><tr><th>State</th><th>Trigger</th><th>Visual treatment</th></tr></thead>
@@ -409,7 +469,7 @@ lookVector *= aimMatrix;
         <tr>
           <td class="state-name">Memory (dim)</td>
           <td class="state-trigger">Tile was in <code>UnseenLayerMask</code> previously, but not this frame</td>
-          <td class="state-visual">Saved terrain pixels (<code>rteTextureLastSeen</code>) rendered with dim/desat; live MOs hidden &mdash; this is what <code>useOneStageFoW = false</code> enables (the two-stage memory branch)</td>
+          <td class="state-visual">With <code>useOneStageFoW = true</code> (Causeless's intent): current frame rendered darkened. Once upstream's SDF-mask-based terrain-commit lands and <code>useOneStageFoW</code> flips to <code>false</code>: <code>rteTextureLastSeen</code> (saved terrain pixels, no live units).</td>
         </tr>
         <tr>
           <td class="state-name">Never-seen, outdoor</td>
@@ -425,36 +485,36 @@ lookVector *= aimMatrix;
     </table>
 
     <h3>3.2 &nbsp; Why the sky-ray dispatch is the differentiator</h3>
-    <p><code>SceneMan::CastSeeRaysFromSky</code> casts rays from the top of the screen downward, clearing the
-    sky-ray mask wherever a ray reaches. Tiles reachable from the sky end up in the "outdoor never-seen" state;
-    tiles unreachable (covered by terrain above) stay in "bunker never-seen". The SDF shader samples this
-    sky-ray mask and switches the visual treatment based on it. <b>This is the mechanism Causeless meant by
-    "difference between outdoors and bunker gameplay"</b> &mdash; not a separate detection pass, but a direct
-    consequence of which tiles sky rays reach.</p>
-
-    <p>Our PR's Editing-only gate disabled this entire mechanism during gameplay, collapsing both never-seen
-    states into one. Restoring the dispatch puts the outdoor/bunker differentiation back.</p>
+    <p><code>SceneMan::CastSeeRaysFromSky</code> casts rays from the top of the screen downward, clearing
+    the sky-ray mask wherever a ray reaches. Tiles reachable from the sky end up in the "outdoor
+    never-seen" state; tiles unreachable (covered by terrain above) stay in "bunker never-seen". The SDF
+    shader samples this sky-ray mask and switches the visual treatment based on it. <b>This is the
+    mechanism Causeless meant by "difference between outdoors and bunker gameplay"</b> &mdash; not a
+    separate detection pass, but a direct consequence of which tiles sky rays reach. Our misread #2
+    disabled this during gameplay; commit #5 restored it.</p>
 
     <h3>3.3 &nbsp; Bunker wall calibration is already done</h3>
-    <p>From the March 2 transcript &mdash; Causeless: <i>&ldquo;I pretty specifically tuned this so that the
-    see-through distance was just about the width of a bunker wall.&rdquo;</i> The negative-distance SDF on this
-    branch was chosen explicitly to fix the over-penetration problem that earlier positive-SDF + large-revealsize
-    attempts had. The branch name (<code>dynamic-fow-negative-distance-test</code>) is a settled solution to a
-    known visual problem, not a speculative experiment.</p>
+    <p>From the March 2 transcript &mdash; Causeless: <i>&ldquo;I pretty specifically tuned this so that
+    the see-through distance was just about the width of a bunker wall.&rdquo;</i> The negative-distance
+    SDF on this branch was chosen explicitly to fix the over-penetration problem that earlier
+    positive-SDF + large-revealsize attempts had. The branch name
+    (<code>dynamic-fow-negative-distance-test</code>) is a settled solution to a known visual problem, not
+    a speculative experiment.</p>
 
     <h3>3.4 &nbsp; Wrap handling is fixed by our PR</h3>
-    <p>One of the real bugs <code>be8734ec4</code> caught and fixed: the SDF shader and sky-ray dispatch both
-    treated scenes as toroidal unconditionally, with no check on <code>WrapsX</code>/<code>WrapsY</code>. On
-    non-wrapping scenes (most CC scenes) the sky rays wrapped to off-screen positions when the camera panned
-    near an edge, leaving camera-dependent dim/bright bands. Our fix added <code>uniform vec2 uWrapsXY</code>
-    to <code>SDF_3_UnsignedSDF.frag</code> and matching guard logic to <code>SceneMan::CastSeeRaysFromSky</code>.
-    Survives the revert &mdash; the wrap fix is in a different region of the codebase than the design misreads.</p>
+    <p>One of the real bugs <code>be8734ec4</code> caught and fixed: the SDF shader and sky-ray dispatch
+    both treated scenes as toroidal unconditionally, with no check on <code>WrapsX</code>/<code>WrapsY</code>.
+    On non-wrapping scenes (most CC scenes) the sky rays wrapped to off-screen positions when the camera
+    panned near an edge, leaving camera-dependent dim/bright bands. Our fix added
+    <code>uniform vec2 uWrapsXY</code> to <code>SDF_3_UnsignedSDF.frag</code> and matching guard logic to
+    <code>SceneMan::CastSeeRaysFromSky</code>. Survives the reverts &mdash; the wrap fix is in a different
+    region of the codebase than the design misreads.</p>
 
     <h3>3.5 &nbsp; The 6 tunable static floats Causeless exposed</h3>
-    <p>From the March transcript &mdash; Causeless made these six values <code>static float</code> rather than
-    constants specifically so they could be adjusted live in-game during tuning:</p>
+    <p>From the March transcript &mdash; Causeless made these six values <code>static float</code> rather
+    than constants specifically so they could be adjusted live in-game during tuning:</p>
 
-    <div class="code-excerpt-caption">FrameMan.cpp (or shader uniforms area) &mdash; live-tunable smoothing knobs</div>
+    <div class="code-excerpt-caption">FrameMan.cpp &mdash; live-tunable smoothing knobs (upstream)</div>
     <div class="code-excerpt"><span class="key">static float</span> usdfThresoldForFoV = <span class="lit">0.02f</span>;                  <span class="com">// how aggressive the current-FoV SDF mask is</span>
 <span class="key">static float</span> usdfOpacitySmoothingDistanceForFoV = <span class="lit">0.02f</span>;     <span class="com">// FoV edge softness</span>
 <span class="key">static float</span> usdfThresoldForNeverSeen = <span class="lit">0.015f</span>;             <span class="com">// memory-vs-never-seen boundary</span>
@@ -464,22 +524,50 @@ lookVector *= aimMatrix;
 
     <p>Our PR didn't touch these (intentionally &mdash; they're his tuning surface). The first two
     (<code>usdfThresoldForFoV</code> and <code>usdfThresoldForNeverSeen</code>) are what Causeless told
-    ooaaaoaoao to play with for "how much pass-through of vision there is" through walls. The smoothing
-    distances control edge softness. Real settings UI would surface these (per &sect;8.7); for now they're
-    debug-only.</p>
+    ooaaaoaoao to play with for "how much pass-through of vision there is" through walls. Real settings
+    UI would surface these (per &sect;8.7); for now they're debug-only.</p>
 
-    <h3>3.6 &nbsp; What's pending in the visual model</h3>
-    <p>From the same transcript &mdash; Causeless said: <i>&ldquo;the solution is to do both: some amount of
-    pushing INTO FoW mask (like in this branch), and also a pre-smoothing step where we sample the FoW mask
-    with bilinear interpolation.&rdquo;</i> The pre-SDF smoothing step is acknowledged as a TBD in his head;
-    the branch as-is uses SDF distance for smoothing rather than a pre-blur pass. Not blocking on this for the
-    PR &mdash; the existing SDF approach works, the pre-smoothing is a nice-to-have improvement that lives in
-    the future-design bucket (&sect;7).</p>
+    <h3>3.6 &nbsp; Pre-SDF smoothing is acknowledged TBD</h3>
+    <p>Causeless in the March transcript: <i>&ldquo;the solution is to do both: some amount of pushing
+    INTO FoW mask (like in this branch), and also a pre-smoothing step where we sample the FoW mask with
+    bilinear interpolation.&rdquo;</i> The pre-SDF smoothing step is acknowledged as a TBD in his head;
+    the branch as-is uses SDF distance for smoothing rather than a pre-blur pass. Future work in
+    &sect;7.3.</p>
 
-    <!-- ============ 4 · THE 5 COMMITS ============ -->
-    <h2 id="commits">4 &nbsp;&middot;&nbsp; <span class="h-accent">The 5 commits</span></h2>
-    <p>All five sit on top of upstream <code>975155e72</code>. The bulk of the work is in
-    <code>be8734ec4</code> + the 5th revert commit; the middle three are smaller fixes / polish / docs.</p>
+    <h3 id="underground-limitation">3.7 &nbsp; Known limitation &mdash; enemy sprites visible (dimmed) in memory layer underground</h3>
+    <div class="design-call" style="border-color: #f5dbb6;">
+      <div class="design-call-title" style="color: #f5dbb6;">Causeless's underground observation</div>
+      <p>Causeless flagged this on Discord with a screenshot: actor underground looking left, but enemies
+      still showing up in the dimmed FoW area (i.e., visible despite being outside the actor's current
+      cone). <b>This is the limitation Causeless's <code>useOneStageFoW = true</code> default acknowledges.</b></p>
+      <p><b>Why it happens</b>: with <code>useOneStageFoW = true</code>, the shader path for the memory
+      layer renders the <i>current frame</i> darkened (terrain + live MOs from <code>moColor</code>) rather
+      than the saved <code>lastSeenTerrain</code> bitmap. Live MOs &mdash; including enemy actors &mdash;
+      are visible but dimmed in memory areas. There's no per-MO FoW gate at the sprite-render layer (only
+      at the HUD-overlay layer, which our PR did wire up via <code>IsCurrentlyUnseen</code>).</p>
+      <p><b>Why <code>useOneStageFoW = false</code> isn't the fix</b>: Causeless explained this is exactly
+      why the GLSL default is <code>true</code>. With <code>= false</code>, the memory layer renders the
+      saved <code>lastSeenTerrain</code> bitmap &mdash; but that bitmap is built from the raw CPU mask,
+      which doesn't reflect what the SDF actually rendered (the SDF "digs into the terrain"). So
+      <code>= false</code> produces incorrect terrain in memory areas. Currently a worse bug than the
+      enemy-sprites-dim issue.</p>
+      <p><b>The proper fix is upstream's</b>: move the commit-to-<code>lastSeenTerrain</code> step over to
+      use the actual SDF mask, so the saved bitmap matches what's rendered. Once that lands,
+      <code>useOneStageFoW</code> flips to <code>false</code> naturally and enemy sprites stop bleeding
+      through the memory layer. Our PR's role is to not block that future flip &mdash; commit #6 removed
+      our override so the GLSL default takes effect today, and the eventual flip-to-false will work
+      cleanly when upstream lands the SDF-mask commit.</p>
+      <p><b>Alternative for the interim</b>: a per-MO sprite-render <code>IsCurrentlyUnseen</code> gate
+      (like the HUD-overlay checks we added, but on the sprite-draw path) would hide enemy actors in
+      memory areas independent of the shader path. This is a meaningful gameplay change &mdash; not just
+      a render fix &mdash; so it belongs in upstream's design hands, not as a contributor patch.</p>
+    </div>
+
+    <!-- ============ 4 · THE 6 COMMITS ============ -->
+    <h2 id="commits">4 &nbsp;&middot;&nbsp; <span class="h-accent">The 6 commits</span></h2>
+    <p>All six sit on top of upstream <code>975155e72</code>. The bulk of the substance is in
+    <code>be8734ec4</code> + commits #5/#6 (the design-feedback corrections); the middle three are smaller
+    fixes / polish / docs.</p>
 
     <div class="commits">
 
@@ -490,14 +578,15 @@ lookVector *= aimMatrix;
           <span class="commit-tag commit-tag-headline">HEADLINE</span>
         </div>
         <div class="commit-desc">
-          The bulk of the work. <b>Two parts originally landed and reverted in commit #5</b> (the 360&deg; fan in
-          <code>Actor::CastSeeRays()</code> and the Editing-only gate on <code>CastSeeRaysFromSky</code>). All the
-          other components <b>stand</b>: crash + null-deref fixes (<code>CommitToLastSeenTerrainWithFowMask</code>
-          null guard, MovableMan <code>GameActivity*</code> casts, FrameMan FoW init / render gating); the wrap
-          class-of-bug fixes (<code>SDF_3_UnsignedSDF.frag</code> <code>uWrapsXY</code> uniform, sky-ray X-wrap
-          guard); the <code>useOneStageFoW = false</code> render-path fix; the
-          <code>MakeAllUnseen</code> <code>(1,1)</code> sentinel &rarr; <code>(4,4)</code> fallback (real perf
-          bug); the FrameMan FogOfWarSetup palette-stripe fix; the focused <code>IsUnseen</code> API split (&sect;5).
+          The bulk of the work. <b>Three parts originally landed and reverted in commits #5 and #6</b> (the
+          360&deg; fan in <code>Actor::CastSeeRays()</code>, the Editing-only gate on
+          <code>CastSeeRaysFromSky</code>, and the <code>useOneStageFoW = false</code> override). All the
+          other components <b>stand</b>: crash + null-deref fixes
+          (<code>CommitToLastSeenTerrainWithFowMask</code> null guard, MovableMan <code>GameActivity*</code>
+          casts, FrameMan FoW init / render gating); the wrap class-of-bug fixes (<code>SDF_3</code>
+          <code>uWrapsXY</code> uniform, sky-ray X-wrap guard); the <code>MakeAllUnseen</code>
+          <code>(1,1)</code> sentinel &rarr; <code>(4,4)</code> fallback (real perf bug); the FrameMan
+          FogOfWarSetup palette-stripe fix; the focused <code>IsUnseen</code> API split (&sect;5).
         </div>
       </div>
 
@@ -508,10 +597,10 @@ lookVector *= aimMatrix;
           <span class="commit-tag commit-tag-polish">DEAD CODE</span>
         </div>
         <div class="commit-desc">
-          Scaled the now-removed <code>rayCount</code> field in our 360&deg; fan. With the fan reverted in commit
-          #5, this code no longer compiles into a hot path &mdash; the <code>Look()</code> dispatcher doesn't use
-          <code>rayCount</code>. The commit is harmless (no runtime effect) but is technically dead. Easy to drop
-          via force-push if preferred; left in place for now to keep the PR diff stable while review continues.
+          Scaled the now-removed <code>rayCount</code> field in our 360&deg; fan. With the fan reverted in
+          commit #5, this code no longer compiles into a hot path &mdash; the <code>Look()</code> dispatcher
+          doesn't use <code>rayCount</code>. The commit is harmless (no runtime effect) but is technically
+          dead. Easy to drop via force-push if preferred; left in place for now to keep the PR diff stable.
         </div>
       </div>
 
@@ -522,9 +611,9 @@ lookVector *= aimMatrix;
           <span class="commit-tag commit-tag-polish">POLISH</span>
         </div>
         <div class="commit-desc">
-          Completely orthogonal to FoW. Uses <code>GetFloorIntX()</code> / <code>GetFloorIntY()</code> like the
-          other 7 <code>DrawHUD</code> callsites instead of raw float members. No behavior change at integer
-          pixel positions; just makes this site consistent with the rest of the codebase.
+          Completely orthogonal to FoW. Uses <code>GetFloorIntX()</code> / <code>GetFloorIntY()</code> like
+          the other 7 <code>DrawHUD</code> callsites instead of raw float members. No behavior change at
+          integer pixel positions; just makes this site consistent with the rest of the codebase.
         </div>
       </div>
 
@@ -535,32 +624,55 @@ lookVector *= aimMatrix;
           <span class="commit-tag commit-tag-polish">DOCS</span>
         </div>
         <div class="commit-desc">
-          Pure comment addition (no functional change). Documents the <i>why</i> behind the
-          <code>if (maskReady)</code> guard around <code>RenderBackgroundLayersBmToTexture()</code> that
-          <code>be8734ec4</code> already put in place. Future maintainers won't have to re-derive the rationale
-          from the call site alone.
+          Originally added a 7-line comment block above the <code>RenderBackgroundLayersBmToTexture()</code>
+          guard. <b>Trimmed to a single line in commit #6</b> per Causeless's "AI comments WAY too much"
+          feedback; the gate's relationship to the FBO+VAO allocated by
+          <code>InitOrReinitFowOglThings</code> remains explained in one short note.
         </div>
       </div>
 
       <div class="commit">
         <div class="commit-head">
-          <span class="commit-hash">[new]</span>
-          <span class="commit-title">Revert the two design-misread changes per Causeless's review</span>
+          <span class="commit-hash">[#5]</span>
+          <span class="commit-title">Revert directional-reveal misreads per Causeless's review</span>
           <span class="commit-tag commit-tag-revert">FIX</span>
         </div>
         <div class="commit-desc">
-          The 5th commit. Two surgical reverts inside the headline:
+          Reverts misreads #1 and #2:
           <ul style="margin: 6px 0 0; padding-left: 20px; font-size: 12.8px;">
             <li><code>Actor::CastSeeRays()</code> back to its <code>Look(100, screenWidth * 0.7f * m_Perceptiveness)</code>
-            dispatcher form. Comment added naming AHuman/ACrab/Actor base overrides so the next reader doesn't
-            re-make the misread.</li>
-            <li><code>MovableMan::Update</code>'s <code>CastSeeRaysFromSky</code> thread-pool dispatch restored
-            to fire during both Editing and gameplay. Comment added clarifying that
-            <code>4ae962455</code>'s "Killed <i>script</i> sky rays" only killed Lua-script spawns, not the
-            engine dispatch.</li>
+            dispatcher form. The directional cone + body bubble in <code>AHuman::Look()</code> drive
+            vision again.</li>
+            <li><code>MovableMan::Update</code>'s <code>CastSeeRaysFromSky</code> thread-pool dispatch
+            restored to fire during both Editing and gameplay (the engine sky-ray dispatch is the
+            outdoor-vs-bunker differentiator Causeless described).</li>
           </ul>
-          Build clean (Debug Minimal, x64) on both <code>fow-fixes</code> and the PR branch. Byte-for-byte equal
-          to <code>fow-fixes</code> preserved.
+        </div>
+      </div>
+
+      <div class="commit">
+        <div class="commit-head">
+          <span class="commit-hash">[#6]</span>
+          <span class="commit-title">Address Causeless's GH review feedback</span>
+          <span class="commit-tag commit-tag-revert">FIX</span>
+        </div>
+        <div class="commit-desc">
+          Reverts misread #3 + addresses comment-verbosity feedback + minor Lua revert:
+          <ul style="margin: 6px 0 0; padding-left: 20px; font-size: 12.8px;">
+            <li><b><code>useOneStageFoW = false</code> override removed.</b> GLSL default
+            <code>uniform bool useOneStageFoW = true;</code> in <code>Background.frag</code> takes effect.
+            Stays the intentional state until upstream's SDF-mask-based terrain-commit lands.</li>
+            <li><b>Aggressive comment trim &mdash; ~74 lines removed</b> across <code>Actor.cpp</code>,
+            <code>FrameMan.cpp</code>, <code>MovableMan.cpp</code>, <code>SceneMan.cpp</code>, and the SDF
+            shader. Multi-paragraph blocks explaining null-deref guards, dispatcher functions,
+            maskReady-gated calls, and sky-ray dispatch are gone; one-line notes for non-obvious
+            invariants remain.</li>
+            <li><b><code>SkirmishDefense.lua</code> initial-reveal radius shrink reverted.</b> The
+            rationale was tied to the 360&deg; fan in misread #1; with <code>AHuman::Look()</code> driving
+            directional vision, upstream Lua content stays as-is.</li>
+          </ul>
+          Build clean (Debug Minimal, x64) on both <code>fow-fixes</code> and PR worktrees. Byte-for-byte
+          equality preserved.
         </div>
       </div>
 
@@ -572,31 +684,30 @@ lookVector *= aimMatrix;
     <div class="design-call">
       <div class="design-call-title">The decision</div>
       <p>Your <code>bdb3c9bbd</code> ("Unseen is now 'ever unseen', not current FoW") repointed
-      <code>SceneMan::IsUnseen</code> at <code>GetUnseenLayerTerrainMask</code> &mdash; the ever-unseen memory
-      mask &mdash; with explicit "OR has seen the space" comments on the <code>HDFirearm</code>/<code>HeldDevice</code>
-      <code>DrawHUD</code> callsites you added in the same commit. <b>That's the right semantic going forward</b>,
-      but it changes the contract every existing caller was written against.</p>
-      <p>Rather than revert your rename, we <b>added a second method</b>: <code>IsCurrentlyUnseen()</code>, which
-      checks the current-FoV mask (the old <code>IsUnseen</code> semantic). Mods (and the renderer's two-stage
-      shader path) can now choose:</p>
+      <code>SceneMan::IsUnseen</code> at <code>GetUnseenLayerTerrainMask</code> &mdash; the ever-unseen
+      memory mask &mdash; with explicit "OR has seen the space" comments on the <code>HDFirearm</code>/<code>HeldDevice</code>
+      <code>DrawHUD</code> callsites you added in the same commit. <b>That's the right semantic going
+      forward</b>, but it changes the contract every existing caller was written against.</p>
+      <p>Rather than revert your rename, we <b>added a second method</b>: <code>IsCurrentlyUnseen()</code>,
+      which checks the current-FoV mask (the old <code>IsUnseen</code> semantic). Mods (and the renderer's
+      two-stage shader path) can now choose:</p>
       <ul>
         <li><code>IsUnseen()</code> &rarr; ever-unseen / memory layer (your new semantic, unchanged)</li>
         <li><code>IsCurrentlyUnseen()</code> &rarr; current FoV (the old <code>IsUnseen</code> semantic, restored)</li>
       </ul>
-      <p>One new method on the Lua API surface. The old name keeps working. Reviewer call: is this the right API
-      shape, or do you want the names reversed (<code>IsUnseen</code> = current, <code>IsEverUnseen</code> = memory)?
-      Either is implementable in five minutes &mdash; we chose this one because <code>bdb3c9bbd</code> already
-      shipped the new semantic and your in-source comments on the DrawHUD callsites read most naturally with it.</p>
+      <p>One new method on the Lua API surface. The old name keeps working. Reviewer call: is this the
+      right API shape, or do you want the names reversed (<code>IsUnseen</code> = current,
+      <code>IsEverUnseen</code> = memory)? Either is implementable in five minutes &mdash; we chose this
+      one because <code>bdb3c9bbd</code> already shipped the new semantic.</p>
     </div>
 
     <h3>5.1 &nbsp; Why this matters &mdash; the callsite audit</h3>
     <p>Counted directly via grep over <code>Data/Base.rte/AI/</code> + <code>D:\Projects\cccp_mods\VoidWanderers\</code>.
-    After <code>bdb3c9bbd</code>, every site below started reading the ever-unseen mask when its author meant
-    current-FoV (or savegame serialization wrote the wrong field). This PR adds the explicit
-    <code>IsCurrentlyUnseen()</code> method so each callsite <i>can</i> be corrected &mdash; but the callsites
-    themselves still call <code>IsUnseen</code> and still get the new semantic. The actual call-rewriting
-    (<code>IsUnseen</code> &rarr; <code>IsCurrentlyUnseen</code> at perception sites) is the headline follow-up
-    in <a href="#ship-list">&sect;8.1</a>.</p>
+    After <code>bdb3c9bbd</code>, every site below started reading the ever-unseen mask when its author
+    meant current-FoV (or savegame serialization wrote the wrong field). This PR adds the explicit
+    <code>IsCurrentlyUnseen()</code> method so each callsite <i>can</i> be corrected &mdash; but the
+    callsites themselves still call <code>IsUnseen</code>. The actual call-rewriting is the headline
+    follow-up in <a href="#ship-list">&sect;8.1</a>.</p>
 
     <table class="tbl callsite-table">
       <thead><tr><th>Site</th><th class="count">Callsites</th><th>Impact if not fixed</th></tr></thead>
@@ -647,16 +758,16 @@ lookVector *= aimMatrix;
     <h3>5.2 &nbsp; What changed in the engine</h3>
     <ul>
       <li><b>Added</b>: <code>SceneMan::IsCurrentlyUnseen(const Vector &amp;posX, int team) const</code> in
-      <code>Source/Managers/SceneMan.h</code> and <code>SceneMan.cpp</code>. Reads <code>GetUnseenLayerMask</code>
-      (the current-FoV mask).</li>
-      <li><b>Added</b>: Lua binding for <code>IsCurrentlyUnseen</code> alongside the existing <code>IsUnseen</code>
-      in <code>LuaBindingsSceneMan.cpp</code>.</li>
-      <li><b>Unchanged</b>: <code>SceneMan::IsUnseen</code> stays exactly as you wrote it in <code>bdb3c9bbd</code>
-      (reads <code>GetUnseenLayerTerrainMask</code>, the ever-unseen mask).</li>
-      <li><b>NOT changed by this PR</b>: the ~30 vanilla AI Lua callsites in <code>Data/Base.rte/AI/*.lua</code>
-      and the ~14 VoidWanderers callsites. They still call <code>IsUnseen</code> and still get the new
-      ever-unseen semantic. Updating them to <code>IsCurrentlyUnseen</code> where the author meant current-FoV is
-      the headline follow-up &mdash; see <a href="#ship-list">&sect;8.1</a>.</li>
+      <code>Source/Managers/SceneMan.h</code> and <code>SceneMan.cpp</code>. Reads
+      <code>GetUnseenLayerMask</code> (the current-FoV mask).</li>
+      <li><b>Added</b>: Lua binding for <code>IsCurrentlyUnseen</code> alongside the existing
+      <code>IsUnseen</code> in <code>LuaBindingsSceneMan.cpp</code>.</li>
+      <li><b>Unchanged</b>: <code>SceneMan::IsUnseen</code> stays exactly as you wrote it in
+      <code>bdb3c9bbd</code> (reads <code>GetUnseenLayerTerrainMask</code>, the ever-unseen mask).</li>
+      <li><b>NOT changed by this PR</b>: the ~30 vanilla AI Lua callsites in
+      <code>Data/Base.rte/AI/*.lua</code> and the ~14 VoidWanderers callsites. They still call
+      <code>IsUnseen</code> and still get the new ever-unseen semantic. Updating them is the headline
+      follow-up &mdash; see <a href="#ship-list">&sect;8.1</a>.</li>
     </ul>
 
     <!-- ============ 6 · THE AI CALLSITE P0 ============ -->
@@ -664,105 +775,118 @@ lookVector *= aimMatrix;
 
     <div class="design-call">
       <div class="design-call-title">The headline P0 we caught and need to ship</div>
-      <p><b>The vanilla AI Lua scripts still call <code>IsUnseen</code> and get the new ever-unseen semantic</b>
-      &mdash; so they think every patch of terrain ever scouted is currently visible. Result: <b>AI shoots through
-      the dimmed memory layer at targets you can't see.</b> The <code>IsCurrentlyUnseen()</code> method this PR
-      added solves the <i>API-level</i> mod-compat (the method exists), but the <i>callsite-level</i> fix &mdash;
-      updating ~30 vanilla AI callsites from <code>IsUnseen</code> &rarr; <code>IsCurrentlyUnseen</code> &mdash;
-      is still ahead. This P0 is orthogonal to the directional-reveal misread; it survives the redesign because
-      it's about the API contract, not the ray-cast direction.</p>
+      <p><b>The vanilla AI Lua scripts still call <code>IsUnseen</code> and get the new ever-unseen
+      semantic</b> &mdash; so they think every patch of terrain ever scouted is currently visible. Result:
+      <b>AI shoots through the dimmed memory layer at targets you can't see.</b> The
+      <code>IsCurrentlyUnseen()</code> method this PR added solves the <i>API-level</i> mod-compat (the
+      method exists), but the <i>callsite-level</i> fix &mdash; updating ~30 vanilla AI callsites from
+      <code>IsUnseen</code> &rarr; <code>IsCurrentlyUnseen</code> &mdash; is still ahead. This P0 is
+      orthogonal to the three reveal-direction misreads; it survives the corrections because it's about
+      the API contract, not the ray-cast direction.</p>
     </div>
 
-    <p>Detail audit lives in <a href="#ship-list">&sect;8.1</a>. Estimated effort: ~2&ndash;4 hours of focused
-    work given the callsite table in &sect;5.1. The change is mechanical &mdash; <code>IsUnseen</code> &rarr;
-    <code>IsCurrentlyUnseen</code> at each perception/visibility callsite, leaving any "has the team ever seen
-    this" callsites alone. The VoidWanderers <code>Tactics.lua:1065</code> savegame line is the most
-    consequential single fix (silent save corruption if missed).</p>
+    <p>Detail audit lives in <a href="#ship-list">&sect;8.1</a>. Estimated effort: ~2&ndash;4 hours of
+    focused work given the callsite table in &sect;5.1. The change is mechanical &mdash;
+    <code>IsUnseen</code> &rarr; <code>IsCurrentlyUnseen</code> at each perception/visibility callsite,
+    leaving any "has the team ever seen this" callsites alone. The VoidWanderers
+    <code>Tactics.lua:1065</code> savegame line is the most consequential single fix (silent save
+    corruption if missed).</p>
 
     <!-- ============ 7 · GENUINE FUTURE DESIGN ============ -->
     <h2 id="future">7 &nbsp;&middot;&nbsp; <span class="h-accent">What's genuinely TBD as future design</span></h2>
 
     <p>Per the March 2&ndash;3 transcript between Causeless, ooaaaoaoao, Naitor, Jeff, HeliumAnt, Bebomonky,
-    bad.beaver, easter cherkov, and Fairyartos &mdash; here's the design conversation that establishes what's
-    still ahead. None of these block the PR landing; all of them are upstream-owned design calls that we'd
-    happily implement to spec once the design lands but won't drive ourselves.</p>
+    bad.beaver, easter cherkov, and Fairyartos &mdash; here's the design conversation that establishes
+    what's still ahead. None of these block the PR landing; all of them are upstream-owned design calls
+    that we'd happily implement to spec once the design lands but won't drive ourselves.</p>
 
     <h3>7.1 &nbsp; Cameras &mdash; stationary vision sources</h3>
-    <p>Naitor: <i>&ldquo;there should be a new building type that lets you see things constantly inside your
-    base&rdquo;</i> &mdash; ooaaaoaoao replied <i>&ldquo;cameras, yes! will be done&rdquo;</i>. The design fit:
-    each camera has its own position, arc, range, and team affiliation. Implementation-wise it'd mirror
-    AHuman::Look() &mdash; same SeeRay primitives, just dispatched from a stationary entity rather than an actor.
+    <p>Naitor: <i>&ldquo;there should be a new building type that lets you see things constantly inside
+    your base&rdquo;</i> &mdash; ooaaaoaoao replied <i>&ldquo;cameras, yes! will be done&rdquo;</i>. The
+    design fit: each camera has its own position, arc, range, and team affiliation. Implementation-wise
+    it'd mirror AHuman::Look() &mdash; same SeeRay primitives, just dispatched from a stationary entity.
     Could be a new <code>Camera</code> entity class or a property on existing emplaced entities (turrets,
-    sensors, etc.). Tunability question: per-camera FOVSpread / arc, or fixed?</p>
+    sensors).</p>
 
     <h3>7.2 &nbsp; Doors as dynamic FoW apertures</h3>
-    <p>Jeff (joking): <i>&ldquo;Every door will now be a new chance to die horribly to something surprising and
-    unforeseen. Suggestion: install more doors.&rdquo;</i> &mdash; Causeless: <i>&ldquo;It should be adjustable in
-    the same way.&rdquo;</i> Doors as opening / closing apertures that affect FoW propagation. Sky rays that
-    pass through an open doorway should illuminate the room beyond (until next sky-ray frame after the door
-    closes). The "adjustable in the same way" line suggests per-door tunable parameters analogous to per-camera /
-    per-actor &mdash; arc width, range, opacity contribution.</p>
+    <p>Jeff (joking): <i>&ldquo;Every door will now be a new chance to die horribly to something
+    surprising and unforeseen. Suggestion: install more doors.&rdquo;</i> &mdash; Causeless:
+    <i>&ldquo;It should be adjustable in the same way.&rdquo;</i> Doors as opening / closing apertures
+    that affect FoW propagation. Sky rays that pass through an open doorway should illuminate the room
+    beyond. The "adjustable in the same way" line suggests per-door tunable parameters analogous to
+    per-camera / per-actor.</p>
 
     <h3>7.3 &nbsp; Pre-SDF smoothing step</h3>
-    <p>Causeless: <i>&ldquo;the solution is to do both: some amount of pushing INTO FoW mask (like in this
-    branch), and also a pre-smoothing step where we sample the FoW mask with bilinear interpolation.&rdquo;</i>
-    The current branch uses negative-distance SDF for smoothing; Causeless's idea is to add a pre-blur pass
-    that smooths the raw FoW mask before SDF computation. Goal: reduce the "stepping effect" that comes from
-    raw pixel-position distances being discontinuous.</p>
+    <p>Causeless: <i>&ldquo;the solution is to do both: some amount of pushing INTO FoW mask (like in
+    this branch), and also a pre-smoothing step where we sample the FoW mask with bilinear
+    interpolation.&rdquo;</i> The current branch uses negative-distance SDF for smoothing; Causeless's
+    idea is to add a pre-blur pass that smooths the raw FoW mask before SDF computation. Goal: reduce
+    the "stepping effect" that comes from raw pixel-position distances being discontinuous.</p>
 
-    <h3>7.4 &nbsp; Team-owned bunker permanent vision</h3>
-    <p>Causeless's idea from the same transcript &mdash; <i>&ldquo;team-owned bunkers could have permanent
-    vision while enemy bunkers are FoW. The idea being that to breach an enemy bunker would require adequate
-    equipment and tooling.&rdquo;</i> trulythepawn proposed <i>&ldquo;recon grenades&rdquo;</i> as the breach
-    tool. Mechanics-wise: a permanently-revealed region centered on each team-owned bunker module;
-    enemy-bunker FoW behaves normally. New gameplay mechanic, not a rendering fix &mdash; deliberate design.</p>
+    <h3>7.4 &nbsp; SDF-mask-based commit to <code>lastSeenTerrain</code></h3>
+    <p>The big one Causeless flagged in his GH review &mdash; the current commit-to-<code>lastSeenTerrain</code>
+    is done with the raw CPU mask, which doesn't reflect what the SDF actually rendered. The plan is to
+    move this over to use the SDF mask so the saved <code>lastSeenTerrain</code> bitmap matches what's
+    rendered. <b>Unlocks <code>useOneStageFoW = false</code></b> &mdash; once this lands, the two-stage
+    memory layer renders the saved terrain bitmap (no live MOs bleeding through) and the underground
+    enemy-visibility issue in &sect;3.7 goes away automatically.</p>
 
-    <h3>7.5 &nbsp; The double-buffering hack</h3>
-    <p>Causeless's <code>031a77b6d</code> <i>&ldquo;hack until double-buffering is in&rdquo;</i> &mdash; the
-    branch currently has a stopgap waiting for proper double-buffered FoW mask updates. ooaaaoaoao noticed in
-    the March transcript that <code>FillUnseenLayerMask</code> was allocating + filling an entirely new bitmap
-    every frame &mdash; Causeless: <i>&ldquo;We have tracked scenelayers btw, where it double-buffers and clears
-    in the background.&rdquo;</i> The double-buffering integration is the proper fix; current state is the hack.</p>
+    <h3>7.5 &nbsp; Team-owned bunker permanent vision</h3>
+    <p>Causeless's idea from the March transcript &mdash; <i>&ldquo;team-owned bunkers could have
+    permanent vision while enemy bunkers are FoW. The idea being that to breach an enemy bunker would
+    require adequate equipment and tooling.&rdquo;</i> trulythepawn proposed <i>&ldquo;recon
+    grenades&rdquo;</i> as the breach tool. Mechanics-wise: a permanently-revealed region centered on
+    each team-owned bunker module; enemy-bunker FoW behaves normally. New gameplay mechanic, not a
+    rendering fix &mdash; deliberate design.</p>
 
-    <h3>7.6 &nbsp; Splitscreen FoW</h3>
-    <p>The <code>TODO- this needs to be done above, per screen! Right now splitscreen is fucked</code> comment
-    in <code>FrameMan::Draw</code> is Causeless's own marker. Per-screen FoW state for multiple local players
-    isn't wired up. Not a regression from our PR &mdash; pre-existing TBD. Audit in <a href="#ship-list">&sect;8.2</a>.</p>
+    <h3>7.6 &nbsp; The double-buffering hack</h3>
+    <p>Causeless's <code>031a77b6d</code> <i>&ldquo;hack until double-buffering is in&rdquo;</i> &mdash;
+    the branch currently has a stopgap waiting for proper double-buffered FoW mask updates. ooaaaoaoao
+    noticed in the March transcript that <code>FillUnseenLayerMask</code> was allocating + filling an
+    entirely new bitmap every frame &mdash; Causeless: <i>&ldquo;We have tracked scenelayers btw, where
+    it double-buffers and clears in the background.&rdquo;</i> The double-buffering integration is the
+    proper fix.</p>
 
-    <h3>7.7 &nbsp; Scene reentry / MetaGame transitions</h3>
+    <h3>7.7 &nbsp; Splitscreen FoW</h3>
+    <p>The <code>TODO- this needs to be done above, per screen! Right now splitscreen is fucked</code>
+    comment in <code>FrameMan::Draw</code> is Causeless's own marker. Per-screen FoW state for multiple
+    local players isn't wired up. Not a regression from our PR &mdash; pre-existing TBD. Audit in
+    <a href="#ship-list">&sect;8.2</a>.</p>
+
+    <h3>7.8 &nbsp; Scene reentry / MetaGame transitions</h3>
     <p>Per <a href="branches.html">branches.html</a>'s audit, scene-reentry FoW (leave + return to scene)
-    doesn't preserve FoW state cleanly. MetaGame mission transitions, mid-mission saves, and activity restarts
-    all need verification. Partially handled by our PR's <code>be8734ec4</code> sentinel fallback for the
-    MakeAllUnseen path, but not exhaustively tested. Audit in <a href="#ship-list">&sect;8.3</a>.</p>
+    doesn't preserve FoW state cleanly. MetaGame mission transitions, mid-mission saves, and activity
+    restarts all need verification. Partially handled by our PR's <code>be8734ec4</code> sentinel
+    fallback for the MakeAllUnseen path, but not exhaustively tested. Audit in
+    <a href="#ship-list">&sect;8.3</a>.</p>
 
-    <h3>7.8 &nbsp; Per-actor FOVSpread configurability</h3>
-    <p>Currently <code>Actor::CastSeeRays()</code> hardcodes <code>Look(100, ...)</code> &mdash; 100&deg; spread
-    for AHumans, identically for everyone. Different actor classes / per-actor tuning would let dropships have
-    narrow forward cones, scouts have wider cones, snipers extend the cone with sharp-aim
-    (<code>m_AimDistance + SharpLength</code> already does this, but only the range, not the spread).
+    <h3>7.9 &nbsp; Per-actor FOVSpread configurability</h3>
+    <p>Currently <code>Actor::CastSeeRays()</code> hardcodes <code>Look(100, ...)</code> &mdash; 100&deg;
+    spread for AHumans, identically for everyone. Different actor classes / per-actor tuning would let
+    dropships have narrow forward cones, scouts have wider cones, snipers extend the cone with sharp-aim.
     Open question: tie spread to existing <code>m_Perceptiveness</code>, or introduce a separate
     <code>m_FOVSpread</code> field?</p>
 
-    <h3>7.9 &nbsp; The GPU rendering migration ooaaaoaoao started</h3>
-    <p>March 3 transcript &mdash; ooaaaoaoao + HeliumAnt collaborated on moving the per-frame CPU tri-blits onto
-    the FoW mask to GPU rendering via raylib render targets. HeliumAnt reported dropping from 2000fps to 1500fps
-    when drawing every MO every frame (vs blitting the MO layer) &mdash; meaningful perf headroom. Unclear from
-    the transcript whether this work landed or was abandoned mid-iteration. Worth grepping
-    <code>upstream/gpu-renderer</code> and <code>upstream/interpolated-render-redux</code> for the actual state.</p>
+    <h3>7.10 &nbsp; The GPU rendering migration ooaaaoaoao started</h3>
+    <p>March 3 transcript &mdash; ooaaaoaoao + HeliumAnt collaborated on moving the per-frame CPU
+    tri-blits onto the FoW mask to GPU rendering via raylib render targets. HeliumAnt reported dropping
+    from 2000fps to 1500fps when drawing every MO every frame &mdash; meaningful perf headroom. Unclear
+    from the transcript whether this work landed or was abandoned mid-iteration. Worth grepping
+    <code>upstream/gpu-renderer</code> and <code>upstream/interpolated-render-redux</code> for the
+    actual state.</p>
 
-    <h3>7.10 &nbsp; HUD / FX visibility design calls (P1)</h3>
-    <p>From Bebomonky's question (<i>&ldquo;could just making it a darker color?&rdquo;</i>): the original FoW
-    was just-black; the new branch has texture-aware visual treatment. Per-element visibility rules need to
-    settle: muzzle flashes through dim, explosions, particle effects, sound propagation, HUD indicators, damage
-    numbers, waypoints, aim reticle. Per-element table in <a href="#ship-list">&sect;8.6</a>.</p>
+    <h3>7.11 &nbsp; HUD / FX visibility design calls (P1)</h3>
+    <p>From Bebomonky's question (<i>&ldquo;could just making it a darker color?&rdquo;</i>): the
+    original FoW was just-black; the new branch has texture-aware visual treatment. Per-element
+    visibility rules need to settle: muzzle flashes through dim, explosions, particle effects, sound
+    propagation, HUD indicators, damage numbers, waypoints, aim reticle. Per-element table in
+    <a href="#ship-list">&sect;8.6</a>.</p>
 
     <!-- ============ 8 · SHIP LIST ============ -->
     <h2 id="ship-list">8 &nbsp;&middot;&nbsp; <span class="h-accent">What ship-complete FoW requires &mdash; the full audit</span></h2>
-    <p>Beyond this PR. This is the comprehensive ship list &mdash; everything that needs to work + be tested for
-    FoW to land as a finished feature, not just "playable end-to-end with the directional cone restored."
-    Categorized by priority: <b style="color:#f08080;">P0</b> = ship-blocker, <b style="color:#f5dbb6;">P1</b> =
-    strongly preferred before release, <b style="color:#bcd5f5;">P2</b> = post-ship polish. <b>Mod-compat</b>
-    column flags items where the existing mod ecosystem is most at risk.</p>
+    <p>Beyond this PR. Categorized by priority: <b style="color:#f08080;">P0</b> = ship-blocker,
+    <b style="color:#f5dbb6;">P1</b> = strongly preferred before release, <b style="color:#bcd5f5;">P2</b> =
+    post-ship polish.</p>
 
     <h3>8.1 &nbsp; AI &amp; gameplay respect for FoW (P0) &mdash; <span style="color:#f08080;">the headline bucket</span></h3>
     <table class="tbl">
@@ -776,64 +900,53 @@ lookVector *= aimMatrix;
         <tr><td>LandingZoneMap.lua semantic</td><td>LZ picker may use wrong visibility test</td><td>Vanilla LZ-pick</td><td>Audit whether "ever-seen" or "current-FoV" is the intent</td></tr>
         <tr><td>BrainVsBrain activity</td><td>Wrong "is brain visible" semantic</td><td>Vanilla activity</td><td>Audit + fix</td></tr>
         <tr><td>VoidWanderers AI (~13 callsites)</td><td>Same family of bugs in VW's custom AI</td><td><b>VoidWanderers</b></td><td>Coordinate with VW maintainer or update in our fork</td></tr>
-        <tr><td>VoidWanderers <code>Tactics.lua:1065</code> savegame</td><td>Wrong field written to save string &mdash; silent save corruption</td><td><b>VoidWanderers saves</b></td><td>Almost certainly should be <code>IsCurrentlyUnseen</code> (the at-save-time visibility)</td></tr>
+        <tr><td>VoidWanderers <code>Tactics.lua:1065</code> savegame</td><td>Wrong field written to save string &mdash; silent save corruption</td><td><b>VoidWanderers saves</b></td><td>Almost certainly should be <code>IsCurrentlyUnseen</code></td></tr>
       </tbody>
     </table>
 
     <h3>8.2 &nbsp; Per-team / multi-player infrastructure (P0)</h3>
     <table class="tbl">
-      <thead><tr><th>Item</th><th>Symptom if broken</th><th>Mod compat</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Item</th><th>Symptom if broken</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td>Splitscreen FoW</td><td>Only player 1 has FoW; player 2 sees everything</td><td>Vanilla scenarios that use 2 players</td><td>The <code>TODO- this needs to be done above, per screen! Right now splitscreen is fucked</code> comment in <code>FrameMan::Draw</code> is Causeless's own marker</td></tr>
-        <tr><td>Per-team unseen layer creation</td><td>Crashes (we null-guarded) or missing per-team masks</td><td>Mods that use custom team configs</td><td>The half-wired root behind the crash; should be fully wired</td></tr>
-        <tr><td>Co-op FoW (2+ humans, same team)</td><td>Shared visibility may not merge correctly</td><td>Co-op activities</td><td>Should be: union of both players' see-rays</td></tr>
-        <tr><td>PvP FoW (2+ humans, different teams)</td><td>Either too revealing or too hidden</td><td>PvP activities</td><td>Each player sees only own-team FoW</td></tr>
-        <tr><td>3-team / 4-team scenarios</td><td>Memory / behavior unknown</td><td>Mods with custom team configs</td><td>Per-team architecture should scale to N teams</td></tr>
-        <tr><td>AI-only teams</td><td>FoW system runs unnecessarily for non-human teams</td><td>Mods with non-player AI factions</td><td>Optimize or document</td></tr>
+        <tr><td>Splitscreen FoW</td><td>Only player 1 has FoW; player 2 sees everything</td><td>Causeless's own TODO marker in <code>FrameMan::Draw</code></td></tr>
+        <tr><td>Per-team unseen layer creation</td><td>Crashes (we null-guarded) or missing per-team masks</td><td>The half-wired root behind the crash; should be fully wired</td></tr>
+        <tr><td>Co-op FoW (2+ humans, same team)</td><td>Shared visibility may not merge correctly</td><td>Should be union of both players' see-rays</td></tr>
+        <tr><td>PvP FoW (2+ humans, different teams)</td><td>Either too revealing or too hidden</td><td>Each player sees only own-team FoW</td></tr>
+        <tr><td>3-team / 4-team scenarios</td><td>Memory / behavior unknown</td><td>Per-team architecture should scale to N teams</td></tr>
       </tbody>
     </table>
 
     <h3>8.3 &nbsp; State persistence &mdash; saves, restarts, transitions (P0)</h3>
     <table class="tbl">
-      <thead><tr><th>Item</th><th>Symptom if broken</th><th>Mod compat</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Item</th><th>Symptom if broken</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td>Mid-mission save preserves FoW state</td><td>Reload reveals/hides incorrectly</td><td><b>All saved mods</b></td><td>Verify <code>.ccsave</code> serializes both masks</td></tr>
-        <tr><td>Scene-reentry preserves FoW</td><td>Leave + return to scene = full reveal</td><td>Mods with multi-scene activities</td><td>Per branches.html audit, this is a known TBD</td></tr>
-        <tr><td>MetaGame transitions</td><td>FoW carries over weirdly between missions</td><td>Conquest / MetaGame mods</td><td>Verify each mission gets fresh FoW state</td></tr>
-        <tr><td>Activity restart</td><td>FoW masks not reset cleanly</td><td>Replay-heavy mods</td><td>We partially handled this (sentinel fallback in <code>be8734ec4</code>)</td></tr>
-        <tr><td>Old save backwards compat</td><td>Pre-two-stage saves crash or load wrong</td><td>All existing user saves</td><td>Graceful upgrade path needed</td></tr>
-        <tr><td>Quickload during active match</td><td>FoW masks reset wrongly</td><td>All saved mods</td><td>Standard quickload semantics</td></tr>
+        <tr><td>Mid-mission save preserves FoW state</td><td>Reload reveals/hides incorrectly</td><td>Verify <code>.ccsave</code> serializes both masks</td></tr>
+        <tr><td>Scene-reentry preserves FoW</td><td>Leave + return to scene = full reveal</td><td>Per branches.html audit, known TBD</td></tr>
+        <tr><td>MetaGame transitions</td><td>FoW carries over weirdly between missions</td><td>Verify each mission gets fresh FoW state</td></tr>
+        <tr><td>Activity restart</td><td>FoW masks not reset cleanly</td><td>Partially handled by sentinel fallback in <code>be8734ec4</code></td></tr>
       </tbody>
     </table>
 
-    <h3>8.4 &nbsp; Mod compatibility audit (P0)</h3>
-    <table class="tbl">
-      <thead><tr><th>Item</th><th>What to verify</th><th>Mod impact</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td>~30 vanilla AI <code>IsUnseen</code> callsites updated</td><td>Switch to <code>IsCurrentlyUnseen</code> where intent was current-FoV</td><td><b>All vanilla AI</b></td><td>See &sect;8.1 &mdash; the headline fix</td></tr>
-        <tr><td>~14 VoidWanderers callsites</td><td>Per-callsite intent audit + update</td><td><b>VoidWanderers</b></td><td>Coordinate with maintainer if possible</td></tr>
-        <tr><td>Top-20 mod regression suite</td><td>Each mod loads + 1 playthrough</td><td><b>Top-20 mods</b></td><td>VoidWanderers, Browncoats, Coalition, Mappack, BB+, etc.</td></tr>
-        <tr><td>Mods using <code>GetUnseenLayerMask</code> / <code>GetUnseenLayerTerrainMask</code> directly</td><td>Verify both pointers stay non-null when expected</td><td>Advanced mods</td><td>Grep mod corpus</td></tr>
-        <tr><td>Mods writing FoW state (<code>MakeAllUnseen</code>, <code>MakeAllSeen</code>, <code>Reveal*</code>)</td><td>Verify they touch the right mask in two-stage mode</td><td>Activity-script mods</td><td>Both stages might need updating</td></tr>
-        <tr><td>Mods using FFI to bypass Lua API</td><td>Likely fewer but possible</td><td>Power-user mods</td><td>Identify via grep over mod corpus</td></tr>
-        <tr><td>Modding docs published</td><td>Clear "when to use which method" guide</td><td>All future mods</td><td>Forum post + wiki</td></tr>
-        <tr><td>Forward-compat guarantee</td><td>Mods that don't touch FoW keep working unchanged</td><td>All mods</td><td>True today; should be CI-verified</td></tr>
-      </tbody>
-    </table>
-
-    <h3>8.5 &nbsp; Rendering edge cases (P0/P1 mixed)</h3>
+    <h3>8.4 &nbsp; Rendering edge cases (P0/P1)</h3>
     <table class="tbl">
       <thead><tr><th>Item</th><th>Priority</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td>The double-buffering hack</td><td><b style="color:#f08080;">P0</b></td><td>Causeless's pending TODO (commit <code>031a77b6d</code>) &mdash; see &sect;7.5</td></tr>
-        <tr><td>Scene wrapping (X / Y / both / none)</td><td><b style="color:#f08080;">P0</b></td><td>Fixed by our PR for the SDF + sky-ray paths; broader sweep recommended for other "wrap without checking WrapsX/Y" patterns elsewhere in engine</td></tr>
-        <tr><td>Very large scenes (12000+ px wide)</td><td><b style="color:#f5dbb6;">P1</b></td><td>Memory + perf scaling</td></tr>
-        <tr><td>Very small scenes</td><td><b style="color:#f5dbb6;">P1</b></td><td>SDF minimum-size assumptions</td></tr>
+        <tr><td>SDF-mask-based <code>lastSeenTerrain</code> commit</td><td><b style="color:#f08080;">P0</b></td><td>Unlocks <code>useOneStageFoW = false</code> + fixes underground enemy-visibility (&sect;3.7)</td></tr>
+        <tr><td>The double-buffering hack</td><td><b style="color:#f08080;">P0</b></td><td>Causeless's pending TODO (commit <code>031a77b6d</code>)</td></tr>
+        <tr><td>Scene wrapping (X / Y / both / none)</td><td><b style="color:#f08080;">P0</b></td><td>Fixed by our PR for the SDF + sky-ray paths; broader sweep recommended for other "wrap without checking WrapsX/Y" patterns</td></tr>
         <tr><td>All zoom levels (1x / 2x / 4x)</td><td><b style="color:#f08080;">P0</b></td><td>FoW resolution scales correctly</td></tr>
         <tr><td>Window resize / aspect ratio</td><td><b style="color:#f5dbb6;">P1</b></td><td>FoW re-init on resize without artifacts</td></tr>
-        <tr><td>Borderless/windowed/fullscreen mode switches</td><td><b style="color:#f5dbb6;">P1</b></td><td>FoW textures survive context recreation</td></tr>
-        <tr><td>High-DPI display scaling</td><td><b style="color:#bcd5f5;">P2</b></td><td>Edge case but real</td></tr>
-        <tr><td>Multi-monitor / spanning</td><td><b style="color:#bcd5f5;">P2</b></td><td>Unusual but possible</td></tr>
+      </tbody>
+    </table>
+
+    <h3>8.5 &nbsp; Mod compatibility audit (P0)</h3>
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>What to verify</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>~30 vanilla AI <code>IsUnseen</code> callsites updated</td><td>Switch to <code>IsCurrentlyUnseen</code> where intent was current-FoV</td><td>See &sect;8.1</td></tr>
+        <tr><td>~14 VoidWanderers callsites</td><td>Per-callsite intent audit + update</td><td>Coordinate with maintainer if possible</td></tr>
+        <tr><td>Top-20 mod regression suite</td><td>Each mod loads + 1 playthrough</td><td>VoidWanderers, Browncoats, Coalition, Mappack, BB+</td></tr>
+        <tr><td>Modding docs published</td><td>Clear "when to use which method" guide</td><td>Forum post + wiki</td></tr>
       </tbody>
     </table>
 
@@ -841,17 +954,12 @@ lookVector *= aimMatrix;
     <table class="tbl">
       <thead><tr><th>Item</th><th>Question</th><th>Notes</th></tr></thead>
       <tbody>
+        <tr><td>Enemy sprite visibility in memory</td><td>Visible (dimmed) or hidden?</td><td>Currently visible-dimmed; resolves with SDF-mask-based commit (&sect;7.4)</td></tr>
         <tr><td>Spawn revelation</td><td>Enemy spawning in dimmed area &mdash; revealed?</td><td>Design call: probably no</td></tr>
-        <tr><td>Dropship arrival</td><td>Incoming craft entering dimmed area &mdash; visible?</td><td>Probably no until they exit dim into current-FoV</td></tr>
+        <tr><td>Dropship arrival</td><td>Incoming craft entering dimmed area &mdash; visible?</td><td>Design call</td></tr>
         <tr><td>Muzzle flash through dim</td><td>Gunfire in dimmed area &mdash; flash visible?</td><td>Design call</td></tr>
         <tr><td>Explosion visibility</td><td>Detonations in dimmed area &mdash; visible?</td><td>Probably yes (sound + flash); design call</td></tr>
-        <tr><td>Particle effects in dim</td><td>Blood, debris &mdash; visible?</td><td>Probably hidden unless current-FoV</td></tr>
         <tr><td>Sound propagation</td><td>Audio respects FoW or not?</td><td>Probably not &mdash; sound shouldn't be FoW-gated</td></tr>
-        <tr><td>HUD indicators (squadmate icons)</td><td>Visible through dim?</td><td>Probably yes for own squad</td></tr>
-        <tr><td>Brain unit indicator</td><td>Always-visible?</td><td>Probably yes</td></tr>
-        <tr><td>Damage number popups</td><td>Visible in dim?</td><td>Probably yes if you dealt the damage</td></tr>
-        <tr><td>Waypoint markers</td><td>Render through dim?</td><td>Probably yes</td></tr>
-        <tr><td>Aim reticle</td><td>Renders in dim?</td><td>Yes &mdash; player cursor always visible</td></tr>
       </tbody>
     </table>
 
@@ -859,12 +967,9 @@ lookVector *= aimMatrix;
     <table class="tbl">
       <thead><tr><th>Item</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td>Two-stage on/off toggle</td><td>Let players revert to single-stage (no memory layer). Settings UI + INI hook.</td></tr>
-        <tr><td>Memory-layer decay time</td><td>How long does an ever-seen patch stay revealed? Configurable?</td></tr>
-        <tr><td>Memory-layer darkness intensity</td><td>How dim is the ever-unseen area? Configurable for accessibility</td></tr>
-        <tr><td>SDF intensity / blur radius</td><td>Edge softness configurable for performance vs aesthetic trade-off &mdash; exposed via Causeless's 6 static floats (&sect;3.5), needs UI</td></tr>
-        <tr><td>Outdoor visual intensity</td><td>The desat + noise + scanline strength &mdash; <code>unseenNoiseIntensity</code> et al, needs UI</td></tr>
-        <tr><td>Settings menu integration</td><td>Where in the UI does the toggle live?</td></tr>
+        <tr><td>Two-stage on/off toggle</td><td>Let players revert to single-stage (no memory layer)</td></tr>
+        <tr><td>Memory-layer decay time</td><td>How long does an ever-seen patch stay revealed?</td></tr>
+        <tr><td>SDF / smoothing knobs (6 static floats)</td><td>Causeless's tunable values, need UI surface</td></tr>
         <tr><td>INI-level access for mod authors</td><td>Activity scripts can override these per-scenario</td></tr>
       </tbody>
     </table>
@@ -873,18 +978,28 @@ lookVector *= aimMatrix;
     <table class="tbl">
       <thead><tr><th>Item</th><th>Priority</th><th>Target</th></tr></thead>
       <tbody>
-        <tr><td>Tracy baseline (1 actor, 1 team)</td><td><b style="color:#f08080;">P0</b></td><td>No regression vs pre-PR &mdash; AHuman::Look() ~232 rays/frame is the baseline cost we restored</td></tr>
+        <tr><td>Tracy baseline (1 actor, 1 team)</td><td><b style="color:#f08080;">P0</b></td><td>No regression vs pre-PR &mdash; AHuman::Look() ~232 rays/frame is the baseline cost</td></tr>
         <tr><td>Skirmish 8 actors, 2 teams (typical)</td><td><b style="color:#f08080;">P0</b></td><td>60 fps on Steam Deck</td></tr>
-        <tr><td>Stress 50+ actors, large sightRadius</td><td><b style="color:#f5dbb6;">P1</b></td><td>Most expensive case: 50 AHumans &times; 232 rays = 11.6k rays/frame; threaded via priorityThreadPool already</td></tr>
+        <tr><td>Stress 50+ actors, large sightRadius</td><td><b style="color:#f5dbb6;">P1</b></td><td>50 AHumans &times; 232 rays = 11.6k rays/frame; threaded via priorityThreadPool already</td></tr>
         <tr><td>Steam Deck floor</td><td><b style="color:#f08080;">P0</b></td><td>Min-spec target per upstream</td></tr>
-        <tr><td>Older GPU drivers (Intel HD, older NVIDIA/AMD)</td><td><b style="color:#f5dbb6;">P1</b></td><td>Shader compat</td></tr>
-        <tr><td>GPU memory budget (N team-masks + SDF + bg-layer)</td><td><b style="color:#f5dbb6;">P1</b></td><td>Multi-team scenarios constraint</td></tr>
-        <tr><td>Frame-time variance (hitches at FoW init?)</td><td><b style="color:#f5dbb6;">P1</b></td><td>Smooth gameplay during activity start</td></tr>
-        <tr><td>GPU rendering migration (ooaaaoaoao's WIP from March 3)</td><td><b style="color:#f5dbb6;">P1</b></td><td>The CPU tri-blit cost was the main perf hotspot per HeliumAnt's note &mdash; see &sect;7.9</td></tr>
+        <tr><td>GPU rendering migration (ooaaaoaoao's WIP)</td><td><b style="color:#f5dbb6;">P1</b></td><td>The CPU tri-blit cost was the main perf hotspot per HeliumAnt's note &mdash; see &sect;7.10</td></tr>
       </tbody>
     </table>
 
-    <h3>8.9 &nbsp; Platform / hardware coverage (P0/P1)</h3>
+    <h3>8.9 &nbsp; New design directions (forward-looking)</h3>
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>Source</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Cameras (stationary vision sources)</td><td>Naitor's question, ooaaaoaoao "yes! will be done"</td><td>&sect;7.1</td></tr>
+        <tr><td>Doors as dynamic FoW apertures</td><td>Causeless "adjustable in the same way"</td><td>&sect;7.2</td></tr>
+        <tr><td>Pre-SDF smoothing step</td><td>Causeless "do both: push INTO mask + pre-smoothing step"</td><td>&sect;7.3</td></tr>
+        <tr><td>SDF-mask-based <code>lastSeenTerrain</code> commit</td><td>Causeless GH comment</td><td>&sect;7.4 &mdash; unlocks <code>useOneStageFoW = false</code></td></tr>
+        <tr><td>Team-owned bunker permanent vision</td><td>Causeless's idea, recon-grenade breach mechanic</td><td>&sect;7.5</td></tr>
+        <tr><td>Per-actor FOVSpread configurability</td><td>Currently hardcoded; tie to <code>m_Perceptiveness</code> or new field</td><td>&sect;7.9</td></tr>
+      </tbody>
+    </table>
+
+    <h3>8.10 &nbsp; Platform / hardware coverage (P0/P1)</h3>
     <table class="tbl">
       <thead><tr><th>Platform</th><th>Status</th><th>Priority</th></tr></thead>
       <tbody>
@@ -892,157 +1007,146 @@ lookVector *= aimMatrix;
         <tr><td>Linux Meson</td><td><span class="status status-blocked">Pre-existing GUIRect fail</span> (not ours)</td><td><b style="color:#f08080;">P0</b></td></tr>
         <tr><td>macOS</td><td>Untested</td><td><b style="color:#f08080;">P0</b></td></tr>
         <tr><td>Steam Deck</td><td>Untested</td><td><b style="color:#f08080;">P0</b></td></tr>
-        <tr><td>NVIDIA / AMD / Intel GPUs</td><td>Tested NVIDIA only</td><td><b style="color:#f5dbb6;">P1</b></td></tr>
-        <tr><td>Apple Silicon</td><td>Untested</td><td><b style="color:#f5dbb6;">P1</b></td></tr>
       </tbody>
     </table>
 
-    <h3>8.10 &nbsp; Edge-case scenarios (P1/P2)</h3>
-    <table class="tbl">
-      <thead><tr><th>Scenario</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td>Actor with sightRadius = 0 (blind)</td><td>Should not crash; should not contribute to FoW</td></tr>
-        <tr><td>Actor with extreme sightRadius (10000+)</td><td>Perf + numerical edge case</td></tr>
-        <tr><td>Two actors at identical position, different teams</td><td>Per-team masks must stay distinct</td></tr>
-        <tr><td>Actor death + respawn</td><td>Sight rays continuity; mask doesn't ghost-update from dead actor</td></tr>
-        <tr><td>Brain unit capture (MetaGame)</td><td>FoW transfers correctly to capturing team</td></tr>
-        <tr><td>Lua-controlled <code>FogOfWarEnabled</code> mid-match</td><td>From <code>read-write-fog-of-war</code> branch direction &mdash; toggle cleanly</td></tr>
-        <tr><td>Allied teams</td><td>Do allies share FoW visibility? Design call</td></tr>
-        <tr><td>Editor mode &harr; play mode</td><td>FoW disabled in editor; cleanly toggles on activity start</td></tr>
-        <tr><td>Console commands during FoW match</td><td>Spawn/reveal debug commands still work</td></tr>
-        <tr><td>Replay system</td><td>FoW state replays correctly (if replays exist)</td></tr>
-        <tr><td>Fast-moving MOs across FoW boundaries</td><td>Pop-in/pop-out behavior should be smooth</td></tr>
-        <tr><td>Multiple sequential scenarios in metagame</td><td>FoW state correctly reset per mission</td></tr>
-      </tbody>
-    </table>
-
-    <h3>8.11 &nbsp; New design directions (forward-looking)</h3>
-    <table class="tbl">
-      <thead><tr><th>Item</th><th>Source</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td>Cameras (stationary vision sources)</td><td>Naitor's question, ooaaaoaoao "yes! will be done"</td><td>&sect;7.1</td></tr>
-        <tr><td>Doors as dynamic FoW apertures</td><td>Causeless "adjustable in the same way"</td><td>&sect;7.2</td></tr>
-        <tr><td>Pre-SDF smoothing step</td><td>Causeless "do both: push INTO mask + pre-smoothing step"</td><td>&sect;7.3</td></tr>
-        <tr><td>Team-owned bunker permanent vision</td><td>Causeless's idea, recon-grenade breach mechanic</td><td>&sect;7.4</td></tr>
-        <tr><td>Per-actor FOVSpread configurability</td><td>Currently hardcoded; tie to <code>m_Perceptiveness</code> or new field</td><td>&sect;7.8</td></tr>
-      </tbody>
-    </table>
-
-    <h3>8.12 &nbsp; ~30 GTODO markers in source (P0/P1/P2 mixed)</h3>
+    <h3>8.11 &nbsp; ~30 GTODO markers in source</h3>
     <div class="scope-out">
-      <p>Causeless left ~30 <code>GTODO</code> markers in the FoW source code. Each is a specific concern that
-      should be triaged: which are P0 (broken behaviors), P1 (known polish needs), P2 (ideas / nice-to-haves).
-      Action: grep <code>GTODO</code> across the FoW-touched source, enumerate each, prioritize.</p>
+      <p>Causeless left ~30 <code>GTODO</code> markers in the FoW source code. Each is a specific concern
+      that should be triaged: which are P0 (broken behaviors), P1 (known polish needs), P2 (ideas /
+      nice-to-haves). Action: grep <code>GTODO</code> across the FoW-touched source, enumerate, prioritize.</p>
     </div>
 
-    <h3>8.13 &nbsp; Documentation + changelog (P1)</h3>
+    <h3>8.12 &nbsp; Documentation + CI (P1)</h3>
     <table class="tbl">
       <thead><tr><th>Item</th><th>Notes</th></tr></thead>
       <tbody>
         <tr><td><code>CHANGELOG.md</code> entry</td><td>User-facing changelog when this lands</td></tr>
         <tr><td>Modding docs</td><td>When to use <code>IsUnseen</code> vs <code>IsCurrentlyUnseen</code></td></tr>
-        <tr><td>User-facing docs</td><td>What's two-stage FoW? Visual explainer</td></tr>
-        <tr><td>Migration notes</td><td>For mods that need updates &mdash; one-time mod-author advisory</td></tr>
-        <tr><td>Forum / Discord announcement</td><td>Reach the active modder community when it ships</td></tr>
-      </tbody>
-    </table>
-
-    <h3>8.14 &nbsp; CI / automated testing (P1)</h3>
-    <table class="tbl">
-      <thead><tr><th>Item</th><th>Notes</th></tr></thead>
-      <tbody>
         <tr><td>Multi-platform build CI</td><td>Windows + Linux + macOS on every PR</td></tr>
         <tr><td>Smoke test CI</td><td>Game boots with FoW on, runs one tick, exits clean</td></tr>
-        <tr><td>Regression scenario CI</td><td>Run representative scenes headless, check no crashes</td></tr>
-        <tr><td>Mod regression CI</td><td>Load top-20 mods, smoke test each</td></tr>
-        <tr><td>Visual diff CI</td><td>Screenshot the same scene, compare to baseline &mdash; catch rendering regressions</td></tr>
       </tbody>
     </table>
-
-    <div class="callout callout-info">
-      <p><b>Estimated effort breakdown (rough)</b>: &sect;8.1 (AI callsite update) is a focused 2&ndash;4 hour pass
-      given the audit table; &sect;8.2 splitscreen is a real chunk of engineering (probably a week);
-      &sect;8.3 persistence is days; &sect;8.4 mod compat is ongoing through release; &sect;8.5&ndash;8.10 are
-      mostly testing passes that compound; &sect;8.11 new directions (cameras / doors / smoothing / team-owned)
-      are weeks-to-months of upstream design work (Causeless's call); &sect;8.12 GTODO triage is half a day;
-      &sect;8.13&ndash;8.14 are docs + CI. <b>Total to fully ship FoW: months of upstream design + ~6&ndash;10
-      weeks of engineering after this PR lands.</b> The PR itself unblocks the unambiguous wins (crash, IsUnseen
-      split, wrap fixes, render-path fixes) without touching the design direction.</p>
-    </div>
 
     <!-- ============ 9 · CREDIT ============ -->
     <h2 id="credit">9 &nbsp;&middot;&nbsp; <span class="h-accent">Credit + collaboration</span></h2>
-    <p>The directional cone + body bubble + sky rays + SDF visual model + bunker-wall calibration + tunable
-    smoothing floats are all Causeless &amp; ooaaaoaoao's work. The bulk of the FoW engineering on this branch
-    is theirs; this PR is a focused finishing pass on the rough edges (crash, mod-compat split, wrap-class-of-bug,
-    render-path fixes) layered on top.</p>
+    <p>The directional cone + body bubble + sky rays + SDF visual model + bunker-wall calibration +
+    tunable smoothing floats are all Causeless &amp; ooaaaoaoao's work. The bulk of the FoW engineering on
+    this branch is theirs; this PR is a focused finishing pass on the rough edges layered on top.</p>
 
     <div class="credit">
       <div class="credit-person">
         <div class="credit-person-name">Causeless</div>
         <div class="credit-person-role">Upstream lead &middot; FoW direction</div>
         <div class="credit-person-desc">Original FoW direction, the two-stage shader pipeline, the
-        <code>bdb3c9bbd</code> "ever-unseen" semantic, the negative-distance SDF experiment, the bunker-wall
-        calibration, the live-tunable static floats, the angle-quantization fix (<code>e5d6b0e11</code>), and
-        the review feedback that surfaced our misread. The PR is grounded in their commit progression and
-        in-source comments.</div>
+        <code>bdb3c9bbd</code> "ever-unseen" semantic, the negative-distance SDF experiment, the
+        bunker-wall calibration, the live-tunable static floats, the angle-quantization fix
+        (<code>e5d6b0e11</code>), and the review feedback (Discord + GH issue thread) that caught all
+        three design-intent misreads. The PR is grounded in their commit progression and in-source
+        comments.</div>
       </div>
       <div class="credit-person">
         <div class="credit-person-name">ooaaaoaoao / getcetc</div>
         <div class="credit-person-role">FoW co-author &middot; directional bubble</div>
         <div class="credit-person-desc">36 commits on the FoW branch as co-author. The body bubble in
-        <code>AHuman::Look()</code> (<code>32f667559</code>), the sky-ray dispatch (<code>889929d36</code>), the
-        FOW toggle infrastructure (<code>3dd6b1d27</code>), the FOW masks rg32f &rarr; r32f format choice
-        (<code>5df2f2240</code>), and the in-progress GPU-rendering migration are theirs. The contribution
-        preserves their work; named PR ping should include them.</div>
+        <code>AHuman::Look()</code> (<code>32f667559</code>), the sky-ray dispatch (<code>889929d36</code>),
+        the FOW toggle infrastructure (<code>3dd6b1d27</code>), the FOW masks rg32f &rarr; r32f format
+        choice (<code>5df2f2240</code>), and the in-progress GPU-rendering migration are theirs. Named
+        PR ping should include them.</div>
       </div>
       <div class="credit-person">
         <div class="credit-person-name">cortex-modern fork (Madreag)</div>
         <div class="credit-person-role">This PR &middot; finishing pass</div>
-        <div class="credit-person-desc">Five commits on top of upstream <code>975155e72</code>: the
-        finish (<code>be8734ec4</code> + the 5th revert), the rays scaling (<code>cd17a0466</code>, now dead
-        code), the DrawHUD harmonization (<code>a6ad06380</code>), the bg-layer maskReady documentation
-        (<code>926262a9d</code>), and the revert commit addressing Causeless's design feedback. Byte-for-byte
-        equal to cortex-modern's working <code>fow-fixes</code> branch. Bot-review-cleaned (three rounds:
-        Devin, Cursor Bugbot, ChatGPT Codex; triage documented in cortex-modern PR
-        <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a>).</div>
+        <div class="credit-person-desc">Six commits on top of upstream <code>975155e72</code>: the
+        finish (<code>be8734ec4</code>), the rays scaling (<code>cd17a0466</code>, now dead code), the
+        DrawHUD harmonization (<code>a6ad06380</code>), the bg-layer maskReady documentation
+        (<code>926262a9d</code>), and the two design-feedback corrections (commits #5 and #6).
+        Byte-for-byte equal to cortex-modern's working <code>fow-fixes</code> branch. Bot-review-cleaned
+        (three rounds: Devin, Cursor Bugbot, ChatGPT Codex).</div>
       </div>
     </div>
 
-    <!-- ============ 10 · NEXT STEPS ============ -->
-    <h2 id="next">10 &nbsp;&middot;&nbsp; <span class="h-accent">Next steps &mdash; what we're asking for</span></h2>
+    <!-- ============ 10 · CAUSELESS'S GH REVIEW ============ -->
+    <h2 id="review">10 &nbsp;&middot;&nbsp; <span class="h-accent">Causeless's GH review &mdash; verbatim</span></h2>
+    <p>For transparency, the three issue-thread comments Causeless left on cortex-modern PR
+    <a href="https://github.com/Madreag/cortex-modern/pull/1">#1</a> on 2026-05-19. All three addressed in
+    commits #5 and #6.</p>
+
+    <div class="review-quote">
+      <div class="review-quote-meta">Causeless &middot; 2026-05-19 14:06 UTC &middot; mapped to misread #2</div>
+      Please note that CastSeeRaysFromSky() is intended for gameplay, not just editing. The intent is to
+      give a clear difference in gameplay between outdoors fighting and indoors bunker clearing. When in
+      an enclosed area or tunnel, we'll have the two-stage FoW whereas outdoors is always bright and
+      visible. This both allows the non-FoW and dynamic-FoW gameplay styles to coexist while also giving
+      a faux lighting system (as underground areas are naturally darker when unseen). The script rays
+      deletion was a different thing entirely really.
+    </div>
+
+    <div class="review-quote">
+      <div class="review-quote-meta">Causeless &middot; 2026-05-19 14:09 UTC &middot; mapped to feedback #4</div>
+      Otherwise just as a observation, AI comments WAY too much. It very much confused and muddies the
+      code when the AI feels the need to add several paragraphs explaining things as mundane as a null
+      dereference fix or other minor adjustments. These things are self-explanatory and if anything, the
+      in-depth comments actually confuse the situation further (especially when it's unclear if the
+      comment is referring to an old problem or an extant one).
+    </div>
+
+    <div class="review-quote">
+      <div class="review-quote-meta">Causeless &middot; 2026-05-19 14:29 UTC &middot; mapped to misread #3</div>
+      Also, useOneStageFoW = true is set because right now the committing of currently-seen to the terrain
+      mask isn't great. THis is being done with the raw CPU mask, which doesn't properly update everything
+      in the sight area (as the actual rendered sight area digs into the terrain). The intent was to move
+      this over to where we can use the actual SDF mask to copy the exact pixels that are currently
+      visible.
+    </div>
+
+    <p>Plus the Discord comment (mapped to misread #1) that triggered the initial pivot:</p>
+
+    <div class="review-quote">
+      <div class="review-quote-meta">Causeless &middot; 2026-05-19 Discord</div>
+      Hey er, this is a pretty big departure from what we had planned and intended. The intent was only to
+      reveal FoW in the direction that the actor was looking. Also the sky rays are intentional, so that
+      there's a difference between outdoors and bunker gameplay.
+    </div>
+
+    <!-- ============ 11 · NEXT STEPS ============ -->
+    <h2 id="next">11 &nbsp;&middot;&nbsp; <span class="h-accent">Next steps &mdash; what we're asking for</span></h2>
     <div class="card">
       <ol>
-        <li><b>Review the narrowed PR at your pace</b> &mdash; the 5th commit is the design-feedback fix; the
-        others are real bug fixes / API split / docs / cosmetic. If anything in the 5 commits looks wrong, flag
-        it and we'll iterate.</li>
-        <li><b>API naming call</b> &mdash; <code>IsUnseen</code> + <code>IsCurrentlyUnseen</code> is the shape we
-        chose, but if you'd prefer the names reversed (or a different name for the new one), say so. The change
-        is five minutes plus the Lua binding update.</li>
-        <li><b><code>cd17a0466</code> is now dead code</b> &mdash; the <code>rayCount</code> field it scaled is
-        gone with the revert. Want it dropped via force-push, or fine to leave as a harmless commit in the
-        history? Either works.</li>
-        <li><b>Future design</b> &mdash; cameras, doors, pre-SDF smoothing, team-owned bunker vision, GPU
-        rendering migration, per-actor FOVSpread (&sect;7) are all upstream-owned design calls. Happy to
-        implement to spec once you and ooaaaoaoao land the design; not going to drive these ourselves.</li>
-        <li><b>The AI callsite P0 (&sect;6)</b> &mdash; if you want us to ship the ~30 callsite update as a
-        separate follow-up PR, we can. It's a 2&ndash;4 hour mechanical pass once the audit table in &sect;5.1 is
-        signed off. Or it can stay in your queue &mdash; your call.</li>
-        <li><b>Rebase / squash / split / drop dead commit</b> &mdash; happy to do any of these however you
-        prefer for review.</li>
+        <li><b>Review the narrowed PR at your pace</b> &mdash; commits #5 and #6 are the design-feedback
+        corrections; #1&ndash;#4 are real bug fixes / API split / docs / cosmetic. All three misreads
+        plus the comment-verbosity feedback are addressed.</li>
+        <li><b>API naming call</b> &mdash; <code>IsUnseen</code> + <code>IsCurrentlyUnseen</code> is the
+        shape we chose, but if you'd prefer the names reversed (or a different name for the new one),
+        say so. Five-minute change.</li>
+        <li><b><code>cd17a0466</code> is now dead code</b> &mdash; the <code>rayCount</code> field it
+        scaled is gone with misread #1's revert. Want it dropped via force-push, or fine to leave as a
+        harmless commit in the history? Either works.</li>
+        <li><b>The underground enemy-visibility limitation (&sect;3.7)</b> &mdash; we've documented it as
+        a known issue resolved naturally by your planned SDF-mask-based terrain commit (&sect;7.4). If
+        you'd rather have the per-MO sprite-render gate as an interim workaround, we can implement that
+        to spec &mdash; it's a gameplay-design call so deferring to you.</li>
+        <li><b>The AI callsite P0 (&sect;6)</b> &mdash; if you want us to ship the ~30 callsite update
+        as a separate follow-up PR, we can. ~2&ndash;4 hour mechanical pass once the audit in &sect;5.1
+        is signed off.</li>
+        <li><b>Future design</b> &mdash; cameras, doors, pre-SDF smoothing, team-owned bunker vision,
+        GPU rendering migration, per-actor FOVSpread (&sect;7) are all upstream-owned design calls.
+        Happy to implement to spec; not going to drive these ourselves.</li>
+        <li><b>Rebase / squash / split / drop dead commit</b> &mdash; happy to do any of these however
+        you prefer for review.</li>
       </ol>
-      <p style="margin-top: 12px; font-size: 12.8px;">Beyond this PR, the cortex-modern fork is heading into
-      determinism + engine modernization work with an eye toward bringing multiplayer back eventually (rough
-      plan: <a href="multiplayer.html">multiplayer.html</a>). Happy to keep helping on FoW if you want a third
-      pair of hands on specific items; not going to push beyond the contribution shape that's worked here.</p>
+      <p style="margin-top: 12px; font-size: 12.8px;">Beyond this PR, the cortex-modern fork is heading
+      into determinism + engine modernization work with an eye toward bringing multiplayer back
+      eventually (rough plan: <a href="multiplayer.html">multiplayer.html</a>). Happy to keep helping on
+      FoW if you want a third pair of hands on specific items; not going to push beyond the contribution
+      shape that's worked here.</p>
     </div>
 
     <div class="page-foot">
-      cortex-modern FoW contribution &middot; rewritten 2026-05-19 after Causeless's design-feedback review and
-      the discovery that <code>AHuman::Look()</code> already implements the directional reveal &middot;
-      canonical source: the 5 commits at
-      <code>Madreag/cortex-modern:pr/fow-character-centric-2stage</code> &middot; this page is the at-a-glance,
-      not the truth &mdash; if something here disagrees with the commits, the commits win.
+      cortex-modern FoW contribution &middot; updated 2026-05-19 after Causeless's GH issue-thread review
+      and the comment-verbosity feedback &middot; canonical source: the 6 commits at
+      <code>Madreag/cortex-modern:pr/fow-character-centric-2stage</code> &middot; this page is the
+      at-a-glance, not the truth &mdash; if something here disagrees with the commits, the commits win.
     </div>
   </main>
 
