@@ -178,12 +178,16 @@ MP M4 — see below). The modder-facing summary lives in
 `modernization-effort` and the MP milestone branches. The divergence report
 is uploaded as an artifact (`determinism-<scenario>-<os>`).
 
-The M2 main-thread-Lua scenarios (`M2LuaBaseline`, `M2LuaRandomStress`,
-`M2PairsStress`, `M2OsStubTest`) are **blocking** — their Lua runs in the
-Activity script, clear of the threaded-sim race, so they reach a clean
-MATCH and a regression should fail the PR. The M1 scenarios and
-`M2ModSmokeLoading` run threaded sim / AI Lua and stay **informational**
-(`continue-on-error`): the last thread-race (Lua-called C++ helpers
-transitively touching `g_SimRNG` from worker threads during
-`ThreadedUpdate` / `SyncedUpdate`) remains. **MP M4 closes that race**;
-those scenarios flip to blocking then.
+All scenarios are **informational** (`continue-on-error`). The per-tick total
+hash combines every subsystem, and M1's `sim_rng` / `actors` / `particles` /
+`scene` subsystems still carry the residual sim-thread race (Lua-called C++
+helpers transitively touching `g_SimRNG` from worker threads during
+`ThreadedUpdate` / `SyncedUpdate`). No scenario reaches a whole-tick MATCH yet
+— M1's own `M1Baseline` diverges `sim_rng` at tick 1 in both the M1 and M2
+builds. **MP M4 closes that race**; the gate flips to blocking then.
+
+M2's Lua determinism is verified in the meantime by the `decisions` subsystem:
+`M2LuaRandomStress` / `M2PairsStress` / `M2OsStubTest` fold each tick's
+`math.random` sequence, `pairs()` order, and `os.*` values into a decision
+event, and that subsystem does not diverge across runs — the Lua-language
+guarantees hold even while the inherited sim race keeps `total` diverging.
