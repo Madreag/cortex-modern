@@ -18,8 +18,8 @@ namespace RTE {
 	/// combines name-sorted subsystems, so registration order is irrelevant. Subsystems are
 	/// created on first Update().
 	///
-	/// Subsystems: `tick`, `terrain`, `decisions`, `actors`, `sim_rng`, `particles`, `scene`
-	/// (M0 + MP M1); `lua_state` (MP M2). Deferred: `carve_math` (MP M3), `controller` (MP M7+).
+	/// Subsystems: `tick`, `terrain`, `decisions`, `actors`, `sim_rng`, `particles`, `scene`,
+	/// `lua_state`. Not yet wired: `carve_math`, `controller`.
 	class SimChecksum : public Singleton<SimChecksum> {
 		friend class Singleton<SimChecksum>;
 

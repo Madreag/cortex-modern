@@ -19,8 +19,8 @@ using namespace RTE;
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
 
 namespace {
-	// M2 Block C — deterministic pairs(): replacing the global builtin bypasses LuaJIT's
-	// pairs ASM fast-path + JIT recorder, which key off the builtin's function identity.
+	// Deterministic pairs(): replacing the global builtin (rather than patching LuaJIT)
+	// sidesteps the pairs ASM fast-path and JIT recorder, which key off the builtin's identity.
 
 	// table.sort comparator: strict weak ordering over primitive keys. Non-primitive keys
 	// (table/function/userdata) compare equal, so their relative order stays unspecified.
@@ -164,7 +164,7 @@ void LuaStateWrapper::Initialize() {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
 
-	// M2 Block C: deterministic sorted-iteration pairs() (the original stays as pairs_unordered).
+	// Swap in deterministic sorted-iteration pairs() (the original stays as pairs_unordered).
 	RegisterDeterministicPairs(m_State);
 
 	// From LuaBind documentation:

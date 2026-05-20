@@ -1,7 +1,6 @@
--- M2LuaBaseline.lua — MP M2 Block A: minimal scenario exercising the `lua_state`
--- SimChecksum subsystem. No actors, so all Lua runs in the Activity script (main
--- thread), clear of the residual M1 threaded-Lua race (see M2_PLAN.md §2.1). OnTick
--- advances the master state's RNG so the subsystem hashes live movement.
+-- M2LuaBaseline.lua — minimal determinism scenario for the lua_state checksum subsystem.
+-- No actors, so all Lua runs in the Activity script (main thread), clear of the threaded
+-- Lua race. OnTick advances the master state's RNG so the subsystem hashes live movement.
 
 package.loaded.Constants = nil; require("Constants");
 local Trust = require("Lib/TrustScenario");
