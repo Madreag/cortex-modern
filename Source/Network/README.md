@@ -5,9 +5,9 @@ the future home of the MP M6+ networking stack. As of M1 (Block F) it contains:
 
 - **`SimChecksum.{h,cpp}`** — per-tick BLAKE3 state hasher with per-subsystem
   breakdown. The total-tick hash is `BLAKE3(concat over sorted subsystems of
-  (name || subsystem_hash))`. Subsystems wired through M1: `tick`, `terrain`,
-  `decisions`, `actors`, `sim_rng`. M2 adds `carve_math`; M5 grows to whole-
-  tick (`particles`, `controller`, `lua_states`, scene metadata).
+  (name || subsystem_hash))`. Subsystems wired: `tick`, `terrain`, `decisions`,
+  `actors`, `sim_rng`, `particles`, `scene` (M0 + M1), `lua_state` (M2). Not yet
+  wired: `carve_math` (M3), `controller` (M7+).
 - **`NetworkSimulator.{h,cpp}`** — latency / loss / jitter knobs plumbed
   through SettingsMan. No-op at M0; MP M1 plugs the real transport on top.
 - **`ReplayLog.{h,cpp}`** — per-tick replay log (scenario, seed, timeline,
@@ -143,20 +143,47 @@ If runs diverge, RESULT becomes `DIVERGED` and the report lists:
 | `particles`  | M1 Block F follow-up | Per-particle {uniqueID, pos, vel}, in MOID order      | `MovableMan::Update`         |
 | `scene`      | M1 Block F follow-up | Tick metadata: actor/item/particle counts + per-team roster size | `MovableMan::Update` |
 | `sim_rng`    | M1 Block F | Full `g_SimRNG` mt19937 internal state, end-of-tick (snapshot inside `MovableMan::Update` before async futures launch) | `MovableMan::Update` |
-| `carve_math` | (M2)     | Deterministic terrain carve / penetrate / dislodge math  | —                            |
-| `controller` | (M5/M6)  | Per-player controller state                              | —                            |
-| `lua_states` | (M5)     | Per-Lua-state math.random RNG state                      | —                            |
+| `lua_state`  | M2       | Per-Lua-state RNG, master then threaded states in order  | `MovableMan::Update`         |
+| `carve_math` | (M3)     | Deterministic terrain carve / penetrate / dislodge math  | —                            |
+| `controller` | (M7+)    | Per-player controller state                              | —                            |
+
+## Lua determinism contract
+
+M2 fences the Lua language environment so a Lua call inside a sim tick
+reproduces across runs. What is guaranteed, and what is not:
+
+- **`math.random`** — every Lua state's RNG is reseeded from `g_SimRNG` at
+  every activity start, so the same activity replays the same sequence.
+  `math.randomseed` still works; a mod that calls it takes over its own RNG
+  state (the `lua_state` subsystem surfaces any drift this causes).
+- **`pairs()`** — iterates a sorted snapshot of the table's keys: numeric
+  keys ascending, then string keys lexicographically. The snapshot is taken
+  when `pairs()` is called, so keys added mid-iteration are not visited.
+  Non-primitive keys (table / function / userdata) compare equal, so their
+  relative order is unspecified. `pairs_unordered` is the original
+  hash-order builtin, kept for mods with hot pairs loops that want it back.
+- **`os.time` / `os.clock`** — return sim-tick seconds, not the wall clock.
+- **`next`** — *not* patched. `for k, v in next, t do` still iterates in
+  hash order. Use `pairs()` for ordered iteration.
+
+A `lua_state` subsystem divergence means a Lua state consumed a different
+number of RNG draws across runs. Usual causes: a mod calling
+`math.randomseed`, or actor AI Lua hitting the threaded-sim race (closes at
+MP M4 — see below). The modder-facing summary lives in
+`Data/Modding/lua-determinism.md`.
 
 ## CI
 
 `.github/workflows/determinism.yml` runs the check on every PR to
-`modernization-effort` and `flagship/mp-m1-determinism-cleanup`. As of M1
-Block F the gate is **informational** — the divergence report is uploaded
-as an artifact (`determinism-<scenario>-<os>`) but the job is marked
-`continue-on-error: true` so the workflow doesn't block merges. M1's
-within-OS divergence has been narrowed from "every tick diverges" at the
-start of Block A to "first divergence at tick ~16 in a small fraction of
-runs," but the last thread-race (Lua-called C++ helpers transitively
-touching `g_SimRNG` from worker threads during `ThreadedUpdate` /
-`SyncedUpdate`) remains. **MP M4 closes that race** as part of its
-deterministic-merge work; the gate flips to blocking then.
+`modernization-effort` and the MP milestone branches. The divergence report
+is uploaded as an artifact (`determinism-<scenario>-<os>`).
+
+The M2 main-thread-Lua scenarios (`M2LuaBaseline`, `M2LuaRandomStress`,
+`M2PairsStress`, `M2OsStubTest`) are **blocking** — their Lua runs in the
+Activity script, clear of the threaded-sim race, so they reach a clean
+MATCH and a regression should fail the PR. The M1 scenarios and
+`M2ModSmokeLoading` run threaded sim / AI Lua and stay **informational**
+(`continue-on-error`): the last thread-race (Lua-called C++ helpers
+transitively touching `g_SimRNG` from worker threads during
+`ThreadedUpdate` / `SyncedUpdate`) remains. **MP M4 closes that race**;
+those scenarios flip to blocking then.

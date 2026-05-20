@@ -89,8 +89,9 @@ jobs:
               --seed 42 \
               --runs 100 \
               --output ${{ matrix.scenario }}-divergence.json
-        # Block F: informational only until MP M4 closes the last thread-race.
-        continue-on-error: true
+        # Main-thread-Lua scenarios are blocking; scenarios that run threaded
+        # sim/AI Lua stay informational until the threaded-sim race is closed.
+        continue-on-error: ${{ !startsWith(matrix.scenario, 'M2') || matrix.scenario == 'M2ModSmokeLoading' }}
 
       - name: Upload divergence report
         if: always()
@@ -133,8 +134,9 @@ jobs:
               --seed 42 `
               --runs 100 `
               --output "${{ matrix.scenario }}-divergence.json"
-        # Block F: informational only until MP M4 closes the last thread-race.
-        continue-on-error: true
+        # Main-thread-Lua scenarios are blocking; scenarios that run threaded
+        # sim/AI Lua stay informational until the threaded-sim race is closed.
+        continue-on-error: ${{ !startsWith(matrix.scenario, 'M2') || matrix.scenario == 'M2ModSmokeLoading' }}
 
       - name: Upload divergence report
         if: always()
