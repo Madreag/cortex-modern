@@ -1458,6 +1458,10 @@ void MovableMan::Update() {
 	{
 		ZoneScopedN("Multithreaded Scripts SyncedUpdate");
 
+		// M4 Block E — the SyncedUpdate boundary: a serial, MOID-ordered (Block B)
+		// pass, and the deterministic channel for script-driven sim-state mutation.
+		// Scripts that change shared sim state must use it, not the parallel
+		// ThreadedUpdate. See Data/Modding/threaded-determinism.md.
 		const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
