@@ -541,8 +541,13 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			do {
 				somethingPenetrated = false;
 
-				const Fixed massDistribution = Fixed::FromFloat(mass) / Fixed::FromFloat(GetSurfaceArea(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1)));
-				const Fixed momentInertiaDistribution = Fixed::FromFloat(m_MomentOfInertia) / Fixed(static_cast<int>(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1)));
+				// hitTerrAtoms may be empty here (the earlier continue only skips when BOTH lists are empty).
+				int terrAtomCount = static_cast<int>(hitTerrAtoms.size()) * (m_Resolution ? m_Resolution : 1);
+				if (terrAtomCount < 1) {
+					terrAtomCount = 1;
+				}
+				const Fixed massDistribution = Fixed::FromFloat(mass) / Fixed::FromFloat(GetSurfaceArea(terrAtomCount));
+				const Fixed momentInertiaDistribution = Fixed::FromFloat(m_MomentOfInertia) / Fixed(terrAtomCount);
 
 				// Determine which of the colliding Atoms will penetrate the terrain.
 				for (std::vector<Atom*>::iterator atomItr = hitTerrAtoms.begin(); atomItr != hitTerrAtoms.end();) {
