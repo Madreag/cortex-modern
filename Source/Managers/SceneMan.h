@@ -1042,10 +1042,6 @@ namespace RTE {
 		/// Feeds one terrain bitmap's dimensions and pixel rows into the `terrain` SimChecksum subsystem.
 		void HashTerrainBitmap(BITMAP* bitmap);
 
-		/// Feeds one penetration-path decision into the `carve_math` SimChecksum subsystem.
-		/// kind: 0 = WillPenetrate, 1 = TryPenetrate, 2 = DislodgePixel.
-		void FeedCarveMath(int kind, int posX, int posY, const Vector& impulse, const Vector& velocity, int materialID, bool result, float retardation);
-
 		// Disallow the use of some implicit methods.
 		SceneMan(const SceneMan& reference) = delete;
 		SceneMan& operator=(const SceneMan& rhs) = delete;

@@ -19,6 +19,7 @@
 #include "SoundContainer.h"
 #include "SimChecksum.h"
 #include "MetricsCollector.h"
+#include "FixedPoint.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -458,25 +459,24 @@ void SceneMan::HashTerrainBitmap(BITMAP* bitmap) {
 	}
 }
 
-void SceneMan::FeedCarveMath(int kind, int posX, int posY, const Vector& impulse, const Vector& velocity, int materialID, bool result, float retardation) {
-	// High call volume — only feed it during a determinism trace, not normal play.
-	if (!g_MetricsCollector.IsRecordingTickHashes()) {
-		return;
+namespace {
+	// Feeds one penetration-path decision into the `carve_math` SimChecksum subsystem.
+	// kind: 0 = WillPenetrate, 1 = TryPenetrate, 2 = DislodgePixel. High call volume —
+	// only feed it during a determinism trace, not normal play.
+	void FeedCarveMath(int kind, int posX, int posY, const FixedVector& impulse, const FixedVector& velocity,
+	                   Fixed integrity, int materialID, bool result, Fixed retardation) {
+		if (!g_MetricsCollector.IsRecordingTickHashes()) {
+			return;
+		}
+		const int64_t fields[] = {
+		    kind, posX, posY, materialID, result ? 1 : 0,
+		    impulse.GetX().Raw(), impulse.GetY().Raw(),
+		    velocity.GetX().Raw(), velocity.GetY().Raw(),
+		    integrity.Raw(), retardation.Raw(),
+		};
+		g_SimChecksum.Update("carve_math", fields, sizeof(fields));
 	}
-	// Penetration inputs are still float here — hash their bit patterns.
-	auto floatBits = [](float f) -> int64_t {
-		uint32_t u = 0;
-		std::memcpy(&u, &f, sizeof(u));
-		return static_cast<int64_t>(u);
-	};
-	const int64_t fields[] = {
-	    kind, posX, posY, materialID, result ? 1 : 0,
-	    floatBits(impulse.m_X), floatBits(impulse.m_Y),
-	    floatBits(velocity.m_X), floatBits(velocity.m_Y),
-	    floatBits(retardation),
-	};
-	g_SimChecksum.Update("carve_math", fields, sizeof(fields));
-}
+} // namespace
 
 bool SceneMan::WillPenetrate(const int posX,
                              const int posY,
@@ -487,9 +487,10 @@ bool SceneMan::WillPenetrate(const int posX,
 		return false;
 
 	unsigned char materialID = getpixel(m_pCurrentScene->GetTerrain()->GetMaterialBitmap(), posX, posY);
-	float integrity = GetMaterialFromID(materialID)->GetIntegrity();
-	const bool result = impulse.MagnitudeIsGreaterThan(integrity);
-	FeedCarveMath(0, posX, posY, impulse, Vector(), materialID, result, 0.0F);
+	const Fixed integrity = Fixed::FromFloat(GetMaterialFromID(materialID)->GetIntegrity());
+	const FixedVector fixedImpulse = FixedVector::FromVectorLike(impulse);
+	const bool result = fixedImpulse.MagnitudeIsGreaterThan(integrity);
+	FeedCarveMath(0, posX, posY, fixedImpulse, FixedVector(), integrity, materialID, result, Fixed());
 	return result;
 }
 
@@ -615,11 +616,14 @@ bool SceneMan::TryPenetrate(int posX,
 	Material const* sceneMat = GetMaterialFromID(materialID);
 	Material const* spawnMat;
 
-	float sprayScale = 0.1F;
-	float sqrImpMag = impulse.GetSqrMagnitude();
+	const Fixed sprayScale = Fixed::FromFloat(0.1F);
+	const FixedVector fixedImpulse = FixedVector::FromVectorLike(impulse);
+	const FixedVector fixedVelocity = FixedVector::FromVectorLike(velocity);
+	const FixedWide sqrImpMag = fixedImpulse.GetSqrMagnitude();
+	const Fixed integrity = Fixed::FromFloat(sceneMat->GetIntegrity());
 
 	// Test if impulse force is enough to penetrate
-	if (sqrImpMag >= (sceneMat->GetIntegrity() * sceneMat->GetIntegrity())) {
+	if (sqrImpMag >= FixedWide::Product(integrity, integrity)) {
 		if (numPenetrations <= 3) {
 			spawnMat = sceneMat->GetSpawnMaterial() ? GetMaterialFromID(sceneMat->GetSpawnMaterial()) : sceneMat;
 			Color spawnColor;
@@ -642,15 +646,15 @@ bool SceneMan::TryPenetrate(int posX,
 				                                new Atom(Vector(), spawnMat, 0, spawnColor, 2),
 				                                0);
 				*/
-				float tempMaxX = velocity.m_X * sprayScale;
-				float tempMinX = tempMaxX / 2.0F;
-				float tempMaxY = velocity.m_Y * sprayScale;
-				float tempMinY = tempMaxY / 2.0F;
+				const Fixed tempMaxX = fixedVelocity.GetX() * sprayScale;
+				const Fixed tempMinX = tempMaxX / Fixed(2);
+				const Fixed tempMaxY = fixedVelocity.GetY() * sprayScale;
+				const Fixed tempMinY = tempMaxY / Fixed(2);
 				MOPixel* pixelMO = new MOPixel(spawnColor,
 				                               spawnMat->GetPixelDensity(),
 				                               Vector(posX, posY),
-				                               Vector(-RandomNum(tempMinX, tempMaxX),
-				                                      -RandomNum(tempMinY, tempMaxY)),
+				                               Vector(-RandomNum(tempMinX.ToFloat(), tempMaxX.ToFloat()),
+				                                      -RandomNum(tempMinY.ToFloat(), tempMaxY.ToFloat())),
 				                               //                                              -(impulse * (sprayScale * RandomNum() / spawnMat.density)),
 				                               new Atom(Vector(), spawnMat->GetIndex(), 0, spawnColor, 2),
 				                               0);
@@ -672,7 +676,7 @@ bool SceneMan::TryPenetrate(int posX,
 
 		// Save the impulse force effects of the penetrating particle.
 		//        retardation = -sceneMat.density;
-		retardation = -(sceneMat->GetIntegrity() / std::sqrt(sqrImpMag));
+		retardation = (-(integrity / Sqrt(sqrImpMag))).ToFloat();
 
 		// If this is a scrap pixel, or there is no background pixel 'supporting' the knocked-loose pixel, make the column above also turn into particles.
 		if (m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
@@ -684,8 +688,8 @@ bool SceneMan::TryPenetrate(int posX,
 			int testMaterialID = g_MaterialAir;
 			MOPixel* pixelMO = 0;
 			Color spawnColor;
-			float sprayMag = std::sqrt(velocity.GetMagnitude() * sprayScale);
-			Vector sprayVel;
+			const Fixed sprayMag = Sqrt(fixedVelocity.GetMagnitude() * sprayScale);
+			FixedVector sprayVel;
 
 			for (int testY = posY - 1; testY > posY - m_ScrapCompactingHeight && testY >= 0; --testY) {
 				if ((testMaterialID = _getpixel(pMaterial, posX, testY)) != g_MaterialAir) {
@@ -701,10 +705,11 @@ bool SceneMan::TryPenetrate(int posX,
 							}
 							if (spawnColor.GetIndex() != g_MaskColor) {
 								// Send terrain pixels flying at a diminishing rate the higher the column goes.
-								sprayVel.SetXY(0, -sprayMag * (1.0F - (static_cast<float>(posY - testY) / static_cast<float>(m_ScrapCompactingHeight))));
-								sprayVel.RadRotate(RandomNum(-c_HalfPI, c_HalfPI));
+								const Fixed heightRatio = Fixed::FromRatio(posY - testY, m_ScrapCompactingHeight);
+								sprayVel = FixedVector(Fixed(), -sprayMag * (Fixed(1) - heightRatio));
+								sprayVel = sprayVel.GetRadRotatedCopy(Fixed::FromFloat(RandomNum(-c_HalfPI, c_HalfPI)));
 
-								pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(posX, testY), sprayVel, new Atom(Vector(), spawnMat->GetIndex(), 0, spawnColor, 2), 0);
+								pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(posX, testY), sprayVel.ToVectorLike<Vector>(), new Atom(Vector(), spawnMat->GetIndex(), 0, spawnColor, 2), 0);
 
 								pixelMO->SetToHitMOs(spawnMat->GetIndex() == c_GoldMaterialID);
 								pixelMO->SetToGetHitByMOs(false);
@@ -730,10 +735,10 @@ bool SceneMan::TryPenetrate(int posX,
 			save_bmp("Orphan.bmp", m_pOrphanSearchBitmap, palette);*/
 		}
 
-		FeedCarveMath(1, posX, posY, impulse, velocity, materialID, true, retardation);
+		FeedCarveMath(1, posX, posY, fixedImpulse, fixedVelocity, integrity, materialID, true, Fixed::FromFloat(retardation));
 		return true;
 	}
-	FeedCarveMath(1, posX, posY, impulse, velocity, materialID, false, 0.0F);
+	FeedCarveMath(1, posX, posY, fixedImpulse, fixedVelocity, integrity, materialID, false, Fixed());
 	return false;
 }
 
@@ -764,7 +769,7 @@ MOPixel* SceneMan::DislodgePixel(int posX, int posY) {
 	m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, ColorKeys::g_MaskColor);
 	m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, MaterialColorKeys::g_MaterialAir);
 
-	FeedCarveMath(2, posX, posY, Vector(), Vector(), materialID, true, 0.0F);
+	FeedCarveMath(2, posX, posY, FixedVector(), FixedVector(), Fixed(), materialID, true, Fixed());
 	return pixelMO;
 }
 
