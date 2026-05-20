@@ -25,6 +25,11 @@
 #                      Block C's MOID sort under heavier population.
 #   M2LuaBaseline    — no actors, main-thread Lua RNG, 600 ticks. Exercises the
 #                      lua_state subsystem.
+#   M2LuaRandomStress — no actors, main-thread math.random, 600 ticks.
+#   M2PairsStress     — no actors, main-thread pairs() iteration, 600 ticks.
+#   M2OsStubTest      — no actors, main-thread os.time/os.clock stubs, 600 ticks.
+#   M2ModSmokeLoading — 4 brain-hunters, 600 ticks. Actor AI Lua smoke test (runs
+#                       threaded AI Lua, so no-error-only, not a MATCH test).
 #
 # Cross-OS:
 #   determinism-cross-os depends on both Linux and Windows jobs and downloads
@@ -57,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline]
+        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,7 +105,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline]
+        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading]
     steps:
       - uses: actions/checkout@v4
         with:
