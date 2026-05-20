@@ -16,6 +16,9 @@
 #include "AllegroBitmap.h"
 
 #include "RTETools.h"
+#include "LuaMan.h"
+
+#include <limits>
 
 using namespace RTE;
 
@@ -293,6 +296,9 @@ int Activity::Save(Writer& writer) const {
 int Activity::Start() {
 	// Reseed the RNG for determinism
 	SeedRNG();
+
+	// M2 Block B: reseed Lua RNGs from g_SimRNG so math.random joins the determinism island.
+	g_LuaMan.SeedAllLuaRNGs(g_SimRNG.RandomNum<uint64_t>(0, std::numeric_limits<uint64_t>::max()));
 
 	if (m_ActivityState != ActivityState::Editing) {
 		m_ActivityState = ActivityState::Running;
