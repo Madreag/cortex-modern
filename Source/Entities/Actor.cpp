@@ -10,6 +10,7 @@
 #include "AtomGroup.h"
 #include "Controller.h"
 #include "RTETools.h"
+#include "LuaMan.h"
 #include "SceneMan.h"
 #include "HeldDevice.h"
 #include "PresetMan.h"
@@ -1307,6 +1308,10 @@ void Actor::Update() {
 }
 
 void RTE::Actor::CastSeeRays() {
+	// M4 Block C — see-ray casting runs on the thread pool and reaches g_SimRNG via
+	// Look(); redirect it to a per-actor generator so it is thread-count-invariant.
+	DeterministicMORNGScope rngScope(GetUniqueID(), Hash("CastSeeRays"));
+
 	// "See" the location and surroundings of this actor on the unseen map
 	if (m_Status != Actor::INACTIVE) {
 		const int lookIterations = 6; // How many see rays to cast per frame

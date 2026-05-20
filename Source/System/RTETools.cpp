@@ -17,6 +17,10 @@ namespace RTE {
 	RandomGenerator  g_RenderRNG;
 	RandomGenerator& g_RandomGenerator = g_SimRNG;
 
+	// M4 Block C — null on the main thread; a threaded sim pass points it at a
+	// per-MO generator (see GetSimRNG / DeterministicMORNGScope).
+	thread_local RandomGenerator* t_simRNGOverride = nullptr;
+
 	void SeedRNG() {
 		// Use a constant seed for determinism.
 		static constexpr uint32_t constSeed = []() {
