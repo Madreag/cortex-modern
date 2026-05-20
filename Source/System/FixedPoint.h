@@ -223,8 +223,9 @@ namespace RTE {
 		float ToFloat() const { return static_cast<float>(static_cast<double>(m_Raw) / 16777216.0); }
 		double ToDouble() const { return static_cast<double>(m_Raw) / 16777216.0; }
 
-		/// Truncate toward zero to an int.
+		/// Convert to int: floor (toward -inf), trunc (toward zero), round-to-nearest, ceil.
 		constexpr int FloorToInt() const { return static_cast<int>(m_Raw >> kFractionBits); }
+		constexpr int TruncToInt() const { return static_cast<int>(m_Raw >= 0 ? (m_Raw >> kFractionBits) : -((-m_Raw) >> kFractionBits)); }
 		constexpr int RoundToInt() const { return static_cast<int>((m_Raw + (int64_t(1) << (kFractionBits - 1))) >> kFractionBits); }
 		constexpr int CeilToInt() const { return static_cast<int>((m_Raw + kFixedOneRaw - 1) >> kFractionBits); }
 

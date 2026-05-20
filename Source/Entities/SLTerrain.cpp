@@ -8,6 +8,7 @@
 #include "Atom.h"
 #include "DataModule.h"
 #include "PresetMan.h"
+#include "FixedPoint.h"
 
 #include <array>
 #include <execution>
@@ -397,9 +398,10 @@ void SLTerrain::CleanAirBox(const Box& box, bool wrapsX, bool wrapsY) {
 std::deque<MOPixel*> SLTerrain::EraseSilhouette(BITMAP* sprite, const Vector& pos, const Vector& pivot, const Matrix& rotation, float scale, bool makeMOPs, int skipMOP, int maxMOPs) {
 	RTEAssert(sprite, "Null BITMAP passed to SLTerrain::EraseSilhouette");
 
-	int maxWidth = static_cast<int>(static_cast<float>(sprite->w + std::abs(pivot.GetFloorIntX() - (sprite->w / 2))) * scale);
-	int maxHeight = static_cast<int>(static_cast<float>(sprite->h + std::abs(pivot.GetFloorIntY() - (sprite->h / 2))) * scale);
-	int maxDiameter = static_cast<int>(std::sqrt(static_cast<float>(maxWidth * maxWidth + maxHeight * maxHeight)) * 2.0F);
+	const Fixed fixedScale = Fixed::FromFloat(scale);
+	int maxWidth = (Fixed(sprite->w + std::abs(pivot.GetFloorIntX() - (sprite->w / 2))) * fixedScale).TruncToInt();
+	int maxHeight = (Fixed(sprite->h + std::abs(pivot.GetFloorIntY() - (sprite->h / 2))) * fixedScale).TruncToInt();
+	int maxDiameter = (Sqrt(Fixed(maxWidth * maxWidth + maxHeight * maxHeight)) * Fixed(2)).TruncToInt();
 	int skipCount = skipMOP;
 
 	BITMAP* tempBitmap = g_SceneMan.GetIntermediateBitmapForSettlingIntoTerrain(maxDiameter);

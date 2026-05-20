@@ -784,18 +784,20 @@ MOPixel* SceneMan::DislodgePixelBool(int posX, int posY, bool deletePixel) {
 
 std::vector<MOPixel*>* SceneMan::DislodgePixelCircle(const Vector& centre, float radius, bool deletePixels) {
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
-	int limit = static_cast<int>(radius) * 2;
+	const Fixed fixedRadius = Fixed::FromFloat(radius);
+	const FixedVector fixedCentre = FixedVector::FromVectorLike(centre);
+	int limit = fixedRadius.TruncToInt() * 2;
 	for (int x = 0; x <= limit; x++) {
 		for (int y = 0; y <= limit; y++) {
-			Vector checkPos = Vector(static_cast<float>(x) - radius, static_cast<float>(y) - radius) + centre;
-			Vector distance = ShortestDistance(centre, checkPos, true);
+			FixedVector checkPos = FixedVector(Fixed(x) - fixedRadius, Fixed(y) - fixedRadius) + fixedCentre;
+			FixedVector distance = FixedVector::FromVectorLike(ShortestDistance(centre, checkPos.ToVectorLike<Vector>(), true));
 
-			if (distance.MagnitudeIsGreaterThan(radius) && y > limit / 2) {
+			if (distance.MagnitudeIsGreaterThan(fixedRadius) && y > limit / 2) {
 				break;
 			}
 
-			if (!distance.MagnitudeIsGreaterThan(radius)) {
-				MOPixel* px = DislodgePixelBool(checkPos.m_X, checkPos.m_Y, deletePixels);
+			if (!distance.MagnitudeIsGreaterThan(fixedRadius)) {
+				MOPixel* px = DislodgePixelBool(checkPos.GetX().TruncToInt(), checkPos.GetY().TruncToInt(), deletePixels);
 				if (px) {
 					pixelList->push_back(px);
 				}
@@ -817,23 +819,26 @@ std::vector<MOPixel*>* SceneMan::DislodgePixelRing(const Vector& centre, float i
 	}
 
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
-	int limit = static_cast<int>(outerRadius) * 2;
+	const Fixed fixedInner = Fixed::FromFloat(innerRadius);
+	const Fixed fixedOuter = Fixed::FromFloat(outerRadius);
+	const FixedVector fixedCentre = FixedVector::FromVectorLike(centre);
+	int limit = fixedOuter.TruncToInt() * 2;
 	for (int x = 0; x <= limit; x++) {
 		for (int y = 0; y <= limit; y++) {
-			Vector checkPos = Vector(static_cast<float>(x) - outerRadius, static_cast<float>(y) - outerRadius) + centre;
-			Vector distance = ShortestDistance(centre, checkPos, true);
+			FixedVector checkPos = FixedVector(Fixed(x) - fixedOuter, Fixed(y) - fixedOuter) + fixedCentre;
+			FixedVector distance = FixedVector::FromVectorLike(ShortestDistance(centre, checkPos.ToVectorLike<Vector>(), true));
 
-			if (distance.MagnitudeIsLessThan(innerRadius) && y < limit - y) {
+			if (distance.MagnitudeIsLessThan(fixedInner) && y < limit - y) {
 				y = limit - y;
 				continue;
 			}
 
-			if (distance.MagnitudeIsGreaterThan(outerRadius) && y > limit / 2) {
+			if (distance.MagnitudeIsGreaterThan(fixedOuter) && y > limit / 2) {
 				break;
 			}
 
-			if (!distance.MagnitudeIsGreaterThan(outerRadius) && !distance.MagnitudeIsLessThan(innerRadius)) {
-				MOPixel* px = DislodgePixelBool(checkPos.m_X, checkPos.m_Y, deletePixels);
+			if (!distance.MagnitudeIsGreaterThan(fixedOuter) && !distance.MagnitudeIsLessThan(fixedInner)) {
+				MOPixel* px = DislodgePixelBool(checkPos.GetX().TruncToInt(), checkPos.GetY().TruncToInt(), deletePixels);
 				if (px) {
 					pixelList->push_back(px);
 				}
@@ -852,15 +857,15 @@ std::vector<MOPixel*>* SceneMan::DislodgePixelBox(const Vector& upperLeftCorner,
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
 
 	// Make sure it works even if people input corners in the wrong order
-	Vector start = Vector(std::min(upperLeftCorner.m_X, lowerRightCorner.m_X), std::min(upperLeftCorner.m_Y, lowerRightCorner.m_Y));
-	Vector end = Vector(std::max(upperLeftCorner.m_X, lowerRightCorner.m_X), std::max(upperLeftCorner.m_Y, lowerRightCorner.m_Y));
+	const FixedVector start(Fixed::FromFloat(std::min(upperLeftCorner.m_X, lowerRightCorner.m_X)), Fixed::FromFloat(std::min(upperLeftCorner.m_Y, lowerRightCorner.m_Y)));
+	const FixedVector end(Fixed::FromFloat(std::max(upperLeftCorner.m_X, lowerRightCorner.m_X)), Fixed::FromFloat(std::max(upperLeftCorner.m_Y, lowerRightCorner.m_Y)));
 
-	float width = end.m_X - start.m_X;
-	float height = end.m_Y - start.m_Y;
-	for (int x = 0; x <= static_cast<int>(width) * 2; x++) {
-		for (int y = 0; y <= static_cast<int>(height) * 2; y++) {
-			Vector checkPos = start + Vector(static_cast<float>(x), static_cast<float>(y));
-			MOPixel* px = DislodgePixelBool(checkPos.m_X, checkPos.m_Y, deletePixels);
+	const Fixed width = end.GetX() - start.GetX();
+	const Fixed height = end.GetY() - start.GetY();
+	for (int x = 0; x <= width.TruncToInt() * 2; x++) {
+		for (int y = 0; y <= height.TruncToInt() * 2; y++) {
+			FixedVector checkPos = start + FixedVector(Fixed(x), Fixed(y));
+			MOPixel* px = DislodgePixelBool(checkPos.GetX().TruncToInt(), checkPos.GetY().TruncToInt(), deletePixels);
 			if (px) {
 				pixelList->push_back(px);
 			}
@@ -879,10 +884,12 @@ std::vector<MOPixel*>* SceneMan::DislodgePixelLine(const Vector& start, const Ve
 	int error, dom, sub, domSteps, skipped = skip;
 	int intPos[2], delta[2], delta2[2], increment[2];
 
-	intPos[X] = std::floor(start.m_X);
-	intPos[Y] = std::floor(start.m_Y);
-	delta[X] = std::floor(start.m_X + ray.m_X) - intPos[X];
-	delta[Y] = std::floor(start.m_Y + ray.m_Y) - intPos[Y];
+	const FixedVector fixedStart = FixedVector::FromVectorLike(start);
+	const FixedVector fixedRay = FixedVector::FromVectorLike(ray);
+	intPos[X] = fixedStart.GetX().FloorToInt();
+	intPos[Y] = fixedStart.GetY().FloorToInt();
+	delta[X] = (fixedStart.GetX() + fixedRay.GetX()).FloorToInt() - intPos[X];
+	delta[Y] = (fixedStart.GetY() + fixedRay.GetY()).FloorToInt() - intPos[Y];
 
 	/////////////////////////////////////////////////////
 	// Bresenham's line drawing algorithm preparation
