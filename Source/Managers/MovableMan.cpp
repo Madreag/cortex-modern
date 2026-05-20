@@ -1825,7 +1825,7 @@ void MovableMan::Update() {
 		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
 	}
 
-	// M2 Block A — co-located with the `sim_rng` snapshot to share its race-free drain point (before the see-ray futures).
+	// Hash every Lua state's RNG, co-located with the sim_rng snapshot to share its pre-see-ray drain point.
 	g_LuaMan.HashAllLuaStatesIntoSimChecksum();
 
 	// Run seeing rays for all actors

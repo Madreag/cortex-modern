@@ -24,7 +24,7 @@
 #   M1ActorStress    — 20-sentry deterministic grid, 600 ticks. Exercises
 #                      Block C's MOID sort under heavier population.
 #   M2LuaBaseline    — no actors, main-thread Lua RNG, 600 ticks. Exercises the
-#                      MP M2 `lua_state` subsystem (added non-blocking at M2 Block A).
+#                      lua_state subsystem.
 #
 # Cross-OS:
 #   determinism-cross-os depends on both Linux and Windows jobs and downloads
