@@ -67,6 +67,15 @@ struct MOUniqueIDLess {
 	}
 };
 
+// M4 Block B — canonical MOID iteration order for the threaded/synced passes; the
+// per-Lua-state registered-MO set is an unordered_set, not reproducibly ordered.
+static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& state) {
+	const auto& registered = state.GetRegisteredMOs();
+	std::vector<MovableObject*> sorted(registered.begin(), registered.end());
+	std::sort(sorted.begin(), sorted.end(), MOUniqueIDLess());
+	return sorted;
+}
+
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -1393,7 +1402,7 @@ void MovableMan::Update() {
 		const std::string threadedUpdate = "ThreadedUpdate"; // avoid string reconstruction
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: g_LuaMan.GetMasterScriptState().GetRegisteredMOs()) {
+		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
 				mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
 			}
@@ -1407,7 +1416,7 @@ void MovableMan::Update() {
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
 
-			                                                     for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			                                                     for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				                                                     if (ValidMO(mo->GetRootParent())) {
 					                                                     mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
 				                                                     }
@@ -1424,7 +1433,7 @@ void MovableMan::Update() {
 		const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: g_LuaMan.GetMasterScriptState().GetRegisteredMOs()) {
+		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
 				mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 			}
@@ -1434,7 +1443,7 @@ void MovableMan::Update() {
 		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
 			g_LuaMan.SetThreadLuaStateOverride(&luaState);
 
-			for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				if (mo->HasRequestedSyncedUpdate()) {
 					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 					mo->ResetRequestedSyncedUpdateFlag();

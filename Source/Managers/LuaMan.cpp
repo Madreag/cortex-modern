@@ -517,6 +517,8 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 
 	return &(*itr);*/
 
+	// M4 Block B — round-robin runs only for non-threaded MO creation (threaded
+	// creation takes the override branch above), so the assignment is deterministic.
 	int ourState = m_LastAssignedLuaState;
 	m_LastAssignedLuaState = (m_LastAssignedLuaState + 1) % m_ScriptStates.size();
 
