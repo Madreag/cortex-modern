@@ -336,13 +336,13 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 	int stepCount = 0;
 	int stepsOnSeg = 0;
 	int hitCount = 0;
-	float timeLeft = travelTime;
-	float segProgress = 0;
-	float segRatio = 0;
+	Fixed timeLeft = Fixed::FromFloat(travelTime);
+	Fixed segProgress = Fixed(0);
+	Fixed segRatio = Fixed(0);
 	float retardation = 0;
 
 	// TODO: Make this dependent on AtomGroup radius!, not hardcoded
-	const float segRotLimit = c_PI / 6.0F;
+	const Fixed segRotLimit = Fixed::FromFloat(c_PI / 6.0F);
 
 	bool hitsMOs = m_OwnerMOSR->m_HitsMOs;
 	bool hitStep = false;
@@ -352,7 +352,7 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 	// Vector preHitPos;
 	// float preHitRot;
 
-	Vector linSegTraj; // The planned travel trajectory of this AtomGroup's origin in pixels.
+	FixedVector linSegTraj; // The planned travel trajectory of this AtomGroup's origin in pixels.
 
 	HitData hitData;
 
@@ -376,9 +376,9 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 				hitData.Reset();
 				if (atom->IsIgnoringTerrain()) {
 					// Calculate and store the accurate hit radius of the Atom in relation to the CoM.
-					hitData.HitRadius[HITOR] = startOff * c_MPP;
+					hitData.HitRadius[HITOR] = (FixedVector::FromVectorLike(startOff) * Fixed::FromFloat(c_MPP)).ToVectorLike<Vector>();
 					// Figure out the pre-collision velocity of the hitting Atom due to body translation and rotation.
-					hitData.HitVel[HITOR] = velocity + hitData.HitRadius[HITOR].GetPerpendicular() * angularVel;
+					hitData.HitVel[HITOR] = (FixedVector::FromVectorLike(velocity) + FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetPerpendicular() * Fixed::FromFloat(angularVel)).ToVectorLike<Vector>();
 
 					/*
 					radMag = hitData.HitRadius[HITOR].GetMagnitude();
@@ -402,15 +402,15 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 					*/
 
 					if (!(atom->GetNormal().IsZero())) {
-						hitData.ResImpulse[HITOR] = m_OwnerMOSR->RotateOffset(atom->GetNormal());
-						hitData.ResImpulse[HITOR] = -hitData.ResImpulse[HITOR];
-						hitData.ResImpulse[HITOR].SetMagnitude(hitData.HitVel[HITOR].GetMagnitude());
+						FixedVector resImpulse = -FixedVector::FromVectorLike(m_OwnerMOSR->RotateOffset(atom->GetNormal()));
+						resImpulse.SetMagnitude(FixedVector::FromVectorLike(hitData.HitVel[HITOR]).GetMagnitude());
+						hitData.ResImpulse[HITOR] = resImpulse.ToVectorLike<Vector>();
 
 						// Apply terrain conflict response
-						velocity += hitData.ResImpulse[HITOR] / mass;
-						angularVel += hitData.HitRadius[HITOR].GetPerpendicular().Dot(hitData.ResImpulse[HITOR]) / m_MomentOfInertia;
+						velocity = (FixedVector::FromVectorLike(velocity) + resImpulse / Fixed::FromFloat(mass)).ToVectorLike<Vector>();
+						angularVel = (Fixed::FromFloat(angularVel) + FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetPerpendicular().Dot(resImpulse).ToFixed() / Fixed::FromFloat(m_MomentOfInertia)).ToFloat();
 						// Accumulate all the impulse forces so the MO can determine if it took damaged as a result
-						totalImpulse += hitData.ResImpulse[HITOR];
+						totalImpulse = (FixedVector::FromVectorLike(totalImpulse) + resImpulse).ToVectorLike<Vector>();
 					}
 				}
 			}
@@ -421,32 +421,32 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 #endif
 		}
 
-		linSegTraj = velocity * timeLeft * c_PPM;
+		linSegTraj = FixedVector::FromVectorLike(velocity) * timeLeft * Fixed::FromFloat(c_PPM);
 
 		// The amount of rotation to be achieved during the time slot, in radians.
-		float rotDelta = angularVel * timeLeft;
+		Fixed rotDelta = Fixed::FromFloat(angularVel) * timeLeft;
 
 		// Cap the segment if the rotation is too severe. This will chunk the segment into several in order to more closely approximate the arc an Atom on a rotating body will trace.
-		if (std::fabs(rotDelta) > segRotLimit) {
-			segRatio = segRotLimit / std::fabs(rotDelta);
-			rotDelta = (rotDelta > 0) ? segRotLimit : -segRotLimit;
-			linSegTraj *= segRatio;
+		if (Abs(rotDelta) > segRotLimit) {
+			segRatio = segRotLimit / Abs(rotDelta);
+			rotDelta = (rotDelta > Fixed(0)) ? segRotLimit : -segRotLimit;
+			linSegTraj = linSegTraj * segRatio;
 		} else {
-			segRatio = 1.0F;
+			segRatio = Fixed(1);
 		}
-		segProgress = 0.0F;
+		segProgress = Fixed(0);
 
-		if (linSegTraj.IsZero() && rotDelta == 0) {
+		if (linSegTraj == FixedVector() && rotDelta == Fixed(0)) {
 			break;
 		}
 
 		for (Atom* atom: m_Atoms) {
 			// Calculate the segment trajectory for each individual Atom, with rotations considered.
 			const Vector startOff = m_OwnerMOSR->RotateOffset(atom->GetOffset());
-			const Vector trajFromAngularTravel = Vector(startOff).RadRotate(rotDelta) - startOff;
+			const FixedVector trajFromAngularTravel = FixedVector::FromVectorLike(startOff).GetRadRotatedCopy(rotDelta) - FixedVector::FromVectorLike(startOff);
 
 			// Set up the initial rasterized step for each Atom and save the longest trajectory.
-			if (atom->SetupSeg(position + startOff, linSegTraj + trajFromAngularTravel) > stepsOnSeg) {
+			if (atom->SetupSeg((FixedVector::FromVectorLike(position) + FixedVector::FromVectorLike(startOff)).ToVectorLike<Vector>(), (linSegTraj + trajFromAngularTravel).ToVectorLike<Vector>()) > stepsOnSeg) {
 				stepsOnSeg = atom->GetStepsLeft();
 			}
 		}
@@ -520,7 +520,7 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			if (stepCount == 0 && stepsOnSeg == 1) {
 				halted = true;
 			}
-			segProgress = static_cast<float>(stepCount) / static_cast<float>(stepsOnSeg);
+			segProgress = Fixed(stepCount) / Fixed(stepsOnSeg);
 
 			/*
 			preHitPos = position;
@@ -528,11 +528,11 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			*/
 
 			// Move position forward to the hit position.
-			position += linSegTraj * segProgress;
+			position = (FixedVector::FromVectorLike(position) + linSegTraj * segProgress).ToVectorLike<Vector>();
 			didWrap = g_SceneMan.WrapPosition(position) || didWrap;
 
 			// Move rotation forward according to the progress made on the segment.
-			rotation += rotDelta * segProgress;
+			rotation += (rotDelta * segProgress).ToFloat();
 
 			// TERRAIN COLLISION RESPONSE ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -541,20 +541,20 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			do {
 				somethingPenetrated = false;
 
-				const float massDistribution = mass / GetSurfaceArea(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1));
-				const float momentInertiaDistribution = m_MomentOfInertia / static_cast<float>(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1));
+				const Fixed massDistribution = Fixed::FromFloat(mass) / Fixed::FromFloat(GetSurfaceArea(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1)));
+				const Fixed momentInertiaDistribution = Fixed::FromFloat(m_MomentOfInertia) / Fixed(static_cast<int>(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1)));
 
 				// Determine which of the colliding Atoms will penetrate the terrain.
 				for (std::vector<Atom*>::iterator atomItr = hitTerrAtoms.begin(); atomItr != hitTerrAtoms.end();) {
 					// Calculate and store the accurate hit radius of the Atom in relation to the CoM
-					hitData.HitRadius[HITOR] = m_OwnerMOSR->RotateOffset((*atomItr)->GetOffset()) * c_MPP;
+					hitData.HitRadius[HITOR] = (FixedVector::FromVectorLike(m_OwnerMOSR->RotateOffset((*atomItr)->GetOffset())) * Fixed::FromFloat(c_MPP)).ToVectorLike<Vector>();
 					// Figure out the pre-collision velocity of the hitting Atom due to body translation and rotation.
-					hitData.HitVel[HITOR] = velocity + hitData.HitRadius[HITOR].GetPerpendicular() * angularVel;
+					hitData.HitVel[HITOR] = (FixedVector::FromVectorLike(velocity) + FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetPerpendicular() * Fixed::FromFloat(angularVel)).ToVectorLike<Vector>();
 
-					const float sqrRadMag = hitData.HitRadius[HITOR].GetSqrMagnitude();
+					const Fixed sqrRadMag = FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetSqrMagnitude().ToFixed();
 					// These are set temporarily here, will be re-set later when the normal of the hit terrain bitmap (ortho pixel side) is known.
-					hitData.HitDenominator = (1.0F / massDistribution) + (sqrRadMag / momentInertiaDistribution);
-					hitData.PreImpulse[HITOR] = hitData.HitVel[HITOR] / hitData.HitDenominator;
+					hitData.HitDenominator = ((Fixed(1) / massDistribution) + (sqrRadMag / momentInertiaDistribution)).ToFloat();
+					hitData.PreImpulse[HITOR] = (FixedVector::FromVectorLike(hitData.HitVel[HITOR]) / Fixed::FromFloat(hitData.HitDenominator)).ToVectorLike<Vector>();
 					// Set the Atom with the HitData with all the info we have so far.
 					(*atomItr)->SetHitData(hitData);
 
@@ -582,13 +582,13 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 				// massDistribution = mass /*/ GetSurfaceArea(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1))*/;
 				// momentInertiaDistribution = m_MomentOfInertia/* / (hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1))*/;
 
-				const float hitFactor = 1.0F / static_cast<float>(hitTerrAtoms.size());
+				const Fixed hitFactor = Fixed(1) / Fixed(static_cast<int>(hitTerrAtoms.size()));
 
 				// Gather the collision response effects so that the impulse force can be calculated.
 				for (Atom* hitTerrAtom: hitTerrAtoms) {
 					hitTerrAtom->GetHitData().TotalMass[HITOR] = mass;
 					hitTerrAtom->GetHitData().MomInertia[HITOR] = m_MomentOfInertia;
-					hitTerrAtom->GetHitData().ImpulseFactor[HITOR] = hitFactor;
+					hitTerrAtom->GetHitData().ImpulseFactor[HITOR] = hitFactor.ToFloat();
 
 					// Get the HitData so far gathered for this Atom.
 					// hitData = hitTerrAtom->GetHitData();
@@ -611,7 +611,7 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 
 			// Handle terrain penetration effects.
 			if (!penetratingAtoms.empty()) {
-				const float hitFactor = 1.0F / static_cast<float>(penetratingAtoms.size());
+				const Fixed hitFactor = Fixed(1) / Fixed(static_cast<int>(penetratingAtoms.size()));
 
 				// Calculate and store the collision response effects.
 				for (Atom* penetratingAtom: penetratingAtoms) {
@@ -629,14 +629,14 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 
 					if (g_SceneMan.TryPenetrate(penetratingAtom->GetCurrentPos().GetFloorIntX(), penetratingAtom->GetCurrentPos().GetFloorIntY(), hitData.PreImpulse[HITOR], hitData.HitVel[HITOR], retardation, 1.0F, 1 /*(*penetratingAtom)->GetNumPenetrations()*/)) {
 						// Recalculate these here without the distributed mass and MI.
-						const float sqrRadMag = hitData.HitRadius[HITOR].GetSqrMagnitude();
-						hitData.HitDenominator = (1.0F / mass) + (sqrRadMag / m_MomentOfInertia);
-						hitData.PreImpulse[HITOR] = hitData.HitVel[HITOR] / hitData.HitDenominator;
+						const Fixed sqrRadMag = FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetSqrMagnitude().ToFixed();
+						hitData.HitDenominator = ((Fixed(1) / Fixed::FromFloat(mass)) + (sqrRadMag / Fixed::FromFloat(m_MomentOfInertia))).ToFloat();
+						hitData.PreImpulse[HITOR] = (FixedVector::FromVectorLike(hitData.HitVel[HITOR]) / Fixed::FromFloat(hitData.HitDenominator)).ToVectorLike<Vector>();
 						hitData.TotalMass[HITOR] = mass;
 						hitData.MomInertia[HITOR] = m_MomentOfInertia;
-						hitData.ImpulseFactor[HITOR] = hitFactor;
+						hitData.ImpulseFactor[HITOR] = hitFactor.ToFloat();
 						// Finally calculate the hit response impulse.
-						hitData.ResImpulse[HITOR] = ((hitData.HitVel[HITOR] * retardation) / hitData.HitDenominator) * hitFactor;
+						hitData.ResImpulse[HITOR] = ((FixedVector::FromVectorLike(hitData.HitVel[HITOR]) * Fixed::FromFloat(retardation)) / Fixed::FromFloat(hitData.HitDenominator) * hitFactor).ToVectorLike<Vector>();
 
 						// Call the call-on-sink function, if requested.
 						if (m_OwnerMOSR && callOnSink) {
@@ -657,11 +657,11 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 				// Set the mass and other data pertaining to the hitor, aka this AtomGroup's owner MO.
 				hitData.TotalMass[HITOR] = mass;
 				hitData.MomInertia[HITOR] = m_MomentOfInertia;
-				hitData.ImpulseFactor[HITOR] = 1.0F / static_cast<float>(atomsHitMOsCount);
+				hitData.ImpulseFactor[HITOR] = (Fixed(1) / Fixed(atomsHitMOsCount)).ToFloat();
 
 				for (auto& MOAtomMapEntry: hitMOAtoms) {
 					// The denominator that the MovableObject being hit should divide its mass with for each Atom of this AtomGroup that is colliding with it during this step.
-					hitData.ImpulseFactor[HITEE] = 1.0F / static_cast<float>(MOAtomMapEntry.second.size());
+					hitData.ImpulseFactor[HITEE] = (Fixed(1) / Fixed(static_cast<int>(MOAtomMapEntry.second.size()))).ToFloat();
 
 					for (Atom* hitMOAtom: MOAtomMapEntry.second) {
 						// Step back all Atoms that hit MOs during this step iteration. This is so we aren't intersecting the hit MO anymore.
@@ -669,9 +669,9 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 						// hitData.HitPoint = hitMOAtom->GetCurrentPos();
 
 						// Calculate and store the accurate hit radius of the Atom in relation to the CoM
-						hitData.HitRadius[HITOR] = m_OwnerMOSR->RotateOffset(hitMOAtom->GetOffset()) * c_MPP;
+						hitData.HitRadius[HITOR] = (FixedVector::FromVectorLike(m_OwnerMOSR->RotateOffset(hitMOAtom->GetOffset())) * Fixed::FromFloat(c_MPP)).ToVectorLike<Vector>();
 						// Figure out the pre-collision velocity of the hitting Atom due to body translation and rotation.
-						hitData.HitVel[HITOR] = velocity + hitData.HitRadius[HITOR].GetPerpendicular() * angularVel;
+						hitData.HitVel[HITOR] = (FixedVector::FromVectorLike(velocity) + FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetPerpendicular() * Fixed::FromFloat(angularVel)).ToVectorLike<Vector>();
 						// Set the Atom with the HitData with all the info we have so far.
 						hitMOAtom->SetHitData(hitData);
 						// Let the Atom calculate the impulse force resulting from the collision, and only add it if collision is valid
@@ -698,10 +698,10 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			for (Atom* hitResponseAtom: hitResponseAtoms) {
 				// TODO: Investigate damping!
 				hitData = hitResponseAtom->GetHitData();
-				velocity += hitData.ResImpulse[HITOR] / mass;
-				angularVel += hitData.HitRadius[HITOR].GetPerpendicular().Dot(hitData.ResImpulse[HITOR]) / m_MomentOfInertia;
+				velocity = (FixedVector::FromVectorLike(velocity) + FixedVector::FromVectorLike(hitData.ResImpulse[HITOR]) / Fixed::FromFloat(mass)).ToVectorLike<Vector>();
+				angularVel = (Fixed::FromFloat(angularVel) + FixedVector::FromVectorLike(hitData.HitRadius[HITOR]).GetPerpendicular().Dot(FixedVector::FromVectorLike(hitData.ResImpulse[HITOR])).ToFixed() / Fixed::FromFloat(m_MomentOfInertia)).ToFloat();
 				// Accumulate all the impulse forces so the MO can determine if it took damaged as a result
-				totalImpulse += hitData.ResImpulse[HITOR];
+				totalImpulse = (FixedVector::FromVectorLike(totalImpulse) + FixedVector::FromVectorLike(hitData.ResImpulse[HITOR])).ToVectorLike<Vector>();
 			}
 
 			// Make sub-pixel progress if there was a hit on the very first step.
@@ -711,12 +711,12 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			timeLeft -= timeLeft * (segProgress * segRatio);
 		} else {
 			// If last completed segment didn't result in a hit, move things forward to reflect the progress made.
-			segProgress = 1.0F;
+			segProgress = Fixed(1);
 			// Move position forward to the end segment position.
-			position += linSegTraj * segProgress;
+			position = (FixedVector::FromVectorLike(position) + linSegTraj * segProgress).ToVectorLike<Vector>();
 			didWrap = g_SceneMan.WrapPosition(position) || didWrap;
 			// Move rotation forward according to the progress made on the segment.
-			rotation += rotDelta * segProgress;
+			rotation += (rotDelta * segProgress).ToFloat();
 			// Now calculate the total time left to travel, according to the progress made.
 			timeLeft -= timeLeft * (segProgress * segRatio);
 		}
@@ -725,7 +725,7 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			// RTEAbort("AtomGroup travel resulted in more than 1000 segments!!");
 			break;
 		}
-	} while (segRatio != 1.0F || hitStep && /*!linSegTraj.GetFloored().IsZero() &&*/ !halted);
+	} while (segRatio != Fixed(1) || hitStep && /*!linSegTraj.GetFloored().IsZero() &&*/ !halted);
 
 	ResolveMOSIntersection(position);
 
@@ -758,7 +758,7 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 		*/
 		return 0;
 	}
-	return timeLeft;
+	return timeLeft.ToFloat();
 }
 
 // TODO: Break down and rework this dumpsterfire.
@@ -1449,7 +1449,7 @@ bool AtomGroup::ResolveMOSIntersection(Vector& position) {
 	// First go through all Atoms to find the first intersection and get the intersected MO
 	for (Atom* atom: m_Atoms) {
 		atomOffset = m_OwnerMOSR->RotateOffset(atom->GetOffset());
-		atom->SetupPos(position + atomOffset);
+		atom->SetupPos((FixedVector::FromVectorLike(position) + FixedVector::FromVectorLike(atomOffset)).ToVectorLike<Vector>());
 		atomPos = atom->GetCurrentPos();
 		hitMOID = g_SceneMan.GetMOIDPixel(atomPos.GetFloorIntX(), atomPos.GetFloorIntY(), m_OwnerMOSR->GetTeam());
 
@@ -1485,32 +1485,32 @@ bool AtomGroup::ResolveMOSIntersection(Vector& position) {
 		}
 	}
 
-	Vector exitDirection = Vector();
-	Vector atomExitVector = Vector();
-	Vector totalExitVector = Vector();
+	FixedVector exitDirection;
+	FixedVector atomExitVector;
+	FixedVector totalExitVector;
 
 	// Go through all intersecting Atoms and find their average inverse normal
 	for (const Atom* intersectingAtom: intersectingAtoms) {
-		exitDirection += m_OwnerMOSR->RotateOffset(intersectingAtom->GetNormal());
+		exitDirection += FixedVector::FromVectorLike(m_OwnerMOSR->RotateOffset(intersectingAtom->GetNormal()));
 	}
 
 	// TODO: Maybe use previous position to create an exit direction instead of quitting.
-	if (exitDirection.IsZero()) {
+	if (exitDirection == FixedVector()) {
 		return false;
 	}
 
 	exitDirection = -exitDirection;
-	exitDirection.SetMagnitude(m_OwnerMOSR->GetDiameter());
+	exitDirection.SetMagnitude(Fixed::FromFloat(m_OwnerMOSR->GetDiameter()));
 
 	Vector clearPos = Vector();
 
 	// See which of the intersecting Atoms has the longest to travel along the exit direction before it clears
-	float sqrLongestDistance = 0.0F;
+	FixedWide sqrLongestDistance;
 	for (const Atom* intersectingAtom: intersectingAtoms) {
 		atomPos = intersectingAtom->GetCurrentPos();
-		if (g_SceneMan.CastFindMORay(atomPos, exitDirection, g_NoMOID, clearPos, 0, true, 0)) {
-			atomExitVector = clearPos - atomPos.GetFloored();
-			float sqrAtomExitDist = atomExitVector.GetSqrMagnitude();
+		if (g_SceneMan.CastFindMORay(atomPos, exitDirection.ToVectorLike<Vector>(), g_NoMOID, clearPos, 0, true, 0)) {
+			atomExitVector = FixedVector::FromVectorLike(clearPos) - FixedVector::FromVectorLike(atomPos.GetFloored());
+			FixedWide sqrAtomExitDist = atomExitVector.GetSqrMagnitude();
 			if (sqrAtomExitDist > sqrLongestDistance) {
 				// We found the Atom with the longest to travel along the exit direction to clear, so that's the distance to move the whole object to clear all its Atoms.
 				sqrLongestDistance = sqrAtomExitDist;
@@ -1519,23 +1519,23 @@ bool AtomGroup::ResolveMOSIntersection(Vector& position) {
 		}
 	}
 
-	Vector thisExit;
-	Vector intersectedExit;
+	FixedVector thisExit;
+	FixedVector intersectedExit;
 
 	// If the other object is pinned, then only move this. Otherwise, apply the object exit vector to both this owner object, and the one it intersected, proportional to their masses.
 	if (intersectedMO->GetPinStrength() > 0.0F) {
 		thisExit = totalExitVector;
 	} else {
-		float massA = (m_OwnerMOSR->GetMass() != 0 ? m_OwnerMOSR->GetMass() : 0.0001F);
-		float massB = (intersectedMO->GetMass() != 0 ? intersectedMO->GetMass() : 0.0001F);
-		float invMassA = 1.0F / massA;
-		float invMassB = 1.0F / massB;
-		float normMassA = invMassA / (invMassA + invMassB);
-		float normMassB = invMassB / (invMassA + invMassB);
+		Fixed massA = Fixed::FromFloat(m_OwnerMOSR->GetMass() != 0 ? m_OwnerMOSR->GetMass() : 0.0001F);
+		Fixed massB = Fixed::FromFloat(intersectedMO->GetMass() != 0 ? intersectedMO->GetMass() : 0.0001F);
+		Fixed invMassA = Fixed(1) / massA;
+		Fixed invMassB = Fixed(1) / massB;
+		Fixed normMassA = invMassA / (invMassA + invMassB);
+		Fixed normMassB = invMassB / (invMassA + invMassB);
 
 		// TODO investigate whether we should apply some (relatively small) amount of movement to the object even if it's a lot heavier, for more realistic physics
 		//  If the intersected is much larger than this' MO, then only move this. Otherwise, apply the movements to both this and the intersected MO's, proportional to their respective masses.
-		if (normMassB < 0.33F) {
+		if (normMassB < Fixed::FromFloat(0.33F)) {
 			thisExit = totalExitVector;
 		} else {
 			thisExit = totalExitVector * normMassA;
@@ -1544,26 +1544,26 @@ bool AtomGroup::ResolveMOSIntersection(Vector& position) {
 	}
 
 	// Now actually apply the exit vectors to both, but only if the jump isn't too jarring
-	if (thisExit.MagnitudeIsLessThan(m_OwnerMOSR->GetIndividualRadius())) {
-		position += thisExit;
+	if (thisExit.MagnitudeIsLessThan(Fixed::FromFloat(m_OwnerMOSR->GetIndividualRadius()))) {
+		position = (FixedVector::FromVectorLike(position) + thisExit).ToVectorLike<Vector>();
 	}
 
-	if (!intersectedExit.IsZero() && intersectedExit.MagnitudeIsLessThan(intersectedMO->GetRadius())) {
-		intersectedMO->SetPos(intersectedMO->GetPos() + intersectedExit);
+	if (!(intersectedExit == FixedVector()) && intersectedExit.MagnitudeIsLessThan(Fixed::FromFloat(intersectedMO->GetRadius()))) {
+		intersectedMO->SetPos((FixedVector::FromVectorLike(intersectedMO->GetPos()) + intersectedExit).ToVectorLike<Vector>());
 	}
 
 	if (m_OwnerMOSR->CanBeSquished() && RatioInTerrain() > 0.75F) /* && totalExitVector.MagnitudeIsGreaterThan(m_OwnerMOSR->GetDiameter())) */ {
 		// Move back before gibbing so gibs don't end up inside terrain
-		position -= thisExit;
-		m_OwnerMOSR->GibThis(-totalExitVector);
+		position = (FixedVector::FromVectorLike(position) - thisExit).ToVectorLike<Vector>();
+		m_OwnerMOSR->GibThis((-totalExitVector).ToVectorLike<Vector>());
 	}
 
 	MOSRotating* intersectedMOS = dynamic_cast<MOSRotating*>(intersectedMO);
 
 	if (intersectedMOS && intersectedMOS->CanBeSquished() && intersectedMOS->GetAtomGroup()->RatioInTerrain() > 0.75F) /* && totalExitVector.MagnitudeIsGreaterThan(intersectedMO->GetDiameter())) */ {
 		// Move back before gibbing so gibs don't end up inside terrain
-		intersectedMO->SetPos(intersectedMO->GetPos() - intersectedExit);
-		intersectedMOS->GibThis(totalExitVector);
+		intersectedMO->SetPos((FixedVector::FromVectorLike(intersectedMO->GetPos()) - intersectedExit).ToVectorLike<Vector>());
+		intersectedMOS->GibThis(totalExitVector.ToVectorLike<Vector>());
 	}
 
 	// TODO: Figure out if a check for clearness after moving the position is actually needed and add one so this return is accurate.
