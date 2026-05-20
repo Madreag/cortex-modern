@@ -666,6 +666,13 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 	if (status >= 0) {
 		ZoneScoped;
 		ZoneText(functionName.c_str(), functionName.length());
+
+		// M4 Block C — redirect this hook's RNG (C++ and Lua) to a per-MO generator
+		// so threaded per-MO work is thread-count-invariant. Collision callbacks are
+		// excluded — they run serially inside Travel() and are out of M4's scope.
+		const bool redirectRNG = functionName != "OnCollideWithMO" && functionName != "OnCollideWithTerrain";
+		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), redirectRNG);
+
 		for (const LuaFunction& luaFunction: itr->second) {
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {

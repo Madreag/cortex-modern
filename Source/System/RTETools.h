@@ -138,38 +138,47 @@ namespace RTE {
 	/// from the same state regardless of how many menu interactions led to it.
 	void SeedRNG();
 
+	// M4 Block C — per-worker sim-RNG redirect: a threaded sim pass points this at a
+	// per-MO generator so the free functions stop racing on the shared g_SimRNG.
+	// Null on serial / main-thread code (defined in RTETools.cpp).
+	extern thread_local RandomGenerator* t_simRNGOverride;
+
+	/// Gets the sim RNG the RandomNum / RandomNormalNum free functions draw from:
+	/// the per-worker override when a threaded pass installed one, else g_SimRNG.
+	inline RandomGenerator& GetSimRNG() { return t_simRNGOverride ? *t_simRNGOverride : g_SimRNG; }
+
 	// Free-function form. These were the dominant call style pre-M1 (~170 sites);
 	// to avoid touching all of them in one PR we keep the form but route it through
 	// the sim RNG explicitly. Render-side call sites that want the render RNG must
 	// reach for `g_RenderRNG.RandomNum<T>()` (or `RandomNormalNum<T>()`) by name.
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNormalNum() {
-		return g_SimRNG.RandomNormalNum<floatType>();
+		return GetSimRNG().RandomNormalNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNormalNum() {
-		return g_SimRNG.RandomNormalNum<intType>();
+		return GetSimRNG().RandomNormalNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum() {
-		return g_SimRNG.RandomNum<floatType>();
+		return GetSimRNG().RandomNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum() {
-		return g_SimRNG.RandomNum<intType>();
+		return GetSimRNG().RandomNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum(floatType min, floatType max) {
-		return g_SimRNG.RandomNum<floatType>(min, max);
+		return GetSimRNG().RandomNum<floatType>(min, max);
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum(intType min, intType max) {
-		return g_SimRNG.RandomNum<intType>(min, max);
+		return GetSimRNG().RandomNum<intType>(min, max);
 	}
 #pragma endregion
 
