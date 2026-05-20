@@ -14,8 +14,9 @@ order, which the Lua manual has always documented as undefined.
 - If your mod already treated `pairs()` order as unspecified (the correct
   assumption), nothing changes.
 - If you relied on a particular hash order, you now get sorted order instead.
-- `pairs()` snapshots the table's keys when called, so keys inserted *during*
-  iteration are not visited. Removing keys mid-iteration is still fine.
+- `pairs()` snapshots the table's keys when called: keys inserted during
+  iteration are not visited, and a key removed during iteration is still
+  visited (its value reads as `nil`).
 - Keys that are tables / functions / userdata have an unspecified order relative
   to each other — sort by string or numeric keys if you need a guarantee.
 

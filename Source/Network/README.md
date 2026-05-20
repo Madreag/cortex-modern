@@ -158,7 +158,8 @@ reproduces across runs. What is guaranteed, and what is not:
   state (the `lua_state` subsystem surfaces any drift this causes).
 - **`pairs()`** — iterates a sorted snapshot of the table's keys: numeric
   keys ascending, then string keys lexicographically. The snapshot is taken
-  when `pairs()` is called, so keys added mid-iteration are not visited.
+  when `pairs()` is called — keys added mid-iteration are not visited, and a
+  key removed mid-iteration is still visited (its value reads as nil).
   Non-primitive keys (table / function / userdata) compare equal, so their
   relative order is unspecified. `pairs_unordered` is the original
   hash-order builtin, kept for mods with hot pairs loops that want it back.
