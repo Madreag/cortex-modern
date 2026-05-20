@@ -30,6 +30,9 @@ namespace RTE {
 			std::string gameBin;        // override for child-process invocation
 			bool        keepRuns = false; // keep tmp/runs/*.json after the diff
 			bool        showHelp = false;
+			// M4 Block A — thread-count matrix. When non-empty, the scenario is run at each
+			// listed Lua-state count and the per-tick traces are diffed across counts.
+			std::vector<int> threadCounts;
 		};
 
 		void PrintUsage(std::ostream& out) {
@@ -38,7 +41,7 @@ namespace RTE {
 			    "\n"
 			    "Spawns the game binary N times with the same seed and diffs the per-tick\n"
 			    "BLAKE3 hash traces. Designed to run as a CI step or locally to verify the\n"
-			    "M1 determinism-cleanup blocks (B-F) take effect.\n"
+			    "determinism-cleanup milestones (MP M1-M4) take effect.\n"
 			    "\n"
 			    "Options (single- or double-dash, value via space):\n"
 			    "  --scenario <name>      Activity preset-suffix to run (e.g. M1Baseline).\n"
@@ -46,6 +49,12 @@ namespace RTE {
 			    "  --ticks <N>            Per-run sim-tick cap. Default 600.\n"
 			    "  --seed <S>             Deterministic seed for every run. Default 42.\n"
 			    "  --runs <R>             Number of independent runs to compare. Default 10.\n"
+			    "                         With --threads, this is runs-PER-thread-count.\n"
+			    "  --threads <list>       M4 thread-count matrix: comma-separated Lua-state\n"
+			    "                         counts, e.g. 1,2,4,8,16. Runs the scenario at each\n"
+			    "                         count and diffs the per-tick traces ACROSS counts.\n"
+			    "                         Empty (default) = repeat-runs mode at the engine\n"
+			    "                         default count.\n"
 			    "  --output <path>        JSON divergence report. Default determinism-report.json.\n"
 			    "  --game-bin <path>      Override the binary to spawn for each run.\n"
 			    "                         Default: argv[0] (this same executable).\n"
@@ -73,6 +82,22 @@ namespace RTE {
 			return a == longForm || a == shortForm;
 		}
 
+		// Parse a comma-separated integer list ("1,2,4,8,16") into a vector. Bad tokens are skipped.
+		std::vector<int> ParseIntList(const std::string& csv) {
+			std::vector<int> out;
+			std::stringstream ss(csv);
+			std::string token;
+			while (std::getline(ss, token, ',')) {
+				if (token.empty()) continue;
+				char* end = nullptr;
+				const long v = std::strtol(token.c_str(), &end, 10);
+				if (end != token.c_str() && v >= 1) {
+					out.push_back(static_cast<int>(v));
+				}
+			}
+			return out;
+		}
+
 		Args ParseArgs(int argc, char** argv) {
 			Args r;
 			for (int i = 1; i < argc; ++i) {
@@ -94,6 +119,10 @@ namespace RTE {
 				}
 				if (ArgEq(a, "runs") && hasValue) {
 					r.runs = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+					continue;
+				}
+				if (ArgEq(a, "threads") && hasValue) {
+					r.threadCounts = ParseIntList(argv[++i]);
 					continue;
 				}
 				if (ArgEq(a, "output") && hasValue) { r.output = argv[++i]; continue; }
@@ -126,6 +155,23 @@ namespace RTE {
 			return out;
 		}
 
+		// Build the child-process command line. threadCount >= 0 pins the Lua-state count
+		// via -num-lua-states (the M4 matrix lever); -1 leaves the engine default.
+		std::string BuildChildCmd(const std::filesystem::path& binary, const Args& args,
+		                          const std::filesystem::path& runOut, int threadCount) {
+			std::ostringstream cmd;
+			cmd << Quote(binary.string())
+			    << " -scenario " << Quote(args.scenario)
+			    << " -seed " << args.seed
+			    << " -max-ticks " << args.ticks
+			    << " -tick-hashes";
+			if (threadCount >= 0) {
+				cmd << " -num-lua-states " << threadCount;
+			}
+			cmd << " -out " << Quote(runOut.string());
+			return cmd.str();
+		}
+
 		// Read a JSON file and return it as a value. Returns null on failure.
 		json ReadJsonFile(const std::filesystem::path& p) {
 			std::ifstream f(p);
@@ -140,6 +186,13 @@ namespace RTE {
 			}
 		}
 
+		// One spawned child run: which thread count it used, where its JSON landed.
+		struct ChildRun {
+			int                   threadCount = -1; // -1 = engine default (repeat-runs mode)
+			int                   runIndex = 0;
+			std::filesystem::path output;
+		};
+
 		struct DivergenceReport {
 			bool diverged = false;
 			uint64_t    firstDivergenceTick = 0;
@@ -151,6 +204,8 @@ namespace RTE {
 			uint64_t comparedTicks = 0;
 			// Per-run tick counts (for diagnostics — divergent run lengths is itself a flag).
 			std::vector<uint64_t> perRunTickCount;
+			// Per-run divergence flag (true if that run ever differed from run 0).
+			std::vector<bool> perRunDiverged;
 		};
 
 	} // namespace
@@ -180,7 +235,21 @@ namespace RTE {
 			PrintUsage(std::cerr);
 			return 2;
 		}
-		if (args.runs < 2) {
+
+		const bool matrixMode = !args.threadCounts.empty();
+
+		// In matrix mode the comparison is across thread counts, so a single run per count is
+		// already a valid diff; repeat-runs mode needs >= 2 to have anything to compare.
+		if (matrixMode) {
+			if (args.runs < 1) {
+				std::cerr << "[determinism-check] --runs must be >= 1.\n";
+				return 2;
+			}
+			if (args.threadCounts.size() * static_cast<size_t>(args.runs) < 2) {
+				std::cerr << "[determinism-check] thread matrix needs >= 2 total runs to diff.\n";
+				return 2;
+			}
+		} else if (args.runs < 2) {
 			std::cerr << "[determinism-check] --runs must be >= 2 (cannot diff a single run).\n";
 			return 2;
 		}
@@ -211,51 +280,78 @@ namespace RTE {
 		    std::filesystem::temp_directory_path() / ("cccp-determinism-" + std::to_string(now));
 		std::filesystem::create_directories(tmpRoot);
 
+		// Build the flat child list. Matrix mode: every (threadCount, runIndex) pair.
+		// Repeat-runs mode: runs at the engine-default count (threadCount = -1).
+		std::vector<ChildRun> children;
+		if (matrixMode) {
+			for (int tc: args.threadCounts) {
+				for (int r = 0; r < args.runs; ++r) {
+					ChildRun c;
+					c.threadCount = tc;
+					c.runIndex = r;
+					c.output = tmpRoot / ("run_t" + std::to_string(tc) + "_" + std::to_string(r) + ".json");
+					children.push_back(std::move(c));
+				}
+			}
+		} else {
+			for (int r = 0; r < args.runs; ++r) {
+				ChildRun c;
+				c.threadCount = -1;
+				c.runIndex = r;
+				c.output = tmpRoot / ("run_" + std::to_string(r) + ".json");
+				children.push_back(std::move(c));
+			}
+		}
+
 		std::cout << "[determinism-check] binary  : " << binary.string() << "\n";
 		std::cout << "[determinism-check] scenario: " << args.scenario << "\n";
 		std::cout << "[determinism-check] ticks   : " << args.ticks << "\n";
 		std::cout << "[determinism-check] seed    : " << args.seed << "\n";
-		std::cout << "[determinism-check] runs    : " << args.runs << "\n";
+		if (matrixMode) {
+			std::cout << "[determinism-check] mode    : thread-count matrix\n";
+			std::cout << "[determinism-check] threads : ";
+			for (size_t i = 0; i < args.threadCounts.size(); ++i) {
+				std::cout << args.threadCounts[i] << (i + 1 < args.threadCounts.size() ? "," : "");
+			}
+			std::cout << "  (x" << args.runs << " runs each = " << children.size() << " total)\n";
+		} else {
+			std::cout << "[determinism-check] runs    : " << args.runs << "\n";
+		}
 		std::cout << "[determinism-check] tmp dir : " << tmpRoot.string() << "\n";
 
-		// Run the binary N times with the same scenario+seed+ticks. -tick-hashes makes the
-		// per-tick hash trace land in the JSON. -out routes the report.
-		std::vector<std::filesystem::path> runOutputs;
-		runOutputs.reserve(static_cast<size_t>(args.runs));
-		for (int i = 0; i < args.runs; ++i) {
-			std::filesystem::path runOut = tmpRoot / ("run_" + std::to_string(i) + ".json");
-			std::ostringstream cmd;
-			cmd << Quote(binary.string())
-			    << " -scenario " << Quote(args.scenario)
-			    << " -seed " << args.seed
-			    << " -max-ticks " << args.ticks
-			    << " -tick-hashes"
-			    << " -out " << Quote(runOut.string());
+		// Run the binary once per child. Same scenario+seed+ticks; in matrix mode the Lua-state
+		// count varies. -tick-hashes makes the per-tick hash trace land in the JSON.
+		for (size_t i = 0; i < children.size(); ++i) {
+			const ChildRun& child = children[i];
+			const std::string cmd = BuildChildCmd(binary, args, child.output, child.threadCount);
 
-			std::cout << "[determinism-check] run " << (i + 1) << "/" << args.runs
-			          << ": " << cmd.str() << std::endl;
-			const int rc = std::system(cmd.str().c_str());
+			std::cout << "[determinism-check] run " << (i + 1) << "/" << children.size();
+			if (child.threadCount >= 0) {
+				std::cout << " (threads=" << child.threadCount << ")";
+			}
+			std::cout << ": " << cmd << std::endl;
+
+			const int rc = std::system(cmd.c_str());
 			// The scenario itself may legitimately exit non-zero (a fail-result trust scenario).
 			// What we really care about is whether the JSON was produced and parseable.
 			if (rc < 0) {
 				std::cerr << "[determinism-check] run " << i << " failed to spawn (rc=" << rc << ")\n";
 				return 2;
 			}
-			if (!std::filesystem::exists(runOut)) {
+			if (!std::filesystem::exists(child.output)) {
 				std::cerr << "[determinism-check] run " << i << " produced no JSON output: "
-				          << runOut.string() << "\n";
+				          << child.output.string() << "\n";
 				return 2;
 			}
-			runOutputs.push_back(runOut);
 		}
 
 		// Read every run's JSON and compute the per-tick comparison.
 		std::vector<json> jsons;
-		jsons.reserve(runOutputs.size());
-		for (const auto& p: runOutputs) {
-			json j = ReadJsonFile(p);
+		jsons.reserve(children.size());
+		for (const auto& child: children) {
+			json j = ReadJsonFile(child.output);
 			if (j.is_null()) {
-				std::cerr << "[determinism-check] run " << p.string() << " produced unparseable JSON.\n";
+				std::cerr << "[determinism-check] run " << child.output.string() << " produced unparseable JSON.\n";
 				return 2;
 			}
 			jsons.push_back(std::move(j));
@@ -284,6 +380,7 @@ namespace RTE {
 
 		DivergenceReport rep;
 		rep.perRunTickCount.reserve(allTickHashes.size());
+		rep.perRunDiverged.assign(allTickHashes.size(), false);
 		uint64_t minTicks = UINT64_MAX;
 		for (const auto& th: allTickHashes) {
 			const uint64_t n = static_cast<uint64_t>(th.size());
@@ -293,6 +390,7 @@ namespace RTE {
 		rep.comparedTicks = (minTicks == UINT64_MAX) ? 0 : minTicks;
 
 		// Walk tick-by-tick. The runs' tick arrays are in order, so index t corresponds to tick t.
+		// run 0 is the reference; every other run is diffed against it.
 		bool foundFirstDivergence = false;
 		for (uint64_t t = 0; t < rep.comparedTicks; ++t) {
 			const json& ref = allTickHashes[0][static_cast<size_t>(t)];
@@ -303,6 +401,7 @@ namespace RTE {
 				const std::string curTotal = cur.value("total", std::string());
 				if (curTotal != refTotal) {
 					tickDivergent = true;
+					rep.perRunDiverged[r] = true;
 				}
 				// Per-subsystem walk — record the FIRST tick each subsystem diverges so the
 				// summary fingers the culprit even when total diverged for many reasons.
@@ -338,7 +437,14 @@ namespace RTE {
 		reportJson["scenario"] = args.scenario;
 		reportJson["seed"] = args.seed;
 		reportJson["ticks_requested"] = args.ticks;
+		reportJson["mode"] = matrixMode ? "thread-count-matrix" : "repeat-runs";
 		reportJson["runs"] = args.runs;
+		reportJson["total_runs"] = static_cast<uint64_t>(children.size());
+		if (matrixMode) {
+			json tc = json::array();
+			for (int t: args.threadCounts) tc.push_back(t);
+			reportJson["thread_counts"] = tc;
+		}
 		reportJson["compared_ticks"] = rep.comparedTicks;
 		reportJson["diverged"] = rep.diverged;
 		reportJson["total_mismatched_ticks"] = rep.totalMismatchedTicks;
@@ -350,6 +456,18 @@ namespace RTE {
 			}
 			reportJson["per_subsystem_first_divergence"] = subs;
 		}
+		// Per-child detail: thread count, tick count, whether it diverged from run 0.
+		json runsDetail = json::array();
+		for (size_t i = 0; i < children.size(); ++i) {
+			json rd;
+			rd["index"] = static_cast<uint64_t>(i);
+			rd["thread_count"] = children[i].threadCount;
+			rd["run_index"] = children[i].runIndex;
+			rd["tick_count"] = (i < rep.perRunTickCount.size()) ? rep.perRunTickCount[i] : 0;
+			rd["diverged"] = (i < rep.perRunDiverged.size()) ? static_cast<bool>(rep.perRunDiverged[i]) : false;
+			runsDetail.push_back(rd);
+		}
+		reportJson["runs_detail"] = runsDetail;
 		json perRun = json::array();
 		for (uint64_t n: rep.perRunTickCount) perRun.push_back(n);
 		reportJson["per_run_tick_count"] = perRun;
@@ -373,9 +491,25 @@ namespace RTE {
 			for (const auto& [name, tick]: rep.perSubsystemFirstDivergence) {
 				std::cout << "        " << name << ": tick " << tick << "\n";
 			}
+			if (matrixMode) {
+				std::cout << "    diverged runs (vs run 0):\n";
+				for (size_t i = 1; i < children.size(); ++i) {
+					if (i < rep.perRunDiverged.size() && rep.perRunDiverged[i]) {
+						std::cout << "        run " << i << " threads=" << children[i].threadCount
+						          << " (run-index " << children[i].runIndex << ")\n";
+					}
+				}
+			}
 		} else {
 			std::cout << "[determinism-check] RESULT: MATCHED (" << rep.comparedTicks
-			          << " ticks across " << args.runs << " runs)\n";
+			          << " ticks across " << children.size() << " runs";
+			if (matrixMode) {
+				std::cout << " at thread counts ";
+				for (size_t i = 0; i < args.threadCounts.size(); ++i) {
+					std::cout << args.threadCounts[i] << (i + 1 < args.threadCounts.size() ? "," : "");
+				}
+			}
+			std::cout << ")\n";
 		}
 
 		// Cleanup per-run JSONs unless --keep-runs.

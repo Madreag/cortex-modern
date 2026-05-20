@@ -16,6 +16,13 @@
 //   <bin> -determinism-check --scenario M1Baseline --ticks 600 --seed 42 --runs 10 \
 //                            --output divergence.json [--game-bin <path>] [--keep-runs]
 //
+// M4 Block A adds the thread-count matrix mode. With `--threads 1,2,4,8,16` the
+// orchestrator runs the scenario at each Lua-state count (via `-num-lua-states`)
+// and diffs the per-tick traces ACROSS counts — the acceptance test for M4's
+// "bit-identical regardless of thread count" contract:
+//   <bin> -determinism-check --scenario M4ThreadStress --ticks 900 --seed 42 \
+//                            --threads 1,2,4,8,16 --runs 2 --output matrix.json
+//
 // Single-dash forms (`-scenario`, `-runs`, …) are also accepted for parity with the
 // rest of the engine's CLI conventions.
 //
