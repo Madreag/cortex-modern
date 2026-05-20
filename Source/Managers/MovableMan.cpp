@@ -76,6 +76,17 @@ static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& st
 	return sorted;
 }
 
+// M4 Block D — m_AddedAlarmEvents is appended in worker-thread race order;
+// sort by a stable content key before the drain so AI reads a canonical order.
+struct AlarmEventLess {
+	bool operator()(const AlarmEvent* a, const AlarmEvent* b) const noexcept {
+		if (a->m_Team != b->m_Team) { return a->m_Team < b->m_Team; }
+		if (a->m_ScenePos.m_X != b->m_ScenePos.m_X) { return a->m_ScenePos.m_X < b->m_ScenePos.m_X; }
+		if (a->m_ScenePos.m_Y != b->m_ScenePos.m_Y) { return a->m_ScenePos.m_Y < b->m_ScenePos.m_Y; }
+		return a->m_Range < b->m_Range;
+	}
+};
+
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -1336,6 +1347,8 @@ void MovableMan::Update() {
 		delete alarmEvent;
 	}
 	m_AlarmEvents.clear();
+	// M4 Block D — canonical order before the drain (see AlarmEventLess).
+	std::sort(m_AddedAlarmEvents.begin(), m_AddedAlarmEvents.end(), AlarmEventLess());
 	for (std::vector<AlarmEvent*>::iterator aeItr = m_AddedAlarmEvents.begin(); aeItr != m_AddedAlarmEvents.end(); ++aeItr) {
 		m_AlarmEvents.push_back(*aeItr);
 	}
@@ -1370,8 +1383,10 @@ void MovableMan::Update() {
 	// Travel MOs
 	Travel();
 
-	// If our debug settings switch is forcing all pathing requests to immediately complete, make sure they're done here
-	if (g_SettingsMan.GetForceImmediatePathingRequestCompletion() && g_SceneMan.GetScene()) {
+	// If our debug settings switch is forcing all pathing requests to immediately complete, make sure they're done here.
+	// M4 Block D — determinism traces force it too: the async pathfinder completes requests over multiple frames on
+	// background threads, a scheduling nondeterminism the thread-count matrix would otherwise see.
+	if ((g_SettingsMan.GetForceImmediatePathingRequestCompletion() || g_MetricsCollector.IsRecordingTickHashes()) && g_SceneMan.GetScene()) {
 		g_SceneMan.GetScene()->BlockUntilAllPathingRequestsComplete();
 	}
 
