@@ -93,7 +93,11 @@ namespace {
 		lua_pushvalue(L, keysIdx);
 		lua_pushinteger(L, 0);
 		lua_pushcclosure(L, det_pairs_iter, 3);
-		return 1;
+		// pairs() is contracted to return (iterator, state, control). The closure is
+		// self-contained; returning t as state keeps det_pairs a faithful drop-in.
+		lua_pushvalue(L, 1);
+		lua_pushnil(L);
+		return 3;
 	}
 
 	// Keeps the original hash-order builtin as pairs_unordered (opt-in fast path).
