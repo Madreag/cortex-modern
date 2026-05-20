@@ -191,6 +191,38 @@ Anything that diverges at 2/4/8/16 threads after Block E and is *not* on this
 list is an audit miss — the matrix is the backstop, and Block F does not close
 until it is fully MATCHED.
 
+## M4 outcome (Block F)
+
+Blocks B–E and the render-RNG fix drove the matrix from "diverges at tick 0" to:
+
+- **Same thread count — fully deterministic.** A fixed Lua-state count is now
+  bit-identical run-to-run; the within-OS scheduling race M1 documented is closed.
+- **Across thread counts — bit-identical for the first ~135 ticks** of
+  `M4ThreadStress` (1/2/4/8/16).
+
+What each block closed:
+
+- **B** — MOID-ordered the threaded / synced registered-MO iteration.
+- **C** — the headline: the per-MO RNG redirect took the threaded `g_SimRNG`
+  race off worker threads; `lua_state` narrowed to the master state. First
+  divergence moved tick 0 → tick 8.
+- **render-RNG redirect** — closed a sim/render RNG-split gap (cosmetic `Draw`
+  `RandomNum` draws were drifting `g_SimRNG` a draw-rate-dependent amount). First
+  divergence tick 8 → ~136, and same-thread-count divergence closed entirely.
+- **D** — alarm-event content-ordering + synchronous pathing in determinism
+  traces.
+- **E** — the `SyncedUpdate` boundary documented.
+
+**The residual.** A cross-thread-count divergence emerges around tick 136: the
+particle / terrain physics (`terrain` / `carve_math` / `particles`) diverges
+between thread counts with identical MO counts — divergent per-particle state,
+not a divergent spawn. It is a count-dependent effect in the threaded→serial-
+physics interaction; the leading candidates are collision-callback per-Lua-state
+RNG (`OnCollideWith*` is deliberately left on the per-state generator, out of M4
+scope) and cross-actor AI coordination through per-Lua-state Lua globals. Per
+`M4_PLAN.md` §7 this is the documented M4-follow-up; the determinism gate stays
+informational until it is closed.
+
 ## How to run
 
 ### Windows
