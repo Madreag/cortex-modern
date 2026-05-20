@@ -196,12 +196,15 @@ unchanged; the conversion happens inside the functions, float↔Fixed at the
 boundary. A mod that carved terrain before M3 carves the same terrain after,
 only now identically on every machine.
 
-**Not converted — the atom collision response.** `AtomGroup::Travel` /
-`PushTravel` / `Atom::Travel` / `ResolveMOSIntersection` stay float. M3 took the
-plan's documented Block D split (`M3_PLAN.md` §4 Block D / §5 / §7) — the
-collision-response conversion is a focused follow-up. Its basic arithmetic is
-already deterministic Windows↔Linux x86 under M1's pinned `/fp:precise` flags;
-the cross-architecture backstop is M5's WASM verification.
+**Converted — the atom collision response (Block D).** `Atom::MOHitResponse` /
+`Atom::TerrHitResponse` / `Atom::Travel`, and `AtomGroup::GetMomentOfInertia` /
+`Travel` / `ResolveMOSIntersection` / `PushTravel` compute their restitution,
+friction, impulse, moment-of-inertia and segment-trajectory math in fixed-point.
+The libm transcendentals (`GetMagnitude` / `Normalize` / `SetMagnitude` /
+`RadRotate` / `CapMagnitude`) become `FixedPoint` integer routines. The
+Bresenham stepping stays integer; the `HitData` struct stays float (it crosses
+the Lua `OnBounce` / `OnSink` / `OnMOHit` callback boundary) and is read/written
+at the fixed-point boundary, which is a defined deterministic conversion.
 
 **Debugging a `carve_math` divergence.** The penetration math is fixed-point —
 bit-identical given identical inputs — so a `carve_math` divergence is a

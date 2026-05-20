@@ -41,11 +41,13 @@ to fixed-point at the function boundary and back on the way out.
 - **No performance cost.** Integer fixed-point destruction is as fast as the
   float path or faster (no FPU transcendentals on the hot path).
 
-## What is *not* converted yet
+## What else changed
 
 The atom **collision response** — how objects bounce, slide and settle — is
-still floating point. That conversion is a separate, focused follow-up. It does
-not affect terrain destruction or anything in your mods.
+also fixed-point now (the impulse, restitution, friction and moment-of-inertia
+math). As with terrain destruction: the `Material` / `Vector` / INI / Lua API
+are unchanged, and the only effect is that bouncing and settling are
+reproducible across machines.
 
 ## Related
 

@@ -1364,7 +1364,7 @@ bool AtomGroup::ResolveTerrainIntersection(Vector& position, unsigned char stron
 	// First go through all Atoms to find the first intersection and get the intersected MO
 	for (Atom* atom: m_Atoms) {
 		atomOffset = m_OwnerMOSR->RotateOffset(atom->GetOffset());
-		atom->SetupPos(position + atomOffset);
+		atom->SetupPos((FixedVector::FromVectorLike(position) + FixedVector::FromVectorLike(atomOffset)).ToVectorLike<Vector>());
 		atomPos = atom->GetCurrentPos();
 		hitMaterial = g_SceneMan.GetTerrain()->GetMaterialPixel(atomPos.GetFloorIntX(), atomPos.GetFloorIntY());
 		if (hitMaterial != g_MaterialAir && strengthThreshold > 0.0F && g_SceneMan.GetMaterialFromID(hitMaterial)->GetIntegrity() > strengthThreshold) {
@@ -1380,41 +1380,41 @@ bool AtomGroup::ResolveTerrainIntersection(Vector& position, unsigned char stron
 		return false;
 	}
 
-	Vector exitDirection = Vector();
+	FixedVector exitDirection;
 
 	// Go through all intersecting Atoms and find their average inverse normal
 	for (const Atom* intersectingAtom: intersectingAtoms) {
-		exitDirection += m_OwnerMOSR->RotateOffset(intersectingAtom->GetNormal());
+		exitDirection += FixedVector::FromVectorLike(m_OwnerMOSR->RotateOffset(intersectingAtom->GetNormal()));
 	}
 
 	// TODO: Maybe use previous position to create an exit direction instead of quitting.
-	if (exitDirection.IsZero()) {
+	if (exitDirection == FixedVector()) {
 		return false;
 	}
 
 	exitDirection = -exitDirection;
-	exitDirection.SetMagnitude(m_OwnerMOSR->GetDiameter());
+	exitDirection.SetMagnitude(Fixed::FromFloat(m_OwnerMOSR->GetDiameter()));
 
 	// See which of the intersecting Atoms has the longest to travel along the exit direction before it clears
-	float sqrLongestDistance = 0.0F;
+	FixedWide sqrLongestDistance;
 
 	Vector clearPos = Vector();
-	Vector atomExitVector = Vector();
-	Vector totalExitVector = Vector();
+	FixedVector atomExitVector;
+	FixedVector totalExitVector;
 
 	for (const Atom* intersectingAtom: intersectingAtoms) {
 		bool rayHit = false;
 		atomPos = intersectingAtom->GetCurrentPos();
 
 		if (strengthThreshold <= 0.0F) {
-			rayHit = g_SceneMan.CastMaterialRay(atomPos, exitDirection, g_MaterialAir, clearPos, 0, false);
+			rayHit = g_SceneMan.CastMaterialRay(atomPos, exitDirection.ToVectorLike<Vector>(), g_MaterialAir, clearPos, 0, false);
 		} else {
-			rayHit = g_SceneMan.CastWeaknessRay(atomPos, exitDirection, strengthThreshold, clearPos, 0, false);
+			rayHit = g_SceneMan.CastWeaknessRay(atomPos, exitDirection.ToVectorLike<Vector>(), strengthThreshold, clearPos, 0, false);
 		}
 
 		if (rayHit) {
-			atomExitVector = clearPos - atomPos;
-			float sqrAtomExitDist = atomExitVector.GetSqrMagnitude();
+			atomExitVector = FixedVector::FromVectorLike(clearPos) - FixedVector::FromVectorLike(atomPos);
+			FixedWide sqrAtomExitDist = atomExitVector.GetSqrMagnitude();
 			if (sqrAtomExitDist > sqrLongestDistance) {
 				// We found the Atom with the longest to travel along the exit direction to clear, so that's the distance to move the whole object to clear all its Atoms.
 				sqrLongestDistance = sqrAtomExitDist;
@@ -1424,11 +1424,11 @@ bool AtomGroup::ResolveTerrainIntersection(Vector& position, unsigned char stron
 	}
 
 	// If the exit vector is too large, then avoid the jarring jump and report that we didn't make it out
-	if (totalExitVector.MagnitudeIsGreaterThan(m_OwnerMOSR->GetIndividualRadius())) {
+	if (totalExitVector.MagnitudeIsGreaterThan(Fixed::FromFloat(m_OwnerMOSR->GetIndividualRadius()))) {
 		return false;
 	}
 
-	position += totalExitVector;
+	position = (FixedVector::FromVectorLike(position) + totalExitVector).ToVectorLike<Vector>();
 
 	// TODO: Figure out if a check for clearness after moving the position is actually needed and add one so this return is accurate.
 	return true;

@@ -676,7 +676,8 @@ bool SceneMan::TryPenetrate(int posX,
 
 		// Save the impulse force effects of the penetrating particle.
 		//        retardation = -sceneMat.density;
-		retardation = (-(integrity / Sqrt(sqrImpMag))).ToFloat();
+		const Fixed fixedRetardation = -(integrity / Sqrt(sqrImpMag));
+		retardation = fixedRetardation.ToFloat();
 
 		// If this is a scrap pixel, or there is no background pixel 'supporting' the knocked-loose pixel, make the column above also turn into particles.
 		if (m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
@@ -735,7 +736,7 @@ bool SceneMan::TryPenetrate(int posX,
 			save_bmp("Orphan.bmp", m_pOrphanSearchBitmap, palette);*/
 		}
 
-		FeedCarveMath(1, posX, posY, fixedImpulse, fixedVelocity, integrity, materialID, true, Fixed::FromFloat(retardation));
+		FeedCarveMath(1, posX, posY, fixedImpulse, fixedVelocity, integrity, materialID, true, fixedRetardation);
 		return true;
 	}
 	FeedCarveMath(1, posX, posY, fixedImpulse, fixedVelocity, integrity, materialID, false, Fixed());
@@ -762,7 +763,8 @@ MOPixel* SceneMan::DislodgePixel(int posX, int posY) {
 		return nullptr;
 	}
 	Atom* pixelAtom = new Atom(Vector(), spawnMat->GetIndex(), nullptr, spawnColor, 2);
-	MOPixel* pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(static_cast<float>(posX), static_cast<float>(posY)), Vector(), pixelAtom, 0);
+	Vector spawnPos = FixedVector(Fixed(posX), Fixed(posY)).ToVectorLike<Vector>();
+	MOPixel* pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), spawnPos, Vector(), pixelAtom, 0);
 	pixelMO->SetToHitMOs(spawnMat->GetIndex() == c_GoldMaterialID);
 	g_MovableMan.AddParticle(pixelMO);
 

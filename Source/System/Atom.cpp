@@ -878,7 +878,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 				}
 
 				// Now normalize the normal in case it's diagonal due to hit in both directions
-				m_LastHit.BitmapNormal.Normalize();
+				m_LastHit.BitmapNormal = FixedVector::FromVectorLike(m_LastHit.BitmapNormal).GetNormalized().ToVectorLike<Vector>();
 
 				// Make this Atom ignore hits with this MO for the rest of the frame, to avoid erroneous multiple hits because the hit MO doesn't move away until it itself
 

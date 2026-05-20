@@ -63,7 +63,7 @@ namespace RTE {
 		constexpr Int128 operator+(const Int128& o) const {
 			uint64_t s = lo + o.lo;
 			int64_t carry = (s < lo) ? 1 : 0;
-			return Int128(s, hi + o.hi + carry);
+			return Int128(s, static_cast<int64_t>(static_cast<uint64_t>(hi) + static_cast<uint64_t>(o.hi) + static_cast<uint64_t>(carry)));
 		}
 		constexpr Int128 operator-(const Int128& o) const { return *this + (-o); }
 
@@ -149,6 +149,7 @@ namespace RTE {
 			rem.lo |= bit;
 			if (rem >= d) {
 				rem = rem - d;
+				RTE_FIXED_CHECK(i < 64); // a set quotient bit at i>=64 would not fit 64 bits
 				if (i < 64) { quo |= (uint64_t(1) << i); }
 			}
 		}
@@ -160,7 +161,7 @@ namespace RTE {
 	constexpr int64_t DivFixedRaw(int64_t a, int64_t b) {
 		RTE_FIXED_CHECK(b != 0);
 		if (a > -(int64_t(1) << 39) && a < (int64_t(1) << 39)) {
-			return (a << kFractionBits) / b;
+			return (a * kFixedOneRaw) / b;
 		}
 		bool neg = (a < 0) != (b < 0);
 		uint64_t ua = (a < 0) ? (0u - static_cast<uint64_t>(a)) : static_cast<uint64_t>(a);
@@ -199,7 +200,7 @@ namespace RTE {
 	public:
 		constexpr Fixed() = default;
 		constexpr Fixed(int v) :
-		    m_Raw(static_cast<int64_t>(v) << kFractionBits) {}
+		    m_Raw(static_cast<int64_t>(v) * kFixedOneRaw) {}
 
 		static constexpr Fixed FromRaw(int64_t raw) {
 			Fixed f;
@@ -226,13 +227,13 @@ namespace RTE {
 		/// Convert to int: floor (toward -inf), trunc (toward zero), round-to-nearest, ceil.
 		constexpr int FloorToInt() const { return static_cast<int>(m_Raw >> kFractionBits); }
 		constexpr int TruncToInt() const { return static_cast<int>(m_Raw >= 0 ? (m_Raw >> kFractionBits) : -((-m_Raw) >> kFractionBits)); }
-		constexpr int RoundToInt() const { return static_cast<int>((m_Raw + (int64_t(1) << (kFractionBits - 1))) >> kFractionBits); }
-		constexpr int CeilToInt() const { return static_cast<int>((m_Raw + kFixedOneRaw - 1) >> kFractionBits); }
+		constexpr int RoundToInt() const { return FloorToInt() + ((m_Raw & (kFixedOneRaw - 1)) >= (kFixedOneRaw >> 1) ? 1 : 0); }
+		constexpr int CeilToInt() const { return FloorToInt() + ((m_Raw & (kFixedOneRaw - 1)) != 0 ? 1 : 0); }
 
-		constexpr Fixed operator-() const { return FromRaw(-m_Raw); }
+		constexpr Fixed operator-() const { return FromRaw(static_cast<int64_t>(0u - static_cast<uint64_t>(m_Raw))); }
 
 		constexpr Fixed operator+(Fixed o) const {
-			int64_t r = m_Raw + o.m_Raw;
+			int64_t r = static_cast<int64_t>(static_cast<uint64_t>(m_Raw) + static_cast<uint64_t>(o.m_Raw));
 			RTE_FIXED_CHECK(!((m_Raw > 0 && o.m_Raw > 0 && r < 0) || (m_Raw < 0 && o.m_Raw < 0 && r > 0)));
 			return FromRaw(r);
 		}
@@ -325,7 +326,9 @@ namespace RTE {
 	/// sqrt of a FixedWide — sqrt of a Q48 value is directly a Q24 Fixed raw.
 	constexpr Fixed Sqrt(FixedWide w) {
 		if (w.Raw().IsNegative()) { return Fixed::FromRaw(0); }
-		return Fixed::FromRaw(static_cast<int64_t>(Isqrt128(w.Raw())));
+		uint64_t root = Isqrt128(w.Raw());
+		RTE_FIXED_CHECK(root <= static_cast<uint64_t>(INT64_MAX));
+		return Fixed::FromRaw(static_cast<int64_t>(root));
 	}
 
 #pragma endregion

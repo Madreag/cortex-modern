@@ -454,6 +454,9 @@
     <ClInclude Include="Source\GUI\GUISound.h">
       <Filter>GUI</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\FixedPoint.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTETools.h">
       <Filter>System</Filter>
     </ClInclude>
