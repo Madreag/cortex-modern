@@ -169,6 +169,11 @@ namespace {
 		}
 		Check(ok, "FromDouble / ToDouble round-trip within 1 Q24 ulp");
 		std::printf("  round-trip max error: %.3e\n", maxErr);
+
+		Check(Fixed::FromDouble(3.7).TruncToInt() == 3 && Fixed::FromDouble(-3.7).TruncToInt() == -3,
+		      "TruncToInt rounds toward zero");
+		Check(Fixed::FromDouble(-3.7).FloorToInt() == -4 && Fixed::FromDouble(3.2).CeilToInt() == 4,
+		      "FloorToInt / CeilToInt round toward -inf / +inf");
 	}
 
 	// --- Sqrt vs std::sqrt, and exactness of the integer root. ---
