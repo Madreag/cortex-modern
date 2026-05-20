@@ -125,3 +125,7 @@ audit-*.replay
 determinism-report.json
 _build_*.log
 _audit_*.log
+
+# M3 FixedPoint.h test build output (FixedPointTests.vcxproj)
+_BinTests/
+fixedpoint-*.txt
