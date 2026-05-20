@@ -5,6 +5,7 @@
 #include "MOSRotating.h"
 #include "LimbPath.h"
 #include "ConsoleMan.h"
+#include "FixedPoint.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -239,16 +240,17 @@ Vector AtomGroup::GetAdjustedAtomOffset(const Atom* atom) const {
 
 float AtomGroup::GetMomentOfInertia() {
 	float currentOwnerMass = (m_OwnerMOSR->GetMass() != 0 ? m_OwnerMOSR->GetMass() : 0.0001F);
-	if (m_MomentOfInertia == 0.0F || std::abs(m_StoredOwnerMass - currentOwnerMass) >= (m_StoredOwnerMass / 10.0F)) {
+	if (m_MomentOfInertia == 0.0F || Abs(Fixed::FromFloat(m_StoredOwnerMass) - Fixed::FromFloat(currentOwnerMass)) >= Fixed::FromFloat(m_StoredOwnerMass) / Fixed(10)) {
 		RTEAssert(m_OwnerMOSR, "Tried to calculate moment of inertia for an AtomGroup with no parent!");
 
 		m_StoredOwnerMass = currentOwnerMass;
-		float distMass = m_StoredOwnerMass / static_cast<float>(m_Atoms.size());
-		float radius = 0.0F;
+		Fixed distMass = Fixed::FromFloat(m_StoredOwnerMass) / Fixed(static_cast<int>(m_Atoms.size()));
+		Fixed momentOfInertia = Fixed::FromFloat(m_MomentOfInertia);
 		for (const Atom* atom: m_Atoms) {
-			radius = atom->GetOffset().GetMagnitude() * c_MPP;
-			m_MomentOfInertia += distMass * radius * radius;
+			Fixed radius = FixedVector::FromVectorLike(atom->GetOffset()).GetMagnitude() * Fixed::FromFloat(c_MPP);
+			momentOfInertia += distMass * radius * radius;
 		}
+		m_MomentOfInertia = momentOfInertia.ToFloat();
 	}
 	// Avoid zero (if radius is nonexistent, for example), will cause divide by zero problems otherwise.
 	if (m_MomentOfInertia == 0.0F) {

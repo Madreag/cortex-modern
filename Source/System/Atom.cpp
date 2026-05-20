@@ -7,6 +7,7 @@
 #include "MOPixel.h"
 #include "PresetMan.h"
 #include "Actor.h"
+#include "FixedPoint.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -328,7 +329,7 @@ bool Atom::MOHitResponse() {
 			m_LastHit.HitPoint.SetXY(m_HitPos[X], m_HitPos[Y]);
 			m_LastHit.BitmapNormal.SetXY(-m_Increment[X], -m_Increment[Y]);
 		}
-		m_LastHit.BitmapNormal.Normalize();
+		m_LastHit.BitmapNormal = FixedVector::FromVectorLike(m_LastHit.BitmapNormal).GetNormalized().ToVectorLike<Vector>();
 
 		if (!m_Normal.IsZero()) {
 			m_LastHit.BitmapNormal = -m_OwnerMO->RotateOffset(m_Normal);
@@ -336,7 +337,7 @@ bool Atom::MOHitResponse() {
 
 		// Cancel collision response for this if it appears the collision is happening in the 'wrong' direction, meaning away from the center.
 		// This happens when things are sunk into each other, and thus getting 'hooked' on each other
-		if (m_LastHit.HitRadius[HITOR].Dot(m_LastHit.BitmapNormal) >= 0) {
+		if (FixedVector::FromVectorLike(m_LastHit.HitRadius[HITOR]).Dot(FixedVector::FromVectorLike(m_LastHit.BitmapNormal)) >= FixedWide()) {
 			// Hitee hit radius and the normal presented to the hitor are facing each other! We are colliding in the wrong direction!
 			validHit = false;
 		}
@@ -379,7 +380,7 @@ HitData& Atom::TerrHitResponse() {
 		bool hit[2];
 		hit[X] = hit[Y] = false;
 		m_LastHit.BitmapNormal.Reset();
-		Vector hitAcc = m_LastHit.HitVel[HITOR];
+		FixedVector hitAcc = FixedVector::FromVectorLike(m_LastHit.HitVel[HITOR]);
 
 		// Check for and react upon a collision in the dominant direction of travel.
 		if (m_Delta[m_Dom] && ((m_Dom == X && g_SceneMan.GetTerrMatter(m_HitPos[X], m_IntPos[Y])) || (m_Dom == Y && g_SceneMan.GetTerrMatter(m_IntPos[X], m_HitPos[Y])))) {
@@ -390,7 +391,7 @@ HitData& Atom::TerrHitResponse() {
 			// Edit the normal accordingly.
 			m_LastHit.BitmapNormal[m_Dom] = -m_Increment[m_Dom];
 			// Bounce according to the collision.
-			hitAcc[m_Dom] = -hitAcc[m_Dom] - hitAcc[m_Dom] * m_Material->GetRestitution() * domMaterial->GetRestitution();
+			hitAcc[m_Dom] = -hitAcc[m_Dom] - hitAcc[m_Dom] * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(domMaterial->GetRestitution());
 		}
 
 		// Check for and react upon a collision in the submissive direction of travel.
@@ -402,7 +403,7 @@ HitData& Atom::TerrHitResponse() {
 			// Edit the normal accordingly.
 			m_LastHit.BitmapNormal[m_Sub] = -m_Increment[m_Sub];
 			// Bounce according to the collision.
-			hitAcc[m_Sub] = -hitAcc[m_Sub] - hitAcc[m_Sub] * m_Material->GetRestitution() * subMaterial->GetRestitution();
+			hitAcc[m_Sub] = -hitAcc[m_Sub] - hitAcc[m_Sub] * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(subMaterial->GetRestitution());
 		}
 
 		// If hit right on the corner of a pixel, bounce straight back with no friction.
@@ -412,26 +413,26 @@ HitData& Atom::TerrHitResponse() {
 			m_LastHit.BitmapNormal[m_Sub] = -m_Increment[m_Sub];
 
 			hit[m_Dom] = true;
-			hitAcc[m_Dom] = -hitAcc[m_Dom] - hitAcc[m_Dom] * m_Material->GetRestitution() * hitMaterial->GetRestitution();
+			hitAcc[m_Dom] = -hitAcc[m_Dom] - hitAcc[m_Dom] * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(hitMaterial->GetRestitution());
 			hit[m_Sub] = true;
-			hitAcc[m_Sub] = -hitAcc[m_Sub] - hitAcc[m_Sub] * m_Material->GetRestitution() * hitMaterial->GetRestitution();
+			hitAcc[m_Sub] = -hitAcc[m_Sub] - hitAcc[m_Sub] * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(hitMaterial->GetRestitution());
 		} else if (hit[m_Dom] && !hit[m_Sub]) {
 			// Calculate the effects of friction.
-			m_LastHit.BitmapNormal[m_Sub] = -m_Increment[m_Sub] * m_Material->GetFriction() * domMaterial->GetFriction();
-			hitAcc[m_Sub] = -hitAcc[m_Sub] * m_Material->GetFriction() * domMaterial->GetFriction();
+			m_LastHit.BitmapNormal[m_Sub] = (Fixed(-m_Increment[m_Sub]) * Fixed::FromFloat(m_Material->GetFriction()) * Fixed::FromFloat(domMaterial->GetFriction())).ToFloat();
+			hitAcc[m_Sub] = -hitAcc[m_Sub] * Fixed::FromFloat(m_Material->GetFriction()) * Fixed::FromFloat(domMaterial->GetFriction());
 		} else if (hit[m_Sub] && !hit[m_Dom]) {
-			m_LastHit.BitmapNormal[m_Dom] = -m_Increment[m_Dom] * m_Material->GetFriction() * domMaterial->GetFriction();
-			hitAcc[m_Dom] = -hitAcc[m_Dom] * m_Material->GetFriction() * subMaterial->GetFriction();
+			m_LastHit.BitmapNormal[m_Dom] = (Fixed(-m_Increment[m_Dom]) * Fixed::FromFloat(m_Material->GetFriction()) * Fixed::FromFloat(domMaterial->GetFriction())).ToFloat();
+			hitAcc[m_Dom] = -hitAcc[m_Dom] * Fixed::FromFloat(m_Material->GetFriction()) * Fixed::FromFloat(subMaterial->GetFriction());
 		}
-		m_LastHit.BitmapNormal.Normalize();
+		m_LastHit.BitmapNormal = FixedVector::FromVectorLike(m_LastHit.BitmapNormal).GetNormalized().ToVectorLike<Vector>();
 
 		// Calculate effects of moment of inertia will have on the impulse.
-		float MIhandle = m_LastHit.HitRadius[HITOR].GetPerpendicular().Dot(m_LastHit.BitmapNormal);
+		Fixed MIhandle = FixedVector::FromVectorLike(m_LastHit.HitRadius[HITOR]).GetPerpendicular().Dot(FixedVector::FromVectorLike(m_LastHit.BitmapNormal)).ToFixed();
 
 		// Calculate the actual impulse force.
-		m_LastHit.ResImpulse[HITOR] = hitAcc / ((1.0F / m_LastHit.TotalMass[HITOR]) + (MIhandle * MIhandle / m_LastHit.MomInertia[HITOR]));
+		m_LastHit.ResImpulse[HITOR] = (hitAcc / (Fixed(1) / Fixed::FromFloat(m_LastHit.TotalMass[HITOR]) + MIhandle * MIhandle / Fixed::FromFloat(m_LastHit.MomInertia[HITOR]))).ToVectorLike<Vector>();
 		// Scale by the impulse factor.
-		m_LastHit.ResImpulse[HITOR] *= m_LastHit.ImpulseFactor[HITOR];
+		m_LastHit.ResImpulse[HITOR] = (FixedVector::FromVectorLike(m_LastHit.ResImpulse[HITOR]) * Fixed::FromFloat(m_LastHit.ImpulseFactor[HITOR])).ToVectorLike<Vector>();
 
 		return m_LastHit;
 	}
@@ -657,8 +658,8 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	int delta2[2];
 	int increment[2];
 
-	float timeLeft = travelTime;
-	float segProgress = 0.0F;
+	Fixed timeLeft = Fixed::FromFloat(travelTime);
+	Fixed segProgress = Fixed(0);
 	float retardation;
 
 	bool hit[2];
@@ -675,8 +676,8 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	const Material* subMaterial = 0; // g_SceneMan.GetMaterialFromID(g_MaterialAir);
 	unsigned char subMaterialID = 0;
 
-	Vector segTraj;
-	Vector hitAccel;
+	FixedVector segTraj;
+	FixedVector hitAccel;
 
 	// Static buffer to avoid having to realloc with every atom's travel
 	// This saves us time because Atom::Travel does a lot of allocations and reallocations if you have a lot of particles.
@@ -689,12 +690,12 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	float removeOrphansRate = m_OwnerMO->m_RemoveOrphanTerrainRate;
 
 	// Bake in the Atom offset.
-	position += m_Offset;
+	position = (FixedVector::FromVectorLike(position) + FixedVector::FromVectorLike(m_Offset)).ToVectorLike<Vector>();
 
 	// Loop for all the different straight segments (between bounces etc) that have to be traveled during the timeLeft.
 	do {
-		intPos[X] = std::floor(position.m_X);
-		intPos[Y] = std::floor(position.m_Y);
+		intPos[X] = Fixed::FromFloat(position.m_X).FloorToInt();
+		intPos[Y] = Fixed::FromFloat(position.m_Y).FloorToInt();
 
 		// Get trail bitmap and put first pixel.
 		if (m_TrailLength) {
@@ -702,10 +703,10 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 			trailPoints.push_back({intPos[X], intPos[Y]});
 		}
 		// Compute and scale the actual on-screen travel trajectory for this segment, based on the velocity, the travel time and the pixels-per-meter constant.
-		segTraj = velocity * timeLeft * c_PPM;
+		segTraj = FixedVector::FromVectorLike(velocity) * timeLeft * Fixed::FromFloat(c_PPM);
 
-		delta[X] = std::floor(position.m_X + segTraj.m_X) - intPos[X];
-		delta[Y] = std::floor(position.m_Y + segTraj.m_Y) - intPos[Y];
+		delta[X] = (Fixed::FromFloat(position.m_X) + segTraj.m_X).FloorToInt() - intPos[X];
+		delta[Y] = (Fixed::FromFloat(position.m_Y) + segTraj.m_Y).FloorToInt() - intPos[Y];
 
 		// This tends to trigger a lot. It shouldn't, and ought to be properly fixed, but... TODO
 		// RTEAssert(std::abs(delta[X]) < 2500 && std::abs(delta[Y] < 2500), "Extremely long difference trajectory found during Atom::Travel. Owner is " + m_OwnerMO->GetPresetName() + ", with Vel (" + std::to_string(velocity.GetX()) + ", " + std::to_string(velocity.GetY()) + ").");
@@ -721,7 +722,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 		subSteps = 0;
 		subStepped = false;
 		sinkHit = false;
-		hitAccel.Reset();
+		hitAccel = FixedVector();
 
 		if (delta[X] == 0 && delta[Y] == 0) {
 			break;
@@ -765,14 +766,14 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 			if (!m_OwnerMO->m_IgnoreTerrain && domSteps == 0 && g_SceneMan.GetTerrMatter(intPos[X], intPos[Y]) != g_MaterialAir) {
 				++hitCount;
 				hit[X] = hit[Y] = true;
-				if (g_SceneMan.TryPenetrate(intPos[X], intPos[Y], velocity * mass * sharpness, velocity, retardation, 0.5F, m_NumPenetrations, removeOrphansRadius, removeOrphansMaxArea, removeOrphansRate)) {
+				if (g_SceneMan.TryPenetrate(intPos[X], intPos[Y], (FixedVector::FromVectorLike(velocity) * Fixed::FromFloat(mass) * Fixed::FromFloat(sharpness)).ToVectorLike<Vector>(), velocity, retardation, 0.5F, m_NumPenetrations, removeOrphansRadius, removeOrphansMaxArea, removeOrphansRate)) {
 					// segProgress = 0.0F;
-					velocity += velocity * retardation;
+					velocity = (FixedVector::FromVectorLike(velocity) + FixedVector::FromVectorLike(velocity) * Fixed::FromFloat(retardation)).ToVectorLike<Vector>();
 					continue;
 				} else {
 					// segProgress = 1.0F;
 					velocity.SetXY(0, 0);
-					timeLeft = 0.0F;
+					timeLeft = Fixed(0);
 					break;
 				}
 			}
@@ -885,7 +886,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 				AddMOIDToIgnore(m_MOIDHit);
 
 				m_LastHit.Body[HITEE]->CollideAtPoint(m_LastHit);
-				hitAccel = m_LastHit.ResImpulse[HITOR] / mass;
+				hitAccel = FixedVector::FromVectorLike(m_LastHit.ResImpulse[HITOR]) / Fixed::FromFloat(mass);
 
 				// Report the hit to both MO's in collision
 				m_LastHit.RootBody[HITOR] = m_LastHit.Body[HITOR]->GetRootParent();
@@ -914,14 +915,14 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 				}
 #endif
 				// Try penetration of the terrain.
-				if (hitMaterial->GetIndex() != g_MaterialOutOfBounds && g_SceneMan.TryPenetrate(intPos[X], intPos[Y], velocity * mass * sharpness, velocity, retardation, 0.65F, m_NumPenetrations, removeOrphansRadius, removeOrphansMaxArea, removeOrphansRate)) {
+				if (hitMaterial->GetIndex() != g_MaterialOutOfBounds && g_SceneMan.TryPenetrate(intPos[X], intPos[Y], (FixedVector::FromVectorLike(velocity) * Fixed::FromFloat(mass) * Fixed::FromFloat(sharpness)).ToVectorLike<Vector>(), velocity, retardation, 0.65F, m_NumPenetrations, removeOrphansRadius, removeOrphansMaxArea, removeOrphansRate)) {
 					hit[dom] = hit[sub] = sinkHit = true;
 					++m_NumPenetrations;
 					m_ChangedDir = false;
 					m_PrevError = error;
 
 					// Calculate the penetration/sink response effects.
-					hitAccel = velocity * retardation;
+					hitAccel = FixedVector::FromVectorLike(velocity) * Fixed::FromFloat(retardation);
 				} else {
 					// Penetration failed, bounce.
 					m_NumPenetrations = 0;
@@ -938,7 +939,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 					g_SceneMan.WrapPosition(intPos[X], intPos[Y]);
 
 					// Check if particle is sticky and should adhere to where it collided
-					if (!m_OwnerMO->IsMissionCritical() && velocity.MagnitudeIsGreaterThan(1.0F)) {
+					if (!m_OwnerMO->IsMissionCritical() && FixedVector::FromVectorLike(velocity).MagnitudeIsGreaterThan(Fixed(1))) {
 						MOPixel* ownerMOAsPixel = dynamic_cast<MOPixel*>(m_OwnerMO);
 						if (RandomNum() < std::max(m_Material->GetStickiness(), ownerMOAsPixel ? ownerMOAsPixel->GetStaininess() : 0.0f)) {
 							// Weighted random select between stickiness or staininess
@@ -951,7 +952,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 								break;
 							} else if (MOPixel* ownerMOAsPixel = dynamic_cast<MOPixel*>(m_OwnerMO); ownerMOAsPixel && randomChoice <= m_Material->GetStickiness() + ownerMOAsPixel->GetStaininess()) {
 								Vector stickPos(intPos[X], intPos[Y]);
-								stickPos += velocity * (c_PPM * g_TimerMan.GetDeltaTimeSecs()) * RandomNum();
+								stickPos = (FixedVector::FromVectorLike(stickPos) + FixedVector::FromVectorLike(velocity) * (Fixed::FromFloat(c_PPM) * Fixed::FromFloat(g_TimerMan.GetDeltaTimeSecs()) * Fixed::FromFloat(RandomNum()))).ToVectorLike<Vector>();
 								int terrainMaterialID = g_SceneMan.GetTerrain()->GetMaterialPixel(stickPos.GetFloorIntX(), stickPos.GetFloorIntY());
 								if (terrainMaterialID != g_MaterialAir && terrainMaterialID != g_MaterialDoor) {
 									m_OwnerMO->SetPos(Vector(stickPos.GetRoundIntX(), stickPos.GetRoundIntY()));
@@ -973,7 +974,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 						domMaterial = g_SceneMan.GetMaterialFromID(domMaterialID);
 
 						// Bounce according to the collision.
-						hitAccel[dom] = -velocity[dom] - velocity[dom] * m_Material->GetRestitution() * domMaterial->GetRestitution();
+						hitAccel[dom] = -Fixed::FromFloat(velocity[dom]) - Fixed::FromFloat(velocity[dom]) * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(domMaterial->GetRestitution());
 					}
 
 					// Check for and react upon a collision in the submissive direction of travel.
@@ -983,20 +984,20 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 						subMaterial = g_SceneMan.GetMaterialFromID(subMaterialID);
 
 						// Bounce according to the collision.
-						hitAccel[sub] = -velocity[sub] - velocity[sub] * m_Material->GetRestitution() * subMaterial->GetRestitution();
+						hitAccel[sub] = -Fixed::FromFloat(velocity[sub]) - Fixed::FromFloat(velocity[sub]) * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(subMaterial->GetRestitution());
 					}
 
 					// If hit right on the corner of a pixel, bounce straight back with no friction.
 					if (!hit[dom] && !hit[sub]) {
 						hit[dom] = true;
-						hitAccel[dom] = -velocity[dom] - velocity[dom] * m_Material->GetRestitution() * hitMaterial->GetRestitution();
+						hitAccel[dom] = -Fixed::FromFloat(velocity[dom]) - Fixed::FromFloat(velocity[dom]) * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(hitMaterial->GetRestitution());
 						hit[sub] = true;
-						hitAccel[sub] = -velocity[sub] - velocity[sub] * m_Material->GetRestitution() * hitMaterial->GetRestitution();
+						hitAccel[sub] = -Fixed::FromFloat(velocity[sub]) - Fixed::FromFloat(velocity[sub]) * Fixed::FromFloat(m_Material->GetRestitution()) * Fixed::FromFloat(hitMaterial->GetRestitution());
 					} else if (hit[dom] && !hit[sub]) {
 						// Calculate the effects of friction.
-						hitAccel[sub] -= velocity[sub] * m_Material->GetFriction() * domMaterial->GetFriction();
+						hitAccel[sub] -= Fixed::FromFloat(velocity[sub]) * Fixed::FromFloat(m_Material->GetFriction()) * Fixed::FromFloat(domMaterial->GetFriction());
 					} else if (hit[sub] && !hit[dom]) {
-						hitAccel[dom] -= velocity[dom] * m_Material->GetFriction() * subMaterial->GetFriction();
+						hitAccel[dom] -= Fixed::FromFloat(velocity[dom]) * Fixed::FromFloat(m_Material->GetFriction()) * Fixed::FromFloat(subMaterial->GetFriction());
 					}
 				}
 			} else if (m_TrailLength) {
@@ -1011,7 +1012,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 				// Calculate the progress made on this segment before hitting something.
 				// We count the hitting step made if it resulted in a terrain sink, because the Atoms weren't stepped back out of intersection.
 				// segProgress = static_cast<float>(domSteps + sinkHit) / static_cast<float>(delta[dom]);
-				segProgress = (static_cast<float>(domSteps + static_cast<int>(sinkHit)) < delta[dom]) ? (static_cast<float>(domSteps + static_cast<int>(sinkHit)) / std::fabs(static_cast<float>(segTraj[dom]))) : 1.0F;
+				segProgress = ((domSteps + static_cast<int>(sinkHit)) < delta[dom]) ? (Fixed(domSteps + static_cast<int>(sinkHit)) / Abs(segTraj[dom])) : Fixed(1);
 
 				// Now calculate the total time left to travel, according to the progress made.
 				timeLeft -= timeLeft * segProgress;
@@ -1019,21 +1020,21 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 				// Move position forward to the hit position.
 				// position += segTraj * segProgress;
 				// Only move the dom forward by int domSteps, so we don't cross into a pixel too far
-				position[dom] += (domSteps + static_cast<int>(sinkHit)) * increment[dom];
+				position[dom] = (Fixed::FromFloat(position[dom]) + Fixed((domSteps + static_cast<int>(sinkHit)) * increment[dom])).ToFloat();
 
 				// Move the submissive direction forward by as many int steps, or the full float segTraj if all sub-steps are clear
 				if ((subSteps + static_cast<int>(subStepped && sinkHit)) < delta[sub]) {
-					position[sub] += (subSteps + static_cast<int>(subStepped && sinkHit)) * increment[sub];
+					position[sub] = (Fixed::FromFloat(position[sub]) + Fixed((subSteps + static_cast<int>(subStepped && sinkHit)) * increment[sub])).ToFloat();
 				} else {
-					position[sub] += segTraj[sub];
+					position[sub] = (Fixed::FromFloat(position[sub]) + segTraj[sub]).ToFloat();
 				}
 
-				Vector testPos = position - m_Offset;
+				Vector testPos = (FixedVector::FromVectorLike(position) - FixedVector::FromVectorLike(m_Offset)).ToVectorLike<Vector>();
 
 				didWrap = g_SceneMan.WrapPosition(testPos) || didWrap;
 
 				// Apply the collision response acceleration to the linear velocity of the owner MO.
-				velocity += hitAccel;
+				velocity = (FixedVector::FromVectorLike(velocity) + hitAccel).ToVectorLike<Vector>();
 			}
 		}
 	} while ((hit[X] || hit[Y]) && /* !segTraj.GetFloored().IsZero() && */ hitCount < 100 && !m_LastHit.Terminate[HITOR]);
@@ -1059,11 +1060,11 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	}
 
 	// Extract Atom offset.
-	position -= m_Offset;
+	position = (FixedVector::FromVectorLike(position) - FixedVector::FromVectorLike(m_Offset)).ToVectorLike<Vector>();
 
 	// Travel along the remaining segTraj.
 	if (!(hit[X] || hit[Y]) && autoTravel) {
-		position += segTraj;
+		position = (FixedVector::FromVectorLike(position) + segTraj).ToVectorLike<Vector>();
 	}
 
 	didWrap = g_SceneMan.WrapPosition(position) || didWrap;

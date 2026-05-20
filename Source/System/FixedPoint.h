@@ -472,6 +472,10 @@ namespace RTE {
 
 		constexpr FixedVector GetPerpendicular() const { return FixedVector(m_Y, -m_X); }
 
+		/// Indexed component access (0 = X, 1 = Y) — mirrors Vector::operator[].
+		constexpr const Fixed& operator[](int axis) const { return (axis == 0) ? m_X : m_Y; }
+		constexpr Fixed& operator[](int axis) { return (axis == 0) ? m_X : m_Y; }
+
 		FixedVector& SetMagnitude(Fixed newMag) {
 			Fixed mag = GetMagnitude();
 			if (mag.Raw() == 0) {
