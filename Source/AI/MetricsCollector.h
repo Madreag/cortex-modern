@@ -71,6 +71,9 @@ namespace RTE {
 			m_RecordTickHashes = enabled;
 		}
 
+		/// Whether the per-tick hash trace is being recorded (a determinism run). Set once at run start.
+		bool IsRecordingTickHashes() const { return m_RecordTickHashes; }
+
 		/// Append a per-tick hash record. Silently no-op if recording is disabled or no run is
 		/// active. The intended call site is `Main.cpp`'s sim-loop right after
 		/// `g_SimChecksum.EndTick()` — that's when the per-subsystem accumulators are finalized

@@ -19,7 +19,7 @@ namespace RTE {
 	/// created on first Update().
 	///
 	/// Subsystems: `tick`, `terrain`, `decisions`, `actors`, `sim_rng`, `particles`, `scene`,
-	/// `lua_state`. Not yet wired: `carve_math`, `controller`.
+	/// `lua_state`, `carve_math`. Not yet wired: `controller`.
 	class SimChecksum : public Singleton<SimChecksum> {
 		friend class Singleton<SimChecksum>;
 

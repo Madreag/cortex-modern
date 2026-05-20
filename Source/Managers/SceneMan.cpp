@@ -17,8 +17,12 @@
 #include "Atom.h"
 #include "Material.h"
 #include "SoundContainer.h"
+#include "SimChecksum.h"
+#include "MetricsCollector.h"
 
 #include "tracy/Tracy.hpp"
+
+#include <cstring>
 
 using namespace RTE;
 
@@ -430,6 +434,50 @@ void SceneMan::ClearAllMOIDDrawings() {
 	m_MOIDsGrid.Reset();
 }
 
+void SceneMan::FeedTerrainToSimChecksum() {
+	// Heavy (full-bitmap) — only run it during a determinism trace, not normal play.
+	if (!g_MetricsCollector.IsRecordingTickHashes() || !m_pCurrentScene) {
+		return;
+	}
+	SLTerrain* terrain = m_pCurrentScene->GetTerrain();
+	if (!terrain) {
+		return;
+	}
+	HashTerrainBitmap(terrain->GetMaterialBitmap());
+	HashTerrainBitmap(terrain->GetFGColorBitmap());
+}
+
+void SceneMan::HashTerrainBitmap(BITMAP* bitmap) {
+	if (!bitmap) {
+		return;
+	}
+	const int dims[2] = {bitmap->w, bitmap->h};
+	g_SimChecksum.Update("terrain", dims, sizeof(dims));
+	for (int y = 0; y < bitmap->h; ++y) {
+		g_SimChecksum.Update("terrain", bitmap->line[y], static_cast<size_t>(bitmap->w));
+	}
+}
+
+void SceneMan::FeedCarveMath(int kind, int posX, int posY, const Vector& impulse, const Vector& velocity, int materialID, bool result, float retardation) {
+	// High call volume — only feed it during a determinism trace, not normal play.
+	if (!g_MetricsCollector.IsRecordingTickHashes()) {
+		return;
+	}
+	// Penetration inputs are still float here — hash their bit patterns.
+	auto floatBits = [](float f) -> int64_t {
+		uint32_t u = 0;
+		std::memcpy(&u, &f, sizeof(u));
+		return static_cast<int64_t>(u);
+	};
+	const int64_t fields[] = {
+	    kind, posX, posY, materialID, result ? 1 : 0,
+	    floatBits(impulse.m_X), floatBits(impulse.m_Y),
+	    floatBits(velocity.m_X), floatBits(velocity.m_Y),
+	    floatBits(retardation),
+	};
+	g_SimChecksum.Update("carve_math", fields, sizeof(fields));
+}
+
 bool SceneMan::WillPenetrate(const int posX,
                              const int posY,
                              const Vector& impulse) {
@@ -440,7 +488,9 @@ bool SceneMan::WillPenetrate(const int posX,
 
 	unsigned char materialID = getpixel(m_pCurrentScene->GetTerrain()->GetMaterialBitmap(), posX, posY);
 	float integrity = GetMaterialFromID(materialID)->GetIntegrity();
-	return impulse.MagnitudeIsGreaterThan(integrity);
+	const bool result = impulse.MagnitudeIsGreaterThan(integrity);
+	FeedCarveMath(0, posX, posY, impulse, Vector(), materialID, result, 0.0F);
+	return result;
 }
 
 int SceneMan::RemoveOrphans(int posX, int posY, int radius, int maxArea, bool remove) {
@@ -680,8 +730,10 @@ bool SceneMan::TryPenetrate(int posX,
 			save_bmp("Orphan.bmp", m_pOrphanSearchBitmap, palette);*/
 		}
 
+		FeedCarveMath(1, posX, posY, impulse, velocity, materialID, true, retardation);
 		return true;
 	}
+	FeedCarveMath(1, posX, posY, impulse, velocity, materialID, false, 0.0F);
 	return false;
 }
 
@@ -712,6 +764,7 @@ MOPixel* SceneMan::DislodgePixel(int posX, int posY) {
 	m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, ColorKeys::g_MaskColor);
 	m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, MaterialColorKeys::g_MaterialAir);
 
+	FeedCarveMath(2, posX, posY, Vector(), Vector(), materialID, true, 0.0F);
 	return pixelMO;
 }
 
