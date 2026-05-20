@@ -65,6 +65,9 @@ namespace RTE {
 		/// Serializes this state's RNG into a byte string for the SimChecksum `lua_state` subsystem.
 		std::string GetRandomGeneratorStateForHashing() const;
 
+		/// Seeds this state's RNG. Called per activity start so Lua math.random is reproducible.
+		void SeedRandomGenerator(uint64_t seed);
+
 		/// Gets m_ScriptTimings.
 		/// @return m_ScriptTimings.
 		const std::unordered_map<std::string, PerformanceMan::ScriptTiming>& GetScriptTimings() const;
@@ -438,6 +441,9 @@ namespace RTE {
 
 		/// Hashes every Lua state's RNG into the SimChecksum `lua_state` subsystem. No-op when no determinism run is active.
 		void HashAllLuaStatesIntoSimChecksum();
+
+		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
+		void SeedAllLuaRNGs(uint64_t baseSeed);
 #pragma endregion
 
 		/// Clears Script Timings.
