@@ -62,6 +62,9 @@ namespace RTE {
 		/// @return This LuaStateWrapper's internal lua state.
 		lua_State* GetLuaState() { return m_State; };
 
+		/// Serializes this state's RNG into a byte string for the SimChecksum `lua_state` subsystem.
+		std::string GetRandomGeneratorStateForHashing() const;
+
 		/// Gets m_ScriptTimings.
 		/// @return m_ScriptTimings.
 		const std::unordered_map<std::string, PerformanceMan::ScriptTiming>& GetScriptTimings() const;
@@ -432,6 +435,9 @@ namespace RTE {
 
 		/// Asynchronously enforces a GC run to occur.
 		void StartAsyncGarbageCollection();
+
+		/// Hashes every Lua state's RNG into the SimChecksum `lua_state` subsystem. No-op when no determinism run is active.
+		void HashAllLuaStatesIntoSimChecksum();
 #pragma endregion
 
 		/// Clears Script Timings.

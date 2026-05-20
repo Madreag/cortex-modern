@@ -14,18 +14,12 @@
 
 namespace RTE {
 
-	/// Per-tick state hasher with per-subsystem breakdown.
+	/// Per-tick state hasher with per-subsystem breakdown. Wraps BLAKE3; the total tick hash
+	/// combines name-sorted subsystems, so registration order is irrelevant. Subsystems are
+	/// created on first Update().
 	///
-	/// Wraps BLAKE3. Each subsystem (`"terrain"`, `"decisions"`, `"tick"`, future `"carve_math"`, `"actors"`,
-	/// `"rng"`) is hashed into its own accumulator; the total tick hash is `BLAKE3(concat over sorted subsystems
-	/// of (name || subsystem_hash))`. Sorted by name so subsystem registration order does not affect the result.
-	///
-	/// Per the M0 plan (D:\Projects\M0_PLAN.md §A2), wired subsystems at M0:
-	///   - `"terrain"` — raw FG/BG terrain bitmap bytes at end-of-tick (seed of the determinism island)
-	///   - `"decisions"` — drained AIDecisionChannel events in sorted order
-	///   - `"tick"` — the sim frame number
-	/// M2 adds `"carve_math"` (deterministic carve/penetrate/dislodge result).
-	/// M5 grows to whole-tick (`"actors"`, `"rng"`, `"lua_state"`).
+	/// Subsystems: `tick`, `terrain`, `decisions`, `actors`, `sim_rng`, `particles`, `scene`
+	/// (M0 + MP M1); `lua_state` (MP M2). Deferred: `carve_math` (MP M3), `controller` (MP M7+).
 	class SimChecksum : public Singleton<SimChecksum> {
 		friend class Singleton<SimChecksum>;
 
@@ -55,6 +49,9 @@ namespace RTE {
 
 		/// Get the most recent result. Thread-safe (returns a copy).
 		Result GetLastResult() const;
+
+		/// Whether a tick is currently being accumulated (between BeginTick and EndTick). Thread-safe.
+		bool IsActive() const;
 
 		/// Convert a hash to a 64-character lowercase hex string.
 		static std::string HashHex(const Hash& h);

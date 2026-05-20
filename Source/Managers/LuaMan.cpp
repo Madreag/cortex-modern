@@ -313,6 +313,10 @@ double LuaStateWrapper::PosRand() {
 	return m_RandomGenerator.RandomNum<double>();
 }
 
+std::string LuaStateWrapper::GetRandomGeneratorStateForHashing() const {
+	return m_RandomGenerator.SerializeStateForHashing();
+}
+
 // Passthrough LuaMan Functions
 const std::vector<std::string>* LuaStateWrapper::DirectoryList(const std::string& path) { return g_LuaMan.DirectoryList(path); }
 const std::vector<std::string>* LuaStateWrapper::FileList(const std::string& path) { return g_LuaMan.FileList(path); }
@@ -1319,6 +1323,19 @@ void LuaMan::StartAsyncGarbageCollection() {
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTOP, 0);
 		    }));
+	}
+}
+
+void LuaMan::HashAllLuaStatesIntoSimChecksum() {
+	if (!g_SimChecksum.IsActive()) {
+		return;
+	}
+	// Master first, then threaded states by index — m_ScriptStates is never reordered, so index is a stable state id.
+	const std::string masterState = m_MasterScriptState.GetRandomGeneratorStateForHashing();
+	g_SimChecksum.Update("lua_state", masterState.data(), masterState.size());
+	for (const LuaStateWrapper& luaState: m_ScriptStates) {
+		const std::string threadedState = luaState.GetRandomGeneratorStateForHashing();
+		g_SimChecksum.Update("lua_state", threadedState.data(), threadedState.size());
 	}
 }
 

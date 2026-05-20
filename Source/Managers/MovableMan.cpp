@@ -1825,6 +1825,9 @@ void MovableMan::Update() {
 		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
 	}
 
+	// M2 Block A — co-located with the `sim_rng` snapshot to share its race-free drain point (before the see-ray futures).
+	g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+
 	// Run seeing rays for all actors
 	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
 	                                                                         [&](int start, int end) {
