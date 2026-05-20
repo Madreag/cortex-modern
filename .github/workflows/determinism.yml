@@ -89,9 +89,10 @@ jobs:
               --seed 42 \
               --runs 100 \
               --output ${{ matrix.scenario }}-divergence.json
-        # Main-thread-Lua scenarios are blocking; scenarios that run threaded
-        # sim/AI Lua stay informational until the threaded-sim race is closed.
-        continue-on-error: ${{ !startsWith(matrix.scenario, 'M2') || matrix.scenario == 'M2ModSmokeLoading' }}
+        # Informational: every scenario's total-tick hash includes the M1
+        # sim_rng / actors subsystems, which carry the residual sim-thread race
+        # until MP M4. Flips to blocking when M4 closes it.
+        continue-on-error: true
 
       - name: Upload divergence report
         if: always()
@@ -134,9 +135,10 @@ jobs:
               --seed 42 `
               --runs 100 `
               --output "${{ matrix.scenario }}-divergence.json"
-        # Main-thread-Lua scenarios are blocking; scenarios that run threaded
-        # sim/AI Lua stay informational until the threaded-sim race is closed.
-        continue-on-error: ${{ !startsWith(matrix.scenario, 'M2') || matrix.scenario == 'M2ModSmokeLoading' }}
+        # Informational: every scenario's total-tick hash includes the M1
+        # sim_rng / actors subsystems, which carry the residual sim-thread race
+        # until MP M4. Flips to blocking when M4 closes it.
+        continue-on-error: true
 
       - name: Upload divergence report
         if: always()

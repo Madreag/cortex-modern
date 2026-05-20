@@ -1,8 +1,8 @@
-# MP M2 — Lua determinism baseline (Block A landing state)
+# MP M2 — Lua determinism state
 
-State of Lua-environment determinism **at the moment Block A (the `lua_state`
-SimChecksum subsystem) lands**, before Blocks B–F. The starting-point reading the
-later blocks are measured against.
+State of Lua-environment determinism for the MP M2 `lua_state` SimChecksum
+subsystem and the Block B–D Lua guarantees, with the post-implementation
+determinism-check results.
 
 ## How CC's Lua RNG actually works
 
@@ -23,29 +23,33 @@ Hashed in `MovableMan::Update`, co-located with the `sim_rng` snapshot (before t
 see-ray / MOID futures launch). Order: master state, then threaded states by index
 (`m_ScriptStates` is a fixed vector, never reordered — index is a stable state id).
 
-## Baseline state (M2LuaBaseline, 600 ticks)
+## Verified state (determinism-check, 3 runs, 2026-05-19)
 
-`m_RandomGenerator` is seeded once per state in `LuaStateWrapper::Initialize()` from
-a `g_SimRNG` pull. On one machine + build that pull is reproducible, so for
-main-thread-only Lua the `lua_state` trace is **already deterministic across
-same-machine runs at Block A** — `M2LuaBaseline` is expected to MATCH.
+The four no-actor M2 scenarios were run through the determinism-check. Every one
+DIVERGED on the total-tick hash — but the cause is inherited from M1, not M2:
 
-That is the correct, honest baseline: M2 is not closing a within-machine
-single-build divergence the way the M1 C++ blocks did. The non-determinism
-`lua_state` exists to catch is:
+- **`sim_rng` is the earliest-diverging subsystem** (tick 1–49). It carries M1's
+  residual sim-thread race. M1's own `M1Baseline` diverges identically — `sim_rng`
+  at tick 1 — in *both* the M1 build and this M2 build, so the divergence is a
+  pre-existing M1-harness property, not an M2 regression.
+- **`lua_state` (M2's subsystem) is the LAST subsystem to diverge** (~tick 307–325),
+  downstream of the M1 race — not an independent M2 fault.
+- **The `decisions` subsystem did NOT diverge** for `M2LuaRandomStress` /
+  `M2PairsStress` / `M2OsStubTest`. Those scenarios fold each tick's `math.random`
+  sequence / `pairs()` order / `os.*` values into a decision event; that subsystem
+  matching across runs is the positive signal that M2's Lua-language guarantees
+  hold. Only the surrounding M1 sim race keeps `total` diverging.
 
-| Source | Closed / handled by |
+So the M2 CI scenarios stay **informational** alongside M1's until MP M4 closes the
+sim-thread race. The non-determinism each M2 block addresses:
+
+| Source | Addressed by |
 |---|---|
 | Per-state RNG not reseeded per activity → drift across activity transitions | Block B |
-| Lua RNG not coupled to the activity/sim seed (`-seed` doesn't reach it) | Block B |
+| Lua RNG not coupled to the activity/sim seed | Block B |
 | `pairs()` hash-bucket iteration order (cross-build, non-primitive keys) | Block C |
-| `os.time`/`os.clock` wall-clock reads in sim Lua | Block D |
-| Threaded-state RNG drift when AI Lua runs under the M1 `ThreadedUpdate` race | MP M4 |
-
-The last row is why M2's MATCH scenarios run their Lua in the Activity script
-(main thread): a scenario that runs actor AI Lua inherits the residual M1 race and
-will diverge at ~tick 10–20 in some runs until M4. That is inherited, not an M2
-regression — see `M2_PLAN.md` §2.1.
+| `os.time` / `os.clock` wall-clock reads in sim Lua | Block D |
+| Threaded-state RNG drift under the M1 `ThreadedUpdate` race | MP M4 |
 
 ## How to run locally
 
