@@ -23,6 +23,8 @@
 #                      `decisions` / `sim_rng` / `actors`).
 #   M1ActorStress    — 20-sentry deterministic grid, 600 ticks. Exercises
 #                      Block C's MOID sort under heavier population.
+#   M2LuaBaseline    — no actors, main-thread Lua RNG, 600 ticks. Exercises the
+#                      MP M2 `lua_state` subsystem (added non-blocking at M2 Block A).
 #
 # Cross-OS:
 #   determinism-cross-os depends on both Linux and Windows jobs and downloads
@@ -41,7 +43,7 @@ name: Determinism
 
 on:
   pull_request:
-    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup]
+    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs]
   workflow_dispatch:
 
 # Concurrency: one run per branch/PR, cancel in-flight if new commits arrive.
@@ -55,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [M1Baseline, M1TerrainStress, M1ActorStress]
+        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [M1Baseline, M1TerrainStress, M1ActorStress]
+        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline]
     steps:
       - uses: actions/checkout@v4
         with:

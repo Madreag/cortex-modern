@@ -98,6 +98,11 @@ namespace RTE {
 		return m_LastResult;
 	}
 
+	bool SimChecksum::IsActive() const {
+		std::lock_guard<std::mutex> lock(m_Impl->mutex);
+		return m_Impl->active;
+	}
+
 	std::string SimChecksum::HashHex(const Hash& h) {
 		static const char hex[] = "0123456789abcdef";
 		std::string out;
