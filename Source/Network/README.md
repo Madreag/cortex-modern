@@ -146,7 +146,7 @@ If runs diverge, RESULT becomes `DIVERGED` and the report lists:
 | `particles`  | M1 Block F follow-up | Per-particle {uniqueID, pos, vel}, in MOID order      | `MovableMan::Update`         |
 | `scene`      | M1 Block F follow-up | Tick metadata: actor/item/particle counts + per-team roster size | `MovableMan::Update` |
 | `sim_rng`    | M1 Block F | Full `g_SimRNG` mt19937 internal state, end-of-tick (snapshot inside `MovableMan::Update` before async futures launch) | `MovableMan::Update` |
-| `lua_state`  | M2       | Per-Lua-state RNG, master then threaded states in order  | `MovableMan::Update`         |
+| `lua_state`  | M2 / M4  | Master-state RNG only (M4: threaded per-MO Lua work is redirected off the per-state RNGs, so they carry no sim-observable state — and their count is the thread count) | `LuaMan::HashAllLuaStatesIntoSimChecksum` |
 | `carve_math` | M3       | Per penetration decision: pos, material, result, fixed-point impulse / velocity / retardation | `SceneMan` penetration path |
 | `controller` | (M7+)    | Per-player controller state                              | —                            |
 
@@ -170,11 +170,12 @@ reproduces across runs. What is guaranteed, and what is not:
 - **`next`** — *not* patched. `for k, v in next, t do` still iterates in
   hash order. Use `pairs()` for ordered iteration.
 
-A `lua_state` subsystem divergence means a Lua state consumed a different
-number of RNG draws across runs. Usual causes: a mod calling
-`math.randomseed`, or actor AI Lua hitting the threaded-sim race (closes at
-MP M4 — see below). The modder-facing summary lives in
-`Data/Modding/lua-determinism.md`.
+Post-M4 the `lua_state` subsystem hashes the master state's RNG only (threaded
+per-MO Lua work is redirected to per-MO generators — see "Threaded-sim
+determinism (M4)" below). A `lua_state` divergence therefore means the master
+state — activity and global scripts — consumed a different number of RNG draws;
+the usual cause is a mod calling `math.randomseed`. The modder-facing summary
+lives in `Data/Modding/lua-determinism.md`.
 
 ## Fixed-point determinism (M3)
 
@@ -214,19 +215,99 @@ is earlier than `sim_rng`'s, a stray float slipped onto the converted path
 divergence is inherited from the upstream `sim_rng` thread race — MP M4's to
 close. The modder-facing summary is in `Data/Modding/fixed-point-physics.md`.
 
+## Threaded-sim determinism (M4)
+
+CC runs three sim passes across worker threads — the `ThreadedUpdate` and
+`ThreadedUpdateAI` script hooks (parallel over Lua states) and see-ray vision
+casting (parallel over actors). M4 makes their result independent of how many
+threads the sim runs on. It does **not** parallelize the physics integrator
+`MovableMan::Travel()` — that stays serial (the Lua synchronous-collision-
+callback contract blocks parallelizing it; a separate, post-M6 effort).
+
+- **Per-worker RNG isolation (Block C).** The worker passes consumed the shared
+  `g_SimRNG` and the per-Lua-state `math.random` generator off worker threads — a
+  race. `DeterministicMORNGScope` (`LuaMan.h`) redirects both, via a
+  `thread_local` override, to a per-MO generator seeded from `(uniqueID, sim
+  tick, hook)`. It is installed at the per-MO script-dispatch chokepoint
+  (`MovableObject::RunScriptedFunctionInAppropriateScripts`) and around
+  `Actor::CastSeeRays`, so each MO's threaded work draws a stream that depends
+  only on the MO and the tick — not on thread count or scheduling. The C++ side
+  is RTETools' `GetSimRNG()` / `t_simRNGOverride`; the Lua side is `LuaMan`'s
+  `s_luaRNGOverride`, consulted by `SelectRand` / `RangeRand` / `PosRand` /
+  `NormalRand`. `lua_state` is narrowed to the master state accordingly.
+- **Deterministic iteration (Block B).** `SortedRegisteredMOs` snapshots each Lua
+  state's `unordered_set` of registered MOs and sorts by `m_UniqueID`, so the
+  threaded/synced passes iterate in a canonical MOID order.
+- **Cross-worker effects (Block D).** Alarm events (`m_AddedAlarmEvents`) are
+  sorted by a stable content key before the frame-start drain; determinism
+  traces force synchronous path completion (the async pathfinder otherwise
+  finishes requests over a scheduling-dependent number of frames).
+- **Render RNG.** Some MO `Draw` / `DrawHUD` paths still reached the sim RNG free
+  functions (an M1 sim/render-split gap); `ScopedRenderRNG` redirects render-side
+  RNG to `g_RenderRNG` for `MovableMan::Draw` / `DrawHUD` / `DrawMatter` /
+  `UpdateDrawMOIDs`, so cosmetic draws cannot drift `g_SimRNG`.
+- **The `SyncedUpdate` boundary (Block E).** `SyncedUpdate` is the serial,
+  MOID-ordered pass and the deterministic channel for script-driven sim-state
+  mutation — `Data/Modding/threaded-determinism.md` is the modder contract.
+
+### The thread-count matrix
+
+`-determinism-check --threads 1,2,4,8,16` runs a scenario at each Lua-state
+count (forced via `SettingsMan::SetNumberOfLuaStatesOverride`, plumbed from a
+`-num-lua-states` CLI flag) and diffs the per-tick traces *across* counts — the
+Factorio FFF-415 acid test. `M4ThreadStress` (40 brain-hunters, 900 ticks) is the
+matrix scenario.
+
+```pwsh
+& ".\Cortex Command.exe" -determinism-check --scenario M4ThreadStress `
+    --ticks 900 --seed 42 --threads 1,2,4,8,16 --runs 2 --output matrix.json
+```
+
+### M4 landing state — what closed, what resists
+
+M4 closed the threaded `g_SimRNG` race, the `lua_state` count-dependence, the
+render-side RNG leak, the alarm-event order race and the async-pathing
+nondeterminism. The result:
+
+- **Same thread count** — the sim is bit-identical run-to-run. Fully closed.
+- **Across thread counts** — `M4ThreadStress` is bit-identical for the first
+  ~135 ticks (the Block A baseline diverged at tick 0).
+
+A residual **cross-thread-count** divergence resists: around tick 136 the
+particle/terrain physics diverges between thread counts — the MO counts stay
+identical, so it is divergent per-particle state, not a divergent spawn. It is
+downstream of a count-dependent effect in the threaded→serial-physics
+interaction; the leading candidates are collision-callback per-Lua-state RNG
+(`OnCollideWith*` is deliberately left on the per-state generator, out of M4
+scope) and cross-actor AI coordination through per-Lua-state Lua globals. Per
+`M4_PLAN.md` §7 the determinism gate stays informational pending the
+M4-follow-up that closes this — M5/M7 inherit a vastly-more-deterministic sim
+and a precise, localized follow-up rather than a tick-0 race.
+
+### Debugging a thread-count divergence
+
+1. Run the matrix with `--keep-runs`; per-run JSONs land in
+   `<tmp>/cccp-determinism-<ts>/run_t<count>_<run>.json`.
+2. The report's `per_subsystem_first_divergence` and `runs_detail` finger the
+   first diverging subsystem and which thread counts diverged.
+3. A *same-count* divergence (two `run_t<N>_*` of the same `<N>` differ) is a
+   scheduling race. A *cross-count-only* divergence (same-count matches, counts
+   differ) is a count-dependent effect — actor→Lua-state assignment, per-state
+   RNG, or a cross-worker mutation.
+
 ## CI
 
 `.github/workflows/determinism.yml` runs the check on every PR to
 `modernization-effort` and the MP milestone branches. The divergence report
 is uploaded as an artifact (`determinism-<scenario>-<os>`).
 
-All scenarios are **informational** (`continue-on-error`). The per-tick total
-hash combines every subsystem, and M1's `sim_rng` / `actors` / `particles` /
-`scene` subsystems still carry the residual sim-thread race (Lua-called C++
-helpers transitively touching `g_SimRNG` from worker threads during
-`ThreadedUpdate` / `SyncedUpdate`). No scenario reaches a whole-tick MATCH yet
-— M1's own `M1Baseline` diverges `sim_rng` at tick 1 in both the M1 and M2
-builds. **MP M4 closes that race**; the gate flips to blocking then.
+All scenarios are **informational** (`continue-on-error`). M4 closed the
+threaded `g_SimRNG` race that kept M1's `M1Baseline` diverging `sim_rng` at
+tick 1 — the sim is now bit-identical run-to-run at a fixed thread count. A
+residual cross-thread-count divergence remains (`M4ThreadStress` matches for
+~135 ticks, then the particle/terrain physics diverges between thread counts);
+per `M4_PLAN.md` §7 the gate stays informational pending the M4-follow-up that
+closes it. The "Threaded-sim determinism (M4)" section above has the detail.
 
 M2's Lua determinism is verified in the meantime by the `decisions` subsystem:
 `M2LuaRandomStress` / `M2PairsStress` / `M2OsStubTest` fold each tick's

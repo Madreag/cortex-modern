@@ -1,4 +1,5 @@
-# M1 Block F — determinism CI gate (informational at M1, blocking at M4).
+# Determinism CI gate (informational — M1 set it so; M4 narrowed the race far
+# but did not fully close it; see the M4 outcome note below).
 #
 # Block A landed this workflow non-blocking (`continue-on-error: true`) so the
 # scaffold could ship without preventing modernization-effort merges. Block F
@@ -11,10 +12,10 @@
 # reach until MP M4 (the threaded-sim-with-deterministic-merge milestone)
 # pulls the rest of the racy consumers off the sim RNG.
 #
-# Therefore the gate stays `continue-on-error: true` at M1. The artifact
-# upload is preserved so reviewers can inspect the divergence reports. MP M4
-# will flip the gate to blocking once its determinism-island treatment has
-# closed the last RNG races.
+# Therefore the gate stays `continue-on-error: true`. The artifact upload is
+# preserved so reviewers can inspect the divergence reports. MP M4 narrowed the
+# race substantially (see the M4 outcome note below); a residual cross-thread-
+# count divergence keeps the gate informational pending the M4-follow-up.
 #
 # Scenarios:
 #   M1Baseline       — one sentry, 600 ticks. Minimal envelope.
@@ -49,11 +50,19 @@
 # its self-check hash cross-OS. These jobs are BLOCKING — the Q40.24 library is
 # pure integer code, not subject to the M1 thread race, so it must be exact.
 #
-# MP M4 Block A adds the determinism-thread-matrix jobs: they run M4ThreadStress
-# through `-determinism-check --threads 1,2,4,8,16`, which runs the scenario at
-# each Lua-state count and diffs the per-tick traces ACROSS counts. Non-blocking
-# at Block A (the residual M1 thread race still diverges it); Block F flips the
-# whole determinism gate to blocking once M4 has closed the race.
+# MP M4 adds the determinism-thread-matrix jobs: they run M4ThreadStress through
+# `-determinism-check --threads 1,2,4,8,16`, running the scenario at each Lua-
+# state count and diffing the per-tick traces ACROSS counts.
+#
+# MP M4 outcome (Block F): M4 closed the threaded g_SimRNG race (Block C), the
+# lua_state count-dependence (Block C), the render-side RNG leak, the alarm-event
+# order race and the async-pathing nondeterminism (Block D). The sim is now bit-
+# identical run-to-run at a fixed thread count, and bit-identical ACROSS thread
+# counts for the first ~135 ticks of M4ThreadStress (the Block A baseline
+# diverged at tick 0). A residual cross-thread-count divergence in the
+# particle/terrain physics (~tick 136) resists; per M4_PLAN.md §7 the gate stays
+# informational pending the M4-follow-up that closes it. See
+# Source/Network/README.md and Source/CI/baseline_thread_divergence.md.
 
 name: Determinism
 
