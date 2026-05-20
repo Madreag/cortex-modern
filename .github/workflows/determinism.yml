@@ -48,12 +48,18 @@
 # FixedPoint.h test (Source/System/FixedPointTests.cpp) on each OS and compare
 # its self-check hash cross-OS. These jobs are BLOCKING — the Q40.24 library is
 # pure integer code, not subject to the M1 thread race, so it must be exact.
+#
+# MP M4 Block A adds the determinism-thread-matrix jobs: they run M4ThreadStress
+# through `-determinism-check --threads 1,2,4,8,16`, which runs the scenario at
+# each Lua-state count and diffs the per-tick traces ACROSS counts. Non-blocking
+# at Block A (the residual M1 thread race still diverges it); Block F flips the
+# whole determinism gate to blocking once M4 has closed the race.
 
 name: Determinism
 
 on:
   pull_request:
-    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs, flagship/mp-m3-fixedpoint-physics]
+    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs, flagship/mp-m3-fixedpoint-physics, flagship/mp-m4-threaded-sim]
   workflow_dispatch:
 
 # Concurrency: one run per branch/PR, cancel in-flight if new commits arrive.
@@ -191,6 +197,90 @@ jobs:
             exit 1
           }
           echo "Cross-OS M1Baseline: $(wc -l < linux-totals.txt) ticks matched."
+
+  # MP M4 Block A — thread-count determinism matrix. Runs M4ThreadStress at Lua-state
+  # counts 1/2/4/8/16 and diffs the per-tick traces across counts. Non-blocking at
+  # Block A; Block F flips it (and the whole gate) to blocking once M4 closes the race.
+  determinism-thread-matrix-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config \
+            libsdl2-dev libsdl2-image-dev libpng-dev libflac-dev \
+            libminizip-dev libtbb-dev liblz4-dev libgl-dev
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Run thread-count matrix (M4ThreadStress)
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario M4ThreadStress \
+              --ticks 900 \
+              --seed 42 \
+              --threads 1,2,4,8,16 \
+              --runs 2 \
+              --output M4ThreadStress-matrix.json
+        # Informational at Block A — the M1 thread race still diverges the matrix.
+        continue-on-error: true
+
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-thread-matrix-linux
+          path: M4ThreadStress-matrix.json
+          if-no-files-found: error
+
+  determinism-thread-matrix-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Final|x64)
+        shell: pwsh
+        run: |
+          msbuild RTEA.sln /p:Configuration="Final" /p:Platform=x64 /m /nologo /v:minimal
+
+      - name: Stage runtime deps
+        shell: pwsh
+        run: |
+          Copy-Item -Path external/lib/win/fmod.dll -Destination fmod.dll -Force
+
+      - name: Run thread-count matrix (M4ThreadStress)
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario M4ThreadStress `
+              --ticks 900 `
+              --seed 42 `
+              --threads 1,2,4,8,16 `
+              --runs 2 `
+              --output M4ThreadStress-matrix.json
+        # Informational at Block A — the M1 thread race still diverges the matrix.
+        continue-on-error: true
+
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-thread-matrix-windows
+          path: M4ThreadStress-matrix.json
+          if-no-files-found: error
 
   # MP M3 Block A — FixedPoint.h standalone unit + determinism tests.
   fixedpoint-tests-linux:

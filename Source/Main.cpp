@@ -80,6 +80,10 @@ FILE __iob_func[3] = {*stdin, *stdout, *stderr};
 
 using namespace RTE;
 
+// M4 Block A — the determinism-check thread-count matrix forces the threaded Lua-state
+// count via -num-lua-states; scanned in main() pre-init, applied in InitializeManagers.
+static int s_cliNumLuaStatesOverride = -1;
+
 /// <summary>
 /// Initializes all the essential managers.
 /// </summary>
@@ -118,6 +122,12 @@ void InitializeManagers() {
 
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
+
+	// Apply the CLI Lua-state-count override before LuaMan::Initialize reads it.
+	if (s_cliNumLuaStatesOverride >= 0) {
+		g_SettingsMan.SetNumberOfLuaStatesOverride(s_cliNumLuaStatesOverride);
+	}
+
 	g_WindowMan.Initialize();
 	g_GLResourceMan.Initialize();
 
@@ -576,6 +586,14 @@ int main(int argc, char** argv) {
 	// lightweight: no module load, no GL context).
 	if (DeterminismCheck::IsRequested(argc, argv)) {
 		return DeterminismCheck::Run(argc, argv);
+	}
+
+	// M4 — pick up the determinism-check thread-count override before any init runs.
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (argv[i] != nullptr && std::string(argv[i]) == "-num-lua-states") {
+			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
+			break;
+		}
 	}
 
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
