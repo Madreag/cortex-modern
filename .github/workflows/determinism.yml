@@ -43,12 +43,17 @@
 # Local equivalent (Linux):
 #   ./CortexCommand -determinism-check --scenario M1Baseline --ticks 600 \
 #                                      --seed 42 --runs 100 --output report.json
+#
+# MP M3 Block A adds the fixedpoint-tests jobs: they build the standalone
+# FixedPoint.h test (Source/System/FixedPointTests.cpp) on each OS and compare
+# its self-check hash cross-OS. These jobs are BLOCKING — the Q40.24 library is
+# pure integer code, not subject to the M1 thread race, so it must be exact.
 
 name: Determinism
 
 on:
   pull_request:
-    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs]
+    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs, flagship/mp-m3-fixedpoint-physics]
   workflow_dispatch:
 
 # Concurrency: one run per branch/PR, cancel in-flight if new commits arrive.
@@ -186,3 +191,88 @@ jobs:
             exit 1
           }
           echo "Cross-OS M1Baseline: $(wc -l < linux-totals.txt) ticks matched."
+
+  # MP M3 Block A — FixedPoint.h standalone unit + determinism tests.
+  fixedpoint-tests-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build FixedPointTests (g++, C++20)
+        run: |
+          g++ -std=c++20 -O2 -msse2 -fno-fast-math -Wall \
+              -o FixedPointTests Source/System/FixedPointTests.cpp
+
+      - name: Run FixedPointTests
+        run: ./FixedPointTests | tee fixedpoint-linux.txt
+
+      - name: Extract self-check hash
+        run: grep '^SELF-CHECK:' fixedpoint-linux.txt | tr -d '\r' > fixedpoint-hash-linux.txt
+
+      - name: Upload self-check hash
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixedpoint-hash-linux
+          path: fixedpoint-hash-linux.txt
+          if-no-files-found: error
+
+  fixedpoint-tests-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build FixedPointTests
+        shell: pwsh
+        run: msbuild Source\System\FixedPointTests.vcxproj /p:Configuration=Release /p:Platform=x64 /nologo /v:minimal
+
+      - name: Run FixedPointTests
+        shell: pwsh
+        run: |
+          & .\Source\System\_BinTests\x64\Release\FixedPointTests.exe | Tee-Object fixedpoint-windows.txt
+
+      - name: Extract self-check hash
+        shell: pwsh
+        run: |
+          Select-String -Path fixedpoint-windows.txt -Pattern '^SELF-CHECK:' |
+            ForEach-Object { $_.Line.Trim() } | Set-Content fixedpoint-hash-windows.txt
+
+      - name: Upload self-check hash
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixedpoint-hash-windows
+          path: fixedpoint-hash-windows.txt
+          if-no-files-found: error
+
+  fixedpoint-tests-cross-os:
+    # Blocking: the FixedPoint.h self-check must produce the same hash on every OS.
+    needs: [fixedpoint-tests-linux, fixedpoint-tests-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux hash
+        uses: actions/download-artifact@v4
+        with:
+          name: fixedpoint-hash-linux
+          path: ./lin
+
+      - name: Download Windows hash
+        uses: actions/download-artifact@v4
+        with:
+          name: fixedpoint-hash-windows
+          path: ./win
+
+      - name: Compare self-check hashes
+        run: |
+          echo "Linux:   $(cat lin/fixedpoint-hash-linux.txt)"
+          echo "Windows: $(cat win/fixedpoint-hash-windows.txt)"
+          tr -d '\r' < lin/fixedpoint-hash-linux.txt > lin.txt
+          tr -d '\r' < win/fixedpoint-hash-windows.txt > win.txt
+          if ! diff lin.txt win.txt; then
+            echo "::error::FixedPoint.h self-check hash differs across OS — the Q40.24 library is not bit-identical."
+            exit 1
+          fi
+          echo "FixedPoint.h self-check: cross-OS bit-identical."

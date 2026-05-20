@@ -281,6 +281,15 @@ cccpelf = executable(
   win_subsystem:'windows', # Windows mark as GUI app
 )
 
+# MP M3 Block A — standalone FixedPoint.h unit + determinism tests.
+# Depends only on FixedPoint.h and the stdlib; no engine sources, no deps.
+fixedpoint_tests = executable(
+  'FixedPointTests', ['Source/System/FixedPointTests.cpp'],
+  cpp_args:[extra_args, preprocessor_flags],
+  build_by_default:true,
+  install:false,
+)
+
 
 #### Installing #####
 base_exclude_files = [
