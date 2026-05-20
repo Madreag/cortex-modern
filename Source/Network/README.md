@@ -6,8 +6,8 @@ the future home of the MP M6+ networking stack. As of M1 (Block F) it contains:
 - **`SimChecksum.{h,cpp}`** — per-tick BLAKE3 state hasher with per-subsystem
   breakdown. The total-tick hash is `BLAKE3(concat over sorted subsystems of
   (name || subsystem_hash))`. Subsystems wired: `tick`, `terrain`, `decisions`,
-  `actors`, `sim_rng`, `particles`, `scene` (M0 + M1), `lua_state` (M2). Not yet
-  wired: `carve_math` (M3), `controller` (M7+).
+  `actors`, `sim_rng`, `particles`, `scene` (M0 + M1), `lua_state` (M2),
+  `carve_math` (M3). Not yet wired: `controller` (M7+).
 - **`NetworkSimulator.{h,cpp}`** — latency / loss / jitter knobs plumbed
   through SettingsMan. No-op at M0; MP M1 plugs the real transport on top.
 - **`ReplayLog.{h,cpp}`** — per-tick replay log (scenario, seed, timeline,
@@ -108,9 +108,12 @@ If runs diverge, RESULT becomes `DIVERGED` and the report lists:
      `sim_rng` (RNG-driven AI behavior) or `decisions`.
    - `decisions` diverging means the AI emitted different events. Usually
      downstream of `sim_rng` or iteration-order drift (Block C).
-   - `terrain` diverging means terrain pixels diverged. At M1 this hash
-     is a placeholder (just the sim tick number) — divergence here would
-     mean `tick` schema is broken too. M2 wires the real terrain hash.
+   - `terrain` diverging means terrain pixels diverged. M3 wired this to the
+     real material + foreground-colour bitmaps; divergence is normally
+     downstream of `sim_rng` (raced carve inputs), not the carve math.
+   - `carve_math` diverging means a penetration decision differed. The math
+     is fixed-point — bit-identical given identical inputs — so this is
+     downstream of `sim_rng`; check `carve_math`'s tick is not earlier.
 
 2. **Re-run with `--keep-runs`** to retain the per-run JSON traces, then
    inspect the first diverging tick across runs:
@@ -137,14 +140,14 @@ If runs diverge, RESULT becomes `DIVERGED` and the report lists:
 | Subsystem    | Wired at | What's fed in                                            | Source                       |
 |--------------|----------|----------------------------------------------------------|------------------------------|
 | `tick`       | M0       | Sim frame number (uint64)                                | `SimChecksum::BeginTick`     |
-| `terrain`    | M0       | Sim frame number (placeholder; real carve hash at M2)    | `Main.cpp` end-of-tick block |
+| `terrain`    | M0 / M3  | Material + FG-colour bitmaps, end-of-tick (M3; tick-number placeholder before) | `SceneMan::FeedTerrainToSimChecksum` |
 | `decisions`  | M0       | Drained `AIDecisionChannel::Event` records               | `MovableMan::Update` drain   |
 | `actors`     | M1 Block F | Per-actor {uniqueID, pos, vel, health, AIMode}, in MOID order | `MovableMan::Update`     |
 | `particles`  | M1 Block F follow-up | Per-particle {uniqueID, pos, vel}, in MOID order      | `MovableMan::Update`         |
 | `scene`      | M1 Block F follow-up | Tick metadata: actor/item/particle counts + per-team roster size | `MovableMan::Update` |
 | `sim_rng`    | M1 Block F | Full `g_SimRNG` mt19937 internal state, end-of-tick (snapshot inside `MovableMan::Update` before async futures launch) | `MovableMan::Update` |
 | `lua_state`  | M2       | Per-Lua-state RNG, master then threaded states in order  | `MovableMan::Update`         |
-| `carve_math` | (M3)     | Deterministic terrain carve / penetrate / dislodge math  | —                            |
+| `carve_math` | M3       | Per penetration decision: pos, material, result, fixed-point impulse / velocity / retardation | `SceneMan` penetration path |
 | `controller` | (M7+)    | Per-player controller state                              | —                            |
 
 ## Lua determinism contract
@@ -172,6 +175,41 @@ number of RNG draws across runs. Usual causes: a mod calling
 `math.randomseed`, or actor AI Lua hitting the threaded-sim race (closes at
 MP M4 — see below). The modder-facing summary lives in
 `Data/Modding/lua-determinism.md`.
+
+## Fixed-point determinism (M3)
+
+M3 converts the terrain-destruction math to integer fixed-point, so it is
+bit-identical across compilers and OSes by construction — no `/fp` flags, no
+libm. `Source/System/FixedPoint.h` is the Q40.24 library: `Fixed` (int64, 24
+fractional bits), `FixedWide` (128-bit, for squared magnitudes / dot products
+kept wide), `FixedVector`, and integer `Sqrt` / `Sin` / `Cos` / `Atan2`.
+`FixedPointTests` — a standalone binary, built by
+`Source/System/FixedPointTests.vcxproj` or the Meson `FixedPointTests` target —
+unit-tests the library and prints a self-check hash that CI compares
+Windows↔Linux.
+
+**Converted — the terrain-destruction path.** `SceneMan::WillPenetrate` /
+`TryPenetrate` / `DislodgePixel`, the `DislodgePixelCircle/Ring/Box/Line`
+geometry helpers, and `SLTerrain::EraseSilhouette`'s sizing math. Float storage
+is untouched — `Vector`, `Material`, the INI format and the Lua API are
+unchanged; the conversion happens inside the functions, float↔Fixed at the
+boundary. A mod that carved terrain before M3 carves the same terrain after,
+only now identically on every machine.
+
+**Not converted — the atom collision response.** `AtomGroup::Travel` /
+`PushTravel` / `Atom::Travel` / `ResolveMOSIntersection` stay float. M3 took the
+plan's documented Block D split (`M3_PLAN.md` §4 Block D / §5 / §7) — the
+collision-response conversion is a focused follow-up. Its basic arithmetic is
+already deterministic Windows↔Linux x86 under M1's pinned `/fp:precise` flags;
+the cross-architecture backstop is M5's WASM verification.
+
+**Debugging a `carve_math` divergence.** The penetration math is fixed-point —
+bit-identical given identical inputs — so a `carve_math` divergence is a
+divergent *input*, not divergent math. If `carve_math`'s first-divergence tick
+is earlier than `sim_rng`'s, a stray float slipped onto the converted path
+(grep the penetration functions for `float` / `std::sqrt`). If it is not, the
+divergence is inherited from the upstream `sim_rng` thread race — MP M4's to
+close. The modder-facing summary is in `Data/Modding/fixed-point-physics.md`.
 
 ## CI
 
