@@ -58,6 +58,12 @@ namespace {
 		}
 	};
 
+	// Mul64's constexpr dispatch path (Mul64Portable) — proven at compile time.
+	static_assert(Mul64(int64_t(1) << 32, int64_t(1) << 32) == Int128(0, 1), "Mul64 constexpr: 2^32 * 2^32 == 2^64");
+	static_assert(Mul64(int64_t(-5), int64_t(7)) == Int128::FromI64(-35), "Mul64 constexpr: negative operand");
+	static_assert(Mul64(int64_t(123456789), int64_t(-987654321)) == Int128::FromI64(int64_t(123456789) * int64_t(-987654321)),
+	              "Mul64 constexpr: matches int64 product when it fits");
+
 	// --- 128-bit multiply: the portable and intrinsic paths must agree bit-for-bit. ---
 	void TestMul128Agreement() {
 		Lcg rng(0xA11CE5);
@@ -90,6 +96,15 @@ namespace {
 		// Negative * positive sign.
 		Int128 negp = Mul64Portable(-(int64_t(1) << 32), int64_t(1) << 32);
 		Check(negp.IsNegative(), "Mul64 negative sign");
+
+		// The production Mul64 dispatcher at runtime resolves to the intrinsic path.
+		bool dispatch = true;
+		for (int64_t a: edges) {
+			for (int64_t b: edges) {
+				if (Mul64(a, b) != Mul64Portable(a, b)) { dispatch = false; }
+			}
+		}
+		Check(dispatch, "Mul64 runtime dispatcher agrees with portable");
 	}
 
 	// --- Fixed multiply value correctness. ---
@@ -125,6 +140,12 @@ namespace {
 		Check((Fixed(12) / Fixed(4)).Raw() == Fixed(3).Raw(), "12 / 4 == 3");
 		Check((Fixed(1) / Fixed(4)).Raw() == kFixedOneRaw / 4, "1 / 4 == 0.25");
 		Check((Fixed(-12) / Fixed(4)).Raw() == Fixed(-3).Raw(), "-12 / 4 == -3");
+
+		// Exact slow-path cases — |dividend raw| >= 2^39 forces the 128-bit divide.
+		Check(DivFixedRaw(int64_t(1) << 40, kFixedOneRaw) == (int64_t(1) << 40), "slow-path divide 2^40 / 1");
+		Check(DivFixedRaw(int64_t(3) << 40, int64_t(1) << 25) == (int64_t(3) << 39), "slow-path divide 3*2^40 / 2");
+		Check(DivFixedRaw(-(int64_t(1) << 45), kFixedOneRaw) == -(int64_t(1) << 45), "slow-path divide -2^45 / 1");
+		Check(DivFixedRaw(int64_t(7) << 40, -kFixedOneRaw) == -(int64_t(7) << 40), "slow-path divide sign 7*2^40 / -1");
 
 		Lcg rng(0xD1D);
 		bool ok = true;

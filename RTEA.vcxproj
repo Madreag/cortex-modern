@@ -830,6 +830,7 @@
     <ClInclude Include="Source\System\Color.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\DataModule.h" />
+    <ClInclude Include="Source\System\FixedPoint.h" />
     <ClInclude Include="Source\System\RTEError.h" />
     <ClInclude Include="Source\System\RTETools.h" />
     <ClInclude Include="Source\System\Matrix.h" />
