@@ -87,6 +87,19 @@ struct AlarmEventLess {
 	}
 };
 
+// M4 — some MO Draw / DrawHUD paths still reach the sim RNG free functions (an
+// incomplete M1 sim/render split); rendering runs a draw-rate-dependent number
+// of times, so that drifts g_SimRNG. Redirect render-side RNG to g_RenderRNG for
+// the duration of a draw, reusing Block C's t_simRNGOverride mechanism.
+struct ScopedRenderRNG {
+	RandomGenerator* m_Prev;
+	ScopedRenderRNG() :
+	    m_Prev(t_simRNGOverride) { t_simRNGOverride = &g_RenderRNG; }
+	~ScopedRenderRNG() { t_simRNGOverride = m_Prev; }
+	ScopedRenderRNG(const ScopedRenderRNG&) = delete;
+	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
+};
+
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -2015,6 +2028,7 @@ void MovableMan::PreControllerUpdate() {
 }
 
 void MovableMan::DrawMatter(BITMAP* pTargetBitmap, Vector& targetPos) {
+	ScopedRenderRNG renderRNG;
 	// Draw objects to accumulation bitmap
 	for (std::deque<Actor*>::iterator aIt = --m_Actors.end(); aIt != --m_Actors.begin(); --aIt)
 		(*aIt)->Draw(pTargetBitmap, targetPos, g_DrawMaterial);
@@ -2047,6 +2061,7 @@ void MovableMan::VerifyMOIDIndex() {
 }
 
 void MovableMan::UpdateDrawMOIDs() {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	///////////////////////////////////////////////////
@@ -2117,6 +2132,7 @@ void MovableMan::CompleteQueuedMOIDDrawings() {
 }
 
 void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	// Draw objects to accumulation bitmap, in reverse order so actors appear on top.
@@ -2147,6 +2163,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 }
 
 void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int which, bool playerControlled) {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	// Draw HUD elements
