@@ -496,13 +496,9 @@ void RunGameLoop() {
 
 			g_ActivityMan.LateUpdateGlobalScripts();
 
-			// M0 observability: feed the terrain subsystem hash with the sim tick number as
-			// the placeholder data (the actual carve/penetrate math hash is wired at MP M2 per
-			// the M0 plan). Then finalize the per-tick hash.
-			//
-			// M1 Block A: hand the tick result to the MetricsCollector for the per-tick hash
-			// trace. The collector silently no-ops when -tick-hashes is not set, so this is
-			// free for normal runs.
+			// Feed the terrain subsystem its real end-of-tick hash (material + FG-colour
+			// bitmaps, via SceneMan), finalize the per-tick hash, and hand the result to the
+			// MetricsCollector for the per-tick trace (no-ops without -tick-hashes).
 			//
 			// M1 Block F: the `actors` and `sim_rng` subsystem feeds happen inside
 			// MovableMan::Update (right after the actors-feed block + before the see-ray and
@@ -510,8 +506,7 @@ void RunGameLoop() {
 			// main-thread sim consumption and isn't racy against the parallel see-ray
 			// workers. See MovableMan.cpp's Block F section for the rationale.
 			{
-				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-				g_SimChecksum.Update("terrain", &simTick, sizeof(simTick));
+				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
 				g_MetricsCollector.RecordTickHash(tickResult);
 			}

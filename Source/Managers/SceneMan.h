@@ -967,6 +967,10 @@ namespace RTE {
 		/// @param newHeight The new compacting height, in pixels.
 		void SetScrapCompactingHeight(int newHeight) { m_ScrapCompactingHeight = newHeight; }
 
+		/// Feeds the current terrain state (material + foreground-colour bitmaps) into the `terrain`
+		/// SimChecksum subsystem. No-ops unless a determinism run is active.
+		void FeedTerrainToSimChecksum();
+
 		/// Protected member variable and method declarations
 	protected:
 		static std::vector<std::pair<int, BITMAP*>> m_IntermediateSettlingBitmaps; //!< Intermediate bitmaps of different sizes that are used to draw settled MovableObjects into the terrain.
@@ -1034,6 +1038,13 @@ namespace RTE {
 		/// Clears all the member variables of this SceneMan, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();
+
+		/// Feeds one terrain bitmap's dimensions and pixel rows into the `terrain` SimChecksum subsystem.
+		void HashTerrainBitmap(BITMAP* bitmap);
+
+		/// Feeds one penetration-path decision into the `carve_math` SimChecksum subsystem.
+		/// kind: 0 = WillPenetrate, 1 = TryPenetrate, 2 = DislodgePixel.
+		void FeedCarveMath(int kind, int posX, int posY, const Vector& impulse, const Vector& velocity, int materialID, bool result, float retardation);
 
 		// Disallow the use of some implicit methods.
 		SceneMan(const SceneMan& reference) = delete;

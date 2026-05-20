@@ -67,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading]
+        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading, M3TerrainStress]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading]
+        scenario: [M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading, M3TerrainStress]
     steps:
       - uses: actions/checkout@v4
         with:
