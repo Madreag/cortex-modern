@@ -779,7 +779,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 	int legCount = 0;
 	int stepCount = 0;
 	int hitCount = 0;
-	float timeLeft = travelTime;
+	Fixed timeLeft = Fixed::FromFloat(travelTime);
 	float mass = (m_OwnerMOSR->GetMass() != 0 ? m_OwnerMOSR->GetMass() : 0.0001F);
 	float retardation;
 	bool halted = false;
@@ -791,11 +791,11 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 	const Material* domMaterial = nullptr;
 	const Material* subMaterial = nullptr;
 
-	Vector legProgress;
-	Vector forceVel;
-	Vector returnPush;
-	Vector ownerVel = velocity;
-	Vector trajectory = ownerVel * travelTime * c_PPM; // Trajectory length in pixels.
+	FixedVector legProgress;
+	FixedVector forceVel;
+	FixedVector returnPush;
+	FixedVector ownerVel = FixedVector::FromVectorLike(velocity);
+	FixedVector trajectory = ownerVel * Fixed::FromFloat(travelTime) * Fixed::FromFloat(c_PPM); // Trajectory length in pixels.
 
 	HitData hitData;
 
@@ -831,10 +831,10 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 		intPos[X] = position.GetFloorIntX();
 		intPos[Y] = position.GetFloorIntY();
 
-		float prevTrajMag = trajectory.GetMagnitude();
-		trajectory = ownerVel * timeLeft * c_PPM;
+		Fixed prevTrajMag = trajectory.GetMagnitude();
+		trajectory = ownerVel * timeLeft * Fixed::FromFloat(c_PPM);
 
-		const Vector nextPosition = position + trajectory;
+		const Vector nextPosition = (FixedVector::FromVectorLike(position) + trajectory).ToVectorLike<Vector>();
 		delta[X] = nextPosition.GetFloorIntX() - intPos[X];
 		delta[Y] = nextPosition.GetFloorIntY() - intPos[Y];
 
@@ -957,14 +957,15 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 			++hitCount;
 
 			// Calculate the progress made on this leg before hitting something.
-			legProgress[dom] = static_cast<float>(domSteps * increment[dom]);
-			legProgress[sub] = static_cast<float>(subSteps * increment[sub]);
+			legProgress[dom] = Fixed(domSteps * increment[dom]);
+			legProgress[sub] = Fixed(subSteps * increment[sub]);
 
 			// Now calculate the total time left to travel, according to the progress made.
 			timeLeft *= (trajectory.GetMagnitude() - legProgress.GetMagnitude()) / prevTrajMag;
 
 			// The capped velocity used for the push calculations. a = F / m
-			forceVel = Vector(ownerVel).CapMagnitude((pushForce * timeLeft) / mass);
+			forceVel = ownerVel;
+			forceVel.CapMagnitude((Fixed::FromFloat(pushForce) * timeLeft) / Fixed::FromFloat(mass));
 
 			// MOVABLEOBJECT COLLISION RESPONSE /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -980,9 +981,9 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 				// Set the mass and other data pertaining to the hitor, aka this AtomGroup's owner MO.
 				hitData.TotalMass[HITOR] = mass;
 				hitData.MomInertia[HITOR] = 1.0F;
-				hitData.ImpulseFactor[HITOR] = 1.0F / static_cast<float>(atomsHitMOsCount);
+				hitData.ImpulseFactor[HITOR] = (Fixed(1) / Fixed(atomsHitMOsCount)).ToFloat();
 				// Figure out the pre-collision velocity of the hitting Atoms due to the max push force allowed.
-				hitData.HitVel[HITOR] = forceVel;
+				hitData.HitVel[HITOR] = forceVel.ToVectorLike<Vector>();
 
 				// The distributed mass of one hitting Atom of the hitting (this AtomGroup's owner) MovableObject.
 				// float hitorMass = mass / ((atomsHitMOsCount/* + hitTerrAtoms.size()*/) * (m_Resolution ? m_Resolution : 1));
@@ -990,7 +991,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 
 				for (const auto& MOAtomMapEntry: hitMOAtoms) {
 					// The denominator that the MovableObject being hit should divide its mass with for each Atom of this AtomGroup that is colliding with it during this step.
-					hitData.ImpulseFactor[HITEE] = 1.0F / static_cast<float>(MOAtomMapEntry.second.size());
+					hitData.ImpulseFactor[HITEE] = (Fixed(1) / Fixed(static_cast<int>(MOAtomMapEntry.second.size()))).ToFloat();
 
 					for (const std::pair<Atom*, Vector>& hitMOAtomEntry: MOAtomMapEntry.second) {
 						// Bake in current Atom's offset into the int positions.
@@ -1001,7 +1002,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 						hitPos[Y] += atomOffset.GetFloorIntY();
 
 						// Calculate and store the accurate hit radius of the Atom in relation to the CoM
-						hitData.HitRadius[HITOR] = atomOffset * c_MPP;
+						hitData.HitRadius[HITOR] = (FixedVector::FromVectorLike(atomOffset) * Fixed::FromFloat(c_MPP)).ToVectorLike<Vector>();
 						hitData.HitPoint.Reset();
 						hitData.BitmapNormal.Reset();
 
@@ -1034,7 +1035,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 							hitData.HitPoint.SetXY(static_cast<float>(hitPos[X]), static_cast<float>(hitPos[Y]));
 							hitData.BitmapNormal.SetXY(static_cast<float>(-increment[X]), static_cast<float>(-increment[Y]));
 						}
-						hitData.BitmapNormal.Normalize();
+						hitData.BitmapNormal = FixedVector::FromVectorLike(hitData.BitmapNormal).GetNormalized().ToVectorLike<Vector>();
 
 						// Extract the current Atom's offset from the int positions.
 						intPos[X] -= atomOffset.GetFloorIntX();
@@ -1055,8 +1056,8 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 							hitData.Body[HITEE]->CollideAtPoint(hitData);
 
 							// Save the impulse force resulting from the MO collision response calculation.
-							ownerVel += hitData.ResImpulse[HITOR] / mass;
-							returnPush += hitData.ResImpulse[HITOR];
+							ownerVel += FixedVector::FromVectorLike(hitData.ResImpulse[HITOR]) / Fixed::FromFloat(mass);
+							returnPush += FixedVector::FromVectorLike(hitData.ResImpulse[HITOR]);
 						}
 					}
 				}
@@ -1073,10 +1074,10 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 			do {
 				somethingPenetrated = false;
 
-				float massDistribution = mass / GetSurfaceArea(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1));
+				Fixed massDistribution = Fixed::FromFloat(mass) / Fixed::FromFloat(GetSurfaceArea(hitTerrAtoms.size() * (m_Resolution ? m_Resolution : 1)));
 
 				for (std::deque<std::pair<Atom*, Vector>>::iterator atomItr = hitTerrAtoms.begin(); atomItr != hitTerrAtoms.end();) {
-					if (g_SceneMan.WillPenetrate(intPos[X] + (*atomItr).second.GetFloorIntX(), intPos[Y] + (*atomItr).second.GetFloorIntY(), forceVel, massDistribution)) {
+					if (g_SceneMan.WillPenetrate(intPos[X] + (*atomItr).second.GetFloorIntX(), intPos[Y] + (*atomItr).second.GetFloorIntY(), (forceVel * massDistribution).ToVectorLike<Vector>())) {
 						// Move the penetrating Atom to the penetrating list from the collision list.
 						penetratingAtoms.push_back({(*atomItr).first, (*atomItr).second});
 						atomItr = hitTerrAtoms.erase(atomItr);
@@ -1103,7 +1104,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 				// Call the call-on-bounce function, if requested.
 				// if (m_OwnerMOSR && callOnBounce) { halted = m_OwnerMOSR->OnBounce(position); }
 
-				float massDistribution = mass / GetSurfaceArea((hitTerrAtoms.size() /* + atomsHitMOsCount*/) * (m_Resolution ? m_Resolution : 1));
+				Fixed massDistribution = Fixed::FromFloat(mass) / Fixed::FromFloat(GetSurfaceArea((hitTerrAtoms.size() /* + atomsHitMOsCount*/) * (m_Resolution ? m_Resolution : 1)));
 
 				// Gather the collision response effects so that the impulse force can be calculated.
 				for (const std::pair<Atom*, Vector>& hitTerrAtomsEntry: hitTerrAtoms) {
@@ -1114,7 +1115,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 					hitPos[X] += atomOffset.GetFloorIntX();
 					hitPos[Y] += atomOffset.GetFloorIntY();
 
-					Vector newVel = forceVel;
+					FixedVector newVel = forceVel;
 
 					unsigned char hitMaterialID = g_SceneMan.GetTerrMatter(hitPos[X], hitPos[Y]);
 					hitMaterial = g_SceneMan.GetMaterialFromID(hitMaterialID);
@@ -1126,7 +1127,7 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 						domMaterial = g_SceneMan.GetMaterialFromID(domMaterialID);
 
 						// Bounce according to the collision.
-						newVel[dom] = -newVel[dom] * hitTerrAtomsEntry.first->GetMaterial()->GetRestitution() * domMaterial->GetRestitution();
+						newVel[dom] = -newVel[dom] * Fixed::FromFloat(hitTerrAtomsEntry.first->GetMaterial()->GetRestitution()) * Fixed::FromFloat(domMaterial->GetRestitution());
 					}
 
 					// Check for and react upon a collision in the submissive direction of travel.
@@ -1136,24 +1137,24 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 						subMaterial = g_SceneMan.GetMaterialFromID(subMaterialID);
 
 						// Bounce according to the collision.
-						newVel[sub] = -newVel[sub] * hitTerrAtomsEntry.first->GetMaterial()->GetRestitution() * subMaterial->GetRestitution();
+						newVel[sub] = -newVel[sub] * Fixed::FromFloat(hitTerrAtomsEntry.first->GetMaterial()->GetRestitution()) * Fixed::FromFloat(subMaterial->GetRestitution());
 					}
 
 					// If hit right on the corner of a pixel, bounce straight back with no friction.
 					if (!hit[dom] && !hit[sub]) {
 						hit[dom] = true;
-						newVel[dom] = -newVel[dom] * hitTerrAtomsEntry.first->GetMaterial()->GetRestitution() * hitMaterial->GetRestitution();
+						newVel[dom] = -newVel[dom] * Fixed::FromFloat(hitTerrAtomsEntry.first->GetMaterial()->GetRestitution()) * Fixed::FromFloat(hitMaterial->GetRestitution());
 						hit[sub] = true;
-						newVel[sub] = -newVel[sub] * hitTerrAtomsEntry.first->GetMaterial()->GetRestitution() * hitMaterial->GetRestitution();
+						newVel[sub] = -newVel[sub] * Fixed::FromFloat(hitTerrAtomsEntry.first->GetMaterial()->GetRestitution()) * Fixed::FromFloat(hitMaterial->GetRestitution());
 					} else if (hit[dom] && !hit[sub]) {
-						newVel[sub] -= newVel[sub] * hitTerrAtomsEntry.first->GetMaterial()->GetFriction() * domMaterial->GetFriction();
+						newVel[sub] -= newVel[sub] * Fixed::FromFloat(hitTerrAtomsEntry.first->GetMaterial()->GetFriction()) * Fixed::FromFloat(domMaterial->GetFriction());
 					} else if (hit[sub] && !hit[dom]) {
-						newVel[dom] -= newVel[dom] * hitTerrAtomsEntry.first->GetMaterial()->GetFriction() * subMaterial->GetFriction();
+						newVel[dom] -= newVel[dom] * Fixed::FromFloat(hitTerrAtomsEntry.first->GetMaterial()->GetFriction()) * Fixed::FromFloat(subMaterial->GetFriction());
 					}
 
 					// Compute and store this Atom's collision response impulse force.
-					Vector impulse = (newVel - forceVel) * massDistribution;
-					ownerVel += impulse / mass;
+					FixedVector impulse = (newVel - forceVel) * massDistribution;
+					ownerVel += impulse / Fixed::FromFloat(mass);
 					returnPush += impulse;
 
 					// Extract the current Atom's offset from the int positions.
@@ -1175,13 +1176,13 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 				// Call the call-on-sink function, if requested.
 				// if (m_OwnerMOSR && callOnSink) { halted = m_OwnerMOSR->OnSink(position); }
 
-				float massDistribution = mass / GetSurfaceArea(penetratingAtoms.size() * (m_Resolution ? m_Resolution : 1));
+				Fixed massDistribution = Fixed::FromFloat(mass) / Fixed::FromFloat(GetSurfaceArea(penetratingAtoms.size() * (m_Resolution ? m_Resolution : 1)));
 
 				// Apply the collision response effects.
 				for (const std::pair<Atom*, Vector>& penetratingAtomsEntry: penetratingAtoms) {
-					if (g_SceneMan.TryPenetrate(intPos[X] + penetratingAtomsEntry.second.GetFloorIntX(), intPos[Y] + penetratingAtomsEntry.second.GetFloorIntY(), forceVel * massDistribution, forceVel, retardation, 1.0F, penetratingAtomsEntry.first->GetNumPenetrations())) {
-						ownerVel += (forceVel * massDistribution * retardation) / mass;
-						returnPush += forceVel * massDistribution * retardation;
+					if (g_SceneMan.TryPenetrate(intPos[X] + penetratingAtomsEntry.second.GetFloorIntX(), intPos[Y] + penetratingAtomsEntry.second.GetFloorIntY(), (forceVel * massDistribution).ToVectorLike<Vector>(), forceVel.ToVectorLike<Vector>(), retardation, 1.0F, penetratingAtomsEntry.first->GetNumPenetrations())) {
+						ownerVel += (forceVel * massDistribution * Fixed::FromFloat(retardation)) / Fixed::FromFloat(mass);
+						returnPush += forceVel * massDistribution * Fixed::FromFloat(retardation);
 					}
 				}
 			}
@@ -1191,26 +1192,26 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 			// If we hit anything, and are about to start a new leg instead of a step, apply the averaged collision response effects to the owning MO.
 			if (hit[X] || hit[Y]) {
 				// Move position forward to the hit position.
-				position += legProgress;
+				position = (FixedVector::FromVectorLike(position) + legProgress).ToVectorLike<Vector>();
 				didWrap = didWrap || g_SceneMan.WrapPosition(position);
 
 				// Stunt travel time if there is no more velocity
-				if (ownerVel.IsZero()) {
-					timeLeft = 0;
+				if (ownerVel == FixedVector()) {
+					timeLeft = Fixed(0);
 				}
 			}
 			++stepCount;
 		}
 		++legCount;
-	} while ((hit[X] || hit[Y]) && timeLeft > 0.0F && /*!trajectory.GetFloored().IsZero() &&*/ !halted && hitCount < 3);
+	} while ((hit[X] || hit[Y]) && timeLeft > Fixed(0) && /*!trajectory.GetFloored().IsZero() &&*/ !halted && hitCount < 3);
 
 	// Travel along the remaining trajectory.
 	if (!(hit[X] || hit[Y]) && !halted) {
-		position += trajectory;
+		position = (FixedVector::FromVectorLike(position) + trajectory).ToVectorLike<Vector>();
 		didWrap = g_SceneMan.WrapPosition(position) || didWrap;
-		return returnPush;
+		return returnPush.ToVectorLike<Vector>();
 	}
-	return returnPush;
+	return returnPush.ToVectorLike<Vector>();
 }
 
 bool AtomGroup::PushAsLimb(const Vector& jointPos, const float limbRadius, const Vector& velocity, const Matrix& rotation, LimbPath& limbPath, const float travelTime, bool* restarted, bool affectRotation, Vector rotationOffset, Vector positionOffset) {
