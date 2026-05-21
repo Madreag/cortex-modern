@@ -131,7 +131,7 @@ namespace RTE {
 	/// Production 64x64->128 multiply: portable in a constant-evaluated context,
 	/// intrinsic at runtime. Both paths produce identical bits (FixedPointTests asserts it).
 	constexpr Int128 Mul64(int64_t a, int64_t b) {
-		if (std::is_constant_evaluated()) {
+		if (__builtin_is_constant_evaluated()) {
 			return Mul64Portable(a, b);
 		}
 		return Mul64Intrinsic(a, b);
@@ -372,7 +372,7 @@ namespace RTE {
 		int quadrant = static_cast<int>(idx >> 12);                // 0..3
 		int q = static_cast<int>(idx & 4095);                      // 0..4095
 
-		int64_t lo, hi;
+		int64_t lo = 0, hi = 0;
 		bool negate = (quadrant >= 2);
 		if (quadrant == 0 || quadrant == 2) {
 			lo = kSinQuarter[q];
