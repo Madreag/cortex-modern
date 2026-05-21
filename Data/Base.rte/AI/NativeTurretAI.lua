@@ -52,13 +52,15 @@ function NativeTurretAI:Update(Owner)
 		       "Turret prev=" .. tostring(self.lastAIMode));
 		self.lastAIMode = Owner.AIMode;
 	end
-	if self.Target ~= self._lastTarget then
-		if self.Target then
-			AIEmit(Owner, "decision", "target_acquired", "Turret", "target=" .. tostring(self.Target.UniqueID), self.Target);
+	-- Compare by UniqueID — luabind defines no == for MOs, and a stored MO ref can dangle.
+	local targetID = self.Target and MovableMan:ValidMO(self.Target) and self.Target.UniqueID or nil;
+	if targetID ~= self._m0_lastTargetID then
+		if targetID then
+			AIEmit(Owner, "decision", "target_acquired", "Turret", "target=" .. tostring(targetID), self.Target);
 		else
 			AIEmit(Owner, "decision", "target_lost", "Turret", "no target");
 		end
-		self._lastTarget = self.Target;
+		self._m0_lastTargetID = targetID;
 	end
 
 	if self.isPlayerOwned then

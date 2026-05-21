@@ -68,14 +68,16 @@ function NativeCrabAI:Update(Owner)
 		self.lastAIMode = Owner.AIMode;
 	end
 	-- Target transitions: emit acquired / lost so trust scenarios can count target churn.
-	if self.Target ~= self._m0_lastTarget then
-		if self.Target then
+	-- Compare by UniqueID — luabind defines no == for MOs, and a stored MO ref can dangle.
+	local targetID = self.Target and MovableMan:ValidMO(self.Target) and self.Target.UniqueID or nil;
+	if targetID ~= self._m0_lastTargetID then
+		if targetID then
 			AIEmit(Owner, "decision", "target_acquired", "Crab",
-			       "id=" .. tostring(self.Target.UniqueID), self.Target);
+			       "id=" .. tostring(targetID), self.Target);
 		else
 			AIEmit(Owner, "decision", "target_lost", "Crab", "target invalid or unseen");
 		end
-		self._m0_lastTarget = self.Target;
+		self._m0_lastTargetID = targetID;
 	end
 
 	-- Our jetpack might have thrust balancing enabled, so update for our current mass
