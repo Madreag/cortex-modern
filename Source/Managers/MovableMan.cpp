@@ -1972,10 +1972,17 @@ void MovableMan::UpdateControllers() {
 			actor->GetController()->Update();
 		}
 
+		// Freeze each actor's AI-phase-mutated, cross-actor-read state so the parallel ThreadedUpdateAI pass reads a race-free snapshot.
+		for (Actor* actor: m_Actors) {
+			actor->FreezeStateForAIPhase();
+		}
+
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
 			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
+				g_CurrentAIActor = nullptr;
 			}
 		}
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
@@ -1988,7 +1995,9 @@ void MovableMan::UpdateControllers() {
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
 			                                                     for (Actor* actor: m_Actors) {
 				                                                     if (actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
+					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
+					                                                     g_CurrentAIActor = nullptr;
 				                                                     }
 			                                                     }
 			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
