@@ -159,7 +159,7 @@ namespace RTE {
 	/// (a << 24) / b, truncated toward zero. Fast int64 path for small dividends,
 	/// 128-bit path otherwise.
 	constexpr int64_t DivFixedRaw(int64_t a, int64_t b) {
-		RTE_FIXED_CHECK(b != 0);
+		if (b == 0) { return 0; }
 		if (a > -(int64_t(1) << 39) && a < (int64_t(1) << 39)) {
 			return (a * kFixedOneRaw) / b;
 		}

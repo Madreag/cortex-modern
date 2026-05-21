@@ -64,6 +64,11 @@ namespace {
 	static_assert(Mul64(int64_t(123456789), int64_t(-987654321)) == Int128::FromI64(int64_t(123456789) * int64_t(-987654321)),
 	              "Mul64 constexpr: matches int64 product when it fits");
 
+	// Divide by zero is total — x/0 == 0, proven at compile time on both DivFixedRaw paths.
+	static_assert(DivFixedRaw(kFixedOneRaw, 0) == 0, "DivFixedRaw fast-path: x/0 == 0");
+	static_assert(DivFixedRaw(int64_t(1) << 45, 0) == 0, "DivFixedRaw slow-path: x/0 == 0");
+	static_assert((Fixed(1) / Fixed(0)).Raw() == 0, "Fixed::operator/ : 1/0 == 0");
+
 	// --- 128-bit multiply: the portable and intrinsic paths must agree bit-for-bit. ---
 	void TestMul128Agreement() {
 		Lcg rng(0xA11CE5);
@@ -140,6 +145,13 @@ namespace {
 		Check((Fixed(12) / Fixed(4)).Raw() == Fixed(3).Raw(), "12 / 4 == 3");
 		Check((Fixed(1) / Fixed(4)).Raw() == kFixedOneRaw / 4, "1 / 4 == 0.25");
 		Check((Fixed(-12) / Fixed(4)).Raw() == Fixed(-3).Raw(), "-12 / 4 == -3");
+
+		// Divide by zero is total — x/0 == 0, no hardware fault, on both paths.
+		Check((Fixed(1) / Fixed(0)).Raw() == 0, "1 / 0 == 0 (no divide fault)");
+		Check((Fixed(0) / Fixed(0)).Raw() == 0, "0 / 0 == 0");
+		Check((Fixed(-7) / Fixed(0)).Raw() == 0, "-7 / 0 == 0 (negative dividend)");
+		Check(DivFixedRaw(int64_t(1) << 45, 0) == 0, "slow-path divide by zero == 0");
+		Check((FixedVector(Fixed(3), Fixed(4)) / Fixed(0)) == FixedVector(Fixed(0), Fixed(0)), "FixedVector / 0 == (0,0)");
 
 		// Exact slow-path cases — |dividend raw| >= 2^39 forces the 128-bit divide.
 		Check(DivFixedRaw(int64_t(1) << 40, kFixedOneRaw) == (int64_t(1) << 40), "slow-path divide 2^40 / 1");
