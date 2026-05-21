@@ -93,14 +93,16 @@ function NativeHumanAI:Update(Owner)
 	end
 	-- Target transitions: emit acquired / lost as a separate type so trust scenarios can
 	-- count how often the AI re-acquires or drops a target during a scenario.
-	if self.Target ~= self._m0_lastTarget then
-		if self.Target then
+	-- Compare by UniqueID — luabind defines no == for MOs, and a stored MO ref can dangle.
+	local targetID = self.Target and MovableMan:ValidMO(self.Target) and self.Target.UniqueID or nil;
+	if targetID ~= self._m0_lastTargetID then
+		if targetID then
 			AIEmit(Owner, "decision", "target_acquired", "Human",
-			       "id=" .. tostring(self.Target.UniqueID), self.Target);
+			       "id=" .. tostring(targetID), self.Target);
 		else
 			AIEmit(Owner, "decision", "target_lost", "Human", "target invalid or unseen");
 		end
-		self._m0_lastTarget = self.Target;
+		self._m0_lastTargetID = targetID;
 	end
 
 	-- Our jetpack might have thrust balancing enabled, so update for our current mass
