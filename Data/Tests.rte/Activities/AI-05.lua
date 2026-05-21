@@ -12,7 +12,7 @@ function TestScenarioAI05:OnStart()
     self._sentry = a;
     self._alarmInjected = false;
     if a then
-        self._initialAim = a.AimAngle;
+        self._initialAim = a:GetAimAngle();
     end
 end
 
@@ -28,7 +28,7 @@ function TestScenarioAI05:OnTick(tick)
         self:RecordMetric("alarm_injected_at_tick", tick);
     end
     if tick % 60 == 0 then
-        local delta = math.abs(a.AimAngle - self._initialAim);
+        local delta = math.abs(a:GetAimAngle() - self._initialAim);
         self:RecordMetric("aim_delta", delta);
     end
     return false, false;
@@ -37,7 +37,7 @@ end
 function TestScenarioAI05:OnEnd()
     local a = self._sentry;
     if a and MovableMan:IsActor(a) then
-        local delta = math.abs(a.AimAngle - self._initialAim);
+        local delta = math.abs(a:GetAimAngle() - self._initialAim);
         self:RecordMetric("aim_delta", delta);
         self._passed = self._alarmInjected and delta > 0.1;
     else
