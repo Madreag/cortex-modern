@@ -95,6 +95,12 @@ namespace RTE {
 		if (!m_RecordTickHashes || m_Scenario.empty()) {
 			return;
 		}
+		// Cap the trace at the -max-ticks budget — the sim loop checks the cap per frame
+		// but its inner fixed-step loop overshoots by a load-dependent tick batch, which
+		// would otherwise make per-run trace lengths non-uniform across the determinism check.
+		if (uint64_t cap = ScenarioRunner::GetArgs().maxTicks; cap > 0 && m_TickHashes.size() >= cap) {
+			return;
+		}
 		TickHashRecord rec;
 		rec.tick = result.tick;
 		rec.totalHex = SimChecksum::HashHex(result.total);
