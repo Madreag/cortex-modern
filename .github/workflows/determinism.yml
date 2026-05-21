@@ -1,21 +1,9 @@
-# Determinism CI gate (informational — M1 set it so; M4 narrowed the race far
-# but did not fully close it; see the M4 outcome note below).
+# Determinism CI gate (blocking).
 #
-# Block A landed this workflow non-blocking (`continue-on-error: true`) so the
-# scaffold could ship without preventing modernization-effort merges. Block F
-# extends the scaffold with the `actors` + `sim_rng` subsystems and the
-# `M1TerrainStress` / `M1ActorStress` scenarios, and tightens the within-OS
-# race window: my Block F changes drove the M1Baseline first-divergence-tick
-# from index 1 (immediately) out to index ~16, but a residual thread-race in
-# the ThreadedUpdate / SyncedUpdate path (Lua-called C++ helpers that
-# transitively touch `g_SimRNG`) keeps full single-machine determinism out of
-# reach until MP M4 (the threaded-sim-with-deterministic-merge milestone)
-# pulls the rest of the racy consumers off the sim RNG.
-#
-# Therefore the gate stays `continue-on-error: true`. The artifact upload is
-# preserved so reviewers can inspect the divergence reports. MP M4 narrowed the
-# race substantially (see the M4 outcome note below); a residual cross-thread-
-# count divergence keeps the gate informational pending the M4-follow-up.
+# The simulation is deterministic — the per-tick BLAKE3 state hash is bit-identical
+# across runs, thread counts, and OSes for a given seed + scenario. Any divergence
+# fails the build. The determinism-check's -determinism-selftest-perturb positive
+# control proves the gate still detects a real divergence.
 #
 # Scenarios:
 #   M1Baseline       — one sentry, 600 ticks. Minimal envelope.
@@ -109,10 +97,6 @@ jobs:
               --seed 42 \
               --runs 100 \
               --output ${{ matrix.scenario }}-divergence.json
-        # Informational: every scenario's total-tick hash includes the M1
-        # sim_rng / actors subsystems, which carry the residual sim-thread race
-        # until MP M4. Flips to blocking when M4 closes it.
-        continue-on-error: true
 
       - name: Upload divergence report
         if: always()
@@ -130,7 +114,6 @@ jobs:
         run: |
           ./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 600 \
               -tick-hashes -num-lua-states 4 -out M1Baseline-trace.json
-        continue-on-error: true
 
       - name: Upload cross-OS trace (M1Baseline only)
         if: matrix.scenario == 'M1Baseline'
@@ -173,10 +156,6 @@ jobs:
               --seed 42 `
               --runs 100 `
               --output "${{ matrix.scenario }}-divergence.json"
-        # Informational: every scenario's total-tick hash includes the M1
-        # sim_rng / actors subsystems, which carry the residual sim-thread race
-        # until MP M4. Flips to blocking when M4 closes it.
-        continue-on-error: true
 
       - name: Upload divergence report
         if: always()
@@ -193,7 +172,6 @@ jobs:
         run: |
           & ".\Cortex Command.exe" -scenario M1Baseline -seed 42 -max-ticks 600 `
               -tick-hashes -num-lua-states 4 -out M1Baseline-trace.json
-        continue-on-error: true
 
       - name: Upload cross-OS trace (M1Baseline only)
         if: matrix.scenario == 'M1Baseline'
@@ -205,13 +183,10 @@ jobs:
 
   determinism-cross-os:
     # Compares the Linux and Windows per-tick hash traces for M1Baseline.
-    # Informational until the determinism foundation is built (the determinism
-    # mandate flips this and the determinism jobs above to blocking). It must,
-    # however, run HONESTLY: jq -e + set -e fail loudly if a trace is missing
-    # or empty — this job must never report success without a real comparison.
+    # Blocking: jq -e + set -e fail loudly if a trace is missing or empty —
+    # this job never reports success without a real comparison.
     needs: [determinism-linux, determinism-windows]
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Download Linux trace
         uses: actions/download-artifact@v4
@@ -274,8 +249,6 @@ jobs:
               --threads 1,2,4,8,16 \
               --runs 2 \
               --output M4ThreadStress-matrix.json
-        # Informational at Block A — the M1 thread race still diverges the matrix.
-        continue-on-error: true
 
       - name: Upload matrix report
         if: always()
@@ -315,8 +288,6 @@ jobs:
               --threads 1,2,4,8,16 `
               --runs 2 `
               --output M4ThreadStress-matrix.json
-        # Informational at Block A — the M1 thread race still diverges the matrix.
-        continue-on-error: true
 
       - name: Upload matrix report
         if: always()
