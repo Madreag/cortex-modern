@@ -122,6 +122,24 @@ jobs:
           path: ${{ matrix.scenario }}-divergence.json
           if-no-files-found: error
 
+      # The cross-OS check needs one real per-tick trace. Produce it from a
+      # single M1Baseline run with -tick-hashes; -num-lua-states is pinned so
+      # the threaded-Lua state count is identical on every OS (audit finding #7).
+      - name: Produce cross-OS per-tick trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        run: |
+          ./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 600 \
+              -tick-hashes -num-lua-states 4 -out M1Baseline-trace.json
+        continue-on-error: true
+
+      - name: Upload cross-OS trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-trace-linux
+          path: M1Baseline-trace.json
+          if-no-files-found: error
+
   determinism-windows:
     runs-on: windows-latest
     strategy:
@@ -168,44 +186,61 @@ jobs:
           path: ${{ matrix.scenario }}-divergence.json
           if-no-files-found: error
 
+      # The cross-OS check needs one real per-tick trace (see the Linux job).
+      - name: Produce cross-OS per-tick trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -scenario M1Baseline -seed 42 -max-ticks 600 `
+              -tick-hashes -num-lua-states 4 -out M1Baseline-trace.json
+        continue-on-error: true
+
+      - name: Upload cross-OS trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-trace-windows
+          path: M1Baseline-trace.json
+          if-no-files-found: error
+
   determinism-cross-os:
-    # Both single-machine determinism jobs must pass before we can meaningfully
-    # compare cross-OS — if either OS diverged within its own runs, the cross-OS
-    # diff is noise on top of noise.
+    # Compares the Linux and Windows per-tick hash traces for M1Baseline.
+    # Informational until the determinism foundation is built (the determinism
+    # mandate flips this and the determinism jobs above to blocking). It must,
+    # however, run HONESTLY: jq -e + set -e fail loudly if a trace is missing
+    # or empty — this job must never report success without a real comparison.
     needs: [determinism-linux, determinism-windows]
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
-      - name: Download Linux report
+      - name: Download Linux trace
         uses: actions/download-artifact@v4
         with:
-          name: determinism-M1Baseline-linux
-          path: ./linux-report
+          name: determinism-trace-linux
+          path: ./lin
 
-      - name: Download Windows report
+      - name: Download Windows trace
         uses: actions/download-artifact@v4
         with:
-          name: determinism-M1Baseline-windows
-          path: ./windows-report
+          name: determinism-trace-windows
+          path: ./win
 
       - name: Compare per-tick total hashes (M1Baseline)
         run: |
-          # Each report's runs[0].tick_hashes carries the same per-tick total
-          # hashes (the within-OS determinism is checked by the jobs above).
-          # Cross-OS check: extract the `total` array from both and diff.
-          jq -r '.runs[0].tick_hashes[].total' linux-report/*-divergence.json   > linux-totals.txt   2>/dev/null || \
-            jq -r '.scenario' linux-report/*-divergence.json
-          jq -r '.runs[0].tick_hashes[].total' windows-report/*-divergence.json > windows-totals.txt 2>/dev/null || \
-            jq -r '.scenario' windows-report/*-divergence.json
-          # The above falls through if the per-tick trace isn't in the report
-          # schema we expect — the within-OS job's --keep-runs option exposes
-          # the raw per-run traces if Block F needs a deeper dive. For now we
-          # diff the divergence-report shape directly.
-          diff linux-totals.txt windows-totals.txt || {
-            echo "::error::Cross-OS divergence on M1Baseline. First mismatched tick:"
-            diff linux-totals.txt windows-totals.txt | head -20
+          set -euo pipefail
+          jq -e -r '.runs[0].tick_hashes[].total' lin/M1Baseline-trace.json > lin-totals.txt
+          jq -e -r '.runs[0].tick_hashes[].total' win/M1Baseline-trace.json > win-totals.txt
+          if [ ! -s lin-totals.txt ] || [ ! -s win-totals.txt ]; then
+            echo "::error::cross-OS trace carried no per-tick hashes — the comparison cannot run"
             exit 1
-          }
-          echo "Cross-OS M1Baseline: $(wc -l < linux-totals.txt) ticks matched."
+          fi
+          if diff lin-totals.txt win-totals.txt > /dev/null; then
+            echo "Cross-OS M1Baseline: $(wc -l < lin-totals.txt) ticks bit-identical."
+          else
+            echo "::error::Cross-OS divergence on M1Baseline:"
+            diff lin-totals.txt win-totals.txt | head -20
+            exit 1
+          fi
 
   # MP M4 Block A — thread-count determinism matrix. Runs M4ThreadStress at Lua-state
   # counts 1/2/4/8/16 and diffs the per-tick traces across counts. Non-blocking at
