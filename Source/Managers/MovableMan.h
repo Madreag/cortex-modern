@@ -458,8 +458,11 @@ namespace RTE {
 		/// Updates the MOIDs of all current MOs.
 		void UpdateDrawMOIDs();
 
-		// Forces MOID drawing to complete (should be done before any physics sim or collision detection etc)
-		void CompleteQueuedMOIDDrawings();
+		/// Drains the deferred sim tasks launched at the end of the previous tick: the
+		/// MOID-draw task and the see-ray future. Must run before any tick code touches
+		/// m_Actors — the see-ray future indexes m_Actors and would otherwise race the
+		/// frame-start sort and the MO-transfer drain.
+		void CompleteDeferredSimTasks();
 
 		/// Draws this MovableMan's current graphical representation to a BITMAP of choice.
 		/// @param pTargetBitmap A pointer to a BITMAP to draw on.

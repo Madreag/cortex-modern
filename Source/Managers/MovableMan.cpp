@@ -1330,6 +1330,11 @@ void MovableMan::ReloadLuaScripts() {
 void MovableMan::Update() {
 	ZoneScoped;
 
+	// Drain the previous tick's deferred see-ray / MOID-draw tasks before anything
+	// touches m_Actors. The sim loop drains them earlier too; this keeps Update
+	// self-contained for any other caller.
+	CompleteDeferredSimTasks();
+
 	// Don't update if paused
 	if (g_ActivityMan.GetActivity() && g_ActivityMan.ActivityPaused()) {
 		return;
@@ -1380,20 +1385,8 @@ void MovableMan::Update() {
 	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
 	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
-	// M1 Block F — wait for the previous frame's see-ray future BEFORE running
-	// Travel(). Pre-Block-F the wait happened a few lines later (after Travel),
-	// which let the see-ray workers (Actor::CastSeeRays → Look() → free-function
-	// RandomNum/RandomNormalNum, which after Block B route to g_SimRNG) run
-	// concurrently with Travel()'s own g_SimRNG consumers (Atom::Travel particle
-	// stickiness rolls and similar). The two RNG streams interleaved differently
-	// per OS scheduling, so same-seed runs ended up with different g_SimRNG
-	// states even though every sim decision before that point was identical —
-	// exactly the divergence Block A's tool surfaces. Forcing the wait to
-	// completion *before* any new sim-thread RNG draws makes the per-frame
-	// consumption sequential and deterministic.
-	m_ActorsSeeFuture.wait();
-
-	// Travel MOs
+	// Travel MOs. The previous tick's see-ray future was drained by
+	// CompleteDeferredSimTasks above, before m_Actors was sorted.
 	Travel();
 
 	// If our debug settings switch is forcing all pathing requests to immediately complete, make sure they're done here.
@@ -2129,10 +2122,13 @@ void MovableMan::UpdateDrawMOIDs() {
 	}
 }
 
-void MovableMan::CompleteQueuedMOIDDrawings() {
+void MovableMan::CompleteDeferredSimTasks() {
 	if (m_DrawMOIDsTask.valid()) {
 		m_DrawMOIDsTask.wait();
 	}
+	// The see-ray future indexes m_Actors; draining it here — before the tick sorts
+	// or drains m_Actors — keeps the see-ray workers off a concurrently-mutated deque.
+	m_ActorsSeeFuture.wait();
 }
 
 void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
