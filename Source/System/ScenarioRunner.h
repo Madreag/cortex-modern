@@ -29,6 +29,9 @@ namespace RTE {
 			bool        tickHashes = false; // -tick-hashes: emit per-tick hash trace into the JSON
 			                                 // report. Block A (M1) — read by cccp-determinism-check
 			                                 // to diff multiple runs of the same scenario+seed.
+			bool        selftestPerturb = false; // -determinism-selftest-perturb: inject one genuine
+			                                 // non-determinism at a fixed tick (the determinism
+			                                 // check's positive control — DETERMINISM_GOAL.md EC3).
 		};
 
 		/// True if `-scenario` was supplied on the command line.

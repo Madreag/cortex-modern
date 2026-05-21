@@ -220,7 +220,8 @@ void HandleMainArgs(int argCount, char** argValue) {
 		// M0 scenario-runner args (CLI direct-launch into a Trust AI-NN scenario).
 		// M1 Block A: -tick-hashes added (no-value flag) for the determinism CI scaffold.
 		if (currentArg == "-scenario" || currentArg == "-out" || currentArg == "-seed" ||
-		    currentArg == "-max-ticks" || currentArg == "-tick-hashes") {
+		    currentArg == "-max-ticks" || currentArg == "-tick-hashes" ||
+		    currentArg == "-determinism-selftest-perturb") {
 			const int consumed = ScenarioRunner::ParseArgs(argCount, argValue, i);
 			if (consumed > 0) {
 				i += consumed;
@@ -472,6 +473,19 @@ void RunGameLoop() {
 				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				g_AIDecisionChannel.SetCurrentTick(simTick);
 				g_SimChecksum.BeginTick(simTick);
+
+				// EC3 positive control — when -determinism-selftest-perturb is set, inject
+				// exactly one genuine non-determinism at a fixed tick: one std::random_device
+				// draw advances g_SimRNG's stream by a non-deterministic amount, so the
+				// sim_rng checksum and every downstream sim decision diverge from here on.
+				// A true no-op without the flag — the determinism check's positive control.
+				if (ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
+					std::random_device perturbDevice;
+					const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
+					for (unsigned i = 0; i < perturbAdvance; ++i) {
+						g_SimRNG.RandomNum<uint32_t>();
+					}
+				}
 				// Per-tick replay frame marker. Player input is empty under CLI/trust runs
 				// (no human player) but the tick numbers + scenario header + seed are enough
 				// for an offline replay-verify tool (M5 stretch goal) to identify the run.
@@ -482,13 +496,15 @@ void RunGameLoop() {
 				}
 			}
 
+			// Drain the previous tick's deferred sim tasks (MOID-draw + see-ray future)
+			// before any tick code touches m_Actors — the see-ray future indexes m_Actors.
+			g_MovableMan.CompleteDeferredSimTasks();
+
 			g_LuaMan.Update();
 
 			g_UInputMan.Update();
 
 			g_FrameMan.Update();
-
-			g_MovableMan.CompleteQueuedMOIDDrawings();
 
 			g_ConsoleMan.Update();
 			g_ActivityMan.Update();

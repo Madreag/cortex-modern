@@ -45,6 +45,11 @@ namespace RTE {
 			s_Args.tickHashes = true;
 			return 1;
 		}
+		if (a == "-determinism-selftest-perturb") {
+			// Positive-control: arm the one-shot perturbation (EC3). Boolean flag — no value.
+			s_Args.selftestPerturb = true;
+			return 1;
+		}
 		return 0;
 	}
 

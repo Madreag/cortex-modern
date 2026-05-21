@@ -14,6 +14,8 @@
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
 
+#include <cstdlib>
+
 using namespace RTE;
 
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
@@ -505,6 +507,11 @@ void LuaMan::Initialize() {
 	m_MasterScriptState.Initialize();
 
 	int luaStateCount = std::thread::hardware_concurrency();
+	// CCCP_SIM_THREADS pins the threaded Lua-state count to match the priority pool
+	// (ThreadMan) so the sim runs as a low-core machine would for determinism testing.
+	if (const char* simThreads = std::getenv("CCCP_SIM_THREADS"); simThreads != nullptr && std::atoi(simThreads) > 0) {
+		luaStateCount = std::atoi(simThreads);
+	}
 	if (g_SettingsMan.EnableLuaDebugging()) {
 		luaStateCount = 0;
 	} else if (g_SettingsMan.GetNumberOfLuaStatesOverride() != -1) {

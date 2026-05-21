@@ -30,6 +30,9 @@ namespace RTE {
 			std::string gameBin;        // override for child-process invocation
 			bool        keepRuns = false; // keep tmp/runs/*.json after the diff
 			bool        showHelp = false;
+			// EC3 positive control. Forwarded verbatim to every child run; the diff logic
+			// below NEVER reads it — divergence is reported only from the compared hashes.
+			bool        selftestPerturb = false;
 			// M4 Block A — thread-count matrix. When non-empty, the scenario is run at each
 			// listed Lua-state count and the per-tick traces are diffed across counts.
 			std::vector<int> threadCounts;
@@ -128,6 +131,10 @@ namespace RTE {
 				if (ArgEq(a, "output") && hasValue) { r.output = argv[++i]; continue; }
 				if (ArgEq(a, "game-bin") && hasValue) { r.gameBin = argv[++i]; continue; }
 				if (ArgEq(a, "keep-runs")) { r.keepRuns = true; continue; }
+				if (a == "-determinism-selftest-perturb" || a == "--determinism-selftest-perturb") {
+					r.selftestPerturb = true;
+					continue;
+				}
 				// Unknown args are silently passed through (we tolerate downstream flags like
 				// -cout that the user might still want to apply to children).
 			}
@@ -167,6 +174,9 @@ namespace RTE {
 			    << " -tick-hashes";
 			if (threadCount >= 0) {
 				cmd << " -num-lua-states " << threadCount;
+			}
+			if (args.selftestPerturb) {
+				cmd << " -determinism-selftest-perturb";
 			}
 			cmd << " -out " << Quote(runOut.string());
 			return cmd.str();
