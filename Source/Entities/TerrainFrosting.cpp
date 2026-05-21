@@ -47,11 +47,8 @@ void TerrainFrosting::FrostTerrain(SLTerrain* terrain) const {
 	int appliedThickness = 0;
 
 	for (int xPos = 0; xPos < matBitmap->w; ++xPos) {
-		// M1 Block B: frosting thickness is scene cosmetic decoration. Both RNGs are
-		// reseeded at activity start so terrain stays byte-identical across same-seed
-		// runs regardless of which RNG produces the roll; using g_RenderRNG keeps the
-		// sim stream untouched by terrain-cosmetic work.
-		int thicknessGoal = g_RenderRNG.RandomNum<int>(m_MinThickness, m_MaxThickness);
+		// Frosting thickness writes terrain pixels — sim RNG, this is determinism-island state.
+		int thicknessGoal = g_SimRNG.RandomNum<int>(m_MinThickness, m_MaxThickness);
 
 		for (int yPos = matBitmap->h - 1; yPos >= 0; --yPos) {
 			int materialCheckPixel = _getpixel(matBitmap, xPos, yPos);

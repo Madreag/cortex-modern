@@ -113,13 +113,9 @@ int TerrainDebris::Save(Writer& writer) const {
 
 bool TerrainDebris::GetPiecePlacementPosition(SLTerrain* terrain, Box& possiblePiecePosition) const {
 	BITMAP* matBitmap = terrain->GetMaterialBitmap();
-	// M1 Block B: scene-decoration RNG. The pieces become terrain pixels that ARE in
-	// the determinism island, but both RNGs are reseeded to the constant at activity
-	// start (see SeedRNG / Activity::Start), so terrain is byte-identical across same-
-	// seed runs regardless of which RNG produced it. Using g_RenderRNG here keeps the
-	// sim RNG's state evolution untouched by terrain-cosmetic decisions.
-	int posX = g_RenderRNG.RandomNum<int>(0, matBitmap->w);
-	int depth = g_RenderRNG.RandomNum<int>(m_MinDepth, m_MaxDepth);
+	// Debris placement writes terrain pixels — sim RNG, this is determinism-island state.
+	int posX = g_SimRNG.RandomNum<int>(0, matBitmap->w);
+	int depth = g_SimRNG.RandomNum<int>(m_MinDepth, m_MaxDepth);
 	int buriedDepthOffset = m_OnlyBuried ? static_cast<int>(possiblePiecePosition.GetHeight() * 0.6F) : 0;
 	int prevMaterialCheckPixel = -1;
 
