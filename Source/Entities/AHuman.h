@@ -329,7 +329,12 @@ namespace RTE {
 
 		/// Gets the FG Arm's HeldDevice. Ownership is NOT transferred.
 		/// @return The FG Arm's HeldDevice.
-		HeldDevice* GetEquippedItem() const { return m_pFGArm ? m_pFGArm->GetHeldDevice() : nullptr; }
+		HeldDevice* GetEquippedItem() const {
+			if (g_CurrentAIActor && g_CurrentAIActor != this) {
+				return m_FrozenEquippedItem;
+			}
+			return m_pFGArm ? m_pFGArm->GetHeldDevice() : nullptr;
+		}
 
 		/// Gets the BG Arm's HeldDevice. Ownership is NOT transferred.
 		/// @return The BG Arm's HeldDevice.
@@ -343,6 +348,9 @@ namespace RTE {
 		/// ammo etc.
 		/// @return Whether a currently HDFirearm (if any) is ready for use.
 		bool FirearmIsReady() const;
+
+		/// Freezes this AHuman's AI-phase-mutated, cross-actor-read state for the parallel ThreadedUpdateAI pass.
+		void FreezeStateForAIPhase() override;
 
 		/// Indicates whether the currently held ThrownDevice's is ready to go.
 		/// @return Whether a currently held ThrownDevice (if any) is ready for use.
@@ -575,6 +583,9 @@ namespace RTE {
 		Arm* m_pFGArm;
 		// Background arm.
 		Arm* m_pBGArm;
+		// FirearmIsReady() / GetEquippedItem() snapshotted before the parallel AI phase; foreign AI reads use these.
+		bool m_FrozenFirearmReady;
+		HeldDevice* m_FrozenEquippedItem;
 		// Foreground leg.
 		Leg* m_pFGLeg;
 		// Background leg.
