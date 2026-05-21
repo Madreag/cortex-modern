@@ -122,6 +122,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, MovableMan) {
 	    .def_readonly("AddedParticles", &MovableMan::m_AddedParticles, luabind::return_stl_iterator)
 	    .def_readonly("AlarmEvents", &MovableMan::m_AlarmEvents, luabind::return_stl_iterator)
 	    .def_readonly("AddedAlarmEvents", &MovableMan::m_AddedAlarmEvents, luabind::return_stl_iterator)
+	    .def("RegisterAlarmEvent", &MovableMan::RegisterAlarmEvent)
 
 	    .def("GetMOFromID", &MovableMan::GetMOFromID)
 	    .def("FindObjectByUniqueID", &MovableMan::FindObjectByUniqueID)
