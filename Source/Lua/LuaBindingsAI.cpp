@@ -99,6 +99,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, MetricsCollector
 	    .def("Record", &MetricsCollector::Record)
 	    .def("RecordString", &MetricsCollector::RecordString)
 	    .def("SetResult", &MetricsCollector::SetResult)
+	    .def("IsSelfTest", &MetricsCollector::IsSelfTest)
 	    .def("WriteReport", &MetricsCollectorWriteReport);
 }
 

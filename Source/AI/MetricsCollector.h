@@ -74,6 +74,10 @@ namespace RTE {
 		/// Whether the per-tick hash trace is being recorded (a determinism run). Set once at run start.
 		bool IsRecordingTickHashes() const { return m_RecordTickHashes; }
 
+		/// Whether the trust-scenario positive-control mode (-trust-selftest) is active — the scenario
+		/// drives its named behaviour itself so the grading criterion can be exercised both ways.
+		bool IsSelfTest() const;
+
 		/// Append a per-tick hash record. Silently no-op if recording is disabled or no run is
 		/// active. The intended call site is `Main.cpp`'s sim-loop right after
 		/// `g_SimChecksum.EndTick()` — that's when the per-subsystem accumulators are finalized

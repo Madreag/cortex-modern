@@ -283,12 +283,20 @@ namespace RTE {
 			return 2;
 		}
 
-		// Temp dir for the per-run JSONs. We pick a process-unique subdir so concurrent CI
-		// jobs don't stomp on each other.
-		const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-		const std::filesystem::path tmpRoot =
-		    std::filesystem::temp_directory_path() / ("cccp-determinism-" + std::to_string(now));
-		std::filesystem::create_directories(tmpRoot);
+		// Temp dir for the per-run JSONs - a genuinely unique subdir per run, since a
+		// clock value alone collides when concurrent orchestrators share a tick.
+		std::filesystem::path tmpRoot;
+		{
+			std::error_code ec;
+			for (int attempt = 0; attempt < 1000; ++attempt) {
+				const auto now = std::chrono::system_clock::now().time_since_epoch().count();
+				tmpRoot = std::filesystem::temp_directory_path() /
+				          ("cccp-determinism-" + std::to_string(now) + "-" + std::to_string(attempt));
+				if (std::filesystem::create_directory(tmpRoot, ec)) {
+					break;
+				}
+			}
+		}
 
 		// Build the flat child list. Matrix mode: every (threadCount, runIndex) pair.
 		// Repeat-runs mode: runs at the engine-default count (threadCount = -1).

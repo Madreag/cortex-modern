@@ -50,6 +50,11 @@ namespace RTE {
 			s_Args.selftestPerturb = true;
 			return 1;
 		}
+		if (a == "-trust-selftest") {
+			// Positive-control: the trust scenario drives its own named behaviour. Boolean flag — no value.
+			s_Args.selfTest = true;
+			return 1;
+		}
 		return 0;
 	}
 

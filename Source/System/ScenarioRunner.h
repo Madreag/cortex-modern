@@ -32,6 +32,8 @@ namespace RTE {
 			bool        selftestPerturb = false; // -determinism-selftest-perturb: inject one genuine
 			                                 // non-determinism at a fixed tick (the determinism
 			                                 // check's positive control — DETERMINISM_GOAL.md EC3).
+			bool        selfTest = false;    // -trust-selftest: the trust scenario drives its own
+			                                 // named behaviour — the harness positive control.
 		};
 
 		/// True if `-scenario` was supplied on the command line.
