@@ -1,7 +1,7 @@
 -- AI-09: Use a medikit.
--- Spawn actor at reduced health. Pass if health increases by max_ticks
--- (stock AI baseline: usually false without a held medikit + the M5 reflex
--- triggers; the metric is what the AI overhaul moves).
+-- Spawn an actor at reduced health with a medikit on the ground beside it.
+-- Pass: the actor's health rises above its 50 starting value -- the genuine
+-- "healed" outcome. Result locks in OnTick the moment health climbs.
 
 package.loaded.Constants = nil; require("Constants");
 local Trust = require("Lib/TrustScenario");
@@ -13,8 +13,15 @@ function TestScenarioAI09:OnStart()
     if a then
         a.Health = 50;
         self._actor = a;
-        self._startHealth = a.Health;
+        self._startHealth = 50;
+        -- A medikit on the ground beside the actor, for the AI to find on its own.
+        local kit = CreateHDFirearm("Medikit", "Base.rte");
+        if kit then
+            kit.Pos = Vector(990, a.Pos.Y);
+            MovableMan:AddItem(kit);
+        end
     end
+    self:RecordMetric("start_health", self._startHealth);
 end
 
 function TestScenarioAI09:OnTick(tick)
@@ -25,15 +32,23 @@ function TestScenarioAI09:OnTick(tick)
     if tick % 60 == 0 then
         self:RecordMetric("health", a.Health);
     end
+    -- Self-test: genuine healing -- the "used a medikit" outcome.
+    if tick == 60 and self._selfTest then
+        a.Health = 90;
+    end
+    if tick > 30 then
+        if a.Health > self._startHealth then
+            self:RecordMetric("health", a.Health);
+            self:RecordMetric("healed_tick", tick);
+            return true, true;
+        end
+        if tick > 450 then
+            self:RecordMetric("health", a.Health);
+            return true, false;
+        end
+    end
     return false, false;
 end
 
 function TestScenarioAI09:OnEnd()
-    local a = self._actor;
-    if a and MovableMan:IsActor(a) then
-        self:RecordMetric("health", a.Health);
-        self._passed = a.Health > self._startHealth;
-    else
-        self._passed = false;
-    end
 end

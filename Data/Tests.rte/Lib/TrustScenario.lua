@@ -42,6 +42,11 @@ function TrustScenario.Extend(scenarioName, defaults)
         self._spawnedActors = {};
         self._metrics = {};
 
+        -- Positive-control mode (-trust-selftest): the scenario drives its own named
+        -- behaviour so the grading criterion can be demonstrated to pass. Without it,
+        -- the scenario is the genuine AI test and the stock AI is on its own.
+        self._selfTest = MetricsCollector:IsSelfTest();
+
         -- Arm MetricsCollector for this run. The seed defaults to 0 here; the C++
         -- side substitutes the CLI -seed value when ScenarioRunner is active, so
         -- the report records the seed actually used.
@@ -199,6 +204,26 @@ function TrustScenario.Extend(scenarioName, defaults)
     function cls:RecordMetric(name, value)
         self._metrics[name] = value;
         MetricsCollector:Record(name, value);
+    end
+
+    -- Counts air (material 0) terrain pixels in an inclusive pixel box. Scenarios
+    -- sample this before/after to prove terrain was genuinely carved.
+    function cls:CountAirPixels(x1, y1, x2, y2)
+        local air = 0;
+        for px = x1, x2 do
+            for py = y1, y2 do
+                if SceneMan:GetTerrMatter(px, py) == 0 then
+                    air = air + 1;
+                end
+            end
+        end
+        return air;
+    end
+
+    -- Carves a rectangular hole in the terrain. Used by scenarios as a real route
+    -- opener and by the self-test positive control.
+    function cls:CarveBox(x1, y1, x2, y2)
+        SceneMan:DislodgePixelBox(Vector(x1, y1), Vector(x2, y2), true);
     end
 
     return cls;
