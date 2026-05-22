@@ -64,6 +64,10 @@ namespace RTE {
 		    std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
 	}
 
+	bool MetricsCollector::IsSelfTest() const {
+		return ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().selfTest;
+	}
+
 	void MetricsCollector::Record(const std::string& name, double value) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_Numeric[name] = value;

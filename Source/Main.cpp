@@ -221,7 +221,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 		// M1 Block A: -tick-hashes added (no-value flag) for the determinism CI scaffold.
 		if (currentArg == "-scenario" || currentArg == "-out" || currentArg == "-seed" ||
 		    currentArg == "-max-ticks" || currentArg == "-tick-hashes" ||
-		    currentArg == "-determinism-selftest-perturb") {
+		    currentArg == "-determinism-selftest-perturb" || currentArg == "-trust-selftest") {
 			const int consumed = ScenarioRunner::ParseArgs(argCount, argValue, i);
 			if (consumed > 0) {
 				i += consumed;
@@ -338,6 +338,7 @@ void RunMenuLoop() {
 /// <summary>
 /// Game simulation loop.
 /// </summary>
+	double g_SimComputeAccum = 0.0; //!< Accumulated sim-update compute time across the run (performance measurement).
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
@@ -572,6 +573,7 @@ void RunGameLoop() {
 
 		updateEndAndDrawStartTime = g_TimerMan.GetAbsoluteTime();
 		updateTotalTime = updateEndAndDrawStartTime - updateStartTime;
+		g_SimComputeAccum += updateTotalTime;
 		drawStartTime = updateEndAndDrawStartTime;
 
 		g_FrameMan.Draw();
@@ -581,6 +583,7 @@ void RunGameLoop() {
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
 	}
+	g_MetricsCollector.Record("__sim_compute_accum", g_SimComputeAccum);
 }
 
 /// <summary>

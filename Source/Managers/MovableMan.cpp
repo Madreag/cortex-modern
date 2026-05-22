@@ -1800,6 +1800,27 @@ void MovableMan::Update() {
 		}
 	}
 
+	// `controller` subsystem — per-actor Controller input state, determinism-run-only.
+	// Catches controller-state drift the `actors` pos/vel/health/AIMode fingerprint misses.
+	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		for (Actor* a: m_Actors) {
+			const Controller* controller = a->GetController();
+			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("controller", &uniqueID, sizeof(uniqueID));
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
+				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
+			}
+			const Vector move = controller->GetAnalogMove();
+			const Vector aim = controller->GetAnalogAim();
+			const Vector cursor = controller->GetAnalogCursor();
+			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
+			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
+			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+		}
+	}
+
 	// M1 Block F follow-up: `particles` subsystem. Sibling to `actors` above,
 	// scoped to the sim-relevant particle stream (m_Particles is the sim deque;
 	// rendered-only particle effects don't live here). Block C's frame-start
