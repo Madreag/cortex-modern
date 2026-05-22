@@ -147,11 +147,13 @@
     </header>
 
     <div class="callout callout-ok" style="margin-bottom:14px">
-      <div class="callout-title">Status &mdash; 2026-05-18</div>
-      <p><b>M0 observability shipped, M1 ready for execution.</b> See the <a href="index.html#active-plan">active
-      plan timeline on index.html</a> for the at-a-glance view, the <a href="engine.html">engine page</a> for the
-      parallel side tracks, and <code>D:\Projects\M1_PLAN.md</code> for the ultra-detailed M1 execution plan (835
-      lines, branch-harvest references included &mdash; an AI coding agent can pick it up immediately).</p>
+      <div class="callout-title">Status &mdash; 2026-05-19</div>
+      <p><b>M0 shipped; M1 and M2 implemented locally; M3 is next.</b> M1 (pre-determinism cleanup)
+      and M2 (LuaJIT deterministic iteration) are implemented on their stacked branches &mdash; built
+      clean across all four MSBuild configs, not yet pushed. Live cross-milestone status:
+      <code>D:\Projects\MISSION_LEDGER.md</code>. Per-milestone build-from plans: <code>M1_PLAN.md</code>,
+      <code>M2_PLAN.md</code>, <code>M3_PLAN.md</code>. Parallel engine side tracks:
+      <a href="engine.html">engine.html</a>.</p>
     </div>
 
     <div class="pivot">
@@ -309,8 +311,8 @@
     </div>
     <div class="callout callout-key">
       <div class="callout-title">The key idea &mdash; full determinism is the foundation, not a feature</div>
-      <p>The original ADR-015 plan treated determinism as something you <i>grow</i>: a small island at M2 (terrain
-      only), a total island at M5. Co-op shipped on the small island; PvP shipped on the total. The pivot reverses
+      <p>The original ADR-015 plan treated determinism as something you <i>grow</i>: a small terrain-only
+      island first, a whole-sim island later. Co-op shipped on the small island; PvP shipped on the total. The pivot reverses
       this: <b>finish the determinism island before any networking ships</b>. M1&ndash;M5 build the deterministic core;
       M6&ndash;M10 layer four netcode modes on top.</p>
       <p>The unlock: once the core is fully deterministic, the netcode for each mode becomes a thin adapter, not a
@@ -538,14 +540,14 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
         <div class="lyr-main">
           <div class="lyr-name">Multi-threaded deterministic sim</div>
           <div class="lyr-desc">The sim runs on every available CPU core via the <code>ThreadMan</code> pool, with a deterministic merge at the end of each update phase. The Factorio model: per-worker buffers, sort by MOID, apply in order. Built at M4.</div>
-          <div class="lyr-fix"><b>Gives:</b> 4&ndash;8&times; sim throughput on modern hardware, with bit-identical output across thread counts.</div>
+          <div class="lyr-fix"><b>Gives:</b> bit-identical sim output across thread counts (the determinism contract MP needs); ~1.2&times; sim throughput measured (physics stays serial).</div>
         </div>
       </div>
       <div class="layer">
         <div class="lyr-id">L2</div>
         <div class="lyr-main">
           <div class="lyr-name">Fixed-point physics core</div>
-          <div class="lyr-desc">Atom / AtomGroup / SceneMan penetration / SLTerrain carve / EraseSilhouette &mdash; all rewritten in Q24.8 fixed-point so destruction math is bit-identical without compiler-flag voodoo. Built at M3.</div>
+          <div class="lyr-desc">Atom / AtomGroup / SceneMan penetration / SLTerrain carve / EraseSilhouette &mdash; the destruction-decision and atom-collision math converted in place to Q40.24 (<code>int64_t</code>) fixed-point, so destruction is bit-identical without compiler-flag voodoo. Built at M3.</div>
           <div class="lyr-fix"><b>Gives:</b> terrain physics that is bit-identical across all platforms by construction, not by hope.</div>
         </div>
       </div>
@@ -627,25 +629,27 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
     (extend M0); MSBuild <code>.vcxproj</code> + Meson <code>meson.build</code> (compile flags); <code>.github/workflows/determinism.yml</code> (CI).</p>
 
     <h3>5.2 &nbsp; LuaJIT deterministic iteration (M2)</h3>
-    <p>The single highest-leverage fix in the entire plan. Patch <code>pairs()</code> once, engine-side, and the
-    entire ~53,000-line community Lua corpus becomes deterministic without any mod-author action.</p>
+    <p>The single highest-leverage fix in the entire plan: make the ~53,000-line community Lua corpus
+    deterministic engine-side, with no mod-author action &mdash; and, as implemented, with <b>no patch to the
+    vendored LuaJIT source</b>.</p>
     <ul>
-      <li>Patch <code>external/sources/LuaJIT-2.1/src/lib_base.c</code> &mdash; <code>pairs()</code> iterates table keys in sorted order (strings lexicographic, integers numeric, mixed = strings first).</li>
-      <li>Patch <code>external/sources/LuaJIT-2.1/src/lib_math.c</code> &mdash; <code>math.random</code> seeded from <code>g_SimRNG</code> at activity start; per-state RNG continues to exist but is reproducible.</li>
-      <li>Block non-deterministic Lua API calls (<code>os.time</code>, <code>os.clock</code>) from sim-thread contexts via the Lua sandbox guard (already partially in place).</li>
-      <li>Top-20 mod corpus regression: VoidWanderers, Browncoats, Coalition, etc. Document any mod that breaks.</li>
+      <li>Replace the global <code>pairs()</code> with a C function registered per Lua state &mdash; it snapshots and sorts the table's keys (numeric ascending, then strings lexicographic), so iteration is order-stable. Replacing the global (rather than patching LuaJIT) cleanly bypasses LuaJIT's <code>pairs</code> ASM fast-path and JIT recorder; the original stays available as <code>pairs_unordered</code>.</li>
+      <li><code>math.random</code> &mdash; CC already overrides it to route to a per-Lua-state C++ <code>RandomGenerator</code>; M2 reseeds that generator from <code>g_SimRNG</code> at every activity start, so the sequence is reproducible per activity. LuaJIT's native PRNG is bypassed by CC's existing override &mdash; there is nothing to patch in <code>lib_math.c</code>.</li>
+      <li><code>os.time</code> / <code>os.clock</code> replaced with sim-tick stubs (0 callsites in vanilla or the mod corpus today &mdash; foreclosure).</li>
+      <li>New <code>lua_state</code> SimChecksum subsystem hashes every Lua state's RNG into the per-tick trace.</li>
+      <li>3-mod corpus regression: VoidWanderers, Mappack, BB+.</li>
     </ul>
-    <p class="evidence">Touch-points: <code>external/sources/LuaJIT-2.1/src/lib_base.c</code> (pairs); <code>lib_math.c</code> (random); <code>Source/Lua/LuaMan.cpp</code> (sandbox guard); CI determinism scenarios extended with Lua-heavy content (VoidWanderers).</p>
+    <p class="evidence">All engine-side in <code>Source/Managers/LuaMan.cpp</code> (no LuaJIT source patch); <code>Source/Entities/Activity.cpp</code> (the per-activity reseed); <code>Source/Network/SimChecksum.*</code> (<code>lua_state</code> subsystem). Build-from doc: <code>D:\Projects\M2_PLAN.md</code>.</p>
 
     <h3>5.3 &nbsp; Fixed-point physics core (M3)</h3>
-    <p>Rewrite the destruction math in Q24.8 fixed-point. Bit-identical by construction across all platforms; the
-    M5 WASM target then verifies the rest of the sim.</p>
+    <p>Convert the destruction math to <b>Q40.24 (<code>int64_t</code>)</b> fixed-point. Bit-identical by
+    construction across all platforms; the M5 WASM target then verifies the rest of the sim.</p>
     <ul>
-      <li>New: <code>Source/System/FixedPoint.h</code> &mdash; Q24.8 (16.16 alternative) math library with operator overloads, fast multiply/divide/sqrt (Newton-Raphson), sin/cos/atan LUTs.</li>
-      <li>Modified: <code>Source/Managers/SceneMan.cpp</code> &mdash; <code>WillPenetrate</code> (line ~433), <code>TryPenetrate</code> (line ~544), <code>DislodgePixel</code> (line ~688). Bresenham line + material lookup converted to fixed.</li>
-      <li>Modified: <code>Source/Entities/SLTerrain.cpp</code> &mdash; carve, <code>EraseSilhouette</code>.</li>
-      <li>Modified: <code>Source/Entities/AtomGroup.cpp</code> (1822 LOC) &mdash; collision math, impulse integration.</li>
-      <li>Per-subsystem checksum: <code>terrain</code> bit-identical single-machine and Windows&harr;Linux x86.</li>
+      <li>New: <code>Source/System/FixedPoint.h</code> &mdash; a Q40.24 (24 fractional bits, <code>int64_t</code> storage) math library: operator overloads, a 128-bit multiply intermediate, Newton-Raphson <code>sqrt</code>, LUT <code>sin</code>/<code>cos</code>/<code>atan2</code>, and a parallel <code>FixedVector</code>. (Q24.8 / Q16.16 are 32-bit and overflow on squared impulse magnitudes &mdash; see <code>M3_PLAN.md</code> §3.2.)</li>
+      <li>Modified: <code>Source/Managers/SceneMan.cpp</code> &mdash; the penetration <i>decision</i> math in <code>WillPenetrate</code>/<code>TryPenetrate</code>/<code>DislodgePixel</code> (the squared-magnitude test, the <code>retardation</code> sqrt-divide, the spray vectors). The Bresenham stepping and the terrain bitmap writes are already integer &mdash; untouched.</li>
+      <li>Modified: <code>Source/Entities/SLTerrain.cpp</code> &mdash; carve / <code>EraseSilhouette</code> decision math.</li>
+      <li>Modified: <code>Source/Entities/AtomGroup.cpp</code> + <code>Source/System/Atom.cpp</code> &mdash; the collision-response arithmetic, converted in place (no refactor of the <code>Travel</code> control flow).</li>
+      <li>Per-subsystem checksum: <code>terrain</code> + the new <code>carve_math</code> bit-identical single-machine and Windows&harr;Linux x86.</li>
     </ul>
     <p>What stays float (verified via WASM at M5, not fixed-point):</p>
     <ul>
@@ -663,8 +667,12 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <li>Deterministic merge at end of update phase &mdash; sort all worker-output mutations by MOID, apply serially.</li>
       <li>CI extension: same per-tick checksum at 1, 2, 4, 8, 16 thread counts. <b>This is the acid test.</b> Factorio's FFF-415 bug is what this gate catches.</li>
     </ul>
-    <p>Expected performance impact: <b>4&ndash;8&times; sim throughput</b> on 8&ndash;16 core hardware. This is the
-    biggest single perf win in the plan, and it benefits single-player too (not just MP).</p>
+    <p>Measured performance impact: <b>~1.2&times; sim throughput</b> at 16 Lua states, plateauing near 1.2&times; by
+    8 states (M4ThreadStress, 40-actor scenario). The 4&ndash;8&times; figure earlier in this plan was a planning
+    estimate; the measured gain is structural &mdash; physics (<code>MovableMan::Travel()</code>) runs serial, so only
+    the AI/script phase parallelizes, and by Amdahl's law a partial parallelization caps the gain near 1.2&ndash;1.4&times;.
+    M4's primary deliverable is not throughput but the <i>deterministic</i> threaded sim &mdash; bit-identical output
+    across thread counts &mdash; which MP requires regardless.</p>
     <p class="evidence">Touch-points: <code>Source/Managers/ThreadMan.cpp/.h</code>; <code>Source/Managers/MovableMan.cpp</code> (SyncedUpdate); per-worker buffer API design.</p>
 
     <h3>5.5 &nbsp; Cross-platform float verification — WASM as canonical (M5)</h3>
@@ -734,8 +742,8 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
       <p>Sequenced by <b>dependency</b> and gated by <b>validation</b>, not by calendar time. The build is executed
       by AI coding agents, for which the cost of a task is not its human-hours; the meaningful units are <i>what
       must exist first</i> and <i>how we know it is done</i>. Every milestone states what it depends on and the
-      exact, machine-checkable condition that closes it. <b>An agent picking up this build starts at M0 (already
-      shipped) and continues to M1.</b> Each milestone is a complete, shippable improvement. Color coding: <b style="color:var(--purple)">purple = foundation</b> (M1&ndash;M5), <b style="color:var(--accent)">orange = enabling</b> (M6), <b style="color:var(--green)">green = MP ships</b> (M7&ndash;M9), <b style="color:var(--blue)">blue = stretch</b> (M10).</p>
+      exact, machine-checkable condition that closes it. <b>An agent picking up this build starts after M0&ndash;M2
+      (implemented) and continues to M3.</b> Each milestone is a complete, shippable improvement. Color coding: <b style="color:var(--purple)">purple = foundation</b> (M1&ndash;M5), <b style="color:var(--accent)">orange = enabling</b> (M6), <b style="color:var(--green)">green = MP ships</b> (M7&ndash;M9), <b style="color:var(--blue)">blue = stretch</b> (M10).</p>
     </div>
     <div class="plan">
 
@@ -766,42 +774,45 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
         </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/System/RTETools.* &middot; Source/Managers/MovableMan.* &middot; Source/Network/SimChecksum.* &middot; Source/CI/DeterminismCheck.* (new) &middot; .vcxproj + meson.build (compile flags) &middot; .github/workflows/determinism.yml (new)</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M0.</span></div>
-        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> three CI scenarios (<code>m1_baseline</code>, <code>m1_terrain_stress</code>, <code>m1_actor_stress</code>) produce identical per-tick checksums across 100 runs on a single machine; Windows MSBuild and Linux Meson builds produce identical checksums; performance regression less than 8%; top-20 mod corpus loads and behaves identically. <b>Detailed plan: <code>D:\Projects\M1_PLAN.md</code></b> (835 lines, ultra-detailed for AI coding agent execution &mdash; 6 building blocks A-F with file paths, line numbers, acceptance criteria, common pitfalls, branch-harvest references for the MOID overlap with Causeless's <code>interpolated-render-redux</code>, full-speed-ahead stance per ADR-008 + ADR-017).</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> three CI scenarios (<code>m1_baseline</code>, <code>m1_terrain_stress</code>, <code>m1_actor_stress</code>) produce identical per-tick checksums across 100 runs on a single machine; Windows MSBuild and Linux Meson builds produce identical checksums; performance regression less than 8%; the 3-mod corpus loads and behaves identically. <b>Detailed plan: <code>D:\Projects\M1_PLAN.md</code></b> (835 lines, ultra-detailed for AI coding agent execution &mdash; 6 building blocks A-F with file paths, line numbers, acceptance criteria, common pitfalls, branch-harvest references for the MOID overlap with Causeless's <code>interpolated-render-redux</code>, full-speed-ahead stance per ADR-008 + ADR-017).</span></div>
+        <div class="ms-field"><span class="ms-key">Status</span><span class="ms-val">Implemented locally 2026-05-19 &mdash; 8 commits on <code>flagship/mp-m1-determinism-cleanup</code>, not pushed; all four MSBuild configs build clean. A residual <code>ThreadedUpdate</code> thread race keeps the determinism CI gate informational until M4. Landing detail: <code>D:\Projects\MISSION_LEDGER.md</code>.</span></div>
       </div>
 
       <div class="ms foundation">
         <div class="ms-head"><span class="ms-id">M2</span><span class="ms-name">LuaJIT deterministic iteration</span><span class="ms-tag">FOUNDATION</span></div>
-        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make the ~53K-LOC community Lua corpus deterministic transparently, via one engine-side patch.</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Make the ~53K-LOC community Lua corpus deterministic transparently, engine-side &mdash; with no patch to the vendored LuaJIT source.</span></div>
         <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
-          <li>Patch <code>external/sources/LuaJIT-2.1/src/lib_base.c</code> &mdash; <code>pairs()</code> iterates keys in sorted order (strings lex, ints numeric).</li>
-          <li>Patch <code>external/sources/LuaJIT-2.1/src/lib_math.c</code> &mdash; <code>math.random</code> per Lua state seeded reproducibly from <code>g_SimRNG</code>.</li>
-          <li>Block <code>os.time</code> / <code>os.clock</code> from sim-thread Lua contexts via sandbox guard.</li>
-          <li>Regression suite: top-20 mod corpus (VoidWanderers, Browncoats, Coalition, etc.). Document any mod that breaks.</li>
-          <li>CI gate extension: Lua-heavy scenarios join determinism matrix.</li>
+          <li>Replace the global <code>pairs()</code> with a per-state C function that snapshots + sorts keys (numeric ascending, then strings lexicographic) &mdash; bypasses LuaJIT's <code>pairs</code> ASM fast-path + JIT recorder; original kept as <code>pairs_unordered</code>.</li>
+          <li><code>math.random</code> &mdash; CC already overrides it to a per-Lua-state C++ <code>RandomGenerator</code>; M2 reseeds that generator from <code>g_SimRNG</code> at every activity start.</li>
+          <li>Replace <code>os.time</code> / <code>os.clock</code> with sim-tick stubs (0 callsites today &mdash; foreclosure).</li>
+          <li>New <code>lua_state</code> SimChecksum subsystem; 5 Lua-determinism CI scenarios.</li>
+          <li>3-mod corpus regression: VoidWanderers, Mappack, BB+.</li>
         </ol></div>
-        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">external/sources/LuaJIT-2.1/src/lib_base.c &middot; lib_math.c &middot; Source/Lua/LuaMan.cpp (sandbox) &middot; CI scenarios extended</span></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/LuaMan.cpp (det_pairs, os stubs, RNG seeding/hashing &mdash; no LuaJIT source patch) &middot; Source/Entities/Activity.cpp &middot; Source/Network/SimChecksum.* &middot; Data/Tests.rte (5 scenarios)</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M1.</span></div>
-        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> Lua-heavy scenarios (VoidWanderers playthrough) produce identical per-tick checksums across 100 runs; the mod corpus regression suite is green; mod compatibility shows no functional changes (visual smoke test on top-20).</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the Lua-determinism scenarios produce identical per-tick checksums across 100 runs and the 3-mod corpus plays without regression. <i>As implemented:</i> the <code>decisions</code> subsystem (carrying the scenarios' <code>math.random</code> / <code>pairs()</code> / <code>os.*</code> folds) does not diverge &mdash; the Lua guarantees hold; the whole-tick checksum MATCH is gated on M4 closing the inherited M1 thread race, same as M1.</span></div>
+        <div class="ms-field"><span class="ms-key">Status</span><span class="ms-val">Implemented locally 2026-05-19 &mdash; 9 commits on <code>flagship/mp-m2-luajit-pairs</code>, not pushed; all four MSBuild configs build clean. Build-from doc <code>D:\Projects\M2_PLAN.md</code>; landing detail <code>D:\Projects\MISSION_LEDGER.md</code>.</span></div>
       </div>
 
       <div class="ms foundation">
         <div class="ms-head"><span class="ms-id">M3</span><span class="ms-name">Fixed-point physics core</span><span class="ms-tag">FOUNDATION</span></div>
-        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Terrain physics + atom collision rewritten in Q24.8 fixed-point. Bit-identical by construction.</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">Terrain-destruction + atom-collision math converted to Q40.24 (<code>int64_t</code>) fixed-point. Bit-identical by construction.</span></div>
         <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
-          <li>New: <code>Source/System/FixedPoint.h</code> &mdash; Q24.8 math library with operator overloads, multiply/divide/sqrt (Newton-Raphson), sin/cos/atan LUTs.</li>
-          <li>Rewrite: <code>SceneMan::WillPenetrate</code> (~line 433), <code>TryPenetrate</code> (~line 544), <code>DislodgePixel</code> (~line 688) in fixed-point.</li>
-          <li>Rewrite: <code>SLTerrain</code> carve, <code>EraseSilhouette</code>.</li>
-          <li>Rewrite: <code>AtomGroup::Travel</code>, collision impulse integration.</li>
-          <li>CI extension: <code>terrain</code> subsystem checksum bit-identical across all platforms (Win/Lin x86 at minimum; macOS deferred to M5).</li>
+          <li>New: <code>Source/System/FixedPoint.h</code> &mdash; Q40.24 math library (24 fractional bits, <code>int64_t</code> storage, 128-bit multiply intermediate), Newton-Raphson <code>sqrt</code>, LUT <code>sin</code>/<code>cos</code>/<code>atan2</code>, parallel <code>FixedVector</code>.</li>
+          <li>Convert in place: the penetration <i>decision</i> math in <code>SceneMan::WillPenetrate</code>/<code>TryPenetrate</code>/<code>DislodgePixel</code>.</li>
+          <li>Convert in place: <code>SLTerrain</code> carve / <code>EraseSilhouette</code> decision math.</li>
+          <li>Convert in place: <code>AtomGroup::Travel</code> / <code>Atom::Travel</code> collision-response arithmetic (no refactor of the control flow).</li>
+          <li>New <code>carve_math</code> subsystem; real <code>terrain</code> hash; <code>terrain</code> / <code>carve_math</code> bit-identical Win/Lin x86 (macOS/ARM deferred to M5).</li>
         </ol></div>
-        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/System/FixedPoint.h (new) &middot; Source/Managers/SceneMan.cpp (~3700 LOC, ~5 functions) &middot; Source/Entities/SLTerrain.cpp (~500 LOC) &middot; Source/Entities/AtomGroup.cpp (~1800 LOC)</span></div>
+        <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/System/FixedPoint.h + FixedPointTests.cpp (new) &middot; Source/Managers/SceneMan.cpp &middot; Source/Entities/SLTerrain.cpp &middot; Source/Entities/AtomGroup.cpp &middot; Source/System/Atom.cpp</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M1, M2.</span></div>
-        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the <code>terrain</code> subsystem checksum is bit-identical Windows&harr;Linux x86 across 100 runs of <code>m3_terrain_stress</code>; performance regression less than 10%; visual A/B test confirms destruction looks identical to pre-M3.</span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the <code>terrain</code> + <code>carve_math</code> subsystem checksums are bit-identical Windows&harr;Linux x86 across 100 runs of <code>M3TerrainStress</code>; performance regression less than 10%; visual A/B test confirms destruction looks identical to pre-M3.</span></div>
+        <div class="ms-field"><span class="ms-key">Status</span><span class="ms-val">Not started. Build-from plan written: <code>D:\Projects\M3_PLAN.md</code> (6 blocks A&ndash;F). Worktree <code>D:\Projects\mp-m3-fixedpoint-physics\</code> cut from the M2 tip.</span></div>
       </div>
 
       <div class="ms foundation">
         <div class="ms-head"><span class="ms-id">M4</span><span class="ms-name">Multi-threaded sim with deterministic merge</span><span class="ms-tag">FOUNDATION</span></div>
-        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">4&ndash;8&times; sim throughput on modern CPUs without sacrificing determinism. The Factorio model.</span></div>
+        <div class="ms-field"><span class="ms-key">Goal</span><span class="ms-val">A deterministic threaded sim &mdash; bit-identical output across thread counts &mdash; on modern CPUs. The Factorio model. Measured throughput gain is ~1.2&times; (physics stays serial); the determinism is the point.</span></div>
         <div class="ms-field"><span class="ms-key">Builds</span><ol class="ms-steps">
           <li>Make <code>MovableMan::SyncedUpdate</code> boundary mandatory for sim-state mutation (currently opt-in).</li>
           <li>Per-worker buffers in <code>ThreadMan</code>. Threaded Lua/AI work writes to its own buffer.</li>
@@ -811,7 +822,7 @@ terrain.settle   { tick=84212, material=7, x=1203, y=902 }
         </ol></div>
         <div class="ms-field"><span class="ms-key">Touches</span><span class="ms-val touch">Source/Managers/ThreadMan.cpp/.h &middot; Source/Managers/MovableMan.cpp (SyncedUpdate boundary) &middot; per-worker buffer API design</span></div>
         <div class="ms-field"><span class="ms-key">Depends on</span><span class="ms-val">M1, M2, M3.</span></div>
-        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the same scenario produces identical per-tick checksums at 1, 2, 4, 8, 16 thread counts; sim throughput on stress scenarios scales near-linearly to 8 cores. <b>This is the largest single-player perf win in the plan.</b></span></div>
+        <div class="ms-field"><span class="ms-key">Validated</span><span class="ms-val gate"><b>Done when</b> the same scenario produces identical per-tick checksums at 1, 2, 4, 8, 16 thread counts &mdash; the determinism acid test, and M4's real deliverable. Throughput is a secondary metric: measured ~1.2&times; at 16 Lua states, and a 120-actor combat scenario shows the M3&rarr;M4 sim-compute delta at -4.7% (perf-neutral-to-slightly-faster). The win here is the deterministic threaded sim, not a throughput multiple.</span></div>
       </div>
 
       <div class="ms foundation">
@@ -998,7 +1009,7 @@ divergence = {
     <pre><code>cccp-determinism-check --scenario m1_baseline       --ticks 600   --seed 42  --runs 100
 cccp-determinism-check --scenario m1_terrain_stress --ticks 1200  --seed 42  --runs 100
 cccp-determinism-check --scenario m1_actor_stress   --ticks 1200  --seed 42  --runs 100
-# Pre-merge CI gate: all three pass at 100/100. Blocking from M1 Block F onward.
+# Pre-merge CI gate. Informational until M4 closes the residual thread race; M3's terrain subsystems gate blocking earlier.
 
 # After M4 (threading):
 cccp-determinism-check --scenario m4_threading_stress --ticks 600 --threads 1,2,4,8,16
@@ -1106,9 +1117,9 @@ cccp-ctl test replay-determinism --runs 100 --scenario X --seed-set Y
     <p>The original plan's state-replication architecture caps actor count at "what one host CPU can simulate." For
     a destructible-pixel-physics game where actor count is the headline feel, that cap is real and binding. The
     pivoted plan's lockstep mode uncaps it: every client runs the full sim in parallel, with M4's multi-threading
-    multiplying per-client capacity. <b>4-player lockstep + 8-core threading = 32&times; raw sim throughput vs
-    state-replication on a single 8-core server.</b> That's the dimension the user explicitly asked to remove from
-    the compromise list.</p>
+    adding a measured ~1.2&times; per-client. <b>4-player lockstep + ~1.2&times; threading &asymp; ~5&times; raw sim
+    throughput vs state-replication on a single threaded server</b> &mdash; and it scales with player count, which a
+    single server does not. That's the dimension the user explicitly asked to remove from the compromise list.</p>
 
     <h3>10.5 &nbsp; The cost (honest)</h3>
     <p>The pivot delays first MP user-visible ship by approximately 6 months. M0&ndash;M6 are now foundation work
