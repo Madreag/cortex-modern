@@ -144,7 +144,7 @@
       tracks</b> (T-RENDER-INTERP, T-RENDER-GPU, T-WASM-BUILD, T-COSMETIC, T-VALIDATION) that coordinate with the
       active upstream branches without blocking MP. The result: <b>online co-op (M7) ships on a deterministic core
       with multi-threaded sim and render interpolation</b> &mdash; the best possible architecture &mdash;
-      <i>and</i> the side tracks deliver single-player wins (4&ndash;8&times; sim throughput at M4, WASM web build
+      <i>and</i> the side tracks deliver single-player wins (~1.2&times; sim throughput at M4 measured, WASM web build
       at M5, smooth high-refresh rendering when T-RENDER-INTERP lands).</p>
     </div>
 
@@ -199,7 +199,7 @@
         <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island. Threading without determinism = Causeless's lost branch (glitchy, killed determinism).</span></div>
         <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; threading is the actor-count multiplier. Without it, the lockstep ceiling collapses.</span></div>
         <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M4</b>.</span></div>
-        <div class="sub-desc">Modernization target: per-worker buffers, deterministic merge by MOID at end of update phase (the Factorio model + Causeless's "buffered Lua callback" idea). 4-8&times; sim throughput on modern CPUs. Benefits single-player massively, even before MP ships.</div>
+        <div class="sub-desc">Modernization target: per-worker buffers, deterministic merge by MOID at end of update phase (the Factorio model + Causeless's "buffered Lua callback" idea). ~1.2&times; sim throughput on modern CPUs (measured) &mdash; physics stays serial, so only the AI/script phase parallelizes. The real value is the deterministic threaded sim, required for MP.</div>
       </div>
 
       <div class="sub">
@@ -282,7 +282,13 @@
           <td>Causeless's lost MT physics branch</td>
           <td><span class="status status-blocked">LOST</span> never pushed</td>
           <td>Parallelized <code>MovableMan::Travel()</code>, commented out Lua callbacks. "Worked relatively well" perf-wise but glitchy + non-deterministic. Source verbatim: "the most frustrating part of it was the Lua collision callback. That could be buffered in some way but it'd likely change behaviour pretty significantly."</td>
-          <td><b>Use as design reference for M4.</b> Our M4 plan implements exactly his "buffered callback" idea, with the M1-M3 foundation that his prototype lacked. Talk to him about the design before implementation.</td>
+          <td><b>Use as design reference for M4.</b> Our M4 plan implements exactly his "buffered callback" idea, with the M1-M3 foundation that his prototype lacked. Talk to him about the design before implementation. His surviving 2023 <code>multithreaded-lua</code> branches (next row) are a different artifact.</td>
+        </tr>
+        <tr>
+          <td><code>multithreaded-lua</code> + <code>multithreaded-sim-and-render</code> (Causeless's old <code>-Source</code> fork)</td>
+          <td><span class="status status-todo">STALE</span> 2023-07, pre-unification repo</td>
+          <td><b>A separate, earlier effort &mdash; not the lost prototype above.</b> An architected 2023 body of work on <code>Causeless/Cortex-Command-Community-Project-Source</code> (300+ non-merge commits combined, a runtime <code>EnableMultithreadedLua</code> toggle, sub-branches). Threads <i>Lua scripting / AI</i> via parallel per-Lua-state <code>std::execution::par</code> updates, and adds a <code>ThreadMan</code> for sim/render thread separation (double-buffered game state). <code>MovableMan::Travel()</code> stays serial and the collision callbacks are untouched &mdash; confirmed <i>not</i> the lost physics prototype. Introduced the <code>SyncedUpdate</code> two-phase script model (parallel <code>Update()</code>, serial <code>SyncedUpdate()</code>); the engine's current opt-in <code>SyncedUpdate</code> descends from it.</td>
+          <td><b>Reference for M4's Lua/AI-threading half only.</b> The <code>SyncedUpdate</code> model seeds M4's "threaded work writes to its own buffer," and M4's "make <code>SyncedUpdate</code> mandatory" finishes Causeless's own unfinished TODO to enforce const-ness in the threaded <code>Update()</code>. Not a reference for physics parallelization or deterministic merge &mdash; neither was attempted. Unlike the lost prototype, the branches survive on the defunct <code>-Source</code> fork and are inspectable.</td>
         </tr>
       </tbody>
     </table>
@@ -662,8 +668,8 @@ determinism CI gate added in Block A.
         </tr>
         <tr>
           <td>M4</td>
-          <td><b>4&ndash;8&times; sim throughput (HUGE)</b></td>
-          <td>This is the biggest single-player perf win in the whole plan. Modern 8-16 core CPUs go from ~12% utilization to ~70-80%. More actors per scene. Smoother frame rates at high actor counts.</td>
+          <td><b>~1.2&times; sim throughput (measured)</b> + deterministic threaded sim</td>
+          <td>Measured ~1.2&times; sim-compute speedup at 16 Lua states &mdash; modest, because physics stays serial and only the AI/script phase parallelizes. The real M4 deliverable is the deterministic threaded sim and the actor-count headroom it unlocks.</td>
           <td>Lockstep mode (M8) becomes viable &mdash; every client runs full sim on all cores.</td>
         </tr>
         <tr>
@@ -709,8 +715,8 @@ determinism CI gate added in Block A.
     <div class="callout callout-ok">
       <p>Look at the "Single-player benefit" column. Each foundation milestone (M1-M5) delivers <i>real</i> single-player
       value, not "we made invisible foundation work, please trust us." A community member who downloads cortex-modern
-      after M4 closes gets <b>4-8&times; sim throughput</b> &mdash; the kind of perf win that's normally a flagship-class
-      release in itself. After M5, they get CC <i>in their browser</i>. Even if MP work paused for some reason between
+      after M4 closes gets a <b>~1.2&times; sim throughput</b> bump (measured) plus a deterministic threaded sim with
+      headroom for more actors. After M5, they get CC <i>in their browser</i>. Even if MP work paused for some reason between
       M5 and M6, the engine improvements alone justify the work.</p>
       <p>This is the architectural answer to "what if we get stuck?" Each milestone has independent value, so being
       stuck at any milestone still means the codebase is better than before.</p>
@@ -766,7 +772,7 @@ determinism CI gate added in Block A.
       <ul>
         <li>Determinism CI gate is blocking on every PR.</li>
         <li>Five-platform (Win/Lin/Mac x86/Mac ARM/WASM) checksum verification produces identical results.</li>
-        <li>Multi-threaded sim runs at 4&ndash;8&times; single-threaded throughput, deterministic across thread counts.</li>
+        <li>Multi-threaded sim is bit-identical across thread counts (the determinism gate); throughput measures ~1.2&times; single-threaded.</li>
         <li>LuaJIT pairs() patched and the top-20 mod corpus passes regression.</li>
         <li>WASM build of CC loads and plays a campaign mission in a browser.</li>
       </ul>
