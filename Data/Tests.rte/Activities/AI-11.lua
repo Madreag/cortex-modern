@@ -1,7 +1,8 @@
 -- AI-11: Retreat from an unwinnable breach.
--- Spawn actor with GOTO toward an unreachable target. Pass if actor reports
--- impossibility (the AI M2 stuck-recovery work surfaces this; M0 baseline
--- almost always fails this — the metric is what we move).
+-- The actor is given a GOTO waypoint at an unreachable up-left objective.
+-- Pass: the actor moves >= 150px to the right -- genuine retreat away from the
+-- objective. A stock actor pushing toward the unreachable target, or one stuck
+-- against terrain, will not displace +150 right. Result locks in OnTick.
 
 package.loaded.Constants = nil; require("Constants");
 local Trust = require("Lib/TrustScenario");
@@ -13,7 +14,7 @@ function TestScenarioAI11:OnStart()
     if a then
         a:AddAISceneWaypoint(Vector(50, 50));
         self._actor = a;
-        self._startPos = Vector(a.Pos.X, a.Pos.Y);
+        self._startX = a.Pos.X;
     end
 end
 
@@ -23,23 +24,26 @@ function TestScenarioAI11:OnTick(tick)
         return true, false;
     end
     if tick % 60 == 0 then
-        local mode = a.AIMode;
-        self:RecordMetric("ai_mode", mode);
-        local dx = a.Pos.X - self._startPos.X;
-        self:RecordMetric("retreat_dx", dx);
+        self:RecordMetric("retreat_dx", a.Pos.X - self._startX);
+    end
+    -- Self-test: genuine retreat away from the unwinnable objective.
+    if tick == 60 and self._selfTest then
+        a.Pos = Vector(self._startX + 250, a.Pos.Y);
+    end
+    if tick > 30 then
+        local dx = a.Pos.X - self._startX;
+        if dx >= 150 then
+            self:RecordMetric("retreat_dx", dx);
+            self:RecordMetric("retreat_tick", tick);
+            return true, true;
+        end
+        if tick > 450 then
+            self:RecordMetric("retreat_dx", dx);
+            return true, false;
+        end
     end
     return false, false;
 end
 
 function TestScenarioAI11:OnEnd()
-    local a = self._actor;
-    if a and MovableMan:IsActor(a) then
-        local dx = a.Pos.X - self._startPos.X;
-        self:RecordMetric("retreat_dx", dx);
-        -- Conservative baseline: pass if mode reverted from GOTO to SENTRY (impossibility reported)
-        -- OR if actor genuinely retreated (dx < -50, away from start).
-        self._passed = (a.AIMode == Actor.AIMODE_SENTRY) or dx < -50;
-    else
-        self._passed = false;
-    end
 end

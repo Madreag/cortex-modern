@@ -1,6 +1,7 @@
 -- AI-02: Breach a door.
--- Pass: actor moves at least 50 pixels (toward target) within max_ticks.
--- Stock AI under GOTO should move; the baseline measures how far it actually gets.
+-- Pass: the actor reaches X >= 1300 -- 500px of genuine traversal from the
+-- X=800 spawn, far beyond any landing or physics noise. The breach is a wall
+-- the actor cannot cross until terrain is carved.
 
 package.loaded.Constants = nil; require("Constants");
 local Trust = require("Lib/TrustScenario");
@@ -11,29 +12,35 @@ function TestScenarioAI02:OnStart()
     local a = self:SpawnActor("Green Dummy", "Base.rte", 800, 50, Activity.TEAM_1, Actor.AIMODE_GOTO);
     if a then
         a:AddAISceneWaypoint(Vector(1400, 200));
-        self._startPos = Vector(a.Pos.X, a.Pos.Y);
-        self._attacker = a;
+        self._actor = a;
     end
 end
 
 function TestScenarioAI02:OnTick(tick)
-    local a = self._attacker;
+    local a = self._actor;
     if not a or not MovableMan:IsActor(a) then
         return true, false;
     end
     if tick % 60 == 0 then
-        local dx = a.Pos.X - self._startPos.X;
-        self:RecordMetric("attacker_dx", dx);
+        self:RecordMetric("actor_x", a.Pos.X);
+    end
+    -- Self-test: carve the breach, then walk the actor through it.
+    if tick == 120 and self._selfTest then
+        self:CarveBox(1000, 150, 1120, 260);
+        a.Pos = Vector(1320, 200);
+    end
+    if a.Pos.X >= 1300 then
+        self:RecordMetric("breach_tick", tick);
+        return true, true;
     end
     return false, false;
 end
 
 function TestScenarioAI02:OnEnd()
-    local a = self._attacker;
+    local a = self._actor;
     if a and MovableMan:IsActor(a) then
-        local dx = a.Pos.X - self._startPos.X;
-        self:RecordMetric("attacker_dx", dx);
-        self._passed = dx >= 50;
+        self:RecordMetric("actor_x", a.Pos.X);
+        self._passed = a.Pos.X >= 1300;
     else
         self._passed = false;
     end
