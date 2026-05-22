@@ -36,15 +36,21 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
   # is exactly what causes cross-host drift in the determinism island.
   # See multiplayer.html §7 (M5) for the WASM-canonical cross-platform pass that
   # adds ARM into the matrix.
+  # macOS-arm64 bring-up: -msse2 is x86-only; gate it on cpu family so ARM
+  # builds don't fail the configure step. -ffp-contract=off applies to every
+  # path (ARM defaults to FMA-on, which silently breaks cross-arch determinism).
+  if host_machine.cpu_family() in ['x86', 'x86_64']
+    extra_args += ['-msse2']         # baseline ISA — no x87 80-bit drift on Windows
+  endif
   extra_args += [
-    '-msse2',                       # baseline ISA — no x87 80-bit drift on Windows
-    '-fno-fast-math',               # disable the umbrella "go fast, drift OK" flag
-    '-fno-finite-math-only',        # honor inf/NaN — required for fesetround/IEEE
-    '-fno-associative-math',        # (a+b)+c must equal a+(b+c) at the bit level
-    '-fno-reciprocal-math',         # no a/b -> a*(1/b) rewrites
+    '-ffp-contract=off',             # forbid FMA/contraction — required on ARM, harmless on x86
+    '-fno-fast-math',                # disable the umbrella "go fast, drift OK" flag
+    '-fno-finite-math-only',         # honor inf/NaN — required for fesetround/IEEE
+    '-fno-associative-math',         # (a+b)+c must equal a+(b+c) at the bit level
+    '-fno-reciprocal-math',          # no a/b -> a*(1/b) rewrites
     '-fno-unsafe-math-optimizations', # umbrella for several of the above
-    '-frounding-math',              # don't assume the default rounding mode
-    '-fsignaling-nans',             # don't convert signaling NaNs to quiet
+    '-frounding-math',               # don't assume the default rounding mode
+    '-fsignaling-nans',              # don't convert signaling NaNs to quiet
   ]
 
   if host_machine.system() == 'linux'
