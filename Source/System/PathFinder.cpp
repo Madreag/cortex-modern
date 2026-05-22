@@ -233,6 +233,13 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	const_cast<Vector&>(pathRequest->startPos) = start;
 	const_cast<Vector&>(pathRequest->targetPos) = end;
 
+	// Count the request from the moment it is queued, not from when a worker
+	// starts it. m_CurrentPathingRequests is the gate UpdateNodeList /
+	// BlockUntilAllPathingRequestsComplete check before touching the shared node
+	// grid; a request still sitting in the pool queue must already hold that gate
+	// or the node-cost write races the path solve's read. Released by the task.
+	++m_CurrentPathingRequests;
+
 	g_ThreadMan.GetBackgroundThreadPool().push_task(
 	    [this, start, end, jumpHeight, digStrength, callback](std::shared_ptr<volatile PathRequest> volRequest) {
 		    // Cast away the volatile-ness - only matters outside (and complicates the API otherwise)
@@ -250,6 +257,10 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		    // Have to set to complete after the callback, so anything that blocks on it knows that the callback will have been called by now
 		    // This has the awkward side-effect that the complete flag is actually false during the callback - but that's fine, if it's called we know it's complete anyways
 		    request.complete = true;
+
+		    // Release the enqueue-time count (CalculatePath kept its own balanced
+		    // ++/--); done last so a waiter sees 0 only once the request is done.
+		    --m_CurrentPathingRequests;
 	    },
 	    pathRequest);
 
