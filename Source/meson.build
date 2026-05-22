@@ -16,9 +16,10 @@ source_inc_dirs += [include_directories(
   'Renderer',
   'System')]
 
-external_inc_dirs += [include_directories(
-  '../external/sources/BLAKE3-1.8.5',
-  '../external/sources/nlohmann_json-3.12.0')]
+# BLAKE3 and nlohmann_json are pulled in via proper subproject deps in the top-level
+# meson.build (so Meson >=1.6's sandbox check is satisfied on macOS-arm64). Their
+# include dirs ride along on the dependency object — no manual include_directories
+# crossing into external/sources is needed.
 
 subdir('Activities')
 subdir('AI')
