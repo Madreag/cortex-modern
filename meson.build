@@ -57,6 +57,28 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
     build_rpath = '$ORIGIN:$ORIGIN/../external/lib/linux/x86_64' # Set RUNPATH so that CCCP can find libfmod.so without needing to set LD_LIBRARY_PATH
   elif host_machine.system()=='darwin'
     build_rpath = '@executable_path/../external/lib/macos' # Add a new R_PATH CCCP can find libfmod.dylib on Darwin TODO: Confirm and validate this.
+    # macOS-arm64 bring-up: Apple Clang ships libc++ which removed std::auto_ptr / std::unary_function /
+    # std::binder1st in C++17 and several traits in C++20. The vendored luabind 0.7.1 + boost 1.75 hash
+    # headers still reference them exactly the way the Windows build's _HAS_AUTO_PTR_ETC=1 escape hatch
+    # keeps alive. These per-feature macros are the libc++ equivalent. add_global_arguments() is required
+    # (not add_project_arguments) so the flags reach the luabind subproject as well.
+    add_global_arguments(
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_BINDERS',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_RANDOM_SHUFFLE',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNEXPECTED_FUNCTIONS',
+      '-D_LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS',
+      '-D_LIBCPP_ENABLE_CXX20_REMOVED_NEGATORS',
+      # libc++ gates <execution> + the parallel STL behind the experimental flag.
+      # Enable it and pin the SERIAL backend: par_unseq becomes a sequential pass,
+      # which is the strongest possible guarantee for run-to-run determinism on this
+      # platform (no thread scheduling involved). libstdc++/TBB on Linux and MSVC's
+      # parallel STL on Windows already produce deterministic per-tick hashes; the
+      # SERIAL backend on macOS is more conservative, not less.
+      '-D_LIBCPP_ENABLE_EXPERIMENTAL',
+      '-D_LIBCPP_PSTL_BACKEND_SERIAL',
+      language: 'cpp')
   endif
 
   #suffix = 'x86_64'
