@@ -275,7 +275,6 @@ void Atom::DrawTrail(BITMAP* targetBitmap, const Vector& targetPos) const {
 	std::vector<std::pair<int, int>> allTrailPoints = m_LastTrailPoints;
 	allTrailPoints.insert(allTrailPoints.end(), m_TrailPoints.begin(), m_TrailPoints.end());
 	for (int i = endPoint - std::min(length, static_cast<int>(endPoint)); i < endPoint; ++i) {
-		Vector trailPointPos = Vector(allTrailPoints[i].first, allTrailPoints[i].second) - targetPos;
 		putpixel(targetBitmap, allTrailPoints[i].first, allTrailPoints[i].second, m_TrailColor.GetIndex());
 
 		topLeftExtent.m_X = std::min(topLeftExtent.m_X, static_cast<float>(allTrailPoints[i].first));
