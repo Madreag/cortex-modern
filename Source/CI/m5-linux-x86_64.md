@@ -36,7 +36,7 @@ Branch: `exp/determinism-linux` cut from `exp/determinism-foundation` at SHA
 | `M2ModSmokeLoading` @ `--runs 10` `--ticks 600` | MATCHED |
 | `M3TerrainStress` @ `--runs 10` `--ticks 900` | MATCHED |
 | `M4ThreadStress` @ `--runs 10` `--ticks 900` | **DIVERGED — same-thread-count race surfaced by the new reinforcement-wave scenario; see RCA** |
-| `M4ThreadStress` thread-count matrix `--threads 1,2,4,8,16` `--runs 2` `--ticks 900` | **DIVERGED at threads ≥ 4 (clean at threads 1 and 2); same tick-333 controller cascade as the repeat-runs test** |
+| `M4ThreadStress` thread-count matrix `--threads 1,2,4,8,16` `--runs 2` `--ticks 900` | **DIVERGED — same tick-333 controller cascade. Two independent matrix runs agree: `threads=1` clean both times; `threads={2,4,8,16}` diverge intermittently. The race fires at any thread count ≥ 2.** |
 | `MPerfBench` @ `--runs 10` `--ticks 1200` | DIVERGED (scenario header declares "Not a determinism scenario"; out-of-scope per the scenario's own contract) |
 
 **Pass criterion not met.** Nine of the ten determinism-scoped scenarios MATCH
@@ -174,8 +174,8 @@ Per-tick total hashes from the committed single-run traces
 | `M2OsStubTest` | `dcbb115d0596130463a55d9074aeebb69a13204af5fbe2a5924ad5b605c4c360` | 599 |
 | `M2ModSmokeLoading` | `ba5ac70105908bef7a205fa5fdbc7a151d671c5beadc2938d9b6ed7cac434fbb` | 599 |
 | `M3TerrainStress` | `4e6703b55370d98c91d7966dc1e737a609f16553ccf36373e3ef376477f33ecf` | 899 |
-| `M4ThreadStress` | `2d4179804f6d34050c838d2c21dc2659b6e322fb73c41161e8b9aaa3fccfb80b` (one sample — race flake not visible at `--runs 1`) | 899 |
-| `MPerfBench` | `2762dce509c1ac3d58f8b95093766e8f49e2025dde3b0d3051d5599cb66c4a07` (out-of-scope per scenario header) | 1199 |
+| `M4ThreadStress` | `99ec198189fb5dc3030d28718c032c0c18f974715b5dec7b44a230e9d49fadc4` (single-run trace; verified reproducible after the `LuaMan` script-callback fix below — two independent re-generations produced this same hash. The 10-run race-flake still fires at `--runs N`.) | 899 |
+| `MPerfBench` | `c2cff6f2758bbddeac90a2f6af8d0162069ed9c86c09992e46046066cdfa0b1c` (out-of-scope per scenario header; trace hash also stabilised by the script-callback fix) | 1199 |
 
 Trace generation total wall: **190 s** (single run per scenario, all in
 serial).
@@ -212,21 +212,30 @@ pressure.
 
 ### Thread-count matrix (`--threads 1,2,4,8,16 --runs 2`)
 
+Two independent matrix runs at the post-fix branch tip:
+
 ```
-RESULT: DIVERGED
-    first_divergence_tick: 333  (same as repeat-runs)
-    diverged runs (vs reference run = threads=1 run 0):
+Matrix run A — RESULT: DIVERGED, first_divergence_tick: 333
+    diverged runs (vs reference threads=1 run 0):
         threads=4  run 0 — diverged
         threads=8  run 1 — diverged
         threads=16 run 1 — diverged
-    threads=1, threads=2 — both runs MATCHED
+
+Matrix run B — RESULT: DIVERGED, first_divergence_tick: 333
+    diverged runs (vs reference threads=1 run 0):
+        threads=2  run 1 — diverged
+        threads=16 run 1 — diverged
 ```
 
-Clean at thread counts **1** and **2**; race fires intermittently at thread
-counts **4, 8, 16**. The race needs at least 4 parallel workers in the
-threaded-AI pass to manifest — i.e. it is genuinely a threading race in the
-`ThreadedUpdateAI` / `ThreadedUpdate` parallelize_loop, not a hidden
-non-determinism every host would hit serially.
+Same cascade (controller@333 → actors/particles@336 → carve_math@337 →
+decisions@350 → scene/sim_rng/terrain@358) in both. `threads=1` was clean
+in both matrix runs — the race needs at least 2 parallel workers in the
+threaded-AI pass to fire. The threads=2/4/8/16 outcome is probabilistic:
+in run A, threads=2 happened to MATCH and threads=4 diverged; in run B,
+threads=2 diverged and threads=4 MATCHED. So the bug is "fires at any
+thread count >= 2, intermittently" rather than a clean "needs >= 4
+workers" threshold — earlier characterisation was over-fit to one
+matrix sample.
 
 ### What did *not* fire
 
@@ -357,9 +366,10 @@ Blocks A-E infrastructure is **present** in the foundation:
    thread count.
 3. **Cross-actor pointer comparison in AI Lua/C++** that sorts or branches
    on memory addresses instead of `m_UniqueID`. ASLR re-randomises
-   addresses per run; M4's high actor count makes ties common. Would also
-   explain the threads ≥ 4 dependency (more actors per Lua state at
-   higher counts increases the cross-actor read surface). Specifically
+   addresses per run; M4's high actor count makes ties common. Would
+   also be consistent with the threads ≥ 2 dependency (more actors per
+   Lua state at higher counts increases the cross-actor read surface).
+   Specifically
    I would re-audit `MovableMan::GetClosestEnemyActor` and any AI use
    of `std::set<MovableObject*>` / `std::unordered_set<MovableObject*>`
    that iterates without a MOID sort wrapper (the audit doc found one
@@ -453,7 +463,7 @@ despite the scenario's out-of-scope status, for completeness).
 
 ## Known issues / follow-ups (not closed by this bring-up)
 
-* **`M4ThreadStress` same-thread-count race at threads ≥ 4** — characterised
+* **`M4ThreadStress` same-thread-count race at threads ≥ 2** — characterised
   above. One contributing race (the `m_ScriptCallbacks` queue order from
   async pathing workers) was identified and fixed in this branch as a
   defensive correctness improvement (see commit
@@ -488,7 +498,7 @@ despite the scenario's out-of-scope status, for completeness).
 
 Linux x86-64 is **green on 9 of 10 determinism-scoped scenarios** at
 `--runs 10`. `M4ThreadStress` exposes a same-thread-count race
-(threads ≥ 4, first-diverges in `controller` at tick 333) that the prior
+(threads ≥ 2, first-diverges in `controller` at tick 333) that the prior
 Linux bring-up did not catch — the reinforcement-wave rewrite of the
 scenario is new since that bring-up, and the matrix-only mode the prior
 work used would not have surfaced it. The pre-existing M4 cross-thread-count
