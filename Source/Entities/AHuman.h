@@ -11,6 +11,8 @@
 #include "LimbPath.h"
 
 #include <array>
+#include <functional>
+#include <vector>
 
 struct BITMAP;
 
@@ -586,6 +588,14 @@ namespace RTE {
 		// FirearmIsReady() / GetEquippedItem() snapshotted before the parallel AI phase; foreign AI reads use these.
 		bool m_FrozenFirearmReady;
 		HeldDevice* m_FrozenEquippedItem;
+
+		std::vector<std::function<void()>> m_PendingDeferredMutations; //!< Equip ops queued from parallel AI; drained serially by MovableMan.
+
+	public:
+		/// Drained in MOID order by MovableMan after the parallel ThreadedUpdateAI; mods don't call this.
+		void DrainPendingDeferredMutations();
+
+	protected:
 		// Foreground leg.
 		Leg* m_pFGLeg;
 		// Background leg.
