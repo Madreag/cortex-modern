@@ -639,7 +639,7 @@ void PieMenu::Update() {
 void PieMenu::RenderUpdate() {
 	if (m_Owner) {
 		SetPos(m_Owner->GetRenderCPUPos());
-	} else if (m_AffectedObject) {
+	} else if (m_AffectedObject && g_MovableMan.ValidMO(m_AffectedObject)) {
 		const Actor* affectedObjectAsActor = dynamic_cast<Actor*>(m_AffectedObject);
 		SetPos(affectedObjectAsActor ? affectedObjectAsActor->GetRenderCPUPos() : m_AffectedObject->GetRenderPos());
 	}
