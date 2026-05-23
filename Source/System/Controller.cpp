@@ -173,6 +173,37 @@ void Controller::Update() {
 	}
 }
 
+void Controller::RenderUpdate() {
+	if (IsDisabled() || m_InputMode != InputMode::CIM_PLAYER) {
+		return;
+	}
+	if (m_ControlledActor && (m_ControlledActor->GetHealth() == 0.0f || m_ControlledActor->GetStatus() == Actor::DYING || m_ControlledActor->GetStatus() == Actor::DEAD)) {
+		return;
+	}
+
+	// Pull the latest analog values each frame so the visual cursor stays smooth;
+	// ControlStates are owned by the sim tick and intentionally left alone here.
+	Vector move = g_UInputMan.AnalogMoveValues(m_Player);
+	Vector aim = g_UInputMan.AnalogAimValues(m_Player);
+
+	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
+		m_AnalogMove = move;
+	}
+
+	if (!m_ControlStates[ControlState::PIE_MENU_ACTIVE] || m_ControlStates[ControlState::PIE_MENU_ACTIVE_DIGITAL]) {
+		m_AnalogAim = aim;
+	} else {
+		m_AnalogCursor = aim;
+		if (m_AnalogCursorAngleLimits.second) {
+			m_AnalogCursor.SetAbsRadAngle(ClampAngle(m_AnalogCursor.GetAbsRadAngle(), m_AnalogCursorAngleLimits.first.first, m_AnalogCursorAngleLimits.first.second));
+		}
+	}
+
+	if (IsMouseControlled()) {
+		m_MouseMovement = g_UInputMan.GetMouseMovement(m_Player);
+	}
+}
+
 void Controller::ResetCommandState() {
 	// Reset all command states.
 	m_ControlStates.fill(false);
@@ -227,34 +258,34 @@ void Controller::UpdatePlayerInput(std::array<bool, ControlState::CONTROLSTATECO
 
 	// Only actually switch when the change button(s) are released
 	// BRAIN ACTOR
-	if ((g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_NEXT) && g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_PREV)) ||
-	    (g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_NEXT) && g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PREV))) {
+	if ((g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_NEXT) && g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_PREV)) ||
+	    (g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_NEXT) && g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PREV))) {
 		m_ControlStates[ControlState::ACTOR_BRAIN] = true;
 		// Ignore the next releases of next and previous buttons so that the brain isn't switched away form immediate after using the brain shortcut
 		m_NextIgnore = m_PrevIgnore = true;
 		// NEXT ACTOR
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_NEXT)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_NEXT)) {
 		if (!m_NextIgnore) {
 			m_ControlStates[ControlState::ACTOR_NEXT] = true;
 		}
 		m_NextIgnore = false;
 		// PREV ACTOR
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_PREV)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_PREV)) {
 		if (!m_PrevIgnore) {
 			m_ControlStates[ControlState::ACTOR_PREV] = true;
 		}
 		m_PrevIgnore = false;
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_WEAPON_CHANGE_NEXT)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_WEAPON_CHANGE_NEXT)) {
 		m_WeaponChangeNextIgnore = false;
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_WEAPON_CHANGE_PREV)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_WEAPON_CHANGE_PREV)) {
 		m_WeaponChangePrevIgnore = false;
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_WEAPON_PICKUP)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_WEAPON_PICKUP)) {
 		m_WeaponPickupIgnore = false;
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_WEAPON_DROP)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_WEAPON_DROP)) {
 		m_WeaponDropIgnore = false;
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_WEAPON_RELOAD)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_WEAPON_RELOAD)) {
 		m_WeaponReloadIgnore = false;
-	} else if (g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_WEAPON_PRIMARY_HOTKEY)) {
+	} else if (g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_WEAPON_PRIMARY_HOTKEY)) {
 		m_WeaponPrimaryHotkeyIgnore = false;
 	}
 
@@ -262,17 +293,17 @@ void Controller::UpdatePlayerInput(std::array<bool, ControlState::CONTROLSTATECO
 	m_ControlStates[ControlState::HOLD_LEFT] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_L_LEFT) || g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_AIM_LEFT);
 	m_ControlStates[ControlState::HOLD_UP] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_L_UP) || g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_AIM_UP);
 	m_ControlStates[ControlState::HOLD_DOWN] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_L_DOWN) || g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_AIM_DOWN);
-	m_ControlStates[ControlState::PRESS_RIGHT] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_L_RIGHT) || g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_AIM_RIGHT);
-	m_ControlStates[ControlState::PRESS_LEFT] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_L_LEFT) || g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_AIM_LEFT);
-	m_ControlStates[ControlState::PRESS_UP] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_L_UP) || g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_AIM_UP);
-	m_ControlStates[ControlState::PRESS_DOWN] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_L_DOWN) || g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_AIM_DOWN);
+	m_ControlStates[ControlState::PRESS_RIGHT] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_L_RIGHT) || g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_AIM_RIGHT);
+	m_ControlStates[ControlState::PRESS_LEFT] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_L_LEFT) || g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_AIM_LEFT);
+	m_ControlStates[ControlState::PRESS_UP] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_L_UP) || g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_AIM_UP);
+	m_ControlStates[ControlState::PRESS_DOWN] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_L_DOWN) || g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_AIM_DOWN);
 
 	m_ControlStates[ControlState::PRIMARY_ACTION] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_FIRE);
 	m_ControlStates[ControlState::SECONDARY_ACTION] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
-	m_ControlStates[ControlState::PRESS_PRIMARY] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_FIRE);
-	m_ControlStates[ControlState::PRESS_SECONDARY] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
-	m_ControlStates[ControlState::RELEASE_PRIMARY] = g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_FIRE);
-	m_ControlStates[ControlState::RELEASE_SECONDARY] = g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
+	m_ControlStates[ControlState::PRESS_PRIMARY] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_FIRE);
+	m_ControlStates[ControlState::PRESS_SECONDARY] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
+	m_ControlStates[ControlState::RELEASE_PRIMARY] = g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_FIRE);
+	m_ControlStates[ControlState::RELEASE_SECONDARY] = g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
 
 	UpdatePlayerAnalogInput();
 }
@@ -289,7 +320,7 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 	} else if (m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
 		m_ControlStates[ControlState::WEAPON_FIRE] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_FIRE);
 		m_ControlStates[ControlState::AIM_SHARP] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_AIM);
-		m_ControlStates[ControlState::BODY_JUMPSTART] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_JUMP);
+		m_ControlStates[ControlState::BODY_JUMPSTART] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_JUMP);
 		m_ControlStates[ControlState::BODY_JUMP] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_JUMP);
 		m_ControlStates[ControlState::BODY_CROUCH] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_CROUCH);
 		m_ControlStates[ControlState::BODY_PRONE] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PRONE);
@@ -304,7 +335,7 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 		}
 
 		// RUNNING
-		if (g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_MOVE_FAST_TOGGLE) || lastControlStates[ControlState::MOVE_FAST_TOGGLE]) {
+		if (g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_MOVE_FAST_TOGGLE) || lastControlStates[ControlState::MOVE_FAST_TOGGLE]) {
 			// If our toggle is on, keep it on until we stop moving
 			m_ControlStates[ControlState::MOVE_FAST_TOGGLE] = m_ControlStates[ControlState::MOVE_LEFT] || m_ControlStates[ControlState::MOVE_RIGHT];
 			m_ControlStates[ControlState::MOVE_FAST] = m_ControlStates[ControlState::MOVE_FAST_TOGGLE];
@@ -333,26 +364,26 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 			m_ControlStates[ControlState::AIM_DOWN] = true;
 		}
 
-		m_ControlStates[ControlState::PRESS_FACEBUTTON] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_FIRE) || g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_AIM);
-		m_ControlStates[ControlState::RELEASE_FACEBUTTON] = g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_FIRE) || g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_AIM);
+		m_ControlStates[ControlState::PRESS_FACEBUTTON] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_FIRE) || g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_AIM);
+		m_ControlStates[ControlState::RELEASE_FACEBUTTON] = g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_FIRE) || g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_AIM);
 
-		if (!m_WeaponChangeNextIgnore && g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_CHANGE_NEXT)) {
+		if (!m_WeaponChangeNextIgnore && g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_CHANGE_NEXT)) {
 			m_ControlStates[ControlState::WEAPON_CHANGE_NEXT] = true;
 			m_WeaponChangeNextIgnore = true;
 		}
-		if (!m_WeaponChangePrevIgnore && g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_CHANGE_PREV)) {
+		if (!m_WeaponChangePrevIgnore && g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_CHANGE_PREV)) {
 			m_ControlStates[ControlState::WEAPON_CHANGE_PREV] = true;
 			m_WeaponChangePrevIgnore = true;
 		}
-		if (!m_WeaponPickupIgnore && g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_PICKUP)) {
+		if (!m_WeaponPickupIgnore && g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_PICKUP)) {
 			m_ControlStates[ControlState::WEAPON_PICKUP] = true;
 			m_WeaponPickupIgnore = true;
 		}
-		if (!m_WeaponDropIgnore && g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_DROP)) {
+		if (!m_WeaponDropIgnore && g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_DROP)) {
 			m_ControlStates[ControlState::WEAPON_DROP] = true;
 			m_WeaponDropIgnore = true;
 		}
-		if (!m_WeaponReloadIgnore && g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_RELOAD)) {
+		if (!m_WeaponReloadIgnore && g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_RELOAD)) {
 			m_ControlStates[ControlState::WEAPON_RELOAD] = true;
 			m_WeaponReloadIgnore = true;
 		}
@@ -360,10 +391,10 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 		// RELOAD and RELOADHELD instead of RELOADSTART and RELOAD for mod lua compatibility reasons.
 		m_ControlStates[ControlState::WEAPON_RELOADHELD] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_WEAPON_RELOAD);
 
-		m_ControlStates[ControlState::WEAPON_PRIMARY_HOTKEYSTART] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_PRIMARY_HOTKEY);
-		m_ControlStates[ControlState::WEAPON_AUXILIARY_HOTKEYSTART] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_WEAPON_AUXILIARY_HOTKEY);
-		m_ControlStates[ControlState::ACTOR_PRIMARY_HOTKEYSTART] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_ACTOR_PRIMARY_HOTKEY);
-		m_ControlStates[ControlState::ACTOR_AUXILIARY_HOTKEYSTART] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_ACTOR_AUXILIARY_HOTKEY);
+		m_ControlStates[ControlState::WEAPON_PRIMARY_HOTKEYSTART] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_PRIMARY_HOTKEY);
+		m_ControlStates[ControlState::WEAPON_AUXILIARY_HOTKEYSTART] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_WEAPON_AUXILIARY_HOTKEY);
+		m_ControlStates[ControlState::ACTOR_PRIMARY_HOTKEYSTART] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_ACTOR_PRIMARY_HOTKEY);
+		m_ControlStates[ControlState::ACTOR_AUXILIARY_HOTKEYSTART] = g_UInputMan.ElementPressedSim(m_Player, InputElements::INPUT_ACTOR_AUXILIARY_HOTKEY);
 		
 		m_ControlStates[ControlState::WEAPON_PRIMARY_HOTKEY] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_WEAPON_PRIMARY_HOTKEY);
 		m_ControlStates[ControlState::WEAPON_AUXILIARY_HOTKEY] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_WEAPON_AUXILIARY_HOTKEY);
@@ -372,8 +403,8 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 	}
 
 	// PIE MENU ACTIVE
-	const bool activeAnalog = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PIEMENU_ANALOG) || g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_PIEMENU_ANALOG);
-	const bool activeDigital = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PIEMENU_DIGITAL) || g_UInputMan.ElementReleased(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
+	const bool activeAnalog = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PIEMENU_ANALOG) || g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_PIEMENU_ANALOG);
+	const bool activeDigital = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_PIEMENU_DIGITAL) || g_UInputMan.ElementReleasedSim(m_Player, InputElements::INPUT_PIEMENU_DIGITAL);
 	if (activeAnalog || activeDigital) {
 		if (m_ControlledActor && m_ControlledActor->GetPieMenu()->IsInNormalAnimationMode() && !m_ControlledActor->GetPieMenu()->IsVisible()) {
 			m_ControlStates[ControlState::PIE_MENU_OPENED] = true;
@@ -457,9 +488,9 @@ void Controller::UpdatePlayerAnalogInput() {
 
 		m_ControlStates[ControlState::PRIMARY_ACTION] = g_UInputMan.MouseButtonHeld(MouseButtons::MOUSE_LEFT, m_Player);
 		m_ControlStates[ControlState::SECONDARY_ACTION] = g_UInputMan.MouseButtonHeld(activeSecondary, m_Player);
-		m_ControlStates[ControlState::PRESS_PRIMARY] = g_UInputMan.MouseButtonPressed(MouseButtons::MOUSE_LEFT, m_Player);
-		m_ControlStates[ControlState::PRESS_SECONDARY] = g_UInputMan.MouseButtonPressed(activeSecondary, m_Player);
-		m_ControlStates[ControlState::RELEASE_PRIMARY] = g_UInputMan.MouseButtonReleased(MouseButtons::MOUSE_LEFT, m_Player);
-		m_ControlStates[ControlState::RELEASE_SECONDARY] = g_UInputMan.MouseButtonReleased(activeSecondary, m_Player);
+		m_ControlStates[ControlState::PRESS_PRIMARY] = g_UInputMan.MouseButtonPressedSim(MouseButtons::MOUSE_LEFT, m_Player);
+		m_ControlStates[ControlState::PRESS_SECONDARY] = g_UInputMan.MouseButtonPressedSim(activeSecondary, m_Player);
+		m_ControlStates[ControlState::RELEASE_PRIMARY] = g_UInputMan.MouseButtonReleasedSim(MouseButtons::MOUSE_LEFT, m_Player);
+		m_ControlStates[ControlState::RELEASE_SECONDARY] = g_UInputMan.MouseButtonReleasedSim(activeSecondary, m_Player);
 	}
 }

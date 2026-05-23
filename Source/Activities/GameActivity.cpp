@@ -1048,10 +1048,6 @@ void GameActivity::UpdateEditing() {
 
 void GameActivity::Update() {
 	Activity::Update();
-}
-
-void GameActivity::RenderUpdate() {
-	Activity::RenderUpdate();
 
 	// Avoid game logic when we're editing
 	if (m_ActivityState == ActivityState::Editing) {
@@ -1837,6 +1833,10 @@ void GameActivity::RenderUpdate() {
 	        g_CameraMan.SetScrollTarget(m_ObservationTarget[Players::PlayerFour], 0.1, g_SceneMan.ForceBounds(m_ObservationTarget[Players::PlayerFour]), ScreenOfPlayer(Players::PlayerFour));
 	    }
 	*/
+}
+
+void GameActivity::RenderUpdate() {
+	Activity::RenderUpdate();
 }
 
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {

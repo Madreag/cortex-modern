@@ -869,17 +869,21 @@ void Activity::SwitchToPrevOrNextActor(bool nextActor, int player, int team, con
 }
 
 void Activity::Update() {
-
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_MessageTimer[player].IsPastSimMS(5000)) {
+			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
+		}
+		if (m_IsActive[player]) {
+			m_PlayerController[player].Update();
+		}
+	}
 }
 
 void Activity::RenderUpdate() {
+	// Keep player controllers' analog cursor tracking latest mouse/stick each render frame
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_MessageTimer[player].LeftTillSimMS(5000)) {
-			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-		}
-
 		if (m_IsActive[player]) {
-			m_PlayerController[player].Update();
+			m_PlayerController[player].RenderUpdate();
 		}
 	}
 }
