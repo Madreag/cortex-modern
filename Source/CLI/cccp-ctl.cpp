@@ -420,7 +420,7 @@ namespace {
 		    "  test thread-matrix             Run scenario across Lua-state counts (M4 acid test)\n"
 		    "  test cross-platform-checksum   Diff trace JSONs from multiple platforms\n"
 		    "  test mp-sync-drift             Spawn N engine processes in parallel, diff traces\n"
-		    "  test latency-injection         [needs M6 — engine network layer not yet shipped]\n"
+		    "  test latency-injection         Deterministic network simulator + parallel-engine diff\n"
 		    "  test snapshot-restore          [needs M8 — engine snapshot/restore not yet shipped]\n"
 		    "  test rollback-burst            [needs M8 — engine rollback not yet shipped]\n"
 		    "\n"
@@ -702,6 +702,51 @@ namespace {
 		    "Exit codes:\n"
 		    "  0   MATCH (or, with --inject-divergence-role, divergence correctly detected)\n"
 		    "  1   DIVERGED (or, with --inject-divergence-role, divergence NOT detected)\n"
+		    "  2   engine spawn failure / usage error\n";
+	}
+
+	void PrintTestLatencyInjectionHelp(std::ostream& out) {
+		out <<
+		    "cccp-ctl test latency-injection — deterministic network condition simulator\n"
+		    "\n"
+		    "Layers a tick-based network simulator over the Block A mp-sync-drift harness.\n"
+		    "Generates a reproducible packet trace (per send tick: delivered? arrival tick?)\n"
+		    "given (network-seed, packet-loss, latency, jitter, reorder). The trace is\n"
+		    "saved as part of the report for M7's eventual lockstep / reconciliation logic\n"
+		    "to consume. Today the engine has no network layer, so the sim itself always\n"
+		    "matches across the two processes regardless of simulated conditions; the\n"
+		    "value of this subcommand at M5.5 is verifying simulator determinism + saving\n"
+		    "the reference packet traces M7 will replay against.\n"
+		    "\n"
+		    "Usage:\n"
+		    "  cccp-ctl test latency-injection [options]\n"
+		    "\n"
+		    "Options:\n"
+		    "  --scenario <name>           Scenario preset-suffix. Default M1Baseline.\n"
+		    "  --ticks <N>                 Sim-tick cap per process. Default 600.\n"
+		    "  --seed <N>                  Sim RNG seed. Default 42.\n"
+		    "  --network-seed <N>          Network simulator RNG seed (separate from sim).\n"
+		    "                              Default 1337. Decision #6 (separate seed).\n"
+		    "  --runs <N>                  Repeat the test N times. Default 1.\n"
+		    "  --processes <N>             How many engine processes. Default 2.\n"
+		    "  --packet-loss <pct>         %% chance each send packet is dropped. Default 0.\n"
+		    "  --latency-ms <ms>           Base one-way delay in ms. Default 0.\n"
+		    "  --jitter-ms <ms>            +/- jitter in ms (uniform). Default 0.\n"
+		    "  --reorder-pct <pct>         %% chance of adjacent-packet swap. Default 0.\n"
+		    "  --num-lua-states <N>        Pin Lua-state count per engine. Default 4.\n"
+		    "  --tick-rate <hz>            Sim tick rate for ms->tick conversion. Default 60.\n"
+		    "  --parallel                  Spawn engines concurrently (CI / headless only).\n"
+		    "  --keep-traces               Keep per-process engine trace JSONs.\n"
+		    "  --output <path>             Where to write the aggregate report.\n"
+		    "  --out-dir <path>            Direct temp/output dir.\n"
+		    "  --game-bin <path>           Path to game binary. Default: auto-detect.\n"
+		    "  --json                      JSON output.\n"
+		    "  --quiet                     Suppress per-spawn echo on stderr.\n"
+		    "  -h, --help                  This help.\n"
+		    "\n"
+		    "Exit codes:\n"
+		    "  0   sim MATCH + packet trace reproducible across --runs\n"
+		    "  1   sim DIVERGED or packet trace inconsistent across --runs\n"
 		    "  2   engine spawn failure / usage error\n";
 	}
 
@@ -1691,6 +1736,365 @@ namespace {
 		return harnessOk ? 0 : 1;
 	}
 
+	// ----- subcommand: test latency-injection ---------------------------------
+	//
+	// Deterministic tick-based network simulator. xorshift64* RNG seeded separately
+	// from the sim seed so network conditions never leak into sim determinism.
+	// Output is a packet trace M7's eventual lockstep / reconciliation logic will
+	// consume; today no engine uses it.
+
+	struct NetworkConditions {
+		int packetLossPct = 0;
+		double latencyMs = 0.0;
+		double jitterMs = 0.0;
+		int reorderPct = 0;
+		double tickRateHz = 60.0;
+	};
+
+	struct PacketTraceEntry {
+		uint64_t sendTick = 0;
+		bool delivered = false;
+		uint64_t arriveTick = 0;
+		int latencyTicks = 0;
+	};
+
+	struct PacketTraceSummary {
+		uint64_t total = 0;
+		uint64_t delivered = 0;
+		uint64_t dropped = 0;
+		double meanArrivalDelayTicks = 0.0;
+		int maxArrivalDelayTicks = 0;
+		uint64_t reorderEvents = 0;
+	};
+
+	std::vector<PacketTraceEntry> SimulateNetworkPackets(
+	    uint64_t numTicks,
+	    const NetworkConditions& cond,
+	    uint64_t networkSeed,
+	    uint64_t& reorderEventsOut) {
+		reorderEventsOut = 0;
+		std::vector<PacketTraceEntry> packets;
+		if (numTicks == 0) return packets;
+		packets.reserve(numTicks);
+
+		uint64_t st = networkSeed ? networkSeed : 0x9E3779B97F4A7C15ull;
+		auto rng = [&st]() -> uint64_t {
+			st ^= st >> 12;
+			st ^= st << 25;
+			st ^= st >> 27;
+			return st * 0x2545F4914F6CDD1Dull;
+		};
+		auto rollPct = [&]() -> int { return static_cast<int>((rng() >> 32) % 100u); };
+
+		const double msPerTick = cond.tickRateHz > 0.0 ? (1000.0 / cond.tickRateHz) : (1000.0 / 60.0);
+		const int baseLatencyTicks = static_cast<int>(cond.latencyMs / msPerTick + 0.5);
+		const int maxJitterTicks = static_cast<int>(cond.jitterMs / msPerTick + 0.5);
+
+		for (uint64_t t = 0; t < numTicks; ++t) {
+			PacketTraceEntry e;
+			e.sendTick = t;
+			e.delivered = (rollPct() >= cond.packetLossPct);
+			if (e.delivered) {
+				int delay = baseLatencyTicks;
+				if (maxJitterTicks > 0) {
+					const int span = 2 * maxJitterTicks + 1;
+					const int j = static_cast<int>((rng() >> 32) % static_cast<uint64_t>(span)) - maxJitterTicks;
+					delay += j;
+				}
+				if (delay < 0) delay = 0;
+				e.latencyTicks = delay;
+				e.arriveTick = t + static_cast<uint64_t>(delay);
+			}
+			packets.push_back(e);
+		}
+
+		// Adjacent-swap reorder. Only swap when both packets delivered.
+		for (size_t i = 0; i + 1 < packets.size(); ++i) {
+			if (!packets[i].delivered || !packets[i + 1].delivered) continue;
+			if (rollPct() < cond.reorderPct) {
+				std::swap(packets[i].arriveTick, packets[i + 1].arriveTick);
+				std::swap(packets[i].latencyTicks, packets[i + 1].latencyTicks);
+				++reorderEventsOut;
+			}
+		}
+		return packets;
+	}
+
+	PacketTraceSummary SummarizePacketTrace(const std::vector<PacketTraceEntry>& packets, uint64_t reorderEvents) {
+		PacketTraceSummary s;
+		s.total = packets.size();
+		s.reorderEvents = reorderEvents;
+		uint64_t latencySum = 0;
+		for (const auto& p: packets) {
+			if (p.delivered) {
+				++s.delivered;
+				latencySum += static_cast<uint64_t>(p.latencyTicks);
+				if (p.latencyTicks > s.maxArrivalDelayTicks) s.maxArrivalDelayTicks = p.latencyTicks;
+			} else {
+				++s.dropped;
+			}
+		}
+		s.meanArrivalDelayTicks = s.delivered > 0 ? (static_cast<double>(latencySum) / static_cast<double>(s.delivered)) : 0.0;
+		return s;
+	}
+
+	// Stable fingerprint of a packet trace for cross-run equality check (avoids
+	// blowing up the report with the full trace when verifying determinism).
+	std::string FingerprintPacketTrace(const std::vector<PacketTraceEntry>& packets) {
+		uint64_t h = 1469598103934665603ull;
+		auto mix = [&](uint64_t v) {
+			h ^= v;
+			h *= 1099511628211ull;
+		};
+		for (const auto& p: packets) {
+			mix(p.sendTick);
+			mix(p.delivered ? 1ull : 0ull);
+			mix(p.arriveTick);
+			mix(static_cast<uint64_t>(p.latencyTicks));
+		}
+		std::ostringstream o;
+		o << std::hex << std::setw(16) << std::setfill('0') << h;
+		return o.str();
+	}
+
+	int CmdTestLatencyInjection(int argc, char** argv, const fs::path& selfDir) {
+		std::string scenario = "M1Baseline";
+		uint64_t seed = 42;
+		uint64_t networkSeed = 1337;
+		uint64_t ticks = 600;
+		int runs = 1;
+		int processes = 2;
+		int numLuaStates = 4;
+		NetworkConditions cond;
+		bool parallel = false;
+		bool keepTraces = false;
+		fs::path outPath;
+		fs::path gameBin;
+		OutputCtx out;
+
+		for (int i = 0; i < argc; ++i) {
+			const std::string a = argv[i];
+			const bool hasV = (i + 1) < argc;
+			if (a == "-h" || a == "--help") { PrintTestLatencyInjectionHelp(std::cout); return 0; }
+			if (ArgEq(a, "scenario") && hasV) { scenario = argv[++i]; continue; }
+			if (ArgEq(a, "seed") && hasV) { seed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "network-seed") && hasV) { networkSeed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "ticks") && hasV) { ticks = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "runs") && hasV) { runs = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "processes") && hasV) { processes = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "num-lua-states") && hasV) { numLuaStates = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "packet-loss") && hasV) { cond.packetLossPct = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "latency-ms") && hasV) { cond.latencyMs = std::strtod(argv[++i], nullptr); continue; }
+			if (ArgEq(a, "jitter-ms") && hasV) { cond.jitterMs = std::strtod(argv[++i], nullptr); continue; }
+			if (ArgEq(a, "reorder-pct") && hasV) { cond.reorderPct = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "tick-rate") && hasV) { cond.tickRateHz = std::strtod(argv[++i], nullptr); continue; }
+			if (ArgEq(a, "parallel")) { parallel = true; continue; }
+			if (ArgEq(a, "keep-traces")) { keepTraces = true; continue; }
+			if (ArgEq(a, "output") && hasV) { outPath = argv[++i]; continue; }
+			if (ArgEq(a, "game-bin") && hasV) { gameBin = argv[++i]; continue; }
+			if (ArgEq(a, "out-dir") && hasV) { out.outDir = argv[++i]; continue; }
+			if (ArgEq(a, "json")) { out.json = true; continue; }
+			if (ArgEq(a, "quiet")) { out.quiet = true; continue; }
+			std::cerr << "[cccp-ctl] unknown option: " << a << "\n";
+			PrintTestLatencyInjectionHelp(std::cerr);
+			return 2;
+		}
+		if (processes < 2) { std::cerr << "[cccp-ctl] --processes must be >= 2.\n"; return 2; }
+		if (runs < 1) runs = 1;
+		if (cond.packetLossPct < 0 || cond.packetLossPct > 100) {
+			std::cerr << "[cccp-ctl] --packet-loss must be in [0, 100].\n"; return 2;
+		}
+		if (cond.reorderPct < 0 || cond.reorderPct > 100) {
+			std::cerr << "[cccp-ctl] --reorder-pct must be in [0, 100].\n"; return 2;
+		}
+		if (cond.latencyMs < 0.0 || cond.jitterMs < 0.0) {
+			std::cerr << "[cccp-ctl] --latency-ms / --jitter-ms must be >= 0.\n"; return 2;
+		}
+		if (cond.tickRateHz <= 0.0) {
+			std::cerr << "[cccp-ctl] --tick-rate must be > 0.\n"; return 2;
+		}
+		if (gameBin.empty()) gameBin = AutoDetectGameBin(selfDir);
+		if (gameBin.empty() || !fs::exists(gameBin)) {
+			std::cerr << "[cccp-ctl] could not locate game binary; pass --game-bin <path>.\n";
+			return 2;
+		}
+
+		const std::vector<std::string> roles = BuildRoleLabels(processes);
+		const fs::path runDir = PickOutDir(out, "cccp-ctl-latency-injection");
+		if (outPath.empty()) outPath = runDir / "report.json";
+
+		json runReports = json::array();
+		bool anyDiverged = false;
+		int totalEngineFailures = 0;
+		std::vector<std::string> traceFingerprints;
+		traceFingerprints.reserve(runs);
+
+		for (int r = 0; r < runs; ++r) {
+			const fs::path thisRunDir = runDir / ("run-" + std::to_string(r));
+			std::error_code ec;
+			fs::create_directories(thisRunDir, ec);
+
+			// Network sim runs first so its determinism property is verified
+			// regardless of engine behavior. Same (cond, networkSeed) => same trace.
+			uint64_t reorderEvents = 0;
+			const std::vector<PacketTraceEntry> packets = SimulateNetworkPackets(ticks, cond, networkSeed, reorderEvents);
+			const std::string fingerprint = FingerprintPacketTrace(packets);
+			traceFingerprints.push_back(fingerprint);
+			const PacketTraceSummary pktSummary = SummarizePacketTrace(packets, reorderEvents);
+
+			const fs::path pktTracePath = thisRunDir / "packet-trace.json";
+			{
+				json pktJson = {
+				    {"network_seed", networkSeed},
+				    {"packet_loss_pct", cond.packetLossPct},
+				    {"latency_ms", cond.latencyMs},
+				    {"jitter_ms", cond.jitterMs},
+				    {"reorder_pct", cond.reorderPct},
+				    {"tick_rate_hz", cond.tickRateHz},
+				    {"total_packets", pktSummary.total},
+				    {"delivered", pktSummary.delivered},
+				    {"dropped", pktSummary.dropped},
+				    {"mean_arrival_delay_ticks", pktSummary.meanArrivalDelayTicks},
+				    {"max_arrival_delay_ticks", pktSummary.maxArrivalDelayTicks},
+				    {"reorder_events", pktSummary.reorderEvents},
+				    {"fingerprint", fingerprint},
+				    {"packets", json::array()},
+				};
+				for (const auto& p: packets) {
+					pktJson["packets"].push_back({
+					    {"send_tick", p.sendTick},
+					    {"delivered", p.delivered},
+					    {"arrive_tick", p.arriveTick},
+					    {"latency_ticks", p.latencyTicks},
+					});
+				}
+				std::ofstream pf(pktTracePath);
+				if (pf.is_open()) pf << pktJson.dump(2) << "\n";
+			}
+
+			int engineFailures = 0;
+			const std::vector<EngineRunResult> results = RunEngines(
+			    gameBin, scenario, seed, ticks, numLuaStates,
+			    roles, {}, thisRunDir, out.quiet, parallel, engineFailures);
+			totalEngineFailures += engineFailures;
+
+			bool diverged = false;
+			uint64_t firstDiv = 0;
+			uint64_t comparedTicks = 0;
+			json perSubsystem = json::object();
+			std::map<std::string, std::string> perRolePairResult;
+			if (engineFailures == 0) {
+				DiffEngineTraces(results, diverged, firstDiv, comparedTicks, perSubsystem, perRolePairResult);
+			}
+			if (diverged) anyDiverged = true;
+
+			json runReport = {
+			    {"run_index", r},
+			    {"packet_trace_path", pktTracePath.string()},
+			    {"packet_trace_summary", {
+			        {"total_packets", pktSummary.total},
+			        {"delivered", pktSummary.delivered},
+			        {"dropped", pktSummary.dropped},
+			        {"mean_arrival_delay_ticks", pktSummary.meanArrivalDelayTicks},
+			        {"max_arrival_delay_ticks", pktSummary.maxArrivalDelayTicks},
+			        {"reorder_events", pktSummary.reorderEvents},
+			        {"fingerprint", fingerprint},
+			    }},
+			    {"engine_results", json::array()},
+			    {"diverged", diverged},
+			    {"first_divergence_tick", firstDiv},
+			    {"compared_ticks", comparedTicks},
+			    {"per_subsystem_first_divergence", perSubsystem},
+			    {"per_role_pair_result", perRolePairResult},
+			    {"engine_failures", engineFailures},
+			};
+			for (const auto& er: results) {
+				runReport["engine_results"].push_back({
+				    {"role", er.role},
+				    {"rc", er.rc},
+				    {"passed", er.passed},
+				    {"final_hash", er.finalHash},
+				    {"out_path", er.outPath.string()},
+				    {"trace_present", er.tracesProduced},
+				});
+			}
+			runReports.push_back(runReport);
+
+			if (!keepTraces && engineFailures == 0) {
+				// Drop engine traces; keep packet-trace.json so the run artifact stays.
+				for (const auto& er: results) {
+					std::error_code ec2;
+					fs::remove(er.outPath, ec2);
+				}
+			}
+		}
+
+		// Cross-run determinism check: all fingerprints must match.
+		bool fingerprintConsistent = true;
+		if (traceFingerprints.size() >= 2) {
+			for (size_t i = 1; i < traceFingerprints.size(); ++i) {
+				if (traceFingerprints[i] != traceFingerprints[0]) {
+					fingerprintConsistent = false;
+					break;
+				}
+			}
+		}
+
+		const bool harnessOk = (totalEngineFailures == 0) && !anyDiverged && fingerprintConsistent;
+
+		json summary = {
+		    {"scenario", scenario},
+		    {"ticks", ticks},
+		    {"seed", seed},
+		    {"network_seed", networkSeed},
+		    {"processes", processes},
+		    {"roles", roles},
+		    {"runs", runs},
+		    {"num_lua_states", numLuaStates},
+		    {"parallel", parallel},
+		    {"network_conditions", {
+		        {"packet_loss_pct", cond.packetLossPct},
+		        {"latency_ms", cond.latencyMs},
+		        {"jitter_ms", cond.jitterMs},
+		        {"reorder_pct", cond.reorderPct},
+		        {"tick_rate_hz", cond.tickRateHz},
+		    }},
+		    {"diverged", anyDiverged},
+		    {"engine_failures_total", totalEngineFailures},
+		    {"packet_trace_fingerprints", traceFingerprints},
+		    {"packet_trace_consistent_across_runs", fingerprintConsistent},
+		    {"harness_ok", harnessOk},
+		    {"runs_detail", runReports},
+		    {"report_path", outPath.string()},
+		    {"out_dir", runDir.string()},
+		};
+
+		std::ofstream o(outPath);
+		if (o.is_open()) o << summary.dump(2) << "\n";
+
+		std::ostringstream text;
+		text << "Scenario:                " << scenario << "\n";
+		text << "Processes:               " << processes << "\n";
+		text << "Runs:                    " << runs << "\n";
+		text << "Sim seed:                " << seed << "\n";
+		text << "Network seed:            " << networkSeed << "\n";
+		text << "Conditions:              packet-loss=" << cond.packetLossPct
+		     << "% latency=" << cond.latencyMs << "ms jitter=" << cond.jitterMs
+		     << "ms reorder=" << cond.reorderPct << "% tick-rate=" << cond.tickRateHz << "Hz\n";
+		text << "Sim result:              ";
+		if (totalEngineFailures > 0) text << "ENGINE FAILURE\n";
+		else text << (anyDiverged ? "DIVERGED" : "MATCH") << "\n";
+		text << "Packet trace:            " << (fingerprintConsistent ? "deterministic across runs" : "INCONSISTENT — simulator broken") << "\n";
+		text << "Packet fingerprint:      " << (traceFingerprints.empty() ? std::string("(no runs)") : traceFingerprints[0]) << "\n";
+		text << "Harness:                 " << (harnessOk ? "OK" : "FAILED") << "\n";
+		text << "Report:                  " << outPath.string() << "\n";
+
+		PrintTextOrJson(out, summary, text.str());
+
+		if (totalEngineFailures > 0) return 2;
+		return harnessOk ? 0 : 1;
+	}
+
 	// ----- subcommand: bench replay -------------------------------------------
 
 	int CmdBenchReplay(int argc, char** argv, const fs::path& selfDir) {
@@ -2328,7 +2732,7 @@ namespace {
 		if (sub == "thread-matrix") return CmdTestThreadMatrix(subArgc, subArgv, selfDir);
 		if (sub == "cross-platform-checksum") return CmdTestCrossPlatformChecksum(subArgc, subArgv, selfDir);
 		if (sub == "mp-sync-drift" || sub == "sync-drift") return CmdTestMpSyncDrift(subArgc, subArgv, selfDir);
-		if (sub == "latency-injection") return CmdStub("latency-injection", "M6 (networking)");
+		if (sub == "latency-injection") return CmdTestLatencyInjection(subArgc, subArgv, selfDir);
 		if (sub == "snapshot-restore") return CmdStub("snapshot-restore", "M8 (rollback)");
 		if (sub == "rollback-burst") return CmdStub("rollback-burst", "M8 (rollback)");
 		if (sub == "-h" || sub == "--help") { PrintTopHelp(std::cout); return 0; }
