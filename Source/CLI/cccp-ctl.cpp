@@ -421,7 +421,7 @@ namespace {
 		    "  test cross-platform-checksum   Diff trace JSONs from multiple platforms\n"
 		    "  test mp-sync-drift             Spawn N engine processes in parallel, diff traces\n"
 		    "  test latency-injection         Deterministic network simulator + parallel-engine diff\n"
-		    "  test snapshot-restore          [needs M8 — engine snapshot/restore not yet shipped]\n"
+		    "  test snapshot-restore          Sim snapshot/restore tester (phase 1 baseline; phases 2-3 pending M8)\n"
 		    "  test rollback-burst            [needs M8 — engine rollback not yet shipped]\n"
 		    "\n"
 		    "Bench commands (performance):\n"
@@ -747,6 +747,46 @@ namespace {
 		    "Exit codes:\n"
 		    "  0   sim MATCH + packet trace reproducible across --runs\n"
 		    "  1   sim DIVERGED or packet trace inconsistent across --runs\n"
+		    "  2   engine spawn failure / usage error\n";
+	}
+
+	void PrintTestSnapshotRestoreHelp(std::ostream& out) {
+		out <<
+		    "cccp-ctl test snapshot-restore — sim-state snapshot/restore tester\n"
+		    "\n"
+		    "Forward-looking M8 rollback infrastructure. Verifies that the engine's\n"
+		    "snapshot/restore round-trips bit-identically: traceA (no snapshot) ==\n"
+		    "traceB (snapshot at tick S, continue) == traceC (snapshot at tick S,\n"
+		    "mutate, restore, continue). M5.5 ships the tester scaffolding; phase 1\n"
+		    "(baseline) runs today, phases 2-3 gracefully report 'engine snapshot\n"
+		    "API pending M8' until M8 lands. When M8 lands the same subcommand\n"
+		    "exercises the full round-trip with no flag changes.\n"
+		    "\n"
+		    "Usage:\n"
+		    "  cccp-ctl test snapshot-restore [--scenario <name>] [options]\n"
+		    "\n"
+		    "Options:\n"
+		    "  --scenario <name>           Scenario preset-suffix. Default M1Baseline.\n"
+		    "  --ticks <N>                 Total sim-tick cap. Default 300.\n"
+		    "  --snapshot-at <tick>        Tick at which to snapshot (phase 2/3). Default 100.\n"
+		    "  --resume-at <tick>          Tick at which to resume from snapshot. Default = snapshot-at.\n"
+		    "  --seed <N>                  RNG seed. Default 42.\n"
+		    "  --runs <N>                  Repeat the test N times. Default 1.\n"
+		    "  --num-lua-states <N>        Pin Lua-state count. Default 4.\n"
+		    "  --keep-traces               Keep per-phase trace JSONs.\n"
+		    "  --strict                    Exit 1 (not 0) if engine snapshot API is missing.\n"
+		    "                              Default: exit 0 with 'pending M8' message — Block C\n"
+		    "                              is CI-friendly until M8 lands.\n"
+		    "  --output <path>             Where to write the aggregate report.\n"
+		    "  --out-dir <path>            Direct temp/output dir.\n"
+		    "  --game-bin <path>           Path to game binary. Default: auto-detect.\n"
+		    "  --json                      JSON output.\n"
+		    "  --quiet                     Suppress per-spawn echo on stderr.\n"
+		    "  -h, --help                  This help.\n"
+		    "\n"
+		    "Exit codes:\n"
+		    "  0   baseline OK; phases 2-3 pending M8 (CI-friendly default)\n"
+		    "  1   baseline failed OR (--strict) snapshot phases pending\n"
 		    "  2   engine spawn failure / usage error\n";
 	}
 
@@ -2095,6 +2135,167 @@ namespace {
 		return harnessOk ? 0 : 1;
 	}
 
+	// ----- subcommand: test snapshot-restore ----------------------------------
+	//
+	// M5.5: phase 1 (baseline) runs today via existing -scenario -tick-hashes.
+	// Phases 2-3 (snapshot/restore round-trip) gracefully report 'pending M8'
+	// until the engine's snapshot API lands. The subcommand structure stays
+	// stable so M8 can fill in phases without changing the CLI surface.
+
+	int CmdTestSnapshotRestore(int argc, char** argv, const fs::path& selfDir) {
+		std::string scenario = "M1Baseline";
+		uint64_t seed = 42;
+		uint64_t ticks = 300;
+		uint64_t snapshotAt = 100;
+		int64_t resumeAtArg = -1;
+		int runs = 1;
+		int numLuaStates = 4;
+		bool keepTraces = false;
+		bool strict = false;
+		fs::path outPath;
+		fs::path gameBin;
+		OutputCtx out;
+
+		for (int i = 0; i < argc; ++i) {
+			const std::string a = argv[i];
+			const bool hasV = (i + 1) < argc;
+			if (a == "-h" || a == "--help") { PrintTestSnapshotRestoreHelp(std::cout); return 0; }
+			if (ArgEq(a, "scenario") && hasV) { scenario = argv[++i]; continue; }
+			if (ArgEq(a, "seed") && hasV) { seed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "ticks") && hasV) { ticks = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "snapshot-at") && hasV) { snapshotAt = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "resume-at") && hasV) { resumeAtArg = std::strtoll(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "runs") && hasV) { runs = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "num-lua-states") && hasV) { numLuaStates = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "keep-traces")) { keepTraces = true; continue; }
+			if (ArgEq(a, "strict")) { strict = true; continue; }
+			if (ArgEq(a, "output") && hasV) { outPath = argv[++i]; continue; }
+			if (ArgEq(a, "game-bin") && hasV) { gameBin = argv[++i]; continue; }
+			if (ArgEq(a, "out-dir") && hasV) { out.outDir = argv[++i]; continue; }
+			if (ArgEq(a, "json")) { out.json = true; continue; }
+			if (ArgEq(a, "quiet")) { out.quiet = true; continue; }
+			std::cerr << "[cccp-ctl] unknown option: " << a << "\n";
+			PrintTestSnapshotRestoreHelp(std::cerr);
+			return 2;
+		}
+		if (runs < 1) runs = 1;
+		if (snapshotAt >= ticks) {
+			std::cerr << "[cccp-ctl] --snapshot-at must be < --ticks (snapshot " << snapshotAt
+			          << " >= ticks " << ticks << ").\n";
+			return 2;
+		}
+		const uint64_t resumeAt = (resumeAtArg < 0) ? snapshotAt : static_cast<uint64_t>(resumeAtArg);
+		if (gameBin.empty()) gameBin = AutoDetectGameBin(selfDir);
+		if (gameBin.empty() || !fs::exists(gameBin)) {
+			std::cerr << "[cccp-ctl] could not locate game binary; pass --game-bin <path>.\n";
+			return 2;
+		}
+
+		const fs::path runDir = PickOutDir(out, "cccp-ctl-snapshot-restore");
+		if (outPath.empty()) outPath = runDir / "report.json";
+
+		// Phase 1 only — phases 2/3 are scaffolded. We invoke the engine via the
+		// same one-role harness as mp-sync-drift to reuse trace loading.
+		const std::vector<std::string> roles = {"baseline"};
+
+		json runReports = json::array();
+		int totalEngineFailures = 0;
+		bool baselineOk = true;
+		std::string baselineFinalHash;
+		uint64_t baselineTickCount = 0;
+
+		for (int r = 0; r < runs; ++r) {
+			const fs::path thisRunDir = runDir / ("run-" + std::to_string(r));
+			std::error_code ec;
+			fs::create_directories(thisRunDir, ec);
+
+			int engineFailures = 0;
+			const std::vector<EngineRunResult> results = RunEngines(
+			    gameBin, scenario, seed, ticks, numLuaStates,
+			    roles, {}, thisRunDir, out.quiet, false, engineFailures);
+			totalEngineFailures += engineFailures;
+
+			bool runBaselineOk = (engineFailures == 0) && !results.empty() && results[0].tracesProduced;
+			if (runBaselineOk) {
+				baselineFinalHash = results[0].finalHash;
+				baselineTickCount = results[0].tickHashes.is_array() ? results[0].tickHashes.size() : 0;
+			} else {
+				baselineOk = false;
+			}
+
+			json runReport = {
+			    {"run_index", r},
+			    {"phase1_baseline", {
+			        {"status", runBaselineOk ? "OK" : "FAILED"},
+			        {"final_hash", runBaselineOk ? results[0].finalHash : std::string()},
+			        {"ticks_recorded", runBaselineOk ? baselineTickCount : 0},
+			        {"trace_path", runBaselineOk ? results[0].outPath.string() : std::string()},
+			    }},
+			    {"phase2_snapshot_at_tick", {
+			        {"status", "PENDING_M8"},
+			        {"requested_tick", snapshotAt},
+			        {"note", "engine snapshot API not yet implemented"},
+			    }},
+			    {"phase3_mutate_restore_at_tick", {
+			        {"status", "PENDING_M8"},
+			        {"requested_tick", resumeAt},
+			        {"note", "engine restore API not yet implemented"},
+			    }},
+			    {"engine_failures", engineFailures},
+			};
+			runReports.push_back(runReport);
+
+			if (!keepTraces && runBaselineOk) {
+				std::error_code ec2;
+				fs::remove(results[0].outPath, ec2);
+			}
+		}
+
+		const bool snapshotPending = true;
+		const bool harnessOk = baselineOk && (!strict || !snapshotPending);
+
+		json summary = {
+		    {"scenario", scenario},
+		    {"ticks", ticks},
+		    {"seed", seed},
+		    {"snapshot_at_tick", snapshotAt},
+		    {"resume_at_tick", resumeAt},
+		    {"runs", runs},
+		    {"num_lua_states", numLuaStates},
+		    {"strict", strict},
+		    {"phase1_baseline_ok", baselineOk},
+		    {"phase2_snapshot_status", "PENDING_M8"},
+		    {"phase3_restore_status", "PENDING_M8"},
+		    {"engine_failures_total", totalEngineFailures},
+		    {"harness_ok", harnessOk},
+		    {"runs_detail", runReports},
+		    {"report_path", outPath.string()},
+		    {"out_dir", runDir.string()},
+		};
+
+		std::ofstream o(outPath);
+		if (o.is_open()) o << summary.dump(2) << "\n";
+
+		std::ostringstream text;
+		text << "Scenario:           " << scenario << "\n";
+		text << "Ticks:              " << ticks << "\n";
+		text << "Snapshot at tick:   " << snapshotAt << "\n";
+		text << "Resume at tick:     " << resumeAt << "\n";
+		text << "Runs:               " << runs << "\n";
+		text << "Phase 1 (baseline): " << (baselineOk ? "OK" : "FAILED") << "\n";
+		text << "                    " << baselineTickCount << " ticks, final hash " << baselineFinalHash << "\n";
+		text << "Phase 2 (snapshot): PENDING_M8 — engine snapshot API not yet implemented\n";
+		text << "Phase 3 (restore):  PENDING_M8 — engine restore API not yet implemented\n";
+		text << "Strict mode:        " << (strict ? "ON (exits 1 while M8 pending)" : "off (CI-friendly default)") << "\n";
+		text << "Harness:            " << (harnessOk ? "OK (tester scaffolding ready for M8)" : "FAILED") << "\n";
+		text << "Report:             " << outPath.string() << "\n";
+
+		PrintTextOrJson(out, summary, text.str());
+
+		if (totalEngineFailures > 0) return 2;
+		return harnessOk ? 0 : 1;
+	}
+
 	// ----- subcommand: bench replay -------------------------------------------
 
 	int CmdBenchReplay(int argc, char** argv, const fs::path& selfDir) {
@@ -2733,7 +2934,7 @@ namespace {
 		if (sub == "cross-platform-checksum") return CmdTestCrossPlatformChecksum(subArgc, subArgv, selfDir);
 		if (sub == "mp-sync-drift" || sub == "sync-drift") return CmdTestMpSyncDrift(subArgc, subArgv, selfDir);
 		if (sub == "latency-injection") return CmdTestLatencyInjection(subArgc, subArgv, selfDir);
-		if (sub == "snapshot-restore") return CmdStub("snapshot-restore", "M8 (rollback)");
+		if (sub == "snapshot-restore") return CmdTestSnapshotRestore(subArgc, subArgv, selfDir);
 		if (sub == "rollback-burst") return CmdStub("rollback-burst", "M8 (rollback)");
 		if (sub == "-h" || sub == "--help") { PrintTopHelp(std::cout); return 0; }
 		std::cerr << "[cccp-ctl] unknown test subcommand: " << sub << "\n";
