@@ -37,18 +37,109 @@ What concrete change closes this entry — relocate caller X to SyncedUpdate, la
 fix Y, finish audit row Z. One short sentence.
 ````
 
+## Where the actual suppression list lives
+
+This .md is the human record. The machine-readable list TSan consumes is
+written inline by the `Write TSan suppressions` step in
+`.github/workflows/determinism.yml` (heredoc → `tsan-suppressions.txt`). Adding
+or removing an entry means editing **both** — keep them in lockstep.
+
 ## Entries
 
-_None yet._ The list starts empty. The TSan gate is advisory at this point, so
-new races surface in CI output rather than getting silently filtered.
+The v1 set carries forward the Linux bring-up's known-noise classes
+(`Source/CI/m5-linux-x64.md:154, 243-258`) so the first CI run reports signal,
+not noise. Unknown races still surface — only the listed classes are filtered.
+
+### lj_*  (LuaJIT runtime)
+
+**Race signature:**
+```
+WARNING: ThreadSanitizer: data race
+  #0 lj_BC_*  external/sources/LuaJIT-2.1/src/...
+  #1 lj_trace_* ...
+```
+
+**Justification:**
+LuaJIT emits machine code at runtime; TSan's shadow-memory model cannot track
+JIT-generated frames, so reports rooted in `lj_*` are phantom. The Linux
+bring-up (`m5-linux-x64.md:154`) handled this by excluding LuaJIT from
+instrumentation at the meson level — out of scope for the M4A Block E lane,
+which is workflow-only. A symbol-prefix suppression is the equivalent dynamic
+analogue.
+
+**Removal path:**
+Patch `external/sources/LuaJIT-2.1/src/meson.build` to filter `-fsanitize=thread`
+out of the LuaJIT compile flags (the bring-up's approach), or move the engine
+to a non-JIT Lua runtime. Either lets us drop the `race:^lj_` line and surface
+real Lua-bridge races.
+
+### libtbb (uninstrumented system lib)
+
+**Race signature:**
+```
+WARNING: ThreadSanitizer: data race
+  #0 tbb::detail::r1::*    (in libtbb.so.*)
+  #1 std::execution::__par_unseq::* ...
+```
+
+**Justification:**
+`std::execution::par_unseq` on Linux dispatches through Ubuntu's pre-compiled
+`libtbb`, which is not built with `-fsanitize=thread`. TSan cannot see TBB's
+internal join synchronisation, so every par-unseq site looks like a race
+(`m5-linux-x64.md:243-248`). The sim's own `BS::thread_pool` *is* instrumented,
+so real sim-side races still surface — only the TBB-internal noise is filtered.
+
+**Removal path:**
+Build TBB from source under `-fsanitize=thread`, or drop `par_unseq` from the
+hot paths that need it (the codebase has a few; `_LIBCPP_PSTL_BACKEND_SERIAL` on
+macOS already does this).
+
+### AdjacentCost ↔ UpdateNodeCosts  (PathFinder grid)
+
+**Race signature:**
+```
+WARNING: ThreadSanitizer: data race
+  Read:  PathFinder::AdjacentCost  Source/System/PathFinder.cpp:...
+  Write: PathFinder::UpdateNodeCosts  Source/System/PathFinder.cpp:...
+```
+
+**Justification:**
+Persists after the bring-up's PathFinder async-counter fix
+(`m5-linux-x64.md:174-176`). The actual synchronisation is the `par_unseq` join
+on `UpdateNodeList`, which TSan can't see (same blind spot as `libtbb` above) —
+so the post-join read looks racy. Not a real race; covered by the par-unseq
+join that TSan is blind to.
+
+**Removal path:**
+Same as `libtbb` — drop par_unseq from `UpdateNodeList`, or instrument TBB.
+Closing either also closes this entry.
+
+### UpdateDrawMOIDs ↔ MOSRotating::Draw  (cosmetic render race)
+
+**Race signature:**
+```
+WARNING: ThreadSanitizer: data race
+  Write: MovableMan::UpdateDrawMOIDs  Source/Managers/MovableMan.cpp:1899
+  Read:  MOSRotating::Draw  Source/Entities/MOSRotating.cpp:...
+```
+
+**Justification:**
+A real race, but render-side only: the deferred MOID-draw task runs concurrent
+with the main-thread `Draw`. The `actors` / `particles` / `scene` checksum
+subsystems are fed earlier in the tick, before the task is submitted, so the
+race does not perturb the sim hash (`m5-linux-x64.md:251-258`). Filtering it
+keeps the TSan gate focused on the determinism island.
+
+**Removal path:**
+Serialize `Draw` against `UpdateDrawMOIDs` (one mutex on MOID state), or
+acknowledge the render path as out of the determinism scope. Either change
+unblocks removing the line.
 
 ## Promoting the gate to required
 
-The advisory phase reports every race; nothing in this file is actually consumed
-by TSan. When the gate flips to required (drop `continue-on-error` from the
-`determinism-tsan-linux` job), entries here that must silence TSan need a
-machine-readable companion at `Source/CI/tsan-suppressions.txt` written in TSan's
-own syntax (`race:<function-or-symbol-pattern>` per line), and the workflow's
-`TSAN_OPTIONS` extended with `:suppressions=$GITHUB_WORKSPACE/Source/CI/tsan-suppressions.txt`.
-This file remains the human record; the .txt is what TSan reads. Keep them in
-lockstep — adding to one without the other will surprise the next reviewer.
+The gate is advisory at landing — the job runs, posts a `::warning::` if races
+are detected, but does not fail the workflow (`continue-on-error: true` at the
+job level). To promote it to required, drop the `continue-on-error` flag from
+`.github/workflows/determinism.yml` and add the job to the GitHub
+branch-protection required-status set for the target branches. New filter
+entries land in the workflow heredoc + here in lockstep.
