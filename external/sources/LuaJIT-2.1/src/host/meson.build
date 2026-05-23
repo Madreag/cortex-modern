@@ -1,4 +1,5 @@
-minilua = executable('minilua', 'minilua.c', dependencies: libm, install: false, native: true)
+minilua = executable('minilua', 'minilua.c', dependencies: libm, install: false, native: true,
+    override_options: ['b_sanitize=none', 'b_lundef=true'])
 
 lj_arch_run = cc.run(lj_arch_test_source)
 if not lj_arch_run.compiled() or lj_arch_run.returncode() != 0
@@ -37,5 +38,6 @@ buildvm = executable('buildvm',
     dependencies: libm,
     build_by_default: false,
     install: false,
-    native: true
+    native: true,
+    override_options: ['b_sanitize=none', 'b_lundef=true']
 )
