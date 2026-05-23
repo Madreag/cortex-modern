@@ -388,7 +388,6 @@ void RunGameLoop() {
 
 		g_UInputMan.Update();
 		g_ActivityMan.RenderUpdate();
-		g_MovableMan.RenderUpdate();
 		g_UInputMan.EndFrame();
 
 		g_MovableMan.Draw(g_SceneMan.GetMOColorBitmap());
