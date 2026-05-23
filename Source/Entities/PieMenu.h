@@ -263,8 +263,11 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Updating
-		/// Updates the state of this PieMenu each frame.
+		/// Sim-tick update: state machine, hover, activation. Run once per sim tick.
 		void Update();
+
+		/// Render-frame update: snaps position to the owner's interpolated render pos so the menu smoothly tracks its actor each frame.
+		void RenderUpdate();
 
 		/// Draws the PieMenu.
 		/// @param targetBitmap A pointer to a BITMAP to draw on. Generally a screen BITMAP.

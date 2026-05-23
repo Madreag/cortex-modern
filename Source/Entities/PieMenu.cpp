@@ -540,13 +540,6 @@ void PieMenu::Update() {
 
 	m_ActivatedPieSlice = nullptr;
 
-	if (m_Owner) {
-		SetPos(m_Owner->GetRenderCPUPos());
-	} else if (m_AffectedObject) {
-		const Actor* affectedObjectAsActor = dynamic_cast<Actor*>(m_AffectedObject);
-		SetPos(affectedObjectAsActor ? affectedObjectAsActor->GetRenderCPUPos() : m_AffectedObject->GetRenderPos());
-	}
-
 	if (controller->IsDisabled()) {
 		SetEnabled(false);
 		return;
@@ -640,6 +633,18 @@ void PieMenu::Update() {
 
 	if (m_BGBitmapNeedsRedrawing && m_EnabledState != EnabledState::Disabled) {
 		UpdatePredrawnMenuBackgroundBitmap();
+	}
+}
+
+void PieMenu::RenderUpdate() {
+	if (m_Owner) {
+		SetPos(m_Owner->GetRenderCPUPos());
+	} else if (m_AffectedObject) {
+		const Actor* affectedObjectAsActor = dynamic_cast<Actor*>(m_AffectedObject);
+		SetPos(affectedObjectAsActor ? affectedObjectAsActor->GetRenderCPUPos() : m_AffectedObject->GetRenderPos());
+	}
+	if (m_ActiveSubPieMenu) {
+		m_ActiveSubPieMenu->RenderUpdate();
 	}
 }
 
