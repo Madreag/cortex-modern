@@ -300,10 +300,8 @@ std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box>& boxList, size
 		}
 	}
 
-	// Note - This copy is necessary because std::for_each with parallel execution doesn't appear to work with std::unordered_set -
-	// Using it will cause nodes to randomly fail to update. This should be rechecked when the codebase upgrades to C++20,
-	// and then UpdateNodeList can be refactored to take a pair of iterators instead of a vector.
 	std::vector<int> nodeVec(nodeIDsToUpdate.begin(), nodeIDsToUpdate.end());
+	std::sort(nodeVec.begin(), nodeVec.end()); // canonical order — unordered_set iteration is hash-bucket dependent.
 
 	// If no PathNode costs were changed, clear the set of IDs to update, so it's empty when it's returned.
 	if (!UpdateNodeList(nodeVec)) {
@@ -577,7 +575,7 @@ bool PathFinder::UpdateNodeList(const std::vector<int>& nodeVec) {
 
 	// Update all the costs going out from each node.
 	std::for_each(
-	    std::execution::par_unseq,
+	    std::execution::seq,
 	    nodeVec.begin(),
 	    nodeVec.end(),
 	    [this, &anyChange](int nodeId) {
@@ -590,7 +588,7 @@ bool PathFinder::UpdateNodeList(const std::vector<int>& nodeVec) {
 		// UpdateNodeCosts only calculates Materials for Right and Down directions, so each PathNode's Up and Left direction Materials need to be matched to the respective neighbor's opposite direction Materials.
 		// For example, this PathNode's Left Material is its Left neighbor's Right Material.
 		std::for_each(
-		    std::execution::par_unseq,
+		    std::execution::seq,
 		    nodeVec.begin(),
 		    nodeVec.end(),
 		    [this](int nodeId) {
@@ -616,7 +614,7 @@ bool PathFinder::UpdateNodeList(const std::vector<int>& nodeVec) {
 void PathFinder::MarkBoxNavigable(Box box, bool navigable) {
 	std::vector<int> pathNodesInBox = GetNodeIdsInBox(box);
 	std::for_each(
-	    std::execution::par_unseq,
+	    std::execution::seq,
 	    pathNodesInBox.begin(),
 	    pathNodesInBox.end(),
 	    [this, navigable](int nodeId) {
@@ -633,7 +631,7 @@ void PathFinder::MarkAllNodesNavigable(bool navigable) {
 	}
 
 	std::for_each(
-	    std::execution::par_unseq,
+	    std::execution::seq,
 	    pathNodesIdsVec.begin(),
 	    pathNodesIdsVec.end(),
 	    [this, navigable](int nodeId) {
