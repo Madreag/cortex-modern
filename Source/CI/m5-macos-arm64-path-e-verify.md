@@ -187,6 +187,174 @@ investigation belongs in the canonical
 `flagship/m4a-path-e-enforcement` consolidation per the user's
 direction; this verification cycle does not implement it.
 
+## Audit-pass bisect — 4-candidate ablation matrix
+
+After the user's "narrow to file + line" request, ran the four
+candidate ablations against `MPerfBench -threads 16 -runs 5`
+(temporary `BISECT_INSTRUMENTATION_DO_NOT_COMMIT` patches; reverted
+before commit; this branch ships zero ablation code).
+
+### Ablation matrix
+
+| # | Candidate ablation (executed only when `g_CurrentAIActor != nullptr`) | Result | Verdict |
+|---|---|---|---|
+| A | `Controller::SetState` → skip the bit write entirely | **MATCHED 5 / 5 runs** | Trivial false-positive — silencing every AI controller write makes actors stand still, suppressing every downstream divergence opportunity; tells us only that the race manifests via controller bits, not where it originates. |
+| B | `MovableMan::AddParticle` → mark particle SetToDelete + return | DIVERGED 3 / 5 runs (signature unchanged: `controller:43, actors:44, particles:44, …`) | **Not the violator** — disabling particle adds does not change the residual. |
+| C | `MovableMan::AddMO` → mark MO SetToDelete + return | DIVERGED 4 / 5 runs (signature unchanged) | **Not the violator** — disabling MO adds does not change the residual. |
+| D | `SceneMan::CastMORay` → return `g_NoMOID` | **MATCHED 3 / 3 sweeps × 5 runs each = 15 / 15 clean** | Trivial-but-significant: skipping the AI target-acquisition ray cast removes the inputs that feed every target-driven AI decision. Race closes, but in the same "no targets → no behavior" sense as A. |
+
+### Byte-level pinning of the offending bit + actor
+
+With per-actor controller dump instrumentation (one file per
+sim-tick per pid, written from inside the `controller` subsystem
+hash compute), captured 6 short MPerfBench runs at `-threads 16`
+(scenario auto-extends past `-ticks 50` so dumps span ticks 1-137).
+Run 0 was the reference; run 1 was the diverging child. Diffed
+each run's per-tick controller dump against run 0; first divergence:
+
+```
+DIFF at sim tick 44 (harness array index 43):
+< uid=18218 bits=000000000100000000000000000000000000000000000000000000000  ← reference (run 0)
+> uid=18218 bits=000010000100000000000000000000000000000000000000000000000  ← diverging (run 1)
+                  ^^^^                                                          ^^^^^^^^^^^
+                  bit 4 = MOVE_LEFT set in run 1 but not run 0; pos/vel/health/AIMode all bit-identical.
+                  bit 9 = BODY_JUMPSTART set in both runs (actor is in PREJUMP state).
+```
+
+Both runs: `px=0x1.d1p+9 py=0x1.351d7p+8 vx=0x0p+0 vy=0x1.caacfap+3
+h=0x1.9p+6 am=4 (BRAINHUNT)`. The ONLY observable difference is bit 4
+of the actor's controller bitmask. All earlier ticks (1-43) are
+byte-identical between the two runs.
+
+### Write site of the diverging bit
+
+`bit 4 = MOVE_LEFT` is set in exactly one place during a NativeHuman
+AI tick:
+
+* **`Data/Base.rte/AI/NativeHumanAI.lua:671`** —
+  ```lua
+  if self.lateralMoveState == Actor.LAT_LEFT then
+      self.Ctrl:SetState(Controller.MOVE_LEFT, true);
+  elseif self.lateralMoveState == Actor.LAT_RIGHT then
+      self.Ctrl:SetState(Controller.MOVE_RIGHT, true);
+  end
+  ```
+
+  So the race is "actor 18218's `self.lateralMoveState` is
+  `Actor.LAT_LEFT` in run 1 but `Actor.LAT_STILL` in run 0 at the
+  AI tick that immediately precedes sim tick 44".
+
+### Upstream chain — where `lateralMoveState` is assigned
+
+`self.lateralMoveState` is a persistent Lua-side AI field (set
+during one AI tick, read during subsequent ticks until next assign).
+The candidate write sites are:
+
+* **`Data/Base.rte/AI/NativeHumanAI.lua:527-534`** —
+  `lateralMoveState = LAT_LEFT/RIGHT/STILL` based on
+  `Owner.Vel.X > 2` / `< -2`. Reads `Owner.Vel.X`. At sim tick 44,
+  `Owner.Vel.X = 0x0p+0 = 0` in BOTH runs — this branch evaluates to
+  STILL identically, so this is NOT the source of the disagreement.
+* **`Data/Base.rte/AI/HumanBehaviors.lua:903-907`** (inside
+  `GoProneToTarget`) —
+  ```lua
+  if not Owner.EquippedBGItem then
+      if Dist.X > 0 then
+          AI.lateralMoveState = Actor.LAT_RIGHT;
+      else
+          AI.lateralMoveState = Actor.LAT_LEFT;
+      end
+  end
+  ```
+  `Dist` is `SceneMan:ShortestDistance(PronePos, AimPoint, false)`.
+  `AimPoint` is the target's aim point. If the AI's **`self.Target`
+  is different across runs**, `Dist` differs, lateralMoveState
+  differs. This is the most plausible upstream culprit — and
+  ablation D (skip `CastMORay`) closing the race is consistent with
+  it (without ray-casts the AI never acquires a target, so the
+  target-divergence path is never exercised).
+
+### Probable root cause (pending consolidation-branch confirmation)
+
+The race is in `self.Target` acquisition by AI actors in MPerfBench
+under contention. The two candidate code paths that drive target
+selection:
+
+* **`HumanBehaviors.CheckEnemyLOS`** (`HumanBehaviors.lua:23-101`) —
+  used by MPerfBench actors (they're spawned with
+  `MaxTeamAISkill ≥ NUTSDIFFICULTY` so `SpotTargets` resolves to
+  `CheckEnemyLOS`, see `NativeHumanAI.lua:57-61`). It collects
+  enemies via `MovableMan:GetMOsInBox(box, Owner.Team, true)` (now
+  deterministic via Fix 2), iterates one per tick, and casts
+  `SceneMan:CastMORay` to verify LOS to the body, then EyePos.
+* **`HumanBehaviors.LookForTargets`** (`HumanBehaviors.lua:7-22`) —
+  fallback path; calls `Owner:LookForMOs(viewAngDeg, ...)` which
+  internally calls `RandomNormalNum()` then `g_SceneMan.CastMORay`
+  (AHuman.cpp:1498-1527).
+
+Both paths converge on `SceneMan::CastMORay` against the MOID grid
+that `MovableMan::UpdateDrawMOIDs` built on the PREVIOUS tick.
+`CastMORay` itself is purely read-only against shared state during
+ThreadedUpdateAI (the MOID-grid bitmap, `m_MOIDIndex`,
+`MovableObject::GetRootID`); per-call output is deterministic for
+identical inputs.
+
+The discriminator is therefore **the INPUT to `CastMORay`** —
+specifically `Owner.ViewPoint`, `Owner.EquippedItem.Pos`,
+`Owner.EyePos`, the per-actor enemy-list cache (`AI.Enemies`), and
+the per-AI-tick consumption order of the per-MO RNG that drives
+`viewAngDeg` in `LookForTargets`. The most plausible specific
+mechanism, consistent with the tick-43 / no-physics-divergence
+fingerprint, is the **enemy-list iteration in `CheckEnemyLOS`**:
+
+* **`Data/Base.rte/AI/HumanBehaviors.lua:39`** — `local Enemy =
+  table.remove(AI.Enemies);` pops the next enemy to LOS-check.
+  `AI.Enemies` is populated via `table.insert(AI.Enemies, Act)` in
+  the for-loop at line 32-36. `MovableMan:GetMOsInBox` returns MOs
+  in `std::set<MOID>` order (deterministic per Fix 2), but the
+  for-loop adds them in iteration order, then `table.remove`
+  (no-arg) pops from the end (LIFO). If the GetMOsInBox result is
+  the same canonical order across runs, AI.Enemies is the same list,
+  and the LIFO pop order is the same.
+
+  However, the **`for Act in MovableMan:GetMOsInBox(box, Owner.Team,
+  true)` iteration is over a Lua iterator returned by a C++ binding**
+  (likely a generator that wraps the internal `std::set<MOID>`
+  iteration). If the C++ binding ALSO touches some shared
+  cross-actor state during iteration (e.g., it constructs a per-call
+  scratch vector that gets moved-from), the race could leak there.
+
+Pending consolidation-branch dive into the `GetMOsInBox` Lua-iterator
+binding + the `MovableObject::GetRootParent()` lookup inside
+`CastMORay`'s ignoredMOID resolution loop (`SceneMan.cpp:1916-1922`),
+both of which were not in scope for any of the four foundation/cherry-
+pick fixes.
+
+### One-line fix target for the consolidation agent
+
+Highest-confidence single-line target, given the above:
+
+> **Audit `HumanBehaviors.CheckEnemyLOS`
+> (`Data/Base.rte/AI/HumanBehaviors.lua:23-101`) and the
+> `MovableMan:GetMOsInBox` Lua-iterator binding for any
+> non-determinism in cross-actor reads during ThreadedUpdateAI.
+> The byte-level pin shows actor `uid=18218` MOVE_LEFT bit flips at
+> sim tick 44 with all physics state bit-identical — i.e. the AI
+> made a different target-selection decision while seeing the same
+> scene snapshot, which can only happen if the target-acquisition
+> read path has a residual race.**
+
+Secondary candidate (lower confidence but cheap to audit):
+
+> **`SceneMan::CastMORay`'s `ignoreMOIDs` resolution loop
+> (`SceneMan.cpp:1916-1922`) calls `g_MovableMan.GetRootMOID(hitMOID)`
+> which walks `m_MOIDIndex` + reads `MovableObject::GetRootID()`. If
+> any actor's `GetRootID()` is being concurrently mutated by another
+> parallel AI worker's Attachable-tree walk (e.g. a not-yet-deferred
+> mutator that escaped the Path E `Equip*` cherry-pick), the
+> returned root ID races, and the AI's `ignoredMOIDHit` decision
+> differs across runs.**
+
 ## What got committed on this branch
 
 ```
@@ -213,6 +381,10 @@ canonical fix lands on `flagship/m4a-path-e-enforcement`.
 | `M4ThreadStress-t8-sweep{1..5}.json` | 5 | macOS `M4ThreadStress` at `-num-lua-states 8`, post-cherry-pick (all clean) |
 | `M4ThreadStress-t16-sweep{1..5}.json` | 5 | macOS `M4ThreadStress` at `-num-lua-states 16`, post-cherry-pick (all clean) |
 | `bisect-ablation-AI-serial-t8-sweep{1..3}.json` | 3 | Confirmation that ThreadedUpdateAI serialization closes the residual |
+| `ablation-A-ctrl-setstate-skip-t16.json` | 1 | Audit ablation: skip `Controller::SetState` from parallel AI → MATCHED (trivial — silences AI) |
+| `ablation-B-addparticle-skip-t16.json` | 1 | Audit ablation: skip `MovableMan::AddParticle` from parallel AI → DIVERGED (not the violator) |
+| `ablation-C-addmo-skip-t16.json` | 1 | Audit ablation: skip `MovableMan::AddMO` from parallel AI → DIVERGED (not the violator) |
+| `ablation-D-castmoray-skip-t16-sweep{1..3}.json` | 3 | Audit ablation: skip `SceneMan::CastMORay` from parallel AI → MATCHED 15 / 15 runs (target-acquisition path implicated; still degraded-behaviour false-positive in absolute sense but discriminates against B / C) |
 
 Each `*-sweep*.json` is the canonical `DeterminismCheck` matrix-mode
 report (10 runs at a single Lua-state count, intra-count diff against
