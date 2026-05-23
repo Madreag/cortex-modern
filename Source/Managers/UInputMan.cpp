@@ -1094,8 +1094,13 @@ void UInputMan::EndFrame() {
 		mouse.change.fill(false);
 	}
 
-	// Drop any sim-rate edges that no sim tick consumed this frame (menus, paused activity)
-	EndSimUpdate();
+	// Drop sim-rate edges only when no sim tick is going to read them. During a
+	// running activity sim ticks own this buffer and clear via EndSimUpdate;
+	// clearing here every render frame would eat presses that landed on iterations
+	// where TimeForSimUpdate happened to return false.
+	if (g_ActivityMan.ActivityPaused()) {
+		EndSimUpdate();
+	}
 }
 
 void UInputMan::EndSimUpdate() {
