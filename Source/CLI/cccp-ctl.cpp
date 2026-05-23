@@ -2006,11 +2006,17 @@ namespace {
 		}
 
 		// Adjacent-swap reorder. Only swap when both packets delivered.
+		// Recompute latencyTicks so latencyTicks == arriveTick - sendTick (clamped >= 0).
+		auto recomputeLatency = [](PacketTraceEntry& p) {
+			const int64_t d = static_cast<int64_t>(p.arriveTick) - static_cast<int64_t>(p.sendTick);
+			p.latencyTicks = d > 0 ? static_cast<int>(d) : 0;
+		};
 		for (size_t i = 0; i + 1 < packets.size(); ++i) {
 			if (!packets[i].delivered || !packets[i + 1].delivered) continue;
 			if (rollPct() < cond.reorderPct) {
 				std::swap(packets[i].arriveTick, packets[i + 1].arriveTick);
-				std::swap(packets[i].latencyTicks, packets[i + 1].latencyTicks);
+				recomputeLatency(packets[i]);
+				recomputeLatency(packets[i + 1]);
 				++reorderEventsOut;
 			}
 		}
@@ -2038,10 +2044,10 @@ namespace {
 	// Stable fingerprint of a packet trace for cross-run equality check (avoids
 	// blowing up the report with the full trace when verifying determinism).
 	std::string FingerprintPacketTrace(const std::vector<PacketTraceEntry>& packets) {
-		uint64_t h = 1469598103934665603ull;
+		uint64_t h = 0xcbf29ce484222325ull;
 		auto mix = [&](uint64_t v) {
 			h ^= v;
-			h *= 1099511628211ull;
+			h *= 0x100000001b3ull;
 		};
 		for (const auto& p: packets) {
 			mix(p.sendTick);
@@ -2435,6 +2441,8 @@ namespace {
 		    {"phase1_baseline_ok", baselineOk},
 		    {"phase2_snapshot_status", "PENDING_M8"},
 		    {"phase3_restore_status", "PENDING_M8"},
+		    {"pending_engine_api", "engine MO snapshot/restore API per M8 plan"},
+		    {"m8_contract", "traceA (baseline) == traceB (snapshot-then-continue) == traceC (snapshot+mutate+restore+continue)"},
 		    {"engine_failures_total", totalEngineFailures},
 		    {"harness_ok", harnessOk},
 		    {"runs_detail", runReports},
@@ -2513,10 +2521,10 @@ namespace {
 	}
 
 	std::string FingerprintBurstPlan(const std::vector<BurstEvent>& events) {
-		uint64_t h = 1469598103934665603ull;
+		uint64_t h = 0xcbf29ce484222325ull;
 		auto mix = [&](uint64_t v) {
 			h ^= v;
-			h *= 1099511628211ull;
+			h *= 0x100000001b3ull;
 		};
 		for (const auto& e: events) {
 			mix(e.mispredictTick);
