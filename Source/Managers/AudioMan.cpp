@@ -1,5 +1,6 @@
 #include "AudioMan.h"
 
+#include "MetricsCollector.h"
 #include "CameraMan.h"
 #include "ConsoleMan.h"
 #include "FrameMan.h"
@@ -360,6 +361,17 @@ void AudioMan::ClearSoundEvents(int player) {
 
 bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	if (!m_AudioEnabled || !soundContainer || soundContainer->GetPlayingChannels()->size() >= c_MaxPlayingSoundsPerContainer) {
+		return false;
+	}
+	// Determinism-mode short-circuit: sound playback advances g_RenderRNG (via
+	// SoundSet::SelectNextSounds) and mutates AudioMan's per-channel hashtable.
+	// Both are reachable from the parallel ThreadedUpdateAI pass (AI scripts call
+	// Owner:EquipFirearm() / EquipDeviceInGroup() which fire the device-switch
+	// sound), so concurrent invocations race on the shared MT19937 state and on
+	// the unordered_map. Sound is cosmetic and headless determinism runs don't
+	// need it; skipping it cleanly removes the race without touching the render
+	// audio path.
+	if (g_MetricsCollector.IsRecordingTickHashes()) {
 		return false;
 	}
 	FMOD_RESULT result = FMOD_OK;
