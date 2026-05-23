@@ -355,6 +355,94 @@ Secondary candidate (lower confidence but cheap to audit):
 > returned root ID races, and the AI's `ignoredMOIDHit` decision
 > differs across runs.**
 
+## Audit-pass round 2 — pinning the secondary candidate (DISPROVEN)
+
+Per follow-up directive (don't duplicate Linux's investigation of the
+primary candidate `CheckEnemyLOS` / `GetMOsInBox`), checked whether
+the secondary `CastMORay` ignoreMOIDs resolution candidate is a real
+Path E violator on macOS.
+
+### Method
+
+Two ablations and one read/write call-count instrumentation pass
+against `MPerfBench -threads 16` (instrumentation reverted before
+commit; this branch ships zero instrumentation code).
+
+| # | What was changed | Variant | Result |
+|---|---|---|---|
+| E1 | Skip the racy half of the `ignoreMOIDs` check (keep direct MOID equality, skip the `g_MovableMan.GetRootMOID(hitMOID) == ignoredMOID` branch) under parallel AI | `-runs 5` × 5 sweeps | 4 / 5 MATCHED — race rate dropped from baseline 4 / 5 DIVERGED to 1 / 5 DIVERGED, **signature unchanged** (`controller:43, actors:44, particles:44, scene:50, sim_rng:49, terrain:54`) |
+| C1 | Log every `Attachable::SetParent(...)` call with a flag for whether `g_CurrentAIActor` was set | `-runs 3 -ticks 100` (3 runs) | 11,022 SetParent calls total; **0 with AIActor=YES** |
+| C2 | Log every `MovableMan::GetRootMOID(MOID)` call with the same flag | `-runs 2 -ticks 60` (2 runs) | 1,425,106 GetRootMOID calls; **1,044,083 with AIActor=YES** — the read path IS heavily exercised under parallel AI |
+
+### What the instrumentation proves
+
+The race-on-read hypothesis requires both a concurrent reader AND a
+concurrent writer. We confirmed the reader: GetRootMOID fires ~1M
+times under parallel AI in 120 sim-ticks. We disproved the writer:
+zero Attachable::SetParent calls fire under parallel AI across 300
+sim-ticks of MPerfBench. With no concurrent writer of `m_RootMOID`
+during the parallel AI phase, `GetRootMOID` returns deterministic
+values per call, and the `ignoreMOIDs` resolution loop in
+`CastMORay` cannot race.
+
+The E1 rate reduction (4 / 5 → 1 / 5 DIVERGED) is therefore explained
+by **behaviour degradation, not race closure**: skipping the
+GetRootMOID resolution makes the AI see its own gun / attachables as
+valid ray-cast hits, which changes AI decisions and by chance
+reduces the divergence frequency without changing the underlying
+signature. Same false-positive class as ablations A and D.
+
+### Verdict
+
+**Secondary candidate (`SceneMan::CastMORay` ignoreMOIDs resolution
+via `GetRootMOID`) is NOT a Path E violator on macOS.** The
+read path is race-free because the write path (`Attachable::SetParent`
+modifying `m_RootMOID`) does not fire concurrently with AI reads.
+The Path E `Equip*` cherry-pick already shut down the only plausible
+parallel-AI caller of `SetParent` (the `AHuman::Equip*` →
+`Arm::SetHeldDevice` → `Arm::RemoveAndDeleteAttachable` /
+`AddAttachable` chain). No remaining mutators are reachable from
+`ThreadedUpdateAI` Lua bindings used by `Base.rte` AI scripts.
+
+Consolidation-branch focus stays on the primary candidate (Linux's
+investigation of `HumanBehaviors.CheckEnemyLOS` +
+`MovableMan:GetMOsInBox` iterator binding). If Linux's investigation
+also rules out the primary, the next bisect candidate is the per-AI-
+tick consumption order of the per-MO RNG seeded by
+`DeterministicMORNGScope` — specifically whether the seed-mix or any
+shared seed source is observable to two parallel AI workers in a
+race-visible way.
+
+### Updated one-line target for the consolidation agent
+
+Primary (Linux is investigating):
+
+> **Audit `HumanBehaviors.CheckEnemyLOS`
+> (`Data/Base.rte/AI/HumanBehaviors.lua:23-101`) and the
+> `MovableMan:GetMOsInBox` Lua-iterator binding for any
+> non-determinism in cross-actor reads during ThreadedUpdateAI.**
+
+Secondary (DISPROVEN on macOS — do not re-investigate):
+
+> ~~`SceneMan::CastMORay`'s `ignoreMOIDs` resolution loop /
+> `g_MovableMan.GetRootMOID`~~ ← empirically race-free; zero
+> concurrent writers of `m_RootMOID` during the parallel AI phase
+> (300 sim-ticks of MPerfBench tested with full SetParent
+> instrumentation; 0 of 11,022 SetParent calls fire under
+> parallel AI).
+
+Tertiary (if both primary and secondary are ruled out):
+
+> **`DeterministicMORNGScope` in
+> `Source/Entities/MovableObject.cpp:674` and the seed-mix in
+> `LuaMan.cpp:DeriveMORNGSeed` (line 140-146). Verify the per-MO
+> RNG seed is byte-stable across runs for the same (uid, tick,
+> hash(funcName)) triple. The fact that actor 18218's controller
+> bit varies while pos/vel are identical means SOME input to the
+> AI script's `RangeRand` / `math.random` / `RandomNormalNum`
+> calls is varying — most plausibly an RNG state divergence not
+> yet identified.**
+
 ## What got committed on this branch
 
 ```
