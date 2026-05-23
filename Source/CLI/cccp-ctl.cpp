@@ -1395,12 +1395,12 @@ namespace {
 
 		if (!outPath.empty()) {
 			std::ofstream o(outPath);
-			if (o.is_open()) {
-				o << summary.dump(2) << "\n";
-				text << "Report written:     " << outPath.string() << "\n";
-			} else {
-				std::cerr << "[cccp-ctl] failed to write report to " << outPath.string() << "\n";
+			if (!o.is_open()) {
+				std::cerr << "[cccp-ctl] failed to open report file: " << outPath.string() << "\n";
+				return 2;
 			}
+			o << summary.dump(2) << "\n";
+			text << "Report written:     " << outPath.string() << "\n";
 		}
 
 		PrintTextOrJson(out, summary, text.str());
@@ -1414,6 +1414,8 @@ namespace {
 	// the bridge endpoint is a structural placeholder for the M6/M7 engine-side
 	// MP code. No third-party deps — POSIX UDS or Win32 named pipe + std::async.
 
+	// Move-only RAII so early-return / exception paths can't leak the socket fd
+	// or named-pipe HANDLE.
 	struct BridgeEndpoint {
 		std::string displayPath;
 		bool created = false;
@@ -1423,6 +1425,49 @@ namespace {
 		int fd = -1;
 		std::string sockPath;
 #endif
+
+		BridgeEndpoint() = default;
+		BridgeEndpoint(const BridgeEndpoint&) = delete;
+		BridgeEndpoint& operator=(const BridgeEndpoint&) = delete;
+		BridgeEndpoint(BridgeEndpoint&& o) noexcept { MoveFrom(o); }
+		BridgeEndpoint& operator=(BridgeEndpoint&& o) noexcept {
+			if (this != &o) { Release(); MoveFrom(o); }
+			return *this;
+		}
+		~BridgeEndpoint() { Release(); }
+
+	private:
+		void MoveFrom(BridgeEndpoint& o) {
+			displayPath = std::move(o.displayPath);
+			created = o.created;
+			o.created = false;
+#ifdef _WIN32
+			handle = o.handle;
+			o.handle = INVALID_HANDLE_VALUE;
+#else
+			fd = o.fd;
+			sockPath = std::move(o.sockPath);
+			o.fd = -1;
+#endif
+		}
+		void Release() {
+			if (!created) return;
+#ifdef _WIN32
+			if (handle != INVALID_HANDLE_VALUE) {
+				::CloseHandle(handle);
+				handle = INVALID_HANDLE_VALUE;
+			}
+#else
+			if (fd >= 0) {
+				::close(fd);
+				fd = -1;
+			}
+			if (!sockPath.empty()) {
+				::unlink(sockPath.c_str());
+			}
+#endif
+			created = false;
+		}
 	};
 
 	BridgeEndpoint CreateBridge(const fs::path& outDir, const std::string& tag) {
@@ -1470,25 +1515,6 @@ namespace {
 		b.created = true;
 #endif
 		return b;
-	}
-
-	void TeardownBridge(BridgeEndpoint& b) {
-		if (!b.created) return;
-#ifdef _WIN32
-		if (b.handle != INVALID_HANDLE_VALUE) {
-			::CloseHandle(b.handle);
-			b.handle = INVALID_HANDLE_VALUE;
-		}
-#else
-		if (b.fd >= 0) {
-			::close(b.fd);
-			b.fd = -1;
-		}
-		if (!b.sockPath.empty()) {
-			::unlink(b.sockPath.c_str());
-		}
-#endif
-		b.created = false;
 	}
 
 	// One engine process's outcome inside an MP run.
@@ -1746,7 +1772,14 @@ namespace {
 			std::cerr << "[cccp-ctl] --processes must be >= 2.\n";
 			return 2;
 		}
+		if (ticks == 0) {
+			std::cerr << "[cccp-ctl] --ticks must be > 0.\n";
+			return 2;
+		}
 		if (runs < 1) runs = 1;
+		if (runs == 1 && !out.quiet) {
+			std::cerr << "[cccp-ctl] warning: --runs 1 cannot detect determinism divergence; consider --runs 2 or more.\n";
+		}
 		if (numLuaStates < 1) numLuaStates = 1;
 		if (gameBin.empty()) gameBin = AutoDetectGameBin(selfDir);
 		if (gameBin.empty() || !fs::exists(gameBin)) {
@@ -1829,8 +1862,6 @@ namespace {
 			}
 			runReports.push_back(runReport);
 
-			TeardownBridge(bridge);
-
 			if (!keepTraces && engineFailures == 0) {
 				std::error_code ec2;
 				fs::remove_all(thisRunDir, ec2);
@@ -1867,7 +1898,11 @@ namespace {
 		};
 
 		std::ofstream o(outPath);
-		if (o.is_open()) o << summary.dump(2) << "\n";
+		if (!o.is_open()) {
+			std::cerr << "[cccp-ctl] failed to open report file: " << outPath.string() << "\n";
+			return 2;
+		}
+		o << summary.dump(2) << "\n";
 
 		std::ostringstream text;
 		text << "Scenario:           " << scenario << "\n";
@@ -2062,7 +2097,11 @@ namespace {
 			return 2;
 		}
 		if (processes < 2) { std::cerr << "[cccp-ctl] --processes must be >= 2.\n"; return 2; }
+		if (ticks == 0) { std::cerr << "[cccp-ctl] --ticks must be > 0.\n"; return 2; }
 		if (runs < 1) runs = 1;
+		if (runs == 1 && !out.quiet) {
+			std::cerr << "[cccp-ctl] warning: --runs 1 cannot detect determinism divergence; consider --runs 2 or more.\n";
+		}
 		if (cond.packetLossPct < 0 || cond.packetLossPct > 100) {
 			std::cerr << "[cccp-ctl] --packet-loss must be in [0, 100].\n"; return 2;
 		}
@@ -2232,7 +2271,11 @@ namespace {
 		};
 
 		std::ofstream o(outPath);
-		if (o.is_open()) o << summary.dump(2) << "\n";
+		if (!o.is_open()) {
+			std::cerr << "[cccp-ctl] failed to open report file: " << outPath.string() << "\n";
+			return 2;
+		}
+		o << summary.dump(2) << "\n";
 
 		std::ostringstream text;
 		text << "Scenario:                " << scenario << "\n";
@@ -2300,7 +2343,11 @@ namespace {
 			PrintTestSnapshotRestoreHelp(std::cerr);
 			return 2;
 		}
+		if (ticks == 0) { std::cerr << "[cccp-ctl] --ticks must be > 0.\n"; return 2; }
 		if (runs < 1) runs = 1;
+		if (runs == 1 && !out.quiet) {
+			std::cerr << "[cccp-ctl] warning: --runs 1 cannot detect determinism divergence; consider --runs 2 or more.\n";
+		}
 		if (snapshotAt >= ticks) {
 			std::cerr << "[cccp-ctl] --snapshot-at must be < --ticks (snapshot " << snapshotAt
 			          << " >= ticks " << ticks << ").\n";
@@ -2396,7 +2443,11 @@ namespace {
 		};
 
 		std::ofstream o(outPath);
-		if (o.is_open()) o << summary.dump(2) << "\n";
+		if (!o.is_open()) {
+			std::cerr << "[cccp-ctl] failed to open report file: " << outPath.string() << "\n";
+			return 2;
+		}
+		o << summary.dump(2) << "\n";
 
 		std::ostringstream text;
 		text << "Scenario:           " << scenario << "\n";
@@ -2515,7 +2566,11 @@ namespace {
 			PrintTestRollbackBurstHelp(std::cerr);
 			return 2;
 		}
+		if (ticks == 0) { std::cerr << "[cccp-ctl] --ticks must be > 0.\n"; return 2; }
 		if (runs < 1) runs = 1;
+		if (runs == 1 && !out.quiet) {
+			std::cerr << "[cccp-ctl] warning: --runs 1 cannot detect determinism divergence; consider --runs 2 or more.\n";
+		}
 		if (burstSize < 0) burstSize = 0;
 		if (burstDepth < 1) {
 			std::cerr << "[cccp-ctl] --burst-depth must be >= 1.\n"; return 2;
@@ -2644,7 +2699,11 @@ namespace {
 		};
 
 		std::ofstream o(outPath);
-		if (o.is_open()) o << summary.dump(2) << "\n";
+		if (!o.is_open()) {
+			std::cerr << "[cccp-ctl] failed to open report file: " << outPath.string() << "\n";
+			return 2;
+		}
+		o << summary.dump(2) << "\n";
 
 		std::ostringstream text;
 		text << "Scenario:           " << scenario << "\n";
