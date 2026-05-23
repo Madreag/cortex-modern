@@ -1,0 +1,107 @@
+{
+  "binary": "/Users/erol/projects/cortex_project/cortex-modern/builddir/./CortexCommand",
+  "compared_ticks": 1200,
+  "diverged": true,
+  "first_divergence_tick": 43,
+  "mode": "repeat-runs",
+  "per_run_tick_count": [
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200
+  ],
+  "per_subsystem_first_divergence": {
+    "actors": 44,
+    "carve_math": 49,
+    "controller": 43,
+    "decisions": 54,
+    "particles": 44,
+    "scene": 50,
+    "sim_rng": 49,
+    "terrain": 54
+  },
+  "runs": 10,
+  "runs_detail": [
+    {
+      "diverged": false,
+      "index": 0,
+      "run_index": 0,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 1,
+      "run_index": 1,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 2,
+      "run_index": 2,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 3,
+      "run_index": 3,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 4,
+      "run_index": 4,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 5,
+      "run_index": 5,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 6,
+      "run_index": 6,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 7,
+      "run_index": 7,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 8,
+      "run_index": 8,
+      "thread_count": -1,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 9,
+      "run_index": 9,
+      "thread_count": -1,
+      "tick_count": 1200
+    }
+  ],
+  "scenario": "MPerfBench",
+  "seed": 42,
+  "ticks_requested": 1200,
+  "total_mismatched_ticks": 1157,
+  "total_runs": 10
+}
