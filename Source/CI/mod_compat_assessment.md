@@ -315,6 +315,25 @@ gain for any mod that did cross-actor AI reads.
 
 ---
 
+## M4 path-E targeted scaffold (added on `exp/determinism-linux` regen `f495476f5`)
+
+The 7 `AHuman::Equip*` methods (`EquipFirearm`, `EquipDeviceInGroup`,
+`EquipLoadedFirearmInGroup`, `EquipNamedDevice`, `EquipThrowable`,
+`EquipDiggingTool`, `EquipShield`) detect parallel-AI context via
+`g_CurrentAIActor` and defer the actual mutation to a serial drain pass at
+the end of `MovableMan::UpdateControllers`. The would-equip predicate is
+computed synchronously and returned, so callers that branch on the return
+value see the right answer. **Behaviour change**: if AI code calls
+`Owner:EquipX(true)` and then in the *same Lua expression* reads
+`Owner.EquippedItem` (e.g. `Owner:EquipDeviceInGroup("Bombs - Grenades", true)
+and ToThrownDevice(Owner.EquippedItem):...`), the read sees the *old* equipped
+item because the equip is deferred. Vanilla `NativeHumanAI:CreateAttackBehavior`
+was refactored to peek the inventory once at the top and use the
+peeked-device for read-after-Equip expressions. Mods that use the same
+read-after-Equip pattern from `ThreadedUpdateAI` must apply the same
+refactor — calls from serial hooks (`Update`, `OnCollide*`, `Create`) are
+unaffected, the deferred path only engages when `g_CurrentAIActor` is set.
+
 ## Bottom line
 
 The M0–M4 + determinism stack contains **zero breaking changes** to mod-facing
