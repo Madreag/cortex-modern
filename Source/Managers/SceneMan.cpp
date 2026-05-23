@@ -2544,7 +2544,7 @@ void SceneMan::Update(int screenId) {
 
 	m_LastUpdatedScreen = screenId;
 
-	const Vector& offset = g_CameraMan.GetOffset(screenId);
+	const Vector offset = g_CameraMan.GetRenderOffset(screenId);
 	m_pMOColorLayer->SetOffset(offset);
 	if (m_pDebugLayer) {
 		m_pDebugLayer->SetOffset(offset);

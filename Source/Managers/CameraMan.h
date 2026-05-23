@@ -41,6 +41,9 @@ namespace RTE {
 		/// @return The offset for the given screen.
 		Vector GetOffset(int screenId = 0) const { return m_Screens[screenId].Offset; }
 
+		/// Render-rate offset interpolated between last sim tick's value and the current one. Snaps to current across seam wraps to avoid lerping the camera across the whole map.
+		Vector GetRenderOffset(int screenId = 0) const;
+
 		/// Sets the offset (scroll position) of the terrain.
 		/// @param offset The new offset value.
 		/// @param screenId Which screen you want to set the offset of.
@@ -182,6 +185,7 @@ namespace RTE {
 			int ScreenTeam = 0; //!< The team associated with this Screen.
 
 			Vector Offset; //!< The position of the upper left corner of the view.
+			Vector PrevOffset; //!< Offset at the start of this sim tick, for render-rate interpolation.
 			Vector DeltaOffset; //!< The difference in current offset and the Update() before.
 			Vector ScrollTarget; //!< The final offset target of the current scroll interpolation, in scene coordinates.
 
