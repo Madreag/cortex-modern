@@ -4,9 +4,14 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "FrameMan.h"
+#include "TimerMan.h"
 #include "Draw.h"
 
 using namespace RTE;
+
+Matrix MOSprite::GetRenderRotMatrix() const {
+	return Lerp(m_PrevRotation, m_Rotation, g_TimerMan.GetSimUpdateProportion());
+}
 
 AbstractClassInfo(MOSprite, MovableObject);
 

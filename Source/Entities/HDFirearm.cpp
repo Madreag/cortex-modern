@@ -1057,10 +1057,11 @@ void HDFirearm::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whic
 	Vector muzzleOffset(std::max(m_MuzzleOff.m_X, m_SpriteRadius), m_MuzzleOff.m_Y);
 
 	Vector currentPos = GetRenderPos();
+	Matrix renderRot = GetRenderRotMatrix();
 
 	for (int i = 0; i < pointCount; ++i) {
 		Vector aimPoint(sharpLength + static_cast<float>(pointSpacing * i), 0);
-		aimPoint = RotateOffset(aimPoint + muzzleOffset) + currentPos;
+		aimPoint = (aimPoint + muzzleOffset).GetXFlipped(m_HFlipped) * renderRot + currentPos;
 
 		g_PostProcessMan.RegisterGlowDotEffect(aimPoint, YellowDot, glowStrength);
 		aimPoint -= targetPos;

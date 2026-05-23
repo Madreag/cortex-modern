@@ -162,6 +162,9 @@ namespace RTE {
 		/// @return The rotational Matrix of this MovableObject.
 		Matrix GetRotMatrix() const override { return m_Rotation; }
 
+		/// Lerped render rotation between previous and current sim rotation, for visual consistency with GetRenderPos.
+		Matrix GetRenderRotMatrix() const;
+
 		/// Gets the current rotational angle of of this, in radians.
 		/// @return The rotational angle of this, in radians.
 		float GetRotAngle() const override { return m_Rotation.GetRadAngle(); }

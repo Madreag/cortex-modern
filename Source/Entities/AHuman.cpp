@@ -420,7 +420,7 @@ Vector AHuman::GetCPUPos() const {
 
 Vector AHuman::GetRenderCPUPos() const {
 	if (m_pHead && m_pHead->IsAttached())
-		return GetRenderPos() + ((m_pHead->GetParentOffset().GetXFlipped(m_HFlipped) * m_Rotation) * 1.5);
+		return GetRenderPos() + ((m_pHead->GetParentOffset().GetXFlipped(m_HFlipped) * GetRenderRotMatrix()) * 1.5);
 
 	return GetRenderPos();
 }
@@ -2789,7 +2789,6 @@ void AHuman::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 		            m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->HoldsHeldDevice())
 		            m_pFGArm->GetHeldDevice()->DrawHUD(pTargetBitmap, targetPos, whichScreen);*/
 
-		const float fLerp = g_TimerMan.GetSimUpdateProportion();
 		Vector currentPos = GetRenderPos();
 		Vector drawPos(currentPos - targetPos);
 
