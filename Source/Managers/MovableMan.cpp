@@ -1431,6 +1431,12 @@ void MovableMan::Update() {
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
 
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
+		// num_blocks pinned to one-per-Lua-state so each task gets exactly one state (the
+		// assertion below requires it). The default block count is the pool's thread_count,
+		// which on hosts where thread_count < luaStates.size() (e.g. -num-lua-states 16 on
+		// the 12-core macOS-arm64 mission machine) splits one state group across multiple
+		// tasks and trips the assert. Pinning num_blocks=luaStates.size() makes the
+		// behaviour identical for any host's thread count.
 		g_ThreadMan.GetPriorityThreadPool().parallelize_loop(luaStates.size(),
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
@@ -1444,7 +1450,8 @@ void MovableMan::Update() {
 			                                                     }
 
 			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		                                                     })
+		                                                     },
+		                                                     luaStates.size())
 		    .wait();
 	}
 
@@ -2009,6 +2016,8 @@ void MovableMan::UpdateControllers() {
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
 
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
+		// See ThreadedUpdate above — pin num_blocks so each task gets exactly one Lua state
+		// regardless of the pool's thread_count.
 		g_ThreadMan.GetPriorityThreadPool().parallelize_loop(luaStates.size(),
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
@@ -2022,7 +2031,8 @@ void MovableMan::UpdateControllers() {
 				                                                     }
 			                                                     }
 			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		                                                     })
+		                                                     },
+		                                                     luaStates.size())
 		    .wait();
 
 		for (Actor* actor: m_Actors) {

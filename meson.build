@@ -36,21 +36,49 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
   # is exactly what causes cross-host drift in the determinism island.
   # See multiplayer.html §7 (M5) for the WASM-canonical cross-platform pass that
   # adds ARM into the matrix.
+  # macOS-arm64 bring-up: -msse2 is x86-only; gate it on cpu family so ARM
+  # builds don't fail the configure step. -ffp-contract=off applies to every
+  # path (ARM defaults to FMA-on, which silently breaks cross-arch determinism).
+  if host_machine.cpu_family() in ['x86', 'x86_64']
+    extra_args += ['-msse2']         # baseline ISA — no x87 80-bit drift on Windows
+  endif
   extra_args += [
-    '-msse2',                       # baseline ISA — no x87 80-bit drift on Windows
-    '-fno-fast-math',               # disable the umbrella "go fast, drift OK" flag
-    '-fno-finite-math-only',        # honor inf/NaN — required for fesetround/IEEE
-    '-fno-associative-math',        # (a+b)+c must equal a+(b+c) at the bit level
-    '-fno-reciprocal-math',         # no a/b -> a*(1/b) rewrites
+    '-ffp-contract=off',             # forbid FMA/contraction — required on ARM, harmless on x86
+    '-fno-fast-math',                # disable the umbrella "go fast, drift OK" flag
+    '-fno-finite-math-only',         # honor inf/NaN — required for fesetround/IEEE
+    '-fno-associative-math',         # (a+b)+c must equal a+(b+c) at the bit level
+    '-fno-reciprocal-math',          # no a/b -> a*(1/b) rewrites
     '-fno-unsafe-math-optimizations', # umbrella for several of the above
-    '-frounding-math',              # don't assume the default rounding mode
-    '-fsignaling-nans',             # don't convert signaling NaNs to quiet
+    '-frounding-math',               # don't assume the default rounding mode
+    '-fsignaling-nans',              # don't convert signaling NaNs to quiet
   ]
 
   if host_machine.system() == 'linux'
     build_rpath = '$ORIGIN:$ORIGIN/../external/lib/linux/x86_64' # Set RUNPATH so that CCCP can find libfmod.so without needing to set LD_LIBRARY_PATH
   elif host_machine.system()=='darwin'
     build_rpath = '@executable_path/../external/lib/macos' # Add a new R_PATH CCCP can find libfmod.dylib on Darwin TODO: Confirm and validate this.
+    # macOS-arm64 bring-up: Apple Clang ships libc++ which removed std::auto_ptr / std::unary_function /
+    # std::binder1st in C++17 and several traits in C++20. The vendored luabind 0.7.1 + boost 1.75 hash
+    # headers still reference them exactly the way the Windows build's _HAS_AUTO_PTR_ETC=1 escape hatch
+    # keeps alive. These per-feature macros are the libc++ equivalent. add_global_arguments() is required
+    # (not add_project_arguments) so the flags reach the luabind subproject as well.
+    add_global_arguments(
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_BINDERS',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_RANDOM_SHUFFLE',
+      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNEXPECTED_FUNCTIONS',
+      '-D_LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS',
+      '-D_LIBCPP_ENABLE_CXX20_REMOVED_NEGATORS',
+      # libc++ gates <execution> + the parallel STL behind the experimental flag.
+      # Enable it and pin the SERIAL backend: par_unseq becomes a sequential pass,
+      # which is the strongest possible guarantee for run-to-run determinism on this
+      # platform (no thread scheduling involved). libstdc++/TBB on Linux and MSVC's
+      # parallel STL on Windows already produce deterministic per-tick hashes; the
+      # SERIAL backend on macOS is more conservative, not less.
+      '-D_LIBCPP_ENABLE_EXPERIMENTAL',
+      '-D_LIBCPP_PSTL_BACKEND_SERIAL',
+      language: 'cpp')
   endif
 
   #suffix = 'x86_64'
@@ -263,8 +291,10 @@ luabind_dep = dependency('luabind')
 raknet_proj = subproject('RakNet')
 raknet_dep = dependency('RakNet')
 blake3_proj = subproject('BLAKE3-1.8.5')
-blake3_dep = blake3_proj.get_variable('blake3_dep')
-deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, blake3_dep]
+blake3_dep = dependency('blake3')
+nlohmann_json_proj = subproject('nlohmann_json-3.12.0')
+nlohmann_json_dep = dependency('nlohmann_json')
+deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, blake3_dep, nlohmann_json_dep]
 
 #### Sources Setup ####
 source_inc_dirs = []
