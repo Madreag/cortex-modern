@@ -1288,6 +1288,19 @@ bool MOSRotating::DeepCheck(bool makeMOPs, int skipMOP, int maxMOPs) {
 	return false;
 }
 
+void MOSRotating::SetPos(const Vector& newPos) {
+	MovableObject::SetPos(newPos);
+	// Refresh attachables to the new joint-relative positions and snap their prevs so the render lerp does not
+	// drag the limbs in from their pre-teleport locations on the first frame after a teleport.
+	CorrectAttachableAndWoundPositionsAndRotations();
+	for (Attachable* attachable: m_Attachables) {
+		attachable->SetPrevPos(attachable->GetPos());
+	}
+	for (Attachable* wound: m_Wounds) {
+		wound->SetPrevPos(wound->GetPos());
+	}
+}
+
 void MOSRotating::PreTravel() {
 	MOSprite::PreTravel();
 
