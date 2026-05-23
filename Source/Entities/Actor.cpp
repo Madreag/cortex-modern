@@ -1501,7 +1501,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 			}
 
 			// Draw the line between the current position and to the start of the movepath, backwards so the dotted lines doesn't crawl
-			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MovePath.front() - targetPos, m_Pos - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MovePath.front() - targetPos, GetRenderPos() - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
 
 			// Draw the first destination/waypoint point
 			waypoint = m_MovePath.back() - targetPos;
@@ -1513,7 +1513,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 			// No points left on movepath, so draw straight line to the movetarget
 
 			// Draw it backwards so the dotted lines doesn't crawl
-			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MoveTarget - targetPos, m_Pos - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MoveTarget - targetPos, GetRenderPos() - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
 
 			// Draw the first destination/waypoint point
 			waypoint = m_MoveTarget - targetPos;
