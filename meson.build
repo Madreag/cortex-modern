@@ -322,6 +322,18 @@ fixedpoint_tests = executable(
   install:false,
 )
 
+# T-VALIDATION (ADR-017) — cccp-ctl test + benchmark CLI.
+# Standalone binary, no engine dependencies (stdlib + nlohmann_json only).
+# Wraps the main binary's -scenario and -determinism-check modes behind a
+# structured subcommand surface. See Source/CLI/cccp-ctl.cpp for the full design.
+cccp_ctl = executable(
+  'cccp-ctl', ['Source/CLI/cccp-ctl.cpp'],
+  cpp_args:[extra_args, preprocessor_flags],
+  dependencies: [nlohmann_json_dep],
+  build_by_default:true,
+  install:false,
+)
+
 
 #### Installing #####
 base_exclude_files = [
