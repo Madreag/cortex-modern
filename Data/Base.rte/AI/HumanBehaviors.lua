@@ -659,7 +659,14 @@ function HumanBehaviors.WeaponSearch(AI, Owner, Abort)
 		end
 		
 		AI.PickupHD = nil;
-		table.sort(devicesToPickUp, function(A,B) return A.score < B.score end);
+		-- Tie-break on deviceId so devicesToPickUp ordering is stable when scores
+		-- collide; the async path callbacks fire in scheduler-dependent order, so
+		-- the table.insert sequence above is non-deterministic even with identical
+		-- sim state. Deterministic determinism-trace runs require a total order.
+		table.sort(devicesToPickUp, function(A,B)
+			if A.score ~= B.score then return A.score < B.score end
+			return A.deviceId < B.deviceId
+		end);
 		for _, deviceToPickupEntry in ipairs(devicesToPickUp) do
 			local device = MovableMan:FindObjectByUniqueID(deviceToPickupEntry.deviceId);
 			if MovableMan:ValidMO(device) and device:IsDevice() then
@@ -777,7 +784,11 @@ function HumanBehaviors.ToolSearch(AI, Owner, Abort)
 		end
 
 		AI.PickupHD = nil;
-		table.sort(devicesToPickUp, function(A,B) return A.score < B.score end); -- sort the items in order of discounted distance
+		-- Tie-break on deviceId — see CreateGetWeaponBehavior above for why.
+		table.sort(devicesToPickUp, function(A,B)
+			if A.score ~= B.score then return A.score < B.score end
+			return A.deviceId < B.deviceId
+		end); -- sort the items in order of discounted distance
 		for _, deviceToPickupEntry in ipairs(devicesToPickUp) do
 			local device = MovableMan:FindObjectByUniqueID(deviceToPickupEntry.deviceId);
 			if MovableMan:ValidMO(device) and device:IsDevice() then
