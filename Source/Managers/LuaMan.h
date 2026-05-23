@@ -333,7 +333,11 @@ namespace RTE {
 
 		/// Adds a function to be called prior to executing lua scripts. This is used to callback into lua from other threads safely.
 		/// @param callback The callback function that will be executed.
-		void AddLuaScriptCallback(const std::function<void()>& callback);
+		/// @param sortKey Deterministic ordering key. Callbacks are stable-sorted by it before being executed so that
+		///                async-completion race order (e.g. multiple pathing requests finishing on worker threads in any
+		///                order) does not leak into per-tick Lua execution order. Pass 0 for callbacks where insertion
+		///                order is already deterministic.
+		void AddLuaScriptCallback(const std::function<void()>& callback, uint64_t sortKey = 0);
 
 		/// Executes and clears all pending script callbacks.
 		void ExecuteLuaScriptCallbacks();
@@ -458,7 +462,11 @@ namespace RTE {
 		LuaStateWrapper m_MasterScriptState;
 		LuaStatesArray m_ScriptStates;
 
-		std::vector<std::function<void()>> m_ScriptCallbacks; //!< A list of callback functions we'll trigger before processing lua scripts. This allows other threads (i.e pathing requests) to safely trigger callbacks in lua
+		struct ScriptCallbackEntry {
+			std::function<void()> callback;
+			uint64_t sortKey; //!< Deterministic order key; 0 = insertion-order. See AddLuaScriptCallback.
+		};
+		std::vector<ScriptCallbackEntry> m_ScriptCallbacks; //!< Pending callbacks, sorted by sortKey before execution.
 		std::mutex m_ScriptCallbacksMutex; //!< Mutex to ensure multiple threads aren't modifying the script callback vector at the same time.
 
 		int m_LastAssignedLuaState = 0;
