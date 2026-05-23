@@ -97,6 +97,7 @@ int Activity::Create(const Activity& reference) {
 	m_Paused = reference.m_Paused;
 	m_AllowsUserSaving = reference.m_AllowsUserSaving;
 	m_Description = reference.m_Description;
+	m_SceneName = reference.m_SceneName;
 	m_MaxPlayerSupport = reference.m_MaxPlayerSupport;
 	m_MinTeamsRequired = reference.m_MinTeamsRequired;
 	m_Difficulty = reference.m_Difficulty;
@@ -726,6 +727,10 @@ void Activity::ReassignSquadLeader(const int player, const int team) {
 }
 
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
+	// Test/determinism activities are sealed -- no human ever takes control of an actor.
+	if (m_IsTestActivity) {
+		return false;
+	}
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsHuman[player]) {
 		return false;
 	}

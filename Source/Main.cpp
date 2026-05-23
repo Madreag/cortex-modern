@@ -615,6 +615,33 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	// Headed vs headless: -tick-hashes (the determinism trace mode, on every
+	// -determinism-check child) renders nothing, so default it windowless.
+	// -headless forces it for any run; -headed forces a visible window.
+	{
+		bool headless = false;
+		for (int i = 1; i < argc; ++i) {
+			if (argv[i] == nullptr) { continue; }
+			const std::string arg = argv[i];
+			if (arg == "-tick-hashes" || arg == "-headless") {
+				headless = true;
+			} else if (arg == "-headed") {
+				headless = false;
+				break;
+			}
+		}
+		if (headless) {
+#ifdef _WIN32
+			// WindowMan creates the window hidden — Windows still needs a real WGL
+			// context, which SDL's offscreen video driver does not provide.
+			_putenv_s("CCCP_HEADLESS", "1");
+#else
+			// Other platforms: SDL's offscreen driver works without a display server.
+			setenv("SDL_VIDEODRIVER", "offscreen", 1);
+#endif
+		}
+	}
+
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
 	loadpng_init();
 
