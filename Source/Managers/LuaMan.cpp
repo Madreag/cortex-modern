@@ -589,13 +589,13 @@ void LuaMan::ClearUserModuleCache() {
 	}
 }
 
-void LuaMan::AddLuaScriptCallback(const std::function<void()>& callback) {
+void LuaMan::AddLuaScriptCallback(const std::function<void()>& callback, uint64_t sortKey) {
 	std::scoped_lock lock(m_ScriptCallbacksMutex);
-	m_ScriptCallbacks.emplace_back(callback);
+	m_ScriptCallbacks.push_back({callback, sortKey});
 }
 
 void LuaMan::ExecuteLuaScriptCallbacks() {
-	std::vector<std::function<void()>> callbacks;
+	std::vector<ScriptCallbackEntry> callbacks;
 
 	// Move our functions into the local buffer to clear the existing callbacks and to lock for as little time as possible
 	{
@@ -603,8 +603,15 @@ void LuaMan::ExecuteLuaScriptCallbacks() {
 		callbacks.swap(m_ScriptCallbacks);
 	}
 
-	for (const std::function<void()>& callback: callbacks) {
-		callback();
+	// Async path requests complete on worker threads and queue here in race order; stable_sort
+	// on the caller-provided key drains that race before the Lua side observes it.
+	std::stable_sort(callbacks.begin(), callbacks.end(),
+	                 [](const ScriptCallbackEntry& a, const ScriptCallbackEntry& b) {
+		                 return a.sortKey < b.sortKey;
+	                 });
+
+	for (const ScriptCallbackEntry& entry: callbacks) {
+		entry.callback();
 	}
 }
 

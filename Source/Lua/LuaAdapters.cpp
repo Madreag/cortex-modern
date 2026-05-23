@@ -305,11 +305,26 @@ void LuaAdaptersScene::CalculatePathAsync(Scene* luaSelfObject, const luabind::o
 	}
 
 	auto callLuaCallback = [luaState, thisCallbackId](std::shared_ptr<volatile PathRequest> pathRequestVol) {
-		// This callback is called from the async pathing thread, so we need to further delay this logic into the main thread (via AddLuaScriptCallback)
+		// This callback is called from the async pathing thread, so we need to further delay this logic into the main thread (via AddLuaScriptCallback).
+		// Sort key is derived from the request's start+target so two paths from different
+		// actors get distinct, deterministic keys regardless of which worker thread completes
+		// first. With race-order execution Lua-side table.insert / table.sort on equal-cost
+		// hits would pick different "best" devices across runs.
+		const PathRequest& reqForKey = const_cast<PathRequest&>(*pathRequestVol);
+		uint32_t bits[4];
+		std::memcpy(&bits[0], &reqForKey.startPos.m_X, sizeof(float));
+		std::memcpy(&bits[1], &reqForKey.startPos.m_Y, sizeof(float));
+		std::memcpy(&bits[2], &reqForKey.targetPos.m_X, sizeof(float));
+		std::memcpy(&bits[3], &reqForKey.targetPos.m_Y, sizeof(float));
+		uint64_t sortKey = static_cast<uint64_t>(bits[0]) * 0x9E3779B97F4A7C15ULL;
+		sortKey = (sortKey ^ bits[1]) * 0xBF58476D1CE4E5B9ULL;
+		sortKey = (sortKey ^ bits[2]) * 0x94D049BB133111EBULL;
+		sortKey = (sortKey ^ bits[3]) * 0x9E3779B97F4A7C15ULL;
+		sortKey ^= sortKey >> 31;
 		g_LuaMan.AddLuaScriptCallback([luaState, thisCallbackId, pathRequestVol]() {
 			PathRequest pathRequest = const_cast<PathRequest&>(*pathRequestVol); // erh, to work with luabind etc
 			luabind::call_function<void>(luaState, "_TriggerAsyncPathCallback", thisCallbackId, pathRequest);
-		});
+		}, sortKey);
 	};
 
 	luaSelfObject->CalculatePathAsync(start, end, jumpHeight, digStrength, team, callLuaCallback);
