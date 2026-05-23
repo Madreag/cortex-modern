@@ -339,54 +339,107 @@ Blocks A-E infrastructure is **present** in the foundation:
    is independently real and any future scenario that does use the
    Lua-callback path API would otherwise be exposed to it.
 
-### Remaining candidates for the M4 race (not narrowed further this pass)
+### Second fix landed this pass: `Controller::FreezeStateForAIPhase` analog gap
 
-1. **Incomplete `FreezeStateForAIPhase` field-list.** The freeze covers
-   `m_FrozenFirearmReady`, `m_FrozenEquippedItem`,
-   `Controller::m_FrozenControlStates` (28 bool button states), and the
-   `Actor::FreezeStateForAIPhase` base. It does **not** cover
-   `Controller::m_AnalogMove`, `m_AnalogAim`, `m_AnalogCursor` (the 6
-   floats hashed alongside the bools), nor most cross-actor fields the
-   AI reads (`Pos`, `Vel`, `ViewPoint`, `AIMode`, ...). The position-class
-   fields are stable during the AI phase (physics is in `Travel`,
-   earlier in the tick), but anything the parallel `ThreadedUpdateAI`
-   itself mutates on its own actor is then read live by another worker
-   reading that actor — and `AnalogAim` in particular is set heavily
-   during the AI phase via `self.Ctrl.AnalogAim = ...`. I audited the
-   Lua AI for cross-actor analog *reads* and didn't find any direct
-   ones, but C++ accessors derived from `m_AnalogAim` could leak the
-   live value into per-actor state another worker reads.
-2. **`OnCollideWith*` per-Lua-state RNG residual.** Deliberately out of M4
-   scope per `baseline_thread_divergence.md` §"Out of M4 scope". These
-   run *serially* inside `Travel()`, so the divergence per-thread-count
-   would be deterministic by thread count — but the per-actor population
-   reaching the collision-callback by tick 333 is influenced by all the
-   earlier non-deterministic AI decisions, which is how a serial
-   callback's RNG-state could end up varying across runs of the same
-   thread count.
-3. **Cross-actor pointer comparison in AI Lua/C++** that sorts or branches
-   on memory addresses instead of `m_UniqueID`. ASLR re-randomises
-   addresses per run; M4's high actor count makes ties common. Would
-   also be consistent with the threads ≥ 2 dependency (more actors per
-   Lua state at higher counts increases the cross-actor read surface).
-   Specifically
-   I would re-audit `MovableMan::GetClosestEnemyActor` and any AI use
-   of `std::set<MovableObject*>` / `std::unordered_set<MovableObject*>`
-   that iterates without a MOID sort wrapper (the audit doc found one
+Verified empirically that even a single-run M4 trace is non-deterministic:
+5 back-to-back `-tick-hashes` invocations produced 2 distinct final
+hashes (one in 4 runs, the other in 1) — so the race fires within a
+single child process, not just across the determinism-check's N children.
+
+`Controller::FreezeStateForAIPhase` snapshotted only `m_FrozenControlStates`
+(the 28 booleans the controller hash captures) and left
+`m_AnalogMove / m_AnalogAim / m_AnalogCursor` live. Those three are
+in the same hashed surface and are written every parallel
+`ThreadedUpdateAI` tick by AI scripts (`self.Ctrl.AnalogAim = ...`),
+so a cross-actor read returned live data while another worker was
+concurrently writing it. Fix landed (commit
+`Controller: freeze the analog vectors alongside the bool control states`):
+adds `m_FrozenAnalog{Move,Aim,Cursor}`, snapshots in
+`FreezeStateForAIPhase`, and gates the getters on the same
+`g_CurrentAIActor && m_ControlledActor != g_CurrentAIActor` check that
+`IsState` already uses.
+
+**Empirical result after this second fix**: M4ThreadStress single-run
+distribution is still 2 outcomes (the same `99ec...` and `29045b...`
+pair, 4-vs-1 split across 5 re-runs). M1Baseline and M2LuaBaseline
+traces are bit-identical to the committed baselines, so the fix is a
+no-regression defensive improvement — it just isn't the M4 root cause
+either.
+
+### Diagnostic narrative (what the per-actor controller dump showed)
+
+`Source/Managers/MovableMan.cpp:1810` was temporarily instrumented to
+write per-actor `(uniqueID, control-bits, AnalogMove/Aim/Cursor float
+bits, inputMode)` to a per-PID file for ticks 330-340. Two divergent
+single-run dumps were diffed at the first divergence tick (~334).
+The result: a single actor (`A31284`, the highest-uniqueID actor
+present at that tick — one of the wave-1 reinforcements that dropped at
+tick 220) had `AnalogAim` differing by **sub-ULP amounts** across runs:
+
+```
+run-A: A31284 ... aim=3f6d9193:bebec202 ...
+run-B: A31284 ... aim=3f6d916d:bebec2bd ...
+```
+
+`0x3f6d9193 ≈ 0.92794` vs `0x3f6d916d ≈ 0.92793` — one last-place ULP of
+drift. No other actor diverges at tick 334; this is a single-actor,
+single-field cascade.
+
+A sub-ULP analog-aim drift consistent with the AI's aim-smoothing
+filter (`HumanBehaviors.lua` `ShootTarget` does `f1 * old + f2 * new`
+each tick) is what you'd expect from a per-actor RNG-stream divergence
+where the AI's `RangeRand` aim-noise call sequence is shifted by one
+draw between the two runs. The per-MO RNG seed is
+`DeriveMORNGSeed(uniqueID, tick, Hash(functionName))` — purely
+deterministic — so the divergence in the consumed *count* of RNG draws
+(not the seed) is what must be racy. That points back at AI branching
+on a cross-actor read whose value depends on parallel worker scheduling.
+
+(The instrumentation was reverted before this report was committed.
+It can be re-applied trivially: a `FILE* dbg = std::fopen(path, "a")`
+gated on `g_TimerMan.GetSimUpdateCount() >= 330 && <= 340` around the
+existing per-actor loop.)
+
+### Remaining candidates for the M4 race (still open)
+
+With the two fixes landed (`LuaMan` script-callback ordering +
+`Controller` analog freeze), the remaining suspects narrow to:
+
+1. **`OnCollideWith*` per-Lua-state RNG residual.** Deliberately out of
+   M4 scope per `baseline_thread_divergence.md` §"Out of M4 scope".
+   Runs serially inside `Travel()`, but the per-actor population
+   reaching the collision-callback at tick 334 is influenced by all the
+   earlier non-deterministic AI decisions, so a serial callback's
+   per-Lua-state RNG ends up consumed by a non-deterministic count of
+   actors.
+2. **Cross-actor pointer comparison in AI Lua/C++** that sorts or
+   branches on memory addresses instead of `m_UniqueID`. ASLR
+   re-randomises addresses per run; M4's high actor count makes ties
+   common. Consistent with the threads ≥ 2 dependency (more actors per
+   Lua state at higher counts increases the cross-actor surface).
+   Specifically: re-audit any AI use of
+   `std::set<MovableObject*>` / `std::unordered_set<MovableObject*>`
+   that iterates without a MOID-sort wrapper (the audit doc found one
    — `LuaStateWrapper::m_RegisteredMOs` — but Block B handles it; any
    other instance would not).
-4. **A non-frozen mutable per-actor field read during the parallel AI
-   phase that varies based on which worker thread runs first.** Cousin
-   of #1 — same class of bug, different field. The Controller's
-   `m_AnalogMove/Aim/Cursor` are the most suspicious because they're
-   in the hashed surface and not in the freeze list.
+3. **A non-frozen cross-actor field read during the parallel AI phase
+   that varies based on which worker thread runs first.** The
+   Controller analog fix above closes the most obvious candidate;
+   other candidates would be fields on the Actor itself that
+   `ThreadedUpdateAI` mutates (e.g. `m_AimAngle` derived from
+   `m_AnalogAim`, internal AI-state booleans set by the AI Lua's
+   `Owner:Set...()` bindings).
 
 A TSan build per the prior Linux PathFinder bug's playbook (build with
-`-Db_sanitize=thread`, run under `setarch -R` for ASLR-off, exclude LuaJIT
-from instrumentation) is the next investigation step. A TSan binary was
-configured and built during this bring-up (`build-tsan/`) but the
-sanitizer pass itself was deferred — full TSan + re-trace + narrow
-deserves a focused M4 follow-up commit, not the bring-up.
+`-Db_sanitize=thread`, run under `setarch -R` for ASLR-off) is the
+canonical next investigation step. **A TSan build was attempted during
+this bring-up (`build-tsan/`) but failed at the LuaJIT subproject's
+DynASM step** — LuaJIT's `lj_bcdef.h` / `lj_folddef.h` etc.
+self-generated headers fail to compile under `-fsanitize=thread`.
+LuaJIT-from-source needs an exclusion shim (likely
+`b_sanitize=` disabled on just the LuaJIT subproject's `meson.build`)
+before TSan can run on the engine. That meson-side rework is a separate
+follow-up.
 
 ## `MPerfBench` — out-of-scope per scenario header; documented divergence
 
@@ -464,17 +517,26 @@ despite the scenario's out-of-scope status, for completeness).
 ## Known issues / follow-ups (not closed by this bring-up)
 
 * **`M4ThreadStress` same-thread-count race at threads ≥ 2** — characterised
-  above. One contributing race (the `m_ScriptCallbacks` queue order from
-  async pathing workers) was identified and fixed in this branch as a
-  defensive correctness improvement (see commit
-  `LuaMan: sort script-callback queue by caller key to drain async-race order`),
-  but verified *not* to be the M4 bug — M4 doesn't fire that code path.
-  The actual M4 race needs a TSan pass to narrow further. Likely
-  candidates per the RCA above: incomplete `FreezeStateForAIPhase`
-  field-list (the Controller analog fields are in the hashed surface
-  but not in the freeze list), an `OnCollideWith*` per-Lua-state RNG
-  residual, or a cross-actor pointer comparison in AI Lua/C++. None
-  are in the audit document's closed-by-Blocks-B-E categories.
+  above. **Two** contributing races were identified and fixed
+  defensively on this branch:
+  (a) the `m_ScriptCallbacks` queue order from async pathing workers
+  (commit `LuaMan: sort script-callback queue by caller key to drain
+  async-race order`); and
+  (b) the `Controller::FreezeStateForAIPhase` analog-fields gap
+  (commit `Controller: freeze the analog vectors alongside the bool
+  control states`).
+  Both fixes are real correctness improvements but neither closes the
+  M4 race — empirical re-test after each shows the same two-outcome
+  single-run-trace hash split (`99ec...` vs `29045b...`, 4-vs-1 across
+  five re-runs). Per-actor instrumented dump localised the symptom
+  to one actor's `AnalogAim` drifting by **one ULP** at tick 334;
+  consistent with a per-MO-RNG draw-count divergence cascading through
+  the AI's aim-smoothing filter. Still-open candidates: `OnCollideWith*`
+  per-Lua-state RNG residual (out of M4 scope), cross-actor pointer
+  comparisons in AI Lua/C++ (ASLR re-randomises), or a non-frozen
+  Actor-level field read during parallel AI. TSan is the canonical next
+  step but requires a LuaJIT exclusion shim — currently
+  `meson setup -Db_sanitize=thread` fails at the LuaJIT DynASM build.
 * **`meson.build:88` discards FP-determinism flags in release.** The macOS
   restructure left the assignment-not-append in place; the
   Linux release build compiles without `-ffp-contract=off` etc. Empirically
@@ -502,10 +564,13 @@ Linux x86-64 is **green on 9 of 10 determinism-scoped scenarios** at
 Linux bring-up did not catch — the reinforcement-wave rewrite of the
 scenario is new since that bring-up, and the matrix-only mode the prior
 work used would not have surfaced it. The pre-existing M4 cross-thread-count
-residual at tick 136 is **closed** by Blocks B-E; the new tick-333 race is
-its successor. One related correctness fix landed on this branch
-(`LuaMan: sort script-callback queue by caller key to drain async-race order`)
-which closes the async pathing → Lua callback queue ordering race; the
-M4ThreadStress race itself remains unfixed (separate root cause, M4
-follow-up). `MPerfBench` diverges by design (scenario header declares
-it). The integer Q40.24 self-check hashes bit-identical to macOS-arm64.
+residual at tick 136 is **closed** by Blocks B-E; the new tick-333/334
+race is its successor. **Two** defensive correctness fixes landed on
+this branch (`LuaMan` script-callback queue ordering + `Controller`
+analog-fields freeze) — both closed real race classes but neither closed
+the M4 race itself. The remaining race localises to a single actor's
+sub-ULP `AnalogAim` drift, most likely a per-MO RNG draw-count
+divergence cascading through the AI's aim smoothing. TSan narrowing is
+deferred pending a LuaJIT exclusion shim for the sanitizer build.
+`MPerfBench` diverges by design (scenario header declares it). The
+integer Q40.24 self-check hashes bit-identical to macOS-arm64.
