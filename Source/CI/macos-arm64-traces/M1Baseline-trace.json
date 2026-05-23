@@ -3,7 +3,7 @@
   "runs": [
     {
       "event_counts": {
-        "decision/ai_tick": 2987,
+        "decision/ai_tick": 2990,
         "decision/behaviour_selected": 13,
         "decision/mode_changed": 9,
         "decision/scenario_end": 1,
@@ -11,13 +11,13 @@
         "decision/target_acquired": 2,
         "decision/target_lost": 2,
         "locomotion/behaviour_selected": 10,
-        "reflex/alarm_scan": 2699,
+        "reflex/alarm_scan": 2702,
         "reflex/behaviour_selected": 6
       },
       "final_total_hash": "c7282c4487df76c6829dedd1140a16cd9ded1894329e1c1d34837cc8db8a7520",
       "numeric": {
-        "__sim_compute_accum": 2984358.0,
-        "__wall_seconds": 10.209463458,
+        "__sim_compute_accum": 3043454.0,
+        "__wall_seconds": 10.198558917,
         "actor_count": 1.0,
         "final_tick": 599.0
       },
@@ -9625,7 +9625,7 @@
           "total": "97c3e4442945fce1780ea1f151295ab6f6ae71c1f0676cbb39342315864b8a03"
         }
       ],
-      "ticks": 688
+      "ticks": 689
     }
   ],
   "scenarios": {

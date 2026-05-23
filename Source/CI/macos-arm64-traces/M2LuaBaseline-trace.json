@@ -13,8 +13,8 @@
       },
       "final_total_hash": "bd3fc0e26022d16fea7cf658af445452db1281d69dfaf187f5f09e73f1cc4491",
       "numeric": {
-        "__sim_compute_accum": 2954399.0,
-        "__wall_seconds": 10.186864584,
+        "__sim_compute_accum": 3008855.0,
+        "__wall_seconds": 10.205570042,
         "actor_count": 0.0,
         "final_tick": 599.0
       },

@@ -3,7 +3,7 @@
   "runs": [
     {
       "event_counts": {
-        "decision/ai_tick": 4555,
+        "decision/ai_tick": 4550,
         "decision/behaviour_selected": 47,
         "decision/mode_changed": 14,
         "decision/scenario_end": 1,
@@ -11,13 +11,13 @@
         "decision/target_acquired": 23,
         "decision/target_lost": 16,
         "locomotion/behaviour_selected": 39,
-        "reflex/alarm_scan": 2858,
+        "reflex/alarm_scan": 2856,
         "reflex/behaviour_selected": 27
       },
-      "final_total_hash": "1ff1bb8ba54f3738a4a6091b3f5df57e28fde367237d78e11b06f5ef85211a74",
+      "final_total_hash": "78e9ecac05c4658e5f6c488be6e2a080dc43e0b0897783851200e50052e5c1ef",
       "numeric": {
-        "__sim_compute_accum": 3133357.0,
-        "__wall_seconds": 11.809214875,
+        "__sim_compute_accum": 3145050.0,
+        "__wall_seconds": 11.726420791,
         "actor_count": 6.0,
         "alive_at_tick_120": 6.0,
         "alive_at_tick_240": 6.0,
@@ -26,7 +26,7 @@
         "alive_at_tick_600": 4.0,
         "ended_externally": 1.0,
         "final_alive_count": 4.0,
-        "final_tick": 689.0
+        "final_tick": 688.0
       },
       "passed": true,
       "scenario": "M3TerrainStress",
@@ -9632,7 +9632,7 @@
           "total": "d79436587ff23e87d56f2483525e131d11cb2d0c9ed5388ef356512719a52f6d"
         }
       ],
-      "ticks": 690
+      "ticks": 689
     }
   ],
   "scenarios": {
