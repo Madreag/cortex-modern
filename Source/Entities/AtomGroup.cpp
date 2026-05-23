@@ -356,8 +356,10 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 
 	HitData hitData;
 
-	// Thread locals for performance (avoid memory allocs)
-	thread_local std::unordered_map<MOID, std::vector<Atom*>> hitMOAtoms;
+	// std::map (not unordered_map) so the hitMOAtoms iteration order below
+	// is MOID-ascending; FP impulse accumulation over a non-deterministic
+	// map order would silently feed bit-noise into the per-tick actors hash.
+	thread_local std::map<MOID, std::vector<Atom*>> hitMOAtoms;
 	hitMOAtoms.clear();
 	thread_local std::vector<Atom*> hitTerrAtoms;
 	hitTerrAtoms.clear();
@@ -804,10 +806,11 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 
 	HitData hitData;
 
-	// Thread locals for performance reasons (avoid memory allocs)
-	thread_local std::unordered_map<MOID, std::unordered_set<Atom*>> MOIgnoreMap;
+	// std::map keys MOID-ascending; see PushTravel above for why FP impulse
+	// accumulation order must be deterministic. MOIgnoreMap is membership-only.
+	thread_local std::map<MOID, std::unordered_set<Atom*>> MOIgnoreMap;
 	MOIgnoreMap.clear();
-	thread_local std::unordered_map<MOID, std::vector<std::pair<Atom*, Vector>>> hitMOAtoms;
+	thread_local std::map<MOID, std::vector<std::pair<Atom*, Vector>>> hitMOAtoms;
 	hitMOAtoms.clear();
 	thread_local std::deque<std::pair<Atom*, Vector>> hitTerrAtoms;
 	hitTerrAtoms.clear();
