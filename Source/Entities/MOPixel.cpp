@@ -236,7 +236,6 @@ void MOPixel::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode,
 			break;
 	}
 
-	const float fLerp = mode == g_DrawMOID ? 1.0f : g_TimerMan.GetSimUpdateProportion();
 	Vector spritePos = GetRenderPos() - targetPos;
 	if (mode != DrawMode::g_DrawMOID) {
 		putpixel(targetBitmap, spritePos.GetFloorIntX(), spritePos.GetFloorIntY(), drawColor);
