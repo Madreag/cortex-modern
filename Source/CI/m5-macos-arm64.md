@@ -26,7 +26,7 @@ Branch: `exp/determinism-macos` off `exp/determinism-foundation`.
 | `M1ActorStress` @ `--runs 100` `--ticks 600` | MATCHED |
 | `M2LuaBaseline` @ `--runs 100` `--ticks 600` | MATCHED |
 | `M2LuaRandomStress` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M2PairsStress` @ `--runs 100` `--ticks 600` | **DIVERGED** — flaky, ~2–4% of runs, `controller` subsystem only (see characterisation below) |
+| `M2PairsStress` @ `--runs 100` `--ticks 600` | MATCHED (verified across three independent --runs 100 sweeps after the UInputMan determinism gate landed; see RCA below) |
 | `M2OsStubTest` @ `--runs 100` `--ticks 600` | MATCHED |
 | `M2ModSmokeLoading` @ `--runs 100` `--ticks 600` | MATCHED |
 | `M3TerrainStress` @ `--runs 100` `--ticks 600` | MATCHED |
@@ -135,6 +135,21 @@ called out next to it.
    _Regression risk on Windows / Linux: none. `IsOnAppMainThread()` returns
    `true` unconditionally on those platforms._
 
+7. **`UInputMan: zero live-device reads when recording tick hashes`** —
+   SDL on macOS captures mouse-motion events even when the binary runs in
+   the `-determinism-check` headless mode, so the one player-controlled actor
+   in the Tutorial Bunker scene was occasionally reading non-zero analog aim
+   from `m_MouseStates.analogAim`. That fed live host cursor jitter into the
+   per-tick `controller` hash and produced a ~3% same-platform flake on
+   `M2PairsStress --runs 100`. Gate `AnalogMoveValues` and `AnalogAimValues`
+   on `g_MetricsCollector.IsRecordingTickHashes()` so they return `(0, 0)`
+   whenever the simulation is hashing its state — same effect on every host
+   regardless of background SDL activity.
+   _Regression risk on Windows / Linux: none. The gate fires only inside
+   `-determinism-check` / `-tick-hashes` runs, which are headless by design
+   and never have a real player driving the analog values. Gameplay outside
+   that mode is unaffected._
+
 ## Same-platform determinism
 
 The harness runs were executed from `builddir/` with a sibling `Data/` tree
@@ -169,106 +184,73 @@ the `--runs 100` final results are the authoritative ones.
 | `M1ActorStress` | `false` | — | MATCHED. |
 | `M2LuaBaseline` | `false` | — | MATCHED. |
 | `M2LuaRandomStress` | `false` | — | MATCHED. |
-| `M2PairsStress` | **`true`** | varies (tick 2 / 8 / 32 / 89 / 121 / 262 / 429 across reruns) | Flaky. 2–4 of 100 runs diverge; only the `controller` subsystem; persists with `CCCP_SIM_THREADS=1` (so it is not a thread-pool race). Detailed characterisation below. |
+| `M2PairsStress` | `false` | — | MATCHED at `--runs 100 --ticks 600` after the UInputMan determinism gate (commit 7 above) landed. Verified across three back-to-back sweeps (300 runs total). |
 | `M2OsStubTest` | `false` | — | MATCHED. |
 | `M2ModSmokeLoading` | `false` | — | MATCHED. |
 | `M3TerrainStress` | `false` | — | MATCHED. |
 
-The 8 of 9 same-platform-deterministic scenarios are stable: the prod sweep
-ran sequentially `M1Baseline → M3TerrainStress` over ~2h 55min wall and each
-produced `diverged: false` with `total_mismatched_ticks: 0`. M2PairsStress is
-the one outlier and is broken out below.
+All nine M1/M2/M3 scenarios at `--runs 100` reported `diverged: false`. The
+prod sweep ran sequentially `M1TerrainStress → M3TerrainStress` over ~2h
+55min wall (plus the earlier `M1Baseline --runs 100` ~22 min); `M2PairsStress`
+was initially flaky and was tracked down + fixed in the same session — see
+the RCA section below.
 
-(For the `--runs 10` iteration pass that preceded this — every scenario above
-plus `M1Baseline` MATCHED on this host. The one M3TerrainStress divergence
-that appeared during the very first `--runs 10` invocation did not reproduce
-on subsequent runs; same hypothesis as `M1Baseline` above. M2PairsStress
-matched at `--runs 10` and only surfaces its flake at `--runs 100`+.)
+### M2PairsStress — initial flake, root-cause + fix
 
-### M2PairsStress — characterisation of the residual flake
+Initial observation (before commit 7 above): `M2PairsStress --runs 100
+--ticks 600` reported `diverged: true` in ~3% of runs (2 / 4 / 4 across three
+independent sweeps), exclusively in the `controller` subsystem at varying
+first-divergence ticks. The pattern survived `CCCP_SIM_THREADS=1` (so it was
+not a thread-pool race) and matched at `--ticks 100` (so the source of drift
+took at least 100 sim ticks to surface).
 
-The flake is **not platform-of-build determinism in the strict sense** (i.e. it
-is not "this build emits different bits") — it is **process-to-process
-variance from heap layout entering a Lua iteration order**. Investigated and
-characterised here; not fixed in this bring-up because the fix is in the
-shared `RegisterDeterministicPairs` C function and rises to a "changes shared
-logic for all platforms" call-out per the instructions.
+To pin the byte source, the `controller` hash loop in `MovableMan.cpp` was
+temporarily instrumented to also write each per-actor field set (uniqueID,
+28 control-state booleans, 6 analog floats, inputMode) as plain text to a
+per-pid diagnostic file. After a fresh `--runs 100 --keep-runs` sweep, two
+runs that differed by their JSON tick-hash were diffed at the diverging tick
+(tick 2 in one case). The diff was a single actor — the one Tutorial Bunker
+scene actor with `mode=1` (`CIM_PLAYER`) — and a single field — `AnalogAim`:
 
-Observed pattern (across three independent `--runs 100 --ticks 600` repeats):
+```
+ref  T2 A16978 ... m=00000000:00000000 a=00000000:00000000 c=00000000:00000000 mode=1
+fail T2 A16978 ... m=00000000:00000000 a=3b31bcb5:3b3700e1 c=00000000:00000000 mode=1
+```
 
-- Each invocation diverges in 2 / 4 / 4 of 100 runs; mean ~3%.
-- Diverging runs are NOT correlated (in repeats 1 and 2 the diverging run
-  indices have no overlap).
-- First-divergence tick varies wildly (`2`, `8`, `32`, `89`, `121`, `262`,
-  `429`); when divergence occurs at tick `T`, every tick `>= T` also diverges
-  (the controller bytes go off and never come back).
-- `per_subsystem_first_divergence` is exactly `{"controller": T}`. No other
-  subsystem diverges first. The `controller` hash bytes — feeding through
-  `MovableMan.cpp` lines 1809–1820 — are six analog floats (`AnalogMove`,
-  `AnalogAim`, `AnalogCursor`) plus the 28 `m_ControlStates` booleans and the
-  `inputMode`.
-- Persists with `CCCP_SIM_THREADS=1` (forces priority pool + Lua state count
-  to 1). Therefore not a thread-pool race, not a parallel-pass scheduling
-  artefact.
-- Goes away at `--ticks 100` (the first ~100 ticks reliably match across 100
-  runs).
+`0x3b31bcb5` ≈ `0.00271f` and `0x3b3700e1` ≈ `0.00279f` — the magnitudes are
+sub-pixel cursor noise. Tracing through `Controller::UpdatePlayerAnalogInput`
+(`Source/System/Controller.cpp:407`), they originate from
+`g_UInputMan.AnalogAimValues(m_Player)`, which dereferences
+`m_MouseStates.at(0).analogAim`. SDL on Cocoa keeps polling mouse-motion
+events into the SDL event queue even when the binary runs without an actual
+on-screen interactive window, so any host-side cursor activity during the
+100-child sweep would occasionally land a non-zero analog-aim float in the
+player actor's controller — and from there into the per-tick controller hash.
 
-Root-cause analysis (source-grounded):
+The fix (commit 7 above): gate `UInputMan::AnalogMoveValues` and
+`UInputMan::AnalogAimValues` on `g_MetricsCollector.IsRecordingTickHashes()`
+and return `Vector(0, 0)` whenever the simulation is recording its tick
+trace. The gate is platform-agnostic, so the same change also closes any
+analogous flake on Linux / Windows determinism CI runs (the only reason it
+was masked there is that the GitHub Actions runner doesn't have a live mouse
+attached to drive non-zero `m_MouseStates`). After the fix:
 
-The current `det_pairs_compare` in `Source/Managers/LuaMan.cpp` lines 28–55
-explicitly returns `false` (compare-equal) for any pair of keys whose Lua type
-is `LUA_TTABLE` / `LUA_TFUNCTION` / `LUA_TUSERDATA` — the commit message in
-`9bef5a9ed` ("M2 Block C: deterministic pairs() via global replacement")
-acknowledges this:
+- `M2PairsStress --runs 100 --ticks 600`: MATCHED, three independent sweeps,
+  300 runs total, zero divergences.
+- `M1Baseline --runs 100 --ticks 600`: MATCHED (re-verified post-fix).
+- `M4ThreadStress --threads 1,2,4,8,16 --runs 2 --ticks 900`: MATCHED
+  (re-verified post-fix).
 
-> Non-primitive keys (table/function/userdata) compare equal, so their
-> relative order stays unspecified.
+The temporary diagnostic was removed before the binary used to regenerate the
+committed traces; the published `Source/CI/macos-arm64-traces/*.json` are the
+fixed-build trace bytes the team's cross-OS comparator step will diff.
 
-LuaJIT's `table.sort` is unstable, so equal-comparing keys retain whichever
-order the snapshot-into-array step put them in — and the snapshot is built by
-walking the source table with raw `lua_next`, which IS hash-order, which IS
-addressed-derived for userdata keys. Across process invocations, ASLR / heap
-layout / allocator timing differ, so the snapshot order differs for any table
-that holds userdata keys.
-
-Stock-AI code paths that iterate such tables (e.g.
-`Data/Base.rte/AI/SharedBehaviors.lua:165 — for _, Act in pairs(Brains)`,
-`SharedBehaviors.lua:935 — for k, Face in pairs(Facings)`) then deliver work
-to actors in a slightly different order in ~3% of process runs. Order-of-call
-to `RangeRand` against the per-actor MO-RNG (which IS deterministic for a
-given call-order, but per-actor draws are not commutative-with-respect-to
-order) produces different aim-jitter outcomes, which write through to the
-controller's analog floats, which surface in the per-tick `controller` hash.
-
-M2PairsStress is the scenario the residual surfaces most reliably in because
-its OnTick spins a 200-element pairs() loop and pushes Lua GC harder than the
-others — that gives LuaJIT more opportunities to compact / reseat / re-hash
-internal tables across its sim run, increasing the probability that an
-AI-script's `pairs(Brains)` lands on a different walk-order than the
-reference run.
-
-Why we are not fixing this here:
-
-- The fix is in `det_pairs_compare` — a SHARED-LOGIC change that touches the
-  Windows and Linux builds identically (the issue is platform-independent;
-  the per-host flake rate is just what surfaces empirically). The mission's
-  scope is macOS bring-up — "Fix bugs; do not refactor, redesign, or
-  modernise" — so changing the deterministic-pairs comparator to deterministic-
-  order userdata keys is explicitly a separate planned step. It needs its own
-  CI gate and its own validation pass on Linux + Windows.
-- The mission's float-divergence guidance ("characterise it in the report and
-  stop; closing that gap is a separate planned step") applies by analogy:
-  this is the Lua-iteration-order gap, equally pre-existing, equally not in
-  scope.
-- Six of the nine M1/M2/M3 scenarios plus the M4 matrix are clean.
-
-The proper fix when it is undertaken: make `det_pairs_compare`, for
-non-primitive keys, compare on either a per-type ordinal AND the value's
-`lua_topointer` cast through the snapshot index (so we get within-snapshot
-stable-order at minimum), OR — preferable — recover a deterministic key from
-the userdata's content (e.g. for `MovableObject`-backed userdata, fetch
-`GetUniqueID` via a luabind binding lookup). Either route is more than a
-single-commit bring-up fix.
+(For the `--runs 10` iteration pass that preceded the production sweep — every
+scenario MATCHED on this host. The one M3TerrainStress divergence that
+appeared during the very first `--runs 10` invocation did not reproduce on
+subsequent runs; same OS-page-cache warm-up hypothesis as the M1Baseline note
+above. M2PairsStress was clean at `--runs 10` and only surfaced its flake at
+`--runs 100`+.)
 
 ### `M4ThreadStress` thread-count matrix
 
@@ -386,5 +368,6 @@ characterise the float ABI gap rather than a determinism regression.
 * `Source/Menus/SaveLoadMenuGUI.cpp` — duration_cast guard
 * `Source/Managers/MovableMan.cpp` — parallelize_loop num_blocks
 * `Source/System/RTEError.cpp` — main-thread guard on the three message boxes
+* `Source/Managers/UInputMan.cpp` — zero AnalogMove/AnalogAim in determinism mode
 * `Source/CI/macos-arm64-traces/*.json` — per-tick traces (10 scenarios)
 * `Source/CI/m5-macos-arm64.md` — this file
