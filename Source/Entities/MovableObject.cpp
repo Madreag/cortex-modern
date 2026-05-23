@@ -170,6 +170,7 @@ int MovableObject::Create(const float mass,
                           bool getHitByMOs) {
 	m_Mass = mass;
 	m_Pos = position;
+	m_PrevPos = position;
 	m_Vel = velocity;
 	m_AgeTimer.Reset();
 	m_RestTimer.Reset();
@@ -195,6 +196,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_MOType = reference.m_MOType;
 	m_Mass = reference.m_Mass;
 	m_Pos = reference.m_Pos;
+	m_PrevPos = reference.m_Pos;
 	m_Vel = reference.m_Vel;
 	m_Scale = reference.m_Scale;
 	m_GlobalAccScalar = reference.m_GlobalAccScalar;

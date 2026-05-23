@@ -156,7 +156,7 @@ namespace RTE {
 
 		/// Gets the previous position vector of this MovableObject, prior to this frame.
 		/// @return A Vector describing the previous position vector.
-		const Vector& GetPrevPos() const { return m_PrevPos.IsZero() ? m_Pos : m_PrevPos; } // if PrevPos is zero we've just spawned, so return current pos to avoid interps from 0,0
+		const Vector& GetPrevPos() const { return m_PrevPos; }
 
 		/// Gets the render position vector of this MovableObject. Returned by value
 		/// because Lerp produces a temporary -- handing back const& would dangle.

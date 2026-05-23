@@ -97,7 +97,7 @@ namespace RTE {
 
 		/// Gets the previous position of this Arm's hand in absolute Scene coordinates.
 		/// @return The previous position of this Arm's hand in absolute Scene coordinates.
-		Vector GetHandPrevPos() const { return m_HandPrevPos.IsZero() ? m_HandPos : m_HandPrevPos; }
+		Vector GetHandPrevPos() const { return m_HandPrevPos; }
 
 		/// Sets the current position of this Arm's hand to an absolute scene coordinate. If needed, the set position is modified so its distance from the joint position of the Arm is capped to the max length of the Arm.
 		/// @param newHandPos The new current position of this Arm's hand as absolute scene coordinate.

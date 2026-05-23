@@ -219,8 +219,13 @@ void Arm::Update() {
 
 	m_HandIdleRotation = 0;
 
+	bool firstUpdate = m_HandPos.IsZero();
 	m_HandPrevPos = m_HandPos;
 	m_HandPos = m_JointPos + m_HandCurrentOffset + (m_Recoiled ? m_RecoilOffset : Vector());
+	// Snap prev to current on first frame so render lerp doesn't fly from origin
+	if (firstUpdate) {
+		m_HandPrevPos = m_HandPos;
+	}
 }
 
 void Arm::UpdateHandCurrentOffset(bool armHasParent, bool heldDeviceIsAThrownDevice) {
