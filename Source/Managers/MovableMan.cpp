@@ -1667,8 +1667,7 @@ void MovableMan::Update() {
 		                                                                         }
 	                                                                         });
 
-	// We've finished stuff that can interact with lua script, so it's the ideal time to start a gc run
-	g_LuaMan.StartAsyncGarbageCollection();
+	// GC kicked off from Main after LateUpdateGlobalScripts, when no more Lua runs on main this tick.
 
 	// Draw the MO matter and IDs to their layers for next frame
 	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
