@@ -111,14 +111,14 @@
 
     <div class="active-banner">
       <div class="active-banner-headline">
-        MP M0 (observability harness) shipped 2026-05-18 &mdash; <a href="multiplayer.html">MP M1</a>
-        (pre-determinism cleanup) is the next milestone, ready for execution
+        MP M0&ndash;M4 complete and determinism-verified (2026-05-22) &mdash;
+        <a href="multiplayer.html">MP M5</a> (cross-platform float verification) is the next milestone
       </div>
       <div class="active-banner-stats">
         <div><b>3</b> committed flagships (MP / AI / Campaign)</div>
         <div><b>5</b> engine side tracks (T-RENDER-INTERP / GPU / WASM / COSMETIC / VALIDATION)</div>
         <div><b>17</b> ADRs (with ADR-016 + ADR-017 as the 2026-05-18 pivot)</div>
-        <div><b>1 of 10</b> MP milestones shipped</div>
+        <div><b>M0&ndash;M4</b> MP milestones complete &amp; determinism-verified</div>
         <div><b>1</b> upstream contribution staged (<a href="fow.html">FoW finish</a>)</div>
       </div>
     </div>
@@ -133,11 +133,11 @@
     <div class="timeline">
       <div class="timeline-row"><div class="timeline-label">MP main spine</div><div class="timeline-cells">
         <div class="tc tc-done">M0&#10003;</div>
-        <div class="tc tc-current">M1</div>
-        <div class="tc tc-fdn">M2</div>
-        <div class="tc tc-fdn">M3</div>
-        <div class="tc tc-fdn">M4</div>
-        <div class="tc tc-fdn">M5</div>
+        <div class="tc tc-done">M1&#10003;</div>
+        <div class="tc tc-done">M2&#10003;</div>
+        <div class="tc tc-done">M3&#10003;</div>
+        <div class="tc tc-done">M4&#10003;</div>
+        <div class="tc tc-current">M5</div>
         <div class="tc tc-enable">M6</div>
         <div class="tc tc-ship">M7</div>
         <div class="tc tc-ship">M8</div>
@@ -229,8 +229,8 @@
           <td><a href="multiplayer.html">Multiplayer</a></td>
           <td>ADR-015 + ADR-016</td>
           <td class="status-cell s-active">ACTIVE</td>
-          <td>M0 done &middot; M1 next</td>
-          <td>M7 online co-op SHIP (then M8 LAN lockstep, M9 PvP rollback, M10 public hosting)</td>
+          <td>M0&ndash;M4 done &middot; M5 next</td>
+          <td>M7 LAN lockstep co-op SHIP (then M8 online co-op, M9 PvP rollback, M10 public hosting)</td>
         </tr>
         <tr>
           <td><a href="ai.html">AI overhaul</a></td>
@@ -258,10 +258,12 @@
 
     <div class="callout callout-info">
       <p><b>Where to start as an AI coding agent:</b> read <a href="multiplayer.html">multiplayer.html</a> for
-      the MP architecture, <a href="engine.html">engine.html</a> for the engine work + side tracks, then open
-      <code>D:\Projects\M1_PLAN.md</code> (the M1 execution plan, ultra-detailed, branch harvest references
-      included). M0 closure docs live at <code>D:\Projects\M0_PLAN.md</code> and
-      <code>D:\Projects\M0_STATUS.md</code>. Master handoff: <code>D:\Projects\HANDOFF.md</code>.</p>
+      the MP architecture and <a href="engine.html">engine.html</a> for the engine work + side tracks.
+      M0&ndash;M4 &mdash; the determinism foundation through the multi-threaded deterministic sim &mdash; are
+      complete and determinism-verified on Windows; see <code>D:\Projects\MILESTONES_COMPLETION.md</code> (the
+      completion report) and <code>D:\Projects\MISSION_LEDGER.md</code> (live status), with per-milestone
+      build-from plans <code>M1_PLAN.md</code>&ndash;<code>M4_PLAN.md</code>. The next milestone is
+      <b>M5 &mdash; cross-platform float verification</b>. Master handoff: <code>D:\Projects\HANDOFF.md</code>.</p>
     </div>
 
     <div class="stats">
@@ -324,7 +326,7 @@
       </div></a>
       <a class="qnav" href="multiplayer.html"><div class="card">
         <h3>Multiplayer &rarr;</h3>
-        <p class="small muted">Networked play, rebuilt — now a committed plan (ADR-015, sequencing pivot ADR-016): per-mode netcode on a fully deterministic core. Ten milestones M0-M10 — determinism foundation (M1-M5), server spine (M6), online co-op SHIP (M7), LAN lockstep (M8), GGPO rollback PvP (M9), public hosting (M10).</p>
+        <p class="small muted">Networked play, rebuilt — now a committed plan (ADR-015, sequencing pivot ADR-016): per-mode netcode on a fully deterministic core. Ten milestones M0-M10 — determinism foundation (M1-M5), server spine (M6), LAN lockstep co-op SHIP (M7), online co-op (M8), GGPO rollback PvP (M9), public hosting (M10). M0-M4 complete and determinism-verified; M5 is next.</p>
       </div></a>
       <a class="qnav" href="ai.html"><div class="card">
         <h3>AI &rarr;</h3>
@@ -372,7 +374,7 @@
     </div>
 
     <div class="page-foot">
-      Cortex-Modern modernization wiki &middot; updated 2026-05-18 &middot; branch <code>modernization-effort</code>
+      Cortex-Modern modernization wiki &middot; updated 2026-05-22 &middot; branch <code>modernization-effort</code>
     </div>
   </main>
 

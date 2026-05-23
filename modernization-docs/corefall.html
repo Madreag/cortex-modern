@@ -444,7 +444,7 @@ const CROSS = [
   { a:"mp", s:"Endgame modes (wave survival, boss rush)", t:["MOD"],
     d:"Wave survival, boss rush, time attack and similar modes, each a GAScripted activity with its own win logic. Standard CC modding practice." },
   { a:"mp", s:"State-replication multiplayer rework", t:["ARCH"],
-    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. The replacement is cortex-modern's committed Multiplayer flagship (ADR-015 architecture, ADR-016 sequencing): per-mode netcode on a fully-deterministic core. Ten milestones M0-M10 — M1-M5 deterministic foundation, M6 server spine + GNS, M7 online co-op SHIP, M8 LAN lockstep, M9 PvP rollback, M10 public hosting. See the Multiplayer page." },
+    d:"CC's old multiplayer (server-authoritative screen-streaming over RakNet, 4-player) is disabled and orphaned in the build. The replacement is cortex-modern's committed Multiplayer flagship (ADR-015 architecture, ADR-016 sequencing): per-mode netcode on a fully-deterministic core. Ten milestones M0-M10 — M1-M5 deterministic foundation, M6 server spine + GNS, M7 LAN lockstep SHIP (first user-visible), M8 online co-op, M9 PvP rollback, M10 public hosting. See the Multiplayer page." },
   { a:"mp", s:"Mod hash sync + lobby discovery", t:["CODE"],
     d:"Clients exchange mod content hashes before a match and a lobby browser filters by mod compatibility. CC Lua cannot hash files, so this is bounded C++ infrastructure." },
   { a:"mp", s:"Matchmaking + ranks + tournaments", t:["ARCH","CODE"],
