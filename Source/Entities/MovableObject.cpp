@@ -509,7 +509,7 @@ void MovableObject::DestroyScriptState() {
 	}
 }
 
-const Vector& MovableObject::GetRenderPos() const {
+Vector MovableObject::GetRenderPos() const {
 	return Lerp(GetPrevPos(), GetPos(), g_TimerMan.GetSimUpdateProportion());
 }
 
