@@ -468,7 +468,9 @@ jobs:
               --output ${{ matrix.scenario }}-tsan.json 2>&1 | tee ${{ matrix.scenario }}-tsan.log
 
       # Surfaces the race count as a PR-UI annotation and produces a small triage
-      # file so reviewers don't have to scroll the full log.
+      # file so reviewers don't have to scroll the full log. TSAN_REQUIRED=1 turns
+      # this step into a fail-on-warning gate; the env var lives at job level so
+      # promotion-to-required is a single change (see tsan-known-races.md).
       - name: Summarise TSan output
         if: always()
         run: |
@@ -483,6 +485,10 @@ jobs:
           if [ "$count" != "0" ]; then
             echo "::warning::TSan detected $count race(s) in ${{ matrix.scenario }} — see artifact"
             grep -A 25 "WARNING: ThreadSanitizer" "$log" >> "$summary" || true
+            if [ "${TSAN_REQUIRED:-0}" = "1" ]; then
+              echo "::error::TSan gate is required and detected races; failing step."
+              exit 1
+            fi
           fi
 
       - name: Upload TSan report
