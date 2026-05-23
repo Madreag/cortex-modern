@@ -1290,14 +1290,20 @@ bool MOSRotating::DeepCheck(bool makeMOPs, int skipMOP, int maxMOPs) {
 
 void MOSRotating::SetPos(const Vector& newPos) {
 	MovableObject::SetPos(newPos);
-	// Refresh attachables to the new joint-relative positions and snap their prevs so the render lerp does not
-	// drag the limbs in from their pre-teleport locations on the first frame after a teleport.
+	// Refresh attachables to the new joint-relative positions and recursively snap every node's m_PrevPos so the
+	// render lerp does not drag the limb tree in from pre-teleport locations on the next frame.
 	CorrectAttachableAndWoundPositionsAndRotations();
+	SnapAttachableTreePrevPositions();
+}
+
+void MOSRotating::SnapAttachableTreePrevPositions() {
 	for (Attachable* attachable: m_Attachables) {
 		attachable->SetPrevPos(attachable->GetPos());
+		attachable->SnapAttachableTreePrevPositions();
 	}
 	for (Attachable* wound: m_Wounds) {
 		wound->SetPrevPos(wound->GetPos());
+		wound->SnapAttachableTreePrevPositions();
 	}
 }
 

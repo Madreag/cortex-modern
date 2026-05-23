@@ -322,6 +322,9 @@ namespace RTE {
 		/// Teleports this MOSRotating; refreshes attachable positions immediately so the rendered tree does not fly into place over the next sim tick.
 		void SetPos(const Vector& newPos) override;
 
+		/// Recursively snaps m_PrevPos = m_Pos for this and every nested attachable / wound. Used after a teleport so the render lerp does not drag the tree from old locations.
+		void SnapAttachableTreePrevPositions();
+
 		/// Does stuff that needs to be done before Travel(). Always call before calling Travel.
 		virtual void PreTravel();
 
