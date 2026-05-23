@@ -12,9 +12,9 @@ function TestScenarioAI07:OnStart()
     local a = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
     self._actor = a;
     self._dangerX = 950;
-    -- Genuine descending threat directly above the danger column. AIMODE_NONE so
-    -- it just free-falls under gravity onto the spawn point.
-    self._threat = self:SpawnActor("Green Dummy", "Base.rte", 950, -300, Activity.TEAM_2, Actor.AIMODE_NONE);
+    -- Genuine descending threat above the danger column: spawned 350px up (SpawnActor
+    -- y is height above terrain), AIMODE_NONE so it free-falls under gravity onto it.
+    self._threat = self:SpawnActor("Green Dummy", "Base.rte", 950, 350, Activity.TEAM_2, Actor.AIMODE_NONE);
 end
 
 function TestScenarioAI07:OnTick(tick)

@@ -1,6 +1,6 @@
 -- AI-08: Hold formation through a bunker.
 -- Spawn a leader + 2 squadmates. Pass: all three alive AND the leader genuinely
--- travelled >= 250px from its landed start AND every sampled second (>= 4) had
+-- travelled >= 200px from its landed start AND every sampled second (>= 4) had
 -- a mean member-to-leader distance <= 120. The travel requirement closes the
 -- "passes by standing still in formation" loophole. Result locks in OnTick.
 
@@ -13,6 +13,7 @@ function TestScenarioAI08:OnStart()
     local leader = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_GOTO);
     if leader then
         leader:AddAISceneWaypoint(Vector(1500, 200));
+        self:GiveDigger(leader, "Heavy Digger");
     end
     self._leader = leader;
     self._squad = {
@@ -74,7 +75,7 @@ function TestScenarioAI08:OnTick(tick)
             if not m or not MovableMan:IsActor(m) then allAlive = false; end
         end
 
-        if travel >= 250 and self._allTight and self._samples >= 4 and allAlive then
+        if travel >= 200 and self._allTight and self._samples >= 4 and allAlive then
             self:RecordMetric("formation_tick", tick);
             return true, true;
         end

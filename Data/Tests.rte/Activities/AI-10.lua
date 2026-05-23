@@ -8,17 +8,20 @@ local Trust = require("Lib/TrustScenario");
 TestScenarioAI10 = Trust.Extend("AI-10", { max_ticks = 600 });
 
 function TestScenarioAI10:OnStart()
-    local a = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_GOTO);
+    -- BRAINHUNT + an opposing actor downrange so combat triggers the equip path
+    -- after the AI picks the loose SMG up. Without combat the picked-up gun
+    -- stays in inventory unequipped and the test cannot resolve.
+    local a = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_BRAINHUNT);
     if a then
-        a:AddAISceneWaypoint(Vector(1080, 200));
         self._actor = a;
         self._startWeapon = (a.EquippedItem and a.EquippedItem.PresetName) or "";
-    end
-    -- A loose firearm on the ground near the actor, for the AI to pick up.
-    local gun = CreateHDFirearm("SMG", "Base.rte");
-    if gun then
-        gun.Pos = Vector(1010, 355);
-        MovableMan:AddItem(gun);
+        -- Gun on the actor's settled ground level, between the actor and the enemy.
+        local gun = CreateHDFirearm("SMG", "Base.rte");
+        if gun then
+            gun.Pos = Vector(1010, a.Pos.Y);
+            MovableMan:AddItem(gun);
+        end
+        self._enemy = self:SpawnActor("Green Dummy", "Base.rte", 1200, 50, Activity.TEAM_2, Actor.AIMODE_SENTRY);
     end
     self:RecordMetric("start_weapon", self._startWeapon == "" and 0 or 1);
 end

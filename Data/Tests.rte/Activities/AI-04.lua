@@ -13,6 +13,8 @@ TestScenarioAI04 = Trust.Extend("AI-04", { max_ticks = 1200 });
 function TestScenarioAI04:OnStart()
     local a = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
     self._actor = a;
+    -- A digger so the trapped actor has a means to dig itself out of the shaft.
+    self:GiveDigger(a, "Heavy Digger");
     self._landed = nil;
     self._trapped = false;
 end

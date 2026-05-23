@@ -9,16 +9,16 @@ local Trust = require("Lib/TrustScenario");
 TestScenarioAI09 = Trust.Extend("AI-09", { max_ticks = 600 });
 
 function TestScenarioAI09:OnStart()
+    -- Medikit goes straight into the actor's inventory so the test isolates
+    -- the "AI uses a medikit on low health" behaviour from any pickup mechanic.
     local a = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
     if a then
         a.Health = 50;
         self._actor = a;
         self._startHealth = 50;
-        -- A medikit on the ground beside the actor, for the AI to find on its own.
         local kit = CreateHDFirearm("Medikit", "Base.rte");
         if kit then
-            kit.Pos = Vector(990, a.Pos.Y);
-            MovableMan:AddItem(kit);
+            a:AddInventoryItem(kit);
         end
     end
     self:RecordMetric("start_health", self._startHealth);
