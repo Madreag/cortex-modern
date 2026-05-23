@@ -788,6 +788,17 @@ function NativeHumanAI:CreateAttackBehavior(Owner)
 	end
 		
 	local dist = SceneMan:ShortestDistance(Owner.Pos, self.Target.Pos, false);
+	-- M4 path-E: peek inventory once (read-only) so the elseif chain can decide without read-after-Equip.
+	local peekGrenade, peekFirearm, peekThrowable;
+	if IsHDFirearm(Owner.EquippedItem) and ToHDFirearm(Owner.EquippedItem):IsWeapon() then peekFirearm = ToHDFirearm(Owner.EquippedItem) end
+	if IsThrownDevice(Owner.EquippedItem) then peekThrowable = ToThrownDevice(Owner.EquippedItem) end
+	if IsThrownDevice(Owner.EquippedItem) and Owner.EquippedItem:HasObjectInGroup("Bombs - Grenades") then peekGrenade = ToThrownDevice(Owner.EquippedItem) end
+	for inv in Owner.Inventory do
+		if not peekFirearm and IsHDFirearm(inv) and ToHDFirearm(inv):IsWeapon() then peekFirearm = ToHDFirearm(inv) end
+		if not peekThrowable and IsThrownDevice(inv) then peekThrowable = ToThrownDevice(inv) end
+		if not peekGrenade and IsThrownDevice(inv) and inv:HasObjectInGroup("Bombs - Grenades") then peekGrenade = ToThrownDevice(inv) end
+		if peekFirearm and peekThrowable and peekGrenade then break end
+	end
 	if IsADoor(self.Target) and Owner.AIMode ~= Actor.AIMODE_SQUAD then
 		--TODO: Include other explosive weapons with varying effective ranges!
 		if Owner:EquipDeviceInGroup("Tools - Breaching", true) then
@@ -801,19 +812,22 @@ function NativeHumanAI:CreateAttackBehavior(Owner)
 			return;
 		end
 	-- favor grenades as the initiator to a sneak attack
-	elseif Owner.AIMode ~= Actor.AIMODE_SQUAD and Owner.AIMode ~= Actor.AIMODE_SENTRY and self.Target.HFlipped == Owner.HFlipped and Owner:EquipDeviceInGroup("Bombs - Grenades", true)
-	and dist:MagnitudeIsGreaterThan(100) and dist:MagnitudeIsLessThan(ToThrownDevice(Owner.EquippedItem):GetCalculatedMaxThrowVelIncludingArmThrowStrength() * GetPPM()) and (self.Target.Pos.Y + 20) > Owner.Pos.Y then
+	elseif Owner.AIMode ~= Actor.AIMODE_SQUAD and Owner.AIMode ~= Actor.AIMODE_SENTRY and self.Target.HFlipped == Owner.HFlipped and peekGrenade
+	and dist:MagnitudeIsGreaterThan(100) and dist:MagnitudeIsLessThan(peekGrenade:GetCalculatedMaxThrowVelIncludingArmThrowStrength() * GetPPM()) and (self.Target.Pos.Y + 20) > Owner.Pos.Y then
+		Owner:EquipDeviceInGroup("Bombs - Grenades", true);
 		self.NextBehavior = coroutine.create(HumanBehaviors.ThrowTarget);
 		self.NextBehaviorName = "ThrowTarget";
-	elseif Owner:EquipFirearm(true) then
-		if Owner.EquippedItem:HasObjectInGroup("Weapons - Melee") then
+	elseif peekFirearm then
+		Owner:EquipFirearm(true);
+		if peekFirearm:HasObjectInGroup("Weapons - Melee") then
 			self.NextBehavior = coroutine.create(HumanBehaviors.AttackTarget);
 			self.NextBehaviorName = "AttackTarget";
 		else
 			self.NextBehavior = coroutine.create(HumanBehaviors.ShootTarget);
 			self.NextBehaviorName = "ShootTarget";
 		end
-	elseif Owner.AIMode ~= Actor.AIMODE_SQUAD and Owner:EquipThrowable(true) and dist:MagnitudeIsLessThan(ToThrownDevice(Owner.EquippedItem):GetCalculatedMaxThrowVelIncludingArmThrowStrength() * GetPPM()) then
+	elseif Owner.AIMode ~= Actor.AIMODE_SQUAD and peekThrowable and dist:MagnitudeIsLessThan(peekThrowable:GetCalculatedMaxThrowVelIncludingArmThrowStrength() * GetPPM()) then
+		Owner:EquipThrowable(true);
 		self.NextBehavior = coroutine.create(HumanBehaviors.ThrowTarget);
 		self.NextBehaviorName = "ThrowTarget";
 	elseif Owner.AIMode ~= Actor.AIMODE_SQUAD and Owner:EquipDiggingTool(true) and dist:MagnitudeIsLessThan(250) then

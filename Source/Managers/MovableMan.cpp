@@ -2035,6 +2035,13 @@ void MovableMan::UpdateControllers() {
 		                                                     luaStates.size())
 		    .wait();
 
+		// Drain per-actor equip mutations queued by AHuman::Equip* under parallel AI. MOID order.
+		for (Actor* actor: m_Actors) {
+			if (AHuman* asHuman = dynamic_cast<AHuman*>(actor)) {
+				asHuman->DrainPendingDeferredMutations();
+			}
+		}
+
 		for (Actor* actor: m_Actors) {
 			if (actor->GetController()->ShouldUpdateAIThisFrame()) {
 				actor->RunScriptedFunctionInAppropriateScripts("UpdateAI", false, true, {}, {}, {});
