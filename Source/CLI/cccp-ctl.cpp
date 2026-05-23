@@ -422,7 +422,7 @@ namespace {
 		    "  test mp-sync-drift             Spawn N engine processes in parallel, diff traces\n"
 		    "  test latency-injection         Deterministic network simulator + parallel-engine diff\n"
 		    "  test snapshot-restore          Sim snapshot/restore tester (phase 1 baseline; phases 2-3 pending M8)\n"
-		    "  test rollback-burst            [needs M8 — engine rollback not yet shipped]\n"
+		    "  test rollback-burst            Rollback tester (phases 1-2 + burst plan; phase 3 pending M8)\n"
 		    "\n"
 		    "Bench commands (performance):\n"
 		    "  bench replay                   Run scenario N times, report sim-compute throughput\n"
@@ -787,6 +787,51 @@ namespace {
 		    "Exit codes:\n"
 		    "  0   baseline OK; phases 2-3 pending M8 (CI-friendly default)\n"
 		    "  1   baseline failed OR (--strict) snapshot phases pending\n"
+		    "  2   engine spawn failure / usage error\n";
+	}
+
+	void PrintTestRollbackBurstHelp(std::ostream& out) {
+		out <<
+		    "cccp-ctl test rollback-burst — rollback machinery tester\n"
+		    "\n"
+		    "Forward-looking M8 tester. The eventual rollback flow is: client\n"
+		    "predicts input, gets a correction, rolls back to the mispredict tick,\n"
+		    "re-executes with the correct input, arrives at the present-tick with\n"
+		    "the reconciled state. The acceptance test compares final state to a\n"
+		    "no-rollback baseline (must be identical) and reports rollback wall-\n"
+		    "clock overhead per burst.\n"
+		    "\n"
+		    "M5.5 ships: phase 1 (baseline trace, runs today) + phase 2 (deterministic\n"
+		    "burst plan — which ticks get mispredictions + the per-burst depth — saved\n"
+		    "as JSON artifact M8 will replay). Phase 3 (apply burst plan, rollback,\n"
+		    "verify) gracefully reports PENDING_M8 until the engine rollback API lands.\n"
+		    "\n"
+		    "Usage:\n"
+		    "  cccp-ctl test rollback-burst [--scenario <name>] [options]\n"
+		    "\n"
+		    "Options:\n"
+		    "  --scenario <name>           Scenario preset-suffix. Default M1Baseline.\n"
+		    "  --ticks <N>                 Total sim-tick cap. Default 300.\n"
+		    "  --seed <N>                  Sim RNG seed. Default 42.\n"
+		    "  --burst-seed <N>            Burst-plan RNG seed. Default 4242.\n"
+		    "  --burst-size <N>            Number of mispredictions to inject. Default 5.\n"
+		    "  --burst-depth <N>           Frames between mispredict and correction. Default 6.\n"
+		    "  --runs <N>                  Repeat the test N times. Default 1.\n"
+		    "  --num-lua-states <N>        Pin Lua-state count. Default 4.\n"
+		    "  --keep-traces               Keep per-phase trace JSONs.\n"
+		    "  --strict                    Exit 1 if engine rollback API is missing.\n"
+		    "                              Default: exit 0 with 'pending M8' message — Block D\n"
+		    "                              is CI-friendly until M8 lands.\n"
+		    "  --output <path>             Where to write the aggregate report.\n"
+		    "  --out-dir <path>            Direct temp/output dir.\n"
+		    "  --game-bin <path>           Path to game binary. Default: auto-detect.\n"
+		    "  --json                      JSON output.\n"
+		    "  --quiet                     Suppress per-spawn echo on stderr.\n"
+		    "  -h, --help                  This help.\n"
+		    "\n"
+		    "Exit codes:\n"
+		    "  0   baseline OK + burst plan deterministic; phase 3 pending M8 (default)\n"
+		    "  1   baseline failed OR plan non-deterministic OR (--strict) phase 3 pending\n"
 		    "  2   engine spawn failure / usage error\n";
 	}
 
@@ -2296,6 +2341,253 @@ namespace {
 		return harnessOk ? 0 : 1;
 	}
 
+	// ----- subcommand: test rollback-burst ------------------------------------
+	//
+	// M5.5 builds the tester ahead of M8 (rollback engine). Phase 1 = baseline
+	// trace (runs today). Phase 2 = deterministic burst plan JSON M8 will replay.
+	// Phase 3 = apply plan + rollback + verify, gated on engine rollback API.
+
+	struct BurstEvent {
+		uint64_t mispredictTick = 0;
+		uint64_t correctionTick = 0;
+		uint64_t burstDepth = 0;
+	};
+
+	std::vector<BurstEvent> GenerateBurstPlan(
+	    uint64_t totalTicks,
+	    int burstSize,
+	    int burstDepth,
+	    uint64_t burstSeed) {
+		std::vector<BurstEvent> out;
+		if (burstSize <= 0 || burstDepth <= 0 || totalTicks <= static_cast<uint64_t>(burstDepth)) return out;
+		out.reserve(burstSize);
+
+		uint64_t st = burstSeed ? burstSeed : 0xD1B54A32D192ED03ull;
+		auto rng = [&st]() -> uint64_t {
+			st ^= st >> 12;
+			st ^= st << 25;
+			st ^= st >> 27;
+			return st * 0x2545F4914F6CDD1Dull;
+		};
+
+		const uint64_t window = totalTicks - static_cast<uint64_t>(burstDepth);
+		for (int i = 0; i < burstSize; ++i) {
+			BurstEvent e;
+			e.mispredictTick = window > 0 ? ((rng() >> 32) % window) : 0;
+			e.burstDepth = static_cast<uint64_t>(burstDepth);
+			e.correctionTick = e.mispredictTick + e.burstDepth;
+			out.push_back(e);
+		}
+		std::sort(out.begin(), out.end(), [](const BurstEvent& a, const BurstEvent& b) {
+			return a.mispredictTick < b.mispredictTick;
+		});
+		return out;
+	}
+
+	std::string FingerprintBurstPlan(const std::vector<BurstEvent>& events) {
+		uint64_t h = 1469598103934665603ull;
+		auto mix = [&](uint64_t v) {
+			h ^= v;
+			h *= 1099511628211ull;
+		};
+		for (const auto& e: events) {
+			mix(e.mispredictTick);
+			mix(e.correctionTick);
+			mix(e.burstDepth);
+		}
+		std::ostringstream o;
+		o << std::hex << std::setw(16) << std::setfill('0') << h;
+		return o.str();
+	}
+
+	int CmdTestRollbackBurst(int argc, char** argv, const fs::path& selfDir) {
+		std::string scenario = "M1Baseline";
+		uint64_t seed = 42;
+		uint64_t burstSeed = 4242;
+		uint64_t ticks = 300;
+		int burstSize = 5;
+		int burstDepth = 6;
+		int runs = 1;
+		int numLuaStates = 4;
+		bool keepTraces = false;
+		bool strict = false;
+		fs::path outPath;
+		fs::path gameBin;
+		OutputCtx out;
+
+		for (int i = 0; i < argc; ++i) {
+			const std::string a = argv[i];
+			const bool hasV = (i + 1) < argc;
+			if (a == "-h" || a == "--help") { PrintTestRollbackBurstHelp(std::cout); return 0; }
+			if (ArgEq(a, "scenario") && hasV) { scenario = argv[++i]; continue; }
+			if (ArgEq(a, "seed") && hasV) { seed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "burst-seed") && hasV) { burstSeed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "ticks") && hasV) { ticks = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "burst-size") && hasV) { burstSize = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "burst-depth") && hasV) { burstDepth = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "runs") && hasV) { runs = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "num-lua-states") && hasV) { numLuaStates = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "keep-traces")) { keepTraces = true; continue; }
+			if (ArgEq(a, "strict")) { strict = true; continue; }
+			if (ArgEq(a, "output") && hasV) { outPath = argv[++i]; continue; }
+			if (ArgEq(a, "game-bin") && hasV) { gameBin = argv[++i]; continue; }
+			if (ArgEq(a, "out-dir") && hasV) { out.outDir = argv[++i]; continue; }
+			if (ArgEq(a, "json")) { out.json = true; continue; }
+			if (ArgEq(a, "quiet")) { out.quiet = true; continue; }
+			std::cerr << "[cccp-ctl] unknown option: " << a << "\n";
+			PrintTestRollbackBurstHelp(std::cerr);
+			return 2;
+		}
+		if (runs < 1) runs = 1;
+		if (burstSize < 0) burstSize = 0;
+		if (burstDepth < 1) {
+			std::cerr << "[cccp-ctl] --burst-depth must be >= 1.\n"; return 2;
+		}
+		if (static_cast<uint64_t>(burstDepth) >= ticks) {
+			std::cerr << "[cccp-ctl] --burst-depth must be < --ticks.\n"; return 2;
+		}
+		if (gameBin.empty()) gameBin = AutoDetectGameBin(selfDir);
+		if (gameBin.empty() || !fs::exists(gameBin)) {
+			std::cerr << "[cccp-ctl] could not locate game binary; pass --game-bin <path>.\n";
+			return 2;
+		}
+
+		const fs::path runDir = PickOutDir(out, "cccp-ctl-rollback-burst");
+		if (outPath.empty()) outPath = runDir / "report.json";
+		const std::vector<std::string> roles = {"baseline"};
+
+		json runReports = json::array();
+		int totalEngineFailures = 0;
+		bool baselineOk = true;
+		std::vector<std::string> planFingerprints;
+		planFingerprints.reserve(runs);
+
+		for (int r = 0; r < runs; ++r) {
+			const fs::path thisRunDir = runDir / ("run-" + std::to_string(r));
+			std::error_code ec;
+			fs::create_directories(thisRunDir, ec);
+
+			// Phase 2: generate the burst plan up-front (deterministic from burstSeed).
+			const std::vector<BurstEvent> plan = GenerateBurstPlan(ticks, burstSize, burstDepth, burstSeed);
+			const std::string fingerprint = FingerprintBurstPlan(plan);
+			planFingerprints.push_back(fingerprint);
+
+			const fs::path planPath = thisRunDir / "burst-plan.json";
+			{
+				json planJson = {
+				    {"burst_seed", burstSeed},
+				    {"burst_size", burstSize},
+				    {"burst_depth", burstDepth},
+				    {"total_ticks", ticks},
+				    {"fingerprint", fingerprint},
+				    {"events", json::array()},
+				};
+				for (const auto& e: plan) {
+					planJson["events"].push_back({
+					    {"mispredict_tick", e.mispredictTick},
+					    {"correction_tick", e.correctionTick},
+					    {"burst_depth", e.burstDepth},
+					});
+				}
+				std::ofstream pf(planPath);
+				if (pf.is_open()) pf << planJson.dump(2) << "\n";
+			}
+
+			// Phase 1: baseline trace (no rollback simulation).
+			int engineFailures = 0;
+			const auto t0 = std::chrono::steady_clock::now();
+			const std::vector<EngineRunResult> results = RunEngines(
+			    gameBin, scenario, seed, ticks, numLuaStates,
+			    roles, {}, thisRunDir, out.quiet, false, engineFailures);
+			const auto t1 = std::chrono::steady_clock::now();
+			const double baselineWallMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+			totalEngineFailures += engineFailures;
+
+			const bool runBaselineOk = (engineFailures == 0) && !results.empty() && results[0].tracesProduced;
+			if (!runBaselineOk) baselineOk = false;
+
+			json runReport = {
+			    {"run_index", r},
+			    {"phase1_baseline", {
+			        {"status", runBaselineOk ? "OK" : "FAILED"},
+			        {"final_hash", runBaselineOk ? results[0].finalHash : std::string()},
+			        {"wall_ms", baselineWallMs},
+			        {"trace_path", runBaselineOk ? results[0].outPath.string() : std::string()},
+			    }},
+			    {"phase2_burst_plan", {
+			        {"status", "OK"},
+			        {"plan_path", planPath.string()},
+			        {"event_count", plan.size()},
+			        {"fingerprint", fingerprint},
+			    }},
+			    {"phase3_apply_rollback", {
+			        {"status", "PENDING_M8"},
+			        {"note", "engine rollback API not yet implemented — plan saved for M8 replay"},
+			    }},
+			    {"engine_failures", engineFailures},
+			};
+			runReports.push_back(runReport);
+
+			if (!keepTraces && runBaselineOk) {
+				std::error_code ec2;
+				fs::remove(results[0].outPath, ec2);
+			}
+		}
+
+		// Plan determinism: every run's plan fingerprint must match.
+		bool planConsistent = true;
+		if (planFingerprints.size() >= 2) {
+			for (size_t i = 1; i < planFingerprints.size(); ++i) {
+				if (planFingerprints[i] != planFingerprints[0]) { planConsistent = false; break; }
+			}
+		}
+
+		const bool rollbackPending = true;
+		const bool harnessOk = baselineOk && planConsistent && (!strict || !rollbackPending);
+
+		json summary = {
+		    {"scenario", scenario},
+		    {"ticks", ticks},
+		    {"seed", seed},
+		    {"burst_seed", burstSeed},
+		    {"burst_size", burstSize},
+		    {"burst_depth", burstDepth},
+		    {"runs", runs},
+		    {"num_lua_states", numLuaStates},
+		    {"strict", strict},
+		    {"phase1_baseline_ok", baselineOk},
+		    {"phase2_plan_consistent_across_runs", planConsistent},
+		    {"phase2_plan_fingerprint", planFingerprints.empty() ? std::string() : planFingerprints[0]},
+		    {"phase3_apply_status", "PENDING_M8"},
+		    {"engine_failures_total", totalEngineFailures},
+		    {"harness_ok", harnessOk},
+		    {"runs_detail", runReports},
+		    {"report_path", outPath.string()},
+		    {"out_dir", runDir.string()},
+		};
+
+		std::ofstream o(outPath);
+		if (o.is_open()) o << summary.dump(2) << "\n";
+
+		std::ostringstream text;
+		text << "Scenario:           " << scenario << "\n";
+		text << "Ticks:              " << ticks << "\n";
+		text << "Burst size:         " << burstSize << " (depth " << burstDepth << ")\n";
+		text << "Runs:               " << runs << "\n";
+		text << "Phase 1 (baseline): " << (baselineOk ? "OK" : "FAILED") << "\n";
+		text << "Phase 2 (plan):     " << (planConsistent ? "deterministic across runs" : "INCONSISTENT — plan RNG broken") << "\n";
+		text << "Plan fingerprint:   " << (planFingerprints.empty() ? std::string("(no runs)") : planFingerprints[0]) << "\n";
+		text << "Phase 3 (apply):    PENDING_M8 — engine rollback API not yet implemented\n";
+		text << "Strict mode:        " << (strict ? "ON (exits 1 while M8 pending)" : "off (CI-friendly default)") << "\n";
+		text << "Harness:            " << (harnessOk ? "OK (tester scaffolding ready for M8)" : "FAILED") << "\n";
+		text << "Report:             " << outPath.string() << "\n";
+
+		PrintTextOrJson(out, summary, text.str());
+
+		if (totalEngineFailures > 0) return 2;
+		return harnessOk ? 0 : 1;
+	}
+
 	// ----- subcommand: bench replay -------------------------------------------
 
 	int CmdBenchReplay(int argc, char** argv, const fs::path& selfDir) {
@@ -2935,7 +3227,7 @@ namespace {
 		if (sub == "mp-sync-drift" || sub == "sync-drift") return CmdTestMpSyncDrift(subArgc, subArgv, selfDir);
 		if (sub == "latency-injection") return CmdTestLatencyInjection(subArgc, subArgv, selfDir);
 		if (sub == "snapshot-restore") return CmdTestSnapshotRestore(subArgc, subArgv, selfDir);
-		if (sub == "rollback-burst") return CmdStub("rollback-burst", "M8 (rollback)");
+		if (sub == "rollback-burst") return CmdTestRollbackBurst(subArgc, subArgv, selfDir);
 		if (sub == "-h" || sub == "--help") { PrintTopHelp(std::cout); return 0; }
 		std::cerr << "[cccp-ctl] unknown test subcommand: " << sub << "\n";
 		PrintTopHelp(std::cerr);
