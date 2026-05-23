@@ -1616,9 +1616,10 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 	RTEAssert(!m_aSprite.empty(), "No sprite bitmaps loaded to draw!");
 	RTEAssert(m_Frame >= 0 && m_Frame < m_FrameCount, "Frame is out of bounds!");
 
-	const float fLerp = g_TimerMan.GetSimUpdateProportion();
+	// MOID layer must match sim positions for deterministic hit detection; render layers lerp.
+	const float fLerp = mode == g_DrawMOID ? 1.0f : g_TimerMan.GetSimUpdateProportion();
 	Matrix currentRotation = Lerp(GetPrevRotMatrix(), GetRotMatrix(), fLerp);
-	Vector currentPos = GetRenderPos();
+	Vector currentPos = Lerp(GetPrevPos(), GetPos(), fLerp);
 	Vector spritePos(currentPos - targetPos);
 
 	if (pTargetBitmap) {
