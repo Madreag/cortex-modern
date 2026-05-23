@@ -443,3 +443,86 @@ jobs:
             exit 1
           fi
           echo "FixedPoint.h self-check: cross-OS bit-identical."
+
+  # M4A Block E — TSan gate enforcing the SyncedUpdate contract. Builds the engine
+  # with -Db_sanitize=thread and runs three scenarios chosen for race surface:
+  # M1Baseline (smoke / link-check), M4ThreadStress (parallel-AI saturation),
+  # MPerfBench (120-actor stress). Advisory at landing (continue-on-error); flipped
+  # to required once Source/CI/tsan-known-races.md stabilises. --runs 2 because TSan
+  # is 5-15× slower. Per-scenario --threads forces a parallel Lua-state count even
+  # for the smoke scenario so the threaded code paths actually execute.
+  determinism-tsan-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { scenario: M1Baseline,     ticks: 600, threads: 2 }
+          - { scenario: M4ThreadStress, ticks: 900, threads: 8 }
+          - { scenario: MPerfBench,     ticks: 900, threads: 8 }
+    env:
+      TSAN_OPTIONS: halt_on_error=0:history_size=7:second_deadlock_stack=1:symbolize=1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config \
+            libsdl2-dev libsdl2-image-dev libpng-dev libflac-dev \
+            libminizip-dev libtbb-dev liblz4-dev libgl-dev
+
+      # Newer Linux kernels default vm.mmap_rnd_bits=32, which exceeds what
+      # libtsan's shadow-memory layout accepts ("FATAL: ThreadSanitizer:
+      # unexpected memory mapping"). 28 is the documented working value.
+      - name: Lower ASLR entropy for TSan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Configure (release + TSan)
+        run: meson setup builddir --buildtype=release -Db_sanitize=thread -Db_lto=false
+
+      - name: Build engine + cccp-ctl
+        run: meson compile -C builddir
+
+      - name: Run determinism-check under TSan (${{ matrix.scenario }})
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario ${{ matrix.scenario }} \
+              --ticks ${{ matrix.ticks }} \
+              --seed 42 \
+              --threads ${{ matrix.threads }} \
+              --runs 2 \
+              --output ${{ matrix.scenario }}-tsan.json 2>&1 | tee ${{ matrix.scenario }}-tsan.log
+
+      # Surfaces the race count as a PR-UI annotation and produces a small triage
+      # file so reviewers don't have to scroll the full log.
+      - name: Summarise TSan output
+        if: always()
+        run: |
+          log=${{ matrix.scenario }}-tsan.log
+          summary=${{ matrix.scenario }}-tsan-summary.txt
+          if [ ! -f "$log" ]; then
+            echo "no log file — run step likely failed before producing output" > "$summary"
+            exit 0
+          fi
+          count=$(grep -c "WARNING: ThreadSanitizer" "$log" || true)
+          echo "TSan warnings: $count" > "$summary"
+          if [ "$count" != "0" ]; then
+            echo "::warning::TSan detected $count race(s) in ${{ matrix.scenario }} — see artifact"
+            grep -A 25 "WARNING: ThreadSanitizer" "$log" >> "$summary" || true
+          fi
+
+      - name: Upload TSan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-tsan-${{ matrix.scenario }}-linux
+          path: |
+            ${{ matrix.scenario }}-tsan.json
+            ${{ matrix.scenario }}-tsan.log
+            ${{ matrix.scenario }}-tsan-summary.txt
+          if-no-files-found: warn
