@@ -430,16 +430,83 @@ With the two fixes landed (`LuaMan` script-callback ordering +
    `m_AnalogAim`, internal AI-state booleans set by the AI Lua's
    `Owner:Set...()` bindings).
 
-A TSan build per the prior Linux PathFinder bug's playbook (build with
-`-Db_sanitize=thread`, run under `setarch -R` for ASLR-off) is the
-canonical next investigation step. **A TSan build was attempted during
-this bring-up (`build-tsan/`) but failed at the LuaJIT subproject's
-DynASM step** — LuaJIT's `lj_bcdef.h` / `lj_folddef.h` etc.
-self-generated headers fail to compile under `-fsanitize=thread`.
-LuaJIT-from-source needs an exclusion shim (likely
-`b_sanitize=` disabled on just the LuaJIT subproject's `meson.build`)
-before TSan can run on the engine. That meson-side rework is a separate
-follow-up.
+### TSan unblock + third-pass fixes
+
+The LuaJIT TSan-build blocker is now closed
+(`external/sources/LuaJIT-2.1/src/host/meson.build` overrides
+`b_sanitize=none` for the native `minilua` + `buildvm` helpers — they
+don't need instrumentation and TSan-built `buildvm` aborted with
+`FATAL: ThreadSanitizer: unexpected memory mapping` before generating
+`lj_bcdef.h` / `lj_folddef.h` etc.). `meson setup build-tsan
+-Db_sanitize=thread -Db_lto=false` now builds cleanly.
+
+TSan against `setarch -R ./build-tsan/CortexCommand
+-scenario M4ThreadStress -seed 42 -max-ticks 400 -tick-hashes` reports
+~5,000 races, dominated by:
+
+* TBB `parallel_unsequenced` internals (`std::execution::par_unseq` is
+  uninstrumented — known false-positive class per the prior PathFinder
+  RCA),
+* `MovableObject::UpdateMOID` / `MOSRotating::Draw` MOID race (the
+  cosmetic post-AI render race the prior bring-up already documented as
+  not-affecting the sim checksum),
+* `SoundSet::SelectNextSounds` consuming `g_RenderRNG` (a shared
+  mt19937) from parallel AI worker threads via
+  `AudioMan::PlaySoundContainer` (reached via AI's
+  `Owner:EquipFirearm()` / `EquipDeviceInGroup()`'s device-switch
+  sound),
+* `AudioMan::PlaySoundContainer` unordered_map insert/find races on
+  `m_SoundChannelMinimumAudibleDistances`,
+* `Arm::SetHeldDevice` writing `m_HeldDevice` while another worker
+  reads it via the AI Lua's cross-actor `Act:HasObjectInGroup(...)`
+  loop in `SharedBehaviors.BrainSearch`,
+* `Attachable::UpdatePositionAndJointPositionBasedOnOffsets` writing
+  Vector positions while another worker's `AHuman::LookForMOs` →
+  `SceneMan::CastMORay` → `MOSprite::HitTestAtPixel` reads them.
+
+**Third pass of fixes landed** (commit
+`Close two parallel-AI races feeding the M4ThreadStress divergence`):
+
+3. `AudioMan::PlaySoundContainer` early-returns when
+   `g_MetricsCollector.IsRecordingTickHashes()` is true. Sound is
+   cosmetic; headless determinism runs don't need it. This closes the
+   `g_RenderRNG` mt19937 race and the unordered_map race in one shot
+   without touching the render-mode audio path.
+4. `LuaAdaptersScene::CalculatePathAsync currentCallbackId` is now
+   `std::atomic<int>` with `fetch_add(memory_order_relaxed)`. The
+   previous static-int increment could hand the same id to two
+   simultaneous async path requests, silently losing one Lua-side
+   `_AsyncPathCallbacks` slot.
+
+### Empirical M4 stability progression
+
+Single-run M4ThreadStress trace hash distribution
+(30 `-tick-hashes --seed 42 --ticks 900` runs each):
+
+| Branch tip | Distribution | Race rate |
+|---|---|---|
+| Foundation (no fixes) | 2 hashes, ~80/20 split | ~20% |
+| + script-callback queue sort + Controller analog freeze | 2 hashes, ~93/7 split | ~7% |
+| + sound gate + atomic callback id + TSan-build shim | 2 hashes, ~93/7 split | ~7% |
+
+The remaining ~7% rate is driven by the **`Attachable` /
+`MOSprite::HitTestAtPixel` Vector-position race** (TSan report #5
+above) — one worker mutating an actor's attachable tree via
+`AHuman::EquipDeviceInGroup` while another worker raycasts through the
+scene from `AHuman::LookForMOs`. The reader picks up a torn or stale
+Vector, which leads to a different MOID-hit decision, which cascades
+into the divergent AI aim observed at tick ~334.
+
+Closing this last residual needs either (a) deferring the actor-tree
+mutations to a post-parallel-AI serial pass, or (b) serializing the
+mutator + reader sides via a per-actor mutex around the attachable
+graph. Both are non-trivial architectural changes (the
+`HandlePotentialRadiusAffectingAttachable` path is reached from many
+sites and changes actor radius mid-mutation, which other code paths
+read without synchronization). Recorded as a follow-up because the
+M4-follow-up's TSan playbook needs to evaluate whether the simpler
+fix is to make the AI's `LookForMOs` use a snapshot of the scene's
+MO grid instead of the live grid.
 
 ## `MPerfBench` — out-of-scope per scenario header; documented divergence
 
