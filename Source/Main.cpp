@@ -631,12 +631,17 @@ int main(int argc, char** argv) {
 			}
 		}
 		if (headless) {
-#ifdef _WIN32
+#if defined(_WIN32)
 			// WindowMan creates the window hidden — Windows still needs a real WGL
 			// context, which SDL's offscreen video driver does not provide.
 			_putenv_s("CCCP_HEADLESS", "1");
+#elif defined(__APPLE__)
+			// macOS Cocoa still needs a real NSOpenGL context: SDL3's offscreen driver
+			// loads no GL extensions on darwin (gladLoadGL leaves glReadBuffer NULL),
+			// so the engine aborts in WindowMan::Initialize. Hide the window instead.
+			setenv("CCCP_HEADLESS", "1", 1);
 #else
-			// Other platforms: SDL's offscreen driver works without a display server.
+			// Linux: SDL's offscreen driver works without a display server.
 			setenv("SDL_VIDEODRIVER", "offscreen", 1);
 #endif
 		}
