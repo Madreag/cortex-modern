@@ -386,6 +386,9 @@ void RunGameLoop() {
 		updateTotalTime = updateEndAndDrawStartTime - updateStartTime;
 		drawStartTime = updateEndAndDrawStartTime;
 
+		// Settle async GC before render-frame Lua paths
+		g_LuaMan.WaitForAsyncGarbageCollection();
+
 		g_UInputMan.Update();
 		g_ActivityMan.RenderUpdate();
 		g_UInputMan.EndFrame();

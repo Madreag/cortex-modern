@@ -432,6 +432,9 @@ namespace RTE {
 
 		/// Asynchronously enforces a GC run to occur.
 		void StartAsyncGarbageCollection();
+
+		/// Blocks until any in-flight async GC finishes.
+		void WaitForAsyncGarbageCollection();
 #pragma endregion
 
 		/// Clears Script Timings.
