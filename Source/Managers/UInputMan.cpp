@@ -3,6 +3,7 @@
 #include "SceneMan.h"
 #include "ActivityMan.h"
 #include "MetaMan.h"
+#include "MetricsCollector.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "ConsoleMan.h"
@@ -136,6 +137,13 @@ void UInputMan::LoadDeviceIcons() {
 }
 
 Vector UInputMan::AnalogMoveValues(int whichPlayer) {
+	// Determinism mode is hermetic: never feed real-device input into the sim, so the
+	// per-tick controller hash isn't perturbed by host-side cursor / gamepad jitter. The
+	// macOS bring-up sweep found a ~3% flake on M2PairsStress traced to SDL polling
+	// mouse cursor deltas while -determinism-check was running 100 child processes.
+	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		return Vector(0, 0);
+	}
 	Vector moveValues(0, 0);
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
 	if (device >= InputDevice::DEVICE_GAMEPAD_1) {
@@ -154,6 +162,10 @@ Vector UInputMan::AnalogMoveValues(int whichPlayer) {
 }
 
 Vector UInputMan::AnalogAimValues(int whichPlayer) {
+	// See AnalogMoveValues — determinism mode must not read live host input.
+	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		return Vector(0, 0);
+	}
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
 
 	Vector aimValues(0, 0);
