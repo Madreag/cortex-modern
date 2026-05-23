@@ -961,6 +961,7 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 
 				float radius = std::sqrt(static_cast<float>(count - i));
 				gibParticleClone->SetPos(m_Pos + rotatedGibOffset);
+				gibParticleClone->SetPrevPos(GetPrevPos() + rotatedGibOffset);
 				gibParticleClone->SetHFlipped(m_HFlipped);
 				Vector gibVelocity(radius * scale + minVelocity, 0);
 				gibVelocity.RadRotate(randAngle + RandomNum(0.0F, spread) + static_cast<float>(i) * goldenAngle);
@@ -1007,6 +1008,7 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 				}
 
 				gibParticleClone->SetPos(m_Pos + rotatedGibOffset);
+				gibParticleClone->SetPrevPos(GetPrevPos() + rotatedGibOffset);
 				gibParticleClone->SetHFlipped(m_HFlipped);
 				Vector gibVelocity = Vector(minVelocity + RandomNum(0.0F, velocityRange), 0.0F);
 

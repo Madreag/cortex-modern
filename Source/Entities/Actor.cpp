@@ -775,6 +775,7 @@ void Actor::DropAllInventory() {
 			gibROffset.RadRotate(c_PI * RandomNormalNum());
 			// Set up its position and velocity according to the parameters of this AEmitter.
 			pObject->SetPos(m_Pos + gibROffset);
+			pObject->SetPrevPos(GetPrevPos() + gibROffset);
 			pObject->SetRotAngle(m_Rotation.GetRadAngle() + pObject->GetRotMatrix().GetRadAngle());
 			// Rotational angle
 			pObject->SetAngularVel((pObject->GetAngularVel() * 0.35F) + (pObject->GetAngularVel() * 0.65F / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F)) * RandomNum());
@@ -894,6 +895,7 @@ void Actor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToI
 		gibROffset.SetXY(m_SpriteRadius * 0.35F * RandomNormalNum(), m_SpriteRadius * 0.35F * RandomNormalNum());
 		// Set up its position and velocity according to the parameters of this AEmitter.
 		pObject->SetPos(m_Pos + gibROffset /*Vector(m_Pos.m_X + 5 * NormalRand(), m_Pos.m_Y + 5 * NormalRand())*/);
+		pObject->SetPrevPos(GetPrevPos() + gibROffset);
 		pObject->SetRotAngle(m_Rotation.GetRadAngle() + pObject->GetRotMatrix().GetRadAngle());
 		// Rotational angle
 		pObject->SetAngularVel((pObject->GetAngularVel() * 0.35F) + (pObject->GetAngularVel() * 0.65F / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F)) * RandomNum());

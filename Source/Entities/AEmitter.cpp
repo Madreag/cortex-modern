@@ -481,15 +481,17 @@ void AEmitter::Update() {
 					// Set up its position and velocity according to the parameters of this.
 					// Emission point offset not set
 
+					// Carry the emitter's prev pos through to the particle so its first render lerps the
+					// same prev->current as the emitter, instead of snapping to the emitter's sim pos
+					// while the emitter renders interpolated forward (particles trailing visually).
+					Vector emissionOffset;
 					if (emission->GetOffset().IsZero()) {
-						if (m_EmissionOffset.IsZero()) {
-							pParticle->SetPos(m_Pos);
-						} else {
-							pParticle->SetPos(m_Pos + RotateOffset(m_EmissionOffset));
-						}
+						emissionOffset = m_EmissionOffset.IsZero() ? Vector() : RotateOffset(m_EmissionOffset);
 					} else {
-						pParticle->SetPos(m_Pos + RotateOffset(emission->GetOffset()));
+						emissionOffset = RotateOffset(emission->GetOffset());
 					}
+					pParticle->SetPos(m_Pos + emissionOffset);
+					pParticle->SetPrevPos(GetPrevPos() + emissionOffset);
 					// TODO: Optimize making the random angles!")
 					emitVel.SetXY(velMin + RandomNum(0.0F, velRange), 0.0F);
 					emitVel.RadRotate(m_EmitAngle.GetRadAngle() + spread * RandomNormalNum());
