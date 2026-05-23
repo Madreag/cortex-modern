@@ -297,6 +297,61 @@ jobs:
           path: M4ThreadStress-matrix.json
           if-no-files-found: error
 
+  # MP M5.5 Block A — two-process sim sync drift, via cccp-ctl. Spawns two engine
+  # processes in --parallel mode (Linux runner is headless, no window-focus race)
+  # and diffs the per-tick traces. Advisory until M7 lockstep lands; then required.
+  # Acceptance test 1: same scenario/seed/ticks ⇒ MATCH at every tick.
+  # Acceptance test 2: --inject-divergence-role peer ⇒ DIVERGED is correctly
+  # reported (EC3-MP positive control — verifies the comparator itself).
+  mp-sync-drift-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # advisory until M7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config \
+            libsdl2-dev libsdl2-image-dev libpng-dev libflac-dev \
+            libminizip-dev libtbb-dev liblz4-dev libgl-dev
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release
+
+      - name: Build engine + cccp-ctl
+        run: meson compile -C builddir CortexCommand cccp-ctl
+
+      - name: mp-sync-drift — clean run (expect MATCH)
+        run: |
+          ./builddir/cccp-ctl test mp-sync-drift \
+              --scenario M4ThreadStress \
+              --ticks 600 --seed 42 --processes 2 --runs 1 \
+              --parallel --quiet \
+              --game-bin ./builddir/CortexCommand \
+              --output mp-sync-drift-clean.json
+
+      - name: mp-sync-drift — EC3-MP positive control (expect DIVERGED detected)
+        run: |
+          ./builddir/cccp-ctl test mp-sync-drift \
+              --scenario M1Baseline \
+              --ticks 200 --seed 42 --processes 2 --runs 1 \
+              --inject-divergence-role peer --parallel --quiet \
+              --game-bin ./builddir/CortexCommand \
+              --output mp-sync-drift-ec3.json
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp-sync-drift-linux
+          path: |
+            mp-sync-drift-clean.json
+            mp-sync-drift-ec3.json
+          if-no-files-found: error
+
   # MP M3 Block A — FixedPoint.h standalone unit + determinism tests.
   fixedpoint-tests-linux:
     runs-on: ubuntu-latest

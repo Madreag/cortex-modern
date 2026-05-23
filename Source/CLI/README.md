@@ -30,6 +30,10 @@ cccp-ctl test scenario --scenario M1Baseline --seed 42
 cccp-ctl test replay-determinism --scenario M1Baseline --runs 100
 cccp-ctl test thread-matrix --scenario M4ThreadStress --threads 1,2,4,8,16
 cccp-ctl test cross-platform-checksum --traces win.json,lin.json,mac.json --labels win,linux,macos
+cccp-ctl test mp-sync-drift --scenario M4ThreadStress --processes 2 --parallel    # MP correctness (headless / CI)
+cccp-ctl test latency-injection --packet-loss 5 --latency-ms 80 --jitter-ms 20    # Network simulator
+cccp-ctl test snapshot-restore --snapshot-at 100 --ticks 300                      # Phase 1; phases 2-3 pending M8
+cccp-ctl test rollback-burst --burst-size 5 --burst-depth 6 --ticks 300           # Phases 1-2; phase 3 pending M8
 cccp-ctl trace inspect M1Baseline-trace.json --ticks 1,100,599
 cccp-ctl bench replay --scenario M3TerrainStress --runs 5
 ```
@@ -47,10 +51,56 @@ cccp-ctl bench replay --scenario M3TerrainStress --runs 5
 | `bench replay` | Run scenario N times, report `__sim_compute_accum` throughput (min/median/max + spread%). |
 | `trace inspect <path>` | Pretty-print a trace JSON. `--full`, `--ticks N1,N2`, `--subsystem name` filters. |
 | `info scenarios` / `info subsystems` / `info game-bin` | Discovery / introspection. |
-| `test sync-drift` / `latency-injection` / `rollback-burst` | Stubs — exit 64. Need M6 / M9. |
+| `test mp-sync-drift` | Spawn N engine processes, diff per-tick traces. EC3-MP via `--inject-divergence-role`. |
+| `test latency-injection` | Deterministic tick-based network simulator + engine-pair diff. Separate `--network-seed`. |
+| `test snapshot-restore` | Sim-state snapshot/restore tester. Phase 1 runs today; phases 2-3 pending M8. |
+| `test rollback-burst` | Rollback machinery tester. Phases 1-2 + burst plan run today; phase 3 pending M8. |
 
 Run `cccp-ctl <command> --help` for every option — the help is comprehensive
 and is the canonical reference. This README is a pointer.
+
+## MP test harness design (V1.4 / Block A–D)
+
+V1.4 adds four MP-correctness subcommands. They share a small set of
+infrastructure pieces so M6/M7/M8 can extend without re-plumbing:
+
+- **Two-process harness.** `RunEngines` spawns N engine subprocesses (default
+  `--processes 2`) via `std::async` (parallel) or back-to-back (sequential).
+  Each engine runs the existing `-scenario -tick-hashes -out <role>.json`
+  mode; the harness post-hoc diffs the resulting trace JSONs. Roles are
+  labelled `host`, `peer`, `peer2`, … — extensible to N-player MP later.
+- **Sequential is the default.** Two visible game windows on Windows desktop
+  fight over input focus and stall. `--parallel` is opt-in for Linux / Xvfb /
+  CI runners where the window manager isn't in play. CI uses `--parallel`.
+- **Bridge endpoint.** A Unix-domain socket (POSIX) or Win32 named pipe
+  (Windows) is created per-run as a structural placeholder for the engine-
+  side MP code M6/M7 will add. The path surfaces in the JSON report under
+  `bridge_path`. Today no engine connects to it; the value is proving the
+  cross-platform socket-creation surface works before M6 lands.
+- **Per-tick comparator.** `DiffEngineTraces` walks the per-tick subsystem
+  hashes (same schema `test cross-platform-checksum` uses) and reports first
+  divergence + per-subsystem first-divergence-tick + per-role pair result.
+- **Deterministic network simulator.** `latency-injection` uses an xorshift64*
+  RNG seeded by `--network-seed` (separate from `--seed` per decision #6 in
+  the M5.5 plan). Conditions are tick-based — no `std::this_thread::sleep_for`,
+  so CI cost stays bounded. The packet trace is reproducible: same seed +
+  conditions ⇒ same trace, verified across `--runs >= 2` by fingerprint.
+- **Forward-looking scaffolding.** `snapshot-restore` and `rollback-burst`
+  ship before M8 lands. Phase 1 (baseline trace) and, for rollback-burst,
+  phase 2 (deterministic burst-event plan JSON) run today; phase 3 (apply
+  snapshot / rollback against the real engine API) gracefully reports
+  `PENDING_M8`. The CLI surface is stable so M8 can fill the gap without
+  touching the args. `--strict` flips the exit code from 0→1 while M8 is
+  pending — useful once M8 starts so the CI gate flips automatically.
+
+### Acceptance summary
+
+| Subcommand | Today | When M6/M8 land |
+|---|---|---|
+| `test mp-sync-drift` | Two-process determinism + EC3-MP comparator | Engine bridge wired into harness for live tick coordination |
+| `test latency-injection` | Deterministic packet-trace simulator (artifact for M7) | Simulator replayed against engine network layer; M7 lockstep convergence verified |
+| `test snapshot-restore` | Baseline trace + arg parsing scaffold | Phases 2-3 exercise engine snapshot/restore round-trip |
+| `test rollback-burst` | Baseline trace + deterministic burst-plan artifact | Phase 3 applies plan to engine rollback path; final state diff vs baseline must be bit-identical |
 
 ## Common options (every subcommand)
 
