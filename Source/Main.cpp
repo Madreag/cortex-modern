@@ -358,6 +358,9 @@ void RunGameLoop() {
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
 			g_PresetMan.ClearReloadEntityPresetCalledThisUpdate();
 
+			// Sim consumed this tick's accumulated input edges; clear before next tick reads
+			g_UInputMan.EndSimUpdate();
+
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			if (!g_ActivityMan.IsInActivity()) {

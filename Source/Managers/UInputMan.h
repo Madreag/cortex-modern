@@ -72,6 +72,9 @@ namespace RTE {
 
 		/// Resets the changed states for keyboard and mouse events.
 		void EndFrame();
+
+		/// Resets the sim-rate edge accumulators. Called at the end of each sim tick.
+		void EndSimUpdate();
 #pragma endregion
 
 #pragma region Control Scheme and Input Mapping Handling
@@ -132,6 +135,12 @@ namespace RTE {
 		/// @param whichElement Which element to check for.
 		/// @return Whether the element is released or not.
 		bool ElementReleased(int whichPlayer, int whichElement) { return GetInputElementState(whichPlayer, whichElement, InputState::Released); }
+
+		/// Sim-rate variant of ElementPressed; press events accumulate across render frames and are cleared by EndSimUpdate.
+		bool ElementPressedSim(int whichPlayer, int whichElement) { return GetInputElementState(whichPlayer, whichElement, InputState::PressedSim); }
+
+		/// Sim-rate variant of ElementReleased; release events accumulate across render frames and are cleared by EndSimUpdate.
+		bool ElementReleasedSim(int whichPlayer, int whichElement) { return GetInputElementState(whichPlayer, whichElement, InputState::ReleasedSim); }
 
 		/// Gets the generic direction input from one or all players which can affect a shared menu cursor. Normalized to 1.0 max.
 		/// @param whichPlayer The player for which menu direction is taken, -1 for combined.
@@ -339,6 +348,12 @@ namespace RTE {
 		/// @return Whether the mouse button is released or not.
 		bool MouseButtonReleased(int whichButton, int whichPlayer = Players::PlayerOne, SDL_MouseID mouse = 0) const { return GetMouseButtonState(whichPlayer, whichButton, InputState::Released, mouse); }
 
+		/// Sim-rate variant of MouseButtonPressed.
+		bool MouseButtonPressedSim(int whichButton, int whichPlayer = Players::PlayerOne, SDL_MouseID mouse = 0) const { return GetMouseButtonState(whichPlayer, whichButton, InputState::PressedSim, mouse); }
+
+		/// Sim-rate variant of MouseButtonReleased.
+		bool MouseButtonReleasedSim(int whichButton, int whichPlayer = Players::PlayerOne, SDL_MouseID mouse = 0) const { return GetMouseButtonState(whichPlayer, whichButton, InputState::ReleasedSim, mouse); }
+
 		const std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS>& GetMouseState(int whichPlayer = -1) const;
 		const std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS>& GetMouseChange(int whichPlayer = -1) const;
 
@@ -471,6 +486,8 @@ namespace RTE {
 			Held,
 			Pressed,
 			Released,
+			PressedSim, //!< Press event since last EndSimUpdate, regardless of current held state.
+			ReleasedSim, //!< Release event since last EndSimUpdate, regardless of current held state.
 			InputStateCount
 		};
 
@@ -478,6 +495,8 @@ namespace RTE {
 			SDL_KeyboardID id{0};
 			std::array<bool, SDL_SCANCODE_COUNT> keyStates{};
 			std::array<bool, SDL_SCANCODE_COUNT> changedKeyStates{};
+			std::array<bool, SDL_SCANCODE_COUNT> pressedSinceSim{}; //!< Press events accumulated since last EndSimUpdate.
+			std::array<bool, SDL_SCANCODE_COUNT> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 		};
 		std::unordered_map<SDL_KeyboardID, Keyboard> m_KeyboardStates; //!< Keyboard state when multi keyboard support is enabled.
 
@@ -485,6 +504,8 @@ namespace RTE {
 			SDL_MouseID id{0};
 			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> state{};
 			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> change{};
+			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> pressedSinceSim{}; //!< Press events accumulated since last EndSimUpdate.
+			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> releasedSinceSim{}; //!< Release events accumulated since last EndSimUpdate.
 			Vector position{};
 			Vector relativeMotion{};
 			Vector analogAim{};
