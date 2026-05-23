@@ -18,6 +18,9 @@ void Controller::Clear() {
 	m_AnalogMove.Reset();
 	m_AnalogAim.Reset();
 	m_AnalogCursor.Reset();
+	m_FrozenAnalogMove.Reset();
+	m_FrozenAnalogAim.Reset();
+	m_FrozenAnalogCursor.Reset();
 
 	m_InputMode = InputMode::CIM_PLAYER;
 	m_ControlledActor = nullptr;

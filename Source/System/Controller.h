@@ -191,8 +191,13 @@ namespace RTE {
 			m_ControlStates[controlState] = setting;
 		};
 
-		/// Snapshots the current control states so foreign reads during the parallel AI phase see a frozen, race-free copy.
-		void FreezeStateForAIPhase() { m_FrozenControlStates = m_ControlStates; }
+		/// Snapshots the current control states + analog vectors so foreign reads during the parallel AI phase see a frozen, race-free copy.
+		void FreezeStateForAIPhase() {
+			m_FrozenControlStates = m_ControlStates;
+			m_FrozenAnalogMove = m_AnalogMove;
+			m_FrozenAnalogAim = m_AnalogAim;
+			m_FrozenAnalogCursor = m_AnalogCursor;
+		}
 
 		/// Gets the current mode of input for this Controller.
 		/// @return The InputMode that this controller is currently using.
@@ -209,7 +214,12 @@ namespace RTE {
 
 		/// Gets the analog movement input data.
 		/// @return A vector with the analog movement data, both axes ranging form -1.0 to 1.0.
-		Vector GetAnalogMove() const { return m_AnalogMove; }
+		Vector GetAnalogMove() const {
+			if (g_CurrentAIActor && m_ControlledActor != g_CurrentAIActor) {
+				return m_FrozenAnalogMove;
+			}
+			return m_AnalogMove;
+		}
 
 		/// Sets the analog movement vector state of this.
 		/// @param newMove The new analog movement vector.
@@ -217,7 +227,12 @@ namespace RTE {
 
 		/// Gets the analog aiming input data.
 		/// @return A vector with the analog aiming data, both axes ranging form -1.0 to 1.0.
-		Vector GetAnalogAim() const { return m_AnalogAim; }
+		Vector GetAnalogAim() const {
+			if (g_CurrentAIActor && m_ControlledActor != g_CurrentAIActor) {
+				return m_FrozenAnalogAim;
+			}
+			return m_AnalogAim;
+		}
 
 		/// Sets the analog aiming vector state of this.
 		/// @param newAim The new analog aiming vector.
@@ -225,7 +240,12 @@ namespace RTE {
 
 		/// Gets the analog menu input data.
 		/// @return A vector with the analog menu data, both axes ranging form -1.0 to 1.0.
-		Vector GetAnalogCursor() const { return m_AnalogCursor; }
+		Vector GetAnalogCursor() const {
+			if (g_CurrentAIActor && m_ControlledActor != g_CurrentAIActor) {
+				return m_FrozenAnalogCursor;
+			}
+			return m_AnalogCursor;
+		}
 
 		/// Sets the analog cursor to the specified position.
 		/// @param newAnalogCursor The position the analog cursor should be set to.
@@ -327,6 +347,9 @@ namespace RTE {
 
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_ControlStates; //!< Control states.
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_FrozenControlStates; //!< Control states snapshotted before the parallel AI phase; foreign AI reads use this.
+		Vector m_FrozenAnalogMove; //!< AnalogMove snapshotted before the parallel AI phase; foreign AI reads use this.
+		Vector m_FrozenAnalogAim; //!< AnalogAim snapshotted before the parallel AI phase; foreign AI reads use this.
+		Vector m_FrozenAnalogCursor; //!< AnalogCursor snapshotted before the parallel AI phase; foreign AI reads use this.
 		bool m_Disabled; //!< Quick and easy disable to prevent updates from being made.
 
 		InputMode m_InputMode; //!< The current controller input mode, like AI, player etc.
