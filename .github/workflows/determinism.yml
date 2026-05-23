@@ -56,7 +56,7 @@ name: Determinism
 
 on:
   pull_request:
-    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs, flagship/mp-m3-fixedpoint-physics, flagship/mp-m4-threaded-sim]
+    branches: [modernization-effort, flagship/mp-m1-determinism-cleanup, flagship/mp-m2-luajit-pairs, flagship/mp-m3-fixedpoint-physics, flagship/mp-m4-threaded-sim, flagship/m5.5-mp-harness, 'flagship/m4a-*', 'flagship/mp-m*']
   workflow_dispatch:
 
 # Concurrency: one run per branch/PR, cancel in-flight if new commits arrive.
