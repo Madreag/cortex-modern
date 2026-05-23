@@ -14,8 +14,8 @@
       },
       "final_total_hash": "1a3aa386a6ce11651bfa48c5ddbd6d2040012df4a8b6208ff8decb11261c8f99",
       "numeric": {
-        "__sim_compute_accum": 3202337.0,
-        "__wall_seconds": 10.2049445,
+        "__sim_compute_accum": 3263311.0,
+        "__wall_seconds": 10.20540325,
         "actor_count": 0.0,
         "final_tick": 599.0,
         "pairs_fold": 849459986.0
