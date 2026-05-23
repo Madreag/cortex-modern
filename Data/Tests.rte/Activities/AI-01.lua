@@ -9,10 +9,21 @@ local Trust = require("Lib/TrustScenario");
 TestScenarioAI01 = Trust.Extend("AI-01", { max_ticks = 1200 });
 
 function TestScenarioAI01:OnStart()
-    -- Brain + one defender, both SENTRY; a BRAINHUNT attacker hunting the brain.
+    -- Max AI skill so the armed defender lands its Battle Rifle hits.
+    self:MaxTeamAISkill(Activity.TEAM_1);
+    self:MaxTeamAISkill(Activity.TEAM_2);
+    -- Brain + armed SENTRY defender; an armed attacker with a GOTO waypoint at
+    -- the brain. The base Activity doesn't auto-mark the brain dummy, so a
+    -- BRAINHUNT attacker wanders -- GOTO + waypoint gives the deterministic
+    -- advance the test needs.
     self._brain = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
-    self:SpawnActor("Green Dummy", "Base.rte", 870, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
-    self._attacker = self:SpawnActor("Green Dummy", "Base.rte", 650, 50, Activity.TEAM_2, Actor.AIMODE_BRAINHUNT);
+    local defender = self:SpawnActor("Green Dummy", "Base.rte", 870, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
+    self:GiveFirearm(defender, "Battle Rifle");
+    self._attacker = self:SpawnActor("Green Dummy", "Base.rte", 650, 50, Activity.TEAM_2, Actor.AIMODE_GOTO);
+    if self._attacker and self._brain then
+        self._attacker:AddAISceneWaypoint(Vector(self._brain.Pos.X, self._brain.Pos.Y));
+        self:GiveFirearm(self._attacker, "SMG");
+    end
     self:RecordMetric("brain_start_health", self._brain and self._brain.Health or 0);
 end
 

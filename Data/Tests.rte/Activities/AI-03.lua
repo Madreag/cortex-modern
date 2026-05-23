@@ -13,6 +13,7 @@ function TestScenarioAI03:OnStart()
     local a = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_GOTO);
     if a then
         a:AddAISceneWaypoint(Vector(950, 600));
+        self:GiveDigger(a, "Heavy Digger");
         self._actor = a;
     end
     self._landed = nil;

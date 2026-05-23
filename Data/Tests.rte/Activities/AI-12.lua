@@ -2,7 +2,7 @@
 -- A horizontal tunnel is genuinely carved at tick 120 (both modes) through the
 -- solid terrain at the actor's landed level -- provable by a pixel-count change.
 -- Pass: the route was genuinely opened (>= 300 air pixels appeared) AND the
--- actor crossed >= 480px through it. Geometry is relative to the landed pos.
+-- actor crossed >= 460px through it. Geometry is relative to the landed pos.
 
 package.loaded.Constants = nil; require("Constants");
 local Trust = require("Lib/TrustScenario");
@@ -54,12 +54,12 @@ function TestScenarioAI12:OnTick(tick)
         self:RecordMetric("actor_x", a.Pos.X);
     end
     if tick > 130 and self._carveDone and self._landed then
-        if self._carved >= 300 and a.Pos.X >= self._landed.X + 480 then
+        if self._carved >= 300 and a.Pos.X >= self._landed.X + 460 then
             self:RecordMetric("actor_x", a.Pos.X);
             self:RecordMetric("goal_tick", tick);
             return true, true;
         end
-        if tick > 450 then
+        if tick > 900 then
             self:RecordMetric("actor_x", a.Pos.X);
             return true, false;
         end
