@@ -369,7 +369,8 @@ namespace RTE {
 
 		int m_CurrentInnerRadius; //!< The current radius of the innermost circle of the pie menu, in pixels.
 		bool m_CursorInVisiblePosition; //!< Whether or not this PieMenu's cursor is in a visible position and should be shown.
-		float m_CursorAngle; //!< Position of the cursor on the circle, in radians, counterclockwise from straight out to the right.
+		float m_CursorAngle; //!< Sim-tick cursor angle. Drives hover-slice determination and activation.
+		float m_CursorVisualAngle; //!< Render-tick cursor angle for smooth visual cursor. Tracks latest controller analog input in analog mode; matches m_CursorAngle otherwise.
 
 		BITMAP* m_BGBitmap; //!< The intermediary bitmap used to first draw the PieMenu background, which will be blitted to the final draw target surface.
 		BITMAP* m_BGRotationBitmap; //!< The intermediary bitmap used to allow the PieMenu background to rotate, which will be pivoted onto the BG bitmap.

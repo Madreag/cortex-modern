@@ -95,6 +95,7 @@ void PieMenu::Clear() {
 	m_CurrentInnerRadius = 0;
 	m_CursorInVisiblePosition = false;
 	m_CursorAngle = 0;
+	m_CursorVisualAngle = 0;
 
 	m_BGBitmap = nullptr;
 	m_BGRotationBitmap = nullptr;
@@ -158,6 +159,7 @@ int PieMenu::Create(const PieMenu& reference) {
 	m_CurrentInnerRadius = reference.m_CurrentInnerRadius;
 	m_CursorInVisiblePosition = reference.m_CursorInVisiblePosition;
 	m_CursorAngle = reference.m_CursorAngle;
+	m_CursorVisualAngle = reference.m_CursorVisualAngle;
 
 	RecreateBackgroundBitmaps();
 
@@ -643,6 +645,20 @@ void PieMenu::RenderUpdate() {
 		const Actor* affectedObjectAsActor = dynamic_cast<Actor*>(m_AffectedObject);
 		SetPos(affectedObjectAsActor ? affectedObjectAsActor->GetRenderCPUPos() : m_AffectedObject->GetRenderPos());
 	}
+
+	// Smooth the visual cursor angle to the latest analog input each render frame; sim-tick m_CursorAngle still drives hover/activation.
+	const Controller* controller = GetController();
+	if (controller && controller->IsState(PIE_MENU_ACTIVE_ANALOG) && IsEnabled()) {
+		const Vector& input = controller->GetAnalogCursor();
+		if (input.MagnitudeIsGreaterThan(0.5F)) {
+			m_CursorVisualAngle = NormalizeAngleBetween0And2PI(input.GetAbsRadAngle());
+		} else {
+			m_CursorVisualAngle = m_CursorAngle;
+		}
+	} else {
+		m_CursorVisualAngle = m_CursorAngle;
+	}
+
 	if (m_ActiveSubPieMenu) {
 		m_ActiveSubPieMenu->RenderUpdate();
 	}
@@ -1010,8 +1026,8 @@ void PieMenu::DrawPieIcons(BITMAP* targetBitmap, const Vector& drawPos) const {
 
 void PieMenu::DrawPieCursorAndPieSliceDescriptions(BITMAP* targetBitmap, const Vector& drawPos) const {
 	int nonLineSeparatorCorrection = m_IconSeparatorMode != IconSeparatorMode::Line ? -(m_BackgroundSeparatorSize) : 0;
-	Vector cursorPos = Vector(static_cast<float>(m_CurrentInnerRadius + nonLineSeparatorCorrection), 0.0F).RadRotate(m_CursorAngle);
-	pivot_sprite(targetBitmap, s_CursorBitmap, drawPos.GetFloorIntX() + cursorPos.GetFloorIntX(), drawPos.GetFloorIntY() + cursorPos.GetFloorIntY(), s_CursorBitmap->w / 2, s_CursorBitmap->h / 2, ftofix((m_CursorAngle / c_PI) * -128.0F));
+	Vector cursorPos = Vector(static_cast<float>(m_CurrentInnerRadius + nonLineSeparatorCorrection), 0.0F).RadRotate(m_CursorVisualAngle);
+	pivot_sprite(targetBitmap, s_CursorBitmap, drawPos.GetFloorIntX() + cursorPos.GetFloorIntX(), drawPos.GetFloorIntY() + cursorPos.GetFloorIntY(), s_CursorBitmap->w / 2, s_CursorBitmap->h / 2, ftofix((m_CursorVisualAngle / c_PI) * -128.0F));
 
 	if (m_HoveredPieSlice) {
 		float textRotation = NormalizeAngleBetween0And2PI(m_HoveredPieSlice->GetMidAngle() + GetRotAngle());
