@@ -11,16 +11,17 @@
 // Source/CI/DeterminismCheck.cpp so the binary is small, fast to build, and
 // safe to run on any platform that ships the main binary.
 //
-// Subcommands (V1.2):
+// Subcommands (V1.4):
 //   test all                    Aggregate M1-M4 suite runner
 //   test selftest               EC3 positive control (verify harness)
 //   test scenario               Run a single scenario
 //   test replay-determinism     Wraps -determinism-check (N runs, diff)
 //   test thread-matrix          Wraps -determinism-check --threads (M4 acid test)
 //   test cross-platform-checksum  Diff trace JSONs from multiple platforms
-//   test sync-drift             [stub — needs M6 networking]
-//   test latency-injection      [stub — needs M6 networking]
-//   test rollback-burst         [stub — needs M9 rollback]
+//   test mp-sync-drift          Spawn N engine processes in parallel, diff traces
+//   test latency-injection      Deterministic network simulator + parallel diff
+//   test snapshot-restore       Snapshot/restore tester (engine support pending M8)
+//   test rollback-burst         Rollback tester (engine support pending M8)
 //   bench replay                Run scenario, report sim-compute throughput
 //   trace inspect <path>        Pretty-print a trace JSON
 //   info scenarios              List known scenarios + descriptions
@@ -36,15 +37,24 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -52,7 +62,7 @@ namespace {
 	using nlohmann::json;
 	namespace fs = std::filesystem;
 
-	constexpr const char* kVersion = "0.3.1";
+	constexpr const char* kVersion = "0.4.0";
 
 	// Path to this cccp-ctl binary itself, set in main() from argv[0]. Used by
 	// `test all` / `test selftest` to re-invoke ourselves with the right
@@ -409,9 +419,10 @@ namespace {
 		    "  test replay-determinism        Run a scenario N times, diff per-tick hashes\n"
 		    "  test thread-matrix             Run scenario across Lua-state counts (M4 acid test)\n"
 		    "  test cross-platform-checksum   Diff trace JSONs from multiple platforms\n"
-		    "  test sync-drift                [needs M6 — networking not yet shipped]\n"
-		    "  test latency-injection         [needs M6 — networking not yet shipped]\n"
-		    "  test rollback-burst            [needs M9 — rollback not yet shipped]\n"
+		    "  test mp-sync-drift             Spawn N engine processes in parallel, diff traces\n"
+		    "  test latency-injection         [needs M6 — engine network layer not yet shipped]\n"
+		    "  test snapshot-restore          [needs M8 — engine snapshot/restore not yet shipped]\n"
+		    "  test rollback-burst            [needs M8 — engine rollback not yet shipped]\n"
 		    "\n"
 		    "Bench commands (performance):\n"
 		    "  bench replay                   Run scenario N times, report sim-compute throughput\n"
@@ -644,6 +655,54 @@ namespace {
 		    "  info game-bin           Locate + validate the game binary.\n"
 		    "\n"
 		    "All sub-commands accept --json for machine-readable output.\n";
+	}
+
+	void PrintTestMpSyncDriftHelp(std::ostream& out) {
+		out <<
+		    "cccp-ctl test mp-sync-drift — two-process sim sync verification\n"
+		    "\n"
+		    "Spawns >=2 engine processes in parallel, each running the same scenario+seed\n"
+		    "with per-tick BLAKE3 hashing on. Compares the resulting traces tick-by-tick\n"
+		    "and reports MATCH or DIVERGED-AT-TICK-N. A local MP bridge endpoint (Unix\n"
+		    "domain socket on POSIX, named pipe on Windows) is created as a scaffolding\n"
+		    "hook for the engine-side MP code that M6/M7 will add; today no engine\n"
+		    "connects to it, so input distribution / tick coordination are post-hoc\n"
+		    "trace comparison only.\n"
+		    "\n"
+		    "Usage:\n"
+		    "  cccp-ctl test mp-sync-drift [--scenario <name>] [options]\n"
+		    "\n"
+		    "Options:\n"
+		    "  --scenario <name>           Scenario preset-suffix. Default M4ThreadStress.\n"
+		    "  --ticks <N>                 Sim-tick cap per process. Default 600.\n"
+		    "  --seed <N>                  RNG seed. Default 42.\n"
+		    "  --processes <N>             How many engine processes to spawn. Default 2.\n"
+		    "  --peers <N>                 Alias for --processes <N+1> (1 host + N peers).\n"
+		    "  --runs <N>                  Repeat the test N times. Default 1.\n"
+		    "  --num-lua-states <N>        Pin Lua-state count per engine. Default 4.\n"
+		    "  --input-script <path>       Pre-recorded input script (scaffolded — engine\n"
+		    "                              -side replay pending M6 networking).\n"
+		    "  --inject-divergence-role <role>\n"
+		    "                              Drive -determinism-selftest-perturb on the\n"
+		    "                              named role (`host` / `peer` / `peer2` ...).\n"
+		    "                              Test then PASSES iff divergence is detected.\n"
+		    "                              Use to verify the comparator (EC3-MP control).\n"
+		    "  --keep-traces               Keep per-process trace JSONs after diff.\n"
+		    "  --parallel                  Spawn engines concurrently. Default OFF:\n"
+		    "                              two visible game windows fight over input\n"
+		    "                              focus on Windows desktop and stall. Use\n"
+		    "                              --parallel only on headless / Xvfb / CI.\n"
+		    "  --output <path>             Where to write the aggregate report.\n"
+		    "  --out-dir <path>            Direct temp/output dir.\n"
+		    "  --game-bin <path>           Path to game binary. Default: auto-detect.\n"
+		    "  --json                      JSON output.\n"
+		    "  --quiet                     Suppress per-spawn echo on stderr.\n"
+		    "  -h, --help                  This help.\n"
+		    "\n"
+		    "Exit codes:\n"
+		    "  0   MATCH (or, with --inject-divergence-role, divergence correctly detected)\n"
+		    "  1   DIVERGED (or, with --inject-divergence-role, divergence NOT detected)\n"
+		    "  2   engine spawn failure / usage error\n";
 	}
 
 	void PrintBenchReplayHelp(std::ostream& out) {
@@ -1152,6 +1211,484 @@ namespace {
 
 		PrintTextOrJson(out, summary, text.str());
 		return anyDiverged ? 1 : 0;
+	}
+
+	// ----- MP harness shared infrastructure -----------------------------------
+	//
+	// Block A (mp-sync-drift) spawns N engine processes in parallel; Blocks B-D
+	// reuse the same scaffolding. Today the harness post-hoc diffs trace JSONs;
+	// the bridge endpoint is a structural placeholder for the M6/M7 engine-side
+	// MP code. No third-party deps — POSIX UDS or Win32 named pipe + std::async.
+
+	struct BridgeEndpoint {
+		std::string displayPath;
+		bool created = false;
+#ifdef _WIN32
+		HANDLE handle = INVALID_HANDLE_VALUE;
+#else
+		int fd = -1;
+		std::string sockPath;
+#endif
+	};
+
+	BridgeEndpoint CreateBridge(const fs::path& outDir, const std::string& tag) {
+		BridgeEndpoint b;
+#ifdef _WIN32
+		(void)outDir;
+		const std::string pipeName = "\\\\.\\pipe\\cccp-ctl-bridge-" + tag + "-" +
+		                             std::to_string(static_cast<unsigned long long>(::GetCurrentProcessId()));
+		HANDLE h = ::CreateNamedPipeA(
+		    pipeName.c_str(),
+		    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+		    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+		    8,
+		    4096, 4096, 0,
+		    nullptr);
+		if (h == INVALID_HANDLE_VALUE) return b;
+		b.handle = h;
+		b.displayPath = pipeName;
+		b.created = true;
+#else
+		const fs::path sockPath = outDir / ("bridge-" + tag + ".sock");
+		const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+		if (fd < 0) return b;
+		sockaddr_un addr{};
+		addr.sun_family = AF_UNIX;
+		const std::string p = sockPath.string();
+		if (p.size() >= sizeof(addr.sun_path)) {
+			::close(fd);
+			return b;
+		}
+		std::strncpy(addr.sun_path, p.c_str(), sizeof(addr.sun_path) - 1);
+		::unlink(addr.sun_path);
+		if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+			::close(fd);
+			return b;
+		}
+		if (::listen(fd, 4) < 0) {
+			::close(fd);
+			::unlink(addr.sun_path);
+			return b;
+		}
+		b.fd = fd;
+		b.sockPath = p;
+		b.displayPath = p;
+		b.created = true;
+#endif
+		return b;
+	}
+
+	void TeardownBridge(BridgeEndpoint& b) {
+		if (!b.created) return;
+#ifdef _WIN32
+		if (b.handle != INVALID_HANDLE_VALUE) {
+			::CloseHandle(b.handle);
+			b.handle = INVALID_HANDLE_VALUE;
+		}
+#else
+		if (b.fd >= 0) {
+			::close(b.fd);
+			b.fd = -1;
+		}
+		if (!b.sockPath.empty()) {
+			::unlink(b.sockPath.c_str());
+		}
+#endif
+		b.created = false;
+	}
+
+	// One engine process's outcome inside an MP run.
+	struct EngineRunResult {
+		std::string role;
+		fs::path outPath;
+		int rc = -1;
+		bool passed = false;
+		bool tracesProduced = false;
+		std::string finalHash;
+		json tickHashes;
+	};
+
+	// Per-role pair diff against role[0] (host). Mirrors the cross-platform-checksum
+	// pattern: first divergence tick, per-subsystem first divergence, per-role status.
+	void DiffEngineTraces(
+	    const std::vector<EngineRunResult>& results,
+	    bool& divergedOut,
+	    uint64_t& firstDivergenceTickOut,
+	    uint64_t& comparedTicksOut,
+	    json& perSubsystemOut,
+	    std::map<std::string, std::string>& perRolePairResultOut) {
+		divergedOut = false;
+		firstDivergenceTickOut = 0;
+		comparedTicksOut = 0;
+		perSubsystemOut = json::object();
+		perRolePairResultOut.clear();
+		if (results.size() < 2) return;
+		if (!results[0].tracesProduced) return;
+		const json& baseTicks = results[0].tickHashes;
+		if (!baseTicks.is_array() || baseTicks.empty()) return;
+
+		size_t minTicks = baseTicks.size();
+		for (size_t i = 1; i < results.size(); ++i) {
+			if (!results[i].tracesProduced) continue;
+			if (!results[i].tickHashes.is_array()) continue;
+			minTicks = std::min(minTicks, results[i].tickHashes.size());
+		}
+		comparedTicksOut = static_cast<uint64_t>(minTicks);
+
+		struct SubsystemDiv {
+			bool diverged = false;
+			uint64_t firstTick = 0;
+			std::vector<std::string> divergentRoles;
+		};
+		std::map<std::string, SubsystemDiv> perSubsystem;
+
+		for (size_t i = 1; i < results.size(); ++i) {
+			perRolePairResultOut[results[i].role] = results[i].tracesProduced ? "MATCH" : "no trace";
+		}
+
+		for (size_t ti = 0; ti < minTicks; ++ti) {
+			const json& baseTick = baseTicks[ti];
+			const uint64_t tickNum = baseTick.value("tick", uint64_t{ti});
+			const json& baseSubs = baseTick.value("subsystems", json::object());
+			for (auto sit = baseSubs.begin(); sit != baseSubs.end(); ++sit) {
+				const std::string sub = sit.key();
+				const std::string baseHash = sit.value().get<std::string>();
+				for (size_t pi = 1; pi < results.size(); ++pi) {
+					if (!results[pi].tracesProduced) continue;
+					if (!results[pi].tickHashes.is_array() || ti >= results[pi].tickHashes.size()) continue;
+					const json& peerTick = results[pi].tickHashes[ti];
+					const json& peerSubs = peerTick.value("subsystems", json::object());
+					const std::string h = peerSubs.value(sub, std::string());
+					if (h != baseHash) {
+						auto& info = perSubsystem[sub];
+						if (!info.diverged) {
+							info.diverged = true;
+							info.firstTick = tickNum;
+						}
+						if (std::find(info.divergentRoles.begin(), info.divergentRoles.end(), results[pi].role) == info.divergentRoles.end()) {
+							info.divergentRoles.push_back(results[pi].role);
+						}
+						if (perRolePairResultOut[results[pi].role] == "MATCH") {
+							perRolePairResultOut[results[pi].role] = "DIVERGED at tick " + std::to_string(tickNum);
+						}
+						if (!divergedOut) {
+							divergedOut = true;
+							firstDivergenceTickOut = tickNum;
+						}
+					}
+				}
+			}
+		}
+
+		for (const auto& [sub, info]: perSubsystem) {
+			if (!info.diverged) continue;
+			perSubsystemOut[sub] = {
+			    {"first_divergence_tick", info.firstTick},
+			    {"divergent_roles", info.divergentRoles},
+			};
+		}
+	}
+
+	// Role labels: host, peer, peer2, peer3, ...
+	std::vector<std::string> BuildRoleLabels(int processes) {
+		std::vector<std::string> roles;
+		roles.reserve(processes);
+		roles.push_back("host");
+		for (int i = 1; i < processes; ++i) {
+			roles.push_back(i == 1 ? "peer" : ("peer" + std::to_string(i)));
+		}
+		return roles;
+	}
+
+	// Spawn N engine subprocesses, wait for all, load each trace JSON into
+	// EngineRunResult. Per-role extra flags (e.g. -determinism-selftest-perturb on
+	// one role for the EC3-MP positive control) are appended to that role's command
+	// line. parallel=true uses std::async; parallel=false runs sequentially. Default
+	// is sequential because two visible game windows on Windows desktop fight over
+	// input focus and stall; CI / headless / Xvfb runs are safe with --parallel.
+	std::vector<EngineRunResult> RunEngines(
+	    const fs::path& gameBin,
+	    const std::string& scenario,
+	    uint64_t seed,
+	    uint64_t ticks,
+	    int numLuaStates,
+	    const std::vector<std::string>& roles,
+	    const std::map<std::string, std::string>& perRoleExtraFlags,
+	    const fs::path& runDir,
+	    bool quietEcho,
+	    bool parallel,
+	    int& engineFailuresOut) {
+		engineFailuresOut = 0;
+		const size_t n = roles.size();
+		std::vector<fs::path> roleOuts(n);
+		std::vector<std::string> cmds(n);
+		const fs::path gbParent = gameBin.parent_path();
+
+		for (size_t p = 0; p < n; ++p) {
+			roleOuts[p] = runDir / (roles[p] + ".json");
+			std::ostringstream cmd;
+			cmd << Quote(gameBin.string())
+			    << " -scenario " << Quote(scenario)
+			    << " -seed " << seed
+			    << " -max-ticks " << ticks
+			    << " -tick-hashes"
+			    << " -num-lua-states " << numLuaStates
+			    << " -out " << Quote(roleOuts[p].string());
+			auto it = perRoleExtraFlags.find(roles[p]);
+			if (it != perRoleExtraFlags.end() && !it->second.empty()) {
+				cmd << " " << it->second;
+			}
+			cmds[p] = cmd.str();
+		}
+
+		std::vector<int> rcs(n, -1);
+		if (parallel) {
+			std::vector<std::future<int>> futures;
+			futures.reserve(n);
+			for (size_t p = 0; p < n; ++p) {
+				if (!quietEcho) std::cerr << "[cccp-ctl] spawning role=" << roles[p] << " (parallel)\n";
+				const std::string fullCmd = cmds[p];
+				futures.push_back(std::async(std::launch::async, [fullCmd, gbParent, quietEcho]() {
+					return RunSubprocess(fullCmd, !quietEcho, gbParent);
+				}));
+			}
+			for (size_t p = 0; p < n; ++p) rcs[p] = futures[p].get();
+		} else {
+			for (size_t p = 0; p < n; ++p) {
+				if (!quietEcho) std::cerr << "[cccp-ctl] running role=" << roles[p] << " (sequential " << (p + 1) << "/" << n << ")\n";
+				rcs[p] = RunSubprocess(cmds[p], !quietEcho, gbParent);
+			}
+		}
+
+		std::vector<EngineRunResult> results;
+		results.reserve(n);
+		for (size_t p = 0; p < n; ++p) {
+			EngineRunResult er;
+			er.role = roles[p];
+			er.rc = rcs[p];
+			er.outPath = roleOuts[p];
+			if (er.rc < 0 || !fs::exists(roleOuts[p])) {
+				++engineFailuresOut;
+				std::cerr << "[cccp-ctl] " << er.role << " engine failed (rc=" << er.rc
+				          << ", trace=" << (fs::exists(roleOuts[p]) ? "present" : "missing") << ")\n";
+				results.push_back(std::move(er));
+				continue;
+			}
+			const json j = ReadJsonFile(roleOuts[p]);
+			if (j.is_null() || !j.contains("runs") || !j["runs"].is_array() || j["runs"].empty()) {
+				++engineFailuresOut;
+				std::cerr << "[cccp-ctl] " << er.role << " produced no usable trace at " << roleOuts[p].string() << "\n";
+				results.push_back(std::move(er));
+				continue;
+			}
+			const json& run0 = j["runs"][0];
+			er.passed = run0.value("passed", false);
+			er.finalHash = run0.value("final_total_hash", std::string());
+			er.tickHashes = run0.value("tick_hashes", json::array());
+			er.tracesProduced = true;
+			results.push_back(std::move(er));
+		}
+		return results;
+	}
+
+	// ----- subcommand: test mp-sync-drift -------------------------------------
+
+	int CmdTestMpSyncDrift(int argc, char** argv, const fs::path& selfDir) {
+		std::string scenario = "M4ThreadStress";
+		uint64_t seed = 42;
+		uint64_t ticks = 600;
+		int processes = 2;
+		int runs = 1;
+		int numLuaStates = 4;
+		std::string injectDivRole;
+		std::string inputScript;
+		bool keepTraces = false;
+		bool parallel = false;
+		fs::path outPath;
+		fs::path gameBin;
+		OutputCtx out;
+
+		for (int i = 0; i < argc; ++i) {
+			const std::string a = argv[i];
+			const bool hasV = (i + 1) < argc;
+			if (a == "-h" || a == "--help") { PrintTestMpSyncDriftHelp(std::cout); return 0; }
+			if (ArgEq(a, "scenario") && hasV) { scenario = argv[++i]; continue; }
+			if (ArgEq(a, "seed") && hasV) { seed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "ticks") && hasV) { ticks = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "processes") && hasV) { processes = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "peers") && hasV) { processes = std::atoi(argv[++i]) + 1; continue; }
+			if (ArgEq(a, "runs") && hasV) { runs = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "num-lua-states") && hasV) { numLuaStates = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "input-script") && hasV) { inputScript = argv[++i]; continue; }
+			if (ArgEq(a, "inject-divergence-role") && hasV) { injectDivRole = argv[++i]; continue; }
+			if (ArgEq(a, "keep-traces")) { keepTraces = true; continue; }
+			if (ArgEq(a, "parallel")) { parallel = true; continue; }
+			if (ArgEq(a, "output") && hasV) { outPath = argv[++i]; continue; }
+			if (ArgEq(a, "game-bin") && hasV) { gameBin = argv[++i]; continue; }
+			if (ArgEq(a, "out-dir") && hasV) { out.outDir = argv[++i]; continue; }
+			if (ArgEq(a, "json")) { out.json = true; continue; }
+			if (ArgEq(a, "quiet")) { out.quiet = true; continue; }
+			std::cerr << "[cccp-ctl] unknown option: " << a << "\n";
+			PrintTestMpSyncDriftHelp(std::cerr);
+			return 2;
+		}
+		if (scenario.empty()) {
+			std::cerr << "[cccp-ctl] --scenario is required (default: M4ThreadStress).\n";
+			return 2;
+		}
+		if (processes < 2) {
+			std::cerr << "[cccp-ctl] --processes must be >= 2.\n";
+			return 2;
+		}
+		if (runs < 1) runs = 1;
+		if (numLuaStates < 1) numLuaStates = 1;
+		if (gameBin.empty()) gameBin = AutoDetectGameBin(selfDir);
+		if (gameBin.empty() || !fs::exists(gameBin)) {
+			std::cerr << "[cccp-ctl] could not locate game binary; pass --game-bin <path>.\n";
+			return 2;
+		}
+
+		const std::vector<std::string> roles = BuildRoleLabels(processes);
+		if (!injectDivRole.empty() && std::find(roles.begin(), roles.end(), injectDivRole) == roles.end()) {
+			std::cerr << "[cccp-ctl] --inject-divergence-role must be one of: ";
+			for (size_t i = 0; i < roles.size(); ++i) {
+				std::cerr << roles[i] << (i + 1 < roles.size() ? ", " : "");
+			}
+			std::cerr << "\n";
+			return 2;
+		}
+
+		const fs::path runDir = PickOutDir(out, "cccp-ctl-mp-sync-drift");
+		if (outPath.empty()) outPath = runDir / "report.json";
+
+		if (!inputScript.empty() && !out.quiet) {
+			std::cerr << "[cccp-ctl] --input-script accepted but engine-side input replay is\n"
+			          << "          pending M6 (networking). Inputs today come from the scenario\n"
+			          << "          script; the flag is reserved for forward compatibility.\n";
+		}
+
+		std::map<std::string, std::string> perRoleFlags;
+		if (!injectDivRole.empty()) {
+			perRoleFlags[injectDivRole] = "-determinism-selftest-perturb";
+		}
+
+		json runReports = json::array();
+		bool anyDiverged = false;
+		int totalEngineFailures = 0;
+
+		for (int r = 0; r < runs; ++r) {
+			const fs::path thisRunDir = runDir / ("run-" + std::to_string(r));
+			std::error_code ec;
+			fs::create_directories(thisRunDir, ec);
+			BridgeEndpoint bridge = CreateBridge(thisRunDir, std::to_string(r));
+
+			int engineFailures = 0;
+			const std::vector<EngineRunResult> results = RunEngines(
+			    gameBin, scenario, seed, ticks, numLuaStates,
+			    roles, perRoleFlags, thisRunDir, out.quiet, parallel, engineFailures);
+			totalEngineFailures += engineFailures;
+
+			bool diverged = false;
+			uint64_t firstDiv = 0;
+			uint64_t comparedTicks = 0;
+			json perSubsystem = json::object();
+			std::map<std::string, std::string> perRolePairResult;
+			if (engineFailures == 0) {
+				DiffEngineTraces(results, diverged, firstDiv, comparedTicks, perSubsystem, perRolePairResult);
+			}
+			if (diverged) anyDiverged = true;
+
+			json runReport = {
+			    {"run_index", r},
+			    {"bridge_path", bridge.displayPath},
+			    {"bridge_status", bridge.created ? "scaffold (engine wiring pending M6/M7)" : "creation failed"},
+			    {"engine_results", json::array()},
+			    {"diverged", diverged},
+			    {"first_divergence_tick", firstDiv},
+			    {"compared_ticks", comparedTicks},
+			    {"per_subsystem_first_divergence", perSubsystem},
+			    {"per_role_pair_result", perRolePairResult},
+			    {"engine_failures", engineFailures},
+			};
+			for (const auto& er: results) {
+				runReport["engine_results"].push_back({
+				    {"role", er.role},
+				    {"rc", er.rc},
+				    {"passed", er.passed},
+				    {"final_hash", er.finalHash},
+				    {"out_path", er.outPath.string()},
+				    {"trace_present", er.tracesProduced},
+				});
+			}
+			runReports.push_back(runReport);
+
+			TeardownBridge(bridge);
+
+			if (!keepTraces && engineFailures == 0) {
+				std::error_code ec2;
+				fs::remove_all(thisRunDir, ec2);
+			}
+		}
+
+		const bool expectedDivergence = !injectDivRole.empty();
+		bool harnessOk = false;
+		if (totalEngineFailures > 0) {
+			harnessOk = false;
+		} else if (expectedDivergence) {
+			harnessOk = anyDiverged;
+		} else {
+			harnessOk = !anyDiverged;
+		}
+
+		json summary = {
+		    {"scenario", scenario},
+		    {"ticks", ticks},
+		    {"seed", seed},
+		    {"processes", processes},
+		    {"roles", roles},
+		    {"runs", runs},
+		    {"num_lua_states", numLuaStates},
+		    {"injected_divergence_role", injectDivRole},
+		    {"expected_divergence", expectedDivergence},
+		    {"parallel", parallel},
+		    {"diverged", anyDiverged},
+		    {"engine_failures_total", totalEngineFailures},
+		    {"harness_ok", harnessOk},
+		    {"runs_detail", runReports},
+		    {"report_path", outPath.string()},
+		    {"out_dir", runDir.string()},
+		};
+
+		std::ofstream o(outPath);
+		if (o.is_open()) o << summary.dump(2) << "\n";
+
+		std::ostringstream text;
+		text << "Scenario:           " << scenario << "\n";
+		text << "Processes:          " << processes << " (";
+		for (size_t i = 0; i < roles.size(); ++i) text << roles[i] << (i + 1 < roles.size() ? ", " : "");
+		text << ")\n";
+		text << "Runs:               " << runs << "\n";
+		text << "Seed:               " << seed << "\n";
+		text << "Ticks:              " << ticks << "\n";
+		text << "Num Lua states:     " << numLuaStates << "\n";
+		text << "Spawn mode:         " << (parallel ? "parallel" : "sequential") << "\n";
+		if (!injectDivRole.empty()) {
+			text << "Injected perturb:   role=" << injectDivRole << " (expecting DIVERGED)\n";
+		}
+		text << "Engine failures:    " << totalEngineFailures << "\n";
+		if (totalEngineFailures > 0) {
+			text << "Result:             ENGINE FAILURE — one or more engines did not produce a trace\n";
+		} else if (expectedDivergence) {
+			text << "Result:             " << (anyDiverged ? "DIVERGED (as expected — harness OK)" : "MATCH (UNEXPECTED — harness BROKEN)") << "\n";
+		} else {
+			text << "Result:             " << (anyDiverged ? "DIVERGED" : "MATCH") << "\n";
+		}
+		text << "Report:             " << outPath.string() << "\n";
+
+		PrintTextOrJson(out, summary, text.str());
+
+		if (totalEngineFailures > 0) return 2;
+		return harnessOk ? 0 : 1;
 	}
 
 	// ----- subcommand: bench replay -------------------------------------------
@@ -1790,9 +2327,10 @@ namespace {
 		if (sub == "replay-determinism") return CmdTestReplayDeterminism(subArgc, subArgv, selfDir);
 		if (sub == "thread-matrix") return CmdTestThreadMatrix(subArgc, subArgv, selfDir);
 		if (sub == "cross-platform-checksum") return CmdTestCrossPlatformChecksum(subArgc, subArgv, selfDir);
-		if (sub == "sync-drift") return CmdStub("sync-drift", "M6 (networking)");
+		if (sub == "mp-sync-drift" || sub == "sync-drift") return CmdTestMpSyncDrift(subArgc, subArgv, selfDir);
 		if (sub == "latency-injection") return CmdStub("latency-injection", "M6 (networking)");
-		if (sub == "rollback-burst") return CmdStub("rollback-burst", "M9 (rollback)");
+		if (sub == "snapshot-restore") return CmdStub("snapshot-restore", "M8 (rollback)");
+		if (sub == "rollback-burst") return CmdStub("rollback-burst", "M8 (rollback)");
 		if (sub == "-h" || sub == "--help") { PrintTopHelp(std::cout); return 0; }
 		std::cerr << "[cccp-ctl] unknown test subcommand: " << sub << "\n";
 		PrintTopHelp(std::cerr);
