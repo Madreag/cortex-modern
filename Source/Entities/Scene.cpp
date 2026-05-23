@@ -2384,6 +2384,9 @@ void Scene::BlockUntilAllPathingRequestsComplete() {
 void Scene::UpdatePathFinding() {
 	ZoneScoped;
 
+	// Drain prev-tick deferred tasks before our par_unseq; Scene::Update runs before MovableMan::Update.
+	g_MovableMan.CompleteDeferredSimTasks();
+
 	constexpr int nodeUpdatesPerCall = 100;
 	constexpr int maxUnupdatedMaterialAreas = 1000;
 
