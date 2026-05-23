@@ -1,0 +1,63 @@
+{
+  "binary": "/home/erol/cccp/./builddir/CortexCommand",
+  "compared_ticks": 900,
+  "diverged": false,
+  "mode": "thread-count-matrix",
+  "per_run_tick_count": [
+    900,
+    900,
+    900,
+    900,
+    900
+  ],
+  "runs": 1,
+  "runs_detail": [
+    {
+      "diverged": false,
+      "index": 0,
+      "run_index": 0,
+      "thread_count": 1,
+      "tick_count": 900
+    },
+    {
+      "diverged": false,
+      "index": 1,
+      "run_index": 0,
+      "thread_count": 2,
+      "tick_count": 900
+    },
+    {
+      "diverged": false,
+      "index": 2,
+      "run_index": 0,
+      "thread_count": 4,
+      "tick_count": 900
+    },
+    {
+      "diverged": false,
+      "index": 3,
+      "run_index": 0,
+      "thread_count": 8,
+      "tick_count": 900
+    },
+    {
+      "diverged": false,
+      "index": 4,
+      "run_index": 0,
+      "thread_count": 16,
+      "tick_count": 900
+    }
+  ],
+  "scenario": "M4ThreadStress",
+  "seed": 42,
+  "thread_counts": [
+    1,
+    2,
+    4,
+    8,
+    16
+  ],
+  "ticks_requested": 900,
+  "total_mismatched_ticks": 0,
+  "total_runs": 5
+}
