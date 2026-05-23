@@ -236,8 +236,9 @@ void MOPixel::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode,
 			break;
 	}
 
-	// MOID layer feeds hit detection, which is sim-deterministic; snap to current sim pos for that mode and lerp for color.
-	const float fLerp = mode == g_DrawMOID ? 1.0f : g_TimerMan.GetSimUpdateProportion();
+	// Modes that bake into sim state (MOID for hit detection, material/door for terrain) snap to current sim pos; visual modes lerp.
+	const bool simBoundMode = mode == g_DrawMOID || mode == g_DrawMaterial || mode == g_DrawDoor;
+	const float fLerp = simBoundMode ? 1.0f : g_TimerMan.GetSimUpdateProportion();
 	Vector spritePos = Lerp(GetPrevPos(), GetPos(), fLerp) - targetPos;
 	if (mode != DrawMode::g_DrawMOID) {
 		putpixel(targetBitmap, spritePos.GetFloorIntX(), spritePos.GetFloorIntY(), drawColor);
