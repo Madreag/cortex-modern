@@ -139,7 +139,18 @@ unblocks removing the line.
 
 The gate is advisory at landing — the job runs, posts a `::warning::` if races
 are detected, but does not fail the workflow (`continue-on-error: true` at the
-job level). To promote it to required, drop the `continue-on-error` flag from
-`.github/workflows/determinism.yml` and add the job to the GitHub
-branch-protection required-status set for the target branches. New filter
-entries land in the workflow heredoc + here in lockstep.
+job level) and the summarise step does not exit non-zero on race count. To
+promote:
+
+1. Set `TSAN_REQUIRED: '1'` in the `env:` block of the `determinism-tsan-linux`
+   job. The summarise step then `exit 1`s on any race count > 0 in addition to
+   the existing `::warning::` annotation.
+2. Drop `continue-on-error: true` from the same job so step failures actually
+   fail the job.
+3. Add the job to the GitHub branch-protection required-status set for the
+   target branches. (Repo-admin change, not a workflow edit.)
+
+Step 1 alone has the safety hatch — flipping just `TSAN_REQUIRED=1` upgrades
+the step's local failure semantics while leaving the job advisory at the
+workflow level, useful as a soak phase before step 2. New filter entries land
+in the workflow heredoc + here in lockstep.
