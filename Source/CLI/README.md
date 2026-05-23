@@ -30,6 +30,7 @@ cccp-ctl test scenario --scenario M1Baseline --seed 42
 cccp-ctl test replay-determinism --scenario M1Baseline --runs 100
 cccp-ctl test thread-matrix --scenario M4ThreadStress --threads 1,2,4,8,16
 cccp-ctl test cross-platform-checksum --traces win.json,lin.json,mac.json --labels win,linux,macos
+cccp-ctl test mp-suite --quick --parallel                                          # All MP tests in one (CI gate)
 cccp-ctl test mp-sync-drift --scenario M4ThreadStress --processes 2 --parallel    # MP correctness (headless / CI)
 cccp-ctl test latency-injection --packet-loss 5 --latency-ms 80 --jitter-ms 20    # Network simulator
 cccp-ctl test snapshot-restore --snapshot-at 100 --ticks 300                      # Phase 1; phases 2-3 pending M8
@@ -51,7 +52,8 @@ cccp-ctl bench replay --scenario M3TerrainStress --runs 5
 | `bench replay` | Run scenario N times, report `__sim_compute_accum` throughput (min/median/max + spread%). |
 | `trace inspect <path>` | Pretty-print a trace JSON. `--full`, `--ticks N1,N2`, `--subsystem name` filters. |
 | `info scenarios` / `info subsystems` / `info game-bin` | Discovery / introspection. |
-| `test mp-sync-drift` | Spawn N engine processes, diff per-tick traces. EC3-MP via `--inject-divergence-role`. |
+| `test mp-suite` | Aggregate MP correctness runner (Blocks A-D in one), `--quick` smoke. |
+| `test mp-sync-drift` | Spawn N engine processes, diff per-tick traces. EC3-MP via `--inject-divergence-role`. Alias: `test sync-drift`. |
 | `test latency-injection` | Deterministic tick-based network simulator + engine-pair diff. Separate `--network-seed`. |
 | `test snapshot-restore` | Sim-state snapshot/restore tester. Phase 1 runs today; phases 2-3 pending M8. |
 | `test rollback-burst` | Rollback machinery tester. Phases 1-2 + burst plan run today; phase 3 pending M8. |
@@ -68,7 +70,18 @@ infrastructure pieces so M6/M7/M8 can extend without re-plumbing:
   `--processes 2`) via `std::async` (parallel) or back-to-back (sequential).
   Each engine runs the existing `-scenario -tick-hashes -out <role>.json`
   mode; the harness post-hoc diffs the resulting trace JSONs. Roles are
-  labelled `host`, `peer`, `peer2`, … — extensible to N-player MP later.
+  labelled `host`, `peer1`, `peer2`, … — extensible to N-player MP later.
+  `peer` is accepted as a back-compat alias for `peer1`.
+- **Engine CWD discovery.** The engine wants its CWD to contain `Data/`. On
+  Windows MSBuild the engine binary lives at the repo root so
+  `gameBin.parent_path()` is correct, but on Linux Meson the binary lives at
+  `builddir/CortexCommand` while `Data/` is at the repo root. `FindEngineWorkDir`
+  walks up from the gameBin parent until it finds a directory containing `Data/`.
+- **Parallel mode avoids the chdir race.** `CwdGuard` does process-wide
+  `fs::current_path()` chdir/restore, which two parallel `std::async` tasks
+  would race on. The parallel branch of `RunEngines` instead embeds
+  `cd <dir> && <cmd>` into the shell command so the subshell handles cwd and
+  the parent's CWD is never touched.
 - **Sequential is the default.** Two visible game windows on Windows desktop
   fight over input focus and stall. `--parallel` is opt-in for Linux / Xvfb /
   CI runners where the window manager isn't in play. CI uses `--parallel`.

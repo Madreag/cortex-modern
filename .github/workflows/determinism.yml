@@ -338,9 +338,15 @@ jobs:
           ./builddir/cccp-ctl test mp-sync-drift \
               --scenario M1Baseline \
               --ticks 200 --seed 42 --processes 2 --runs 1 \
-              --inject-divergence-role peer --parallel --quiet \
+              --inject-divergence-role peer1 --parallel --quiet \
               --game-bin ./builddir/CortexCommand \
               --output mp-sync-drift-ec3.json
+
+      - name: mp-suite — Blocks A-D in one (quick mode)
+        run: |
+          ./builddir/cccp-ctl test mp-suite --quick --parallel --quiet \
+              --game-bin ./builddir/CortexCommand \
+              --out-dir mp-suite-out
 
       - name: Upload reports
         if: always()
@@ -350,6 +356,7 @@ jobs:
           path: |
             mp-sync-drift-clean.json
             mp-sync-drift-ec3.json
+            mp-suite-out
           if-no-files-found: error
 
   # MP M3 Block A — FixedPoint.h standalone unit + determinism tests.
