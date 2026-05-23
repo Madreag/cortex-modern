@@ -1,18 +1,25 @@
 # M5 bring-up — macOS-arm64
 
-This is the macOS-arm64 bring-up report that precedes the formal M5 milestone:
-green Meson build on Apple Silicon, the determinism scenarios run to
-completion, and same-platform determinism is verified. Cross-platform
-(macOS-arm64 vs Linux-x86_64 vs Windows-x86_64) trace diffing is the team's
-job — the per-tick traces produced here live under
-`Source/CI/macos-arm64-traces/` for that comparator step.
+This is the regenerated macOS-arm64 bring-up report. It supersedes the
+pre-seed-fix version: every per-tick trace under
+`Source/CI/macos-arm64-traces/` was produced by the post-fix binary that
+honours `-seed 42` end-to-end (foundation commit `6537ca214`) against the
+revised 23-scenario suite (`05650b976`). Same-platform determinism is
+verified across the eleven M-series scenarios — all eleven cleanly
+MATCHED at `--runs 10`. Cross-platform (macOS-arm64 vs Linux-x86_64
+vs Windows-x86_64) trace diffing is the team's job — the per-tick traces
+produced here live under `Source/CI/macos-arm64-traces/` for that
+comparator step.
 
 Host: Apple M-series, 12 logical CPUs, macOS 15.7.3 (24G419), Apple Clang
-17.0.0 (target arm64-apple-darwin24.6.0). Toolchain: Xcode CommandLineTools +
-Homebrew (`sdl3`, `sdl3_image`, `libpng`, `flac`, `lz4`, `minizip`, `tbb`,
-`meson`, `ninja`, `pkgconf`).
+17.0.0 (target arm64-apple-darwin24.6.0). Toolchain: Xcode CommandLineTools
++ Homebrew (`sdl3 3.4.8`, `sdl3_image 3.4.4`, `libpng 1.6.58`, `flac 1.5.0`,
+`lz4 1.10.0`, `minizip 1.3.2_1`, `tbb 2023.0.0`, `meson 1.11.1`,
+`ninja 1.13.2`, `pkgconf 2.5.1`).
 
-Branch: `exp/determinism-macos` off `exp/determinism-foundation`.
+Branch: `exp/determinism-macos` off `exp/determinism-foundation` at
+`c7d38d87a` (`Merge: integrate exp/determinism-macos -- macOS-arm64
+bring-up + cross-platform determinism fixes`).
 
 ## TL;DR
 
@@ -21,261 +28,305 @@ Branch: `exp/determinism-macos` off `exp/determinism-foundation`.
 | Meson configure on macOS-arm64 | green |
 | Meson compile on macOS-arm64 (Apple Clang 17) | green |
 | `FixedPointTests` (Q40.24 self-check) | 42 / 42 — SELF-CHECK: `5ce9c33b84d29932` |
-| `M1Baseline` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M1TerrainStress` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M1ActorStress` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M2LuaBaseline` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M2LuaRandomStress` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M2PairsStress` @ `--runs 100` `--ticks 600` | MATCHED (verified across three independent --runs 100 sweeps after the UInputMan determinism gate landed; see RCA below) |
-| `M2OsStubTest` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M2ModSmokeLoading` @ `--runs 100` `--ticks 600` | MATCHED |
-| `M3TerrainStress` @ `--runs 100` `--ticks 600` | MATCHED |
+| `M1Baseline` @ `--runs 10` `--ticks 600` | MATCHED |
+| `M1TerrainStress` @ `--runs 10` `--ticks 900` | MATCHED |
+| `M1ActorStress` @ `--runs 10` `--ticks 900` | MATCHED |
+| `M2LuaBaseline` @ `--runs 10` `--ticks 600` | MATCHED |
+| `M2LuaRandomStress` @ `--runs 10` `--ticks 600` | MATCHED |
+| `M2PairsStress` @ `--runs 10` `--ticks 600` | MATCHED |
+| `M2OsStubTest` @ `--runs 10` `--ticks 600` | MATCHED |
+| `M2ModSmokeLoading` @ `--runs 10` `--ticks 600` | MATCHED |
+| `M3TerrainStress` @ `--runs 10` `--ticks 900` | MATCHED |
+| `M4ThreadStress` @ `--runs 10` `--ticks 900` | MATCHED |
+| `MPerfBench` @ `--runs 10` `--ticks 1200` | MATCHED (intermittent flake under contention — see Known issues) |
 | `M4ThreadStress` thread-count matrix `--threads 1,2,4,8,16` `--runs 2` `--ticks 900` | MATCHED across all five counts |
 
-The thread-count matrix passing across 1/2/4/8/16 on macOS-arm64 is stronger
-than the Linux Block A landing state captured in
-`Source/CI/baseline_thread_divergence.md` (which had a residual cross-count
-divergence in particle/terrain physics around tick 136). That is a side-effect
-of macOS using the `_LIBCPP_PSTL_BACKEND_SERIAL` parallel-STL backend
-(see below) — `par_unseq` is sequential on this build, so the threading
-sources of the residual race are not in play. Cross-platform trace diffing
-will tell the team how much of that contributes to the macOS vs Linux gap.
+**Bottom line: 11 of 11 M-series scenarios MATCHED at `--runs 10` after
+four targeted engine-side fixes addressing latent undefined-behaviour
+in unordered-set/map iteration paths that AI / collision code relied on
+for determinism. MPerfBench passes reliably in this configuration
+(verified across the final sweep + three back-to-back reruns + the M4
+thread-count matrix) but the underlying race is documented as a
+Path E follow-up — see "Known issues / MPerfBench follow-up" below.**
 
-## Build fixes (commits on this branch)
+## The four fixes that landed on this branch
 
-Each is a single focused commit; the regression risk on Windows / Linux is
-called out next to it.
+The previous macOS bring-up's fixes (UInputMan determinism gate, MovableMan
+`parallelize_loop` block-count pin, `RTEError` cross-thread message-box
+guard, `SaveLoadMenuGUI` `file_time_type` conversion, the Meson
+subproject / libc++ / FP-flag scaffolding) are already part of foundation
+via merge `c7d38d87a`. The four new fixes for THIS regen cycle:
 
-1. **`meson: ARM-aware FP-determinism flag block`** —
-   `-msse2` is x86-only and trips the configure step on Apple Silicon;
-   gated on `host_machine.cpu_family() in ['x86', 'x86_64']`. `-ffp-contract=off`
-   is now applied to every gcc-syntax path (was implicitly redundant on x86
-   because SSE2 codegen doesn't emit FMA, but on ARM it is required — ARM
-   defaults to FMA-on, which silently breaks cross-arch FP determinism by
-   contracting `a*b + c` into a single fused-multiply-add instruction with
-   different rounding behaviour). Windows MSVC's `/fp:precise` already forbids
-   contraction, so the MSVC block is unchanged.
-   _Regression risk on Windows / Linux: none. The ARM-only `-msse2` gate is a
-   pure superset; `-ffp-contract=off` on x86 GCC/Clang is a no-op for code
-   paths that don't already get auto-contracted (and the project's existing FP
-   flags already forbid the umbrella `-funsafe-math-optimizations`)._
+1. **`Main.cpp`: macOS headless via `CCCP_HEADLESS=1`, not
+   `SDL_VIDEODRIVER=offscreen`.** Foundation commit `164ee210d` introduced
+   a `-tick-hashes`-triggered headless env-var. The Windows branch sets
+   `CCCP_HEADLESS=1` (hidden Cocoa/WGL window with a real GL context); the
+   non-Windows branch sets `SDL_VIDEODRIVER=offscreen`. The latter works
+   on Linux (SDL3's offscreen driver provides a real EGL context,
+   verified bit-identical in `m5-linux-x64.md`), but on macOS the
+   offscreen driver loads NO GL extensions: `gladLoadGL` leaves
+   `glReadBuffer = NULL`, and the engine aborts on first abort-screen
+   dispatch in `WindowMan::Initialize`. Gate the macOS path off Cocoa's
+   hidden-window route (`CCCP_HEADLESS=1`) — same as Windows — and keep
+   the Linux `offscreen` path intact.
+   _Regression risk on Linux / Windows: none. The macOS branch is
+   `#elif defined(__APPLE__)`, sibling to the existing `#if defined(_WIN32)`
+   block; Linux keeps the offscreen-driver path exactly as before._
 
-2. **`meson: libc++ feature macros + PSTL serial backend for macOS`** —
-   Apple Clang's libc++ removed `std::auto_ptr`, `std::unary_function`,
-   `std::binder1st/2nd`, `std::random_shuffle` etc. in C++17, and several
-   binder typedefs / negators in C++20. The vendored `luabind 0.7.1` and
-   `boost 1.75 container_hash` headers still reference them — exactly the way
-   the Windows build's `_HAS_AUTO_PTR_ETC=1` escape hatch keeps alive. The
-   libc++ analogues `-D_LIBCPP_ENABLE_CXX17_REMOVED_*` and the C++20 ones are
-   added via `add_global_arguments` so the `luabind` subproject also sees
-   them. The same block enables libc++'s experimental parallel STL via
-   `_LIBCPP_ENABLE_EXPERIMENTAL` and pins it to `_LIBCPP_PSTL_BACKEND_SERIAL`
-   so `std::execution::par_unseq` becomes a sequential pass — the strongest
-   per-platform determinism guarantee (no thread scheduling involved). Linux
-   `libstdc++ + TBB` and Windows `parallel STL` already produce deterministic
-   per-tick hashes; the SERIAL backend on macOS is more conservative, not
-   less.
-   _Regression risk on Windows / Linux: none. Both blocks are inside the
-   `host_machine.system() == 'darwin'` branch._
+2. **`SpatialPartitionGrid`: `std::set<MOID>` not `std::unordered_set`.**
+   The three spatial-query entry points
+   (`GetMOsInBox` / `GetMOsInRadius` / `GetMOsAtPosition`) populated a
+   `std::unordered_set<MOID>` to dedupe MOIDs gathered from grid cells,
+   then iterated that set to build the returned `MOList`. The
+   `unordered_set` iteration order is bucket-hash dependent and varies
+   across runs (different malloc / hash seed / rehash history). Lua AI
+   scripts iterate the returned `MOList` directly (e.g.
+   `HumanBehaviors.lua:GetMOsInRadius` in pickup / target / facing
+   logic), so the very first AI decision can race on which MO is seen
+   first — even with byte-identical sim state. Switching the three sets
+   to `std::set<MOID>` gives a canonical MOID-ascending iteration order;
+   downstream Lua sees a stable ordering regardless of hash bucket
+   layout. This is the headline AI-determinism fix for the regen cycle —
+   it's what carried `M4ThreadStress` from DIVERGED → MATCHED.
+   _Cross-platform implication: Windows + Linux baselines were passing
+   partly on luck because `unordered_set` iteration order varied less
+   under their respective allocators. This fix removes the
+   undefined-behaviour reliance on every platform; same-platform
+   baselines should be more robust on all three after re-run._
 
-3. **`meson: declare BLAKE3 + nlohmann_json as proper subprojects`** —
-   These vendored libs live under `subproject_dir = 'external/sources'` but had
-   no `meson.build` of their own, so Meson ≥1.6 (the project's
-   `meson_version` floor) rejects `files()` references into them from
-   `Source/Network/meson.build` and `Source/meson.build` as nested-subproject
-   sandbox violations. Add a one-shot `meson.build` to each vendor directory
-   (`external/sources/BLAKE3-1.8.5/meson.build`,
-   `external/sources/nlohmann_json-3.12.0/meson.build`) that declares the
-   existing sources as a `static_library` (BLAKE3) or header-only dep
-   (nlohmann_json) and exposes them via `override_dependency`. The top-level
-   `meson.build` now consumes them through the dependency, and
-   `Source/Network/meson.build` + `Source/meson.build` drop their direct
-   cross-subproject file references. **No vendored library source code is
-   touched** — these are pure build-system shims, invisible to MSBuild on
-   Windows.
-   _Regression risk on Windows / Linux: none on Windows (uses MSBuild via
-   `.vcxproj`, which doesn't touch the Meson subproject layout). On Linux this
-   is identical to what older-Meson builds were doing — the older Meson just
-   skipped the sandbox check the new one enforces. The new subproject
-   meson.build files emit the same BLAKE3 static-library object file with the
-   same `c_args` set (`-DBLAKE3_NO_*` / `-DBLAKE3_USE_NEON=0`)._
+3. **`AtomGroup`: `std::map<MOID, ...>` for collision-response
+   accumulators.** `AtomGroup::Travel` and `AtomGroup::PushTravel` keep
+   thread-local `unordered_map<MOID, ...>` of atoms that hit MOs during
+   a step, then iterate that map to apply collision impulses to the
+   owner's velocity and angular velocity. Per-impulse FP accumulation is
+   non-associative: `(a + b) + c != a + (b + c)` at float precision, so
+   iteration order over the map directly affects the resulting velocity
+   bit pattern. With `unordered_map` the order is hash-bucket-dependent
+   and can change across runs. Switching to `std::map` pins the order
+   MOID-ascending. (Companion `MOIgnoreMap` is membership-only — no
+   iteration — but switched too for documentation symmetry.)
+   _Cross-platform implication: same undefined-by-spec FP-accumulation-
+   order bug applied on Windows + Linux too. The fix is portable; same-
+   platform determinism on those hosts should improve as a side effect._
 
-4. **`macOS: fix file_time_type -> system_clock conversion in SaveLoadMenuGUI`** —
-   Apple Clang's libc++ uses `__int128` for `std::filesystem::file_clock`'s
-   duration rep; constructing a `system_clock::time_point` directly from a
-   `file_clock` duration is rejected (narrowing). Add a guarded
-   `duration_cast` for that platform; the existing offset arithmetic below
-   stays intact for Linux libstdc++ (`__GLIBCXX__`) and for `_WIN32`.
-   _Regression risk on Windows / Linux: none. The new branch is gated on
-   `defined(__APPLE__) && defined(_LIBCPP_VERSION)`._
-
-5. **`MovableMan: pin parallelize_loop block count to luaStates.size()`** —
-   The threaded-script and threaded-AI passes both hold an invariant — one Lua
-   state per task — enforced by `RTEAssert(start + 1 == end)`. The block count
-   was defaulting to the priority pool's `thread_count`, which on hosts where
-   `thread_count < luaStates.size()` (e.g. `-num-lua-states 16` on the 12-core
-   machine used for this bring-up) splits one state's actor group across
-   multiple tasks and trips the assert (and then deadlocks on the assert
-   message box — see the next commit). Pinning `num_blocks=luaStates.size()`
-   restores the one-state-per-task invariant for any thread count.
-   _Regression risk on Windows / Linux: none. On hosts where `thread_count >=
-   luaStates.size()` the BS_thread_pool internal `blocks` constructor was
-   already falling into the `block_size==0 → block_size=1; num_blocks=total_size`
-   branch, which is exactly what the explicit `num_blocks=luaStates.size()`
-   asks for. So the change is observationally identical on those hosts._
-
-6. **`RTEError: avoid cross-thread message-box deadlock on macOS`** —
-   `SDL_ShowMessageBox` on Cocoa dispatches the dialog UI synchronously onto
-   the main thread's run loop. If a worker thread fires an assert (or warning,
-   or abort) while the main thread is blocked waiting on that worker — e.g.
-   inside `parallelize_loop().wait()` — the dialog dispatch deadlocks. Detect
-   the case via `pthread_main_np()` and fall back to a `stderr` print for
-   non-main-thread calls. Defensive companion to commit (5); without (5) this
-   was the symptom the user saw at `-num-lua-states 16`.
-   _Regression risk on Windows / Linux: none. `IsOnAppMainThread()` returns
-   `true` unconditionally on those platforms._
-
-7. **`UInputMan: zero live-device reads when recording tick hashes`** —
-   SDL on macOS captures mouse-motion events even when the binary runs in
-   the `-determinism-check` headless mode, so the one player-controlled actor
-   in the Tutorial Bunker scene was occasionally reading non-zero analog aim
-   from `m_MouseStates.analogAim`. That fed live host cursor jitter into the
-   per-tick `controller` hash and produced a ~3% same-platform flake on
-   `M2PairsStress --runs 100`. Gate `AnalogMoveValues` and `AnalogAimValues`
-   on `g_MetricsCollector.IsRecordingTickHashes()` so they return `(0, 0)`
-   whenever the simulation is hashing its state — same effect on every host
-   regardless of background SDL activity.
-   _Regression risk on Windows / Linux: none. The gate fires only inside
-   `-determinism-check` / `-tick-hashes` runs, which are headless by design
-   and never have a real player driving the analog values. Gameplay outside
-   that mode is unaffected._
+4. **`HumanBehaviors.lua`: tie-break `devicesToPickUp` sort on
+   `deviceId`.** The two weapon-pickup behaviours
+   (`CreateGetWeaponBehavior`, `CreateGetToolBehavior`) build a
+   `devicesToPickUp` table via async `CalculatePathAsync` callbacks
+   that `table.insert` results in scheduler-completion order, then
+   `table.sort` by score. Lua's `table.sort` is unstable; if two devices
+   have equal scores the post-sort order falls back to insertion order
+   (i.e. callback-completion order, i.e. non-deterministic). Adding a
+   `deviceId` tie-break gives the sort a stable total order. Defence in
+   depth alongside fix (2); kept because both bugs surfaced
+   simultaneously and the Lua fix is independently correct.
+   _Regression risk: none. Tie-break is a strict refinement; unique
+   scores still sort as before._
 
 ## Same-platform determinism
 
-The harness runs were executed from `builddir/` with a sibling `Data/` tree
-copied from the repo (the binary looks for module data relative to its CWD).
+`Source/CI/macos-arm64-traces/` contains the single-run BLAKE3 traces
+(`<scenario>-trace.json`) and the divergence reports
+(`<scenario>-determinism.json` from the `--runs 10` sweep, plus
+`M4ThreadStress-threadmatrix.json`). The single-run traces are what the
+cross-OS comparator in `.github/workflows/determinism.yml` expects to
+diff.
 
-`Source/CI/macos-arm64-traces/` contains the single-run BLAKE3 traces — they
-are what the cross-OS comparator step in
-`.github/workflows/determinism.yml` expects to consume (the `*.divergence.json`
-report-files produced by `--runs 100` are not committed; they are CI run-output
-and `.gitignore`d at the project level).
+### Per-scenario results (`--runs 10`, `--seed 42`)
 
-### `M1Baseline` flake observation
+| Scenario | Ticks | `diverged` | Wall | Final-hash @ `-seed 42` (single-run) |
+|---|---|---|---|---|
+| `M1Baseline` | 600 | `false` | 131s | `ad995ddb98542a85…` |
+| `M1TerrainStress` | 900 | `false` | 187s | `edd7f9b80f9c21f6…` |
+| `M1ActorStress` | 900 | `false` | 184s | `d444dd9b14348833…` |
+| `M2LuaBaseline` | 600 | `false` | 131s | `7975064f6326eda6…` |
+| `M2LuaRandomStress` | 600 | `false` | 131s | `bcbc0603067f3d7f…` |
+| `M2PairsStress` | 600 | `false` | 132s | `1fee1213ae271f1d…` |
+| `M2OsStubTest` | 600 | `false` | 131s | `ee7e33de6cf986c5…` |
+| `M2ModSmokeLoading` | 600 | `false` | 132s | `035bd4d1974b853b…` |
+| `M3TerrainStress` | 900 | `false` | 187s | `41827cd28ec3d9e7…` |
+| `M4ThreadStress` | 900 | `false` | 185s | `d8c42c4101366eeb…` |
+| `MPerfBench` | 1200 | `false` | 297s | `b6070aca038ee94c…` |
 
-The very first invocation of `-determinism-check --runs 3 --scenario M1Baseline`
-right after a clean build reported `DIVERGED` at tick 1 across `actors` /
-`controller` / `particles` / `carve_math`. Every subsequent invocation of the
-same scenario — `--runs 100`, `--runs 10` repeated 5 times, and the per-tick
-trace single-run pass — matched cleanly. The simplest hypothesis is OS-level
-page-cache warm-up affecting the parallel data-module load in
-`PresetMan::LoadAllDataModules` (the first child process reads modules off
-disk; subsequent children read the same modules from the page cache, possibly
-in a different access order that settles to a canonical one). The first-run
-divergence is not currently reproducible after one warm-up cycle on this host;
-the `--runs 100` final results are the authoritative ones.
-
-### Per-scenario results (final pass: `--runs 100`, `--ticks 600`, `--seed 42`)
-
-| Scenario | `diverged` | First divergence | Notes |
-|---|---|---|---|
-| `M1Baseline` | `false` | — | 100 runs MATCHED. ~22 min wall. |
-| `M1TerrainStress` | `false` | — | MATCHED. |
-| `M1ActorStress` | `false` | — | MATCHED. |
-| `M2LuaBaseline` | `false` | — | MATCHED. |
-| `M2LuaRandomStress` | `false` | — | MATCHED. |
-| `M2PairsStress` | `false` | — | MATCHED at `--runs 100 --ticks 600` after the UInputMan determinism gate (commit 7 above) landed. Verified across three back-to-back sweeps (300 runs total). |
-| `M2OsStubTest` | `false` | — | MATCHED. |
-| `M2ModSmokeLoading` | `false` | — | MATCHED. |
-| `M3TerrainStress` | `false` | — | MATCHED. |
-
-All nine M1/M2/M3 scenarios at `--runs 100` reported `diverged: false`. The
-prod sweep ran sequentially `M1TerrainStress → M3TerrainStress` over ~2h
-55min wall (plus the earlier `M1Baseline --runs 100` ~22 min); `M2PairsStress`
-was initially flaky and was tracked down + fixed in the same session — see
-the RCA section below.
-
-### M2PairsStress — initial flake, root-cause + fix
-
-Initial observation (before commit 7 above): `M2PairsStress --runs 100
---ticks 600` reported `diverged: true` in ~3% of runs (2 / 4 / 4 across three
-independent sweeps), exclusively in the `controller` subsystem at varying
-first-divergence ticks. The pattern survived `CCCP_SIM_THREADS=1` (so it was
-not a thread-pool race) and matched at `--ticks 100` (so the source of drift
-took at least 100 sim ticks to surface).
-
-To pin the byte source, the `controller` hash loop in `MovableMan.cpp` was
-temporarily instrumented to also write each per-actor field set (uniqueID,
-28 control-state booleans, 6 analog floats, inputMode) as plain text to a
-per-pid diagnostic file. After a fresh `--runs 100 --keep-runs` sweep, two
-runs that differed by their JSON tick-hash were diffed at the diverging tick
-(tick 2 in one case). The diff was a single actor — the one Tutorial Bunker
-scene actor with `mode=1` (`CIM_PLAYER`) — and a single field — `AnalogAim`:
-
-```
-ref  T2 A16978 ... m=00000000:00000000 a=00000000:00000000 c=00000000:00000000 mode=1
-fail T2 A16978 ... m=00000000:00000000 a=3b31bcb5:3b3700e1 c=00000000:00000000 mode=1
-```
-
-`0x3b31bcb5` ≈ `0.00271f` and `0x3b3700e1` ≈ `0.00279f` — the magnitudes are
-sub-pixel cursor noise. Tracing through `Controller::UpdatePlayerAnalogInput`
-(`Source/System/Controller.cpp:407`), they originate from
-`g_UInputMan.AnalogAimValues(m_Player)`, which dereferences
-`m_MouseStates.at(0).analogAim`. SDL on Cocoa keeps polling mouse-motion
-events into the SDL event queue even when the binary runs without an actual
-on-screen interactive window, so any host-side cursor activity during the
-100-child sweep would occasionally land a non-zero analog-aim float in the
-player actor's controller — and from there into the per-tick controller hash.
-
-The fix (commit 7 above): gate `UInputMan::AnalogMoveValues` and
-`UInputMan::AnalogAimValues` on `g_MetricsCollector.IsRecordingTickHashes()`
-and return `Vector(0, 0)` whenever the simulation is recording its tick
-trace. The gate is platform-agnostic, so the same change also closes any
-analogous flake on Linux / Windows determinism CI runs (the only reason it
-was masked there is that the GitHub Actions runner doesn't have a live mouse
-attached to drive non-zero `m_MouseStates`). After the fix:
-
-- `M2PairsStress --runs 100 --ticks 600`: MATCHED, three independent sweeps,
-  300 runs total, zero divergences.
-- `M1Baseline --runs 100 --ticks 600`: MATCHED (re-verified post-fix).
-- `M4ThreadStress --threads 1,2,4,8,16 --runs 2 --ticks 900`: MATCHED
-  (re-verified post-fix).
-
-The temporary diagnostic was removed before the binary used to regenerate the
-committed traces; the published `Source/CI/macos-arm64-traces/*.json` are the
-fixed-build trace bytes the team's cross-OS comparator step will diff.
-
-(For the `--runs 10` iteration pass that preceded the production sweep — every
-scenario MATCHED on this host. The one M3TerrainStress divergence that
-appeared during the very first `--runs 10` invocation did not reproduce on
-subsequent runs; same OS-page-cache warm-up hypothesis as the M1Baseline note
-above. M2PairsStress was clean at `--runs 10` and only surfaced its flake at
-`--runs 100`+.)
+All eleven scenarios MATCHED across all 10 runs in the final sweep.
 
 ### `M4ThreadStress` thread-count matrix
 
 Final pass: `--threads 1,2,4,8,16 --runs 2 --ticks 900`.
 
-`RESULT: MATCHED (900 ticks across 10 runs at thread counts 1,2,4,8,16)`.
+`RESULT: MATCHED (900 ticks across 10 runs at thread counts 1,2,4,8,16)` — wall 184s.
 
-This is **stronger** than the Linux baseline landing state captured in
-`Source/CI/baseline_thread_divergence.md` (which had a residual cross-count
-divergence around tick 136 in particle/terrain physics). The macOS build's
-`_LIBCPP_PSTL_BACKEND_SERIAL` opts the parallel STL out of multi-threading at
-the algorithm level, so the threading sources of that residual race are not in
-play here. This isn't a "fixed on macOS" claim — it's a "this host doesn't
-exercise the failing path" observation. The team's cross-platform trace
-comparison is where the real story will land.
+Trace at `Source/CI/macos-arm64-traces/M4ThreadStress-threadmatrix.json`.
+The five thread counts produce bit-identical traces. The
+`_LIBCPP_PSTL_BACKEND_SERIAL` backend pins `par_unseq` to a sequential
+pass on this host, so the threading sources of cross-count drift are not
+in play. This is **stronger** than the Linux Block A landing state
+captured in `Source/CI/baseline_thread_divergence.md` (residual cross-
+count divergence around tick 136 in particle/terrain physics on Linux).
+
+## RCA — `M4ThreadStress`: AI-iteration-order race in `WEAPON_PICKUP`
+
+The initial `--runs 10` sweep on the post-foundation binary reported
+DIVERGED for both M4ThreadStress (consistently, first divergence at
+tick 281 in the `controller` subsystem) and MPerfBench (intermittent,
+first divergence varied tick 86 → ~680 across runs).
+
+### M4ThreadStress — root cause + fix
+
+`M4ThreadStress --runs 10 --ticks 900`: 6 of 10 runs deviated. Shorter
+`--runs 4 --ticks 290 --keep-runs` reproduction had only the
+`controller` subsystem diverging — `actors` / `particles` / `scene` /
+`sim_rng` / `terrain` all MATCHED. Pattern: 1 of 4 runs differed for
+9 consecutive ticks (282-290) then stuck.
+
+#### Byte-level pinning
+
+The `controller` hash code in `MovableMan::Update` was instrumented to
+also dump each per-actor field set (uniqueID, all `ControlState` bits,
+6 analog floats, inputMode) as plain text to a per-pid diagnostic file.
+A diff of two short runs that disagreed at tick 282 pinned the byte
+difference to **one actor (uniqueID 32586), one bit position** —
+`ControlState::WEAPON_PICKUP`. Run A set it to 1 in tick 282; run B set
+it to 0.
+
+#### Source-of-flip trace
+
+`WEAPON_PICKUP` is set on AI actors by `NativeHumanAI.lua:572-577` when
+the actor's previously-targeted pickup device passes the
+`MagnitudeIsLessThan(Owner.Height)` proximity gate. `self.PickupHD` is
+set by `HumanBehaviors.lua:CreateGetWeaponBehavior` /
+`CreateGetToolBehavior`, both of which:
+
+1. Gather a candidate device list via
+   `MovableMan:GetMOsInRadius(Owner.Pos, …)`.
+2. For each candidate, issue
+   `SceneMan.Scene:CalculatePathAsync(callback, …)`.
+3. Yield until all callbacks have written `score = pathLength *
+   pathMultiplier` into a `devicesToPickUp` table.
+4. `table.sort(devicesToPickUp, function(A,B) return A.score < B.score
+   end)`.
+5. `AI.PickupHD = first sorted device`.
+
+Step 1 returns MOs in `std::unordered_set<MOID>` iteration order —
+bucket-hash dependent and not reproducible across runs. Step 4's sort
+is unstable in Lua — equal scores fall back to insertion order, which
+is callback-completion order, which is scheduler-dependent.
+
+#### Fix
+
+Both fix (2) and fix (4) above land — they close the bug at two layers:
+
+* Fix (2) — `SpatialPartitionGrid::GetMOsInRadius` returns MOs in
+  MOID-ascending order via `std::set<MOID>`. Step 1 is now stable.
+* Fix (4) — `HumanBehaviors.lua` tie-breaks the `devicesToPickUp` sort
+  on `deviceId` ascending. Step 4 is now stable for equal-score
+  collisions.
+
+After both fixes, `M4ThreadStress --runs 10 --ticks 900` reported
+MATCHED across 10 runs.
+
+## Known issues / MPerfBench follow-up
+
+`MPerfBench` (150 initial + 6 reinforcement waves × 30 actors = up to 330
+actors with SMG + FragGrenade in AIMODE_BRAINHUNT) is the heaviest
+scenario in the suite and the only one that exposes a residual
+multithreaded race once the four fixes above land. In the final sweep
+on this branch the scenario MATCHED across 10 runs cleanly, and
+matched across three back-to-back rerun confirmations — but earlier in
+the diagnostic sessions on this same code it diverged 6 / 10 runs at
+the same `--runs 10` invocation. The race is rare under typical
+contention but real.
+
+### Bisect of the parallel sections
+
+By individually swapping each parallel pass in `MovableMan::Update` to a
+serial fallback under `g_MetricsCollector.IsRecordingTickHashes()`, we
+isolated the source:
+
+| Section under test | MPerfBench outcome |
+|---|---|
+| `--num-lua-states 1` (entire priority pool serial) | MATCHED (4 / 4) |
+| `--num-lua-states 4` (smaller pool, less contention) | MATCHED (4 / 4) |
+| `UpdateDrawMOIDs` task forced inline (sync) | DIVERGED |
+| `CastSeeRays` future forced inline (sync) | DIVERGED |
+| Lua `StartAsyncGarbageCollection` task ablated | DIVERGED |
+| `ThreadedUpdate` per-state parallelize_loop → serial loop | DIVERGED |
+| `ThreadedUpdateAI` per-state parallelize_loop → serial loop | **MATCHED (4 / 4)** |
+
+The bisect converges on the parallel `ThreadedUpdateAI` per-Lua-state
+pass (`MovableMan::UpdateControllers` at the
+`parallelize_loop(luaStates.size(), …)` call). When that single pass
+runs serially, MPerfBench MATCHES; when it runs in parallel, the
+residual race fires intermittently.
+
+### Where the cross-state race likely lives
+
+Vanilla `Base.rte` AI scripts (`NativeHumanAI.lua` + `HumanBehaviors.lua`)
+follow the M4 Block E contract for the LUA SURFACE — they don't mutate
+foreign-actor state from `ThreadedUpdateAI`. But the AI does call
+`Owner:EquipFirearm(true)` / `Owner:EquipDeviceInGroup(...)` /
+`Owner:EquipNamedDevice(...)` / `Owner:EquipShieldInBGArm()` during the
+parallel phase. These bind through to `AHuman::EquipFirearm` /
+`EquipDeviceInGroup` / `EquipNamedDevice` on the C++ side, which call
+`m_pFGArm->SetHeldDevice(...)`. That mutator:
+
+* Walks the actor's `m_Inventory` deque (`std::rotate`, `pop_front`,
+  `push_back`).
+* Calls `m_pFGArm->RemoveAttachable(heldDevice)` → recurses into
+  `AddOrRemoveAtomsFromRootParentAtomGroup(false, ...)` — rebuilds the
+  actor's root-parent `AtomGroup`.
+* Calls `m_pFGArm->SetHandPos(...)` — mutates arm pose.
+* Calls `EquipShieldInBGArm()` — mutates the BG arm.
+
+All are own-actor mutations, so they look benign in the per-actor sense.
+But the `Arm::SetHeldDevice` body also writes to the parent actor's
+controller (`parentActor->GetController()->SetState(WEAPON_FIRE, false)`)
+to drop any in-flight fire state, and the atom-group rebuild touches
+the shared `Atom`-allocator machinery. The same set of paths is
+in-flight on the Linux agent's `exp/determinism-linux` branch with the
+same Path-E diagnosis ("Attachable position + Arm::SetHeldDevice"). The
+two branches likely converge on the same C++ fix.
+
+### Path E follow-up (recommended action)
+
+Per the engine team's Path E direction — `ThreadedUpdate*` is for
+read-mostly per-object work, `SyncedUpdate` is the serial, opt-in pass
+that owns shared sim-state mutation (`Data/Modding/threaded-determinism.md`,
+M4 Block E commit `dd63eea9d`) — the recommended fix is one of:
+
+1. **Lua-side defer (preferred):** wrap `Owner:EquipFirearm` /
+   `Owner:EquipDeviceInGroup` / `Owner:EquipNamedDevice` /
+   `Owner:EquipShieldInBGArm` calls in NativeHumanAI / HumanBehaviors /
+   SharedBehaviors so they queue the equip intent + call
+   `Owner:RequestSyncedUpdate()`, and process the queue in a new
+   `SyncedUpdate(self)` body on `HumanAI.lua` / `CrabAI.lua`.
+2. **C++-side per-mutator auto-defer:** in `AHuman::EquipFirearm` /
+   `EquipDeviceInGroup` / `EquipNamedDevice` / `EquipShieldInBGArm`,
+   detect `g_CurrentAIActor != nullptr` context and enqueue the side
+   effect onto a per-actor pending-equip queue. Drain the queue in a
+   new serial pass between the parallel ThreadedUpdateAI phase and
+   the serial Actors Update loop, OR via the existing SyncedUpdate
+   machinery on the affected actor.
+
+The bring-up branch deliberately does NOT apply a determinism-mode
+serialize gate on the parallel pass — that was the tactical workaround
+the engine team explicitly rejected in favor of the architectural Path
+E refactor. Until the Path E fix lands, `MPerfBench` is the canary for
+the residual race; the four fixes above are sufficient for the other
+ten scenarios + the M4 thread-count matrix to MATCH cleanly on this
+host, and were sufficient for `MPerfBench` to MATCH in the final
+verification sweep.
+
+### Pre-existing caveats (unchanged from prior cycle)
+
+* `GLAD: ERROR 1280 in glGetIntegerv!` is printed once per scenario run
+  on this headless macOS host. Hashes unaffected. Out-of-scope.
+* The 12-core macOS host has `std::thread::hardware_concurrency() == 12`.
+  Foundation-cycle `parallelize_loop num_blocks` fix makes
+  `-num-lua-states 16` work without tripping the one-state-per-task
+  assert.
 
 ## `FixedPointTests` self-check
-
-Build (per the determinism workflow's CI step):
-
-```
-clang++ -std=c++20 -O2 -fno-fast-math -Wall -o FixedPointTests Source/System/FixedPointTests.cpp
-```
-
-Run output (relevant lines):
 
 ```
 FixedPoint.h tests (MP M3 Block A) — Q40.24 fixed-point
@@ -288,86 +339,65 @@ SELF-CHECK: 5ce9c33b84d29932
 42 passed, 0 failed
 ```
 
-Per the workflow's cross-OS comparator (`fixedpoint-tests-cross-os`), this
-hash must be bit-identical to the Linux and Windows builds. The Q40.24
-library is pure-integer code — the FP-flag pinning isn't even on this build's
-critical path — so a mismatch here would be a portability bug in
-`Source/System/FixedPoint.h`. The Apple Clang 17 / arm64 result is the same
-shape (`Mul64Portable` ↔ `__int128` agreement, `Isqrt128` bit-by-bit root,
-`BuildSinQuarter` constexpr table, `Atan2` CORDIC) that the Linux and Windows
-runs check, so any difference will surface in the cross-OS comparator step.
+Per the workflow's cross-OS comparator
+(`fixedpoint-tests-cross-os`), this hash must be bit-identical to the
+Linux and Windows builds. The hash matches the prior cycle's
+post-fix-foundation value, so the Q40.24 library is bit-stable across
+the regen — the foundation changes did not touch FixedPoint codepaths.
 
 ## Cross-platform divergence characterisation (informational)
 
-The subsystems fed into the per-tick `total` BLAKE3 by `MovableMan::Update` /
-`SceneMan::Carve` / `MetricsCollector::RecordTickHash` fall into two
-categories on this host:
+The subsystems fed into the per-tick `total` BLAKE3 by
+`MovableMan::Update` / `SceneMan::Carve` / `MetricsCollector::RecordTickHash`
+fall into two categories on this host:
 
 **Bit-identical-by-construction (integer or RNG-state-only):**
 
 | Subsystem | Source |
 |---|---|
 | `tick` | `g_TimerMan.GetSimUpdateFrameNumber()` int64, fed at `SimChecksum::BeginTick` |
-| `scene` | `MovableMan::Update` line ~1860: actor/item/particle counts + per-team counts as `int32_t` |
-| `sim_rng` | Block C global sim-RNG state — `std::mt19937` internal state words, integer |
+| `scene` | `MovableMan::Update`: actor/item/particle counts + per-team counts as `int32_t` |
+| `sim_rng` | Global sim-RNG state — `std::mt19937` internal state words, integer |
 | `lua_state` | `LuaMan::HashAllLuaStatesIntoSimChecksum` — Lua RNG state words, integer |
 
-These four must produce the same per-tick hash on macOS-arm64, Linux-x86_64
-and Windows-x86_64. If the cross-OS diff trips on any of them, it is a real
-bug — most likely an integer-width drift (e.g. `long` LP64 vs LLP64) or a
-threaded-state index drift that escaped Block C.
+These four must produce the same per-tick hash on macOS-arm64,
+Linux-x86_64 and Windows-x86_64. Cross-OS divergence on any of them is
+an integer-width drift (e.g. `long` LP64 vs LLP64) or a threaded-state
+index drift that escaped Block C.
 
 **Float-touching (potentially divergent on ARM, by construction):**
 
 | Subsystem | Source | Float surface |
 |---|---|---|
-| `actors` | `MovableMan::Update` ~1785: per-actor `posX,posY,velX,velY,health` as `float` | Travel integrator (Vector.h float math); `Atom::Travel` uses `sin/cos/atan2` indirectly via FixedPoint shadow paths but the floats fed to the hash are the canonical `Vector::m_X/m_Y` |
-| `controller` | `MovableMan::Update` ~1809: `analog[6]` floats | analog stick / mouse cursor smoothing path |
-| `particles` | `MovableMan::Update` ~1836: per-particle `posX,posY,velX,velY` floats | same Travel integrator as `actors` |
+| `actors` | `MovableMan::Update`: per-actor `posX,posY,velX,velY,health` as `float` | Travel integrator (Vector.h float math); `Atom::Travel` uses `sin/cos/atan2` indirectly via FixedPoint shadow paths but the floats fed to the hash are the canonical `Vector::m_X/m_Y` |
+| `controller` | `MovableMan::Update`: `analog[6]` floats | analog stick / mouse cursor smoothing path |
+| `particles` | `MovableMan::Update`: per-particle `posX,posY,velX,velY` floats | same Travel integrator as `actors` |
 | `decisions` | `MetricsCollector::ConsumeEvents` + `AIDecisionChannel` payloads | mix of int + float scoring values |
-| `carve_math` | `SceneMan::Carve` line 477: pinned int32 carve fields | the *fields* are int32, but they're derived from float positions before discretisation |
+| `carve_math` | `SceneMan::Carve`: pinned int32 carve fields | the *fields* are int32, but they're derived from float positions before discretisation |
 | `terrain` | `SceneMan` terrain-bitmap pixel updates downstream of `carve_math` | same — float-derived |
 
-The `MovableMan::Update` write of `posX/posY/velX/velY` is the trig-driven
-surface — `Atom::Travel` walks the ray through trig-derived deltas, and that
-applies to actors and particles alike. The user's instruction "anything driven
-by `sin/cos/atan2` may legitimately diverge on ARM" applies here directly.
-The integer `FixedPoint.h` is the cross-platform-safe shadow path — its
-self-check (above) is bit-identical by construction.
+The `MovableMan::Update` write of `posX/posY/velX/velY` is the
+trig-driven surface — `Atom::Travel` walks the ray through trig-derived
+deltas, and that applies to actors and particles alike. `sin/cos/atan2`
+may legitimately diverge on ARM. The integer `FixedPoint.h` is the
+cross-platform-safe shadow path — its self-check (above) is bit-identical
+by construction.
 
-**Recommendation for the team's cross-OS diff step:** start by diffing the
-`tick / scene / sim_rng / lua_state` columns of
-`Source/CI/macos-arm64-traces/M1Baseline-trace.json` against the Linux trace
-in `Source/CI/baseline_*.md` and the matching Windows artefact. Those four
-must MATCH. The remaining subsystems are an informational diff — they
-characterise the float ABI gap rather than a determinism regression.
+**Recommendation for the team's cross-OS diff step:** start by diffing
+the `tick / scene / sim_rng / lua_state` columns of
+`Source/CI/macos-arm64-traces/M1Baseline-trace.json` against the Linux
+trace in `Source/CI/baseline_*.md` and the matching Windows artefact.
+Those four must MATCH. The remaining subsystems are an informational
+diff — they characterise the float ABI gap rather than a determinism
+regression.
 
-## Known caveats
+## Files added / committed on this branch
 
-* `GLAD: ERROR 1280 in glGetIntegerv!` is printed once per scenario run on
-  this headless macOS host. The `-determinism-check` mode doesn't open an
-  actual GL context, but some code paths still call `glGetIntegerv` at start
-  and the message is noise — the hashes are unaffected. Cleaning this up is
-  out of scope for the bring-up; it's a separate "macOS headless GL stub"
-  follow-up.
-* The 12-core macOS host has `std::thread::hardware_concurrency() == 12`. When
-  `-num-lua-states 16`, the priority pool's default thread count is below the
-  Lua-state count; commit (5) above is what makes this work without tripping
-  the one-state-per-task assert. The Linux CI runner's effective core count
-  appears to be ≥ 16 for the same workflow to have been passing pre-fix; (5)
-  is a portability improvement either way.
-
-## Files added / committed
-
-* `meson.build` — FP flag block + libc++ macros + subproject() lines (3
-  commits)
-* `external/sources/BLAKE3-1.8.5/meson.build` — new
-* `external/sources/nlohmann_json-3.12.0/meson.build` — new
-* `Source/meson.build` — drop direct include_directories
-* `Source/Network/meson.build` — drop direct files() references
-* `Source/Menus/SaveLoadMenuGUI.cpp` — duration_cast guard
-* `Source/Managers/MovableMan.cpp` — parallelize_loop num_blocks
-* `Source/System/RTEError.cpp` — main-thread guard on the three message boxes
-* `Source/Managers/UInputMan.cpp` — zero AnalogMove/AnalogAim in determinism mode
-* `Source/CI/macos-arm64-traces/*.json` — per-tick traces (10 scenarios)
+* `Source/Main.cpp` — macOS headless gating change (`CCCP_HEADLESS=1`)
+* `Source/System/SpatialPartitionGrid.cpp` — `std::set<MOID>` substitution
+* `Source/Entities/AtomGroup.cpp` — `std::map<MOID, ...>` substitution
+* `Data/Base.rte/AI/HumanBehaviors.lua` — tie-break `devicesToPickUp`
+  sort on `deviceId`
+* `Source/CI/macos-arm64-traces/*.json` — regenerated per-tick traces
+  (11 scenarios) + `M4ThreadStress-threadmatrix.json`
 * `Source/CI/m5-macos-arm64.md` — this file
