@@ -556,21 +556,32 @@
         <p>Restructure the MP roadmap to <b>determinism-first ordering with per-mode netcode on top</b>. The new
         sequence is M1 pre-determinism cleanup &rarr; M2 LuaJIT deterministic iteration &rarr; M3 fixed-point atom
         physics &rarr; M4 multi-threaded sim with deterministic merge &rarr; M5 cross-platform / WASM canonical
-        anchor &rarr; M6 server spine + GNS transport &rarr; <b>M7 online co-op SHIP</b> (first user-visible)
-        &rarr; M8 LAN lockstep SHIP &rarr; M9 GGPO rollback PvP SHIP &rarr; M10 public hosting (stretch). First
-        MP user-visible ship slips from ~M4 to ~M7 (~6 months); in exchange the performance ceiling on actors,
-        physics, and terrain destruction becomes <b>uncapped</b> (every client runs the full multi-threaded sim
-        in parallel), four MP modes ship instead of two, and the determinism foundation is permanent.</p>
+        anchor &rarr; M6 server spine + GNS transport &rarr; <b>M7 LAN lockstep SHIP</b> (first user-visible &mdash;
+        smallest adapter, proves the determinism foundation in real network play) &rarr; M8 online co-op SHIP
+        (server-auth + client prediction + reconciliation) &rarr; M9 GGPO rollback PvP SHIP &rarr; M10 public
+        hosting (stretch). First MP user-visible ship slips from ~M4 to ~M7 (~6 months); in exchange the
+        performance ceiling on actors, physics, and terrain destruction becomes <b>uncapped</b> (every client
+        runs the full multi-threaded sim in parallel), four MP modes ship instead of two, and the determinism
+        foundation is permanent.</p>
         <p>The ADR-015 <i>architectural</i> commitment stands &mdash; per-mode netcode (lockstep / prediction /
         rollback) on a deterministic core. ADR-016 changes the <i>order</i> in which the foundation under that
         architecture is built.</p>
         <h4>Consequences</h4>
         <p>M1&ndash;M5 are foundation work (no user-visible MP); M6 enables; M7&ndash;M9 ship MP modes;
         M10 is stretch. Every M1&ndash;M5 milestone delivers single-player value (better stability, deterministic
-        replays, fixed-point terrain perf, 4&ndash;8&times; sim throughput from threading, WASM web build), so the
-        pivot is <b>value-positive at every stage</b> even if MP work pauses. Pivot is reversible at any milestone
-        &mdash; M1 work alone strengthens single-player; original ADR-015 ordering remains a viable fallback. See
-        <a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;10</a> for the full reasoning.</p>
+        replays, fixed-point terrain perf, ~1.2&times; sim throughput from threading (measured), WASM web build),
+        so the pivot is <b>value-positive at every stage</b> even if MP work pauses. Pivot is reversible at any
+        milestone &mdash; M1 work alone strengthens single-player; original ADR-015 ordering remains a viable
+        fallback. See <a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;11</a> for the full
+        reasoning.</p>
+        <p><b>Alternative considered:</b> AI Controller-sync (each player runs AI locally; only Controllers traverse
+        the network; sim must respond deterministically to Controllers, a strictly weaker requirement than full
+        determinism) was surfaced in upstream-dev review (2026-05) after M1&ndash;M4 had shipped. It is a simpler
+        architecture that fits server-auth modes (M8, M10) but cannot support LAN lockstep (M7) or GGPO rollback (M9).
+        Rejected because we committed to all four modes; the counter-intuitive bandwidth analysis (lockstep
+        ~30 kbit/s vs. Controller-sync ~3 Mbit/s at 200 actors) makes lockstep cheaper on the wire too. See
+        <a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;11.7</a> for the full comparison including
+        the constraint cost (no wall-clock / no env-seeded RNG / no ML inference inside the sim).</p>
       </div>
     </section>
 

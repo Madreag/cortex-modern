@@ -142,7 +142,7 @@
       cross-platform anchor (M5), GNS transport (M6). Everything outside the determinism island &mdash; render
       interpolation, GPU cosmetic offload, the Camera/RenderBatch abstraction &mdash; runs as <b>parallel side
       tracks</b> (T-RENDER-INTERP, T-RENDER-GPU, T-WASM-BUILD, T-COSMETIC, T-VALIDATION) that coordinate with the
-      active upstream branches without blocking MP. The result: <b>online co-op (M7) ships on a deterministic core
+      active upstream branches without blocking MP. The result: <b>LAN lockstep (M7) ships first on a deterministic core
       with multi-threaded sim and render interpolation</b> &mdash; the best possible architecture &mdash;
       <i>and</i> the side tracks deliver single-player wins (~1.2&times; sim throughput at M4 measured, WASM web build
       at M5, smooth high-refresh rendering when T-RENDER-INTERP lands).</p>
@@ -152,13 +152,13 @@
       <div class="callout-title">The headline</div>
       <p>cortex-modern is not building MP in a vacuum &mdash; we're building it <i>on top of</i> the engine
       modernization work the community has already partially done. The 2019&ndash;2026 upstream branch list contains
-      <b>five branches with real engine value</b>: <code>interpolated-render-redux</code> (Causeless's active retry
-      of render decoupling), <code>gpu-renderer</code> (HeliumAnt's 60-70%-done renderer rewrite, dormant since
-      2026-03-28), <code>box2d-emscripten</code> (a substantially-working WebAssembly port, dormant since 2026-04-02),
-      <code>sol3</code> (a reference for the future luabind&rarr;sol2 migration), and the original
+      <b>five branches with real engine value</b>: <code>interpolated-render-redux</code> (active retry of render
+      decoupling, in polish phase as of 2026-05-21), <code>gpu-renderer</code> (60-70%-done renderer rewrite, dormant
+      since 2026-03-28), <code>box2d-emscripten</code> (a substantially-working WebAssembly port, dormant since
+      2026-04-02), <code>sol3</code> (a reference for the future luabind&rarr;sol2 migration), and the original
       <code>interpolated-render</code> (abandoned 2024 but useful for lerp primitives). <b>None of these are
-      mergeable as-is.</b> The pattern: coordinate where the author is active (Causeless), harvest selectively where
-      dormant (HeliumAnt, box2d-emscripten), avoid wholesale merge of any of them.</p>
+      mergeable as-is.</b> The pattern: harvest the active branches when they stabilize, harvest selectively where
+      dormant, avoid wholesale merge of any of them.</p>
       <div class="toc">
         <a href="#subsystems">1 The five subsystems</a>
         <a href="#branches">2 Upstream branches to mine</a>
@@ -199,7 +199,7 @@
         <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island. Threading without determinism = Causeless's lost branch (glitchy, killed determinism).</span></div>
         <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; threading is the actor-count multiplier. Without it, the lockstep ceiling collapses.</span></div>
         <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M4</b>.</span></div>
-        <div class="sub-desc">Modernization target: per-worker buffers, deterministic merge by MOID at end of update phase (the Factorio model + Causeless's "buffered Lua callback" idea). ~1.2&times; sim throughput on modern CPUs (measured) &mdash; physics stays serial, so only the AI/script phase parallelizes. The real value is the deterministic threaded sim, required for MP.</div>
+        <div class="sub-desc">M4 made the <i>existing</i> threaded paths (<code>ThreadedUpdate</code>, <code>ThreadedUpdateAI</code>, see-ray vision casting) deterministic via per-Lua-state RNG isolation, sorted iteration of the per-state MO sets, and the SyncedUpdate boundary enforced as the only deterministic mutation path. ~1.2&times; sim throughput measured (16 Lua states, M4ThreadStress) &mdash; physics <code>Travel()</code> stays serial, so only the AI/script phase parallelizes; the real value is the determinism, not the modest throughput. The bigger throughput lever &mdash; parallelizing <code>Travel()</code> with buffered Lua collision callbacks &mdash; is <b>Path C</b>, deferred to a post-M6 ADR-scale effort with its own mod-migration contract (it would change <code>OnCollideWith*</code> semantics).</div>
       </div>
 
       <div class="sub">
@@ -250,9 +250,9 @@
       <tbody>
         <tr>
           <td><code>interpolated-render-redux</code></td>
-          <td><span class="status status-doing">ACTIVE</span> Causeless</td>
-          <td>Just started — "Basic MO interp" + "Ensure MOIDs are always up-to-date" committed 2026-05-17. Single-threaded render-frame-rate decoupling (the right direction). Frustum culling + MO-draw moved into Scene.</td>
-          <td><b>Coordinate.</b> Our M1 Block C (stable MOID iteration) overlaps with his MOID-stability work. Offer to share. Track his branch as the upstream home for T-RENDER-INTERP.</td>
+          <td><span class="status status-doing">ACTIVE</span></td>
+          <td>In polish phase as of 2026-05-21: ~14 substantive commits in the 2026-05-18&ndash;21 window covering basic MO interp (<code>GetSimUpdateProportion</code> accumulator + 3-arg Lerp overloads in RTETools), particle / atom-trail / arm / MOPixel interp, HUD + rotation, camera/buy-menu/controller smooth in draw update, pie-menu interp (WIP). MOID draw forced to lerp=1.0 so click-targeting matches canonical position. Single-threaded by design (no sim/render thread split &mdash; learned from the 2024 attempt that sank on that).</td>
+          <td><b>Harvest target.</b> Architecture is the same accumulator pattern T-RENDER-INTERP describes. Cherry-pick onto <code>exp/determinism-foundation</code> and run the determinism CI gate against it; ship if clean, file specific repros upstream if not. Note: the "Ensure MOIDs are always up-to-date" commit is a 3-line lerp-mode fix (force lerp=1.0 in MOID draw), <i>not</i> the stable-MOID-iteration work in our M1 Block C &mdash; different problems sharing similar names.</td>
         </tr>
         <tr>
           <td><code>gpu-renderer</code></td>
@@ -279,10 +279,10 @@
           <td><b>Out of scope for MP.</b> ADR-003 (proposed) is post-MP work. The compat break IS the real T2-02 problem, not the binding mechanics. Defer until after M10.</td>
         </tr>
         <tr>
-          <td>Causeless's lost MT physics branch</td>
+          <td>The lost MT physics prototype</td>
           <td><span class="status status-blocked">LOST</span> never pushed</td>
-          <td>Parallelized <code>MovableMan::Travel()</code>, commented out Lua callbacks. "Worked relatively well" perf-wise but glitchy + non-deterministic. Source verbatim: "the most frustrating part of it was the Lua collision callback. That could be buffered in some way but it'd likely change behaviour pretty significantly."</td>
-          <td><b>Use as design reference for M4.</b> Our M4 plan implements exactly his "buffered callback" idea, with the M1-M3 foundation that his prototype lacked. Talk to him about the design before implementation. His surviving 2023 <code>multithreaded-lua</code> branches (next row) are a different artifact.</td>
+          <td>Parallelized <code>MovableMan::Travel()</code>, commented out Lua callbacks. Source description: "worked relatively well" perf-wise but glitchy + non-deterministic. The blocker was the Lua collision callback contract &mdash; "could be buffered in some way but it'd likely change behaviour pretty significantly."</td>
+          <td><b>Reference for Path C, not M4.</b> M4 did <i>not</i> parallelize <code>Travel()</code> &mdash; that work and the buffered-callback semantics change are deferred to a post-M6 ADR-scale effort (Path C) with explicit mod-migration. M4 made the <i>existing</i> threaded paths deterministic, which is a narrower and separable problem. The 2023 <code>multithreaded-lua</code> branches (next row) are a different artifact &mdash; they thread Lua / AI but leave Travel and collision callbacks serial, which is closer to what M4 actually did.</td>
         </tr>
         <tr>
           <td><code>multithreaded-lua</code> + <code>multithreaded-sim-and-render</code> (Causeless's old <code>-Source</code> fork)</td>
@@ -303,7 +303,7 @@
     track has explicit dependencies, an effort estimate, and a clear "when do we pair this with MP?" answer.</p>
 
     <div class="track">
-      <div class="track-head"><span class="track-id">T-RENDER-INTERP</span><span class="track-name">Render interpolation &mdash; decouple frame rate from sim tick</span><span class="track-tag">collab w/ Causeless</span></div>
+      <div class="track-head"><span class="track-id">T-RENDER-INTERP</span><span class="track-name">Render interpolation &mdash; decouple frame rate from sim tick</span><span class="track-tag">harvest target</span></div>
       <div class="track-field"><span class="track-key">Goal</span><span class="track-val">Sim runs at fixed 60Hz; render runs at display refresh (144Hz / 240Hz). Actor positions interpolated between sim ticks for smooth visuals at high refresh rates. No sim/render thread split (that's what sank the 2024 attempt).</span></div>
       <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
         <li>Stable MOID iteration in <code>MovableMan</code> (overlaps with M1 Block C &mdash; coordinate to avoid double-work).</li>
@@ -316,7 +316,7 @@
       <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M1 Block C (stable MOID iteration). Otherwise standalone.</span></div>
       <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">M4 (sim threading) &mdash; both land in the M3&ndash;M5 window, mutually reinforcing (threaded sim + smooth render = the modern game-engine architecture).</span></div>
       <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">Source/Managers/MovableMan.* (coordinate with M1 Block C) &middot; Source/Entities/MOSRotating.* (sprite draw) &middot; Source/Managers/SceneMan.* (MO draw integration) &middot; Source/Main.cpp (accumulator) &middot; possibly Source/System/Matrix.cpp + Vector.cpp (lerp)</span></div>
-      <div class="track-field"><span class="track-key">Coordination</span><span class="track-val">This branch is <b>Causeless's active work</b>. Two options: (a) contribute MOID-stability work to his branch so it lands first, (b) do MOID-stability in our M1 and offer it to him post-merge. Either way, the interp itself stays primarily Causeless's; we benefit when it lands upstream.</span></div>
+      <div class="track-field"><span class="track-key">Coordination</span><span class="track-val">Per ADR-008 fork-first and the harvest strategy in &sect;5: harvest the upstream <code>interpolated-render-redux</code> branch onto <code>exp/determinism-foundation</code> when it stabilizes, run the determinism CI gate against it, ship if clean. The MOID-stability talking point in earlier drafts was a misreading &mdash; the upstream "Ensure MOIDs are always up-to-date" commit is a 3-line lerp-mode fix (force lerp=1.0 in MOID draw), <b>not</b> the sorted MOID iteration our M1 Block C did; no overlap, nothing to offer back on that specific axis.</span></div>
       <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> 144Hz monitor shows smooth motion between sim ticks; teleports and scene-wrap don't show interpolation artifacts; the sim tick rate remains exactly 60Hz; CI determinism gate (post-M1) stays green.</span></div>
     </div>
 
@@ -364,13 +364,44 @@
         <li>Verify M1 determinism CI gate stays green throughout &mdash; cosmetic system outputs feed <code>g_RenderRNG</code>, not <code>g_SimRNG</code>.</li>
       </ol></div>
       <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">T-RENDER-GPU (the Camera/RenderBatch abstraction), M1 Block B (RNG split).</span></div>
-      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">M6&ndash;M7 &mdash; lands as M7 (online co-op) ships so the actor ceiling for MP is multiplied at first user-visible MP release.</span></div>
+      <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">M6&ndash;M8 &mdash; lands by M8 (online co-op) so the actor ceiling for MP is multiplied for the online ship (the M7 LAN ship doesn't need it as urgently since LAN has more local CPU headroom).</span></div>
       <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">Source/Managers/PostProcessMan.cpp &middot; Source/Entities/MOSParticle.cpp (cosmetic particles) &middot; Source/Audio/AudioMan.cpp &middot; new Source/Renderer/Compute/* (compute shader infrastructure)</span></div>
       <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> a stress scenario (1000 active actors + sustained explosions + heavy particle systems) sees CPU usage drop measurably (target: 30%+ reduction in PostProcessMan + MOSParticle CPU time), and the M1 determinism CI gate stays green (no leakage into the sim island).</span></div>
     </div>
 
     <div class="track">
-      <div class="track-head"><span class="track-id">T-VALIDATION</span><span class="track-name">cccp-ctl &mdash; CLI test surface (corefall's cfctl pattern adapted)</span><span class="track-tag">post-M0, ongoing</span></div>
+      <div class="track-head"><span class="track-id">T-VALIDATION</span><span class="track-name">cccp-ctl &mdash; CLI test surface (corefall's cfctl pattern adapted)</span><span class="track-tag">V1.3 SHIPPED + END-TO-END VERIFIED 2026-05-22</span></div>
+      <div class="track-field"><span class="track-key">Status</span><span class="track-val">V1.3 shipped on <code>exp/determinism-foundation</code>: <code>Source/CLI/cccp-ctl.cpp</code> (~1880 LOC) + <code>cccp-ctl.vcxproj</code> + meson target. Standalone binary, no engine dependencies (stdlib + nlohmann_json header only) &mdash; mirrors the <code>Source/CI/DeterminismCheck.cpp</code> no-engine-deps pattern and the <code>Source/System/FixedPointTests.vcxproj</code> standalone-executable precedent. Built clean Final|x64. <b>End-to-end verified against the real game binary at <code>D:\Projects\determinism-foundation\Cortex Command.exe</code>:</b> <code>test scenario</code>, <code>test replay-determinism</code> (3 runs MATCHED), <code>test selftest</code> (EC3 positive control verified — phase 1 MATCH, phase 2 DIVERGED at tick 49 on sim_rng as expected), <code>trace inspect</code> (per-tick subsystem hash filtering on real traces).</span></div>
+      <div class="track-field"><span class="track-key">V1.3 bug fixes</span><span class="track-val">Two more critical bugs caught during end-to-end testing:
+        <b>(1) AutoDetectGameBin false-positive on meson.build</b> &mdash; the marker check matched any subdir with a <code>meson.build</code>, which the recursive Meson build means is every subdir under <code>Source/</code>. Terminated the search early at <code>Source/</code> before reaching the actual repo root. Fixed by using <code>RTEA.sln</code> / <code>.git</code> / <code>external/</code> as repo-root markers (these are unique to repo root, unlike <code>meson.build</code>).
+        <b>(2) Game binary couldn't find <code>Data/Tests.rte/Index.ini</code></b> &mdash; the game expects to be launched with CWD == its worktree root (data files referenced as <code>Data/...</code>), but <code>std::system</code> inherits cccp-ctl's CWD which is whatever the user launched from. Without this fix the game popped up "RTE Assert! Failed to open data file". Fixed via a <code>CwdGuard</code> RAII helper that chdirs to <code>gameBin.parent_path()</code> before <code>std::system</code> / <code>popen</code> and restores after.</span></div>
+      <div class="track-field"><span class="track-key">V1.2 audit fixes</span><ol class="track-steps">
+        <li><b>Critical bugs caught + fixed:</b> Unix exit-code decoding (pclose/system return wait-status on POSIX, needed WEXITSTATUS — would have broken test selftest's rc==1 check entirely on Linux/macOS); test all/selftest were parsing stdout polluted with echo lines from the child + game-binary output (now read JSON directly from --output files); AutoDetectGameBin walks 8 levels + detects repo-root markers (RTEA.sln / meson.build) — V1.1 only walked 3 levels which couldn't reach repo root from the typical _BinTests/x64/Release layout.</li>
+        <li><b>UX consistency:</b> --quiet + --out-dir now parsed by every subcommand that needs them (V1.1 advertised them as "common" but only test all + test selftest implemented them); test scenario defaults to -tick-hashes ON with --no-tick-hashes opt-out (V1.1 had it OFF, breaking downstream consumers); test scenario adds --trust-selftest for AI-NN trust scenarios; test all gained --seed + --ticks for CI reproducibility; bench replay's per-run echo now gated on !--quiet and routes to stderr.</li>
+        <li><b>Architectural cleanup:</b> RunSubprocess echoes to stderr instead of stdout (lets downstream consumers parse stdout as pure data); DecodeExitStatus helper centralises the wait-status decoding; test all's selftest sub-step uses exit code instead of fragile JSON heuristic.</li>
+        <li><b>Content accuracy:</b> AI scenario descriptions replaced — unverified made-up descriptions for AI-01/02/04-11 swapped for neutral "see Data/Tests.rte" placeholder; only AI-03 (dig) + AI-12 (carve) retain specific descriptions (ground-truth-verified against MILESTONES_COMPLETION MC3).</li>
+        <li><b>Help text:</b> per-subcommand --help now mentions --quiet / --out-dir / --trust-selftest / --no-tick-hashes; AI-NN warning ("stock AI fails them by design") in test scenario help; info game-bin hint updated to reflect new 8-level search + repo-root detection.</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">V1.1 surface</span><ol class="track-steps">
+        <li><b>Test (correctness):</b> <code>test all</code> [<code>--quick</code> / <code>--runs N</code>] aggregate suite runner; <code>test selftest</code> EC3 positive control (verifies harness catches injected divergence); <code>test scenario</code>; <code>test replay-determinism</code>; <code>test thread-matrix</code> (M4 acid test); <code>test cross-platform-checksum</code>.</li>
+        <li><b>Bench (perf):</b> <code>bench replay</code> with <code>__sim_compute_accum</code> aggregation (min / median / max + spread %).</li>
+        <li><b>Trace inspection:</b> <code>trace inspect &lt;path&gt;</code> with <code>--full</code> / <code>--ticks N1,N2</code> / <code>--subsystem name</code> filters.</li>
+        <li><b>Discovery:</b> <code>info scenarios</code> (22 scenarios with descriptions + milestone tags), <code>info subsystems</code> (10 SimChecksum subsystems documented), <code>info game-bin</code> (locate + validate the engine binary with helpful search-path hint on miss).</li>
+        <li><b>Stubs (intentional):</b> <code>test sync-drift</code> / <code>latency-injection</code> / <code>rollback-burst</code> exit 64 with "needs M6 / M9".</li>
+        <li><b>Common options:</b> <code>--game-bin &lt;path&gt;</code>, <code>--json</code>, <code>--quiet</code>, <code>--out-dir &lt;path&gt;</code>, <code>--help</code>, <code>--version</code>.</li>
+        <li><b>Exit codes:</b> 0 = success / MATCH, 1 = test failed / DIVERGED, 2 = usage error, 64 = stub.</li>
+      </ol></div>
+      <div class="track-field"><span class="track-key">Smoke-tested</span><span class="track-val">Verified end-to-end against real M0&ndash;M4 traces in tree: <code>test cross-platform-checksum</code> on <code>Source/CI/M1Baseline-trace.json</code> vs. <code>Source/CI/macos-arm64-traces/M1Baseline-trace.json</code> correctly identifies divergence at tick 1 on <code>terrain</code> / <code>lua_state</code> / <code>sim_rng</code> &mdash; the libm-transcendental cross-arch gap M5 Block C is designed to map. <code>trace inspect</code> on the same file gives clean summary + per-tick filtering. All exit codes verified.</span></div>
+      <div class="track-field"><span class="track-key">Deferred to V2</span><span class="track-val">Explicit non-goals for V1.1, queued for follow-up when needed:
+        <b>(a)</b> <code>--parallel N</code> for replay-determinism &mdash; needs reimplementing the diff loop at cccp-ctl level rather than delegating to <code>-determinism-check</code> (which is single-threaded by design);
+        <b>(b)</b> <code>--timeout &lt;sec&gt;</code> &mdash; <code>std::system</code> can't kill the subprocess; needs platform-specific spawn (CreateProcess + WaitForSingleObject, or posix_spawn + waitpid);
+        <b>(c)</b> <code>test mod-corpus</code> &mdash; needs the M2 mod-corpus runner as a standalone test target;
+        <b>(d)</b> <code>trace bisect</code> &mdash; given a divergent scenario, find the smallest reproducer (ticks-halving + seed-sweep);
+        <b>(e)</b> <code>ci baseline</code> + <code>ci compare-pr</code> &mdash; baseline storage format + regression-detection logic;
+        <b>(f)</b> <code>watch determinism</code> &mdash; file-watcher-driven continuous run;
+        <b>(g)</b> Slack/Discord webhook hooks for nightly failure alerts;
+        <b>(h)</b> reading the scenario list from <code>Data/Tests.rte</code> at runtime instead of the hardcoded <code>kScenarios</code> table (needs an INI parser).
+        None of these block V1.1's use as the M5 / M6+ standard test invocation path.</span></div>
       <div class="track-field"><span class="track-key">Goal</span><span class="track-val">A first-class command-line test surface for sim determinism, network sync, replay verification, rollback stress tests. Builds on M0's <code>ScenarioRunner</code>. Pattern lifted from <a href="https://github.com/Madreag/corefall/blob/main/docs/plan/spec/network-sync-rollback-and-determinism.md">corefall's cfctl spec</a>.</span></div>
       <div class="track-field"><span class="track-key">Builds</span><ol class="track-steps">
         <li><code>cccp-ctl test sync-drift --clients N --scenario X --duration T</code> &mdash; multi-client sync verification.</li>
@@ -401,7 +432,7 @@
     <p>Stated as "X must close before Y can start." Arrows are dependency, not chronology.</p>
     <pre><code>M0 (DONE) &rarr; M1 &rarr; M2 &rarr; M3 &rarr; M4 &rarr; M5 &rarr; M6 &rarr; M7 &rarr; M8 &rarr; M9 &rarr; M10
                   &darr;        &darr;        &darr;
-              T-RENDER-INTERP (coordinate w/ Causeless after M1 Block C)
+              T-RENDER-INTERP (harvest from upstream interpolated-render-redux)
                                        &darr;
                                   T-RENDER-GPU (harvest from gpu-renderer, after M1)
                                                   &darr;
@@ -416,7 +447,7 @@ T-VALIDATION is incremental, accreted across M0&rarr;M10</code></pre>
     <table class="tbl">
       <thead><tr><th>Side track</th><th>Starts at</th><th>Finishes by</th><th>Why this window</th></tr></thead>
       <tbody>
-        <tr><td>T-RENDER-INTERP (collab)</td><td>M1 Block C complete</td><td>M5 (ideally) or M7</td><td>Needs stable MOIDs (M1 Block C). Causeless is actively working on it now &mdash; the timing is dictated by his cadence, not ours.</td></tr>
+        <tr><td>T-RENDER-INTERP (harvest)</td><td>upstream branch reaches a stable polish state</td><td>M5 (ideally) or M7</td><td>The upstream <code>interpolated-render-redux</code> branch is the harvest source; our T-RENDER-INTERP plan is to cherry-pick it onto <code>exp/determinism-foundation</code> and verify against the determinism CI gate when it stabilizes.</td></tr>
         <tr><td>T-RENDER-GPU</td><td>M1 complete</td><td>M6</td><td>Needs compile flags pinned (M1 Block E). Lands before M7 so MP user-visible ship benefits from the abstraction.</td></tr>
         <tr><td>T-WASM-BUILD</td><td>M3 complete</td><td>M5 (fused)</td><td>Needs fixed-point physics so WASM checksum is meaningful. Is M5.</td></tr>
         <tr><td>T-COSMETIC</td><td>T-RENDER-GPU complete</td><td>M7</td><td>Needs the GPU abstraction. Lands as M7 ships for max actor ceiling.</td></tr>
@@ -477,8 +508,8 @@ determinism CI gate added in Block A.
       <tbody>
         <tr>
           <td>T-RENDER-INTERP</td>
-          <td><code>upstream/interpolated-render-redux</code> (Causeless, active), <code>upstream/interpolated-render</code> (abandoned 2024)</td>
-          <td><b>Harvest what's useful, ship our own.</b> Causeless's MOID-stability work likely cherry-picks cleanly into M1 Block C. His "Basic MO interp" commit is starting work &mdash; we can take it or write our own. The abandoned <code>interpolated-render</code> has lerp primitives + teleport/wrap fixes worth mining. We finish the work ourselves; if it lands upstream eventually, fine.</td>
+          <td><code>upstream/interpolated-render-redux</code> (active, polish phase), <code>upstream/interpolated-render</code> (abandoned 2024)</td>
+          <td><b>Harvest the redux branch onto <code>exp/determinism-foundation</code> when stable; verify with determinism CI.</b> The redux branch is the same accumulator + lerp architecture our plan describes, and it's ~80% of the way through the per-system hooks (sprites, particles, atom trails, arms, HUD, rotation, camera, UI). Remaining gaps to address ourselves if we want to finish on our fork before upstream merges: teleport / scene-wrap discontinuity handling, and any determinism issues the CI gate surfaces. The abandoned <code>interpolated-render</code> branch has lerp primitives + teleport/wrap fixes worth mining as a parts archive for that work.</td>
         </tr>
         <tr>
           <td>T-RENDER-GPU</td>
@@ -686,15 +717,15 @@ determinism CI gate added in Block A.
         </tr>
         <tr>
           <td>M7</td>
-          <td><b>ONLINE CO-OP SHIP &mdash; first user-visible MP</b></td>
-          <td>Friend in another city joins your campaign mission via Steam/IP. Mid-mission save. NAT-traversal works without port forwarding.</td>
-          <td><b>First MP user-visible ship.</b> Server-auth + client prediction + reconciliation + interpolation. T-COSMETIC's CPU offload multiplies actor count.</td>
+          <td><b>LAN lockstep SHIP &mdash; first MP user-visible</b></td>
+          <td>LAN parties. Two-machine local couch co-op without splitscreen. Input lag = 1 local frame. Smallest adapter (~800 LOC) &mdash; ships first because it proves the determinism foundation in real network play.</td>
+          <td><b>First MP user-visible ship.</b> Lockstep co-op at ~500 kbit/s/client bandwidth. Every client runs full multi-threaded sim in parallel. Max actor count.</td>
         </tr>
         <tr>
           <td>M8</td>
-          <td><b>LAN lockstep SHIP &mdash; best feel for co-op</b></td>
-          <td>LAN parties. Two-machine local couch co-op without splitscreen. Input lag = 1 local frame.</td>
-          <td>Lockstep co-op at ~500 kbit/s/client bandwidth. Every client runs full multi-threaded sim in parallel. Max actor count.</td>
+          <td><b>ONLINE CO-OP SHIP &mdash; server-auth + prediction</b></td>
+          <td>Friend in another city joins your campaign mission via Steam/IP. Mid-mission save. NAT-traversal works without port forwarding.</td>
+          <td>Server-auth + client prediction + reconciliation + interpolation (~2000 LOC adapter). T-COSMETIC's CPU offload multiplies actor count if it lands by here.</td>
         </tr>
         <tr>
           <td>M9</td>
@@ -737,8 +768,8 @@ determinism CI gate added in Block A.
         <tr><td>M4 (threaded sim)</td><td>If deterministic merge can't be made to work (Lua collision callback issue insurmountable)</td><td>Ship single-threaded. Online co-op (M7) still works (server CPU handles 4 players fine).</td><td>Max actor count lower. PvP/MMO at scale becomes hard.</td></tr>
         <tr><td>M5 (WASM cross-platform)</td><td>If WASM perf is unacceptable or build matrix maintenance becomes a burden</td><td>Native-only verification. Skip macOS ARM cross-checking.</td><td>macOS ARM users might have desync. Acceptable for initial ship; revisit when M9 PvP demands it.</td></tr>
         <tr><td>M6 (GNS)</td><td>If GNS integration proves too complex (build complexity, Steam coupling concerns)</td><td>ENet (simpler library, MIT-licensed).</td><td>Lose encryption + NAT + lanes. Add libsodium for encryption later. NAT becomes "you need to port forward or use Hamachi."</td></tr>
-        <tr><td>M7 (online co-op)</td><td>If server-auth + prediction reveals architectural issue (e.g., interest management too coarse for CC's actor counts)</td><td>Ship listen-server-only (host is server). Skip dedicated server for now.</td><td>Lose dedicated server hosting; community runs from player hosts.</td></tr>
-        <tr><td>M8 (LAN lockstep)</td><td>If determinism still has subtle bugs at lockstep precision</td><td>Ship M7 (online co-op via state-replication) as the LAN mode too. State-replication tolerates more drift than lockstep.</td><td>Higher bandwidth on LAN (uses snapshots not inputs). Worse feel but acceptable.</td></tr>
+        <tr><td>M7 (LAN lockstep)</td><td>If determinism still has subtle bugs at lockstep precision</td><td>Defer M7; ship M8 (server-auth + prediction) as the first MP mode instead. State-replication tolerates more drift than lockstep.</td><td>First MP ship slips to M8; LAN mode comes later (or never if M8 covers LAN well enough).</td></tr>
+        <tr><td>M8 (online co-op)</td><td>If server-auth + prediction reveals architectural issue (e.g., interest management too coarse for CC's actor counts)</td><td>Ship listen-server-only (host is server). Skip dedicated server for now.</td><td>Lose dedicated server hosting; community runs from player hosts.</td></tr>
         <tr><td>M9 (rollback PvP)</td><td>If incremental snapshot/restore proves too slow for 8-frame rollback at 60Hz</td><td>Reduce rollback window to 4 frames; or ship PvP with no rollback (just lag compensation).</td><td>Worse competitive feel. Probably still acceptable for casual PvP.</td></tr>
         <tr><td>M10 (public hosting)</td><td>If MMO scale interest management is too complex</td><td>Defer indefinitely. M7-M9 modes are sufficient ship targets.</td><td>No 16+ player public matches. Acceptable.</td></tr>
       </tbody>
@@ -746,7 +777,7 @@ determinism CI gate added in Block A.
 
     <h3>8.1 &nbsp; The critical-path argument</h3>
     <div class="callout callout-warn">
-      <p>Even with all the fallback paths in place, the <b>online co-op MVP at M7</b> only strictly requires M1 to
+      <p>Even with all the fallback paths in place, the <b>LAN lockstep MVP at M7</b> only strictly requires M1 to
       succeed at its optimal path. Everything else (M2-M6) has a degradable fallback. So if you read this and worry
       "what if we get stuck," the answer is: <b>complete M1, then choose your battles</b>. Online co-op via M7 can
       ship even if M2-M6 all hit fallbacks &mdash; just with reduced feature completeness.</p>
@@ -778,15 +809,15 @@ determinism CI gate added in Block A.
       </ul>
       <p><b>Side tracks delivered</b> when:</p>
       <ul>
-        <li>T-RENDER-INTERP: 144Hz monitors show smooth motion (likely lands via Causeless's upstream branch).</li>
+        <li>T-RENDER-INTERP: 144Hz monitors show smooth motion (harvested from the upstream <code>interpolated-render-redux</code> branch + verified against our determinism CI gate).</li>
         <li>T-RENDER-GPU: Camera + RenderBatch abstraction in place, sprite draws batched.</li>
         <li>T-COSMETIC: cosmetic systems CPU usage down 30%+ in stress scenarios.</li>
         <li>T-VALIDATION: every MP milestone has a cccp-ctl test command verifying it.</li>
       </ul>
       <p><b>MP done</b> when:</p>
       <ul>
-        <li>Online co-op (M7): friends in different cities complete a mission through NAT at 50-200ms RTT.</li>
-        <li>LAN lockstep (M8): 4 LAN clients run bit-identical sim for the entire match at ~500 kbit/s/client.</li>
+        <li>LAN lockstep (M7): 4 LAN clients run bit-identical sim for the entire match at ~500 kbit/s/client.</li>
+        <li>Online co-op (M8): friends in different cities complete a mission through NAT at 50-200ms RTT.</li>
         <li>PvP rollback (M9): 4-player arena at sub-50ms input latency with GGPO rollback.</li>
         <li>(Stretch) Public hosting (M10): 16+ player community-hosted match for 1 hour without divergence.</li>
       </ul>
@@ -797,7 +828,7 @@ determinism CI gate added in Block A.
       <a href="multiplayer.html">multiplayer.html</a>. Built from the upstream branch deep-dive
       (<a href="branches.html">branches.html</a>), the Box2D rejection rationale
       (<a href="decisions.html">ADR-005</a>), the MP architectural pivot
-      (<a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;10</a> / proposed ADR-016), the corefall
+      (<a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;11</a> / proposed ADR-016), the corefall
       determinism contract (<a href="https://github.com/Madreag/corefall/blob/main/docs/plan/decisions/dr-052-network-sync-rollback-and-cli-testable-determinism.md">corefall DR-052</a>),
       Causeless's stated direction on Discord (2026-05), and the M1 execution plan
       (<a href="https://github.com/Madreag/cortex-modern/blob/modernization-effort/M1_PLAN.md">M1_PLAN.md</a>).
