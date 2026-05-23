@@ -514,7 +514,10 @@ void MOSprite::Draw(BITMAP* pTargetBitmap,
 	else
 		spriteOffset = m_SpriteOffset;
 
-	Vector spritePos(GetRenderPos() + spriteOffset - targetPos);
+	// Sim-bound modes (MOID, material, door) snap to sim pos; visual modes lerp. Mirrors the pattern in MOSRotating / MOSParticle / MOPixel.
+	const bool simBoundMode = mode == g_DrawMOID || mode == g_DrawMaterial || mode == g_DrawDoor;
+	const float fLerp = simBoundMode ? 1.0f : g_TimerMan.GetSimUpdateProportion();
+	Vector spritePos(Lerp(GetPrevPos(), GetPos(), fLerp) + spriteOffset - targetPos);
 
 	// Take care of wrapping situations
 	Vector aDrawPos[4];
