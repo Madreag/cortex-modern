@@ -37,6 +37,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iomanip>
 #include <iostream>
@@ -254,6 +255,21 @@ namespace {
 		return {};
 	}
 
+	// The engine references Data/... as relative paths so its CWD must contain Data/.
+	// On Windows MSBuild output the engine lives at the repo root so gameBin.parent_path()
+	// is correct. On Linux Meson the engine lives at builddir/CortexCommand while Data/
+	// lives at the repo root — gameBin.parent_path() is wrong. Walk up looking for Data/.
+	fs::path FindEngineWorkDir(const fs::path& gameBin) {
+		fs::path cur = gameBin.parent_path();
+		for (int up = 0; up < 8; ++up) {
+			if (fs::exists(cur / "Data")) return cur;
+			const fs::path parent = cur.parent_path();
+			if (parent.empty() || parent == cur) break;
+			cur = parent;
+		}
+		return gameBin.parent_path();
+	}
+
 	fs::path ResolveSelfDir(const char* argv0) {
 		std::error_code ec;
 		fs::path self = fs::absolute(fs::path(argv0 ? argv0 : ""), ec);
@@ -306,6 +322,21 @@ namespace {
 		CwdGuard(const CwdGuard&) = delete;
 		CwdGuard& operator=(const CwdGuard&) = delete;
 	};
+
+	// Wrap a command so the shell cd's into <dir> before invoking it, without
+	// touching the parent process's CWD. Used by the --parallel branch of
+	// RunEngines to dodge the std::async race on process-wide fs::current_path().
+	std::string WrapCmdWithCd(const std::string& cmd, const fs::path& dir) {
+		if (dir.empty()) return cmd;
+		std::ostringstream w;
+#ifdef _WIN32
+		// std::system on Windows invokes cmd.exe; "cd /d" handles drive changes.
+		w << "cd /d " << Quote(dir.string()) << " && " << cmd;
+#else
+		w << "cd " << Quote(dir.string()) << " && " << cmd;
+#endif
+		return w.str();
+	}
 
 	int RunSubprocess(const std::string& cmd, bool echoCmd = true, const fs::path& cwd = {}) {
 		if (echoCmd) {
@@ -419,6 +450,7 @@ namespace {
 		    "  test replay-determinism        Run a scenario N times, diff per-tick hashes\n"
 		    "  test thread-matrix             Run scenario across Lua-state counts (M4 acid test)\n"
 		    "  test cross-platform-checksum   Diff trace JSONs from multiple platforms\n"
+		    "  test mp-suite                  Aggregate MP correctness suite (Blocks A-D in one)\n"
 		    "  test mp-sync-drift             Spawn N engine processes in parallel, diff traces\n"
 		    "  test latency-injection         Deterministic network simulator + parallel-engine diff\n"
 		    "  test snapshot-restore          Sim snapshot/restore tester (phase 1 baseline; phases 2-3 pending M8)\n"
@@ -657,9 +689,40 @@ namespace {
 		    "All sub-commands accept --json for machine-readable output.\n";
 	}
 
+	void PrintTestMpSuiteHelp(std::ostream& out) {
+		out <<
+		    "cccp-ctl test mp-suite — aggregate MP test runner (Blocks A-D)\n"
+		    "\n"
+		    "Runs the four MP-correctness subcommands as one CI-friendly batch:\n"
+		    "  1. mp-sync-drift     (clean MATCH on M4ThreadStress)\n"
+		    "  2. mp-sync-drift     (EC3-MP positive control on M1Baseline)\n"
+		    "  3. latency-injection (perfect conditions — verifies pipeline)\n"
+		    "  4. snapshot-restore  (baseline phase; phases 2-3 pending M8)\n"
+		    "  5. rollback-burst    (baseline + plan; phase 3 pending M8)\n"
+		    "\n"
+		    "Exits 0 iff every step's harness_ok holds. Designed as the single CI\n"
+		    "step that gates an MP-related PR merge: `cccp-ctl test mp-suite --quick`.\n"
+		    "\n"
+		    "Usage:\n"
+		    "  cccp-ctl test mp-suite [options]\n"
+		    "\n"
+		    "Options:\n"
+		    "  --ticks <N>            Per-step sim-tick cap. Default 200.\n"
+		    "  --seed <N>             RNG seed propagated to every step. Default 42.\n"
+		    "  --parallel             Enable mp-sync-drift / latency-injection parallel\n"
+		    "                         spawn (CI / headless only).\n"
+		    "  --quick                Cut ticks down for smoke runs (ticks → 60).\n"
+		    "  --out-dir <path>       Direct all reports here.\n"
+		    "  --game-bin <path>      Path to game binary. Default: auto-detect.\n"
+		    "  --json                 JSON aggregate output.\n"
+		    "  --quiet                Suppress per-step command echo.\n"
+		    "  -h, --help             This help.\n";
+	}
+
 	void PrintTestMpSyncDriftHelp(std::ostream& out) {
 		out <<
 		    "cccp-ctl test mp-sync-drift — two-process sim sync verification\n"
+		    "                              (alias: cccp-ctl test sync-drift)\n"
 		    "\n"
 		    "Spawns >=2 engine processes in parallel, each running the same scenario+seed\n"
 		    "with per-tick BLAKE3 hashing on. Compares the resulting traces tick-by-tick\n"
@@ -684,7 +747,8 @@ namespace {
 		    "                              -side replay pending M6 networking).\n"
 		    "  --inject-divergence-role <role>\n"
 		    "                              Drive -determinism-selftest-perturb on the\n"
-		    "                              named role (`host` / `peer` / `peer2` ...).\n"
+		    "                              named role (`host` / `peer1` / `peer2` ...).\n"
+		    "                              `peer` accepted as alias for `peer1`.\n"
 		    "                              Test then PASSES iff divergence is detected.\n"
 		    "                              Use to verify the comparator (EC3-MP control).\n"
 		    "  --keep-traces               Keep per-process trace JSONs after diff.\n"
@@ -1519,15 +1583,23 @@ namespace {
 		}
 	}
 
-	// Role labels: host, peer, peer2, peer3, ...
+	// Role labels: host, peer1, peer2, peer3, ... Consistent numeric suffix
+	// across all peers so `--inject-divergence-role peer1` is unambiguous.
+	// `peer` (no suffix) is accepted as a back-compat alias for `peer1`.
 	std::vector<std::string> BuildRoleLabels(int processes) {
 		std::vector<std::string> roles;
 		roles.reserve(processes);
 		roles.push_back("host");
 		for (int i = 1; i < processes; ++i) {
-			roles.push_back(i == 1 ? "peer" : ("peer" + std::to_string(i)));
+			roles.push_back("peer" + std::to_string(i));
 		}
 		return roles;
+	}
+
+	// Normalize a user-supplied role label. Accepts the legacy "peer" form and
+	// remaps it to "peer1" so the rest of the harness sees one canonical name.
+	std::string NormalizeRoleLabel(const std::string& s) {
+		return s == "peer" ? std::string("peer1") : s;
 	}
 
 	// Spawn N engine subprocesses, wait for all, load each trace JSON into
@@ -1552,7 +1624,9 @@ namespace {
 		const size_t n = roles.size();
 		std::vector<fs::path> roleOuts(n);
 		std::vector<std::string> cmds(n);
-		const fs::path gbParent = gameBin.parent_path();
+		// Engine needs CWD = dir containing Data/. On Linux Meson that's the repo
+		// root, not gameBin.parent_path() (= builddir/). Walk up to find it.
+		const fs::path engineCwd = FindEngineWorkDir(gameBin);
 
 		for (size_t p = 0; p < n; ++p) {
 			roleOuts[p] = runDir / (roles[p] + ".json");
@@ -1573,20 +1647,22 @@ namespace {
 
 		std::vector<int> rcs(n, -1);
 		if (parallel) {
+			// Embed cd into the command so the shell handles cwd; avoids the
+			// process-wide chdir race CwdGuard would introduce across threads.
 			std::vector<std::future<int>> futures;
 			futures.reserve(n);
 			for (size_t p = 0; p < n; ++p) {
 				if (!quietEcho) std::cerr << "[cccp-ctl] spawning role=" << roles[p] << " (parallel)\n";
-				const std::string fullCmd = cmds[p];
-				futures.push_back(std::async(std::launch::async, [fullCmd, gbParent, quietEcho]() {
-					return RunSubprocess(fullCmd, !quietEcho, gbParent);
+				const std::string wrapped = WrapCmdWithCd(cmds[p], engineCwd);
+				futures.push_back(std::async(std::launch::async, [wrapped, quietEcho]() {
+					return RunSubprocess(wrapped, !quietEcho, {});
 				}));
 			}
 			for (size_t p = 0; p < n; ++p) rcs[p] = futures[p].get();
 		} else {
 			for (size_t p = 0; p < n; ++p) {
 				if (!quietEcho) std::cerr << "[cccp-ctl] running role=" << roles[p] << " (sequential " << (p + 1) << "/" << n << ")\n";
-				rcs[p] = RunSubprocess(cmds[p], !quietEcho, gbParent);
+				rcs[p] = RunSubprocess(cmds[p], !quietEcho, engineCwd);
 			}
 		}
 
@@ -1679,6 +1755,7 @@ namespace {
 		}
 
 		const std::vector<std::string> roles = BuildRoleLabels(processes);
+		if (!injectDivRole.empty()) injectDivRole = NormalizeRoleLabel(injectDivRole);
 		if (!injectDivRole.empty() && std::find(roles.begin(), roles.end(), injectDivRole) == roles.end()) {
 			std::cerr << "[cccp-ctl] --inject-divergence-role must be one of: ";
 			for (size_t i = 0; i < roles.size(); ++i) {
@@ -2588,6 +2665,212 @@ namespace {
 		return harnessOk ? 0 : 1;
 	}
 
+	// ----- subcommand: test mp-suite ------------------------------------------
+	//
+	// Aggregates the four MP-correctness subcommands as one CI-friendly run.
+	// Reuses self-invocation via g_selfPath (same trick as `test all`) so each
+	// sub-step gets full arg validation + its own JSON report.
+
+	int CmdTestMpSuite(int argc, char** argv, const fs::path& selfDir) {
+		uint64_t seed = 42;
+		uint64_t ticks = 200;
+		bool quick = false;
+		bool parallel = false;
+		fs::path gameBin;
+		OutputCtx out;
+
+		for (int i = 0; i < argc; ++i) {
+			const std::string a = argv[i];
+			const bool hasV = (i + 1) < argc;
+			if (a == "-h" || a == "--help") { PrintTestMpSuiteHelp(std::cout); return 0; }
+			if (ArgEq(a, "seed") && hasV) { seed = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "ticks") && hasV) { ticks = std::strtoull(argv[++i], nullptr, 10); continue; }
+			if (ArgEq(a, "quick")) { quick = true; continue; }
+			if (ArgEq(a, "parallel")) { parallel = true; continue; }
+			if (ArgEq(a, "game-bin") && hasV) { gameBin = argv[++i]; continue; }
+			if (ArgEq(a, "out-dir") && hasV) { out.outDir = argv[++i]; continue; }
+			if (ArgEq(a, "json")) { out.json = true; continue; }
+			if (ArgEq(a, "quiet")) { out.quiet = true; continue; }
+			std::cerr << "[cccp-ctl] unknown option: " << a << "\n";
+			PrintTestMpSuiteHelp(std::cerr);
+			return 2;
+		}
+		if (quick) ticks = 60;
+		if (gameBin.empty()) gameBin = AutoDetectGameBin(selfDir);
+		if (gameBin.empty() || !fs::exists(gameBin)) {
+			std::cerr << "[cccp-ctl] could not locate game binary; pass --game-bin <path>.\n";
+			return 2;
+		}
+
+		const fs::path runDir = PickOutDir(out, "cccp-ctl-mp-suite");
+
+		auto commonTail = [&](std::ostringstream& c) {
+			c << " --game-bin " << Quote(gameBin.string());
+			if (out.quiet) c << " --quiet";
+		};
+		auto loadReport = [&](const fs::path& p) -> json {
+			if (!fs::exists(p)) return json();
+			return ReadJsonFile(p);
+		};
+
+		struct Step {
+			std::string name;
+			std::string cmd;
+			int rc = 0;
+			bool harnessOk = false;
+			std::string detail;
+		};
+		std::vector<Step> steps;
+
+		auto runStep = [&](const std::string& name, std::function<std::string(const fs::path&)> buildCmd,
+		                   std::function<bool(const json&)> harnessOkFromReport,
+		                   std::function<std::string(const json&, int)> detailFromReport) {
+			Step s;
+			s.name = name;
+			const fs::path report = runDir / (name + "-report.json");
+			std::ostringstream c;
+			c << buildCmd(report);
+			commonTail(c);
+			s.cmd = c.str();
+			if (!out.quiet) std::cerr << "\n[cccp-ctl] === " << name << " ===\n";
+			s.rc = RunSubprocess(s.cmd, !out.quiet);
+			const json j = loadReport(report);
+			s.harnessOk = harnessOkFromReport(j);
+			s.detail = detailFromReport(j, s.rc);
+			steps.push_back(s);
+			if (!out.quiet) std::cerr << "  -> " << (s.harnessOk ? "PASS" : "FAIL") << " (" << s.detail << ")\n";
+		};
+
+		const std::string parallelFlag = parallel ? " --parallel" : "";
+
+		// 1. mp-sync-drift clean (M4ThreadStress for thread-density signal).
+		runStep("mp-sync-drift-clean",
+		    [&](const fs::path& report) {
+			    std::ostringstream c;
+			    c << Quote(g_selfPath) << " test mp-sync-drift"
+			      << " --scenario M4ThreadStress --processes 2 --runs 1"
+			      << " --seed " << seed << " --ticks " << ticks
+			      << " --output " << Quote(report.string()) << parallelFlag;
+			    return c.str();
+		    },
+		    [](const json& j) { return !j.is_null() && j.value("harness_ok", false); },
+		    [](const json& j, int rc) {
+			    if (j.is_null()) return std::string("no report (rc=") + std::to_string(rc) + ")";
+			    return std::string(j.value("diverged", false) ? "DIVERGED" : "MATCH");
+		    });
+
+		// 2. mp-sync-drift EC3-MP positive control (perturb peer1 — expects DIVERGED).
+		runStep("mp-sync-drift-ec3",
+		    [&](const fs::path& report) {
+			    std::ostringstream c;
+			    c << Quote(g_selfPath) << " test mp-sync-drift"
+			      << " --scenario M1Baseline --processes 2 --runs 1"
+			      << " --inject-divergence-role peer1"
+			      << " --seed " << seed << " --ticks " << ticks
+			      << " --output " << Quote(report.string()) << parallelFlag;
+			    return c.str();
+		    },
+		    [](const json& j) { return !j.is_null() && j.value("harness_ok", false); },
+		    [](const json& j, int rc) {
+			    if (j.is_null()) return std::string("no report (rc=") + std::to_string(rc) + ")";
+			    return std::string(j.value("diverged", false) ? "DIVERGED (expected)" : "MATCH (UNEXPECTED — comparator broken)");
+		    });
+
+		// 3. latency-injection perfect conditions (verifies pipeline + simulator determinism).
+		runStep("latency-injection",
+		    [&](const fs::path& report) {
+			    std::ostringstream c;
+			    c << Quote(g_selfPath) << " test latency-injection"
+			      << " --scenario M1Baseline --processes 2 --runs 2"
+			      << " --packet-loss 0 --latency-ms 0 --jitter-ms 0 --reorder-pct 0"
+			      << " --seed " << seed << " --ticks " << ticks
+			      << " --output " << Quote(report.string()) << parallelFlag;
+			    return c.str();
+		    },
+		    [](const json& j) { return !j.is_null() && j.value("harness_ok", false); },
+		    [](const json& j, int rc) {
+			    if (j.is_null()) return std::string("no report (rc=") + std::to_string(rc) + ")";
+			    const bool consistent = j.value("packet_trace_consistent_across_runs", false);
+			    return std::string(consistent ? "sim MATCH + simulator deterministic" : "simulator NON-DETERMINISTIC");
+		    });
+
+		// 4. snapshot-restore baseline (phases 2-3 PENDING_M8).
+		runStep("snapshot-restore",
+		    [&](const fs::path& report) {
+			    std::ostringstream c;
+			    c << Quote(g_selfPath) << " test snapshot-restore"
+			      << " --scenario M1Baseline --runs 1"
+			      << " --snapshot-at " << (ticks / 3) << " --ticks " << ticks
+			      << " --seed " << seed
+			      << " --output " << Quote(report.string());
+			    return c.str();
+		    },
+		    [](const json& j) { return !j.is_null() && j.value("harness_ok", false); },
+		    [](const json& j, int rc) {
+			    if (j.is_null()) return std::string("no report (rc=") + std::to_string(rc) + ")";
+			    return std::string(j.value("phase1_baseline_ok", false) ? "phase 1 OK; phases 2-3 PENDING_M8" : "phase 1 FAILED");
+		    });
+
+		// 5. rollback-burst baseline + plan (phase 3 PENDING_M8).
+		runStep("rollback-burst",
+		    [&](const fs::path& report) {
+			    std::ostringstream c;
+			    c << Quote(g_selfPath) << " test rollback-burst"
+			      << " --scenario M1Baseline --runs 2"
+			      << " --burst-size 3 --burst-depth 5 --ticks " << ticks
+			      << " --seed " << seed
+			      << " --output " << Quote(report.string());
+			    return c.str();
+		    },
+		    [](const json& j) { return !j.is_null() && j.value("harness_ok", false); },
+		    [](const json& j, int rc) {
+			    if (j.is_null()) return std::string("no report (rc=") + std::to_string(rc) + ")";
+			    const bool consistent = j.value("phase2_plan_consistent_across_runs", false);
+			    return std::string(consistent ? "phases 1-2 OK; phase 3 PENDING_M8" : "burst plan NON-DETERMINISTIC");
+		    });
+
+		int passed = 0, failed = 0;
+		for (const auto& s: steps) (s.harnessOk ? passed : failed)++;
+		const bool allOk = (failed == 0);
+
+		json summary = {
+		    {"mode", quick ? "quick" : "full"},
+		    {"seed", seed},
+		    {"ticks", ticks},
+		    {"parallel", parallel},
+		    {"total_steps", static_cast<int>(steps.size())},
+		    {"passed", passed},
+		    {"failed", failed},
+		    {"all_passed", allOk},
+		    {"out_dir", runDir.string()},
+		    {"steps", json::array()},
+		};
+		for (const auto& s: steps) {
+			summary["steps"].push_back({
+			    {"name", s.name},
+			    {"harness_ok", s.harnessOk},
+			    {"rc", s.rc},
+			    {"detail", s.detail},
+			});
+		}
+
+		std::ostringstream text;
+		text << "\n";
+		text << "================================================================\n";
+		text << "  cccp-ctl test mp-suite — MP SUITE SUMMARY (" << (quick ? "quick" : "full") << " mode)\n";
+		text << "================================================================\n";
+		for (const auto& s: steps) {
+			text << "  " << (s.harnessOk ? "PASS  " : "FAIL  ") << std::left << std::setw(28) << s.name << "  " << s.detail << "\n";
+		}
+		text << "----------------------------------------------------------------\n";
+		text << "  Total: " << steps.size() << " steps, " << passed << " passed, " << failed << " failed\n";
+		text << "  Out dir: " << runDir.string() << "\n";
+		text << "  Result: " << (allOk ? "ALL PASSED" : "FAILURES — see details above") << "\n";
+
+		PrintTextOrJson(out, summary, text.str());
+		return allOk ? 0 : 1;
+	}
+
 	// ----- subcommand: bench replay -------------------------------------------
 
 	int CmdBenchReplay(int argc, char** argv, const fs::path& selfDir) {
@@ -3225,6 +3508,7 @@ namespace {
 		if (sub == "thread-matrix") return CmdTestThreadMatrix(subArgc, subArgv, selfDir);
 		if (sub == "cross-platform-checksum") return CmdTestCrossPlatformChecksum(subArgc, subArgv, selfDir);
 		if (sub == "mp-sync-drift" || sub == "sync-drift") return CmdTestMpSyncDrift(subArgc, subArgv, selfDir);
+		if (sub == "mp-suite") return CmdTestMpSuite(subArgc, subArgv, selfDir);
 		if (sub == "latency-injection") return CmdTestLatencyInjection(subArgc, subArgv, selfDir);
 		if (sub == "snapshot-restore") return CmdTestSnapshotRestore(subArgc, subArgv, selfDir);
 		if (sub == "rollback-burst") return CmdTestRollbackBurst(subArgc, subArgv, selfDir);
