@@ -26,10 +26,14 @@ namespace RTE {
 		float m_Angle = 0.0F; // Post effect angle in radians.
 		int m_Strength = 128; //!< Scalar float for how hard to blend it in, 0 - 255.
 		Vector m_Pos; //!< Post effect position. Can be relative to the scene, or to the screen, depending on context.
+		MOID m_AttachedToMOID = g_NoMOID; //!< If set, the effect tracks this MO's render pos at draw time instead of using the stored m_Pos snapshot.
 
 		/// Constructor method used to instantiate a PostEffect object in system memory.
 		PostEffect(const Vector& pos, BITMAP* bitmap, size_t bitmapHash, int strength, float angle) :
 		    m_Bitmap(bitmap), m_BitmapHash(bitmapHash), m_Angle(angle), m_Strength(strength), m_Pos(pos) {}
+
+		PostEffect(const Vector& pos, BITMAP* bitmap, size_t bitmapHash, int strength, float angle, MOID attachedToMOID) :
+		    m_Bitmap(bitmap), m_BitmapHash(bitmapHash), m_Angle(angle), m_Strength(strength), m_Pos(pos), m_AttachedToMOID(attachedToMOID) {}
 	};
 
 	/// Singleton manager responsible for all 32bpp post-process effect drawing.
@@ -89,6 +93,9 @@ namespace RTE {
 		/// @param strength The intensity level this effect should have when blended in post. 0 - 255.
 		/// @param angle The angle this effect should be rotated at in radians.
 		void RegisterPostEffect(const Vector& effectPos, BITMAP* effect, size_t hash, int strength = 255, float angle = 0);
+
+		/// Variant that attaches the effect to an MO's render position. At draw time the stored effectPos is replaced by the MO's GetRenderPos(), so the effect tracks the sprite as it interpolates and as it gets teleported via SetPos during activity-paused placement.
+		void RegisterPostEffect(const Vector& effectPos, BITMAP* effect, size_t hash, int strength, float angle, MOID attachedToMOID);
 
 		/// Gets all screen effects that are located within a box in the scene.
 		/// Their coordinates will be returned relative to the upper left corner of the box passed in here. Wrapping of the box will be taken care of.
