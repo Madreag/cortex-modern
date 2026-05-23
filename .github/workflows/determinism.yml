@@ -454,16 +454,16 @@ jobs:
   determinism-tsan-linux:
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { scenario: M1Baseline,     ticks: 600, threads: 2 }
-          - { scenario: M4ThreadStress, ticks: 900, threads: 8 }
-          - { scenario: MPerfBench,     ticks: 900, threads: 8 }
+          - { scenario: M1Baseline,     ticks: 600,  threads: 2 }
+          - { scenario: M4ThreadStress, ticks: 900,  threads: 8 }
+          - { scenario: MPerfBench,     ticks: 1200, threads: 8 }
     env:
-      TSAN_OPTIONS: halt_on_error=0:history_size=7:second_deadlock_stack=1:symbolize=1
+      TSAN_OPTIONS: halt_on_error=0:history_size=7:second_deadlock_stack=1:symbolize=1:suppressions=${{ github.workspace }}/tsan-suppressions.txt
     steps:
       - uses: actions/checkout@v4
         with:
@@ -487,6 +487,37 @@ jobs:
 
       - name: Build engine + cccp-ctl
         run: meson compile -C builddir
+
+      # Inline known-noise suppressions. Sources documented entry-by-entry in
+      # Source/CI/tsan-known-races.md — keep this list in lockstep with that
+      # file. The .md is the human record + removal-path tracking; this
+      # heredoc is what TSan actually reads.
+      - name: Write TSan suppressions
+        run: |
+          cat > tsan-suppressions.txt <<'EOF'
+          # LuaJIT — JIT-emitted machine code is opaque to TSan instrumentation;
+          # the bring-up (Source/CI/m5-linux-x64.md:154) excluded LuaJIT entirely.
+          # We can't filter the LuaJIT subproject's compile flags from this lane,
+          # so suppress the JIT entry points by symbol prefix instead.
+          race:^lj_
+
+          # System libtbb is not built under -fsanitize=thread, so TSan can't see
+          # std::execution::par_unseq join sync — yields a flood of false
+          # positives in partitioner.h / parallel_for.h.
+          called_from_lib:libtbb
+
+          # PathFinder grid AdjacentCost ↔ UpdateNodeCosts — TBB par_unseq join
+          # blind spot that persists after the PathFinder async-counter fix
+          # (m5-linux-x64.md:174-176).
+          race:AdjacentCost
+          race:UpdateNodeCosts
+
+          # Cosmetic render-side MOID race — UpdateDrawMOIDs vs main-thread Draw;
+          # sim checksum is fed before the deferred draw task, so this does not
+          # affect determinism (m5-linux-x64.md:251-258).
+          race:UpdateDrawMOIDs
+          race:MOSRotating::Draw
+          EOF
 
       - name: Run determinism-check under TSan (${{ matrix.scenario }})
         run: |
