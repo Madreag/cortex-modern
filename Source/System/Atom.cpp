@@ -275,12 +275,13 @@ void Atom::DrawTrail(BITMAP* targetBitmap, const Vector& targetPos) const {
 	std::vector<std::pair<int, int>> allTrailPoints = m_LastTrailPoints;
 	allTrailPoints.insert(allTrailPoints.end(), m_TrailPoints.begin(), m_TrailPoints.end());
 	for (int i = endPoint - std::min(length, static_cast<int>(endPoint)); i < endPoint; ++i) {
-		putpixel(targetBitmap, allTrailPoints[i].first, allTrailPoints[i].second, m_TrailColor.GetIndex());
+		Vector trailPointPos = Vector(allTrailPoints[i].first, allTrailPoints[i].second) - targetPos;
+		putpixel(targetBitmap, trailPointPos.GetFloorIntX(), trailPointPos.GetFloorIntY(), m_TrailColor.GetIndex());
 
-		topLeftExtent.m_X = std::min(topLeftExtent.m_X, static_cast<float>(allTrailPoints[i].first));
-		topLeftExtent.m_Y = std::min(topLeftExtent.m_Y, static_cast<float>(allTrailPoints[i].second));
-		bottomRightExtent.m_X = std::max(bottomRightExtent.m_X, static_cast<float>(allTrailPoints[i].first));
-		bottomRightExtent.m_Y = std::max(bottomRightExtent.m_Y, static_cast<float>(allTrailPoints[i].second));
+		topLeftExtent.m_X = std::min(topLeftExtent.m_X, trailPointPos.m_X);
+		topLeftExtent.m_Y = std::min(topLeftExtent.m_Y, trailPointPos.m_Y);
+		bottomRightExtent.m_X = std::max(bottomRightExtent.m_X, trailPointPos.m_X);
+		bottomRightExtent.m_Y = std::max(bottomRightExtent.m_Y, trailPointPos.m_Y);
 	}
 
 	g_SceneMan.RegisterDrawing(targetBitmap, g_NoMOID, topLeftExtent.m_X, topLeftExtent.m_Y, bottomRightExtent.m_X + 1.0F, bottomRightExtent.m_Y + 1.0F);
