@@ -801,20 +801,20 @@ void ACraft::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 			}
 		}
 
-		Matrix currentRotation = Lerp(GetPrevRotMatrix(), GetRotMatrix(), g_TimerMan.GetSimUpdateProportion());
-		Vector currentPos = GetRenderPos();
-		Vector drawPos(currentPos - targetPos);
+		Matrix currentRotation = GetRenderRotMatrix();
+		Vector drawPos(GetRenderPos() - targetPos);
 
 		// Draw the actual dotted lines
 		for (std::list<Exit>::iterator exit = m_Exits.begin(); exit != m_Exits.end(); ++exit) {
-			// CheckIfClear wants world coords; exitCorner is target-relative
-			if (!exit->CheckIfClear(currentPos, currentRotation, 18)) {
+			// CheckIfClear is a sim-state geometric check (raycast against terrain); pass sim values, not interpolated ones.
+			if (!exit->CheckIfClear(m_Pos, m_Rotation, 18)) {
 				continue;
 			}
 
-			Vector exitRadius = RotateOffset(exit->GetVelocity().GetPerpendicular().SetMagnitude(exit->GetRadius()));
-			Vector exitCorner = drawPos + RotateOffset(exit->GetOffset()) + exitRadius;
-			Vector arrowVec = RotateOffset(exit->GetVelocity().SetMagnitude(exit->GetRange()));
+			// Visual line drawing uses interpolated rotation so the indicator stays glued to the rendered sprite.
+			Vector exitRadius = exit->GetVelocity().GetPerpendicular().SetMagnitude(exit->GetRadius()).GetXFlipped(m_HFlipped) * currentRotation;
+			Vector exitCorner = drawPos + (exit->GetOffset().GetXFlipped(m_HFlipped) * currentRotation) + exitRadius;
+			Vector arrowVec = exit->GetVelocity().SetMagnitude(exit->GetRange()).GetXFlipped(m_HFlipped) * currentRotation;
 			g_FrameMan.DrawLine(pTargetBitmap, exitCorner, exitCorner + arrowVec, 120, 120, EXITLINESPACING, m_ExitLinePhase);
 			exitCorner -= exitRadius * 2;
 			g_FrameMan.DrawLine(pTargetBitmap, exitCorner, exitCorner + arrowVec, 120, 120, EXITLINESPACING, m_ExitLinePhase);
