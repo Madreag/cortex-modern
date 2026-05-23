@@ -120,7 +120,14 @@ namespace RTE {
 		r.scenario = m_Scenario;
 		r.seed = m_Seed;
 		r.passed = m_Result.passed;
-		r.ticks = m_TickCount;
+		// Prefer the Lua-recorded final_tick over m_TickCount -- ConsumeEvents only
+		// fires on ticks that emitted decision events, so m_TickCount under-counts
+		// scenarios that emit infrequently (M2LuaBaseline shows 2 vs final_tick 599).
+		if (auto it = m_Numeric.find("final_tick"); it != m_Numeric.end()) {
+			r.ticks = static_cast<uint64_t>(it->second);
+		} else {
+			r.ticks = m_TickCount;
+		}
 		r.numeric = m_Numeric;
 		r.stringValues = m_Strings;
 		r.eventCounts = m_EventCounts;

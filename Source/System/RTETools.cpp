@@ -1,5 +1,6 @@
 #include "RTETools.h"
 
+#include "ScenarioRunner.h"
 #include "Vector.h"
 #include "Matrix.h"
 #include "System.h"
@@ -39,12 +40,19 @@ namespace RTE {
 			return static_cast<uint32_t>(seedResult);
 		}();
 
+		// ScenarioRunner -seed CLI value overrides the constant when set non-zero;
+		// a 0 / absent flag keeps constSeed so unmodified callers stay byte-identical.
+		const uint32_t seedToUse =
+		    (ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().seed != 0)
+		        ? static_cast<uint32_t>(ScenarioRunner::GetArgs().seed)
+		        : constSeed;
+
 		// M1 Block B: seed both RNGs identically. g_RenderRNG could legitimately
 		// drift to a wall-clock seed in a future block (cosmetic variation across
 		// runs would be a feature, not a bug) but at M1 we keep both deterministic
 		// to keep the determinism-check tool's render-side assertions tractable.
-		g_SimRNG.Seed(constSeed);
-		g_RenderRNG.Seed(constSeed);
+		g_SimRNG.Seed(seedToUse);
+		g_RenderRNG.Seed(seedToUse);
 	}
 
 	float Lerp(float scaleStart, float scaleEnd, float startValue, float endValue, float progressScalar) {
