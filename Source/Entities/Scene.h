@@ -639,6 +639,9 @@ namespace RTE {
 		/// marked as outdated.
 		void UpdatePathFinding();
 
+		// Tick epilogue: drain sim+path, then run UpdatePathFinding if timer is due.
+		void UpdatePathFindingEpilogue();
+
 		/// Tells whether the pathfinding data has been updated in the last frame.
 		/// @return Whether the pathfinding data was recalculated fully or partially.
 		bool PathFindingUpdated() { return m_PathfindingUpdated; }

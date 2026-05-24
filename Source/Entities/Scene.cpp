@@ -2384,20 +2384,14 @@ void Scene::BlockUntilAllPathingRequestsComplete() {
 void Scene::UpdatePathFinding() {
 	ZoneScoped;
 
-	// Drain prev-tick deferred tasks before our par_unseq; Scene::Update runs before MovableMan::Update.
-	g_MovableMan.CompleteDeferredSimTasks();
+	// Caller (epilogue) is responsible for draining sim+path tasks. Assert clean state.
+	for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
+		RTEAssert(GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() == 0,
+		    "UpdatePathFinding entered with in-flight pathing requests; caller must drain.");
+	}
 
 	constexpr int nodeUpdatesPerCall = 100;
 	constexpr int maxUnupdatedMaterialAreas = 1000;
-
-	// If any pathing requests are active, don't update things yet, wait till they're finished
-	// TODO: this can indefinitely block updates if pathing requests are made every frame. Figure out a solution for this
-	// Either force-complete pathing requests occasionally, or delay starting new pathing requests if we've not updated in a while
-	for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
-		if (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {
-			return;
-		};
-	}
 
 	int nodesToUpdate = nodeUpdatesPerCall / g_ActivityMan.GetActivity()->GetTeamCount();
 	if (m_pTerrain->GetUpdatedMaterialAreas().size() > maxUnupdatedMaterialAreas) {
@@ -2426,6 +2420,15 @@ void Scene::UpdatePathFinding() {
 
 	m_PartialPathUpdateTimer.Reset();
 	m_PathfindingUpdated = true;
+}
+
+void Scene::UpdatePathFindingEpilogue() {
+	if (!m_PartialPathUpdateTimer.IsPastSimMS(100)) {
+		return;
+	}
+	g_MovableMan.CompleteDeferredSimTasks();
+	BlockUntilAllPathingRequestsComplete();
+	UpdatePathFinding();
 }
 
 float Scene::CalculatePath(const Vector& start, const Vector& end, std::list<Vector>& pathResult, float jumpHeight, float digStrength, Activity::Teams team) {
@@ -2489,10 +2492,7 @@ void Scene::Update() {
 		}
 	}
 
-	// Occasionally update pathfinding. There's a tradeoff between how often updates occur vs how big the multithreaded batched node lists to update are.
-	if (m_PartialPathUpdateTimer.IsPastSimMS(100)) {
-		UpdatePathFinding();
-	}
+	// Per-tick UpdatePathFinding moved to Main.cpp epilogue after MovableMan::Update.
 }
 
 PathFinder& Scene::GetPathFinder(Activity::Teams team) {

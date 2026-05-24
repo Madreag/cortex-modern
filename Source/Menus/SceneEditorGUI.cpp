@@ -247,6 +247,7 @@ bool SceneEditorGUI::TestBrainResidence(bool noBrainIsOK) {
 	// We do we have a resident brain now, so let's check that it's in a legit spot
 	if (pBrain) {
 		// Got to update the pathfinding graphs so the latest terrain is used for the below tests
+		g_SceneMan.GetScene()->BlockUntilAllPathingRequestsComplete();
 		g_SceneMan.GetScene()->UpdatePathFinding();
 		UpdateBrainSkyPathAndCost(pBrain->GetPos());
 	} else {
