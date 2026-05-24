@@ -518,6 +518,11 @@ void RunGameLoop() {
 			g_MovableMan.Update();
 			g_PerformanceMan.UpdateSortedScriptTimings(g_LuaMan.GetScriptTimings());
 
+			// Serial epilogue: AI next-tick reads a grid written with no concurrent work.
+			if (g_SceneMan.GetScene()) {
+				g_SceneMan.GetScene()->UpdatePathFindingEpilogue();
+			}
+
 			g_AudioMan.Update();
 			g_MusicMan.Update();
 

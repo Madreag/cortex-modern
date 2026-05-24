@@ -955,6 +955,8 @@ void MovableMan::ChangeActorTeam(Actor* pActor, int team) {
 	// Because doors affect the team-based pathfinders, we need to tell them there's been a change.
 	// This is hackily done by erasing the door material, updating the pathfinders, then redrawing it and updating them again so they properly account for the door's new team.
 	if (ADoor* actorAsADoor = dynamic_cast<ADoor*>(pActor); actorAsADoor && actorAsADoor->GetDoorMaterialDrawn()) {
+		CompleteDeferredSimTasks();
+		g_SceneMan.GetScene()->BlockUntilAllPathingRequestsComplete();
 		actorAsADoor->TempEraseOrRedrawDoorMaterial(true);
 		g_SceneMan.GetTerrain()->AddUpdatedMaterialArea(actorAsADoor->GetBoundingBox());
 		g_SceneMan.GetScene()->UpdatePathFinding();
