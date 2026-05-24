@@ -1996,6 +1996,13 @@ void MovableMan::Travel() {
 void MovableMan::UpdateControllers() {
 	ZoneScoped;
 
+	// Sync rebuild for ShouldUpdateAIThisFrame's gate; the prior async rebuild in UpdateDrawMOIDs races vs in-tick m_Actors edits.
+	m_ContiguousActorIDs.clear();
+	int actorID = 0;
+	for (Actor* actor: m_Actors) {
+		m_ContiguousActorIDs[actor] = actorID++;
+	}
+
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
 	{
 		for (Actor* actor: m_Actors) {
@@ -2116,7 +2123,6 @@ void MovableMan::UpdateDrawMOIDs() {
 
 	// Clear the index each frame and do it over because MO's get added and deleted between each frame.
 	m_MOIDIndex.clear();
-	m_ContiguousActorIDs.clear();
 
 	// Add a null and start counter at 1 because MOID == 0 means no MO.
 	// - Update: This isnt' true anymore, but still keep 0 free just to be safe
@@ -2124,9 +2130,7 @@ void MovableMan::UpdateDrawMOIDs() {
 
 	MOID currentMOID = 1;
 
-	int actorID = 0;
 	for (Actor* actor: m_Actors) {
-		m_ContiguousActorIDs[actor] = actorID++;
 		if (!actor->IsSetToDelete()) {
 			actor->UpdateMOID(m_MOIDIndex);
 			actor->Draw(nullptr, Vector(), g_DrawMOID, true);
