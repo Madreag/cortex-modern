@@ -1996,6 +1996,13 @@ void MovableMan::Travel() {
 void MovableMan::UpdateControllers() {
 	ZoneScoped;
 
+	// Re-sort after the frame-start sort: ExecuteLuaScriptCallbacks between
+	// can mutate m_Actors order via AddActor / RemoveActor. The AI gate built
+	// next must read a canonical order.
+	std::sort(m_Actors.begin(), m_Actors.end(), MOUniqueIDLess());
+	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
+	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
+
 	// Sync rebuild for ShouldUpdateAIThisFrame's gate; the prior async rebuild in UpdateDrawMOIDs races vs in-tick m_Actors edits.
 	m_ContiguousActorIDs.clear();
 	int actorID = 0;
