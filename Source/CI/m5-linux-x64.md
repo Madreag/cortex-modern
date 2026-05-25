@@ -301,3 +301,41 @@ in `PathFinder::CalculatePathAsync` (commit `679b53c84`).
 
 Net: the Linux x86-64 build is clean, and the simulation is deterministic
 run-to-run on this platform across every CI determinism scenario.
+
+## Block F revalidation — canonical M4A consolidation
+
+Branch tip `366b9d073` (`exp/determinism-linux` after force-push from
+`dfa7691a4`). Pre-rebase state preserved at
+`backup/pre-block-f-linux-2026-05-24`.
+
+Consolidated stack on this tip: Path E architecture (epilogue
+UpdatePathFinding) + atomic callback-id + queue sort + PathFinder seq/sort
+internals + `m_ContiguousActorIDs` sync rebuild + M5.5 V1.4 + M4A TSan +
+macOS universal UB fixes.
+
+### Verification — all green
+
+| Scenario | Config | Result | Report |
+|---|---|---|---|
+| 9 × M1/M2/M3 (M1Baseline, M1TerrainStress, M1ActorStress, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading, M3TerrainStress) | --runs 10 | **MATCH** (all) | `block-f-test-all.json` |
+| M4ThreadStress thread-matrix | --threads 1,2,4,8,16 --runs 2 | **MATCH** (FFF-415 acid) | `block-f-m4-matrix.json` |
+| MPerfBench | --threads 8 --ticks 1200 --runs 10 | **MATCH** | `block-f-mperfbench.json` |
+| selftest:M1Baseline (EC3 positive control) | --runs 5 | **PASS** (harness catches injected divergence) | `block-f-test-all.json` |
+| FixedPointTests SELF-CHECK | — | `5ce9c33b84d29932` | (matches the cross-platform proof point) |
+
+### Notes
+
+* `cccp-ctl test all` aggregates `--runs 10 --seed 42` over the 9
+  M1/M2/M3 scenarios + an M4ThreadStress sub-thread-matrix (defaults to
+  `--runs 1` inside the aggregate). The explicit `test thread-matrix`
+  with `--runs 2` (above) covers the user-spec re-run.
+* MPerfBench was driven through `test thread-matrix --threads 8` because
+  `test scenario` / `test replay-determinism` do not surface a
+  `--num-lua-states` knob; `thread-matrix` with a single value is the
+  equivalent shape.
+* Linux host: GCC 13.3, Meson 1.11.1, `--buildtype=release`. `Data/` was
+  symlinked into `build/` (`build/Data → ../Data`) so the harness's
+  `cwd=build/` invocation can find scenario assets.
+* Race A (PathFinder consumption-side residual) and Race C
+  (`m_ContiguousActorIDs` async-rebuild drift) remain closed on this
+  platform under the consolidation; no regression observed.
