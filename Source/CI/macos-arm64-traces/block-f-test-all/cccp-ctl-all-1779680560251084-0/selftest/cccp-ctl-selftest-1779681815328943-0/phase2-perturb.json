@@ -1,0 +1,66 @@
+{
+  "binary": "/Users/erol/projects/cortex_project/cortex-modern/builddir/./CortexCommand",
+  "compared_ticks": 600,
+  "diverged": true,
+  "first_divergence_tick": 49,
+  "mode": "repeat-runs",
+  "per_run_tick_count": [
+    600,
+    600,
+    600,
+    600,
+    600
+  ],
+  "per_subsystem_first_divergence": {
+    "actors": 50,
+    "carve_math": 61,
+    "controller": 63,
+    "decisions": 171,
+    "particles": 50,
+    "scene": 53,
+    "sim_rng": 49
+  },
+  "runs": 5,
+  "runs_detail": [
+    {
+      "diverged": false,
+      "index": 0,
+      "run_index": 0,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": true,
+      "index": 1,
+      "run_index": 1,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": true,
+      "index": 2,
+      "run_index": 2,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": true,
+      "index": 3,
+      "run_index": 3,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": true,
+      "index": 4,
+      "run_index": 4,
+      "thread_count": -1,
+      "tick_count": 600
+    }
+  ],
+  "scenario": "M1Baseline",
+  "seed": 42,
+  "ticks_requested": 600,
+  "total_mismatched_ticks": 551,
+  "total_runs": 5
+}

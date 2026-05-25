@@ -1,0 +1,78 @@
+{
+  "all_passed": true,
+  "failed": 0,
+  "mode": "full",
+  "out_dir": "../Source/CI/macos-arm64-traces/block-f-test-all/cccp-ctl-all-1779680560251084-0",
+  "passed": 11,
+  "runs_per_scenario": 10,
+  "steps": [
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M1Baseline",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M1TerrainStress",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M1ActorStress",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M2LuaBaseline",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M2LuaRandomStress",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M2PairsStress",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M2OsStubTest",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M2ModSmokeLoading",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH",
+      "name": "replay-determinism:M3TerrainStress",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "MATCH (FFF-415 acid test PASSED)",
+      "name": "thread-matrix:M4ThreadStress",
+      "passed": true,
+      "rc": 0
+    },
+    {
+      "detail": "harness catches injected divergence (EC3 OK)",
+      "name": "selftest:M1Baseline",
+      "passed": true,
+      "rc": 0
+    }
+  ],
+  "thread_matrix": "1,2,4,8,16",
+  "total_steps": 11
+}

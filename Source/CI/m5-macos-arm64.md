@@ -371,3 +371,82 @@ characterise the float ABI gap rather than a determinism regression.
 * `Source/Managers/UInputMan.cpp` — zero AnalogMove/AnalogAim in determinism mode
 * `Source/CI/macos-arm64-traces/*.json` — per-tick traces (10 scenarios)
 * `Source/CI/m5-macos-arm64.md` — this file
+
+## Block F revalidation (2026-05-24)
+
+After the M4A consolidation force-pushed `exp/determinism-macos` from
+`7cde7b22c` to `366b9d073` (which bundles the round-1 macOS fixes
+into the canonical foundation alongside Linux's PathFinder Path E,
+WSL2's `m_ContiguousActorIDs` synchronous rebuild, the atomic
+callback-id, the LuaMan callback queue sort, the AudioMan
+suppression, and the TSan CI scaffold), the macOS branch was hard-
+reset to the consolidated tip and the full Block F test matrix was
+re-run.
+
+### Branch state at Block F revalidation
+
+```
+$ git log --oneline -5 origin/exp/determinism-macos
+366b9d073  MovableMan: rebuild m_ContiguousActorIDs synchronously at UpdateControllers entry  ← WSL2 fix
+e48f8b6cc  PathFinder Path E: move UpdatePathFinding to post-MovableMan epilogue              ← Linux PE
+64ec09f58  LuaMan: sort script-callback queue by caller key to drain async-race order         ← Linux
+8d0875651  Close two parallel-AI races feeding the M4ThreadStress divergence                  ← Linux
+f8a82a299  PathFinder: drain prev-tick deferred + sort node list + serial UpdateNodeList      ← Linux
+```
+
+Pre-rebase tip preserved at
+`origin/backup/pre-block-f-macos-2026-05-24`.
+
+### Block F matrix (all MATCHED)
+
+| Step | Configuration | Runs | Result |
+|---|---|---|---|
+| `cccp-ctl test all` | `--runs 10 --seed 42` (9 M1/M2/M3 scenarios + M4 thread-matrix at 1,2,4,8,16 + EC3 selftest) | 11 / 11 sub-steps PASS | overall PASS |
+| `M4ThreadStress` thread-matrix | `--threads 8 --runs 10 --ticks 900` | 10 | MATCH |
+| `M4ThreadStress` thread-matrix | `--threads 16 --runs 10 --ticks 900` | 10 | MATCH |
+| `MPerfBench` thread-matrix | `--threads 8 --runs 5 --ticks 1200` | 5 | MATCH |
+| `MPerfBench` thread-matrix | `--threads 12 --runs 5 --ticks 1200` | 5 | MATCH |
+| `MPerfBench` thread-matrix | `--threads 16 --runs 5 --ticks 1200` | 5 | MATCH |
+| `MPerfBench` confirm sweep 1-5 | `--threads 16 --runs 10 --ticks 1200` × 5 sweeps | 50 | MATCH 50 / 50 |
+
+Aggregate independent of `test all`: **85 / 85 MATCH** across the
+extra MPerfBench / M4ThreadStress matrix. `test all` itself
+exercises 9 M1/M2/M3 scenarios × 10 runs + M4 thread matrix
+(5 thread counts × 3 runs default) + 2 selftest phases (5 runs
+each), all of which PASS.
+
+### Byte-level fingerprint pin re-check (instrumentation reverted before commit)
+
+Temporarily re-added the per-actor controller / pos / vel dump,
+ran `MPerfBench -seed 42 -ticks 60 -runs 10 -threads 16` (the
+surface where the round-3 Race B fingerprint surfaced at sim tick
+44), captured per-tick dumps in the 40-48 window, and md5'd the 10
+sim-tick-44 dumps:
+
+```
+all 10 files md5 → a0964d8952376633e95fecf744af69db  (1 unique hash)
+
+Round-5 baseline md5  → a0964d8952376633e95fecf744af69db  (identical)
+Round-6 baseline md5  → a0964d8952376633e95fecf744af69db  (identical)
+
+Actor uid=18218 entry at sim tick 44 (identical across all 10 runs):
+uid=18218 bits=000000000100000000000000000000000000000000000000000000000
+          mv=0x0p+0,0x0p+0 aim=0x0p+0,0x0p+0 cur=0x0p+0,0x0p+0
+          mode=2 px=0x1.d1p+9 py=0x1.351d7p+8 vx=0x0p+0 vy=0x1.caacfap+3
+          h=0x1.9p+6 am=4
+                                  ^ bit 9 = BODY_JUMPSTART (set)
+                       ^ bit 4 = MOVE_LEFT (CLEAR — reference)
+```
+
+Identical to both prior baselines. M4A consolidation preserves
+Race B closure exactly at the byte level.
+
+### `FixedPointTests` SELF-CHECK
+
+```
+SELF-CHECK: 5ce9c33b84d29932
+42 passed, 0 failed
+```
+
+Unchanged through all six round-of-investigation + Block F
+revalidation cycles.
