@@ -1,0 +1,110 @@
+{
+  "binary": "D:\\Projects\\determinism-windows\\Cortex Command.exe",
+  "compared_ticks": 1200,
+  "diverged": true,
+  "first_divergence_tick": 1161,
+  "mode": "thread-count-matrix",
+  "per_run_tick_count": [
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200,
+    1200
+  ],
+  "per_subsystem_first_divergence": {
+    "actors": 1163,
+    "carve_math": 1163,
+    "controller": 1161,
+    "decisions": 1170,
+    "particles": 1165,
+    "scene": 1168,
+    "sim_rng": 1168,
+    "terrain": 1168
+  },
+  "runs": 10,
+  "runs_detail": [
+    {
+      "diverged": false,
+      "index": 0,
+      "run_index": 0,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 1,
+      "run_index": 1,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 2,
+      "run_index": 2,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": true,
+      "index": 3,
+      "run_index": 3,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 4,
+      "run_index": 4,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 5,
+      "run_index": 5,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 6,
+      "run_index": 6,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 7,
+      "run_index": 7,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 8,
+      "run_index": 8,
+      "thread_count": 8,
+      "tick_count": 1200
+    },
+    {
+      "diverged": false,
+      "index": 9,
+      "run_index": 9,
+      "thread_count": 8,
+      "tick_count": 1200
+    }
+  ],
+  "scenario": "MPerfBench",
+  "seed": 42,
+  "thread_counts": [
+    8
+  ],
+  "ticks_requested": 1200,
+  "total_mismatched_ticks": 39,
+  "total_runs": 10
+}
