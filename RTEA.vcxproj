@@ -817,6 +817,7 @@
     <ClInclude Include="Source\System\StandardIncludes.h" />
     <ClInclude Include="Source\System\Box.h" />
     <ClInclude Include="Source\System\Color.h" />
+    <ClInclude Include="Source\Network\SimChecksum.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\DataModule.h" />
     <ClInclude Include="Source\System\RTEError.h" />
@@ -1343,6 +1344,7 @@
     </ClCompile>
     <ClCompile Include="Source\System\Box.cpp" />
     <ClCompile Include="Source\System\Color.cpp" />
+    <ClCompile Include="Source\Network\SimChecksum.cpp" />
     <ClCompile Include="Source\System\ContentFile.cpp" />
     <ClCompile Include="Source\System\DataModule.cpp" />
     <ClCompile Include="Source\System\RTEError.cpp" />
