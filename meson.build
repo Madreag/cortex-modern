@@ -242,7 +242,9 @@ raknet_proj = subproject('RakNet')
 raknet_dep = dependency('RakNet')
 blake3_proj = subproject('BLAKE3-1.8.5')
 blake3_dep = dependency('blake3')
-deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, blake3_dep]
+nlohmann_json_proj = subproject('nlohmann_json-3.12.0')
+nlohmann_json_dep = dependency('nlohmann_json')
+deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, blake3_dep, nlohmann_json_dep]
 
 #### Sources Setup ####
 source_inc_dirs = []
