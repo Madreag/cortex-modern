@@ -1,0 +1,173 @@
+# Determinism CI gate (blocking).
+#
+# Runs the M1/M2 scenarios through the engine's -determinism-check harness and
+# fails the build if the per-tick BLAKE3 state hash is not bit-identical across
+# runs for a given seed + scenario. determinism-cross-os then diffs the Linux and
+# Windows M1Baseline traces so the two toolchains must agree tick-for-tick.
+#
+# Local equivalent (Windows):
+#   "Cortex Command.exe" -determinism-check --scenario M2PairsStress --ticks 600 \
+#                                           --seed 42 --runs 100 --output report.json
+
+name: Determinism
+
+on:
+  pull_request:
+    branches: [determinism-revamp, 'pr/*']
+  workflow_dispatch:
+
+# Concurrency: one run per branch/PR, cancel in-flight if new commits arrive.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  determinism-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [M1Baseline, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config \
+            libsdl2-dev libsdl2-image-dev libpng-dev libflac-dev \
+            libminizip-dev libtbb-dev liblz4-dev libgl-dev
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Run determinism-check (${{ matrix.scenario }})
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario ${{ matrix.scenario }} \
+              --ticks 600 \
+              --seed 42 \
+              --runs 100 \
+              --output ${{ matrix.scenario }}-divergence.json
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-${{ matrix.scenario }}-linux
+          path: ${{ matrix.scenario }}-divergence.json
+          if-no-files-found: error
+
+      # The cross-OS check needs one real per-tick trace. -num-lua-states is pinned
+      # so the threaded-Lua state count is identical on every OS.
+      - name: Produce cross-OS per-tick trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        run: |
+          ./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 600 \
+              -tick-hashes -num-lua-states 4 -out M1Baseline-trace.json
+
+      - name: Upload cross-OS trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-trace-linux
+          path: M1Baseline-trace.json
+          if-no-files-found: error
+
+  determinism-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [M1Baseline, M2LuaBaseline, M2LuaRandomStress, M2PairsStress, M2OsStubTest, M2ModSmokeLoading]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Final|x64)
+        shell: pwsh
+        run: |
+          msbuild RTEA.sln /p:Configuration="Final" /p:Platform=x64 /m /nologo /v:minimal
+
+      - name: Stage runtime deps
+        shell: pwsh
+        run: |
+          Copy-Item -Path external/lib/win/fmod.dll -Destination fmod.dll -Force
+
+      - name: Run determinism-check (${{ matrix.scenario }})
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario ${{ matrix.scenario }} `
+              --ticks 600 `
+              --seed 42 `
+              --runs 100 `
+              --output "${{ matrix.scenario }}-divergence.json"
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-${{ matrix.scenario }}-windows
+          path: ${{ matrix.scenario }}-divergence.json
+          if-no-files-found: error
+
+      # The cross-OS check needs one real per-tick trace (see the Linux job).
+      - name: Produce cross-OS per-tick trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -scenario M1Baseline -seed 42 -max-ticks 600 `
+              -tick-hashes -num-lua-states 4 -out M1Baseline-trace.json
+
+      - name: Upload cross-OS trace (M1Baseline only)
+        if: matrix.scenario == 'M1Baseline'
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-trace-windows
+          path: M1Baseline-trace.json
+          if-no-files-found: error
+
+  determinism-cross-os:
+    # Compares the Linux and Windows per-tick hash traces for M1Baseline.
+    # Blocking: jq -e + set -e fail loudly if a trace is missing or empty.
+    needs: [determinism-linux, determinism-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux trace
+        uses: actions/download-artifact@v4
+        with:
+          name: determinism-trace-linux
+          path: ./lin
+
+      - name: Download Windows trace
+        uses: actions/download-artifact@v4
+        with:
+          name: determinism-trace-windows
+          path: ./win
+
+      - name: Compare per-tick total hashes (M1Baseline)
+        run: |
+          set -euo pipefail
+          jq -e -r '.runs[0].tick_hashes[].total' lin/M1Baseline-trace.json > lin-totals.txt
+          jq -e -r '.runs[0].tick_hashes[].total' win/M1Baseline-trace.json > win-totals.txt
+          if [ ! -s lin-totals.txt ] || [ ! -s win-totals.txt ]; then
+            echo "::error::cross-OS trace carried no per-tick hashes — the comparison cannot run"
+            exit 1
+          fi
+          if diff lin-totals.txt win-totals.txt > /dev/null; then
+            echo "Cross-OS M1Baseline: $(wc -l < lin-totals.txt) ticks bit-identical."
+          else
+            echo "::error::Cross-OS divergence on M1Baseline:"
+            diff lin-totals.txt win-totals.txt | head -20
+            exit 1
+          fi
