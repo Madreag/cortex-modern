@@ -12,6 +12,28 @@ using namespace RTE;
 
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
 
+namespace {
+	// os.time / os.clock replacements returning sim-tick seconds instead of the wall clock.
+	int det_os_time(lua_State* L) {
+		lua_pushnumber(L, static_cast<lua_Number>(g_TimerMan.GetSimUpdateCount()) / 60.0);
+		return 1;
+	}
+
+	int det_os_clock(lua_State* L) {
+		lua_pushnumber(L, static_cast<lua_Number>(g_TimerMan.GetSimUpdateCount()) / 60.0);
+		return 1;
+	}
+
+	void RegisterDeterministicOsStubs(lua_State* L) {
+		lua_getglobal(L, "os");
+		lua_pushcfunction(L, det_os_time);
+		lua_setfield(L, -2, "time");
+		lua_pushcfunction(L, det_os_clock);
+		lua_setfield(L, -2, "clock");
+		lua_pop(L, 1);
+	}
+} // namespace
+
 LuaStateWrapper::LuaStateWrapper() {
 	Clear();
 }
@@ -70,6 +92,9 @@ void LuaStateWrapper::Initialize() {
 	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON)) {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
+
+	// Replace os.time / os.clock with sim-tick stubs so sim Lua can't read the wall clock.
+	RegisterDeterministicOsStubs(m_State);
 
 	// From LuaBind documentation:
 	// As mentioned in the Lua documentation, it is possible to pass an error handler function to lua_pcall(). LuaBind makes use of lua_pcall() internally when calling member functions and free functions.
