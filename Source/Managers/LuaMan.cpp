@@ -297,6 +297,10 @@ double LuaStateWrapper::PosRand() {
 	return m_RandomGenerator.RandomNum<double>();
 }
 
+void LuaStateWrapper::SeedRandomGenerator(uint64_t seed) {
+	m_RandomGenerator.Seed(seed);
+}
+
 // Passthrough LuaMan Functions
 const std::vector<std::string>* LuaStateWrapper::DirectoryList(const std::string& path) { return g_LuaMan.DirectoryList(path); }
 const std::vector<std::string>* LuaStateWrapper::FileList(const std::string& path) { return g_LuaMan.FileList(path); }
@@ -1303,6 +1307,15 @@ void LuaMan::StartAsyncGarbageCollection() {
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTOP, 0);
 		    }));
+	}
+}
+
+void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
+	// Derive an independent per-state seed so states don't share a math.random sequence.
+	std::mt19937_64 derive(baseSeed);
+	m_MasterScriptState.SeedRandomGenerator(derive());
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		luaState.SeedRandomGenerator(derive());
 	}
 }
 
