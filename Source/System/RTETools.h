@@ -76,41 +76,54 @@ namespace RTE {
 		}
 	};
 
-	extern RandomGenerator g_RandomGenerator; //!< The global random number generator used in our simulation thread.
+	// Sim/render RNG split: sim code draws g_SimRNG, cosmetic draws use g_RenderRNG,
+	// so render-rate-dependent draws never advance the sim stream.
+	extern RandomGenerator g_SimRNG;    //!< Sim RNG. Default for the RandomNum/RandomNormalNum free functions.
+	extern RandomGenerator g_RenderRNG; //!< Cosmetic RNG. Used by visual jitter, audio variation, screen shake, etc.
 
-	/// Seed global the global random number generators.
+	/// Deprecated: prefer g_SimRNG or g_RenderRNG directly. Aliases g_SimRNG so pre-split
+	/// usage (including taking its address for Lua bindings) keeps the same behaviour.
+	extern RandomGenerator& g_RandomGenerator;
+
+	/// Seed both global RNGs to the deterministic constant.
 	void SeedRNG();
 
-	// TODO: Maybe remove these passthrough functions and force the user to manually specify if they want the simulation thread random,
-	// Or, in future, a render-thread random, as right now determinism isn't viable because framerate affects sim updates per draw
+	// Per-thread redirect for the sim free functions. Null on serial / main-thread code.
+	extern thread_local RandomGenerator* t_simRNGOverride;
+
+	/// Gets the sim RNG the free functions draw from: this thread's override if installed, else g_SimRNG.
+	inline RandomGenerator& GetSimRNG() { return t_simRNGOverride ? *t_simRNGOverride : g_SimRNG; }
+
+	// Free-function form routes to the sim RNG. Render-side call sites must reach for
+	// g_RenderRNG.RandomNum<T>() / RandomNormalNum<T>() by name.
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNormalNum() {
-		return g_RandomGenerator.RandomNormalNum();
+		return GetSimRNG().RandomNormalNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNormalNum() {
-		return g_RandomGenerator.RandomNormalNum();
+		return GetSimRNG().RandomNormalNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum() {
-		return g_RandomGenerator.RandomNum();
+		return GetSimRNG().RandomNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum() {
-		return g_RandomGenerator.RandomNum();
+		return GetSimRNG().RandomNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum(floatType min, floatType max) {
-		return g_RandomGenerator.RandomNum(min, max);
+		return GetSimRNG().RandomNum<floatType>(min, max);
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum(intType min, intType max) {
-		return g_RandomGenerator.RandomNum(min, max);
+		return GetSimRNG().RandomNum<intType>(min, max);
 	}
 #pragma endregion
 

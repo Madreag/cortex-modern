@@ -8,7 +8,14 @@
 
 namespace RTE {
 
-	RandomGenerator g_RandomGenerator;
+	// Sim/render RNG split. g_RandomGenerator aliases g_SimRNG so legacy code (and any binding
+	// that took its address) keeps working byte-identically against the sim RNG.
+	RandomGenerator  g_SimRNG;
+	RandomGenerator  g_RenderRNG;
+	RandomGenerator& g_RandomGenerator = g_SimRNG;
+
+	// Null normally; a scope can redirect this thread's sim free functions (see GetSimRNG).
+	thread_local RandomGenerator* t_simRNGOverride = nullptr;
 
 	void SeedRNG() {
 		// Use a constant seed for determinism.
@@ -28,7 +35,9 @@ namespace RTE {
 			return static_cast<uint32_t>(seedResult);
 		}();
 
-		g_RandomGenerator.Seed(constSeed);
+		// Seed both RNGs identically; both stay deterministic at this stage.
+		g_SimRNG.Seed(constSeed);
+		g_RenderRNG.Seed(constSeed);
 	}
 
 	float Lerp(float scaleStart, float scaleEnd, float startValue, float endValue, float progressScalar) {
