@@ -11,6 +11,11 @@ namespace RTE {
 
 	/// The centralized singleton manager of all Timers and overall timekeeping in RTE.
 	/// Uses QueryPerformanceCounter for sub-ms resolution timers and the model described in http://www.gaffer.org/game-physics/fix-your-timestep.
+	///
+	/// Determinism contract: sim-island code (Activities, Entity Update/Travel/OnCollide, MovableMan,
+	/// SceneMan sim paths, Controller, PathFinder) must read time only from the fixed-step Sim family
+	/// (GetSimTickCount / GetSimUpdateCount / GetSimTimeMS / GetDeltaTime*). The Real family
+	/// (GetAbsoluteTime / GetRealTickCount) is wall-clock and drifts with host frame rate.
 	class TimerMan : public Singleton<TimerMan> {
 
 	public:
