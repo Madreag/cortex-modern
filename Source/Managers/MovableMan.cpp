@@ -1,5 +1,6 @@
 #include "MovableMan.h"
 
+#include "SimChecksum.h"
 #include "PrimitiveMan.h"
 #include "PostProcessMan.h"
 #include "PerformanceMan.h"
@@ -1663,6 +1664,27 @@ void MovableMan::Update() {
 				parIt++;
 			}
 			m_Particles.erase(midIt, m_Particles.end());
+		}
+	}
+
+	// Feed each actor's stable end-of-tick state into the `actors` checksum subsystem.
+	// Fields go in individually with fixed-width types so the byte stream is cross-OS-stable.
+	if (g_SimChecksum.IsActive()) {
+		for (Actor* a: m_Actors) {
+			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
+			const float posX = a->GetPos().m_X;
+			g_SimChecksum.Update("actors", &posX, sizeof(posX));
+			const float posY = a->GetPos().m_Y;
+			g_SimChecksum.Update("actors", &posY, sizeof(posY));
+			const float velX = a->GetVel().m_X;
+			g_SimChecksum.Update("actors", &velX, sizeof(velX));
+			const float velY = a->GetVel().m_Y;
+			g_SimChecksum.Update("actors", &velY, sizeof(velY));
+			const float health = a->GetHealth();
+			g_SimChecksum.Update("actors", &health, sizeof(health));
+			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
+			g_SimChecksum.Update("actors", &aiMode, sizeof(aiMode));
 		}
 	}
 
