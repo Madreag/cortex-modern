@@ -12,6 +12,97 @@ using namespace RTE;
 
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
 
+namespace {
+	// Deterministic pairs(): replacing the global builtin (rather than patching LuaJIT)
+	// sidesteps the pairs ASM fast-path and JIT recorder, which key off the builtin's identity.
+
+	// table.sort comparator: strict weak ordering over primitive keys. Non-primitive keys
+	// (table/function/userdata) compare equal, so their relative order stays unspecified.
+	int det_pairs_compare(lua_State* L) {
+		const int ta = lua_type(L, 1);
+		const int tb = lua_type(L, 2);
+		if (ta != tb) {
+			lua_pushboolean(L, ta < tb);
+			return 1;
+		}
+		if (ta == LUA_TNUMBER) {
+			lua_pushboolean(L, lua_tonumber(L, 1) < lua_tonumber(L, 2));
+			return 1;
+		}
+		if (ta == LUA_TSTRING) {
+			size_t la = 0, lb = 0;
+			const char* sa = lua_tolstring(L, 1, &la);
+			const char* sb = lua_tolstring(L, 2, &lb);
+			const size_t shared = la < lb ? la : lb;
+			const int cmp = std::memcmp(sa, sb, shared);
+			lua_pushboolean(L, cmp < 0 || (cmp == 0 && la < lb));
+			return 1;
+		}
+		if (ta == LUA_TBOOLEAN) {
+			lua_pushboolean(L, lua_toboolean(L, 1) < lua_toboolean(L, 2));
+			return 1;
+		}
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+
+	// Iterator over the sorted snapshot. Upvalues: 1 = source table, 2 = sorted-keys array, 3 = position.
+	int det_pairs_iter(lua_State* L) {
+		const lua_Integer pos = lua_tointeger(L, lua_upvalueindex(3)) + 1;
+		lua_pushinteger(L, pos);
+		lua_replace(L, lua_upvalueindex(3));
+
+		lua_rawgeti(L, lua_upvalueindex(2), static_cast<int>(pos));
+		if (lua_isnil(L, -1)) {
+			return 1;
+		}
+		lua_pushvalue(L, -1);
+		lua_rawget(L, lua_upvalueindex(1));
+		return 2;
+	}
+
+	int det_pairs(lua_State* L) {
+		luaL_checktype(L, 1, LUA_TTABLE);
+
+		// Snapshot every key into a fresh array.
+		lua_newtable(L);
+		const int keysIdx = lua_gettop(L);
+		int count = 0;
+		lua_pushnil(L);
+		while (lua_next(L, 1) != 0) {
+			lua_pop(L, 1);
+			lua_pushvalue(L, -1);
+			lua_rawseti(L, keysIdx, ++count);
+		}
+
+		// Sort the snapshot, then hand back a closure that walks it.
+		lua_getglobal(L, "table");
+		lua_getfield(L, -1, "sort");
+		lua_pushvalue(L, keysIdx);
+		lua_pushcfunction(L, det_pairs_compare);
+		lua_call(L, 2, 0);
+		lua_pop(L, 1);
+
+		lua_pushvalue(L, 1);
+		lua_pushvalue(L, keysIdx);
+		lua_pushinteger(L, 0);
+		lua_pushcclosure(L, det_pairs_iter, 3);
+		// pairs() is contracted to return (iterator, state, control); returning t as state
+		// keeps det_pairs a faithful drop-in (the closure is self-contained via upvalues).
+		lua_pushvalue(L, 1);
+		lua_pushnil(L);
+		return 3;
+	}
+
+	// Keeps the original hash-order builtin as pairs_unordered (opt-in fast path).
+	void RegisterDeterministicPairs(lua_State* L) {
+		lua_getglobal(L, "pairs");
+		lua_setglobal(L, "pairs_unordered");
+		lua_pushcfunction(L, det_pairs);
+		lua_setglobal(L, "pairs");
+	}
+} // namespace
+
 LuaStateWrapper::LuaStateWrapper() {
 	Clear();
 }
@@ -70,6 +161,9 @@ void LuaStateWrapper::Initialize() {
 	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON)) {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
+
+	// Swap in deterministic sorted-iteration pairs() (the original stays as pairs_unordered).
+	RegisterDeterministicPairs(m_State);
 
 	// From LuaBind documentation:
 	// As mentioned in the Lua documentation, it is possible to pass an error handler function to lua_pcall(). LuaBind makes use of lua_pcall() internally when calling member functions and free functions.
