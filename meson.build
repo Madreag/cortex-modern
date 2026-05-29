@@ -240,7 +240,9 @@ luabind_proj = subproject('luabind-0.7.1')
 luabind_dep = dependency('luabind')
 raknet_proj = subproject('RakNet')
 raknet_dep = dependency('RakNet')
-deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep]
+blake3_proj = subproject('BLAKE3-1.8.5')
+blake3_dep = dependency('blake3')
+deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, blake3_dep]
 
 #### Sources Setup ####
 source_inc_dirs = []

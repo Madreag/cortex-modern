@@ -59,6 +59,9 @@
     <Filter Include="Renderer\raylib">
       <UniqueIdentifier>{5aa83e16-d772-476c-b51a-72480c976207}</UniqueIdentifier>
     </Filter>
+    <Filter Include="external\BLAKE3">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e03}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\System\Box.h">
@@ -1271,6 +1274,23 @@
     <ClCompile Include="Source\Entities\DynamicSong.cpp">
       <Filter>Entities</Filter>
     </ClCompile>
+    <ClCompile Include="external\sources\BLAKE3-1.8.5\blake3.c">
+      <Filter>external\BLAKE3</Filter>
+    </ClCompile>
+    <ClCompile Include="external\sources\BLAKE3-1.8.5\blake3_dispatch.c">
+      <Filter>external\BLAKE3</Filter>
+    </ClCompile>
+    <ClCompile Include="external\sources\BLAKE3-1.8.5\blake3_portable.c">
+      <Filter>external\BLAKE3</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="external\sources\BLAKE3-1.8.5\blake3.h">
+      <Filter>external\BLAKE3</Filter>
+    </ClInclude>
+    <ClInclude Include="external\sources\BLAKE3-1.8.5\blake3_impl.h">
+      <Filter>external\BLAKE3</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Image Include="Resources\ccicon.ico">
