@@ -62,6 +62,9 @@ namespace RTE {
 		/// @return This LuaStateWrapper's internal lua state.
 		lua_State* GetLuaState() { return m_State; };
 
+		/// Seeds this state's RNG. Called per activity start so Lua math.random is reproducible.
+		void SeedRandomGenerator(uint64_t seed);
+
 		/// Gets m_ScriptTimings.
 		/// @return m_ScriptTimings.
 		const std::unordered_map<std::string, PerformanceMan::ScriptTiming>& GetScriptTimings() const;
@@ -432,6 +435,9 @@ namespace RTE {
 
 		/// Asynchronously enforces a GC run to occur.
 		void StartAsyncGarbageCollection();
+
+		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
+		void SeedAllLuaRNGs(uint64_t baseSeed);
 #pragma endregion
 
 		/// Clears Script Timings.
