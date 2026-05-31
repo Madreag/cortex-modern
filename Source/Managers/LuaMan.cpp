@@ -34,6 +34,39 @@ namespace {
 	}
 } // namespace
 
+// Per-MO RNG generator and its Lua-side override pointer; a threaded per-MO hook
+// points both sim-RNG overrides here so its draws depend only on the MO and tick.
+thread_local RandomGenerator s_workerMORNG;
+thread_local RandomGenerator* s_luaRNGOverride = nullptr;
+
+// splitmix64-style mix so an MO's successive hooks and ticks don't correlate.
+static uint64_t DeriveMORNGSeed(long uniqueID, uint64_t tick, uint64_t phase) {
+	uint64_t h = static_cast<uint64_t>(uniqueID) * 0x9E3779B97F4A7C15ULL;
+	h = (h ^ tick) * 0xBF58476D1CE4E5B9ULL;
+	h = (h ^ phase) * 0x94D049BB133111EBULL;
+	h ^= h >> 31;
+	return h;
+}
+
+DeterministicMORNGScope::DeterministicMORNGScope(long uniqueID, uint64_t phase, bool enabled) :
+    m_Installed(enabled), m_PrevSimOverride(nullptr), m_PrevLuaOverride(nullptr) {
+	if (!enabled) {
+		return;
+	}
+	s_workerMORNG.Seed(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	m_PrevSimOverride = t_simRNGOverride;
+	m_PrevLuaOverride = s_luaRNGOverride;
+	t_simRNGOverride = &s_workerMORNG;
+	s_luaRNGOverride = &s_workerMORNG;
+}
+
+DeterministicMORNGScope::~DeterministicMORNGScope() {
+	if (m_Installed) {
+		t_simRNGOverride = m_PrevSimOverride;
+		s_luaRNGOverride = m_PrevLuaOverride;
+	}
+}
+
 LuaStateWrapper::LuaStateWrapper() {
 	Clear();
 }
@@ -306,20 +339,25 @@ void LuaStateWrapper::Destroy() {
 	lua_close(m_State);
 }
 
+// During a threaded per-MO hook these draw from the per-MO generator; else this state's RNG.
 int LuaStateWrapper::SelectRand(int minInclusive, int maxInclusive) {
-	return m_RandomGenerator.RandomNum<int>(minInclusive, maxInclusive);
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNum<int>(minInclusive, maxInclusive);
 }
 
 double LuaStateWrapper::RangeRand(double minInclusive, double maxInclusive) {
-	return m_RandomGenerator.RandomNum<double>(minInclusive, maxInclusive);
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNum<double>(minInclusive, maxInclusive);
 }
 
 double LuaStateWrapper::NormalRand() {
-	return m_RandomGenerator.RandomNormalNum<double>();
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNormalNum<double>();
 }
 
 double LuaStateWrapper::PosRand() {
-	return m_RandomGenerator.RandomNum<double>();
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNum<double>();
 }
 
 void LuaStateWrapper::SeedRandomGenerator(uint64_t seed) {

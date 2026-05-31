@@ -55,6 +55,17 @@ static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& st
 	return sorted;
 }
 
+// Routes any sim-RNG draws made during a draw to g_RenderRNG, so the draw-rate-dependent
+// number of draw passes can't drift the deterministic g_SimRNG stream.
+struct ScopedRenderRNG {
+	RandomGenerator* m_Prev;
+	ScopedRenderRNG() :
+	    m_Prev(t_simRNGOverride) { t_simRNGOverride = &g_RenderRNG; }
+	~ScopedRenderRNG() { t_simRNGOverride = m_Prev; }
+	ScopedRenderRNG(const ScopedRenderRNG&) = delete;
+	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
+};
+
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -1877,6 +1888,7 @@ void MovableMan::PreControllerUpdate() {
 }
 
 void MovableMan::DrawMatter(BITMAP* pTargetBitmap, Vector& targetPos) {
+	ScopedRenderRNG renderRNG;
 	// Draw objects to accumulation bitmap
 	for (std::deque<Actor*>::iterator aIt = --m_Actors.end(); aIt != --m_Actors.begin(); --aIt)
 		(*aIt)->Draw(pTargetBitmap, targetPos, g_DrawMaterial);
@@ -1909,6 +1921,7 @@ void MovableMan::VerifyMOIDIndex() {
 }
 
 void MovableMan::UpdateDrawMOIDs() {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	///////////////////////////////////////////////////
@@ -1976,6 +1989,7 @@ void MovableMan::CompleteQueuedMOIDDrawings() {
 }
 
 void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	// Draw objects to accumulation bitmap, in reverse order so actors appear on top.
@@ -2006,6 +2020,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 }
 
 void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int which, bool playerControlled) {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	// Draw HUD elements

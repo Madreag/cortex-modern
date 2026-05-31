@@ -466,4 +466,24 @@ namespace RTE {
 		LuaMan(const LuaMan& reference) = delete;
 		LuaMan& operator=(const LuaMan& rhs) = delete;
 	};
+
+	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one
+	/// per-MO generator seeded from (uniqueID, sim tick, phase), so threaded per-MO
+	/// work draws a stream that depends only on the MO and the tick.
+	class DeterministicMORNGScope {
+	public:
+		/// @param uniqueID The MovableObject's GetUniqueID().
+		/// @param phase Per-hook salt so an MO's different hooks don't correlate.
+		/// @param enabled When false the scope is a no-op (leaves collision callbacks on the per-state RNG).
+		DeterministicMORNGScope(long uniqueID, uint64_t phase, bool enabled = true);
+		~DeterministicMORNGScope();
+
+		DeterministicMORNGScope(const DeterministicMORNGScope&) = delete;
+		DeterministicMORNGScope& operator=(const DeterministicMORNGScope&) = delete;
+
+	private:
+		bool m_Installed;
+		RandomGenerator* m_PrevSimOverride;
+		RandomGenerator* m_PrevLuaOverride;
+	};
 } // namespace RTE

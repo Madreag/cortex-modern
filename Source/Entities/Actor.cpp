@@ -10,6 +10,7 @@
 #include "AtomGroup.h"
 #include "Controller.h"
 #include "RTETools.h"
+#include "LuaMan.h"
 #include "SceneMan.h"
 #include "HeldDevice.h"
 #include "PresetMan.h"
@@ -1307,6 +1308,9 @@ void Actor::Update() {
 }
 
 void RTE::Actor::CastSeeRays() {
+	// See-ray casting runs on the thread pool and reaches g_SimRNG via Look(); redirect to a per-actor stream.
+	DeterministicMORNGScope rngScope(GetUniqueID(), Hash("CastSeeRays"));
+
 	// "See" the location and surroundings of this actor on the unseen map
 	if (m_Status != Actor::INACTIVE) {
 		const int lookIterations = 6; // How many see rays to cast per frame
