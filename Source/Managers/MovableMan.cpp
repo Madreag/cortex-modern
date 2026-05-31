@@ -1418,10 +1418,12 @@ void MovableMan::Update() {
 	{
 		ZoneScopedN("Multithreaded Scripts SyncedUpdate");
 
+		// The serial, MOID-ordered channel for script-driven shared-state mutation;
+		// scripts opt in via RequestSyncedUpdate. See Data/Modding/threaded-determinism.md.
 		const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: g_LuaMan.GetMasterScriptState().GetRegisteredMOs()) {
+		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
 				mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 			}
@@ -1431,7 +1433,7 @@ void MovableMan::Update() {
 		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
 			g_LuaMan.SetThreadLuaStateOverride(&luaState);
 
-			for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				if (mo->HasRequestedSyncedUpdate()) {
 					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 					mo->ResetRequestedSyncedUpdateFlag();
