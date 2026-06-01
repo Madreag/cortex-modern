@@ -16,9 +16,9 @@
 //   <bin> -determinism-check --scenario SimBaseline --ticks 600 --seed 42 --runs 10 \
 //                            --output divergence.json [--game-bin <path>] [--keep-runs]
 //
-// The thread-count matrix mode: with `--threads 1,2,4,8,16` the
+// The thread-count matrix mode adds cross-thread-count diffing. With `--threads 1,2,4,8,16` the
 // orchestrator runs the scenario at each Lua-state count (via `-num-lua-states`)
-// and diffs the per-tick traces ACROSS counts — the acceptance test for M4's
+// and diffs the per-tick traces ACROSS counts — the acceptance test for the
 // "bit-identical regardless of thread count" contract:
 //   <bin> -determinism-check --scenario ThreadStress --ticks 900 --seed 42 \
 //                            --threads 1,2,4,8,16 --runs 2 --output matrix.json
@@ -28,8 +28,7 @@
 //
 // Exit codes:
 //   0 — all runs matched on every tick (the deterministic-by-construction goal).
-//   1 — at least one tick diverged across runs (expected at the start of M1; the
-//       Blocks B-F work drives this to zero).
+//   1 — at least one tick diverged across runs.
 //   2 — argument/usage error or child-process failure.
 //
 // This module deliberately has *no* dependency on engine headers (no Singleton,
