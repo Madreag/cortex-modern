@@ -442,6 +442,9 @@ void RunGameLoop() {
 				const uint64_t tickCap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800;
 				const Activity* scenarioActivity = g_ActivityMan.GetActivity();
 				if ((scenarioActivity && scenarioActivity->IsOver()) || elapsedTicks >= tickCap) {
+					// Finalize so the scenario's Lua OnEnd grades the run even when the CLI tick cap
+					// stops it before the scenario's own max-ticks (idempotent if it already ended).
+					g_ActivityMan.EndActivity();
 					System::SetQuit(true);
 					break;
 				}

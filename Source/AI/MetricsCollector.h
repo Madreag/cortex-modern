@@ -136,7 +136,7 @@ namespace RTE {
 		std::unordered_map<std::string, std::string>  m_Strings;
 		std::string                                   m_FinalTotalHashHex;
 
-		// The per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
+		// Per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
 		bool                                          m_RecordTickHashes = false;
 		std::vector<TickHashRecord>                   m_TickHashes;
 	};

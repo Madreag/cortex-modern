@@ -4,7 +4,7 @@
 -- goal is that one sim tick's compute consistently exceeds the real-time frame
 -- budget so the sim is compute-bound for most of the run -- only then does
 -- __wall_seconds reflect the build's actual per-tick sim cost rather than
--- TimerMan's idle-sleep. Run the same scenario+seed on each milestone build
+-- TimerMan's idle-sleep. Run the same scenario+seed on each build
 -- and compare __wall_seconds for the regression.
 --
 -- A one-shot brawl collapses to a handful in ~240 ticks, after which the sim
