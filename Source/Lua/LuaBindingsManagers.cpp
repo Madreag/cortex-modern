@@ -1,8 +1,19 @@
 // Make sure that binding definition files are always set to NOT use pre-compiled headers and conformance mode (/permissive) otherwise everything will be on fire!
 
 #include "LuaBindingRegisterDefinitions.h"
+#include "MetricsCollector.h"
 
 using namespace RTE;
+
+namespace {
+	void MetricsCollectorBeginRun(MetricsCollector* self, const std::string& scenario, double seed) {
+		self->BeginRun(scenario, static_cast<uint64_t>(seed));
+	}
+
+	bool MetricsCollectorWriteReport(MetricsCollector* self, const std::string& path) {
+		return self->WriteReport(path);
+	}
+}
 
 LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, ActivityMan) {
 	return luabind::class_<ActivityMan>("ActivityManager")
@@ -395,6 +406,18 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, SettingsMan) {
 	    .property("AIUpdateInterval", &SettingsMan::GetAIUpdateInterval, &SettingsMan::SetAIUpdateInterval)
 	    .property("ShowEnemyHUD", &SettingsMan::ShowEnemyHUD)
 	    .property("AutomaticGoldDeposit", &SettingsMan::GetAutomaticGoldDeposit);
+}
+
+LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, MetricsCollector) {
+	return luabind::class_<MetricsCollector>("MetricsCollectorManager")
+
+	    .def("BeginRun", &MetricsCollectorBeginRun)
+	    .def("EndRun", &MetricsCollector::EndRun)
+	    .def("Record", &MetricsCollector::Record)
+	    .def("RecordString", &MetricsCollector::RecordString)
+	    .def("SetResult", &MetricsCollector::SetResult)
+	    .def("IsSelfTest", &MetricsCollector::IsSelfTest)
+	    .def("WriteReport", &MetricsCollectorWriteReport);
 }
 
 LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, TimerMan) {
