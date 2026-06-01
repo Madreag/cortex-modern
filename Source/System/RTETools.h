@@ -7,6 +7,7 @@
 
 #include <random>
 #include <memory>
+#include <sstream>
 #include <string_view>
 #include <type_traits>
 
@@ -22,6 +23,14 @@ namespace RTE {
 	public:
 		/// Seed the random number generator.
 		void Seed(uint64_t seed) { m_RNG.seed(seed); };
+
+		/// Serialize the generator's full internal state to a string for hashing — byte-identical
+		/// across same-seed runs at the same tick once the determinism work has settled.
+		std::string SerializeStateForHashing() const {
+			std::ostringstream oss;
+			oss << m_RNG;
+			return oss.str();
+		}
 
 		/// Function template which returns a uniformly distributed random number in the range [-1, 1].
 		/// @return Uniformly distributed random number in the range [-1, 1].

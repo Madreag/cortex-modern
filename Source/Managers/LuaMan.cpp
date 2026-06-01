@@ -4,6 +4,8 @@
 #include "LuaBindingRegisterDefinitions.h"
 #include "ThreadMan.h"
 #include "System.h"
+#include "MetricsCollector.h"
+#include "SimChecksum.h"
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
@@ -341,6 +343,7 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, PrimitiveMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SceneMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SettingsMan),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, MetricsCollector),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, TimerMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, UInputMan),
 	                         RegisterLuaBindingsOfType(PrimitiveLuaBindings, GraphicalPrimitive),
@@ -391,6 +394,7 @@ void LuaStateWrapper::Initialize() {
 	luabind::globals(m_State)["ConsoleMan"] = &g_ConsoleMan;
 	luabind::globals(m_State)["LuaMan"] = this;
 	luabind::globals(m_State)["SettingsMan"] = &g_SettingsMan;
+	luabind::globals(m_State)["MetricsCollector"] = &g_MetricsCollector;
 
 	const uint64_t seed = RandomNum<uint64_t>(0, std::numeric_limits<uint64_t>::max());
 	m_RandomGenerator.Seed(seed);
@@ -454,6 +458,10 @@ double LuaStateWrapper::PosRand() {
 
 void LuaStateWrapper::SeedRandomGenerator(uint64_t seed) {
 	m_RandomGenerator.Seed(seed);
+}
+
+std::string LuaStateWrapper::GetRandomGeneratorStateForHashing() const {
+	return m_RandomGenerator.SerializeStateForHashing();
 }
 
 // Passthrough LuaMan Functions
@@ -625,7 +633,9 @@ void LuaStateWrapper::SetTempEntityVector(const std::vector<const Entity*>& enti
 
 void LuaStateWrapper::SetLuaPath(const std::string& filePath) {
 	const std::string moduleName = g_PresetMan.GetModuleNameFromPath(filePath);
-	const std::string moduleFolder = g_PresetMan.IsModuleOfficial(moduleName) ? System::GetDataDirectory() : System::GetModDirectory();
+	// A bundled non-official module (the determinism Tests.rte) ships in Data/, not Mods/, so its
+	// require() path must resolve there too — mirror PresetMan::GetFullModulePath.
+	const std::string moduleFolder = (g_PresetMan.IsModuleOfficial(moduleName) || std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + moduleName)) ? System::GetDataDirectory() : System::GetModDirectory();
 	const std::string scriptPath = moduleFolder + moduleName + "/?.lua";
 
 	lua_getglobal(m_State, "package");
@@ -1472,6 +1482,17 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
 		luaState.SeedRandomGenerator(derive());
 	}
+}
+
+void LuaMan::HashAllLuaStatesIntoSimChecksum() {
+	if (!g_SimChecksum.IsActive()) {
+		return;
+	}
+	// Hash the master state only — threaded per-MO Lua work is redirected to per-MO RNGs, so the
+	// threaded states carry no sim-observable RNG state. Master is the thread-count-invariant,
+	// sim-authoritative Lua RNG.
+	const std::string masterState = m_MasterScriptState.GetRandomGeneratorStateForHashing();
+	g_SimChecksum.Update("lua_state", masterState.data(), masterState.size());
 }
 
 void LuaMan::ClearScriptTimings() {

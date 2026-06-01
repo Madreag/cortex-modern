@@ -101,6 +101,10 @@ namespace RTE {
 		/// @return How many threaded Lua states we'll use.
 		int GetNumberOfLuaStatesOverride() const { return m_NumberOfLuaStatesOverride; }
 
+		/// Sets how many threaded Lua states we'll use. Used by the determinism-check thread-count matrix to pin a fixed count.
+		/// @param count How many threaded Lua states to use. -1 for no override.
+		void SetNumberOfLuaStatesOverride(int count) { m_NumberOfLuaStatesOverride = count; }
+
 		/// Gets whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 		/// @return Whether pathing requests will be forced to immediately complete for the next frame
 		bool GetForceImmediatePathingRequestCompletion() const { return m_ForceImmediatePathingRequestCompletion; }
