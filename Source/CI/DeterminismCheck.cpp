@@ -43,8 +43,8 @@ namespace RTE {
 			    "Usage: <bin> -determinism-check --scenario <name> [options]\n"
 			    "\n"
 			    "Spawns the game binary N times with the same seed and diffs the per-tick\n"
-			    "per-tick hash traces. Designed to run as a CI step or locally to verify\n"
-			    "the sim stays deterministic.\n"
+			    "hash traces. Designed to run as a CI step or locally to verify the sim\n"
+			    "stays deterministic.\n"
 			    "\n"
 			    "Options (single- or double-dash, value via space):\n"
 			    "  --scenario <name>      Activity preset-suffix to run (e.g. SimBaseline).\n"
@@ -212,6 +212,9 @@ namespace RTE {
 			uint64_t totalMismatchedTicks = 0;
 			// How many ticks were actually compared (min over the per-run tick counts).
 			uint64_t comparedTicks = 0;
+			// Runs disagreed on trace length — an early-exiting run (crash/abort/assert), itself a
+			// non-determinism the per-tick overlap diff would otherwise miss.
+			bool lengthMismatch = false;
 			// Per-run tick counts (for diagnostics — divergent run lengths is itself a flag).
 			std::vector<uint64_t> perRunTickCount;
 			// Per-run divergence flag (true if that run ever differed from run 0).
@@ -409,12 +412,17 @@ namespace RTE {
 		rep.perRunTickCount.reserve(allTickHashes.size());
 		rep.perRunDiverged.assign(allTickHashes.size(), false);
 		uint64_t minTicks = UINT64_MAX;
+		uint64_t maxTicks = 0;
 		for (const auto& th: allTickHashes) {
 			const uint64_t n = static_cast<uint64_t>(th.size());
 			rep.perRunTickCount.push_back(n);
 			if (n < minTicks) minTicks = n;
+			if (n > maxTicks) maxTicks = n;
 		}
 		rep.comparedTicks = (minTicks == UINT64_MAX) ? 0 : minTicks;
+		// Identical seed+scenario must produce identical-length traces; differing lengths mean a
+		// run exited early, and the overlap-only diff below would otherwise false-MATCH.
+		rep.lengthMismatch = (minTicks != maxTicks);
 
 		// Walk tick-by-tick. The runs' tick arrays are in order, so index t corresponds to tick t.
 		// run 0 is the reference; every other run is diffed against it.
@@ -457,7 +465,10 @@ namespace RTE {
 				}
 			}
 		}
-		rep.diverged = foundFirstDivergence;
+		rep.diverged = foundFirstDivergence || rep.lengthMismatch;
+		if (rep.lengthMismatch && !foundFirstDivergence) {
+			rep.firstDivergenceTick = rep.comparedTicks; // where the shortest run stopped
+		}
 
 		// Write the divergence report. Schema is small and stable — read by humans and CI scripts.
 		json reportJson;
@@ -474,6 +485,7 @@ namespace RTE {
 		}
 		reportJson["compared_ticks"] = rep.comparedTicks;
 		reportJson["diverged"] = rep.diverged;
+		reportJson["length_mismatch"] = rep.lengthMismatch;
 		reportJson["total_mismatched_ticks"] = rep.totalMismatchedTicks;
 		if (rep.diverged) {
 			reportJson["first_divergence_tick"] = rep.firstDivergenceTick;
@@ -514,6 +526,11 @@ namespace RTE {
 			std::cout << "    first_divergence_tick: " << rep.firstDivergenceTick << "\n";
 			std::cout << "    total_mismatched_ticks: " << rep.totalMismatchedTicks
 			          << " / " << rep.comparedTicks << "\n";
+			if (rep.lengthMismatch) {
+				std::cout << "    length mismatch — per-run tick counts:";
+				for (uint64_t n: rep.perRunTickCount) std::cout << " " << n;
+				std::cout << "  (a run exited early)\n";
+			}
 			std::cout << "    per-subsystem first divergence:\n";
 			for (const auto& [name, tick]: rep.perSubsystemFirstDivergence) {
 				std::cout << "        " << name << ": tick " << tick << "\n";
@@ -537,6 +554,11 @@ namespace RTE {
 				}
 			}
 			std::cout << ")\n";
+			if (rep.comparedTicks < args.ticks) {
+				std::cout << "[determinism-check] NOTE: trace ended at " << rep.comparedTicks
+				          << " ticks (< requested " << args.ticks << ") — scenario exited early but"
+				          << " deterministically; check its pass/fail grade.\n";
+			}
 		}
 
 		// Cleanup per-run JSONs unless --keep-runs.

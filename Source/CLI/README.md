@@ -105,8 +105,9 @@ Required external: `nlohmann/json.hpp` at
   smaller traces if you don't need per-tick analysis. `trace inspect` and
   `cross-platform-checksum` need them.
 - **Window visibility:** a plain `-scenario` run opens the normal game window so
-  the run can be watched; `-tick-hashes` runs (everything `test replay-determinism`
-  and `test thread-matrix` spawn) create it hidden, so sweeps run headless.
+  the run can be watched; `-headless` / `-tick-hashes` runs it hidden (everything
+  `test replay-determinism` and `test thread-matrix` spawn), and `-headed` forces a
+  window back on. Scenarios self-terminate on activity end or at the `-max-ticks` cap.
 - **`info game-bin` is your first stop** if anything fails — it shows where
   `cccp-ctl` looked + whether the binary was found, with a helpful search-path
   hint on miss.
