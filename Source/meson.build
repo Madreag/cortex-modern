@@ -3,6 +3,8 @@ sources = []
 source_libs = []
 source_inc_dirs += [include_directories(
   '.',
+  'AI',
+  'CI',
   'Activities',
   'Entities',
   'GUI',
@@ -14,6 +16,8 @@ source_inc_dirs += [include_directories(
   'Renderer',
   'System')]
 
+subdir('AI')
+subdir('CI')
 subdir('Activities')
 subdir('Entities')
 subdir('GUI')
