@@ -50,7 +50,7 @@ namespace RTE {
 		/// Record a string-valued metric (e.g. a status code).
 		void RecordString(const std::string& name, const std::string& value);
 
-		/// Block A (M1): per-tick hash trace recording for the determinism CI check.
+		/// Per-tick hash trace recording for the determinism CI check.
 		///
 		/// When enabled, every call to `RecordTickHash` appends the tick number, the BLAKE3
 		/// `total` hash (hex), and each subsystem hash (hex, sorted by subsystem name) into
@@ -140,7 +140,7 @@ namespace RTE {
 		std::unordered_map<std::string, std::string>  m_Strings;
 		std::string                                   m_FinalTotalHashHex;
 
-		// Block A (M1) per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
+		// Per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
 		bool                                          m_RecordTickHashes = false;
 		std::vector<TickHashRecord>                   m_TickHashes;
 	};

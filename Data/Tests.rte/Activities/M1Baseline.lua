@@ -1,9 +1,9 @@
--- M1Baseline.lua — MP M1 determinism scenario: the suite's minimal baseline.
+-- M1Baseline.lua — determinism scenario: the suite's minimal baseline.
 --
 -- One Green Dummy in SENTRY mode on the open Grasslands field -- the fewest
 -- moving parts in the suite. SENTRY means no patrolling and no random pathing,
 -- so any per-tick BLAKE3 divergence across runs must come from RNG, iteration
--- order, wall-clock or FP -- exactly the classes the M1-M4 determinism work
+-- order, wall-clock or FP -- exactly the classes the determinism work
 -- removes. If this scenario diverges, something foundational is broken.
 --
 -- It is also a self-verifying baseline: a clean sentry spawns, drops onto solid
@@ -19,7 +19,7 @@ TestScenarioM1Baseline = Trust.Extend("M1Baseline", { max_ticks = 600 });
 function TestScenarioM1Baseline:OnStart()
     -- One sentry at the centre of the field. SpawnActor grounds it on the terrain;
     -- the y arg is height above ground, so it drops a short settling distance.
-    self._actor = self:SpawnActor("Green Dummy", "Base.rte", 1200, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
+    self._actor = self:SpawnActor("Green Dummy", "Base.rte", 950, 50, Activity.TEAM_1, Actor.AIMODE_SENTRY);
     self._landed = nil;
     self:RecordMetric("actor_count", 1);
 end
