@@ -35,7 +35,7 @@ namespace RTE {
 		if (seed == 0 && ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().seed != 0) {
 			seed = ScenarioRunner::GetArgs().seed;
 		}
-		// Block A: the CLI `-tick-hashes` flag arms per-tick hash recording. Setting it here
+		// The CLI `-tick-hashes` flag arms per-tick hash recording. Setting it here
 		// (in BeginRun) keeps the recording state aligned with the run lifetime; EndRun does
 		// not clear it because the trace is read by WriteReport after EndRun returns.
 		const bool armTickHashes = ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().tickHashes;
@@ -165,7 +165,7 @@ namespace RTE {
 			for (const auto& [k, v]: r.stringValues) strings[k] = v;
 			rj["strings"] = strings;
 
-			// Block A (M1): emit the per-tick hash trace when present. cccp-determinism-check
+			// Emit the per-tick hash trace when present. cccp-determinism-check
 			// reads this array to diff multiple runs of the same scenario+seed and surface
 			// the first tick at which divergence appears, plus which subsystem diverged.
 			if (!r.tickHashes.empty()) {

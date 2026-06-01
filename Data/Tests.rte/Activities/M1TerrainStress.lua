@@ -1,4 +1,4 @@
--- M1TerrainStress.lua — MP M1 determinism scenario: heavy, sustained terrain
+-- M1TerrainStress.lua — determinism scenario: heavy, sustained terrain
 -- destruction. Drives the `terrain` and `carve_math` subsystems of the per-tick
 -- BLAKE3 trace hard, so any divergence in the destruction path is caught.
 --
