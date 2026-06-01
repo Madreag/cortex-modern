@@ -221,7 +221,7 @@ function TrustScenario.Extend(scenarioName, defaults)
         SceneMan:DislodgePixelBox(Vector(x1, y1), Vector(x2, y2), true);
     end
 
-    -- Determinism-scenario helpers (M1-M4). Each is pcall-guarded so an unknown
+    -- Determinism-scenario helpers. Each is pcall-guarded so an unknown
     -- preset or a headless run degrades to a no-op rather than aborting the run.
 
     -- Equips an actor with a firearm from Base.rte.

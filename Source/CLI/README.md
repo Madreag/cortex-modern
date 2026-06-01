@@ -24,7 +24,7 @@ Output: `builddir/cccp-ctl`
 ```
 cccp-ctl --help
 cccp-ctl info game-bin                                      # First-stop sanity check
-cccp-ctl test selftest                                      # Verify the harness itself (EC3)
+cccp-ctl test selftest                                      # Verify the harness itself (positive control)
 cccp-ctl test all --quick                                   # CI smoke run, ~minutes
 cccp-ctl test scenario --scenario M1Baseline --seed 42
 cccp-ctl test replay-determinism --scenario M1Baseline --runs 100
@@ -39,7 +39,7 @@ cccp-ctl bench replay --scenario M3TerrainStress --runs 5
 | Command | What it does |
 |---|---|
 | `test all` | Aggregate M1–M4 determinism suite runner (the CI gate). `--quick` for fast smoke. |
-| `test selftest` | EC3 positive control — runs scenario without then with `--selftest-perturb`, verifies harness catches injected non-determinism. First test to run on any new machine. |
+| `test selftest` | Positive control — runs scenario without then with `--selftest-perturb`, verifies harness catches injected non-determinism. First test to run on any new machine. |
 | `test scenario` | Run a single scenario, report pass/fail + metrics. |
 | `test replay-determinism` | Run scenario N times, diff per-tick hashes. Wraps `<bin> -determinism-check`. |
 | `test thread-matrix` | Run scenario across Lua-state counts (M4 FFF-415 acid test). |
@@ -112,10 +112,10 @@ Required external: `nlohmann/json.hpp` at
 - **`test scenario` writes tick hashes by default.** Use `--no-tick-hashes` for
   smaller traces if you don't need per-tick analysis. `trace inspect` and
   `cross-platform-checksum` need them.
-- **The game binary opens a visible window** — there's no headless mode (per
-  ScenarioRunner.h: the previous hidden-window architecture was reverted
-  because the user wants to *see* the AI play). Scenarios self-terminate on
-  activity end with a short settle wait. Minimum runtime ≈ startup + sim ticks.
+- **The game binary opens a visible window by default** so you can watch the
+  scenario play. `-headless` / `-tick-hashes` runs it hidden (the determinism
+  check uses this); `-headed` forces a window back on. Scenarios self-terminate
+  on activity end or at the `-max-ticks` cap.
 - **`info game-bin` is your first stop** if anything fails — it shows where
   `cccp-ctl` looked + whether the binary was found, with a helpful search-path
   hint on miss.

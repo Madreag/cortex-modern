@@ -12,8 +12,8 @@
 // safe to run on any platform that ships the main binary.
 //
 // Subcommands:
-//   test all                    Aggregate M1-M4 determinism suite runner
-//   test selftest               EC3 positive control (verify harness)
+//   test all                    Aggregate determinism suite runner
+//   test selftest               positive control (verify harness)
 //   test scenario               Run a single scenario
 //   test replay-determinism     Wraps -determinism-check (N runs, diff)
 //   test thread-matrix          Wraps -determinism-check --threads (M4 acid test)
@@ -93,14 +93,14 @@ namespace {
 	};
 	const std::vector<SubsystemInfo> kSubsystems = {
 	    {"tick",        "M1", "The per-tick fold of the previous subsystems' hashes (the total hash)."},
-	    {"sim_rng",     "M1", "g_SimRNG state (M1 Block B sim/render RNG split)."},
-	    {"lua_state",   "M2", "All Lua states' RNG + key tables (M2 deterministic Lua)."},
-	    {"actors",      "M1", "All MovableMan actors' state (M1 Block C stable MOID iteration)."},
+	    {"sim_rng",     "M1", "g_SimRNG state (sim/render RNG split)."},
+	    {"lua_state",   "M2", "All Lua states' RNG + key tables (deterministic Lua)."},
+	    {"actors",      "M1", "All MovableMan actors' state (stable MOID iteration)."},
 	    {"particles",   "M1", "MovableMan particles' state."},
 	    {"controller",  "M1", "All Controller state per actor (53 control states + analog vectors + input mode)."},
 	    {"scene",       "M3", "SceneMan global state."},
-	    {"terrain",     "M3", "SLTerrain pixel state (M3 fixed-point carve math)."},
-	    {"carve_math",  "M3", "Per-carve math intermediate results (M3 fixed-point verification)."},
+	    {"terrain",     "M3", "SLTerrain pixel state."},
+	    {"carve_math",  "M3", "Per-carve penetration-math intermediate results."},
 	};
 
 	// ----- arg matching --------------------------------------------------------
@@ -357,8 +357,8 @@ namespace {
 		    "  cccp-ctl <command> [<subcommand>] [<args>]\n"
 		    "\n"
 		    "Test commands (correctness):\n"
-		    "  test all                       Run the full M1-M4 determinism verification suite\n"
-		    "  test selftest                  Verify the harness catches injected non-determinism (EC3)\n"
+		    "  test all                       Run the full determinism verification suite\n"
+		    "  test selftest                  Verify the harness catches injected non-determinism (positive control)\n"
 		    "  test scenario                  Run a single scenario, report pass/fail + metrics\n"
 		    "  test replay-determinism        Run a scenario N times, diff per-tick hashes\n"
 		    "  test thread-matrix             Run scenario across Lua-state counts (M4 acid test)\n"
@@ -392,7 +392,7 @@ namespace {
 		    "\n"
 		    "Examples:\n"
 		    "  cccp-ctl test all --quick                      # CI smoke run, ~minutes\n"
-		    "  cccp-ctl test all --runs 100                   # Full M1-M4 verification\n"
+		    "  cccp-ctl test all --runs 100                   # Full determinism verification\n"
 		    "  cccp-ctl test selftest                         # Verify the harness itself\n"
 		    "  cccp-ctl test scenario --scenario M1Baseline --seed 42\n"
 		    "  cccp-ctl test replay-determinism --scenario M1Baseline --runs 100\n"
@@ -422,7 +422,7 @@ namespace {
 		    "                        cross-platform-checksum).\n"
 		    "  --trust-selftest      Drive the named behaviour in trust scenarios (AI-NN).\n"
 		    "                        Required for AI-NN scenarios to PASS; stock AI fails them by design.\n"
-		    "  --selftest-perturb    Inject one genuine non-determinism (the EC3 positive control).\n"
+		    "  --selftest-perturb    Inject one genuine non-determinism (the positive control).\n"
 		    "  --out-dir <path>      Direct temp/output dir.\n"
 		    "  --game-bin <path>     Path to game binary. Default: auto-detect.\n"
 		    "  --json                JSON output. Default: human-readable summary.\n"
@@ -513,12 +513,12 @@ namespace {
 
 	void PrintTestAllHelp(std::ostream& out) {
 		out <<
-		    "cccp-ctl test all — run the full M1-M4 determinism verification suite\n"
+		    "cccp-ctl test all — run the full determinism verification suite\n"
 		    "\n"
 		    "Aggregates every other test subcommand into one CI-friendly run:\n"
 		    "  - replay-determinism for each of the 9 M1/M2/M3 scenarios\n"
 		    "  - thread-matrix for M4ThreadStress (the FFF-415 acid test)\n"
-		    "  - selftest positive control on M1Baseline (EC3)\n"
+		    "  - selftest positive control on M1Baseline\n"
 		    "\n"
 		    "Exits 0 iff every sub-step passes. Exits 1 iff any diverges. Designed as\n"
 		    "the single CI step that gates a PR merge: `cccp-ctl test all --quick`.\n"
@@ -542,7 +542,7 @@ namespace {
 		out <<
 		    "cccp-ctl test selftest — verify the harness catches injected non-determinism\n"
 		    "\n"
-		    "The EC3 positive control. Runs the same scenario twice:\n"
+		    "The positive control. Runs the same scenario twice:\n"
 		    "  1. WITHOUT --selftest-perturb (should MATCH)\n"
 		    "  2. WITH --selftest-perturb    (should DIVERGE — a fixed-tick std::random_device pull)\n"
 		    "\n"
@@ -1392,7 +1392,7 @@ namespace {
 			step.rc = RunSubprocess(step.command, !out.quiet);
 			step.passed = (step.rc == 0);
 			step.detail = step.passed
-			    ? "harness catches injected divergence (EC3 OK)"
+			    ? "harness catches injected divergence (positive control OK)"
 			    : ("harness FAILED the positive control (rc=" + std::to_string(step.rc) + ")");
 			steps.push_back(step);
 			if (!out.quiet) std::cerr << "  -> " << (step.passed ? "PASS" : "FAIL") << " (" << step.detail << ")\n";
@@ -1442,7 +1442,7 @@ namespace {
 
 	// ----- subcommand: test selftest ------------------------------------------
 	//
-	// EC3 positive control. Runs the scenario WITHOUT --selftest-perturb (expects MATCH)
+	// Positive control. Runs the scenario WITHOUT --selftest-perturb (expects MATCH)
 	// then WITH --selftest-perturb (expects DIVERGED). harness_ok = both expected outcomes.
 
 	int CmdTestSelftest(int argc, char** argv, const fs::path& selfDir) {
@@ -1538,7 +1538,7 @@ namespace {
 		text << "Scenario:           " << scenario << "\n";
 		text << "Phase 1 (clean):    " << (phase1Pass ? "PASS (MATCH as expected)" : "FAIL (expected MATCH; got DIVERGED or rc!=0)") << "\n";
 		text << "Phase 2 (perturb):  " << (phase2Pass ? "PASS (DIVERGED as expected)" : "FAIL (expected DIVERGED; got MATCH or rc!=1)") << "\n";
-		text << "Harness:            " << (harnessOk ? "OK — catches injected non-determinism (EC3 verified)" : "BROKEN — does not detect or false-positives") << "\n";
+		text << "Harness:            " << (harnessOk ? "OK — catches injected non-determinism (positive control verified)" : "BROKEN — does not detect or false-positives") << "\n";
 		text << "Out dir:            " << runDir.string() << "\n";
 
 		PrintTextOrJson(out, summary, text.str());

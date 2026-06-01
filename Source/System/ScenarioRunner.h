@@ -9,14 +9,13 @@ namespace RTE {
 	///
 	/// Activated when the binary is invoked with `-scenario <PresetName>`. Skips the menu loop,
 	/// starts the named activity directly via `g_ActivityMan.StartActivity`, runs the normal
-	/// `RunGameLoop` (visible window, real GL context — the user *watches* the scenario play),
-	/// and exits cleanly when the activity sets `ActivityState::Over`. The `MetricsCollector`'s
-	/// JSON report is written if `-out <path>` was supplied.
+	/// `RunGameLoop` — visible by default so the user can *watch*, or hidden under `-headless` /
+	/// `-tick-hashes` for an automated run (`-headed` forces a window back on) — and exits when
+	/// the activity ends or the `-max-ticks` cap is hit. The `MetricsCollector`'s JSON report is
+	/// written if `-out <path>` was supplied.
 	///
-	/// Used both for solo developer "run AI-04 and watch it" workflows and for batch-style
-	/// runs from a shell script that loops over scenarios. There is no "headless" mode any more;
-	/// the previous hidden-window architecture was reverted because the user wants to *see*
-	/// the AI play.
+	/// Used both for "run a scenario and watch it" workflows and for batch determinism runs
+	/// driven headless by the `-determinism-check` orchestrator.
 	class ScenarioRunner {
 	public:
 		struct Args {
@@ -27,11 +26,11 @@ namespace RTE {
 			uint64_t    seed = 0;     // deterministic seed; 0 = use SeedRNG()'s default
 			uint64_t    maxTicks = 0; // 0 = scenario-default safety cap (1800 ticks / 30 sim seconds)
 			bool        tickHashes = false; // -tick-hashes: emit per-tick hash trace into the JSON
-			                                 // report. Block A (M1) — read by cccp-determinism-check
-			                                 // to diff multiple runs of the same scenario+seed.
+			                                 // report, read by the determinism check to diff
+			                                 // multiple runs of the same scenario+seed.
 			bool        selftestPerturb = false; // -determinism-selftest-perturb: inject one genuine
 			                                 // non-determinism at a fixed tick (the determinism
-			                                 // check's positive control — DETERMINISM_GOAL.md EC3).
+			                                 // check's positive control).
 			bool        selfTest = false;    // -trust-selftest: the trust scenario drives its own
 			                                 // named behaviour — the harness positive control.
 		};

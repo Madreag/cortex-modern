@@ -377,7 +377,7 @@ void RunGameLoop() {
 				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				g_SimChecksum.BeginTick(simTick);
 
-				// EC3 positive control — inject exactly one genuine non-determinism at a fixed tick
+				// Positive control — inject exactly one genuine non-determinism at a fixed tick
 				// so the determinism check's selftest sees a guaranteed divergence.
 				if (ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
 					std::random_device perturbDevice;
@@ -441,6 +441,9 @@ void RunGameLoop() {
 				const uint64_t tickCap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800;
 				const Activity* scenarioActivity = g_ActivityMan.GetActivity();
 				if ((scenarioActivity && scenarioActivity->IsOver()) || elapsedTicks >= tickCap) {
+					// Finalize so the scenario's Lua OnEnd grades the run even when the CLI tick cap
+					// stops it before the scenario's own max-ticks (idempotent if it already ended).
+					g_ActivityMan.EndActivity();
 					System::SetQuit(true);
 					break;
 				}

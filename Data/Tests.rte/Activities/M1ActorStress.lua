@@ -1,5 +1,5 @@
--- M1ActorStress.lua — MP M1 determinism scenario: large, churning population.
--- M1 Block C's concern is stable MOID-ordered iteration -- m_Actors / m_Items /
+-- M1ActorStress.lua — determinism scenario: large, churning population.
+-- The concern is stable MOID-ordered iteration -- m_Actors / m_Items /
 -- m_Particles are re-sorted every tick. This scenario keeps those containers big
 -- AND continuously churning: a dense infantry battle on the flat plateau, fed by
 -- scripted reinforcement waves, so the actor-add path (MOID assignment) and the
