@@ -1,4 +1,4 @@
--- M4ThreadStress.lua — MP M4 determinism scenario: saturate the threaded sim
+-- M4ThreadStress.lua — determinism scenario: saturate the threaded sim
 -- paths so the per-tick BLAKE3 trace has a demanding workload to compare ACROSS
 -- thread counts (the determinism-check `--threads 1,2,4,8,16` matrix).
 --
@@ -8,7 +8,7 @@
 -- every thread count. SMGs and frag grenades load the device hooks; BRAINHUNT
 -- keeps the AI pathing and firing every tick. Attrition is intentional -- gibs
 -- and dropped inventory exercise the threaded-Lua -> g_SimRNG consumers
--- (GibThis, DropAllInventory) that Block C's per-worker RNG must cover.
+-- (GibThis, DropAllInventory) that the per-worker RNG must cover.
 --
 -- Reinforcement waves keep the population well above the 16-thread ceiling for
 -- the full 900 ticks. A one-shot 40-actor brawl wipes to ~8 in 240 ticks and

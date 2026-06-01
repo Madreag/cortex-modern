@@ -1,6 +1,6 @@
 #pragma once
 
-// Block A (M1) — CI determinism test scaffold.
+// CI determinism test scaffold.
 //
 // Provides the `-determinism-check` mode of the main game binary. When that flag is
 // detected by `Main.cpp` (before any of the heavy engine init runs), execution is
@@ -16,7 +16,7 @@
 //   <bin> -determinism-check --scenario M1Baseline --ticks 600 --seed 42 --runs 10 \
 //                            --output divergence.json [--game-bin <path>] [--keep-runs]
 //
-// M4 Block A adds the thread-count matrix mode. With `--threads 1,2,4,8,16` the
+// The thread-count matrix mode adds cross-thread-count diffing. With `--threads 1,2,4,8,16` the
 // orchestrator runs the scenario at each Lua-state count (via `-num-lua-states`)
 // and diffs the per-tick traces ACROSS counts — the acceptance test for M4's
 // "bit-identical regardless of thread count" contract:

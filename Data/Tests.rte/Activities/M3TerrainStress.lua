@@ -1,4 +1,4 @@
--- M3TerrainStress.lua — MP M3 determinism scenario: sustained combat-driven
+-- M3TerrainStress.lua — determinism scenario: sustained combat-driven
 -- terrain interaction. M3's concern is the `terrain` and `carve_math`
 -- subsystems -- every projectile-terrain contact runs WillPenetrate even when
 -- no pixel removes, so high-frequency projectile fire saturates the path.
