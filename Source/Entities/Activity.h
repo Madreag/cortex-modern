@@ -544,6 +544,10 @@ namespace RTE {
 		/// @param allowsUserSaving Whether or not this Activity can be manually saved be the player.
 		void SetAllowsUserSaving(bool allowsUserSaving) { m_AllowsUserSaving = allowsUserSaving; }
 
+		/// Gets whether this is a test activity (hidden from the regular scenarios menu).
+		/// @return Whether this is a test activity.
+		bool IsTestActivity() const { return m_IsTestActivity; }
+
 		/// Saves a string which will be stored in our ini.
 		/// @param key The key of the saved string.
 		/// @param value The string to save.
@@ -570,6 +574,8 @@ namespace RTE {
 		bool m_Paused; //!< Whether this Activity is paused or not.
 
 		bool m_AllowsUserSaving; //!< Whether or not the current Activity can be saved by the user.
+
+		bool m_IsTestActivity; //!< Whether this is a test activity, hidden from the regular scenarios menu.
 
 		std::string m_Description; //!< User-friendly description of what this Activity is all about.
 		std::string m_SceneName; //!< The name of the Scene in which this Activity takes place.

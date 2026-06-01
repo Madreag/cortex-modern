@@ -7,6 +7,7 @@
 #include "Loadout.h"
 #include "ACraft.h"
 #include "LuaMan.h"
+#include "ScenarioRunner.h"
 // #include "AHuman.h"
 // #include "MOPixel.h"
 // #include "SLTerrain.h"
@@ -129,6 +130,12 @@ bool PresetMan::LoadAllDataModules() {
 		if (!LoadDataModule(officialModule, true, false, LoadingScreen::LoadingSplashProgressReport)) {
 			return false;
 		}
+	}
+
+	// Load the bundled determinism test module only when the test harness is driving the run,
+	// so a normal launch never loads it.
+	if (ScenarioRunner::IsActive() && std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + "Tests.rte/Index.ini")) {
+		LoadDataModule("Tests.rte", false, false, LoadingScreen::LoadingSplashProgressReport);
 	}
 
 	// If a single module is specified, skip loading all other unofficial modules and load specified module only.
@@ -292,6 +299,9 @@ std::string PresetMan::GetFullModulePath(const std::string& modulePath) const {
 		moduleTopDir = System::GetDataDirectory();
 	} else if (IsModuleUserdata(moduleName)) {
 		moduleTopDir = System::GetUserdataDirectory();
+	} else if (std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + moduleName)) {
+		// Bundled non-official modules (the determinism Tests.rte) ship in Data/, not Mods/.
+		moduleTopDir = System::GetDataDirectory();
 	}
 	return (pathTopDir == moduleTopDir) ? modulePathGeneric : moduleTopDir + modulePathGeneric;
 }
