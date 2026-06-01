@@ -25,6 +25,7 @@ compile_commands.json
 .vs/
 /.idea
 /_Bin
+_BinTests/
 /NATPunchServer/Server/NATCompleteServer/Debug
 /NATPunchServer/Server/NATCompleteServer/Release
 /Documentation/Doxygen/Output
