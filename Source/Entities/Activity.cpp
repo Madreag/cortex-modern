@@ -34,6 +34,7 @@ void Activity::Clear() {
 	m_ActivityState = ActivityState::NotStarted;
 	m_Paused = false;
 	m_AllowsUserSaving = false;
+	m_IsTestActivity = false;
 	m_Description.clear();
 	m_SceneName.clear();
 	m_MaxPlayerSupport = Players::MaxPlayerCount;
@@ -94,6 +95,7 @@ int Activity::Create(const Activity& reference) {
 	m_Paused = reference.m_Paused;
 	m_AllowsUserSaving = reference.m_AllowsUserSaving;
 	m_Description = reference.m_Description;
+	m_IsTestActivity = reference.m_IsTestActivity;
 	m_MaxPlayerSupport = reference.m_MaxPlayerSupport;
 	m_MinTeamsRequired = reference.m_MinTeamsRequired;
 	m_Difficulty = reference.m_Difficulty;
@@ -146,6 +148,7 @@ int Activity::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("InCampaignStage", { reader >> m_InCampaignStage; });
 	MatchProperty("ActivityState", { m_ActivityState = static_cast<ActivityState>(std::stoi(reader.ReadPropValue())); });
 	MatchProperty("AllowsUserSaving", { reader >> m_AllowsUserSaving; });
+	MatchProperty("IsTestActivity", { reader >> m_IsTestActivity; });
 	MatchForwards("TeamOfPlayer1") MatchForwards("TeamOfPlayer2") MatchForwards("TeamOfPlayer3") MatchProperty("TeamOfPlayer4", {
 		for (int playerTeam = Teams::TeamOne; playerTeam < Teams::MaxTeamCount; playerTeam++) {
 			std::string playerTeamNum = std::to_string(playerTeam + 1);
@@ -234,6 +237,8 @@ int Activity::Save(Writer& writer) const {
 
 	writer.NewProperty("Description");
 	writer << m_Description;
+	writer.NewProperty("IsTestActivity");
+	writer << m_IsTestActivity;
 	writer.NewProperty("SceneName");
 	writer << m_SceneName;
 	writer.NewProperty("MaxPlayerSupport");
