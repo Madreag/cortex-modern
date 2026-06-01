@@ -131,6 +131,12 @@ bool PresetMan::LoadAllDataModules() {
 		}
 	}
 
+	// Load the bundled determinism test module from Data/ if present — it ships in the repo
+	// (Data/), not the gitignored Mods/, so the user-mod scan below never sees it.
+	if (std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + "Tests.rte/Index.ini")) {
+		LoadDataModule("Tests.rte", false, false, LoadingScreen::LoadingSplashProgressReport);
+	}
+
 	// If a single module is specified, skip loading all other unofficial modules and load specified module only.
 	if (!m_SingleModuleToLoad.empty() && !IsModuleOfficial(m_SingleModuleToLoad)) {
 		if (!LoadDataModule(m_SingleModuleToLoad, false, false, LoadingScreen::LoadingSplashProgressReport)) {
@@ -292,6 +298,9 @@ std::string PresetMan::GetFullModulePath(const std::string& modulePath) const {
 		moduleTopDir = System::GetDataDirectory();
 	} else if (IsModuleUserdata(moduleName)) {
 		moduleTopDir = System::GetUserdataDirectory();
+	} else if (std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + moduleName)) {
+		// Bundled non-official modules (the determinism Tests.rte) ship in Data/, not Mods/.
+		moduleTopDir = System::GetDataDirectory();
 	}
 	return (pathTopDir == moduleTopDir) ? modulePathGeneric : moduleTopDir + modulePathGeneric;
 }
