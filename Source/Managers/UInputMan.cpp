@@ -12,6 +12,7 @@
 #include "Icon.h"
 #include "GameActivity.h"
 #include "System.h"
+#include "MetricsCollector.h"
 
 #include <SDL3/SDL.h>
 #include <array>
@@ -136,6 +137,11 @@ void UInputMan::LoadDeviceIcons() {
 }
 
 Vector UInputMan::AnalogMoveValues(int whichPlayer) {
+	// Determinism runs are hermetic: never feed live host input into the sim, or the per-tick
+	// controller hash gets perturbed by host cursor / gamepad jitter.
+	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		return Vector(0, 0);
+	}
 	Vector moveValues(0, 0);
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
 	if (device >= InputDevice::DEVICE_GAMEPAD_1) {
@@ -154,6 +160,10 @@ Vector UInputMan::AnalogMoveValues(int whichPlayer) {
 }
 
 Vector UInputMan::AnalogAimValues(int whichPlayer) {
+	// See AnalogMoveValues — determinism runs must not read live host input.
+	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		return Vector(0, 0);
+	}
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
 
 	Vector aimValues(0, 0);
