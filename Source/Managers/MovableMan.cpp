@@ -1738,6 +1738,56 @@ void MovableMan::Update() {
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
 			g_SimChecksum.Update("actors", &aiMode, sizeof(aiMode));
 		}
+
+		// Controller input state per actor — catches control drift the actors fingerprint misses.
+		for (Actor* a: m_Actors) {
+			const Controller* controller = a->GetController();
+			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
+				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
+			}
+			const Vector move = controller->GetAnalogMove();
+			const Vector aim = controller->GetAnalogAim();
+			const Vector cursor = controller->GetAnalogCursor();
+			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
+			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
+			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+		}
+
+		// Compact per-particle fingerprint — uniqueID + pos + vel.
+		for (MovableObject* p: m_Particles) {
+			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
+			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
+			const float ppX = p->GetPos().m_X;
+			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
+			const float ppY = p->GetPos().m_Y;
+			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
+			const float pvX = p->GetVel().m_X;
+			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
+			const float pvY = p->GetVel().m_Y;
+			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
+		}
+
+		// Lightweight population metadata — catches spawn/delete count drift.
+		const int32_t actorCount = static_cast<int32_t>(m_Actors.size());
+		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
+		const int32_t itemCount = static_cast<int32_t>(m_Items.size());
+		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
+		const int32_t particleCount = static_cast<int32_t>(m_Particles.size());
+		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			const int32_t rosterSize = static_cast<int32_t>(m_ActorRoster[team].size());
+			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
+		}
+
+		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
+		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
+		const std::string rngState = g_SimRNG.SerializeStateForHashing();
+		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
+		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
 	}
 
 	// Run seeing rays for all actors
