@@ -54,6 +54,9 @@
 #include "System.h"
 
 #include "SimChecksum.h"
+#include "ScenarioRunner.h"
+#include "DeterminismCheck.h"
+#include "MetricsCollector.h"
 
 #include "RenderTarget.h"
 #include "tracy/Tracy.hpp"
@@ -62,7 +65,12 @@
 
 #ifdef _WIN32
 #include "windows.h"
+#include <crtdbg.h>
 #endif
+
+#include <cstdlib>
+#include <iostream>
+#include <random>
 
 extern "C" {
 FILE __iob_func[3] = {*stdin, *stdout, *stderr};
@@ -72,6 +80,9 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+
+// CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
+static int s_cliNumLuaStatesOverride = -1;
 
 /// <summary>
 /// Initializes all the essential managers.
@@ -100,10 +111,18 @@ void InitializeManagers() {
 	CameraMan::Construct();
 	ActivityMan::Construct();
 	LoadingScreen::Construct();
+	MetricsCollector::Construct();
 	SimChecksum::Construct();
 
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
+
+	// Apply the CLI -num-lua-states override after SettingsMan loads (so it wins over the file)
+	// and before LuaMan creates its threaded states.
+	if (s_cliNumLuaStatesOverride >= 0) {
+		g_SettingsMan.SetNumberOfLuaStatesOverride(s_cliNumLuaStatesOverride);
+	}
+
 	g_WindowMan.Initialize();
 	g_GLResourceMan.Initialize();
 
@@ -137,6 +156,7 @@ void InitializeManagers() {
 /// </summary>
 void DestroyManagers() {
 	g_SimChecksum.Destroy();
+	g_MetricsCollector.Destroy();
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
 	g_MovableMan.Destroy();
@@ -193,6 +213,12 @@ void HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+
+		// Scenario direct-launch + determinism flags (-scenario, -seed, -max-ticks, -trust-selftest, ...).
+		if (int consumed = ScenarioRunner::ParseArgs(argCount, argValue, i); consumed > 0) {
+			i += consumed;
+			continue;
 		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
@@ -350,7 +376,18 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			if (s_recordTickHashes) {
-				g_SimChecksum.BeginTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				g_SimChecksum.BeginTick(simTick);
+
+				// EC3 positive control — inject exactly one genuine non-determinism at a fixed tick
+				// so the determinism check's selftest sees a guaranteed divergence.
+				if (ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
+					std::random_device perturbDevice;
+					const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
+					for (unsigned k = 0; k < perturbAdvance; ++k) {
+						g_SimRNG.RandomNum<uint32_t>();
+					}
+				}
 			}
 
 			g_LuaMan.Update();
@@ -377,10 +414,12 @@ void RunGameLoop() {
 
 			g_ActivityMan.LateUpdateGlobalScripts();
 
-			// Feed end-of-tick terrain state, then finalize this tick's hash.
+			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
+			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
 			if (s_recordTickHashes) {
 				g_SceneMan.FeedTerrainToSimChecksum();
-				g_SimChecksum.EndTick();
+				const auto tickResult = g_SimChecksum.EndTick();
+				g_MetricsCollector.RecordTickHash(tickResult);
 			}
 
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
@@ -389,6 +428,25 @@ void RunGameLoop() {
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			g_UInputMan.EndFrame();
+
+			// Scenario direct-launch mode: quit when the activity reaches OVER (the trust scenario
+			// sets it at its max-ticks) or when the -max-ticks hard cap is hit, instead of bouncing
+			// to the menu. The cap counts global sim ticks so it bounds the run + fixes the trace
+			// length deterministically even if the activity never sets OVER.
+			if (ScenarioRunner::IsActive()) {
+				static uint64_t s_scenarioStartTick = UINT64_MAX;
+				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				if (s_scenarioStartTick == UINT64_MAX) {
+					s_scenarioStartTick = nowTick;
+				}
+				const uint64_t elapsedTicks = nowTick - s_scenarioStartTick;
+				const uint64_t tickCap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800;
+				const Activity* scenarioActivity = g_ActivityMan.GetActivity();
+				if ((scenarioActivity && scenarioActivity->IsOver()) || elapsedTicks >= tickCap) {
+					System::SetQuit(true);
+					break;
+				}
+			}
 
 			if (!g_ActivityMan.IsInActivity()) {
 				g_TimerMan.PauseSim(true);
@@ -442,6 +500,53 @@ static const bool RTESetExceptionHandlers = []() {
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
+	// Determinism-check mode is a pre-init orchestrator: it spawns child game processes and diffs
+	// their JSON traces, so it must short-circuit before SDL / engine bootstrapping.
+	if (DeterminismCheck::IsRequested(argc, argv)) {
+		return DeterminismCheck::Run(argc, argv);
+	}
+
+	// Pick up the -num-lua-states thread-count override before any init runs.
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (argv[i] != nullptr && std::string(argv[i]) == "-num-lua-states") {
+			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
+			break;
+		}
+	}
+
+	// Headless: -tick-hashes (the determinism trace mode, set on every -determinism-check child)
+	// has nothing worth displaying, so create the window hidden. -headless forces it; -headed forces
+	// a visible window. WindowMan reads CCCP_HEADLESS.
+	{
+		bool headless = false;
+		for (int i = 1; i < argc; ++i) {
+			if (argv[i] == nullptr) {
+				continue;
+			}
+			const std::string arg = argv[i];
+			if (arg == "-tick-hashes" || arg == "-headless") {
+				headless = true;
+			} else if (arg == "-headed") {
+				headless = false;
+				break;
+			}
+		}
+		if (headless) {
+#ifdef _WIN32
+			_putenv_s("CCCP_HEADLESS", "1");
+			// Suppress the CRT's modal abort()/assert dialogs so an automated run exits to the log
+			// instead of blocking on a message box no one is there to dismiss.
+			_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+			_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+			_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+			_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+			_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#else
+			setenv("SDL_VIDEODRIVER", "offscreen", 1);
+#endif
+		}
+	}
+
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
 	loadpng_init();
 
@@ -474,6 +579,8 @@ int main(int argc, char** argv) {
 
 	g_PresetMan.LoadAllDataModules();
 
+	int scenarioExitCode = 0;
+
 	if (!System::IsInExternalModuleValidationMode()) {
 		// Load the different input device icons. This can't be done during UInputMan::Create() because the icon presets don't exist so we need to do this after modules are loaded.
 		g_UInputMan.LoadDeviceIcons();
@@ -490,15 +597,49 @@ int main(int argc, char** argv) {
 			}
 		}
 
-		if (!g_ActivityMan.Initialize()) {
-			RunMenuLoop();
-		}
+		if (ScenarioRunner::IsActive()) {
+			// CLI direct-launch into a scenario: skip the menu, start the named GAScripted activity
+			// directly, run the loop, then finalize the JSON report + exit code.
+			const std::string presetName = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
+			const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", presetName);
+			const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
+			int startResult = -1;
+			if (presetActivity) {
+				const std::string& sceneName = presetActivity->GetSceneName();
+				if (!sceneName.empty()) {
+					g_SceneMan.SetSceneToLoad(sceneName, true, false);
+				}
+				startResult = g_ActivityMan.StartActivity("GAScripted", presetName);
+			} else {
+				std::cerr << "[scenario] no preset \"" << presetName << "\" of class GAScripted" << std::endl;
+			}
 
-		RunGameLoop();
+			if (startResult < 0) {
+				std::cerr << "[scenario] failed to start scenario \"" << presetName << "\"" << std::endl;
+				scenarioExitCode = 1;
+			} else {
+				RunGameLoop();
+				scenarioExitCode = ScenarioRunner::FinalizeAndGetExitCode();
+			}
+		} else {
+			if (!g_ActivityMan.Initialize()) {
+				RunMenuLoop();
+			}
+
+			RunGameLoop();
+		}
 	}
 
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
+
+	if (ScenarioRunner::IsActive()) {
+		// Scenario mode: the JSON report was flushed before RunGameLoop returned. Skip
+		// DestroyManagers — it races FMOD's async update thread on freed Sound userdata when actors
+		// tear down faster than the normal quit flow. The OS reclaims everything on process exit.
+		g_ConsoleMan.SaveAllText("LogConsole.txt");
+		std::_Exit(scenarioExitCode);
+	}
 
 	DestroyManagers();
 
