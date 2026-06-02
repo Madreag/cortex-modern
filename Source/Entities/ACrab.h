@@ -139,6 +139,9 @@ namespace RTE {
 		/// @return Whether a currently HDFirearm (if any) is ready for use.
 		bool FirearmIsReady() const;
 
+		/// Freezes this ACrab's AI-phase-mutated, cross-actor-read state for the parallel ThreadedUpdateAI pass.
+		void FreezeStateForAIPhase() override;
+
 		/// Indicates whether the currently held HDFirearm's is out of ammo.
 		/// @return Whether a currently HDFirearm (if any) is out of ammo.
 		bool FirearmIsEmpty() const;
@@ -282,6 +285,9 @@ namespace RTE {
 
 		// Turret which can be mounted with a weapon
 		Turret* m_pTurret;
+		// FirearmIsReady() / GetEquippedItem() snapshotted before the parallel AI phase; foreign AI reads use these.
+		bool m_FrozenFirearmReady;
+		MovableObject* m_FrozenEquippedItem;
 		// TODO when this class is cleaned up these legs and footgroups should probably be renamed. L and R should be expanded to Left and Right. I think FG and BG can stay as is cause they're everywhere.
 		//  Left Foreground leg.
 		Leg* m_pLFGLeg;

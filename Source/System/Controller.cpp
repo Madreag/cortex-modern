@@ -14,6 +14,7 @@ thread_local Actor* RTE::g_CurrentAIActor = nullptr;
 
 void Controller::Clear() {
 	m_ControlStates.fill(false);
+	m_FrozenControlStates.fill(false);
 	m_AnalogMove.Reset();
 	m_AnalogAim.Reset();
 	m_AnalogCursor.Reset();

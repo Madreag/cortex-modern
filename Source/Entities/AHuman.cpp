@@ -42,6 +42,8 @@ void AHuman::Clear() {
 	m_pJetpack = nullptr;
 	m_pFGArm = 0;
 	m_pBGArm = 0;
+	m_FrozenFirearmReady = false;
+	m_FrozenEquippedItem = nullptr;
 	m_pFGLeg = 0;
 	m_pBGLeg = 0;
 	m_pFGHandGroup = 0;
@@ -1272,6 +1274,10 @@ float AHuman::GetEquippedMass() const {
 }
 
 bool AHuman::FirearmIsReady() const {
+	if (g_CurrentAIActor && g_CurrentAIActor != this) {
+		return m_FrozenFirearmReady;
+	}
+
 	// Check if the currently held device is already the desired type
 	if (m_pFGArm && m_pFGArm->IsAttached()) {
 		const HDFirearm* pWeapon = dynamic_cast<HDFirearm*>(m_pFGArm->GetHeldDevice());
@@ -1280,6 +1286,12 @@ bool AHuman::FirearmIsReady() const {
 	}
 
 	return false;
+}
+
+void AHuman::FreezeStateForAIPhase() {
+	Actor::FreezeStateForAIPhase();
+	m_FrozenFirearmReady = FirearmIsReady();
+	m_FrozenEquippedItem = GetEquippedItem();
 }
 
 bool AHuman::ThrowableIsReady() const {
