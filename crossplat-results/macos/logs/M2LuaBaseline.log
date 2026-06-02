@@ -1,0 +1,39 @@
+[determinism-check] binary  : /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand
+[determinism-check] scenario: M2LuaBaseline
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] runs    : 5
+[determinism-check] tmp dir : /tmp/claude-501/cccp-determinism-1780353855220717-0
+[determinism-check] run 1/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M2LuaBaseline -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780353855220717-0/run_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780353855220717-0/run_0.json
+[scenario] M2LuaBaseline passed=no ticks=301
+[determinism-check] run 2/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M2LuaBaseline -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780353855220717-0/run_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780353855220717-0/run_1.json
+[scenario] M2LuaBaseline passed=no ticks=301
+[determinism-check] run 3/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M2LuaBaseline -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780353855220717-0/run_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780353855220717-0/run_2.json
+[scenario] M2LuaBaseline passed=no ticks=301
+[determinism-check] run 4/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M2LuaBaseline -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780353855220717-0/run_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780353855220717-0/run_3.json
+[scenario] M2LuaBaseline passed=no ticks=301
+[determinism-check] run 5/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M2LuaBaseline -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780353855220717-0/run_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780353855220717-0/run_4.json
+[scenario] M2LuaBaseline passed=no ticks=301
+
+[determinism-check] wrote report: /tmp/det-results/M2LuaBaseline.json
+[determinism-check] RESULT: DIVERGED
+    first_divergence_tick: 2
+    total_mismatched_ticks: 281 / 300
+    per-subsystem first divergence:
+        actors: tick 20
+        carve_math: tick 20
+        controller: tick 22
+        particles: tick 20
+        scene: tick 20
+        sim_rng: tick 2
+        terrain: tick 20

@@ -1,0 +1,81 @@
+=== INTRA-MACOS DETERMINISM CHECK ===
+Build: ./builddir/CortexCommand: Mach-O 64-bit executable arm64
+Date: Mon Jun  1 15:42:34 MST 2026
+
+--- M1Baseline (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 2
+  total_mismatched: 282 / 300
+  subsystems first div: {'actors': 19, 'carve_math': 19, 'controller': 23, 'particles': 19, 'scene': 20, 'sim_rng': 2, 'terrain': 23}
+--- M1ActorStress (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 3
+  total_mismatched: 297 / 300
+  subsystems first div: {'actors': 10, 'carve_math': 8, 'controller': 19, 'particles': 3, 'scene': 3, 'sim_rng': 4, 'terrain': 8}
+--- M1TerrainStress (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 2
+  total_mismatched: 281 / 300
+  subsystems first div: {'actors': 20, 'carve_math': 21, 'controller': 26, 'particles': 20, 'scene': 21, 'sim_rng': 2, 'terrain': 21}
+--- M2LuaBaseline (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 2
+  total_mismatched: 281 / 300
+  subsystems first div: {'actors': 20, 'carve_math': 20, 'controller': 22, 'particles': 20, 'scene': 20, 'sim_rng': 2, 'terrain': 20}
+--- M2LuaRandomStress (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 3
+  total_mismatched: 297 / 300
+  subsystems first div: {'actors': 10, 'carve_math': 8, 'controller': 17, 'particles': 3, 'scene': 3, 'sim_rng': 4, 'terrain': 8}
+--- M2PairsStress (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 22
+  total_mismatched: 278 / 300
+  subsystems first div: {'actors': 22, 'carve_math': 23, 'controller': 30, 'particles': 22, 'scene': 22, 'sim_rng': 22, 'terrain': 22}
+--- M2OsStubTest (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 3
+  total_mismatched: 297 / 300
+  subsystems first div: {'actors': 10, 'carve_math': 8, 'controller': 17, 'particles': 3, 'scene': 3, 'sim_rng': 4, 'terrain': 8}
+--- M2ModSmokeLoading (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 2
+  total_mismatched: 269 / 300
+  subsystems first div: {'actors': 33, 'carve_math': 33, 'controller': 52, 'particles': 32, 'scene': 32, 'sim_rng': 2, 'terrain': 32}
+--- M3TerrainStress (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 2
+  total_mismatched: 278 / 300
+  subsystems first div: {'actors': 23, 'carve_math': 23, 'controller': 33, 'particles': 23, 'scene': 26, 'sim_rng': 2, 'terrain': 25}
+--- M4ThreadStress (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 3
+  total_mismatched: 297 / 300
+  subsystems first div: {'actors': 10, 'carve_math': 4, 'controller': 15, 'particles': 3, 'scene': 3, 'sim_rng': 3, 'terrain': 9}
+--- MPerfBench (runs=5 ticks=300 seed=42) ---
+  DIVERGED (exit 1)
+  first_div_tick: 2
+  total_mismatched: 298 / 300
+  subsystems first div: {'actors': 10, 'carve_math': 8, 'controller': 12, 'particles': 3, 'scene': 3, 'sim_rng': 2, 'terrain': 8}
+
+=== POSITIVE CONTROL (--determinism-selftest-perturb on M1Baseline) ===
+  exit 1 (1 = DIVERGED, expected)
+
+=== THREAD MATRIX (M4ThreadStress --threads 1,2,4,8) ===
+  exit 1 (0 expected = MATCHED across thread counts)
+
+=== EXIT CODES ===
+  M1Baseline:1
+  M1ActorStress:1
+  M1TerrainStress:1
+  M2LuaBaseline:1
+  M2LuaRandomStress:1
+  M2PairsStress:1
+  M2OsStubTest:1
+  M2ModSmokeLoading:1
+  M3TerrainStress:1
+  M4ThreadStress:1
+  MPerfBench:1
+  CONTROL:1
+  THREAD_MATRIX:1
+DONE

@@ -1,0 +1,39 @@
+[determinism-check] binary  : /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand
+[determinism-check] scenario: MPerfBench
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] runs    : 5
+[determinism-check] tmp dir : /tmp/claude-501/cccp-determinism-1780354086728564-0
+[determinism-check] run 1/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario MPerfBench -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780354086728564-0/run_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780354086728564-0/run_0.json
+[scenario] MPerfBench passed=no ticks=301
+[determinism-check] run 2/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario MPerfBench -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780354086728564-0/run_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780354086728564-0/run_1.json
+[scenario] MPerfBench passed=no ticks=301
+[determinism-check] run 3/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario MPerfBench -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780354086728564-0/run_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780354086728564-0/run_2.json
+[scenario] MPerfBench passed=no ticks=301
+[determinism-check] run 4/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario MPerfBench -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780354086728564-0/run_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780354086728564-0/run_3.json
+[scenario] MPerfBench passed=no ticks=301
+[determinism-check] run 5/5: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario MPerfBench -seed 42 -max-ticks 300 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780354086728564-0/run_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780354086728564-0/run_4.json
+[scenario] MPerfBench passed=no ticks=301
+
+[determinism-check] wrote report: /tmp/det-results/MPerfBench.json
+[determinism-check] RESULT: DIVERGED
+    first_divergence_tick: 2
+    total_mismatched_ticks: 298 / 300
+    per-subsystem first divergence:
+        actors: tick 10
+        carve_math: tick 8
+        controller: tick 12
+        particles: tick 3
+        scene: tick 3
+        sim_rng: tick 2
+        terrain: tick 8
