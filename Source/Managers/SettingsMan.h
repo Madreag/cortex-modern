@@ -108,6 +108,10 @@ namespace RTE {
 		/// Gets whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 		/// @return Whether pathing requests will be forced to immediately complete for the next frame
 		bool GetForceImmediatePathingRequestCompletion() const { return m_ForceImmediatePathingRequestCompletion; }
+
+		/// Sets whether pathing requests are forced to immediately complete each frame.
+		/// @param force Whether to force immediate pathing request completion.
+		void SetForceImmediatePathingRequestCompletion(bool force) { m_ForceImmediatePathingRequestCompletion = force; }
 #pragma endregion
 
 #pragma region Gameplay Settings
