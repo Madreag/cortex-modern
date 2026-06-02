@@ -134,6 +134,9 @@ namespace RTE {
 		/// @return A const pointer to this Actor's Controller.
 		Controller* GetController() { return &m_Controller; }
 
+		/// Freezes this Actor's AI-phase-mutated, cross-actor-read state so the parallel ThreadedUpdateAI pass reads a race-free snapshot.
+		virtual void FreezeStateForAIPhase() { m_Controller.FreezeStateForAIPhase(); }
+
 		/// Tells whether a player is currently controlling this.
 		/// @return Whether a player is controlling this.
 		bool IsPlayerControlled() const;

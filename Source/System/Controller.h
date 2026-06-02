@@ -78,7 +78,7 @@ namespace RTE {
 		CONTROLSTATECOUNT
 	};
 
-	/// The actor whose AI is running on this thread during the parallel ThreadedUpdateAI pass (null outside it).
+	/// The Actor whose AI is running on this thread during the parallel ThreadedUpdateAI pass; foreign reads of AI-mutated state route to a frozen snapshot.
 	extern thread_local Actor* g_CurrentAIActor;
 
 	/// A class controlling MovableObjects through either player input, networking, scripting, AI, etc.
@@ -176,7 +176,12 @@ namespace RTE {
 		/// Shows whether the current controller is in a specific state.
 		/// @param controlState What control state to check for.
 		/// @return Whether the controller is in the specified state.
-		bool IsState(ControlState controlState) const { return m_ControlStates[controlState]; };
+		bool IsState(ControlState controlState) const {
+			if (g_CurrentAIActor && m_ControlledActor != g_CurrentAIActor) {
+				return m_FrozenControlStates[controlState];
+			}
+			return m_ControlStates[controlState];
+		};
 
 		/// Sets one of this controller's states.
 		/// @param controlStat Which state to set.
@@ -185,6 +190,9 @@ namespace RTE {
 			RTEAssert(controlState >= 0 && controlState < ControlState::CONTROLSTATECOUNT, "Control state out of whack");
 			m_ControlStates[controlState] = setting;
 		};
+
+		/// Snapshots the current control states so foreign reads during the parallel AI phase see a frozen, race-free copy.
+		void FreezeStateForAIPhase() { m_FrozenControlStates = m_ControlStates; }
 
 		/// Gets the current mode of input for this Controller.
 		/// @return The InputMode that this controller is currently using.
@@ -318,6 +326,7 @@ namespace RTE {
 		static constexpr int m_ReleaseDelay = 250; //!< The delay between releasing a menu button and activating the regular controls, to avoid accidental input.
 
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_ControlStates; //!< Control states.
+		std::array<bool, ControlState::CONTROLSTATECOUNT> m_FrozenControlStates; //!< Control states snapshotted before the parallel AI phase; foreign AI reads use this.
 		bool m_Disabled; //!< Quick and easy disable to prevent updates from being made.
 
 		InputMode m_InputMode; //!< The current controller input mode, like AI, player etc.
