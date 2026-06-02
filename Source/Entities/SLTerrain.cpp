@@ -30,6 +30,7 @@ void SLTerrain::Clear() {
 	m_LayerToDraw = LayerType::ForegroundLayer;
 	m_FGColorLayer = nullptr;
 	m_BGColorLayer = nullptr;
+	m_MaterialCopy = nullptr;
 	m_DefaultBGTextureFile.Reset();
 	m_TerrainFrostings.clear();
 	m_TerrainDebris.clear();
@@ -352,6 +353,19 @@ void SLTerrain::CleanAir() {
 			              }
 		              }
 	              });
+}
+
+void SLTerrain::UpdateMaterialCopy() {
+	if (!m_MainBitmap) {
+		return;
+	}
+	if (!m_MaterialCopy || m_MaterialCopy->w != m_MainBitmap->w || m_MaterialCopy->h != m_MainBitmap->h) {
+		if (m_MaterialCopy) {
+			destroy_bitmap(m_MaterialCopy);
+		}
+		m_MaterialCopy = create_bitmap_ex(8, m_MainBitmap->w, m_MainBitmap->h);
+	}
+	blit(m_MainBitmap, m_MaterialCopy, 0, 0, 0, 0, m_MainBitmap->w, m_MainBitmap->h);
 }
 
 void SLTerrain::CleanAirBox(const Box& box, bool wrapsX, bool wrapsY) {
