@@ -215,6 +215,16 @@ namespace RTE {
 		/// different possible mode settings.
 		int GetLayerDrawMode() const { return m_LayerDrawMode; }
 
+		/// RAII guard routing this thread's GetTerrMatter reads to the frozen per-tick material copy. The threaded vision pass uses it so concurrent carves can't race its reads.
+		class ScopedTerrainCopyRead {
+		public:
+			ScopedTerrainCopyRead();
+			~ScopedTerrainCopyRead();
+
+		private:
+			bool m_Previous;
+		};
+
 		/// Gets a specific pixel from the total material representation of
 		/// this Scene. LockScene() must be called before using this method.
 		/// @param pixelX The X and Y coordinates of screen material pixel to get.
