@@ -1742,6 +1742,11 @@ void MovableMan::Update() {
 		}
 	}
 
+	// Freeze the material terrain for the threaded vision pass so carves can't race the see-ray reads.
+	if (SLTerrain* terrain = g_SceneMan.GetTerrain()) {
+		terrain->UpdateMaterialCopy();
+	}
+
 	// Run seeing rays for all actors
 	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
 	                                                                         [&](int start, int end) {

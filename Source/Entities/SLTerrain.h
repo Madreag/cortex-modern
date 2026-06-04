@@ -46,6 +46,10 @@ namespace RTE {
 		/// Destroys and resets (through Clear()) the SLTerrain object.
 		/// @param notInherited Whether to only destroy the members defined in this derived class, or to destroy all inherited members also.
 		void Destroy(bool notInherited = false) override {
+			if (m_MaterialCopy) {
+				destroy_bitmap(m_MaterialCopy);
+				m_MaterialCopy = nullptr;
+			}
 			if (!notInherited) {
 				SceneLayer::Destroy();
 			}
@@ -110,6 +114,10 @@ namespace RTE {
 		/// @return A pointer to the material bitmap.
 		BITMAP* GetMaterialBitmap() { return m_MainBitmap; }
 
+		/// Gets the frozen per-tick copy of the material bitmap that the threaded vision pass reads.
+		/// @return A pointer to the material copy bitmap, or null before the first UpdateMaterialCopy.
+		BITMAP* GetMaterialCopyBitmap() const { return m_MaterialCopy; }
+
 		/// Gets a specific pixel from the foreground color bitmap of this.
 		/// @param pixelX The X coordinate of the pixel to get.
 		/// @param pixelY The Y coordinate of the pixel to get.
@@ -170,6 +178,9 @@ namespace RTE {
 		/// Removes any color pixel in the color layer of this SLTerrain wherever there is an air material pixel in the material layer.
 		void CleanAir();
 
+		/// Refreshes the threaded-reader material snapshot from the live material bitmap. Call serially each tick before the vision pass.
+		void UpdateMaterialCopy();
+
 		/// Removes any color pixel in the color layer of this SLTerrain wherever there is an air material pixel in the material layer inside the specified box.
 		/// @param box Box to clean.
 		/// @param wrapsX Whether the scene is X-wrapped.
@@ -212,6 +223,8 @@ namespace RTE {
 
 		std::unique_ptr<SceneLayer> m_FGColorLayer; //!< The foreground color layer of this SLTerrain.
 		std::unique_ptr<SceneLayer> m_BGColorLayer; //!< The background color layer of this SLTerrain.
+
+		BITMAP* m_MaterialCopy; //!< Frozen per-tick copy of the material layer for the threaded vision pass; refreshed serially so carves can't race see-ray reads.
 
 		LayerType m_LayerToDraw; //!< The layer of this SLTerrain that should be drawn to the screen when Draw() is called. See LayerType enumeration.
 
