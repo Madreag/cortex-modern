@@ -240,7 +240,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_RandomizeEffectRotAngleEveryFrame = reference.m_RandomizeEffectRotAngleEveryFrame;
 
 	if (m_RandomizeEffectRotAngle)
-		m_EffectRotAngle = c_PI * RandomNum(-2.0F, 2.0F);
+		m_EffectRotAngle = c_PI * g_RenderRNG.RandomNum(-2.0F, 2.0F);
 
 	m_ScreenEffectHash = reference.m_ScreenEffectHash;
 	m_EffectStartTime = reference.m_EffectStartTime;
@@ -898,7 +898,7 @@ void MovableObject::PostTravel() {
 
 void MovableObject::Update() {
 	if (m_RandomizeEffectRotAngleEveryFrame) {
-		m_EffectRotAngle = c_PI * 2.0F * RandomNormalNum();
+		m_EffectRotAngle = c_PI * 2.0F * g_RenderRNG.RandomNormalNum();
 	}
 
 	if (m_pScreenEffect && m_PostEffectEnabled) {
