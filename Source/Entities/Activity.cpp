@@ -8,6 +8,7 @@
 #include "FrameMan.h"
 #include "MetaMan.h"
 #include "SceneMan.h"
+#include "LuaMan.h"
 
 #include "ACraft.h"
 
@@ -293,6 +294,8 @@ int Activity::Save(Writer& writer) const {
 int Activity::Start() {
 	// Reseed the RNG for determinism
 	SeedRNG();
+	// Reseed each Lua state's math.random from the same sim seed so script RNG is deterministic per activity.
+	g_LuaMan.SeedAllLuaRNGs(g_SimRNG.GetSeed());
 
 	if (m_ActivityState != ActivityState::Editing) {
 		m_ActivityState = ActivityState::Running;

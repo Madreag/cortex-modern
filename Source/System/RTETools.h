@@ -19,10 +19,18 @@ namespace RTE {
 #pragma region Random Numbers
 	class RandomGenerator {
 		std::mt19937 m_RNG; //!< The random number generator used for all random functions.
+		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
 
 	public:
 		/// Seed the random number generator.
-		void Seed(uint64_t seed) { m_RNG.seed(seed); };
+		void Seed(uint64_t seed) {
+			m_Seed = seed;
+			m_RNG.seed(seed);
+		};
+
+		/// Gets the seed this generator was last seeded with.
+		/// @return The last seed.
+		uint64_t GetSeed() const { return m_Seed; }
 
 		/// Serialize the generator's full internal state to a string for hashing — byte-identical
 		/// across same-seed runs at the same tick once the determinism work has settled.
