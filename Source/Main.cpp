@@ -191,6 +191,8 @@ void HandleMainArgs(int argCount, char** argValue) {
 		// Arm per-tick state hashing for the determinism trace.
 		if (currentArg == "-tick-hashes") {
 			s_recordTickHashes = true;
+			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
+			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
 		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
@@ -414,9 +416,14 @@ void RunGameLoop() {
 		updateTotalTime = updateEndAndDrawStartTime - updateStartTime;
 		drawStartTime = updateEndAndDrawStartTime;
 
+		// Frame rendering must not advance the sim RNG stream — its cadence is host frame-rate
+		// dependent, so redirect any cosmetic draws here to the render RNG.
+		RandomGenerator* prevSimRNG = t_simRNGOverride;
+		t_simRNGOverride = &g_RenderRNG;
 		g_FrameMan.Draw();
 		g_WindowMan.DrawPostProcessBuffer();
 		g_WindowMan.UploadFrame();
+		t_simRNGOverride = prevSimRNG;
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
