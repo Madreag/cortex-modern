@@ -1904,10 +1904,15 @@ void MovableMan::UpdateControllers() {
 			actor->GetController()->Update();
 		}
 
+		// Freeze each actor's AI-phase-mutated, cross-actor-read state so the parallel ThreadedUpdateAI pass reads a race-free snapshot.
+		for (Actor* actor: m_Actors) {
+			actor->FreezeStateForAIPhase();
+		}
+
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
 			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
-				// Mark the running AI actor so its Equip* mutators defer cross-actor work (Path E).
+				// Mark the running AI actor: its Equip* mutators defer cross-actor work (Path E), and foreign reads of its AI-mutated state route to the frozen snapshot.
 				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 				g_CurrentAIActor = nullptr;
