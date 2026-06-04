@@ -35,6 +35,8 @@ ACrab::~ACrab() {
 
 void ACrab::Clear() {
 	m_pTurret = 0;
+	m_FrozenFirearmReady = false;
+	m_FrozenEquippedItem = nullptr;
 	m_pLFGLeg = 0;
 	m_pLBGLeg = 0;
 	m_pRFGLeg = 0;
@@ -565,6 +567,10 @@ bool ACrab::HandlePieCommand(PieSliceType pieSliceIndex) {
 }
 
 MovableObject* ACrab::GetEquippedItem() const {
+	if (g_CurrentAIActor && g_CurrentAIActor != this) {
+		return m_FrozenEquippedItem;
+	}
+
 	if (m_pTurret && m_pTurret->IsAttached() && m_pTurret->HasMountedDevice()) {
 		return m_pTurret->GetFirstMountedDevice();
 	}
@@ -573,6 +579,10 @@ MovableObject* ACrab::GetEquippedItem() const {
 }
 
 bool ACrab::FirearmIsReady() const {
+	if (g_CurrentAIActor && g_CurrentAIActor != this) {
+		return m_FrozenFirearmReady;
+	}
+
 	if (m_pTurret && m_pTurret->IsAttached() && m_pTurret->HasMountedDevice()) {
 		for (const HeldDevice* mountedDevice: m_pTurret->GetMountedDevices()) {
 			if (const HDFirearm* mountedFirearm = dynamic_cast<const HDFirearm*>(mountedDevice); mountedFirearm && mountedFirearm->GetRoundInMagCount() != 0) {
@@ -582,6 +592,12 @@ bool ACrab::FirearmIsReady() const {
 	}
 
 	return false;
+}
+
+void ACrab::FreezeStateForAIPhase() {
+	Actor::FreezeStateForAIPhase();
+	m_FrozenFirearmReady = FirearmIsReady();
+	m_FrozenEquippedItem = GetEquippedItem();
 }
 
 bool ACrab::FirearmIsEmpty() const {
