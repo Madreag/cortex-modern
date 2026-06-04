@@ -667,10 +667,10 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		ZoneScoped;
 		ZoneText(functionName.c_str(), functionName.length());
 
-		// Redirect this hook's RNG to a per-MO generator for thread-count invariance.
-		// Collision callbacks stay on the per-state RNG (serial inside Travel(), out of scope).
-		const bool redirectRNG = functionName != "OnCollideWithMO" && functionName != "OnCollideWithTerrain";
-		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), redirectRNG);
+		// Redirect every hook's RNG to a per-MO generator for thread-count invariance, collision
+		// callbacks included: their firing order isn't deterministic (the MOID map and terrain they
+		// read are built off-thread), so the shared RNG can't be drawn from here.
+		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), true);
 
 		for (const LuaFunction& luaFunction: itr->second) {
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();

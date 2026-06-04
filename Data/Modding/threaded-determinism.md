@@ -42,8 +42,10 @@ Inside `ThreadedUpdate`, `ThreadedUpdateAI`, `UpdateAI`, `Update` and the other
 per-object script hooks, `math.random` (and `RangeRand` / `SelectRand` /
 `PosRand` / `NormalRand`) now draws from a generator keyed to the object and the
 sim tick. The same object on the same tick draws the same sequence regardless of
-thread count or which Lua state it was assigned to. Scripts need no change — the
-signatures and ranges are identical; only the determinism guarantee is new.
+thread count or which Lua state it was assigned to. The collision callbacks
+`OnCollideWithMO` / `OnCollideWithTerrain` draw from the same per-object stream.
+Scripts need no change — the signatures and ranges are identical; only the
+determinism guarantee is new.
 
 ## Nothing else changes
 
