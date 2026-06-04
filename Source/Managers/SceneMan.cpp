@@ -33,6 +33,18 @@ std::vector<std::pair<int, BITMAP*>> SceneMan::m_IntermediateSettlingBitmaps;
 // Stored as a thread-local instead of in the class, because multithreaded Lua scripts will interfere otherwise
 thread_local Vector s_LastRayHitPos;
 
+// While set on a worker, GetTerrMatter reads the frozen material copy so the threaded vision pass can't race concurrent carves.
+thread_local bool s_ReadTerrainFromCopy = false;
+
+SceneMan::ScopedTerrainCopyRead::ScopedTerrainCopyRead() :
+    m_Previous(s_ReadTerrainFromCopy) {
+	s_ReadTerrainFromCopy = true;
+}
+
+SceneMan::ScopedTerrainCopyRead::~ScopedTerrainCopyRead() {
+	s_ReadTerrainFromCopy = m_Previous;
+}
+
 SceneMan::SceneMan() {
 	m_pOrphanSearchBitmap = 0;
 	Clear();
@@ -371,6 +383,11 @@ unsigned char SceneMan::GetTerrMatter(int pixelX, int pixelY) {
 	}
 
 	BITMAP* pTMatBitmap = m_pCurrentScene->GetTerrain()->GetMaterialBitmap();
+	if (s_ReadTerrainFromCopy) {
+		if (BITMAP* matCopy = m_pCurrentScene->GetTerrain()->GetMaterialCopyBitmap()) {
+			pTMatBitmap = matCopy;
+		}
+	}
 	if (pTMatBitmap == nullptr) {
 		return g_MaterialAir;
 	}
