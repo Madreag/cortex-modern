@@ -35,6 +35,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <shared_mutex>
+#include <thread>
 
 using namespace RTE;
 
@@ -2377,7 +2378,9 @@ void Scene::ResetPathFinding() {
 
 void Scene::BlockUntilAllPathingRequestsComplete() {
 	for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
-		while (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {};
+		while (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {
+			std::this_thread::yield();
+		}
 	}
 }
 
