@@ -1,0 +1,129 @@
+[determinism-check] binary  : /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand
+[determinism-check] scenario: M1ActorStress
+[determinism-check] ticks   : 900
+[determinism-check] seed    : 42
+[determinism-check] runs    : 30
+[determinism-check] tmp dir : /tmp/claude-501/cccp-determinism-1780536983856734-0
+[determinism-check] run 1/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_0.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 2/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_1.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 3/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_2.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 4/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_3.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 5/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_4.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 6/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_5.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_5.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 7/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_6.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_6.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 8/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_7.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_7.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 9/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_8.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_8.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 10/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_9.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_9.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 11/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_10.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_10.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 12/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_11.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_11.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 13/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_12.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_12.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 14/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_13.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_13.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 15/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_14.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_14.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 16/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_15.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_15.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 17/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_16.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_16.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 18/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_17.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_17.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 19/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_18.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_18.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 20/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_19.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_19.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 21/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_20.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_20.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 22/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_21.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_21.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 23/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_22.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_22.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 24/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_23.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_23.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 25/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_24.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_24.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 26/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_25.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_25.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 27/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_26.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_26.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 28/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_27.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_27.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 29/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_28.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_28.json
+[scenario] M1ActorStress passed=yes ticks=899
+[determinism-check] run 30/30: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1ActorStress -seed 42 -max-ticks 900 -tick-hashes -out /tmp/claude-501/cccp-determinism-1780536983856734-0/run_29.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536983856734-0/run_29.json
+[scenario] M1ActorStress passed=yes ticks=899
+
+[determinism-check] wrote report: /tmp/r5-results/det/M1ActorStress_soak.json
+[determinism-check] RESULT: MATCHED (900 ticks across 30 runs)

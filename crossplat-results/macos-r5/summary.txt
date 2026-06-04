@@ -1,0 +1,41 @@
+=== ROUND-5 MACOS ARM64 VERIFICATION ===
+Build: ./builddir/CortexCommand: Mach-O 64-bit executable arm64
+Branch tip: 38453e09e28b1a6b0e04abe1813be565219e88a5
+Date: Wed Jun  3 18:21:33 MST 2026
+
+=== 1) ALL-SCENARIO BATTERY (runs=10 ticks=300 seed=42) ===
+M1Baseline exit=0
+M1ActorStress exit=0
+M1TerrainStress exit=0
+M2LuaBaseline exit=0
+M2LuaRandomStress exit=0
+M2PairsStress exit=0
+M2OsStubTest exit=0
+M2ModSmokeLoading exit=0
+M3TerrainStress exit=0
+M4ThreadStress exit=0
+MPerfBench exit=0
+
+=== 2) THREAD MATRIX (threads=1,2,4,8 runs=3 ticks=300) ===
+M3TerrainStress_threadmatrix exit=0
+M4ThreadStress_threadmatrix exit=0
+
+=== 3) SOAK (runs=30 ticks=900) ===
+M1ActorStress_soak exit=0
+M3TerrainStress_soak exit=0
+
+=== 4) POSITIVE CONTROL (--determinism-selftest-perturb) ===
+CONTROL exit=1
+
+=== 5) CROSS-OS TRACES (single -tick-hashes runs) ===
+trace M1Baseline_run0 exit=0 bytes=297525
+trace M1Baseline_run1 exit=0 bytes=297525
+trace M1Baseline_run2 exit=0 bytes=297525
+trace M1TerrainStress_run0 exit=1 bytes=297827
+trace M1TerrainStress_run1 exit=1 bytes=297827
+trace M1TerrainStress_run2 exit=1 bytes=297827
+trace M4ThreadStress_run0 exit=1 bytes=297741
+trace M4ThreadStress_run1 exit=1 bytes=297740
+trace M4ThreadStress_run2 exit=1 bytes=297741
+
+DONE Wed Jun  3 18:54:24 MST 2026

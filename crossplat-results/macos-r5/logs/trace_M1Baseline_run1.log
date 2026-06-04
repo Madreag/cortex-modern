@@ -1,0 +1,3 @@
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/r5-results/traces/M1Baseline_run1.json
+[scenario] M1Baseline passed=yes ticks=301

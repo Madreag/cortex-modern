@@ -1,0 +1,58 @@
+[determinism-check] binary  : /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand
+[determinism-check] scenario: M4ThreadStress
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] mode    : thread-count matrix
+[determinism-check] threads : 1,2,4,8  (x3 runs each = 12 total)
+[determinism-check] tmp dir : /tmp/claude-501/cccp-determinism-1780536906688483-0
+[determinism-check] run 1/12 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t1_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t1_0.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 2/12 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t1_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t1_1.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 3/12 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t1_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t1_2.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 4/12 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t2_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t2_0.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 5/12 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t2_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t2_1.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 6/12 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t2_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t2_2.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 7/12 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t4_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t4_0.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 8/12 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t4_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t4_1.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 9/12 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t4_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t4_2.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 10/12 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t8_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t8_0.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 11/12 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t8_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t8_1.json
+[scenario] M4ThreadStress passed=no ticks=301
+[determinism-check] run 12/12 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M4ThreadStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t8_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /tmp/claude-501/cccp-determinism-1780536906688483-0/run_t8_2.json
+[scenario] M4ThreadStress passed=no ticks=301
+
+[determinism-check] wrote report: /tmp/r5-results/det/M4ThreadStress_threadmatrix.json
+[determinism-check] RESULT: MATCHED (300 ticks across 12 runs at thread counts 1,2,4,8)

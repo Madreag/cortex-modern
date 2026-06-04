@@ -1,0 +1,52 @@
+diff --git a/Source/Main.cpp b/Source/Main.cpp
+index 3ee93571b..acde9b2df 100644
+--- a/Source/Main.cpp
++++ b/Source/Main.cpp
+@@ -535,7 +535,7 @@ int main(int argc, char** argv) {
+ 			}
+ 		}
+ 		if (headless) {
+-#ifdef _WIN32
++#if defined(_WIN32)
+ 			_putenv_s("CCCP_HEADLESS", "1");
+ 			// Suppress the CRT's modal abort()/assert dialogs so an automated run exits to the log
+ 			// instead of blocking on a message box no one is there to dismiss.
+@@ -544,6 +544,12 @@ int main(int argc, char** argv) {
+ 			_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+ 			_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+ 			_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
++#elif defined(__APPLE__)
++			// LOCAL VERIFY-ONLY PATCH (not on PR branch): macOS Cocoa needs a real NSOpenGL
++			// context; SDL3's offscreen driver loads no GL on darwin (gladLoadGL leaves
++			// glReadBuffer NULL) and the engine aborts in WindowMan::Initialize. Hide the
++			// window instead (CCCP_HEADLESS creates a hidden, real-GL window).
++			setenv("CCCP_HEADLESS", "1", 1);
+ #else
+ 			setenv("SDL_VIDEODRIVER", "offscreen", 1);
+ #endif
+diff --git a/meson.build b/meson.build
+index f09e0a224..25816c393 100644
+--- a/meson.build
++++ b/meson.build
+@@ -49,6 +49,21 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
+     build_rpath = '$ORIGIN:$ORIGIN/../external/lib/linux/x86_64' # Set RUNPATH so that CCCP can find libfmod.so without needing to set LD_LIBRARY_PATH
+   elif host_machine.system()=='darwin'
+     build_rpath = '@executable_path/../external/lib/macos' # Add a new R_PATH CCCP can find libfmod.dylib on Darwin TODO: Confirm and validate this.
++    # LOCAL VERIFY-ONLY PATCH (not on PR branch): Apple Clang 17 libc++ 200100 removed
++    # std::auto_ptr / unary_function / binders. Vendored luabind 0.7.1 + boost 1.75 reference
++    # them. Re-enable via libc++ opt-in macros (Windows analogue: _HAS_AUTO_PTR_ETC=1).
++    # Same set as commit 7f2195090 from the prior macOS bring-up.
++    add_global_arguments(
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_BINDERS',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_RANDOM_SHUFFLE',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNEXPECTED_FUNCTIONS',
++      '-D_LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS',
++      '-D_LIBCPP_ENABLE_CXX20_REMOVED_NEGATORS',
++      '-D_LIBCPP_ENABLE_EXPERIMENTAL',
++      '-D_LIBCPP_PSTL_BACKEND_SERIAL',
++      language: 'cpp')
+   endif
+ 
+   #suffix = 'x86_64'
