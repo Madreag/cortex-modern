@@ -543,6 +543,9 @@ int main(int argc, char** argv) {
 			_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 			_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
 			_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#elif defined(__APPLE__)
+			// macOS: SDL's offscreen driver loads no GL on Darwin, so use a hidden real-GL window instead.
+			setenv("CCCP_HEADLESS", "1", 1);
 #else
 			setenv("SDL_VIDEODRIVER", "offscreen", 1);
 #endif
