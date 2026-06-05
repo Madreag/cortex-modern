@@ -15,6 +15,12 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace RTE {
 
 	namespace {
@@ -141,9 +147,8 @@ namespace RTE {
 			return r;
 		}
 
-		// Cross-platform quoted command builder. We use std::system, which routes through the
-		// platform shell — Windows cmd.exe handles embedded quotes around the program path well
-		// enough for our controlled inputs.
+		// Quote a path/arg so the program path survives both the POSIX shell (std::system)
+		// and Windows CreateProcess command-line parsing.
 		std::string Quote(const std::string& s) {
 			if (s.find(' ') == std::string::npos && s.find('"') == std::string::npos) {
 				return s;
@@ -180,6 +185,31 @@ namespace RTE {
 			}
 			cmd << " -out " << Quote(runOut.string());
 			return cmd.str();
+		}
+
+		// Spawn one child, wait for it, return its exit code (-1 on spawn failure). On Windows
+		// we use CreateProcess with CREATE_NO_WINDOW: std::system shells through cmd.exe, whose
+		// per-child console exhausts the desktop heap at high --runs counts (the headless
+		// children need no window of their own).
+		int RunChild(const std::string& cmd) {
+#ifdef _WIN32
+			STARTUPINFOA si{};
+			si.cb = sizeof(si);
+			PROCESS_INFORMATION pi{};
+			std::string mutableCmd = cmd; // CreateProcess may write to the command-line buffer.
+			if (!CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, TRUE,
+			                    CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+				return -1;
+			}
+			WaitForSingleObject(pi.hProcess, INFINITE);
+			DWORD code = 0;
+			GetExitCodeProcess(pi.hProcess, &code);
+			CloseHandle(pi.hProcess);
+			CloseHandle(pi.hThread);
+			return static_cast<int>(code);
+#else
+			return std::system(cmd.c_str());
+#endif
 		}
 
 		// Read a JSON file and return it as a value. Returns null on failure.
@@ -356,7 +386,7 @@ namespace RTE {
 			Args warmArgs = args;
 			warmArgs.ticks = 1;
 			std::cout << "[determinism-check] warm-up : 1-tick run to settle first-boot settings (discarded)" << std::endl;
-			std::system(BuildChildCmd(binary, warmArgs, tmpRoot / "warmup.json", matrixMode ? args.threadCounts.front() : -1).c_str());
+			RunChild(BuildChildCmd(binary, warmArgs, tmpRoot / "warmup.json", matrixMode ? args.threadCounts.front() : -1));
 		}
 
 		// Run the binary once per child. Same scenario+seed+ticks; in matrix mode the Lua-state
@@ -371,7 +401,7 @@ namespace RTE {
 			}
 			std::cout << ": " << cmd << std::endl;
 
-			const int rc = std::system(cmd.c_str());
+			const int rc = RunChild(cmd);
 			// The scenario itself may legitimately exit non-zero (a fail-result trust scenario).
 			// What we really care about is whether the JSON was produced and parseable.
 			if (rc < 0) {
