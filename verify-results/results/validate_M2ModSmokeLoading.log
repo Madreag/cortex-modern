@@ -1,0 +1,18 @@
+[determinism-check] binary  : /home/erol/cccp-linux/builddir-cum/CortexCommand
+[determinism-check] scenario: M2ModSmokeLoading
+[determinism-check] ticks   : 120
+[determinism-check] seed    : 42
+[determinism-check] mode    : thread-count matrix
+[determinism-check] threads : 1  (x2 runs each = 2 total)
+[determinism-check] tmp dir : /tmp/claude-1000/cccp-determinism-1780677647956214312-0
+[determinism-check] run 1/2 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M2ModSmokeLoading -seed 42 -max-ticks 120 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677647956214312-0/run_t1_0.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677647956214312-0/run_t1_0.json
+[scenario] M2ModSmokeLoading passed=no ticks=121
+[determinism-check] run 2/2 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M2ModSmokeLoading -seed 42 -max-ticks 120 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677647956214312-0/run_t1_1.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677647956214312-0/run_t1_1.json
+[scenario] M2ModSmokeLoading passed=no ticks=121
+
+[determinism-check] wrote report: /tmp/cumv/results/validate_M2ModSmokeLoading.json
+[determinism-check] RESULT: MATCHED (120 ticks across 2 runs at thread counts 1)

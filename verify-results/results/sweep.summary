@@ -1,0 +1,13 @@
+== PHASE sweep start 2026-06-05_09:41:21 ==
+sweep_MPerfBench             rc=2 exp=0 NONE      cmp_ticks=?                               92s [FAIL]
+sweep_M2LuaBaseline          rc=0 exp=0 MATCHED   cmp_ticks=300                             131s [PASS]
+sweep_M2OsStubTest           rc=0 exp=0 MATCHED   cmp_ticks=300                             131s [PASS]
+sweep_M2PairsStress          rc=0 exp=0 MATCHED   cmp_ticks=300                             131s [PASS]
+sweep_M1Baseline             rc=0 exp=0 MATCHED   cmp_ticks=300                             131s [PASS]
+sweep_M2LuaRandomStress      rc=0 exp=0 MATCHED   cmp_ticks=300                             131s [PASS]
+sweep_M2ModSmokeLoading      rc=0 exp=0 MATCHED   cmp_ticks=300                             134s [PASS]
+sweep_M1ActorStress          rc=0 exp=0 MATCHED   cmp_ticks=300                             147s [PASS]
+sweep_M3TerrainStress        rc=0 exp=0 MATCHED   cmp_ticks=300                             148s [PASS]
+sweep_M1TerrainStress        rc=0 exp=0 MATCHED   cmp_ticks=300                             157s [PASS]
+sweep_M4ThreadStress         rc=0 exp=0 MATCHED   cmp_ticks=300                             166s [PASS]
+== PHASE sweep done 2026-06-05_09:44:07 ==

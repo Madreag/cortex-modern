@@ -1,0 +1,13 @@
+diff --git a/external/sources/tracy/public/client/TracyProfiler.cpp b/external/sources/tracy/public/client/TracyProfiler.cpp
+index 22830765e..056f53115 100644
+--- a/external/sources/tracy/public/client/TracyProfiler.cpp
++++ b/external/sources/tracy/public/client/TracyProfiler.cpp
+@@ -1891,7 +1891,7 @@ void Profiler::Worker()
+ 
+                     lastBroadcast = t;
+                     const auto ts = std::chrono::duration_cast<std::chrono::seconds>( std::chrono::system_clock::now().time_since_epoch() ).count();
+-                    broadcastMsg.activeTime = int32_t( ts - m_epoch );
++                    broadcastMsg.activeTime = ts > m_epoch ? int32_t( ts - m_epoch ) : 0;
+                     assert( broadcastMsg.activeTime >= 0 );
+                     m_broadcast->Send( broadcastPort, &broadcastMsg, broadcastLen );
+                 }

@@ -1,0 +1,36 @@
+{
+  "binary": "/home/erol/cccp-linux/builddir-cum/CortexCommand",
+  "compared_ticks": 120,
+  "diverged": false,
+  "length_mismatch": false,
+  "mode": "thread-count-matrix",
+  "per_run_tick_count": [
+    120,
+    120
+  ],
+  "runs": 2,
+  "runs_detail": [
+    {
+      "diverged": false,
+      "index": 0,
+      "run_index": 0,
+      "thread_count": 1,
+      "tick_count": 120
+    },
+    {
+      "diverged": false,
+      "index": 1,
+      "run_index": 1,
+      "thread_count": 1,
+      "tick_count": 120
+    }
+  ],
+  "scenario": "M2ModSmokeLoading",
+  "seed": 42,
+  "thread_counts": [
+    1
+  ],
+  "ticks_requested": 120,
+  "total_mismatched_ticks": 0,
+  "total_runs": 2
+}

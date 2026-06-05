@@ -1,0 +1,8 @@
+== PHASE matrix start 2026-06-05_09:44:07 ==
+matrix_M2PairsStress         rc=0 exp=0 MATCHED   cmp_ticks=300                             370s [PASS]
+matrix_M2LuaBaseline         rc=0 exp=0 MATCHED   cmp_ticks=300                             370s [PASS]
+matrix_M1ActorStress         rc=0 exp=0 MATCHED   cmp_ticks=300                             440s [PASS]
+matrix_M3TerrainStress       rc=0 exp=0 MATCHED   cmp_ticks=300                             445s [PASS]
+matrix_M1TerrainStress       rc=0 exp=0 MATCHED   cmp_ticks=300                             488s [PASS]
+matrix_M4ThreadStress        rc=0 exp=0 MATCHED   cmp_ticks=300                             510s [PASS]
+== PHASE matrix done 2026-06-05_09:52:37 ==
