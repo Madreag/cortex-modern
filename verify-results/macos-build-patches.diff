@@ -1,0 +1,52 @@
+diff --git a/Source/Main.cpp b/Source/Main.cpp
+index 3ee93571b..2bf134c82 100644
+--- a/Source/Main.cpp
++++ b/Source/Main.cpp
+@@ -535,7 +535,7 @@ int main(int argc, char** argv) {
+ 			}
+ 		}
+ 		if (headless) {
+-#ifdef _WIN32
++#if defined(_WIN32)
+ 			_putenv_s("CCCP_HEADLESS", "1");
+ 			// Suppress the CRT's modal abort()/assert dialogs so an automated run exits to the log
+ 			// instead of blocking on a message box no one is there to dismiss.
+@@ -544,6 +544,12 @@ int main(int argc, char** argv) {
+ 			_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+ 			_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+ 			_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
++#elif defined(__APPLE__)
++			// macOS bring-up build patch (verify-only; destined for PR 4): Cocoa needs a real
++			// NSOpenGL context. SDL3's offscreen driver loads no GL on Darwin (gladLoadGL leaves
++			// glReadBuffer NULL) and the engine aborts in WindowMan::Initialize. Create a hidden
++			// real-GL window instead via CCCP_HEADLESS.
++			setenv("CCCP_HEADLESS", "1", 1);
+ #else
+ 			setenv("SDL_VIDEODRIVER", "offscreen", 1);
+ #endif
+diff --git a/meson.build b/meson.build
+index 4ff2cc3aa..e416c4e63 100644
+--- a/meson.build
++++ b/meson.build
+@@ -49,6 +49,21 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
+     build_rpath = '$ORIGIN:$ORIGIN/../external/lib/linux/x86_64' # Set RUNPATH so that CCCP can find libfmod.so without needing to set LD_LIBRARY_PATH
+   elif host_machine.system()=='darwin'
+     build_rpath = '@executable_path/../external/lib/macos' # Add a new R_PATH CCCP can find libfmod.dylib on Darwin TODO: Confirm and validate this.
++    # macOS bring-up build patch (verify-only; destined for PR 4): Apple Clang 17 / libc++ 200100
++    # removed std::auto_ptr / unary_function / binders. Vendored luabind 0.7.1 + boost 1.75 still
++    # reference them, so re-enable via the libc++ opt-in macros (the Windows analogue is
++    # _HAS_AUTO_PTR_ETC=1). Same macro set used by the r5/r6/r7 macOS bring-up.
++    add_global_arguments(
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_BINDERS',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_RANDOM_SHUFFLE',
++      '-D_LIBCPP_ENABLE_CXX17_REMOVED_UNEXPECTED_FUNCTIONS',
++      '-D_LIBCPP_ENABLE_CXX20_REMOVED_BINDER_TYPEDEFS',
++      '-D_LIBCPP_ENABLE_CXX20_REMOVED_NEGATORS',
++      '-D_LIBCPP_ENABLE_EXPERIMENTAL',
++      '-D_LIBCPP_PSTL_BACKEND_SERIAL',
++      language: 'cpp')
+   endif
+ 
+   #suffix = 'x86_64'

@@ -1,0 +1,62 @@
+[determinism-check] binary  : /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand
+[determinism-check] scenario: M1Baseline
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] runs    : 10
+[determinism-check] tmp dir : /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0
+[determinism-check] run 1/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_0.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 2/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_1.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 3/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_2.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 4/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_3.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 5/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_4.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 6/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_5.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_5.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 7/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_6.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_6.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 8/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_7.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_7.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 9/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_8.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_8.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 10/10: /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -determinism-selftest-perturb -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_9.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780677638847382-0/run_9.json
+[scenario] M1Baseline passed=yes ticks=301
+
+[determinism-check] wrote report: verify-work/det/CONTROL_M1Baseline_perturb.json
+[determinism-check] RESULT: DIVERGED
+    first_divergence_tick: 49
+    total_mismatched_ticks: 251 / 300
+    per-subsystem first divergence:
+        actors: tick 54
+        carve_math: tick 56
+        controller: tick 55
+        particles: tick 54
+        scene: tick 56
+        sim_rng: tick 49
+        terrain: tick 52
+real 65.98
+user 56.62
+sys 8.65

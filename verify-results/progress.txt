@@ -1,0 +1,40 @@
+===== PHASE 2: SINGLE-CORE SWEEP (11 scenarios, runs=10, ticks=300) =====
+[09:43:18] START single M1Baseline threads=- runs=10 ticks=300
+[09:44:23] DONE  single M1Baseline exit=0 MATCHED 
+[09:44:23] START single M1ActorStress threads=- runs=10 ticks=300
+[09:45:28] DONE  single M1ActorStress exit=0 MATCHED 
+[09:45:28] START single M1TerrainStress threads=- runs=10 ticks=300
+[09:46:36] DONE  single M1TerrainStress exit=0 MATCHED 
+[09:46:36] START single M2LuaBaseline threads=- runs=10 ticks=300
+[09:47:42] DONE  single M2LuaBaseline exit=0 MATCHED 
+[09:47:42] START single M2LuaRandomStress threads=- runs=10 ticks=300
+[09:48:46] DONE  single M2LuaRandomStress exit=0 MATCHED 
+[09:48:46] START single M2PairsStress threads=- runs=10 ticks=300
+[09:49:51] DONE  single M2PairsStress exit=0 MATCHED 
+[09:49:51] START single M2OsStubTest threads=- runs=10 ticks=300
+[09:50:56] DONE  single M2OsStubTest exit=0 MATCHED 
+[09:50:56] START single M2ModSmokeLoading threads=- runs=10 ticks=300
+[09:52:02] DONE  single M2ModSmokeLoading exit=0 MATCHED 
+[09:52:02] START single M3TerrainStress threads=- runs=10 ticks=300
+[09:53:08] DONE  single M3TerrainStress exit=0 MATCHED 
+[09:53:08] START single M4ThreadStress threads=- runs=10 ticks=300
+[09:54:13] DONE  single M4ThreadStress exit=0 MATCHED 
+[09:54:13] START single MPerfBench threads=- runs=10 ticks=300
+[09:55:42] DONE  single MPerfBench exit=0 MATCHED 
+===== PHASE 3: THREAD MATRIX (threads=1,2,4,8, runs=10, ticks=300) =====
+[09:55:42] START matrix M4ThreadStress threads=1,2,4,8 runs=10 ticks=300
+[10:00:02] DONE  matrix M4ThreadStress exit=0 MATCHED 
+[10:00:02] START matrix M3TerrainStress threads=1,2,4,8 runs=10 ticks=300
+[10:04:21] DONE  matrix M3TerrainStress exit=0 MATCHED 
+[10:04:21] START matrix M1ActorStress threads=1,2,4,8 runs=10 ticks=300
+[10:08:41] DONE  matrix M1ActorStress exit=0 MATCHED 
+[10:08:41] START matrix M1TerrainStress threads=1,2,4,8 runs=10 ticks=300
+[10:13:11] DONE  matrix M1TerrainStress exit=0 MATCHED 
+[10:13:11] START matrix M2PairsStress threads=1,2,4,8 runs=10 ticks=300
+[10:17:30] DONE  matrix M2PairsStress exit=0 MATCHED 
+[10:17:30] START matrix M2LuaBaseline threads=1,2,4,8 runs=10 ticks=300
+[10:21:49] DONE  matrix M2LuaBaseline exit=0 MATCHED 
+===== PHASE 4: AUDIO-ON SOAK (M4ThreadStress, threads=8, runs=30, ticks=900) =====
+[10:21:49] START soak M4ThreadStress threads=8 runs=30 ticks=900
+[10:30:15] DONE  soak M4ThreadStress exit=0 MATCHED 
+ALL_DONE

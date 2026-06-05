@@ -1,0 +1,170 @@
+[determinism-check] binary  : /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand
+[determinism-check] scenario: M3TerrainStress
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] mode    : thread-count matrix
+[determinism-check] threads : 1,2,4,8  (x10 runs each = 40 total)
+[determinism-check] tmp dir : /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0
+[determinism-check] run 1/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_0.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 2/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_1.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 3/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_2.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 4/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_3.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 5/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_4.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 6/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_5.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_5.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 7/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_6.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_6.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 8/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_7.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_7.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 9/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_8.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_8.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 10/40 (threads=1): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_9.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t1_9.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 11/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_0.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 12/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_1.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 13/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_2.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 14/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_3.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 15/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_4.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 16/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_5.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_5.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 17/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_6.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_6.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 18/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_7.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_7.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 19/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_8.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_8.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 20/40 (threads=2): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 2 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_9.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t2_9.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 21/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_0.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 22/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_1.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 23/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_2.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 24/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_3.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 25/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_4.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 26/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_5.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_5.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 27/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_6.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_6.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 28/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_7.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_7.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 29/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_8.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_8.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 30/40 (threads=4): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 4 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_9.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t4_9.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 31/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_0.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_0.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 32/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_1.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_1.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 33/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_2.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_2.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 34/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_3.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_3.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 35/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_4.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_4.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 36/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_5.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_5.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 37/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_6.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_6.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 38/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_7.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_7.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 39/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_8.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_8.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 40/40 (threads=8): /Users/erol/projects/cccp/cortex-modern/./builddir/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 8 -out /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_9.json
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] wrote report: /var/folders/yg/vb32p_cs221f9xv6gwvxj3br0000gn/T/cccp-determinism-1780678802274997-0/run_t8_9.json
+[scenario] M3TerrainStress passed=no ticks=301
+
+[determinism-check] wrote report: verify-work/det/matrix_M3TerrainStress_th1-2-4-8.json
+[determinism-check] RESULT: MATCHED (300 ticks across 40 runs at thread counts 1,2,4,8)
