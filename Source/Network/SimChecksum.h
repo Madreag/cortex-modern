@@ -14,7 +14,7 @@
 
 namespace RTE {
 
-	/// Per-tick state hasher with per-subsystem breakdown. Wraps BLAKE3; the total tick hash
+	/// Per-tick state hasher with per-subsystem breakdown. Uses a small deterministic non-crypto hash; the total tick hash
 	/// combines name-sorted subsystems, so registration order is irrelevant. Subsystems are
 	/// created on first Update().
 	///
