@@ -13,6 +13,9 @@
     <Filter Include="Managers">
       <UniqueIdentifier>{777a2010-7ae7-41e7-8d10-1a3d2e6b3001}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Network">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e02}</UniqueIdentifier>
+    </Filter>
     <Filter Include="GUI">
       <UniqueIdentifier>{2f4c4852-44a1-459f-8666-e8c263c47196}</UniqueIdentifier>
     </Filter>
@@ -442,6 +445,9 @@
     <ClInclude Include="Source\GUI\GUISound.h">
       <Filter>GUI</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\SimChecksum.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTETools.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -681,6 +687,9 @@
     </ClCompile>
     <ClCompile Include="Source\System\Matrix.cpp">
       <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\SimChecksum.cpp">
+      <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\PathFinder.cpp">
       <Filter>System</Filter>

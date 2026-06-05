@@ -928,7 +928,7 @@ void HDFirearm::Update() {
 		// Display gun flame frame.
 		if (m_pFlash) {
 			m_pFlash->SetParentOffset(m_MuzzleOff);
-			m_pFlash->SetFrame(RandomNum(0, m_pFlash->GetFrameCount() - 1));
+			m_pFlash->SetFrame(g_RenderRNG.RandomNum(0, m_pFlash->GetFrameCount() - 1));
 		}
 
 		// Play firing sound
@@ -1006,7 +1006,7 @@ void HDFirearm::Update() {
 	if (m_FireFrame && m_pFlash && m_pFlash->GetScreenEffect()) {
 		Vector muzzlePos = m_Pos + RotateOffset(m_MuzzleOff + Vector(m_pFlash->GetSpriteWidth() * 0.3F, 0));
 		if (m_EffectAlwaysShows || !g_SceneMan.ObscuredPoint(muzzlePos)) {
-			g_PostProcessMan.RegisterPostEffect(muzzlePos, m_pFlash->GetScreenEffect(), m_pFlash->GetScreenEffectHash(), RandomNum(m_pFlash->GetEffectStopStrength(), m_pFlash->GetEffectStartStrength()), m_pFlash->GetEffectRotAngle());
+			g_PostProcessMan.RegisterPostEffect(muzzlePos, m_pFlash->GetScreenEffect(), m_pFlash->GetScreenEffectHash(), g_RenderRNG.RandomNum(m_pFlash->GetEffectStopStrength(), m_pFlash->GetEffectStartStrength()), m_pFlash->GetEffectRotAngle());
 		}
 	}
 }

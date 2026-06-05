@@ -53,6 +53,8 @@
 #include "MusicMan.h"
 #include "System.h"
 
+#include "SimChecksum.h"
+
 #include "RenderTarget.h"
 #include "tracy/Tracy.hpp"
 
@@ -67,6 +69,9 @@ FILE __iob_func[3] = {*stdin, *stdout, *stderr};
 }
 
 using namespace RTE;
+
+// Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
+static bool s_recordTickHashes = false;
 
 /// <summary>
 /// Initializes all the essential managers.
@@ -95,6 +100,7 @@ void InitializeManagers() {
 	CameraMan::Construct();
 	ActivityMan::Construct();
 	LoadingScreen::Construct();
+	SimChecksum::Construct();
 
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
@@ -130,6 +136,7 @@ void InitializeManagers() {
 /// Destroys all the managers and frees all loaded data before termination.
 /// </summary>
 void DestroyManagers() {
+	g_SimChecksum.Destroy();
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
 	g_MovableMan.Destroy();
@@ -179,6 +186,13 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-ext-validate") {
 			System::EnableExternalModuleValidationMode();
+		}
+
+		// Arm per-tick state hashing for the determinism trace.
+		if (currentArg == "-tick-hashes") {
+			s_recordTickHashes = true;
+			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
+			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
 		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
@@ -335,6 +349,10 @@ void RunGameLoop() {
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
+			if (s_recordTickHashes) {
+				g_SimChecksum.BeginTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			}
+
 			g_LuaMan.Update();
 
 			g_UInputMan.Update();
@@ -358,6 +376,12 @@ void RunGameLoop() {
 			g_MusicMan.Update();
 
 			g_ActivityMan.LateUpdateGlobalScripts();
+
+			// Feed end-of-tick terrain state, then finalize this tick's hash.
+			if (s_recordTickHashes) {
+				g_SceneMan.FeedTerrainToSimChecksum();
+				g_SimChecksum.EndTick();
+			}
 
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
@@ -392,9 +416,14 @@ void RunGameLoop() {
 		updateTotalTime = updateEndAndDrawStartTime - updateStartTime;
 		drawStartTime = updateEndAndDrawStartTime;
 
+		// Frame rendering must not advance the sim RNG stream — its cadence is host frame-rate
+		// dependent, so redirect any cosmetic draws here to the render RNG.
+		RandomGenerator* prevSimRNG = t_simRNGOverride;
+		t_simRNGOverride = &g_RenderRNG;
 		g_FrameMan.Draw();
 		g_WindowMan.DrawPostProcessBuffer();
 		g_WindowMan.UploadFrame();
+		t_simRNGOverride = prevSimRNG;
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
