@@ -1,6 +1,5 @@
 #include "SimChecksum.h"
 
-#include "blake3.h"
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
@@ -10,9 +9,38 @@
 
 namespace RTE {
 
+	// A small deterministic, non-cryptographic hash for the determinism checksum. Integer-only,
+	// so it is bit-identical on every platform — a crypto hash isn't needed to detect divergence.
+	// FNV-1a accumulation, expanded to the digest with a splitmix64 finalizer.
+	struct ChecksumHasher {
+		uint64_t state = 0xcbf29ce484222325ull; // FNV-1a 64-bit offset basis
+
+		void update(const void* data, size_t bytes) {
+			const auto* p = static_cast<const uint8_t*>(data);
+			for (size_t i = 0; i < bytes; ++i) {
+				state ^= p[i];
+				state *= 0x100000001b3ull; // FNV-1a 64-bit prime
+			}
+		}
+
+		void finalize(uint8_t* out, size_t outBytes) const {
+			uint64_t x = state;
+			for (size_t i = 0; i < outBytes; i += 8) {
+				x += 0x9e3779b97f4a7c15ull;
+				uint64_t z = x;
+				z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+				z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+				z ^= z >> 31;
+				for (size_t b = 0; b < 8 && i + b < outBytes; ++b) {
+					out[i + b] = static_cast<uint8_t>(z >> (b * 8));
+				}
+			}
+		}
+	};
+
 	struct SimChecksum::Impl {
 		// std::map so iteration is name-sorted — the total combines subsystems in name order.
-		std::map<std::string, blake3_hasher> hashers;
+		std::map<std::string, ChecksumHasher> hashers;
 		std::mutex                           mutex;
 		uint64_t                             tick = 0;
 		bool                                 active = false;
@@ -37,9 +65,8 @@ namespace RTE {
 		m_Impl->active = true;
 
 		// Always feed the tick subsystem so a no-op tick still has a stable hash.
-		blake3_hasher h;
-		blake3_hasher_init(&h);
-		blake3_hasher_update(&h, &simFrame, sizeof(simFrame));
+		ChecksumHasher h;
+		h.update(&simFrame, sizeof(simFrame));
 		m_Impl->hashers.emplace("tick", h);
 	}
 
@@ -51,11 +78,9 @@ namespace RTE {
 		std::string key(subsystem);
 		auto it = m_Impl->hashers.find(key);
 		if (it == m_Impl->hashers.end()) {
-			blake3_hasher h;
-			blake3_hasher_init(&h);
-			it = m_Impl->hashers.emplace(std::move(key), h).first;
+			it = m_Impl->hashers.emplace(std::move(key), ChecksumHasher{}).first;
 		}
-		blake3_hasher_update(&it->second, data, bytes);
+		it->second.update(data, bytes);
 	}
 
 	SimChecksum::Result SimChecksum::EndTick() {
@@ -65,20 +90,19 @@ namespace RTE {
 		Result r;
 		r.tick = m_Impl->tick;
 
-		blake3_hasher total;
-		blake3_hasher_init(&total);
+		ChecksumHasher total;
 
 		for (auto& [name, hasher]: m_Impl->hashers) {
 			Hash out{};
-			blake3_hasher_finalize(&hasher, out.data(), out.size());
+			hasher.finalize(out.data(), out.size());
 			r.per_subsystem[name] = out;
 
 			// Combine as name || hash; map order is sorted, so total is registration-order-independent.
-			blake3_hasher_update(&total, name.data(), name.size());
-			blake3_hasher_update(&total, out.data(), out.size());
+			total.update(name.data(), name.size());
+			total.update(out.data(), out.size());
 		}
 
-		blake3_hasher_finalize(&total, r.total.data(), r.total.size());
+		total.finalize(r.total.data(), r.total.size());
 
 		m_Impl->active = false;
 		m_Impl->hashers.clear();
