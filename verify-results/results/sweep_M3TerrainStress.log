@@ -1,0 +1,50 @@
+[determinism-check] binary  : /home/erol/cccp-linux/builddir-cum/CortexCommand
+[determinism-check] scenario: M3TerrainStress
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] mode    : thread-count matrix
+[determinism-check] threads : 1  (x10 runs each = 10 total)
+[determinism-check] tmp dir : /tmp/claude-1000/cccp-determinism-1780677682136943362-0
+[determinism-check] run 1/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_0.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_0.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 2/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_1.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_1.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 3/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_2.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_2.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 4/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_3.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_3.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 5/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_4.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_4.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 6/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_5.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_5.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 7/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_6.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_6.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 8/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_7.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_7.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 9/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_8.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_8.json
+[scenario] M3TerrainStress passed=no ticks=301
+[determinism-check] run 10/10 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M3TerrainStress -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -out /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_9.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677682136943362-0/run_t1_9.json
+[scenario] M3TerrainStress passed=no ticks=301
+
+[determinism-check] wrote report: /tmp/cumv/results/sweep_M3TerrainStress.json
+[determinism-check] RESULT: MATCHED (300 ticks across 10 runs at thread counts 1)

@@ -1,0 +1,35 @@
+[determinism-check] binary  : /home/erol/cccp-linux/builddir-cum/CortexCommand
+[determinism-check] scenario: M1Baseline
+[determinism-check] ticks   : 300
+[determinism-check] seed    : 42
+[determinism-check] mode    : thread-count matrix
+[determinism-check] threads : 1  (x3 runs each = 3 total)
+[determinism-check] tmp dir : /tmp/claude-1000/cccp-determinism-1780677658904895128-0
+[determinism-check] run 1/3 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -determinism-selftest-perturb -out /tmp/claude-1000/cccp-determinism-1780677658904895128-0/run_t1_0.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677658904895128-0/run_t1_0.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 2/3 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -determinism-selftest-perturb -out /tmp/claude-1000/cccp-determinism-1780677658904895128-0/run_t1_1.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677658904895128-0/run_t1_1.json
+[scenario] M1Baseline passed=yes ticks=301
+[determinism-check] run 3/3 (threads=1): /home/erol/cccp-linux/builddir-cum/CortexCommand -scenario M1Baseline -seed 42 -max-ticks 300 -tick-hashes -num-lua-states 1 -determinism-selftest-perturb -out /tmp/claude-1000/cccp-determinism-1780677658904895128-0/run_t1_2.json
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] wrote report: /tmp/claude-1000/cccp-determinism-1780677658904895128-0/run_t1_2.json
+[scenario] M1Baseline passed=yes ticks=301
+
+[determinism-check] wrote report: /tmp/cumv/results/control_perturb_M1Baseline.json
+[determinism-check] RESULT: DIVERGED
+    first_divergence_tick: 49
+    total_mismatched_ticks: 251 / 300
+    per-subsystem first divergence:
+        actors: tick 62
+        carve_math: tick 52
+        controller: tick 92
+        particles: tick 49
+        scene: tick 49
+        sim_rng: tick 49
+        terrain: tick 52
+    diverged runs (vs run 0):
+        run 1 threads=1 (run-index 1)
+        run 2 threads=1 (run-index 2)
