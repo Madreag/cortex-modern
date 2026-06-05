@@ -18,10 +18,18 @@ namespace RTE {
 #pragma region Random Numbers
 	class RandomGenerator {
 		std::mt19937 m_RNG; //!< The random number generator used for all random functions.
+		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
 
 	public:
 		/// Seed the random number generator.
-		void Seed(uint64_t seed) { m_RNG.seed(seed); };
+		void Seed(uint64_t seed) {
+			m_Seed = seed;
+			m_RNG.seed(seed);
+		};
+
+		/// Gets the seed this generator was last seeded with.
+		/// @return The last seed.
+		uint64_t GetSeed() const { return m_Seed; }
 
 		/// Function template which returns a uniformly distributed random number in the range [-1, 1].
 		/// @return Uniformly distributed random number in the range [-1, 1].
@@ -76,41 +84,56 @@ namespace RTE {
 		}
 	};
 
-	extern RandomGenerator g_RandomGenerator; //!< The global random number generator used in our simulation thread.
+	// Sim/render RNG split. g_SimRNG is the determinism-island RNG (Update/Travel/OnCollide,
+	// AI, physics, spawn timers); g_RenderRNG is the cosmetic-side RNG (visual jitter, screen
+	// shake, audio variation). Render-side draws never advance the sim stream.
+	extern RandomGenerator g_SimRNG;    //!< Determinism-island RNG. Default for the RandomNum/RandomNormalNum free functions.
+	extern RandomGenerator g_RenderRNG; //!< Cosmetic-side RNG. Used by visual jitter, audio variation, screen shake, etc.
 
-	/// Seed global the global random number generators.
+	/// Deprecated: prefer g_SimRNG or g_RenderRNG directly. Aliases g_SimRNG so pre-split
+	/// usage (including taking its address for Lua bindings) keeps the same behaviour.
+	extern RandomGenerator& g_RandomGenerator;
+
+	/// Seed both global RNGs to the deterministic constant.
 	void SeedRNG();
 
-	// TODO: Maybe remove these passthrough functions and force the user to manually specify if they want the simulation thread random,
-	// Or, in future, a render-thread random, as right now determinism isn't viable because framerate affects sim updates per draw
+	// Per-worker sim-RNG redirect: a threaded sim pass points this at a per-MO generator so
+	// the free functions stop racing on the shared g_SimRNG. Null on serial / main-thread code.
+	extern thread_local RandomGenerator* t_simRNGOverride;
+
+	/// Gets the sim RNG the free functions draw from: the per-worker override if installed, else g_SimRNG.
+	inline RandomGenerator& GetSimRNG() { return t_simRNGOverride ? *t_simRNGOverride : g_SimRNG; }
+
+	// Free-function form routes to the sim RNG. Render-side call sites must reach for
+	// g_RenderRNG.RandomNum<T>() / RandomNormalNum<T>() by name.
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNormalNum() {
-		return g_RandomGenerator.RandomNormalNum();
+		return GetSimRNG().RandomNormalNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNormalNum() {
-		return g_RandomGenerator.RandomNormalNum();
+		return GetSimRNG().RandomNormalNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum() {
-		return g_RandomGenerator.RandomNum();
+		return GetSimRNG().RandomNum<floatType>();
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum() {
-		return g_RandomGenerator.RandomNum();
+		return GetSimRNG().RandomNum<intType>();
 	}
 
 	template <typename floatType = float>
 	typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum(floatType min, floatType max) {
-		return g_RandomGenerator.RandomNum(min, max);
+		return GetSimRNG().RandomNum<floatType>(min, max);
 	}
 
 	template <typename intType>
 	typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum(intType min, intType max) {
-		return g_RandomGenerator.RandomNum(min, max);
+		return GetSimRNG().RandomNum<intType>(min, max);
 	}
 #pragma endregion
 
