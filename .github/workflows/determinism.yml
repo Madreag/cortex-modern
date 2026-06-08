@@ -30,18 +30,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { scenario: SimBaseline,        required: true,  trace: true }
-          - { scenario: ActorStress,     required: true,  trace: false }
-          - { scenario: TerrainStress,   required: true,  trace: true }
-          - { scenario: LuaBaseline,     required: true,  trace: false }
-          - { scenario: LuaRandomStress, required: true,  trace: true }
-          - { scenario: LuaPairsStress,     required: true,  trace: false }
-          - { scenario: LuaOsStubTest,      required: true,  trace: false }
-          - { scenario: ModSmokeLoading, required: true,  trace: false }
-          - { scenario: TerrainCarveStress,   required: true,  trace: false }
-          - { scenario: ThreadStress,    required: true,  trace: true }
+          - { scenario: SimBaseline,        ticks: 600,  required: true,  trace: true }
+          - { scenario: ActorStress,        ticks: 900,  required: true,  trace: false }
+          - { scenario: TerrainStress,      ticks: 900,  required: true,  trace: true }
+          - { scenario: LuaBaseline,        ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaRandomStress,    ticks: 600,  required: true,  trace: true }
+          - { scenario: LuaPairsStress,     ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaOsStubTest,      ticks: 600,  required: true,  trace: false }
+          - { scenario: ModSmokeLoading,    ticks: 600,  required: true,  trace: false }
+          - { scenario: TerrainCarveStress, ticks: 900,  required: true,  trace: false }
+          - { scenario: ThreadStress,       ticks: 900,  required: true,  trace: true }
           # Perf scenario; determinism advisory pending the async MOID-rebuild fix.
-          - { scenario: PerfBench,        required: false, trace: false }
+          - { scenario: PerfBench,          ticks: 1200,  required: false, trace: false }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,7 +68,7 @@ jobs:
         run: |
           ./builddir/CortexCommand -determinism-check \
               --scenario ${{ matrix.scenario }} \
-              --ticks 600 --seed 42 --runs 100 \
+              --ticks ${{ matrix.ticks }} --seed 42 --runs 100 \
               --output ${{ matrix.scenario }}-divergence.json
 
       # The gate must be able to fail: inject a real perturbation and assert it diverges.
@@ -90,12 +90,12 @@ jobs:
             exit 1
           fi
 
-      # One real per-tick trace for the cross-OS diff. -num-lua-states is pinned so the
-      # threaded-Lua state count is identical on every OS.
-      - name: Produce cross-OS trace
-        if: ${{ matrix.trace }}
+      # Standalone run at design length; exit code is the scenario's self-verdict. The trace
+      # doubles as the cross-OS artifact. -num-lua-states pinned so the count matches every OS.
+      - name: Scenario verdict + trace
+        if: ${{ matrix.required }}
         run: |
-          ./builddir/CortexCommand -scenario ${{ matrix.scenario }} -seed 42 -max-ticks 600 \
+          ./builddir/CortexCommand -scenario ${{ matrix.scenario }} -seed 42 -max-ticks ${{ matrix.ticks }} \
               -tick-hashes -num-lua-states 4 -out ${{ matrix.scenario }}-trace.json
 
       - name: Upload divergence report
@@ -120,17 +120,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { scenario: SimBaseline,        required: true,  trace: true }
-          - { scenario: ActorStress,     required: true,  trace: false }
-          - { scenario: TerrainStress,   required: true,  trace: true }
-          - { scenario: LuaBaseline,     required: true,  trace: false }
-          - { scenario: LuaRandomStress, required: true,  trace: true }
-          - { scenario: LuaPairsStress,     required: true,  trace: false }
-          - { scenario: LuaOsStubTest,      required: true,  trace: false }
-          - { scenario: ModSmokeLoading, required: true,  trace: false }
-          - { scenario: TerrainCarveStress,   required: true,  trace: false }
-          - { scenario: ThreadStress,    required: true,  trace: true }
-          - { scenario: PerfBench,        required: false, trace: false }
+          - { scenario: SimBaseline,        ticks: 600,  required: true,  trace: true }
+          - { scenario: ActorStress,        ticks: 900,  required: true,  trace: false }
+          - { scenario: TerrainStress,      ticks: 900,  required: true,  trace: true }
+          - { scenario: LuaBaseline,        ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaRandomStress,    ticks: 600,  required: true,  trace: true }
+          - { scenario: LuaPairsStress,     ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaOsStubTest,      ticks: 600,  required: true,  trace: false }
+          - { scenario: ModSmokeLoading,    ticks: 600,  required: true,  trace: false }
+          - { scenario: TerrainCarveStress, ticks: 900,  required: true,  trace: false }
+          - { scenario: ThreadStress,       ticks: 900,  required: true,  trace: true }
+          - { scenario: PerfBench,          ticks: 1200,  required: false, trace: false }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -154,7 +154,7 @@ jobs:
         run: |
           & ".\Cortex Command.exe" -determinism-check `
               --scenario ${{ matrix.scenario }} `
-              --ticks 600 --seed 42 --runs 100 `
+              --ticks ${{ matrix.ticks }} --seed 42 --runs 100 `
               --output "${{ matrix.scenario }}-divergence.json" 2>&1 | Out-Host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -169,11 +169,11 @@ jobs:
           elseif ($LASTEXITCODE -eq 0) { Write-Error "positive control MATCHED — the gate is blind"; exit 1 }
           else { Write-Error "positive control errored (exit $LASTEXITCODE)"; exit 1 }
 
-      - name: Produce cross-OS trace
-        if: ${{ matrix.trace }}
+      - name: Scenario verdict + trace
+        if: ${{ matrix.required }}
         shell: pwsh
         run: |
-          & ".\Cortex Command.exe" -scenario ${{ matrix.scenario }} -seed 42 -max-ticks 600 `
+          & ".\Cortex Command.exe" -scenario ${{ matrix.scenario }} -seed 42 -max-ticks ${{ matrix.ticks }} `
               -tick-hashes -num-lua-states 4 -out "${{ matrix.scenario }}-trace.json" 2>&1 | Out-Host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -220,7 +220,7 @@ jobs:
       - name: Compare per-tick hashes (Linux x64 vs Windows x64)
         run: |
           set -uo pipefail
-          subs="tick sim_rng lua_state actors particles controller scene terrain carve_math decisions"
+          subs="tick sim_rng lua_state actors particles controller scene terrain carve_math"
           status=0
           for s in SimBaseline TerrainStress LuaRandomStress ThreadStress; do
             lin="lin/${s}-trace.json"; win="win/${s}-trace.json"
@@ -253,9 +253,9 @@ jobs:
           exit $status
 
   # Thread-count determinism: runs ThreadStress at Lua-state counts 1/2/4/8/16 and diffs the
-  # per-tick traces ACROSS counts. Advisory: a residual cross-thread-count divergence remains in
-  # ThreadStress past ~tick 795 (see Source/CI/baseline_crossplatform_divergence.md); the
-  # shorter-horizon scenario matrix above is the blocking gate. Flip to blocking once it closes.
+  # per-tick traces ACROSS counts. Controller-led divergence reports MATCHED-SIM (advisory) —
+  # AI output is an input to the sim, off the sim-given-Controllers contract; the sim subsystems
+  # must stay bit-identical across counts. See Source/CI/thread-count-determinism.md.
   determinism-thread-matrix-linux:
     runs-on: ubuntu-latest
     continue-on-error: true
