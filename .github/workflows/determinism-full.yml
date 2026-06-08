@@ -1,0 +1,428 @@
+name: Determinism (full suite)
+
+# The complete sweep: 11 scenarios x 2 OS at design length, thread matrix, TSan,
+# cross-OS trace, perf scenario. Heavy by design — manual trigger only; the per-PR
+# gate is the small determinism.yml.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  determinism-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { scenario: SimBaseline,        ticks: 600,  required: true,  trace: true }
+          - { scenario: ActorStress,        ticks: 900,  required: true,  trace: false }
+          - { scenario: TerrainStress,      ticks: 900,  required: true,  trace: true }
+          - { scenario: LuaBaseline,        ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaRandomStress,    ticks: 600,  required: true,  trace: true }
+          - { scenario: LuaPairsStress,     ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaOsStubTest,      ticks: 600,  required: true,  trace: false }
+          - { scenario: ModSmokeLoading,    ticks: 600,  required: true,  trace: false }
+          - { scenario: TerrainCarveStress, ticks: 900,  required: true,  trace: false }
+          - { scenario: ThreadStress,       ticks: 900,  required: true,  trace: true }
+          # Perf scenario; determinism advisory pending the async MOID-rebuild fix.
+          - { scenario: PerfBench,          ticks: 1200,  required: false, trace: false }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install --no-install-recommends -y \
+            ninja-build pkg-config \
+            liballegro4-dev libloadpng4-dev libflac++-dev luajit-5.1-dev liblua5.2-dev \
+            libminizip-dev liblz4-dev libpng++-dev libx11-dev libboost-dev libtbb-dev \
+            libsdl2-dev libsdl2-image-dev libopengl-dev libfuse2
+          sudo pip install meson
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release -Db_lto=false -Db_pch=false
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Run determinism-check (${{ matrix.scenario }})
+        continue-on-error: ${{ matrix.required == false }}
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario ${{ matrix.scenario }} \
+              --ticks ${{ matrix.ticks }} --seed 42 --runs 100 \
+              --output ${{ matrix.scenario }}-divergence.json
+
+      # The gate must be able to fail: inject a real perturbation and assert it diverges.
+      - name: Positive control (must DIVERGE)
+        if: matrix.scenario == 'SimBaseline'
+        run: |
+          set +e
+          ./builddir/CortexCommand -determinism-check \
+              --scenario SimBaseline --ticks 120 --seed 42 --runs 3 \
+              --determinism-selftest-perturb --output selftest.json
+          code=$?
+          if [ "$code" -eq 1 ]; then
+            echo "positive control diverged (exit 1) as expected"
+          elif [ "$code" -eq 0 ]; then
+            echo "::error::positive control MATCHED — the gate is blind to injected non-determinism"
+            exit 1
+          else
+            echo "::error::positive control errored (exit $code) instead of diverging"
+            exit 1
+          fi
+
+      # Standalone run at design length; exit code is the scenario's self-verdict. The trace
+      # doubles as the cross-OS artifact. -num-lua-states pinned so the count matches every OS.
+      - name: Scenario verdict + trace
+        if: ${{ matrix.required }}
+        run: |
+          ./builddir/CortexCommand -scenario ${{ matrix.scenario }} -seed 42 -max-ticks ${{ matrix.ticks }} \
+              -tick-hashes -num-lua-states 4 -out ${{ matrix.scenario }}-trace.json
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-${{ matrix.scenario }}-linux
+          path: ${{ matrix.scenario }}-divergence.json
+          if-no-files-found: warn
+
+      - name: Upload cross-OS trace
+        if: ${{ matrix.trace }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-trace-linux-${{ matrix.scenario }}
+          path: ${{ matrix.scenario }}-trace.json
+          if-no-files-found: error
+
+  determinism-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { scenario: SimBaseline,        ticks: 600,  required: true,  trace: true }
+          - { scenario: ActorStress,        ticks: 900,  required: true,  trace: false }
+          - { scenario: TerrainStress,      ticks: 900,  required: true,  trace: true }
+          - { scenario: LuaBaseline,        ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaRandomStress,    ticks: 600,  required: true,  trace: true }
+          - { scenario: LuaPairsStress,     ticks: 600,  required: true,  trace: false }
+          - { scenario: LuaOsStubTest,      ticks: 600,  required: true,  trace: false }
+          - { scenario: ModSmokeLoading,    ticks: 600,  required: true,  trace: false }
+          - { scenario: TerrainCarveStress, ticks: 900,  required: true,  trace: false }
+          - { scenario: ThreadStress,       ticks: 900,  required: true,  trace: true }
+          - { scenario: PerfBench,          ticks: 1200,  required: false, trace: false }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Final|x64)
+        shell: pwsh
+        run: msbuild RTEA.sln /p:Configuration="Final" /p:Platform=x64 /m /nologo /v:minimal
+
+      - name: Stage runtime deps
+        shell: pwsh
+        run: Copy-Item -Path external/lib/win/fmod.dll -Destination fmod.dll -Force
+
+      - name: Run determinism-check (${{ matrix.scenario }})
+        continue-on-error: ${{ matrix.required == false }}
+        shell: pwsh
+        # The game is a windowed app — pipe its output so pwsh waits and $LASTEXITCODE is real.
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario ${{ matrix.scenario }} `
+              --ticks ${{ matrix.ticks }} --seed 42 --runs 100 `
+              --output "${{ matrix.scenario }}-divergence.json" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Positive control (must DIVERGE)
+        if: matrix.scenario == 'SimBaseline'
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario SimBaseline --ticks 120 --seed 42 --runs 3 `
+              --determinism-selftest-perturb --output selftest.json 2>&1 | Out-Host
+          if ($LASTEXITCODE -eq 1) { Write-Host "positive control diverged (exit 1) as expected" }
+          elseif ($LASTEXITCODE -eq 0) { Write-Error "positive control MATCHED — the gate is blind"; exit 1 }
+          else { Write-Error "positive control errored (exit $LASTEXITCODE)"; exit 1 }
+
+      - name: Scenario verdict + trace
+        if: ${{ matrix.required }}
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -scenario ${{ matrix.scenario }} -seed 42 -max-ticks ${{ matrix.ticks }} `
+              -tick-hashes -num-lua-states 4 -out "${{ matrix.scenario }}-trace.json" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-${{ matrix.scenario }}-windows
+          path: ${{ matrix.scenario }}-divergence.json
+          if-no-files-found: warn
+
+      - name: Upload cross-OS trace
+        if: ${{ matrix.trace }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-trace-windows-${{ matrix.scenario }}
+          path: ${{ matrix.scenario }}-trace.json
+          if-no-files-found: error
+
+  determinism-cross-os:
+    # Diffs the Linux x64 and Windows x64 per-tick traces per subsystem. Advisory: the FPU
+    # contract is pinned, but cross-host bit-identity also needs libm standardization, which is
+    # not in place yet — sim_rng/lua_state diverge from tick 0 (see
+    # Source/CI/baseline_crossplatform_divergence.md). The job runs the real per-subsystem diff
+    # so the gap stays visible; flip to blocking once libm is standardized.
+    needs: [determinism-linux, determinism-windows]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Download Linux traces
+        uses: actions/download-artifact@v4
+        with:
+          pattern: determinism-trace-linux-*
+          path: lin
+          merge-multiple: true
+
+      - name: Download Windows traces
+        uses: actions/download-artifact@v4
+        with:
+          pattern: determinism-trace-windows-*
+          path: win
+          merge-multiple: true
+
+      - name: Compare per-tick hashes (Linux x64 vs Windows x64)
+        run: |
+          set -uo pipefail
+          subs="tick sim_rng lua_state actors particles controller scene terrain carve_math"
+          status=0
+          for s in SimBaseline TerrainStress LuaRandomStress ThreadStress; do
+            lin="lin/${s}-trace.json"; win="win/${s}-trace.json"
+            if [ ! -f "$lin" ] || [ ! -f "$win" ]; then
+              echo "::error::${s}: missing a trace"; status=1; continue
+            fi
+            jq -e -r '.runs[0].tick_hashes[].total' "$lin" > "lin-${s}.txt" || { echo "::error::${s}: linux trace carried no hashes"; status=1; continue; }
+            jq -e -r '.runs[0].tick_hashes[].total' "$win" > "win-${s}.txt" || { echo "::error::${s}: windows trace carried no hashes"; status=1; continue; }
+            if [ ! -s "lin-${s}.txt" ] || [ ! -s "win-${s}.txt" ]; then
+              echo "::error::${s}: a trace carried no per-tick hashes"; status=1; continue
+            fi
+            if diff -q "lin-${s}.txt" "win-${s}.txt" >/dev/null; then
+              echo "OK ${s}: $(wc -l < lin-${s}.txt) ticks bit-identical (Linux x64 == Windows x64)"
+            else
+              echo "::error::${s}: cross-OS divergence on the total hash"
+              ft=$(paste -d' ' <(cat -n "lin-${s}.txt") <(cat "win-${s}.txt") | awk '$2!=$3{print $1-1; exit}')
+              echo "    first diverging tick: ${ft:-?}"
+              for sub in $subs; do
+                jq -r ".runs[0].tick_hashes[].subsystems[\"${sub}\"] // empty" "$lin" > "lin-${s}-${sub}.txt"
+                jq -r ".runs[0].tick_hashes[].subsystems[\"${sub}\"] // empty" "$win" > "win-${s}-${sub}.txt"
+                if [ -s "lin-${s}-${sub}.txt" ] && ! diff -q "lin-${s}-${sub}.txt" "win-${s}-${sub}.txt" >/dev/null; then
+                  st=$(paste -d' ' <(cat -n "lin-${s}-${sub}.txt") <(cat "win-${s}-${sub}.txt") | awk '$2!=$3{print $1-1; exit}')
+                  echo "    subsystem '${sub}' first diverges at tick ${st:-?}"
+                fi
+              done
+              diff "lin-${s}.txt" "win-${s}.txt" | head -10
+              status=1
+            fi
+          done
+          exit $status
+
+  # Thread-count determinism: runs ThreadStress at Lua-state counts 1/2/4/8/16 and diffs the
+  # per-tick traces ACROSS counts. Advisory: AI output legitimately differs per count (it is an
+  # input to the sim, off the sim-given-Controllers contract), and once Controllers differ the
+  # downstream sim differs too, so DIVERGED is expected here; a controller-only flicker reports
+  # MATCHED-SIM. See Source/CI/thread-count-determinism.md.
+  determinism-thread-matrix-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install --no-install-recommends -y \
+            ninja-build pkg-config \
+            liballegro4-dev libloadpng4-dev libflac++-dev luajit-5.1-dev liblua5.2-dev \
+            libminizip-dev liblz4-dev libpng++-dev libx11-dev libboost-dev libtbb-dev \
+            libsdl2-dev libsdl2-image-dev libopengl-dev libfuse2
+          sudo pip install meson
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release -Db_lto=false -Db_pch=false
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Run thread-count matrix (ThreadStress)
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario ThreadStress --ticks 900 --seed 42 \
+              --threads 1,2,4,8,16 --runs 2 \
+              --output ThreadStress-matrix.json
+
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-thread-matrix-linux
+          path: ThreadStress-matrix.json
+          if-no-files-found: warn
+
+  determinism-thread-matrix-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Final|x64)
+        shell: pwsh
+        run: msbuild RTEA.sln /p:Configuration="Final" /p:Platform=x64 /m /nologo /v:minimal
+
+      - name: Stage runtime deps
+        shell: pwsh
+        run: Copy-Item -Path external/lib/win/fmod.dll -Destination fmod.dll -Force
+
+      - name: Run thread-count matrix (ThreadStress)
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario ThreadStress --ticks 900 --seed 42 `
+              --threads 1,2,4,8,16 --runs 2 `
+              --output ThreadStress-matrix.json 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-thread-matrix-windows
+          path: ThreadStress-matrix.json
+          if-no-files-found: warn
+
+  # ThreadSanitizer gate on the threaded sim. Advisory at landing (continue-on-error) with a
+  # curated known-noise suppression set; promote via TSAN_REQUIRED — see Source/CI/tsan-known-races.md.
+  determinism-tsan-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { scenario: SimBaseline,     ticks: 600,  threads: 2 }
+          - { scenario: ThreadStress, ticks: 900,  threads: 8 }
+          - { scenario: PerfBench,     ticks: 600,  threads: 8 }
+    env:
+      TSAN_OPTIONS: halt_on_error=0:history_size=7:second_deadlock_stack=1:symbolize=1:suppressions=${{ github.workspace }}/tsan-suppressions.txt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install --no-install-recommends -y \
+            ninja-build pkg-config \
+            liballegro4-dev libloadpng4-dev libflac++-dev luajit-5.1-dev liblua5.2-dev \
+            libminizip-dev liblz4-dev libpng++-dev libx11-dev libboost-dev libtbb-dev \
+            libsdl2-dev libsdl2-image-dev libopengl-dev libfuse2
+          sudo pip install meson
+
+      # Newer kernels default vm.mmap_rnd_bits=32, which exceeds what libtsan's shadow memory
+      # accepts ("unexpected memory mapping"). 28 is the documented working value.
+      - name: Lower ASLR entropy for TSan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Write TSan suppressions
+        run: |
+          cat > tsan-suppressions.txt <<'EOF'
+          # LuaJIT emits machine code at runtime; TSan can't instrument JIT frames, so lj_* reports are phantom.
+          race:^lj_
+
+          # System libtbb isn't built under -fsanitize=thread, so TSan can't see par_unseq join sync.
+          # Patterns name the .so explicitly — an ambiguous called_from_lib match is fatal to TSan.
+          called_from_lib:libtbb.so
+          called_from_lib:libtbbmalloc.so
+
+          # par_unseq dispatches through uninstrumented TBB, so TSan is blind to the join and every
+          # par_unseq site reports. Suppress the dispatch templates; real races elsewhere still surface.
+          race:tbb::detail::d1::start_for
+          race:__pstl::__internal::__brick_walk1
+          race:AdjacentCost
+          race:UpdateNodeCosts
+
+          # Render-side MOID race: deferred draw task vs main-thread Draw. The sim checksum is fed before the
+          # task is submitted, so it does not perturb the hash.
+          race:UpdateDrawMOIDs
+          race:MOSRotating::Draw
+          EOF
+
+      - name: Configure (release + TSan)
+        run: meson setup builddir --buildtype=release -Db_sanitize=thread -Db_lto=false
+
+      - name: Build
+        run: meson compile -C builddir
+
+      # Known-noise suppressions. Documented entry-by-entry in Source/CI/tsan-known-races.md —
+      # keep this heredoc in step with that file.
+      - name: Run determinism-check under TSan (${{ matrix.scenario }})
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario ${{ matrix.scenario }} \
+              --ticks ${{ matrix.ticks }} --seed 42 \
+              --threads ${{ matrix.threads }} --runs 2 \
+              --output ${{ matrix.scenario }}-tsan.json 2>&1 | tee ${{ matrix.scenario }}-tsan.log
+
+      # Surface the race count as a PR annotation. TSAN_REQUIRED=1 turns this into a fail-on-warning
+      # gate (the env var lives at job level so promotion is a single change).
+      - name: Summarise TSan output
+        if: always()
+        run: |
+          log=${{ matrix.scenario }}-tsan.log
+          summary=${{ matrix.scenario }}-tsan-summary.txt
+          if [ ! -f "$log" ]; then
+            echo "no log file — run step failed before producing output" > "$summary"
+            exit 0
+          fi
+          count=$(grep -c "WARNING: ThreadSanitizer" "$log" || true)
+          echo "TSan warnings: $count" > "$summary"
+          if [ "$count" != "0" ]; then
+            echo "::warning::TSan detected $count race(s) in ${{ matrix.scenario }} — see artifact"
+            grep -A 25 "WARNING: ThreadSanitizer" "$log" >> "$summary" || true
+            if [ "${TSAN_REQUIRED:-0}" = "1" ]; then
+              echo "::error::TSan gate is required and detected races; failing step."
+              exit 1
+            fi
+          fi
+
+      - name: Upload TSan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-tsan-${{ matrix.scenario }}-linux
+          path: |
+            ${{ matrix.scenario }}-tsan.json
+            ${{ matrix.scenario }}-tsan.log
+            ${{ matrix.scenario }}-tsan-summary.txt
+          if-no-files-found: warn
