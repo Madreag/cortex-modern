@@ -47,7 +47,8 @@ void TerrainFrosting::FrostTerrain(SLTerrain* terrain) const {
 	int appliedThickness = 0;
 
 	for (int xPos = 0; xPos < matBitmap->w; ++xPos) {
-		int thicknessGoal = RandomNum(m_MinThickness, m_MaxThickness);
+		// Frosting thickness writes terrain pixels — sim state, so draw the sim RNG explicitly.
+		int thicknessGoal = g_SimRNG.RandomNum<int>(m_MinThickness, m_MaxThickness);
 
 		for (int yPos = matBitmap->h - 1; yPos >= 0; --yPos) {
 			int materialCheckPixel = _getpixel(matBitmap, xPos, yPos);
