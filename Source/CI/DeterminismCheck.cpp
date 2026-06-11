@@ -503,20 +503,18 @@ namespace RTE {
 		}
 
 		// Controller state is the AI's output — an input to the sim, not part of the
-		// sim-given-Controllers contract (see Source/CI/thread-count-determinism.md). If the
-		// controller hash diverges strictly before any sim subsystem, the rest is downstream of
-		// different AI input, so the result is advisory rather than a gate failure.
-		if (rep.diverged && !rep.lengthMismatch) {
-			uint64_t aiFirst = UINT64_MAX;
-			uint64_t simFirst = UINT64_MAX;
+		// sim-given-Controllers contract (see Source/CI/thread-count-determinism.md). Advisory only
+		// when the divergence is controller-ONLY for the whole run; any sim-subsystem divergence
+		// fails, whatever diverged first.
+		if (rep.diverged && !rep.lengthMismatch && !rep.perSubsystemFirstDivergence.empty()) {
+			bool controllerOnly = true;
 			for (const auto& [name, tick]: rep.perSubsystemFirstDivergence) {
-				if (name == "controller") {
-					aiFirst = std::min(aiFirst, tick);
-				} else {
-					simFirst = std::min(simFirst, tick);
+				if (name != "controller") {
+					controllerOnly = false;
+					break;
 				}
 			}
-			rep.aiOnlyDivergence = (aiFirst < simFirst);
+			rep.aiOnlyDivergence = controllerOnly;
 		}
 
 		// Write the divergence report. Schema is small and stable — read by humans and CI scripts.
