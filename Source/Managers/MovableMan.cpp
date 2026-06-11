@@ -40,6 +40,42 @@ struct MOXPosComparison {
 	bool operator()(MovableObject* pRhs, MovableObject* pLhs) { return pRhs->GetPos().m_X < pLhs->GetPos().m_X; }
 };
 
+// Sorts MO containers by unique ID for a stable per-frame iteration order across same-seed runs.
+struct MOUniqueIDLess {
+	bool operator()(const MovableObject* a, const MovableObject* b) const noexcept {
+		return a->GetUniqueID() < b->GetUniqueID();
+	}
+};
+
+// A Lua state's registered-MO set copied into canonical unique-ID order (the set itself is unordered).
+static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& state) {
+	const auto& registered = state.GetRegisteredMOs();
+	std::vector<MovableObject*> sorted(registered.begin(), registered.end());
+	std::sort(sorted.begin(), sorted.end(), MOUniqueIDLess());
+	return sorted;
+}
+
+// Routes any sim-RNG draws made during a draw to g_RenderRNG, so the draw-rate-dependent
+// number of draw passes can't drift the deterministic g_SimRNG stream.
+struct ScopedRenderRNG {
+	RandomGenerator* m_Prev;
+	ScopedRenderRNG() :
+	    m_Prev(t_simRNGOverride) { t_simRNGOverride = &g_RenderRNG; }
+	~ScopedRenderRNG() { t_simRNGOverride = m_Prev; }
+	ScopedRenderRNG(const ScopedRenderRNG&) = delete;
+	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
+};
+
+// Orders alarm events by a stable content key (m_AddedAlarmEvents is appended in worker-thread race order).
+struct AlarmEventLess {
+	bool operator()(const AlarmEvent* a, const AlarmEvent* b) const noexcept {
+		if (a->m_Team != b->m_Team) { return a->m_Team < b->m_Team; }
+		if (a->m_ScenePos.m_X != b->m_ScenePos.m_X) { return a->m_ScenePos.m_X < b->m_ScenePos.m_X; }
+		if (a->m_ScenePos.m_Y != b->m_ScenePos.m_Y) { return a->m_ScenePos.m_Y < b->m_ScenePos.m_Y; }
+		return a->m_Range < b->m_Range;
+	}
+};
+
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -1302,10 +1338,17 @@ void MovableMan::Update() {
 		delete alarmEvent;
 	}
 	m_AlarmEvents.clear();
+	// Sort into canonical order before the drain so AI reads alarms deterministically.
+	std::sort(m_AddedAlarmEvents.begin(), m_AddedAlarmEvents.end(), AlarmEventLess());
 	for (std::vector<AlarmEvent*>::iterator aeItr = m_AddedAlarmEvents.begin(); aeItr != m_AddedAlarmEvents.end(); ++aeItr) {
 		m_AlarmEvents.push_back(*aeItr);
 	}
 	m_AddedAlarmEvents.clear();
+
+	// Lock iteration order before the sim passes so same-seed runs visit MOs identically.
+	std::sort(m_Actors.begin(), m_Actors.end(), MOUniqueIDLess());
+	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
+	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
 	// Travel MOs
 	Travel();
@@ -1345,7 +1388,7 @@ void MovableMan::Update() {
 		const std::string threadedUpdate = "ThreadedUpdate"; // avoid string reconstruction
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: g_LuaMan.GetMasterScriptState().GetRegisteredMOs()) {
+		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
 				mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
 			}
@@ -1353,30 +1396,34 @@ void MovableMan::Update() {
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
 
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
+		// One Lua state per task; the assert below requires it regardless of pool size.
 		g_ThreadMan.GetPriorityThreadPool().parallelize_loop(luaStates.size(),
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
 
-			                                                     for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			                                                     for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				                                                     if (ValidMO(mo->GetRootParent())) {
 					                                                     mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
 				                                                     }
 			                                                     }
 
 			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		                                                     })
+		                                                     },
+		                                                     luaStates.size())
 		    .wait();
 	}
 
 	{
 		ZoneScopedN("Multithreaded Scripts SyncedUpdate");
 
+		// The serial, MOID-ordered channel for script-driven shared-state mutation;
+		// scripts opt in via RequestSyncedUpdate. See Data/Modding/threaded-determinism.md.
 		const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: g_LuaMan.GetMasterScriptState().GetRegisteredMOs()) {
+		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
 				mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 			}
@@ -1386,7 +1433,7 @@ void MovableMan::Update() {
 		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
 			g_LuaMan.SetThreadLuaStateOverride(&luaState);
 
-			for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				if (mo->HasRequestedSyncedUpdate()) {
 					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 					mo->ResetRequestedSyncedUpdateFlag();
@@ -1478,6 +1525,11 @@ void MovableMan::Update() {
 
 	{
 		ZoneScopedN("MO Transfer and Deletion");
+
+		// Sort the added queues before the drain so the transfer order is stable across runs.
+		std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
+		std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
+		std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
 
 		{
 			// Actors
@@ -1690,6 +1742,11 @@ void MovableMan::Update() {
 		}
 	}
 
+	// Freeze the material terrain for the threaded vision pass so carves can't race the see-ray reads.
+	if (SLTerrain* terrain = g_SceneMan.GetTerrain()) {
+		terrain->UpdateMaterialCopy();
+	}
+
 	// Run seeing rays for all actors
 	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
 	                                                                         [&](int start, int end) {
@@ -1778,6 +1835,19 @@ void MovableMan::Travel() {
 void MovableMan::UpdateControllers() {
 	ZoneScoped;
 
+	// Re-sort: ExecuteLuaScriptCallbacks may have added or removed actors since the frame-start sort.
+	std::sort(m_Actors.begin(), m_Actors.end(), MOUniqueIDLess());
+	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
+	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
+
+	// Rebuild the contiguous actor-ID map here, in sync, so the AI-update gate reads it stably;
+	// the old async rebuild in UpdateDrawMOIDs raced this tick's actor edits.
+	m_ContiguousActorIDs.clear();
+	int actorID = 0;
+	for (Actor* actor: m_Actors) {
+		m_ContiguousActorIDs[actor] = actorID++;
+	}
+
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
 	{
 		for (Actor* actor: m_Actors) {
@@ -1787,7 +1857,10 @@ void MovableMan::UpdateControllers() {
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
 			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
+				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
+				g_CurrentAIActor = nullptr;
 			}
 		}
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
@@ -1800,12 +1873,22 @@ void MovableMan::UpdateControllers() {
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
 			                                                     for (Actor* actor: m_Actors) {
 				                                                     if (actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
+					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
+					                                                     g_CurrentAIActor = nullptr;
 				                                                     }
 			                                                     }
 			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		                                                     })
+		                                                     },
+		                                                     luaStates.size())
 		    .wait();
+
+		// Drain the equip mutations AHuman::Equip* queued under parallel AI, in MOID order.
+		for (Actor* actor: m_Actors) {
+			if (AHuman* asHuman = dynamic_cast<AHuman*>(actor)) {
+				asHuman->DrainPendingDeferredMutations();
+			}
+		}
 
 		for (Actor* actor: m_Actors) {
 			if (actor->GetController()->ShouldUpdateAIThisFrame()) {
@@ -1837,6 +1920,7 @@ void MovableMan::PreControllerUpdate() {
 }
 
 void MovableMan::DrawMatter(BITMAP* pTargetBitmap, Vector& targetPos) {
+	ScopedRenderRNG renderRNG;
 	// Draw objects to accumulation bitmap
 	for (std::deque<Actor*>::iterator aIt = --m_Actors.end(); aIt != --m_Actors.begin(); --aIt)
 		(*aIt)->Draw(pTargetBitmap, targetPos, g_DrawMaterial);
@@ -1869,6 +1953,7 @@ void MovableMan::VerifyMOIDIndex() {
 }
 
 void MovableMan::UpdateDrawMOIDs() {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	///////////////////////////////////////////////////
@@ -1877,7 +1962,6 @@ void MovableMan::UpdateDrawMOIDs() {
 
 	// Clear the index each frame and do it over because MO's get added and deleted between each frame.
 	m_MOIDIndex.clear();
-	m_ContiguousActorIDs.clear();
 
 	// Add a null and start counter at 1 because MOID == 0 means no MO.
 	// - Update: This isnt' true anymore, but still keep 0 free just to be safe
@@ -1885,9 +1969,7 @@ void MovableMan::UpdateDrawMOIDs() {
 
 	MOID currentMOID = 1;
 
-	int actorID = 0;
 	for (Actor* actor: m_Actors) {
-		m_ContiguousActorIDs[actor] = actorID++;
 		if (!actor->IsSetToDelete()) {
 			actor->UpdateMOID(m_MOIDIndex);
 			actor->Draw(nullptr, Vector(), g_DrawMOID, true);
@@ -1939,6 +2021,7 @@ void MovableMan::CompleteQueuedMOIDDrawings() {
 }
 
 void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	// Draw objects to accumulation bitmap, in reverse order so actors appear on top.
@@ -1969,6 +2052,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 }
 
 void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int which, bool playerControlled) {
+	ScopedRenderRNG renderRNG;
 	ZoneScoped;
 
 	// Draw HUD elements

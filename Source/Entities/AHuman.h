@@ -11,6 +11,8 @@
 #include "LimbPath.h"
 
 #include <array>
+#include <functional>
+#include <vector>
 
 struct BITMAP;
 
@@ -575,6 +577,13 @@ namespace RTE {
 		Arm* m_pFGArm;
 		// Background arm.
 		Arm* m_pBGArm;
+		std::vector<std::function<void()>> m_PendingDeferredMutations; //!< Equip ops queued from parallel AI; drained serially by MovableMan.
+
+	public:
+		/// Drained in MOID order by MovableMan after the parallel ThreadedUpdateAI; mods don't call this.
+		void DrainPendingDeferredMutations();
+
+	protected:
 		// Foreground leg.
 		Leg* m_pFGLeg;
 		// Background leg.
