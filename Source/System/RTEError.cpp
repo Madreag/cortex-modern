@@ -226,6 +226,11 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 		std::fprintf(stderr, "RTE Abort (from worker thread): %s\n", message.c_str());
 		return false;
 	}
+	// Headless / automated runs can't dismiss a modal dialog — log + proceed to exit.
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		std::fprintf(stderr, "RTE Abort (headless): %s\n", message.c_str());
+		return false;
+	}
 	enum AbortMessageButton {
 		ButtonInvalid,
 		ButtonExit,
@@ -263,6 +268,11 @@ bool RTEError::ShowAssertMessageBox(const std::string& message) {
 		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
 		std::fprintf(stderr, "RTE Assert (from worker thread): %s\n", message.c_str());
 		return false;
+	}
+	// Headless / automated runs can't dismiss a modal dialog — log + abort to exit.
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		std::fprintf(stderr, "RTE Assert (headless): %s\n", message.c_str());
+		return true;
 	}
 	enum AssertMessageButton {
 		ButtonInvalid,
