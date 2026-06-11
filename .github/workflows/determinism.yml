@@ -1,0 +1,132 @@
+name: Determinism
+
+# Per-PR determinism gate, sized for a community repo: one canary scenario per OS
+# (25 same-seed runs diffed per tick), the gate-not-blind selftest, and the scenario's
+# own pass verdict. The full 11-scenario suite is determinism-full.yml (manual trigger).
+on:
+  pull_request:
+    branches: [determinism-revamp]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  determinism-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install --no-install-recommends -y \
+            ninja-build pkg-config \
+            liballegro4-dev libloadpng4-dev libflac++-dev luajit-5.1-dev liblua5.2-dev \
+            libminizip-dev liblz4-dev libpng++-dev libx11-dev libboost-dev libtbb-dev \
+            libsdl2-dev libsdl2-image-dev libopengl-dev libfuse2
+          sudo pip install meson
+
+      - name: Configure (release)
+        run: meson setup builddir --buildtype=release -Db_lto=false -Db_pch=false
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Run determinism-check (SimBaseline)
+        run: |
+          ./builddir/CortexCommand -determinism-check \
+              --scenario SimBaseline \
+              --ticks 600 --seed 42 --runs 25 \
+              --output SimBaseline-divergence.json
+
+      # The gate must be able to fail: inject a real perturbation and assert it diverges.
+      - name: Positive control (must DIVERGE)
+        run: |
+          set +e
+          ./builddir/CortexCommand -determinism-check \
+              --scenario SimBaseline --ticks 120 --seed 42 --runs 3 \
+              --determinism-selftest-perturb --output selftest.json
+          code=$?
+          if [ "$code" -eq 1 ]; then
+            echo "positive control diverged (exit 1) as expected"
+          elif [ "$code" -eq 0 ]; then
+            echo "::error::positive control MATCHED — the gate is blind to injected non-determinism"
+            exit 1
+          else
+            echo "::error::positive control errored (exit $code) instead of diverging"
+            exit 1
+          fi
+
+      # Standalone run at design length; exit code is the scenario's self-verdict.
+      - name: Scenario verdict
+        run: |
+          ./builddir/CortexCommand -scenario SimBaseline -seed 42 -max-ticks 600 \
+              -tick-hashes -num-lua-states 4 -out SimBaseline-trace.json
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-linux
+          path: |
+            SimBaseline-divergence.json
+            selftest.json
+          if-no-files-found: warn
+
+  determinism-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Final|x64)
+        shell: pwsh
+        run: msbuild RTEA.sln /p:Configuration="Final" /p:Platform=x64 /m /nologo /v:minimal
+
+      - name: Stage runtime deps
+        shell: pwsh
+        run: Copy-Item -Path external/lib/win/fmod.dll -Destination fmod.dll -Force
+
+      # Hosted Windows runners have no GPU/GL driver; the engine makes a real GL context even
+      # headless. Mesa's software OpenGL fills that in (llvmpipe), like Mesa does on the Linux runner.
+      - name: Stage Mesa software OpenGL
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/pal1000/mesa-dist-win/releases/download/26.1.1/mesa3d-26.1.1-release-msvc.7z" -OutFile mesa.7z
+          7z x mesa.7z -omesa | Out-Null
+          Copy-Item -Path mesa\x64\* -Destination . -Recurse -Force
+
+      - name: Run determinism-check (SimBaseline)
+        shell: pwsh
+        # The game is a windowed app — pipe its output so pwsh waits and $LASTEXITCODE is real.
+        run: |
+          & ".\Cortex Command.exe" -determinism-check `
+              --scenario SimBaseline `
+              --ticks 600 --seed 42 --runs 25 `
+              --output "SimBaseline-divergence.json" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Scenario verdict
+        shell: pwsh
+        run: |
+          & ".\Cortex Command.exe" -scenario SimBaseline -seed 42 -max-ticks 600 `
+              -tick-hashes -num-lua-states 4 -out "SimBaseline-trace.json" 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload divergence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-windows
+          path: SimBaseline-divergence.json
+          if-no-files-found: warn
