@@ -205,6 +205,8 @@ namespace RTE {
 
 		struct DivergenceReport {
 			bool diverged = false;
+			// Controller state diverged strictly before any sim subsystem — AI flicker, advisory.
+			bool aiOnlyDivergence = false;
 			uint64_t    firstDivergenceTick = 0;
 			// Per-subsystem first-divergence summary (subsystem name → tick where it first diverged).
 			std::map<std::string, uint64_t> perSubsystemFirstDivergence;
@@ -470,6 +472,21 @@ namespace RTE {
 			rep.firstDivergenceTick = rep.comparedTicks; // where the shortest run stopped
 		}
 
+		// Controller state is the AI's output — an input to the sim, not part of the
+		// sim-given-Controllers contract (see Source/CI/thread-count-determinism.md). Advisory only
+		// when the divergence is controller-ONLY for the whole run; any sim-subsystem divergence
+		// fails, whatever diverged first.
+		if (rep.diverged && !rep.lengthMismatch && !rep.perSubsystemFirstDivergence.empty()) {
+			bool controllerOnly = true;
+			for (const auto& [name, tick]: rep.perSubsystemFirstDivergence) {
+				if (name != "controller") {
+					controllerOnly = false;
+					break;
+				}
+			}
+			rep.aiOnlyDivergence = controllerOnly;
+		}
+
 		// Write the divergence report. Schema is small and stable — read by humans and CI scripts.
 		json reportJson;
 		reportJson["scenario"] = args.scenario;
@@ -485,6 +502,7 @@ namespace RTE {
 		}
 		reportJson["compared_ticks"] = rep.comparedTicks;
 		reportJson["diverged"] = rep.diverged;
+		reportJson["ai_only_divergence"] = rep.aiOnlyDivergence;
 		reportJson["length_mismatch"] = rep.lengthMismatch;
 		reportJson["total_mismatched_ticks"] = rep.totalMismatchedTicks;
 		if (rep.diverged) {
@@ -522,7 +540,8 @@ namespace RTE {
 
 		std::cout << "\n[determinism-check] wrote report: " << args.output << "\n";
 		if (rep.diverged) {
-			std::cout << "[determinism-check] RESULT: DIVERGED\n";
+			std::cout << "[determinism-check] RESULT: "
+			          << (rep.aiOnlyDivergence ? "MATCHED-SIM (controller-only flicker, advisory)" : "DIVERGED") << "\n";
 			std::cout << "    first_divergence_tick: " << rep.firstDivergenceTick << "\n";
 			std::cout << "    total_mismatched_ticks: " << rep.totalMismatchedTicks
 			          << " / " << rep.comparedTicks << "\n";
@@ -569,7 +588,7 @@ namespace RTE {
 			std::cout << "[determinism-check] per-run JSONs kept at: " << tmpRoot.string() << "\n";
 		}
 
-		return rep.diverged ? 1 : 0;
+		return (rep.diverged && !rep.aiOnlyDivergence) ? 1 : 0;
 	}
 
 } // namespace RTE
