@@ -94,6 +94,7 @@ int Activity::Create(const Activity& reference) {
 	m_Paused = reference.m_Paused;
 	m_AllowsUserSaving = reference.m_AllowsUserSaving;
 	m_Description = reference.m_Description;
+	m_SceneName = reference.m_SceneName;
 	m_MaxPlayerSupport = reference.m_MaxPlayerSupport;
 	m_MinTeamsRequired = reference.m_MinTeamsRequired;
 	m_Difficulty = reference.m_Difficulty;
