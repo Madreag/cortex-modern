@@ -205,6 +205,14 @@ namespace RTE {
 
 		struct DivergenceReport {
 			bool diverged = false;
+			// All sim divergence sits at/after the AI's first deviation per run — advisory.
+			bool aiOnlyDivergence = false;
+			// A sim subsystem diverged while the controllers still matched — the contract broke.
+			bool simDivergedBeforeAI = false;
+			uint64_t blockingFirstTick = 0;
+			std::string blockingSubsystem;
+			// Per-run tick where the controller hash first deviates from run 0 (UINT64_MAX = never).
+			std::vector<uint64_t> aiDeviationTick;
 			uint64_t    firstDivergenceTick = 0;
 			// Per-subsystem first-divergence summary (subsystem name → tick where it first diverged).
 			std::map<std::string, uint64_t> perSubsystemFirstDivergence;
@@ -317,7 +325,9 @@ namespace RTE {
 		} else {
 			for (int r = 0; r < args.runs; ++r) {
 				ChildRun c;
-				c.threadCount = -1;
+				// The selftest needs clean causality: a single Lua state keeps the AI
+				// deterministic so the injected perturbation is the only divergence source.
+				c.threadCount = args.selftestPerturb ? 1 : -1;
 				c.runIndex = r;
 				c.output = tmpRoot / ("run_" + std::to_string(r) + ".json");
 				children.push_back(std::move(c));
@@ -424,6 +434,27 @@ namespace RTE {
 		// run exited early, and the overlap-only diff below would otherwise false-MATCH.
 		rep.lengthMismatch = (minTicks != maxTicks);
 
+		// The AI is per-machine and may legitimately deviate (Controller-sync: only Controllers
+		// cross the wire). The contract under test is the sim GIVEN identical controllers — so per
+		// run, find the tick the controller hash first deviates from run 0; the sim must be
+		// bit-identical strictly before that tick, and anything after is downstream of different
+		// AI input. See Source/CI/thread-count-determinism.md.
+		rep.aiDeviationTick.assign(allTickHashes.size(), UINT64_MAX);
+		for (size_t r = 1; r < allTickHashes.size(); ++r) {
+			for (uint64_t t = 0; t < rep.comparedTicks; ++t) {
+				const json& ref = allTickHashes[0][static_cast<size_t>(t)];
+				const json& cur = allTickHashes[r][static_cast<size_t>(t)];
+				if (!ref.contains("subsystems") || !cur.contains("subsystems")) {
+					continue;
+				}
+				if (ref["subsystems"].value("controller", std::string()) !=
+				    cur["subsystems"].value("controller", std::string())) {
+					rep.aiDeviationTick[r] = t;
+					break;
+				}
+			}
+		}
+
 		// Walk tick-by-tick. The runs' tick arrays are in order, so index t corresponds to tick t.
 		// run 0 is the reference; every other run is diffed against it.
 		bool foundFirstDivergence = false;
@@ -453,6 +484,13 @@ namespace RTE {
 						if (refHex != curHex) {
 							auto inserted = rep.perSubsystemFirstDivergence.emplace(name, t);
 							(void)inserted; // emplace keeps the earliest tick for each subsystem
+							// Sim divergence while this run's controllers still matched run 0 breaks
+							// the contract, whatever happens later.
+							if (name != "controller" && t < rep.aiDeviationTick[r] && !rep.simDivergedBeforeAI) {
+								rep.simDivergedBeforeAI = true;
+								rep.blockingFirstTick = t;
+								rep.blockingSubsystem = name;
+							}
 						}
 					}
 				}
@@ -469,6 +507,15 @@ namespace RTE {
 		if (rep.lengthMismatch && !foundFirstDivergence) {
 			rep.firstDivergenceTick = rep.comparedTicks; // where the shortest run stopped
 		}
+		// Advisory only when the divergence is actually explained by an observed AI deviation.
+		bool anyAiDeviation = false;
+		for (uint64_t tick: rep.aiDeviationTick) {
+			if (tick != UINT64_MAX) {
+				anyAiDeviation = true;
+				break;
+			}
+		}
+		rep.aiOnlyDivergence = rep.diverged && !rep.lengthMismatch && !rep.simDivergedBeforeAI && anyAiDeviation;
 
 		// Write the divergence report. Schema is small and stable — read by humans and CI scripts.
 		json reportJson;
@@ -485,8 +532,25 @@ namespace RTE {
 		}
 		reportJson["compared_ticks"] = rep.comparedTicks;
 		reportJson["diverged"] = rep.diverged;
+		reportJson["ai_only_divergence"] = rep.aiOnlyDivergence;
+		reportJson["sim_diverged_before_ai"] = rep.simDivergedBeforeAI;
 		reportJson["length_mismatch"] = rep.lengthMismatch;
 		reportJson["total_mismatched_ticks"] = rep.totalMismatchedTicks;
+		if (rep.simDivergedBeforeAI) {
+			reportJson["blocking_first_tick"] = rep.blockingFirstTick;
+			reportJson["blocking_subsystem"] = rep.blockingSubsystem;
+		}
+		{
+			json devs = json::array();
+			for (uint64_t tick: rep.aiDeviationTick) {
+				if (tick == UINT64_MAX) {
+					devs.push_back(nullptr);
+				} else {
+					devs.push_back(tick);
+				}
+			}
+			reportJson["ai_deviation_tick_per_run"] = devs;
+		}
 		if (rep.diverged) {
 			reportJson["first_divergence_tick"] = rep.firstDivergenceTick;
 			json subs = json::object();
@@ -522,7 +586,12 @@ namespace RTE {
 
 		std::cout << "\n[determinism-check] wrote report: " << args.output << "\n";
 		if (rep.diverged) {
-			std::cout << "[determinism-check] RESULT: DIVERGED\n";
+			std::cout << "[determinism-check] RESULT: "
+			          << (rep.aiOnlyDivergence ? "MATCHED-SIM (sim identical until the AI deviated; later divergence is downstream of AI input, advisory)" : "DIVERGED") << "\n";
+			if (rep.simDivergedBeforeAI) {
+				std::cout << "    sim diverged BEFORE any AI deviation: " << rep.blockingSubsystem
+				          << " at tick " << rep.blockingFirstTick << "\n";
+			}
 			std::cout << "    first_divergence_tick: " << rep.firstDivergenceTick << "\n";
 			std::cout << "    total_mismatched_ticks: " << rep.totalMismatchedTicks
 			          << " / " << rep.comparedTicks << "\n";
@@ -569,7 +638,7 @@ namespace RTE {
 			std::cout << "[determinism-check] per-run JSONs kept at: " << tmpRoot.string() << "\n";
 		}
 
-		return rep.diverged ? 1 : 0;
+		return (rep.diverged && !rep.aiOnlyDivergence) ? 1 : 0;
 	}
 
 } // namespace RTE
