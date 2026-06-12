@@ -399,13 +399,14 @@ function BunkerBreach:UpdatePlayerObjectiveArrowsAndScreenText()
 end
 
 function BunkerBreach:UpdateInternalReinforcementSpawning(forceInstantSpawning)
-	for internalReinforcementDoor, actorsToSpawn in pairs(self.AI.internalReinforcementDoorsAndActorsToSpawn) do
+	for doorUniqueID, doorSpawnData in pairs(self.AI.internalReinforcementDoorsAndActorsToSpawn) do
+		local internalReinforcementDoor = doorSpawnData.door;
 		if MovableMan:IsParticle(internalReinforcementDoor) and (forceInstantSpawning or internalReinforcementDoor.Frame == internalReinforcementDoor.FrameCount - 1) then
-			for _, actorToSpawn in pairs(actorsToSpawn) do
+			for _, actorToSpawn in pairs(doorSpawnData.actorsToSpawn) do
 				actorToSpawn.Team = internalReinforcementDoor.Team;
 				MovableMan:AddActor(actorToSpawn);
 			end
-			self.AI.internalReinforcementDoorsAndActorsToSpawn[internalReinforcementDoor] = nil;
+			self.AI.internalReinforcementDoorsAndActorsToSpawn[doorUniqueID] = nil;
 		end
 	end
 end
@@ -628,6 +629,7 @@ function BunkerBreach:CalculateInternalReinforcementPositionsToEnemyTargets(numb
 	end
 
 	local internalReinforcementPositionsToEnemyTargets = {};
+	local entryByPosition = {};
 	for _, enemyToTarget in ipairs(enemiesToTarget) do
 		local internalReinforcementPositionForEnemy;
 		local pathLengthFromClosestInternalReinforcementPositionToEnemy = SceneMan.SceneWidth * SceneMan.SceneHeight;
@@ -639,10 +641,13 @@ function BunkerBreach:CalculateInternalReinforcementPositionsToEnemyTargets(numb
 			end
 		end
 		if internalReinforcementPositionForEnemy then
-			if not internalReinforcementPositionsToEnemyTargets[internalReinforcementPositionForEnemy] then
-				internalReinforcementPositionsToEnemyTargets[internalReinforcementPositionForEnemy] = {};
+			local entry = entryByPosition[internalReinforcementPositionForEnemy];
+			if not entry then
+				entry = { position = internalReinforcementPositionForEnemy, enemyTargets = {} };
+				entryByPosition[internalReinforcementPositionForEnemy] = entry;
+				table.insert(internalReinforcementPositionsToEnemyTargets, entry);
 			end
-			table.insert(internalReinforcementPositionsToEnemyTargets[internalReinforcementPositionForEnemy], enemyToTarget);
+			table.insert(entry.enemyTargets, enemyToTarget);
 		end
 	end
 
@@ -660,13 +665,15 @@ function BunkerBreach:CreateInternalReinforcements(loadout, numberOfReinforcemen
 	local internalReinforcementPositionsToEnemyTargets = self:CalculateInternalReinforcementPositionsToEnemyTargets(numberOfReinforcementsToCreate);
 
 	local numberOfReinforcementsCreated = 0;
-	for internalReinforcementPosition, enemyTargetsForPosition in pairs(internalReinforcementPositionsToEnemyTargets) do
+	for _, positionAndTargetsEntry in ipairs(internalReinforcementPositionsToEnemyTargets) do
+		local internalReinforcementPosition = positionAndTargetsEntry.position;
+		local enemyTargetsForPosition = positionAndTargetsEntry.enemyTargets;
 		if numberOfReinforcementsCreated < numberOfReinforcementsToCreate and self.AI.internalReinforcementBudget > 0 and #enemyTargetsForPosition > 0 then
 			local doorParticle = self.AI.internalReinforcementsDoorParticle:Clone();
 			doorParticle.Pos = internalReinforcementPosition;
 			doorParticle.Team = team;
 			MovableMan:AddParticle(doorParticle);
-			self.AI.internalReinforcementDoorsAndActorsToSpawn[doorParticle] = {};
+			self.AI.internalReinforcementDoorsAndActorsToSpawn[doorParticle.UniqueID] = { door = doorParticle, actorsToSpawn = {} };
 
 			local numberOfInternalReinforcementsToCreateAtPosition = math.min(#enemyTargetsForPosition, 3);
 			if numberOfInternalReinforcementsToCreateAtPosition == 1 and math.random() < (self.AI.difficultyRatio * 0.75) then
@@ -699,7 +706,7 @@ function BunkerBreach:CreateInternalReinforcements(loadout, numberOfReinforcemen
 					internalReinforcement.AIMode = Actor.AIMODE_GOTO;
 					internalReinforcement:AddAIMOWaypoint(enemyTargetsForPosition[math.random(#enemyTargetsForPosition)]);
 				end
-				table.insert(self.AI.internalReinforcementDoorsAndActorsToSpawn[doorParticle], internalReinforcement);
+				table.insert(self.AI.internalReinforcementDoorsAndActorsToSpawn[doorParticle.UniqueID].actorsToSpawn, internalReinforcement);
 
 				self.AI.internalReinforcementBudget = self.AI.internalReinforcementBudget - internalReinforcement:GetTotalValue(techID, 2);
 				numberOfReinforcementsCreated = numberOfReinforcementsCreated + 1;
