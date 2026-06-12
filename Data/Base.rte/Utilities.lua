@@ -23,7 +23,7 @@ function FindStartPositionWithShortestPathToEndPosition(startPositions, endPosit
 	for startPositionKey, startPosition in pairs(startPositions) do
 		SceneMan.Scene:CalculatePathAsync(
 			function(pathRequest)
-				if pathRequest.TotalCost < totalCostToClosestStartPosition then
+				if pathRequest.TotalCost < totalCostToClosestStartPosition or (pathRequest.TotalCost == totalCostToClosestStartPosition and type(startPositionKey) == type(closestStartPositionKey) and startPositionKey < closestStartPositionKey) then
 					closestStartPositionKey = startPositionKey;
 					closestStartPosition = startPosition;
 					totalCostToClosestStartPosition = pathRequest.TotalCost;

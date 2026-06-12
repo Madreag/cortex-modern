@@ -14,8 +14,8 @@ function Update(self)
 
 	if AutomoverData[self.Team].energyLevel <= 0 then
 		self.Frame = 16;
-	elseif self.myInfoGenerated and self.checkNodesTimer:IsPastSimTimeLimit() and AutomoverData[self.Team].nodeData[self] ~= nil then
-		local nodeTable = AutomoverData[self.Team].nodeData[self];
+	elseif self.myInfoGenerated and self.checkNodesTimer:IsPastSimTimeLimit() and AutomoverData[self.Team].nodeData[self.UniqueID] ~= nil then
+		local nodeTable = AutomoverData[self.Team].nodeData[self.UniqueID];
 
 		local connectsUpBits = nodeTable.connectedNodeData[Directions.Up] ~= nil and 1 or 0;
 		local connectsDownBits = nodeTable.connectedNodeData[Directions.Down] ~= nil and 2 or 0;

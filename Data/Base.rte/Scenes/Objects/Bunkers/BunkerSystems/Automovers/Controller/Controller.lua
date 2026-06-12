@@ -240,7 +240,7 @@ automoverActorFunctions.actorMovementUpdate = function(self)
 			if actorData.movementMode ~= self.movementModes.leaveAutomovers then
 				if actor:IsPlayerControlled() then
 					local closestNode = self:findClosestNode(actor.Pos, nil, false, false);
-					if closestNode ~= nil and AutomoverData[self.Team].teleporterNodes[closestNode] ~= nil and AutomoverData[self.Team].nodeData[closestNode].zoneBox:IsWithinBox(actor.Pos) then
+					if closestNode ~= nil and AutomoverData[self.Team].teleporterNodes[closestNode.UniqueID] ~= nil and AutomoverData[self.Team].nodeData[closestNode.UniqueID].zoneBox:IsWithinBox(actor.Pos) then
 						actor.PieMenu:AddPieSliceIfPresetNameIsUnique(self.chooseTeleporterPieSlice, self);
 					else
 						actor.PieMenu:RemovePieSlicesByPresetName(self.chooseTeleporterPieSlice.PresetName);
@@ -418,8 +418,9 @@ automoverUtilityFunctions.updateActivityEditingMode = function(self)
 
 			for direction, matches in pairs(directionMatches) do
 				local distanceInDirectionMustBeNegative = direction == "up" or direction == "left";
-				for node, nodeData in pairs(teamNodeTable) do
-					if selectedEditorObject.PresetName:find("Teleporter Zone") == nil or not teamTeleporterTable[node] then
+				for nodeId, nodeData in pairs(teamNodeTable) do
+					local node = nodeData.node;
+					if selectedEditorObject.PresetName:find("Teleporter Zone") == nil or not teamTeleporterTable[nodeId] then
 						local ignoreXMatching = direction == "left" or direction == "right" or (node.PresetName:find("Horizontal Only") ~= nil);
 						local ignoreYMatching = direction == "up" or direction == "down" or (node.PresetName:find("Vertical Only") ~= nil);
 						if not (ignoreXMatching and ignoreYMatching) then
@@ -487,14 +488,15 @@ automoverUtilityFunctions.checkAllObstructions = function(self)
 		[Directions.Right] = Directions.Left,
 	};
 
-	for node, nodeData in pairs(teamNodeTable) do
+	for nodeId, nodeData in pairs(teamNodeTable) do
+		local node = nodeData.node;
 		local previousConnectedNodeData = nodeData.connectedNodeData;
 		nodeData.connectedNodeData = {};
 
 		local nodesAffectedByThisAutomover = Automovers_CheckConnections(node);
 		if nodesAffectedByThisAutomover ~= nil then
 			for direction, affectedNode in pairs(nodesAffectedByThisAutomover) do
-				local affectedNodeTable = teamNodeTable[affectedNode];
+				local affectedNodeTable = teamNodeTable[affectedNode.UniqueID];
 				affectedNodeTable.connectedNodeData[oppositeDirections[direction]] = nil;
 				Automovers_CheckConnections(affectedNode);
 			end
@@ -503,7 +505,7 @@ automoverUtilityFunctions.checkAllObstructions = function(self)
 		for direction, _ in pairs(oppositeDirections) do
 			if type(previousConnectedNodeData[direction]) ~= type(nodeData.connectedNodeData[direction]) then
 				nodeConnectionsHaveChanged = true;
-				self.visualEffectsData[node] = {};
+				self.visualEffectsData[nodeId] = {};
 				break;
 			end
 		end
@@ -540,7 +542,8 @@ automoverUtilityFunctions.addAllBoxes = function(self)
 	local teamNodeTable = AutomoverData[self.Team].nodeData;
 
 	local addedNodeCount = 0;
-	for node, nodeData in pairs(teamNodeTable) do
+	for nodeId, nodeData in pairs(teamNodeTable) do
+		local node = nodeData.node;
 		if nodeData.zoneBox ~= nil then
 			self.combinedAutomoverArea:AddBox(nodeData.zoneBox);
 			SceneMan.Scene:GetArea("NoGravityArea"):AddBox(nodeData.zoneBox);
@@ -551,7 +554,7 @@ automoverUtilityFunctions.addAllBoxes = function(self)
 		for _, direction in pairs({Directions.Up, Directions.Left}) do
 			if nodeData.connectedNodeData[direction] then
 				local connectedNode = nodeData.connectedNodeData[direction].node;
-				local connectedNodeData = teamNodeTable[connectedNode];
+				local connectedNodeData = teamNodeTable[connectedNode.UniqueID];
 
 				local connectingBoxTopLeftCornerOffset;
 				local connectingBoxBottomRightCornerOffset;
@@ -581,10 +584,10 @@ automoverUtilityFunctions.addAllBoxes = function(self)
 		end
 	end
 
-	for node, nodeData in pairs(teamNodeTable) do
+	for nodeId, nodeData in pairs(teamNodeTable) do
 		for _, direction in pairs({Directions.Down, Directions.Right}) do
 			if nodeData.connectedNodeData[direction] then
-				nodeData.connectingAreas[direction] = teamNodeTable[nodeData.connectedNodeData[direction].node].connectingAreas[(direction == Directions.Down and Directions.Up or Directions.Left)];
+				nodeData.connectingAreas[direction] = teamNodeTable[nodeData.connectedNodeData[direction].node.UniqueID].connectingAreas[(direction == Directions.Down and Directions.Up or Directions.Left)];
 			end
 		end
 	end
@@ -598,58 +601,58 @@ automoverUtilityFunctions.addAllPaths = function(self)
 
 	local possibleConnectionDirections = {Directions.Up, Directions.Down, Directions.Left, Directions.Right};
 
-	for node, nodeData in pairs(teamNodeTable) do
+	for nodeId, nodeData in pairs(teamNodeTable) do
 		local tentativeNodes = {};
 		local confirmedNodes = {};
-		confirmedNodes[node] = { distance = 0, direction = Directions.None };
+		confirmedNodes[nodeId] = { distance = 0, direction = Directions.None };
 		local addedPathCount = 0;
 
 		local connectedNodeData = nodeData.connectedNodeData;
 		for _, direction in ipairs(possibleConnectionDirections) do
-			if connectedNodeData[direction] ~= nil and confirmedNodes[connectedNodeData[direction].node] == nil then
-				tentativeNodes[connectedNodeData[direction].node] = { distance = confirmedNodes[node].distance + connectedNodeData[direction].distance.Magnitude, direction = direction };
+			if connectedNodeData[direction] ~= nil and confirmedNodes[connectedNodeData[direction].node.UniqueID] == nil then
+				tentativeNodes[connectedNodeData[direction].node.UniqueID] = { distance = confirmedNodes[nodeId].distance + connectedNodeData[direction].distance.Magnitude, direction = direction };
 			end
 		end
 
-		if teamTeleporterTable[node] then
-			for teleporter, _ in pairs(teamTeleporterTable) do
-				if teleporter.UniqueID ~= node.UniqueID then
-					tentativeNodes[teleporter] = { distance = 48, direction = Directions.Any }; -- Teleporter extra distance is set as the smallest distance between two nodes, and its direction is set to Any to distinguish it.
+		if teamTeleporterTable[nodeId] then
+			for teleporterId, _ in pairs(teamTeleporterTable) do
+				if teleporterId ~= nodeId then
+					tentativeNodes[teleporterId] = { distance = 48, direction = Directions.Any }; -- Teleporter extra distance is set as the smallest distance between two nodes, and its direction is set to Any to distinguish it.
 				end
 			end
 		end
 
 		while next(tentativeNodes) ~= nil do
-			local closestNode;
+			local closestNodeId;
 			local distanceToClosestNode;
-			for tentativeNode, tentativeNodeData in pairs(tentativeNodes) do
-				if distanceToClosestNode == nil or tentativeNodeData.distance < distanceToClosestNode then
-					closestNode = tentativeNode;
+			for tentativeNodeId, tentativeNodeData in pairs(tentativeNodes) do
+				if distanceToClosestNode == nil or tentativeNodeData.distance < distanceToClosestNode or (tentativeNodeData.distance == distanceToClosestNode and tentativeNodeId < closestNodeId) then
+					closestNodeId = tentativeNodeId;
 					distanceToClosestNode = tentativeNodeData.distance;
 				end
 			end
 
-			if closestNode == nil then
+			if closestNodeId == nil then
 				break;
 			end
 
-			confirmedNodes[closestNode] = { distance = distanceToClosestNode, direction = tentativeNodes[closestNode].direction };
-			tentativeNodes[closestNode] = nil;
+			confirmedNodes[closestNodeId] = { distance = distanceToClosestNode, direction = tentativeNodes[closestNodeId].direction };
+			tentativeNodes[closestNodeId] = nil;
 
-			local closestNodeConnectedNodeData = teamNodeTable[closestNode].connectedNodeData;
+			local closestNodeConnectedNodeData = teamNodeTable[closestNodeId].connectedNodeData;
 			for _, direction in ipairs(possibleConnectionDirections) do
-				if closestNodeConnectedNodeData[direction] ~= nil and confirmedNodes[closestNodeConnectedNodeData[direction].node] == nil then
-					local nodeInDirection = closestNodeConnectedNodeData[direction].node;
-					if tentativeNodes[nodeInDirection] == nil or tentativeNodes[nodeInDirection].distance > (closestNodeConnectedNodeData[direction].distance.Magnitude + confirmedNodes[closestNode].distance) then
-						tentativeNodes[nodeInDirection] = { distance = closestNodeConnectedNodeData[direction].distance.Magnitude + confirmedNodes[closestNode].distance, direction = confirmedNodes[closestNode].direction };
+				if closestNodeConnectedNodeData[direction] ~= nil and confirmedNodes[closestNodeConnectedNodeData[direction].node.UniqueID] == nil then
+					local nodeInDirectionId = closestNodeConnectedNodeData[direction].node.UniqueID;
+					if tentativeNodes[nodeInDirectionId] == nil or tentativeNodes[nodeInDirectionId].distance > (closestNodeConnectedNodeData[direction].distance.Magnitude + confirmedNodes[closestNodeId].distance) then
+						tentativeNodes[nodeInDirectionId] = { distance = closestNodeConnectedNodeData[direction].distance.Magnitude + confirmedNodes[closestNodeId].distance, direction = confirmedNodes[closestNodeId].direction };
 					end
 				end
 			end
 
-			if teamTeleporterTable[closestNode] then
-				for teleporter, _ in pairs(teamTeleporterTable) do
-					if teleporter.UniqueID ~= closestNode.UniqueID and confirmedNodes[teleporter] == nil then
-						tentativeNodes[teleporter] = { distance = confirmedNodes[closestNode].distance + 48, direction = confirmedNodes[closestNode].direction }; -- Teleporter extra distance is set as the smallest distance between two nodes, and its direction is set to Any to distinguish it.
+			if teamTeleporterTable[closestNodeId] then
+				for teleporterId, _ in pairs(teamTeleporterTable) do
+					if teleporterId ~= closestNodeId and confirmedNodes[teleporterId] == nil then
+						tentativeNodes[teleporterId] = { distance = confirmedNodes[closestNodeId].distance + 48, direction = confirmedNodes[closestNodeId].direction }; -- Teleporter extra distance is set as the smallest distance between two nodes, and its direction is set to Any to distinguish it.
 					end
 				end
 			end
@@ -660,7 +663,7 @@ automoverUtilityFunctions.addAllPaths = function(self)
 			end
 		end
 
-		self.pathTable[node] = confirmedNodes;
+		self.pathTable[nodeId] = confirmedNodes;
 		if coroutine.running() then
 			coroutine.yield();
 		end
@@ -675,15 +678,16 @@ automoverUtilityFunctions.findClosestNode = function(self, positionToFindClosest
 
 	local nodesToCheck = teamNodeTable;
 	if nodeToCheckForPathsFrom ~= nil then
-		nodesToCheck = self.pathTable[nodeToCheckForPathsFrom];
+		nodesToCheck = self.pathTable[nodeToCheckForPathsFrom.UniqueID];
 	end
 
 	local closestNode;
 	local distanceToClosestNodeSqr;
-	for node, _ in pairs(nodesToCheck) do
-		local nodeData = teamNodeTable[node];
-		local distanceToNode = SceneMan:ShortestDistance(node.Pos, positionToFindClosestNodeFor, self.checkWrapping);
-		if distanceToClosestNodeSqr == nil or distanceToNode.SqrMagnitude < distanceToClosestNodeSqr then
+	for nodeId, _ in pairs(nodesToCheck) do
+		local nodeData = teamNodeTable[nodeId];
+		local node = nodeData ~= nil and nodeData.node or nil;
+		local distanceToNode = node ~= nil and SceneMan:ShortestDistance(node.Pos, positionToFindClosestNodeFor, self.checkWrapping) or nil;
+		if node ~= nil and (distanceToClosestNodeSqr == nil or distanceToNode.SqrMagnitude < distanceToClosestNodeSqr or (distanceToNode.SqrMagnitude == distanceToClosestNodeSqr and nodeId < closestNode.UniqueID)) then
 			local nodeSatisfiesConditions = true;
 			if checkForLineOfSight then
 				nodeSatisfiesConditions = not SceneMan:CastStrengthRay(node.Pos, distanceToNode, 15, Vector(), 4, 0, true);
@@ -722,8 +726,9 @@ automoverUtilityFunctions.findNodeWithShortestScenePath = function(self, positio
 	local teamTeleporterTable = AutomoverData[self.Team].teleporterNodes;
 
 	local potentialClosestNodes = {}
-	for node, nodeData in pairs(teamNodeTable) do
-		local nodeSatisfiesConditions = nodeToCheckForPathsFrom == nil or (self.pathTable[nodeToCheckForPathsFrom] ~= nil and self.pathTable[nodeToCheckForPathsFrom][node] ~= nil);
+	for nodeId, nodeData in pairs(teamNodeTable) do
+		local node = nodeData.node;
+		local nodeSatisfiesConditions = nodeToCheckForPathsFrom == nil or (self.pathTable[nodeToCheckForPathsFrom.UniqueID] ~= nil and self.pathTable[nodeToCheckForPathsFrom.UniqueID][nodeId] ~= nil);
 
 		if nodeSatisfiesConditions and checkThatPositionIsInsideNodeZoneBoxOrConnectingAreas then
 			nodeSatisfiesConditions = nodeData.zoneBox:IsWithinBox(positionToFindClosestNodeFor);
@@ -746,7 +751,7 @@ automoverUtilityFunctions.findNodeWithShortestScenePath = function(self, positio
 		end
 
 		if nodeSatisfiesConditions then
-			potentialClosestNodes[node] = node.Pos;
+			potentialClosestNodes[nodeId] = node.Pos;
 		end
 	end
 
@@ -778,9 +783,9 @@ automoverVisualEffectsFunctions.updateVisualEffects = function(self)
 	local selectedVisualEffects = self.visualEffectsConfig[self.visualEffectsSelectedType][self.visualEffectsSelectedSize];
 
 	if selectedVisualEffects.moveTimer:IsPastSimTimeLimit() then
-		for node, nodeData in pairs(AutomoverData[self.Team].nodeData) do
+		for nodeId, nodeData in pairs(AutomoverData[self.Team].nodeData) do
 			for _, direction in ipairs({Directions.Up, Directions.Left}) do
-				self:setupNodeVisualEffectsForDirectionIfAppropriate(node, nodeData, direction);
+				self:setupNodeVisualEffectsForDirectionIfAppropriate(nodeData.node, nodeData, direction);
 			end
 		end
 		self:updateVisualEffectsFrames();
@@ -799,22 +804,22 @@ automoverVisualEffectsFunctions.setupNodeVisualEffectsForDirectionIfAppropriate 
 		return;
 	end
 
-	if self.visualEffectsData[node] ~= nil and self.visualEffectsData[node][direction] ~= nil and self.visualEffectsData[node][direction].endNode.UniqueID == nodeConnectionDataInDirection.node.UniqueID then
+	if self.visualEffectsData[node.UniqueID] ~= nil and self.visualEffectsData[node.UniqueID][direction] ~= nil and self.visualEffectsData[node.UniqueID][direction].endNode.UniqueID == nodeConnectionDataInDirection.node.UniqueID then
 		return;
 	end
 
 	local relevantAxis = direction == Directions.Up and "Y" or "X";
-	local nodeInDirectionData = AutomoverData[self.Team].nodeData[nodeConnectionDataInDirection.node];
+	local nodeInDirectionData = AutomoverData[self.Team].nodeData[nodeConnectionDataInDirection.node.UniqueID];
 	local minDistanceToShowEffects = (nodeData.size[relevantAxis] * 0.5) + (nodeInDirectionData.size[relevantAxis] * 0.5) + (selectedVisualEffects.spriteSize * self.visualEffectsMinimumNumberOfSpacesNeededForDrawingObjectEffects);
 	if math.abs(nodeConnectionDataInDirection.distance[relevantAxis]) < minDistanceToShowEffects then
 		return;
 	end
 
-	if self.visualEffectsData[node] == nil then
-		self.visualEffectsData[node] = {};
+	if self.visualEffectsData[node.UniqueID] == nil then
+		self.visualEffectsData[node.UniqueID] = {};
 	end
 
-	self.visualEffectsData[node][direction] = {
+	self.visualEffectsData[node.UniqueID][direction] = {
 		coolDownTimer = Timer(selectedVisualEffects.coolDownInterval),
 		isGoingBackwards = false,
 		endNode = nodeConnectionDataInDirection.node,
@@ -830,7 +835,7 @@ automoverVisualEffectsFunctions.setupNodeVisualEffectsForDirectionIfAppropriate 
 	for i = 1, numberOfSpritesToDraw do
 		local spriteIndexOffset = Vector();
 		spriteIndexOffset[relevantAxis] = -(selectedVisualEffects.spriteSize * (i - 1));
-		self.visualEffectsData[node][direction].drawData[i] = {
+		self.visualEffectsData[node.UniqueID][direction].drawData[i] = {
 			position = firstSpritePos + spriteIndexOffset,
 			frame = selectedVisualEffects.minFrame - 1,
 		};
@@ -1025,13 +1030,13 @@ automoverActorFunctions.setupManualTeleporterData = function(self, actorData)
 	local startingTeleporter = self:findClosestNode(actor.Pos, nil, false, false);
 	manualTeleporterData.sortedTeleporters = {{ node = startingTeleporter, distance = 0 }};
 
-	for teleporterNode, _ in pairs(teamTeleporterTable) do
+	for _, teleporterNode in pairs(teamTeleporterTable) do
 		if teleporterNode.UniqueID ~= startingTeleporter.UniqueID then
 			local xDistanceToTeleporter = SceneMan:ShortestDistance(startingTeleporter.Pos, teleporterNode.Pos, self.checkWrapping).X;
 
 			local teleporterNodeAddedToSortedTable = false;
 			for index, sortedTeleporterData in ipairs(manualTeleporterData.sortedTeleporters) do
-				if xDistanceToTeleporter <= sortedTeleporterData.distance then
+				if xDistanceToTeleporter < sortedTeleporterData.distance or (xDistanceToTeleporter == sortedTeleporterData.distance and teleporterNode.UniqueID < sortedTeleporterData.node.UniqueID) then
 					table.insert(manualTeleporterData.sortedTeleporters, index, { node = teleporterNode, distance = xDistanceToTeleporter });
 					teleporterNodeAddedToSortedTable = true;
 					break;
@@ -1213,7 +1218,7 @@ automoverActorFunctions.updateDirectionsFromWaypoints = function(self, actorData
 			if actorData.movementMode == self.movementModes.teleporting then
 				self:handleTeleportingActorToAppropriateTeleporterForWaypoint(actorData);
 			elseif waypointData.previousNode.UniqueID ~= waypointData.endNode.UniqueID and not actorData.waypointData.targetIsBetweenPreviousAndNextNode then
-				if teamNodeTable[waypointData.nextNode].zoneInternalBox:IsWithinBox(actor.Pos) then
+				if teamNodeTable[waypointData.nextNode.UniqueID].zoneInternalBox:IsWithinBox(actor.Pos) then
 					self:handleActorInNextNodeZoneInternalBox(actorData);
 				end
 			else
@@ -1247,7 +1252,7 @@ automoverActorFunctions.setupActorWaypointData = function(self, actorData)
 	while coroutine.status(nodeWithShortestPathCoroutine) ~= "dead" do
 		local _, result = coroutine.resume(nodeWithShortestPathCoroutine, self, waypointData.targetPosition, waypointData.previousNode, waypointData.targetIsInsideAutomoverArea, actor.Team, actor.DigStrength);
 		if result then
-			waypointData.endNode = result.key;
+			waypointData.endNode = result.key ~= nil and teamNodeTable[result.key].node or nil;
 		else
 			coroutine.yield();
 		end
@@ -1258,7 +1263,7 @@ automoverActorFunctions.setupActorWaypointData = function(self, actorData)
 		while coroutine.status(nodeWithShortestPathCoroutine) ~= "dead" do
 			local _, result = coroutine.resume(nodeWithShortestPathCoroutine, self, waypointData.targetPosition, waypointData.previousNode, false, actor.Team, actor.DigStrength);
 			if result then
-				waypointData.endNode = result.key;
+				waypointData.endNode = result.key ~= nil and teamNodeTable[result.key].node or nil;
 			else
 				coroutine.yield();
 			end
@@ -1272,8 +1277,8 @@ automoverActorFunctions.setupActorWaypointData = function(self, actorData)
 			nodeWithShortestPathCoroutine = coroutine.create(self.findNodeWithShortestScenePath);
 			local _, result = coroutine.resume(nodeWithShortestPathCoroutine, self, waypointData.targetPosition, nil, true, actor.Team, actor.DigStrength);
 			if result then
-				local closestPotentiallyNonConnectedNode = result.key;
-				local nonConnectedNodeThatEncompassesTargetExists = closestPotentiallyNonConnectedNode ~= nil and self.pathTable[waypointData.previousNode][closestPotentiallyNonConnectedNode] == nil;
+				local closestPotentiallyNonConnectedNodeId = result.key;
+				local nonConnectedNodeThatEncompassesTargetExists = closestPotentiallyNonConnectedNodeId ~= nil and self.pathTable[waypointData.previousNode.UniqueID][closestPotentiallyNonConnectedNodeId] == nil;
 				if nonConnectedNodeThatEncompassesTargetExists then
 					waypointData.targetIsInsideAutomoverArea = false;
 				end
@@ -1286,19 +1291,19 @@ automoverActorFunctions.setupActorWaypointData = function(self, actorData)
 	if waypointData.previousNode.UniqueID == waypointData.endNode.UniqueID then
 		self:accountForSameStartingAndEndingNodeWhenSettingUpActorWaypointData(actorData);
 	else
-		actorData.direction = self.pathTable[waypointData.previousNode][waypointData.endNode].direction;
+		actorData.direction = self.pathTable[waypointData.previousNode.UniqueID][waypointData.endNode.UniqueID].direction;
 		if actorData.direction == Directions.Any then
 			waypointData.nextNode = waypointData.previousNode;
 			if not self:makeActorMoveToStartingNodeIfAppropriateWhenSettingUpActorWaypointData(actorData) then
 				actorData.movementMode = self.movementModes.teleporting;
 			end
 		else
-			waypointData.nextNode = teamNodeTable[waypointData.previousNode].connectedNodeData[actorData.direction].node;
+			waypointData.nextNode = teamNodeTable[waypointData.previousNode.UniqueID].connectedNodeData[actorData.direction].node;
 			self:makeActorMoveToStartingNodeIfAppropriateWhenSettingUpActorWaypointData(actorData);
 		end
 
 		if waypointData.nextNode.UniqueID == waypointData.endNode.UniqueID and waypointData.targetIsInsideAutomoverArea then
-			local areaToCheckForTargetPos = teamNodeTable[waypointData.previousNode].connectingAreas[actorData.direction];
+			local areaToCheckForTargetPos = teamNodeTable[waypointData.previousNode.UniqueID].connectingAreas[actorData.direction];
 			waypointData.targetIsBetweenPreviousAndNextNode = areaToCheckForTargetPos ~= nil and areaToCheckForTargetPos:IsInside(waypointData.targetPosition);
 		end
 	end
@@ -1311,12 +1316,12 @@ automoverActorFunctions.accountForSameStartingAndEndingNodeWhenSettingUpActorWay
 	local waypointData = actorData.waypointData;
 
 	if waypointData.targetIsInsideAutomoverArea then
-		local zoneBox = teamNodeTable[waypointData.previousNode].zoneBox;
+		local zoneBox = teamNodeTable[waypointData.previousNode.UniqueID].zoneBox;
 		local actorAndTargetAreInSameArea = zoneBox:IsWithinBox(actor.Pos) or zoneBox:IsWithinBox(waypointData.targetPosition);
 		local directionOfConnectingAreaActorIsIn = Directions.None;
 		local directionOfConnectingAreaTargetIsIn = Directions.None;
 		if not actorAndTargetAreInSameArea then
-			for direction, connectingArea in pairs(teamNodeTable[waypointData.previousNode].connectingAreas) do
+			for direction, connectingArea in pairs(teamNodeTable[waypointData.previousNode.UniqueID].connectingAreas) do
 				if connectingArea:IsInside(actor.Pos) then
 					directionOfConnectingAreaActorIsIn = direction;
 				end
@@ -1340,7 +1345,7 @@ automoverActorFunctions.accountForSameStartingAndEndingNodeWhenSettingUpActorWay
 		else
 			actorData.direction = self.oppositeDirections[directionOfConnectingAreaActorIsIn];
 			waypointData.nextNode = waypointData.previousNode;
-			waypointData.endNode = teamNodeTable[waypointData.previousNode].connectedNodeData[directionOfConnectingAreaTargetIsIn].node;
+			waypointData.endNode = teamNodeTable[waypointData.previousNode.UniqueID].connectedNodeData[directionOfConnectingAreaTargetIsIn].node;
 		end
 	else
 		self:makeActorMoveToStartingNodeIfAppropriateWhenSettingUpActorWaypointData(actorData);
@@ -1384,13 +1389,14 @@ automoverActorFunctions.handleTeleportingActorToAppropriateTeleporterForWaypoint
 	local actorHasTeleported = waypointData.previousNode.UniqueID ~= waypointData.nextNode.UniqueID
 	if waypointData.teleporterVisualsTimer:IsPastSimTimeLimit() then
 		if not actorHasTeleported then
-			if teamTeleporterTable[waypointData.endNode] then
+			if teamTeleporterTable[waypointData.endNode.UniqueID] then
 				waypointData.nextNode = waypointData.endNode;
 			else
 				local closestTeleporterDistance;
-				for teleporterNode, _ in pairs(teamTeleporterTable) do
-					if self.pathTable[teleporterNode][waypointData.endNode] ~= nil and (closestTeleporterDistance == nil or self.pathTable[teleporterNode][waypointData.endNode].distance < closestTeleporterDistance) then
-						closestTeleporterDistance = self.pathTable[teleporterNode][waypointData.endNode].distance;
+				for teleporterId, teleporterNode in pairs(teamTeleporterTable) do
+					local pathToEndNode = self.pathTable[teleporterId][waypointData.endNode.UniqueID];
+					if pathToEndNode ~= nil and (closestTeleporterDistance == nil or pathToEndNode.distance < closestTeleporterDistance or (pathToEndNode.distance == closestTeleporterDistance and teleporterId < waypointData.nextNode.UniqueID)) then
+						closestTeleporterDistance = pathToEndNode.distance;
 						waypointData.nextNode = teleporterNode;
 					end
 				end
@@ -1423,26 +1429,26 @@ automoverActorFunctions.handleActorInNextNodeZoneInternalBox = function(self, ac
 		return;
 	end
 
-	if teamTeleporterTable[waypointData.previousNode] then
+	if teamTeleporterTable[waypointData.previousNode.UniqueID] then
 		actor.Pos = waypointData.nextNode.Pos;
 	end
 
-	actorData.direction = self.pathTable[waypointData.previousNode][waypointData.endNode].direction;
+	actorData.direction = self.pathTable[waypointData.previousNode.UniqueID][waypointData.endNode.UniqueID].direction;
 	if actorData.direction == Directions.Any then
 		actorData.movementMode = self.movementModes.teleporting;
 		waypointData.teleporterVisualsTimer:Reset();
 		return;
 	else
-		waypointData.nextNode = teamNodeTable[waypointData.previousNode].connectedNodeData[actorData.direction].node;
+		waypointData.nextNode = teamNodeTable[waypointData.previousNode.UniqueID].connectedNodeData[actorData.direction].node;
 	end
 
-	waypointData.nextNode = teamNodeTable[waypointData.previousNode].connectedNodeData[actorData.direction].node;
+	waypointData.nextNode = teamNodeTable[waypointData.previousNode.UniqueID].connectedNodeData[actorData.direction].node;
 	if waypointData.movableObjectTarget then
 		waypointData.targetPosition = Vector(waypointData.movableObjectTarget.Pos.X, waypointData.movableObjectTarget.Pos.Y);
 	end
 
 	if waypointData.nextNode.UniqueID == waypointData.endNode.UniqueID and waypointData.targetIsInsideAutomoverArea then
-		local areaToCheckForTargetPos = teamNodeTable[waypointData.previousNode].connectingAreas[actorData.direction];
+		local areaToCheckForTargetPos = teamNodeTable[waypointData.previousNode.UniqueID].connectingAreas[actorData.direction];
 		waypointData.targetIsBetweenPreviousAndNextNode = areaToCheckForTargetPos ~= nil and areaToCheckForTargetPos:IsInside(waypointData.targetPosition);
 	end
 end
@@ -1494,7 +1500,7 @@ automoverActorFunctions.handleActorThatHasReachedItsEndNode = function(self, act
 			end
 		end
 	else
-		if teamNodeTable[waypointData.endNode].zoneBox:IsWithinBox(actor.Pos) and waypointData.exitPath == nil then
+		if teamNodeTable[waypointData.endNode.UniqueID].zoneBox:IsWithinBox(actor.Pos) and waypointData.exitPath == nil then
 			waypointData.exitPath = {};
 			SceneMan.Scene:CalculatePathAsync(
 				function(pathRequest)
@@ -1516,7 +1522,7 @@ automoverActorFunctions.handleActorThatHasReachedItsEndNode = function(self, act
 			end
 			actorData.direction = getDirectionForDistanceLargerAxis(distanceFromActorToFirstExitPathPosition, 0);
 
-			local endNodeData = teamNodeTable[waypointData.endNode];
+			local endNodeData = teamNodeTable[waypointData.endNode.UniqueID];
 			if #waypointData.exitPath > 0 and not endNodeData.zoneBox:IsWithinBox(waypointData.exitPath[1]) and (endNodeData.connectedNodeData[actorData.direction] == nil or not endNodeData.connectingAreas[actorData.direction]:IsInside(waypointData.exitPath[1])) then
 				local velocityToAddToActor = distanceFromActorToFirstExitPathPosition.Normalized:FlipX(true):FlipY(true) * self.movementAcceleration * 5;
 				if math.abs(velocityToAddToActor.X) < 1 and velocityToAddToActor.Y < 0 and SceneMan.GlobalAcc.Y > 0 then
@@ -1571,8 +1577,8 @@ automoverActorFunctions.centreActorToClosestNodeIfMovingInAppropriateDirection =
 	forceCentring = forceCentring or isStuck;
 	local directionToUseForCentering;
 	local directionConnectingArea;
-	if not forceCentring and not teamNodeTable[closestNode].zoneBox:IsWithinBox(actor.Pos) then
-		for direction, connectingArea in pairs(teamNodeTable[closestNode].connectingAreas) do
+	if not forceCentring and not teamNodeTable[closestNode.UniqueID].zoneBox:IsWithinBox(actor.Pos) then
+		for direction, connectingArea in pairs(teamNodeTable[closestNode.UniqueID].connectingAreas) do
 			if connectingArea:IsInside(actor.Pos) then
 				directionToUseForCentering = direction;
 				directionConnectingArea = connectingArea;
