@@ -286,6 +286,9 @@ namespace RTE {
 		/// Clears all registered drawn areas of the MOID layer to the g_NoMOID color and clears the registrations too. Should be done each sim update.
 		void ClearAllMOIDDrawings();
 
+		/// Swaps the front MOID grid with the freshly registered back grid. Called once the async registration completes.
+		void SwapMOIDGrids();
+
 		/// Test whether a pixel of the scene would be knocked loose and turned into a MO by another particle of a certain material going at a certain velocity.
 		/// @param posX The X and Y coords of the scene pixel that is collided with.
 		/// @param posY The velocity of the incoming particle.
@@ -1000,6 +1003,8 @@ namespace RTE {
 		SceneLayerTracked* m_pMOColorLayer;
 		// A spatial partitioning grid of MOIDs, used to optimize collision and distance queries
 		SpatialPartitionGrid m_MOIDsGrid;
+		// Back grid the async MOID registration builds into while readers use the front one
+		SpatialPartitionGrid m_MOIDsGridBack;
 
 		// Debug layer for seeing cast rays etc
 		SceneLayer* m_pDebugLayer;

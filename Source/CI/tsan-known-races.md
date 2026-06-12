@@ -1,6 +1,6 @@
 # TSan known-races filter list
 
-Companion to the `determinism-tsan-linux` job in `.github/workflows/determinism.yml`.
+Companion to the `determinism-tsan-linux` job in `.github/workflows/determinism-full.yml`.
 Lists data-race reports the TSan gate is allowed to ignore, with the justification
 and the change that would remove each entry.
 
@@ -16,7 +16,7 @@ and the change that would remove each entry.
 ## Where the actual suppression list lives
 
 This .md is the human record. The machine-readable list TSan consumes is written inline by
-the `Write TSan suppressions` step in `.github/workflows/determinism.yml` (heredoc →
+the `Write TSan suppressions` step in `.github/workflows/determinism-full.yml` (heredoc →
 `tsan-suppressions.txt`). Adding or removing an entry means editing **both** — keep them in
 step.
 
@@ -54,16 +54,6 @@ The actual synchronisation is the `par_unseq` join on the node-cost update, whic
 (same blind spot as `libtbb`), so the post-join read of `AdjacentCost` looks racy. Not a real race.
 
 **Removal path:** same as `libtbb` — drop par_unseq from the node-cost update, or instrument TBB.
-
-### UpdateDrawMOIDs ↔ MOSRotating::Draw  (render-side MOID race)
-
-A real race, but render-side only: the deferred MOID-draw task runs concurrent with the main-thread
-`Draw`. The `actors`/`particles`/`scene` checksum subsystems are fed earlier in the tick, before the
-task is submitted, so the race does not perturb the sim hash. This is the pre-existing async
-MOID-rebuild/draw race, tracked for its own fix.
-
-**Removal path:** join the async MOID rebuild before the draw/AI passes, or serialize
-`Draw` against `UpdateDrawMOIDs`. Either unblocks removing these lines.
 
 ## Promoting the gate to required
 

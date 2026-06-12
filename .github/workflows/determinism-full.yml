@@ -371,11 +371,6 @@ jobs:
           race:__pstl::__internal::__brick_walk1
           race:AdjacentCost
           race:UpdateNodeCosts
-
-          # Render-side MOID race: deferred draw task vs main-thread Draw. The sim checksum is fed before the
-          # task is submitted, so it does not perturb the hash.
-          race:UpdateDrawMOIDs
-          race:MOSRotating::Draw
           EOF
 
       - name: Configure (release + TSan)

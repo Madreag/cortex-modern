@@ -4,6 +4,8 @@
 #include "MovableObject.h"
 #include "SceneMan.h"
 
+#include <utility>
+
 using namespace RTE;
 
 void SpatialPartitionGrid::Clear() {
@@ -52,6 +54,15 @@ void SpatialPartitionGrid::Reset() {
 	}
 
 	m_UsedCellIds.clear();
+}
+
+void SpatialPartitionGrid::Swap(SpatialPartitionGrid& other) {
+	std::swap(m_Width, other.m_Width);
+	std::swap(m_Height, other.m_Height);
+	std::swap(m_CellSize, other.m_CellSize);
+	m_Cells.swap(other.m_Cells);
+	m_PhysicsCells.swap(other.m_PhysicsCells);
+	m_UsedCellIds.swap(other.m_UsedCellIds);
 }
 
 void SpatialPartitionGrid::Add(const IntRect& rect, const MovableObject& mo) {
