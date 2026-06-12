@@ -458,6 +458,12 @@ namespace RTE {
 		/// Updates the MOIDs of all current MOs.
 		void UpdateDrawMOIDs();
 
+		/// Rebuilds the MOID index and assigns every MO's MOIDs for this tick.
+		void RebuildMOIDIndex();
+
+		/// Registers all MOs into the back MOID grid. Safe to run async; readers see the front grid until the swap.
+		void RegisterMOIDDrawings();
+
 		// Forces MOID drawing to complete (should be done before any physics sim or collision detection etc)
 		void CompleteQueuedMOIDDrawings();
 

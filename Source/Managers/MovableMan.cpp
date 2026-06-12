@@ -1809,9 +1809,12 @@ void MovableMan::Update() {
 	// We've finished stuff that can interact with lua script, so it's the ideal time to start a gc run
 	g_LuaMan.StartAsyncGarbageCollection();
 
-	// Draw the MO matter and IDs to their layers for next frame
+	// Assign this tick's MOIDs now, on the sim thread, so draw/AI/Lua never read a half-rebuilt index
+	RebuildMOIDIndex();
+
+	// Register the MOID drawings into the back grid for next frame; readers keep the front grid until the swap
 	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
-		UpdateDrawMOIDs();
+		RegisterMOIDDrawings();
 	});
 
 	////////////////////////////////////////////////////////////////////
@@ -2003,12 +2006,14 @@ void MovableMan::VerifyMOIDIndex() {
 }
 
 void MovableMan::UpdateDrawMOIDs() {
+	RebuildMOIDIndex();
+	RegisterMOIDDrawings();
+	g_SceneMan.SwapMOIDGrids();
+}
+
+void MovableMan::RebuildMOIDIndex() {
 	ScopedRenderRNG renderRNG;
 	ZoneScoped;
-
-	///////////////////////////////////////////////////
-	// Clear the MOID layer before starting to delete stuff which may be in the MOIDIndex
-	g_SceneMan.ClearAllMOIDDrawings();
 
 	// Clear the index each frame and do it over because MO's get added and deleted between each frame.
 	m_MOIDIndex.clear();
@@ -2017,13 +2022,9 @@ void MovableMan::UpdateDrawMOIDs() {
 	// - Update: This isnt' true anymore, but still keep 0 free just to be safe
 	m_MOIDIndex.push_back(0);
 
-	MOID currentMOID = 1;
-
 	for (Actor* actor: m_Actors) {
 		if (!actor->IsSetToDelete()) {
 			actor->UpdateMOID(m_MOIDIndex);
-			actor->Draw(nullptr, Vector(), g_DrawMOID, true);
-			currentMOID = m_MOIDIndex.size();
 		} else {
 			actor->SetAsNoID();
 		}
@@ -2032,8 +2033,6 @@ void MovableMan::UpdateDrawMOIDs() {
 	for (MovableObject* item: m_Items) {
 		if (!item->IsSetToDelete()) {
 			item->UpdateMOID(m_MOIDIndex);
-			item->Draw(nullptr, Vector(), g_DrawMOID, true);
-			currentMOID = m_MOIDIndex.size();
 		} else {
 			item->SetAsNoID();
 		}
@@ -2042,8 +2041,6 @@ void MovableMan::UpdateDrawMOIDs() {
 	for (MovableObject* particle: m_Particles) {
 		if (!particle->IsSetToDelete()) {
 			particle->UpdateMOID(m_MOIDIndex);
-			particle->Draw(nullptr, Vector(), g_DrawMOID, true);
-			currentMOID = m_MOIDIndex.size();
 		} else {
 			particle->SetAsNoID();
 		}
@@ -2064,9 +2061,39 @@ void MovableMan::UpdateDrawMOIDs() {
 	}
 }
 
+void MovableMan::RegisterMOIDDrawings() {
+	ScopedRenderRNG renderRNG;
+	ZoneScoped;
+
+	g_SceneMan.ClearAllMOIDDrawings();
+
+	// Hold the list mutexes so a script removing an MO mid-registration waits instead of invalidating the walk
+	std::scoped_lock lock(m_ActorsMutex, m_ItemsMutex, m_ParticlesMutex);
+
+	for (Actor* actor: m_Actors) {
+		if (!actor->IsSetToDelete()) {
+			actor->Draw(nullptr, Vector(), g_DrawMOID, true);
+		}
+	}
+
+	for (MovableObject* item: m_Items) {
+		if (!item->IsSetToDelete()) {
+			item->Draw(nullptr, Vector(), g_DrawMOID, true);
+		}
+	}
+
+	for (MovableObject* particle: m_Particles) {
+		if (!particle->IsSetToDelete()) {
+			particle->Draw(nullptr, Vector(), g_DrawMOID, true);
+		}
+	}
+}
+
 void MovableMan::CompleteQueuedMOIDDrawings() {
 	if (m_DrawMOIDsTask.valid()) {
 		m_DrawMOIDsTask.wait();
+		m_DrawMOIDsTask = std::future<void>();
+		g_SceneMan.SwapMOIDGrids();
 	}
 }
 

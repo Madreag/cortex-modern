@@ -43,6 +43,10 @@ namespace RTE {
 		/// Resets the spatial partitioning grid, removing everything from it
 		void Reset();
 
+		/// Swaps this grid's contents with another's.
+		/// @param other The grid to swap with.
+		void Swap(SpatialPartitionGrid& other);
+
 		/// Adds the given MovableObject to this SpatialPartitionGrid.
 		/// @param rect A rectangle defining the space the MovableObject takes up.
 		/// @param mo The MovableObject to add.
