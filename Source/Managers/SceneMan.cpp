@@ -154,6 +154,7 @@ int SceneMan::LoadScene(Scene* pNewScene, bool placeObjects, bool placeUnits) {
 
 	const int cellSize = 20;
 	m_MOIDsGrid = SpatialPartitionGrid(GetSceneWidth(), GetSceneHeight(), cellSize);
+	m_MOIDsGridBack = SpatialPartitionGrid(GetSceneWidth(), GetSceneHeight(), cellSize);
 
 	// Create the Debug SceneLayer
 	if (m_DrawRayCastVisualizations || m_DrawPixelCheckVisualizations) {
@@ -416,7 +417,7 @@ void SceneMan::RegisterDrawing(const BITMAP* bitmap, int moid, int left, int top
 		m_pMOColorLayer->RegisterDrawing(left, top, right, bottom);
 	} else if (const MovableObject* mo = g_MovableMan.GetMOFromID(moid)) {
 		IntRect rect(left, top, right, bottom);
-		m_MOIDsGrid.Add(rect, *mo);
+		m_MOIDsGridBack.Add(rect, *mo);
 	}
 }
 
@@ -427,7 +428,11 @@ void SceneMan::RegisterDrawing(const BITMAP* bitmap, int moid, const Vector& cen
 }
 
 void SceneMan::ClearAllMOIDDrawings() {
-	m_MOIDsGrid.Reset();
+	m_MOIDsGridBack.Reset();
+}
+
+void SceneMan::SwapMOIDGrids() {
+	m_MOIDsGrid.Swap(m_MOIDsGridBack);
 }
 
 bool SceneMan::WillPenetrate(const int posX,
