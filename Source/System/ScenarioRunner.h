@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace RTE {
@@ -53,6 +54,14 @@ namespace RTE {
 		/// After the activity ends and RunGameLoop returns, write the metrics report (if -out set).
 		/// Returns exit code: 0 if scenario passed (or no result was set), 1 otherwise.
 		static int FinalizeAndGetExitCode();
+
+		/// Pin the sim-affecting config to canonical values for a deterministic run, so the sim is
+		/// bit-identical across machines regardless of per-machine Settings.ini. Call after settings
+		/// load, before the sim starts.
+		static void ApplyDeterministicConfig();
+
+		/// Snapshot the effective sim-affecting config as key=value strings, for the trace fingerprint.
+		static std::map<std::string, std::string> GatherSimConfig();
 	};
 
 } // namespace RTE

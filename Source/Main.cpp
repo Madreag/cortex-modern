@@ -603,6 +603,8 @@ int main(int argc, char** argv) {
 		}
 
 		if (ScenarioRunner::IsActive()) {
+			// Pin the canonical deterministic sim config before anything loads or runs.
+			ScenarioRunner::ApplyDeterministicConfig();
 			// CLI direct-launch into a scenario: skip the menu, start the named GAScripted activity
 			// directly, run the loop, then finalize the JSON report + exit code.
 			const std::string presetName = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
