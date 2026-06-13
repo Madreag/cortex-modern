@@ -112,6 +112,7 @@ namespace RTE {
 			std::unordered_map<std::string, std::string> stringValues;
 			std::string                                  finalTotalHashHex;
 			std::vector<TickHashRecord>                  tickHashes;
+			std::map<std::string, std::string>           simConfig;
 		};
 		static bool WriteAggregatedReport(const std::string& path,
 		                                  const std::vector<AggregatedRun>& runs,
@@ -139,6 +140,7 @@ namespace RTE {
 		// Per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
 		bool                                          m_RecordTickHashes = false;
 		std::vector<TickHashRecord>                   m_TickHashes;
+		std::map<std::string, std::string>            m_SimConfig;
 	};
 
 } // namespace RTE
