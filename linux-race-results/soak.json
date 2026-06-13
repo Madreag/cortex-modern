@@ -1,0 +1,921 @@
+{
+  "ai_deviation_tick_per_run": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "ai_only_divergence": false,
+  "binary": "/home/erol/cccp/./builddir/CortexCommand",
+  "compared_ticks": 600,
+  "diverged": false,
+  "length_mismatch": false,
+  "mode": "repeat-runs",
+  "per_run_tick_count": [
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600,
+    600
+  ],
+  "runs": 100,
+  "runs_detail": [
+    {
+      "diverged": false,
+      "index": 0,
+      "run_index": 0,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 1,
+      "run_index": 1,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 2,
+      "run_index": 2,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 3,
+      "run_index": 3,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 4,
+      "run_index": 4,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 5,
+      "run_index": 5,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 6,
+      "run_index": 6,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 7,
+      "run_index": 7,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 8,
+      "run_index": 8,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 9,
+      "run_index": 9,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 10,
+      "run_index": 10,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 11,
+      "run_index": 11,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 12,
+      "run_index": 12,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 13,
+      "run_index": 13,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 14,
+      "run_index": 14,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 15,
+      "run_index": 15,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 16,
+      "run_index": 16,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 17,
+      "run_index": 17,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 18,
+      "run_index": 18,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 19,
+      "run_index": 19,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 20,
+      "run_index": 20,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 21,
+      "run_index": 21,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 22,
+      "run_index": 22,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 23,
+      "run_index": 23,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 24,
+      "run_index": 24,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 25,
+      "run_index": 25,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 26,
+      "run_index": 26,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 27,
+      "run_index": 27,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 28,
+      "run_index": 28,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 29,
+      "run_index": 29,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 30,
+      "run_index": 30,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 31,
+      "run_index": 31,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 32,
+      "run_index": 32,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 33,
+      "run_index": 33,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 34,
+      "run_index": 34,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 35,
+      "run_index": 35,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 36,
+      "run_index": 36,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 37,
+      "run_index": 37,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 38,
+      "run_index": 38,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 39,
+      "run_index": 39,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 40,
+      "run_index": 40,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 41,
+      "run_index": 41,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 42,
+      "run_index": 42,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 43,
+      "run_index": 43,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 44,
+      "run_index": 44,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 45,
+      "run_index": 45,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 46,
+      "run_index": 46,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 47,
+      "run_index": 47,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 48,
+      "run_index": 48,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 49,
+      "run_index": 49,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 50,
+      "run_index": 50,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 51,
+      "run_index": 51,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 52,
+      "run_index": 52,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 53,
+      "run_index": 53,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 54,
+      "run_index": 54,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 55,
+      "run_index": 55,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 56,
+      "run_index": 56,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 57,
+      "run_index": 57,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 58,
+      "run_index": 58,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 59,
+      "run_index": 59,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 60,
+      "run_index": 60,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 61,
+      "run_index": 61,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 62,
+      "run_index": 62,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 63,
+      "run_index": 63,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 64,
+      "run_index": 64,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 65,
+      "run_index": 65,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 66,
+      "run_index": 66,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 67,
+      "run_index": 67,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 68,
+      "run_index": 68,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 69,
+      "run_index": 69,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 70,
+      "run_index": 70,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 71,
+      "run_index": 71,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 72,
+      "run_index": 72,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 73,
+      "run_index": 73,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 74,
+      "run_index": 74,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 75,
+      "run_index": 75,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 76,
+      "run_index": 76,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 77,
+      "run_index": 77,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 78,
+      "run_index": 78,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 79,
+      "run_index": 79,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 80,
+      "run_index": 80,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 81,
+      "run_index": 81,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 82,
+      "run_index": 82,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 83,
+      "run_index": 83,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 84,
+      "run_index": 84,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 85,
+      "run_index": 85,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 86,
+      "run_index": 86,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 87,
+      "run_index": 87,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 88,
+      "run_index": 88,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 89,
+      "run_index": 89,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 90,
+      "run_index": 90,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 91,
+      "run_index": 91,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 92,
+      "run_index": 92,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 93,
+      "run_index": 93,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 94,
+      "run_index": 94,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 95,
+      "run_index": 95,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 96,
+      "run_index": 96,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 97,
+      "run_index": 97,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 98,
+      "run_index": 98,
+      "thread_count": -1,
+      "tick_count": 600
+    },
+    {
+      "diverged": false,
+      "index": 99,
+      "run_index": 99,
+      "thread_count": -1,
+      "tick_count": 600
+    }
+  ],
+  "scenario": "SimBaseline",
+  "seed": 42,
+  "sim_diverged_before_ai": false,
+  "ticks_requested": 600,
+  "total_mismatched_ticks": 0,
+  "total_runs": 100
+}

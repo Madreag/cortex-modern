@@ -1,0 +1,7 @@
+Env-gated controller-field probe (CCCP_CTRL_PROBE), SimBaseline nls=16, 30 runs each.
+Field localized: controller ControlState index 2 = MOVE_IDLE (first-press sim-tick).
+
+PRE-FIX  (Controller::IsPastRealMS gate):   first MOVE_IDLE tick  16 -> 9 runs,  17 -> 21 runs   (DIVERGES run-to-run)
+POST-FIX (Controller::IsPastSimMS gate):    first MOVE_IDLE tick  16 -> 30 runs                  (DETERMINISTIC)
+
+All other controller fields (analog move/aim/cursor, inputMode, every other button) identical in all runs, both pre and post.
