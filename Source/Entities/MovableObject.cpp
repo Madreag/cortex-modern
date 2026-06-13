@@ -19,6 +19,12 @@
 
 #include <array>
 
+// TEMP ARM64<->x86 divergence probe (test/arm-actorprobe — NEVER SHIPS): gravity-op raw bits.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+
 using namespace RTE;
 
 AbstractClassInfo(MovableObject, SceneObject);
@@ -801,10 +807,29 @@ void MovableObject::ApplyForces() {
 
 	float deltaTime = g_TimerMan.GetDeltaTimeSecs();
 
+	// === TEMP Step-4 ARM64<->x86 GRAVITY-OP PROBE — NEVER SHIPS (test/arm-actorprobe). ===
+	const bool s4probe = std::getenv("CCCP_ACTOR_PROBE") && g_TimerMan.GetSimUpdateCount() <= 2;
+	const float s4velYBefore = m_Vel.m_Y;
+
 	//// TODO: remove this!$@#$%#@%#@%#@^#@^#@^@#^@#")
 	//    if (m_PresetName != "Test Player")
 	// Apply global acceleration (gravity), scaled by the scalar we have that can even be negative.
 	m_Vel += g_SceneMan.GetGlobalAcc() * m_GlobalAccScalar * deltaTime;
+
+	if (s4probe) {
+		const Vector s4ga = g_SceneMan.GetGlobalAcc();
+		const float s4gaY = s4ga.m_Y;
+		const float s4scalar = m_GlobalAccScalar;
+		const float s4p1 = s4gaY * s4scalar; // GlobalAcc.y * scalar   (mul op 1)
+		const float s4p2 = s4p1 * deltaTime; // (gaY*scalar) * dt      (mul op 2)
+		auto s4u = [](float f) { uint32_t v; std::memcpy(&v, &f, 4); return v; };
+		std::fprintf(stderr,
+			"GRAVPROBE t=%lld id=%lld dt=%a/0x%08X gaY=%a/0x%08X scalar=%a/0x%08X "
+			"p1[gaY*scalar]=%a/0x%08X p2[p1*dt]=%a/0x%08X velYbefore=%a/0x%08X velYafter=%a/0x%08X\n",
+			static_cast<long long>(g_TimerMan.GetSimUpdateCount()), static_cast<long long>(m_UniqueID),
+			deltaTime, s4u(deltaTime), s4gaY, s4u(s4gaY), s4scalar, s4u(s4scalar),
+			s4p1, s4u(s4p1), s4p2, s4u(s4p2), s4velYBefore, s4u(s4velYBefore), m_Vel.m_Y, s4u(m_Vel.m_Y));
+	}
 
 	// Calculate air resistance effects, only when something flies faster than a threshold
 	if (m_AirResistance > 0 && m_Vel.GetLargest() >= m_AirThreshold)

@@ -26,6 +26,11 @@
 
 #include <execution>
 
+// TEMP ARM64<->x86 divergence probe (test/arm-actorprobe — NEVER SHIPS): raw-bit field dump.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 using namespace RTE;
 
 AlarmEvent::AlarmEvent(const Vector& pos, int team, float range) :
@@ -1739,6 +1744,38 @@ void MovableMan::Update() {
 			g_SimChecksum.Update("actors", &health, sizeof(health));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
 			g_SimChecksum.Update("actors", &aiMode, sizeof(aiMode));
+		}
+
+		// === TEMP ARM64<->x86 DIVERGENCE PROBE — NEVER SHIPS (test/arm-actorprobe). ===
+		// Env-gated (CCCP_ACTOR_PROBE) raw-bit dump of the 5 hashed actor floats
+		// (posX/posY/velX/velY/health) + the un-hashed suspected originators (rotation
+		// angle, angular velocity), for the first ticks. Compare the 0x hex columns
+		// between arm64 and x86 to pin the first field that diverges at actors@2.
+		if (std::getenv("CCCP_ACTOR_PROBE")) {
+			const unsigned long long ptick = static_cast<unsigned long long>(g_TimerMan.GetSimUpdateCount());
+			if (ptick <= 4) {
+				int probeIdx = 0;
+				for (Actor* a: m_Actors) {
+					const float posX = a->GetPos().m_X, posY = a->GetPos().m_Y;
+					const float velX = a->GetVel().m_X, velY = a->GetVel().m_Y;
+					const float health = a->GetHealth();
+					const float rot = a->GetRotAngle();      // not hashed — suspected originator
+					const float angVel = a->GetAngularVel(); // not hashed — suspected originator
+					uint32_t bPosX, bPosY, bVelX, bVelY, bHealth, bRot, bAngVel;
+					std::memcpy(&bPosX, &posX, 4); std::memcpy(&bPosY, &posY, 4);
+					std::memcpy(&bVelX, &velX, 4); std::memcpy(&bVelY, &velY, 4);
+					std::memcpy(&bHealth, &health, 4); std::memcpy(&bRot, &rot, 4);
+					std::memcpy(&bAngVel, &angVel, 4);
+					std::fprintf(stderr,
+						"ACTORPROBE t=%llu i=%d id=%lld "
+						"posX=%a/0x%08X posY=%a/0x%08X velX=%a/0x%08X velY=%a/0x%08X "
+						"health=%a/0x%08X rot=%a/0x%08X angVel=%a/0x%08X\n",
+						ptick, probeIdx, static_cast<long long>(a->GetUniqueID()),
+						posX, bPosX, posY, bPosY, velX, bVelX, velY, bVelY,
+						health, bHealth, rot, bRot, angVel, bAngVel);
+					++probeIdx;
+				}
+			}
 		}
 
 		// Controller input state per actor — catches control drift the actors fingerprint misses.
