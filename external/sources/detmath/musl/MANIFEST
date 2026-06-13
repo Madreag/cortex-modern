@@ -1,0 +1,39 @@
+# Vendored from musl 1.2.5 (https://musl.libc.org), byte-pure. MIT licensed (COPYRIGHT).
+# tarball sha256 a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4
+# file -> sha256 of the copied original:
+# 24e53a9d85f196f66919cc19247be5480bb607ef38844b1a24bc47c4fe4974ef  src/math/sin.c
+# 3a74e054057d636fa494bdd76a53a40db5cee618264f6ab31cb0538ba63c6bda  src/math/cos.c
+# 422d411bac962a1077ae394d14e54313012a6faa3476c20b2a66d3fb3f7a923f  src/math/tan.c
+# 9302dd0b2f302f7b7decce82e737ed250bae1bcc65c19eaf3d7ec19010892e63  src/math/asin.c
+# cc6f9017e7e2e0ef01516fa12c68aa63865e6415c90dc039dfce9abffae09a4c  src/math/acos.c
+# 1cffb67a65456ae0bc5f07a94df04a4f18ebc1ac0bffe3219250c4e0555ee01d  src/math/atan.c
+# a5f94b09b10b4e72bb15d94ae403c9dfd27d7ad881ecd729000004429acfca63  src/math/atan2.c
+# 7db56f21ca9b8915d36dd5099b707aafeb6a736eae798e19b76b074764e75f34  src/math/exp.c
+# a0694d8587a0d145d0f8ae87cbffba014d7988bc2ebcbfad94cea73b394c9ecc  src/math/log.c
+# ef9b4b1f0918cf1fcb797f9fa4d4ffe177bfa27f668d74a41d613bfbcd83850a  src/math/log10.c
+# b06f0a08d74fcff8cced7afa2c0e47e301e3e8a19c0de5becdec28cd7b014027  src/math/pow.c
+# ab082814c4b1bbad8ea7dcfde1e36167cd72be5ef0e8b3ef3def0e052dd74261  src/math/sinh.c
+# 5e5ed87e1a80e68734f4c87a4907a55f50a54df58261698aa94d5cb3276a3d43  src/math/cosh.c
+# 7e290e86729cba6ccc8eb1f7db2452736daf1a2a8ce01b210db5787fee5cb762  src/math/tanh.c
+# c4764166cea03420f2dfc1840a6a7615934192d851b96d5d2dcc321cc1e39460  src/math/expm1.c
+# a2e766283ed30c2b30c71e01dbdabef58faf92cc9aa84a01c1ce1069b6625696  src/math/scalbn.c
+# f3a37ef9bcfb8a2f9c809d8c7f1aa2c17c8c3319ad7fb2fe7c0a6284ea8859d2  src/math/__sin.c
+# 3f0f774aab60a18d7ef935ffdf121bcda17cbadabff14096c614da22e31a42c1  src/math/__cos.c
+# e18b65b69fced8dbb2d3ed1a3dc6daea0e9f857f2762f274380bd89a6f89d2c4  src/math/__tan.c
+# 938329e0939cd83ee2185a52154b41242f618d4a6df1b08395f344da33d4f1e6  src/math/__rem_pio2.c
+# b97f19fb5951c83a0c10506fab35646caefde13bd03100ad2af55ef00af0b9fb  src/math/__rem_pio2_large.c
+# 29cc9dd6d656cd0fbf921a8a1aeee81b430558d880194832a8d44d82c8d37d94  src/math/__expo2.c
+# 74669de53bc4b250183cfa262a8a03ee8106f33a83e3aca6b217bafc7363b83c  src/math/__math_oflow.c
+# 9a841197bbe9ade9bbd684f8bc65424a97c481d37dabb9fa1790bafe7959034a  src/math/__math_uflow.c
+# 5feafe10347636884a071a5096f912d5ca4a0939844804ca09b88241405648ad  src/math/__math_xflow.c
+# 84aa910bdc5e7ccfed42098c37c44e278aa942d46e5a51d5ee8273336c79e719  src/math/__math_divzero.c
+# b56440ed59fa1e1aaaf6bf8b672c8bb71eaf844457906f7773da1d67d7ef013b  src/math/__math_invalid.c
+# c55dff64e369fe816cd8ce367064989bb119f85783599680d1a329031c660689  src/math/exp_data.c
+# e96bcd99d88fc57e0f3686299014f4b949a6212603ce237f39e16cedc155617a  src/math/log_data.c
+# 2052ec913f9b4a2170a98a6fcbcd7694f5dec220036b00c36106a2b4b65a4c55  src/math/pow_data.c
+# df77fca837edd02b260dd09a2914202775909ae67a059218ae38cfab104e6d16  src/math/exp_data.h
+# a8dced6f0821f30cad040ba326b03e419fbe0a750ed8f3b0d7145992bee4bccc  src/math/log_data.h
+# 5014345a7958adcf6ff835b5e96afa99dd5a98c40dfe968442288e002b8e01a3  src/math/pow_data.h
+# d5a11757541471030d8f4bf7a39a29de35732ecbb291b2f45bf03296be4f25a2  src/internal/libm.h
+# e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  arch/generic/fp_arch.h
+# f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af  COPYRIGHT

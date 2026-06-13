@@ -56,6 +56,7 @@
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
 #include "DeterminismCheck.h"
+#include "DetMathSweep.h"
 #include "MetricsCollector.h"
 
 #include "RenderTarget.h"
@@ -80,6 +81,9 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+
+// Run the detmath cross-platform sweep and exit, armed by -detmath-sweep.
+static bool s_runDetMathSweep = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static int s_cliNumLuaStatesOverride = -1;
@@ -206,6 +210,10 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-ext-validate") {
 			System::EnableExternalModuleValidationMode();
+		}
+
+		if (currentArg == "-detmath-sweep") {
+			s_runDetMathSweep = true;
 		}
 
 		// Arm per-tick state hashing for the determinism trace.
@@ -581,6 +589,10 @@ int main(int argc, char** argv) {
 	InitializeManagers();
 
 	HandleMainArgs(argc, argv);
+
+	if (s_runDetMathSweep) {
+		return DetMathSweep::Run();
+	}
 
 	g_PresetMan.LoadAllDataModules();
 

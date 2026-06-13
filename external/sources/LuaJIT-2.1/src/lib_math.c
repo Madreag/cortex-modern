@@ -17,6 +17,7 @@
 #include "lj_lib.h"
 #include "lj_vm.h"
 #include "lj_prng.h"
+#include "lj_detmath.h"
 
 /* ------------------------------------------------------------------------ */
 

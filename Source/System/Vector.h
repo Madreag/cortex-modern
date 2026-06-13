@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DetMath.h"
 #include "Serializable.h"
 #include "RTETools.h"
 #include "glm/vec2.hpp"
@@ -214,7 +215,7 @@ namespace RTE {
 		/// Get this Vector's absolute angle in radians. e.g: when x = 1, y = 0, the value returned here will be 0. x = 0, y = 1 yields -pi/2 here.
 		/// @return The absolute angle in radians, in the interval [-0.5 pi, 1.5 pi).
 		inline float GetAbsRadAngle() const {
-			const float radAngle = -std::atan2(m_Y, m_X);
+			const float radAngle = -DetMath::ATan2(m_Y, m_X);
 			return (radAngle < -c_HalfPI) ? (radAngle + c_TwoPI) : radAngle;
 		}
 
@@ -236,8 +237,8 @@ namespace RTE {
 		inline Vector GetRadRotatedCopy(const float angle) const {
 			Vector returnVector = *this;
 			const float adjustedAngle = -angle;
-			returnVector.m_X = m_X * std::cos(adjustedAngle) - m_Y * std::sin(adjustedAngle);
-			returnVector.m_Y = m_X * std::sin(adjustedAngle) + m_Y * std::cos(adjustedAngle);
+			returnVector.m_X = m_X * DetMath::Cos(adjustedAngle) - m_Y * DetMath::Sin(adjustedAngle);
+			returnVector.m_Y = m_X * DetMath::Sin(adjustedAngle) + m_Y * DetMath::Cos(adjustedAngle);
 			return returnVector;
 		}
 

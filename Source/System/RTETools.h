@@ -2,6 +2,7 @@
 
 // Header file for global utility methods.
 
+#include "DetMath.h"
 #include "RTEError.h"
 #include "Constants.h"
 
@@ -21,6 +22,24 @@ namespace RTE {
 		std::mt19937 m_RNG; //!< The random number generator used for all random functions.
 		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
 
+		// One raw 32-bit draw. The mt19937 stream is portable; the std:: distributions are not,
+		// so the mappings below are explicit.
+		uint32_t DrawBits() {
+			return static_cast<uint32_t>(m_RNG());
+		}
+
+		// Canonical [0, 1) from the top mantissa-width bits.
+		template <typename floatType>
+		floatType DrawCanonical() {
+			if constexpr (sizeof(floatType) == 4) {
+				return static_cast<floatType>(DrawBits() >> 8) * floatType(0x1.0p-24);
+			} else {
+				const uint64_t hi = DrawBits() >> 6;
+				const uint64_t lo = DrawBits() >> 6;
+				return static_cast<floatType>((hi << 26) | lo) * floatType(0x1.0p-52);
+			}
+		}
+
 	public:
 		/// Seed the random number generator.
 		void Seed(uint64_t seed) {
@@ -35,37 +54,41 @@ namespace RTE {
 		/// Serialize the generator's full internal state to a string for hashing — byte-identical
 		/// across same-seed runs at the same tick once the determinism work has settled.
 		std::string SerializeStateForHashing() const {
+			// mt19937's operator<< text is implementation-defined; hash the next outputs of a copy instead (the stream is standard).
+			std::mt19937 copy = m_RNG;
 			std::ostringstream oss;
-			oss << m_RNG;
+			for (int i = 0; i < std::mt19937::state_size; ++i) {
+				oss << static_cast<uint32_t>(copy()) << ' ';
+			}
 			return oss.str();
 		}
 
-		/// Function template which returns a uniformly distributed random number in the range [-1, 1].
-		/// @return Uniformly distributed random number in the range [-1, 1].
+		/// Function template which returns a uniformly distributed random number in the range [-1, 1).
+		/// @return Uniformly distributed random number in the range [-1, 1).
 		template <typename floatType = float>
 		typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNormalNum() {
-			return std::uniform_real_distribution<floatType>(floatType(-1.0), std::nextafter(floatType(1.0), std::numeric_limits<floatType>::max()))(m_RNG);
+			return DrawCanonical<floatType>() * floatType(2.0) - floatType(1.0);
 		}
 
 		/// Function template specialization for int types which returns a uniformly distributed random number in the range [-1, 1].
 		/// @return Uniformly distributed random number in the range [-1, 1].
 		template <typename intType>
 		typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNormalNum() {
-			return std::uniform_int_distribution<intType>(intType(-1), intType(1))(m_RNG);
+			return static_cast<intType>(DrawBits() % 3u) - intType(1);
 		}
 
-		/// Function template which returns a uniformly distributed random number in the range [0, 1].
-		/// @return Uniformly distributed random number in the range [0, 1].
+		/// Function template which returns a uniformly distributed random number in the range [0, 1).
+		/// @return Uniformly distributed random number in the range [0, 1).
 		template <typename floatType = float>
 		typename std::enable_if<std::is_floating_point<floatType>::value, floatType>::type RandomNum() {
-			return std::uniform_real_distribution<floatType>(floatType(0.0), std::nextafter(floatType(1.0), std::numeric_limits<floatType>::max()))(m_RNG);
+			return DrawCanonical<floatType>();
 		}
 
 		/// Function template specialization for int types which returns a uniformly distributed random number in the range [0, 1].
 		/// @return Uniformly distributed random number in the range [0, 1].
 		template <typename intType>
 		typename std::enable_if<std::is_integral<intType>::value, intType>::type RandomNum() {
-			return std::uniform_int_distribution<intType>(intType(0), intType(1))(m_RNG);
+			return static_cast<intType>(DrawBits() & 1u);
 		}
 
 		/// Function template which returns a uniformly distributed random number in the range [min, max].
@@ -77,7 +100,7 @@ namespace RTE {
 			if (max < min) {
 				std::swap(min, max);
 			}
-			return (std::uniform_real_distribution<floatType>(floatType(0.0), std::nextafter(max - min, std::numeric_limits<floatType>::max()))(m_RNG) + min);
+			return min + (max - min) * DrawCanonical<floatType>();
 		}
 
 		/// Function template specialization for int types which returns a uniformly distributed random number in the range [min, max].
@@ -89,7 +112,20 @@ namespace RTE {
 			if (max < min) {
 				std::swap(min, max);
 			}
-			return (std::uniform_int_distribution<intType>(intType(0), max - min)(m_RNG) + min);
+			// Two's-complement diff is correct modulo 2^64 even for signed full ranges
+			const uint64_t spanMinusOne = static_cast<uint64_t>(max) - static_cast<uint64_t>(min);
+			uint64_t draw;
+			if (spanMinusOne >= 0xFFFFFFFFu) {
+				const uint64_t hi = DrawBits();
+				const uint64_t lo = DrawBits();
+				draw = (hi << 32) | lo;
+			} else {
+				draw = DrawBits();
+			}
+			if (spanMinusOne != ~0ULL) {
+				draw %= spanMinusOne + 1u;
+			}
+			return static_cast<intType>(min + static_cast<intType>(draw));
 		}
 	};
 
@@ -358,7 +394,7 @@ namespace RTE {
 	/// @param deltaTime Amount of time of decay to simulate.
 	/// @returns The decayed value.
 	inline float ExpDecay(float current, float target, float decay, float deltaTime) {
-		return target + (current - target) * std::exp(-decay * deltaTime);
+		return target + (current - target) * DetMath::Exp(-decay * deltaTime);
 	}
 		
 #pragma endregion

@@ -9,6 +9,7 @@
 /* For pointers to libc/libm functions. */
 #include <stdio.h>
 #include <math.h>
+#include "lj_detmath.h"
 
 #include "lj_obj.h"
 

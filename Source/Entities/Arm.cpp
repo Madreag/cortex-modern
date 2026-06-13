@@ -226,7 +226,7 @@ void Arm::UpdateHandCurrentOffset(bool armHasParent, bool heldDeviceIsAThrownDev
 				targetOffset = m_HeldDevice->GetStanceOffset();
 				if (HDFirearm* heldFirearm = dynamic_cast<HDFirearm*>(m_HeldDevice); heldFirearm && heldFirearm->GetCurrentReloadAngle() != 0) {
 					if (heldFirearm->IsReloading()) {
-						float reloadProgressSin = std::sin(heldFirearm->GetReloadProgress() * c_PI);
+						float reloadProgressSin = DetMath::Sin(heldFirearm->GetReloadProgress() * c_PI);
 						// TODO: There are a few values available for customization here, but they need clear property names. The following plays out well as a default.
 						// Currently, non-supported always move to the same angle relative to the body. Supported items move halfway between the aim angle and body rotation.
 						// What needs to be decided upon is the property name(s) for the rate at which both the two-handed and one-handed reload angles move between the aim angle and body rotation.
@@ -310,7 +310,7 @@ void Arm::AccountForHeldDeviceRecoil(const HeldDevice* heldDevice, Vector& targe
 
 		if (totalGripStrength > 0.0F) {
 			// Diminish recoil effect when body is horizontal so that the device doesn't get pushed into terrain when prone.
-			float rotAngleScalar = std::abs(std::cos(m_Parent->GetRotAngle()));
+			float rotAngleScalar = std::abs(DetMath::Cos(m_Parent->GetRotAngle()));
 			float recoilScalar = std::sqrt(std::min(heldDevice->GetRecoilForce().GetMagnitude() / totalGripStrength, 0.7F)) * rotAngleScalar;
 			recoilScalar *= heldDevice->GetVisualRecoilMultiplier();
 
