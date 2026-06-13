@@ -27,6 +27,7 @@ namespace RTE {
 		m_FinalTotalHashHex.clear();
 		m_TickHashes.clear();
 		m_RecordTickHashes = false;
+		m_SimConfig.clear();
 	}
 
 	void MetricsCollector::BeginRun(const std::string& scenario, uint64_t seed) {
@@ -50,6 +51,7 @@ namespace RTE {
 		m_TickHashes.clear();
 		m_RecordTickHashes = armTickHashes;
 		m_StartWall = std::chrono::steady_clock::now();
+		m_SimConfig = ScenarioRunner::GatherSimConfig();
 	}
 
 	void MetricsCollector::EndRun() {
@@ -110,6 +112,7 @@ namespace RTE {
 		r.stringValues = m_Strings;
 		r.finalTotalHashHex = m_FinalTotalHashHex;
 		r.tickHashes = m_TickHashes;
+		r.simConfig = m_SimConfig;
 		return r;
 	}
 
@@ -152,6 +155,10 @@ namespace RTE {
 			rj["passed"] = r.passed;
 			rj["ticks"] = r.ticks;
 			rj["final_total_hash"] = r.finalTotalHashHex;
+
+			json simConfig = json::object();
+			for (const auto& [k, v]: r.simConfig) simConfig[k] = v;
+			rj["sim_config"] = simConfig;
 
 			json numeric = json::object();
 			for (const auto& [k, v]: r.numeric) numeric[k] = v;

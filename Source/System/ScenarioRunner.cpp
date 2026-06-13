@@ -1,9 +1,18 @@
 #include "ScenarioRunner.h"
 
+#include "Constants.h"
 #include "MetricsCollector.h"
+#include "MovableMan.h"
+#include "SettingsMan.h"
+#include "TimerMan.h"
 
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <iomanip>
 #include <iostream>
+#include <map>
+#include <sstream>
 #include <string>
 
 namespace RTE {
@@ -11,6 +20,14 @@ namespace RTE {
 	namespace {
 		bool s_Active = false;
 		ScenarioRunner::Args s_Args;
+
+		std::string FloatBitsHex(float value) {
+			uint32_t bits;
+			std::memcpy(&bits, &value, sizeof(bits));
+			std::ostringstream oss;
+			oss << "0x" << std::hex << std::setw(8) << std::setfill('0') << bits;
+			return oss.str();
+		}
 	}
 
 	bool ScenarioRunner::IsActive() { return s_Active; }
@@ -82,6 +99,31 @@ namespace RTE {
 		          << " ticks=" << currentRun.ticks << std::endl;
 
 		return currentRun.passed ? 0 : 1;
+	}
+
+	void ScenarioRunner::ApplyDeterministicConfig() {
+		// One canonical timestep on every machine. Settings.ini's DeltaTime is per-machine and, depending
+		// on the SettingsMan/TimerMan init order, may not even apply — so pin it here, post-load, pre-sim.
+		const std::string loaded = FloatBitsHex(g_TimerMan.GetDeltaTimeSecs());
+		g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
+		const std::string pinned = FloatBitsHex(g_TimerMan.GetDeltaTimeSecs());
+		if (loaded != pinned) {
+			std::cerr << "[scenario] pinned dt " << loaded << " -> " << pinned << std::endl;
+		}
+	}
+
+	std::map<std::string, std::string> ScenarioRunner::GatherSimConfig() {
+		// Sim-affecting settings that must match across machines in a deterministic run. Recorded into the
+		// trace; the determinism check diffs this before the per-tick hashes, so a config mismatch reads as
+		// one instead of masquerading as a sim divergence.
+		std::map<std::string, std::string> config;
+		config["delta_time_bits"] = FloatBitsHex(g_TimerMan.GetDeltaTimeSecs());
+		config["ai_update_interval"] = std::to_string(g_SettingsMan.GetAIUpdateInterval());
+		config["pathfinder_grid_node_size"] = std::to_string(g_SettingsMan.GetPathFinderGridNodeSize());
+		config["recommended_moid_count"] = std::to_string(g_SettingsMan.RecommendedMOIDCount());
+		config["particle_settling"] = g_MovableMan.IsParticleSettlingEnabled() ? "1" : "0";
+		config["mo_subtraction"] = g_MovableMan.IsMOSubtractionEnabled() ? "1" : "0";
+		return config;
 	}
 
 } // namespace RTE
