@@ -118,7 +118,7 @@ AL_INLINE(fixed, fixsub, (fixed x, fixed y),
  *
  * PS. Don't move the #ifs inside the AL_INLINE; BCC doesn't like it.
  */
-#if (defined ALLEGRO_I386) || (!defined LONG_LONG)
+#if (!defined LONG_LONG)
    AL_INLINE(fixed, fixmul, (fixed x, fixed y),
    {
       return ftofix(fixtof(x) * fixtof(y));
@@ -146,15 +146,28 @@ AL_INLINE(fixed, fixsub, (fixed x, fixed y),
 #endif	    /* fixmul() C implementations */
 
 
-AL_INLINE(fixed, fixdiv, (fixed x, fixed y),
-{
-   if (y == 0) {
-      *allegro_errno = ERANGE;
-      return (x < 0) ? -0x7FFFFFFF : 0x7FFFFFFF;
-   }
-   else
-      return ftofix(fixtof(x) / fixtof(y));
-})
+/* Integer division keeps fixed-point math bit-identical across platforms (float rounding is not). */
+#if (!defined LONG_LONG)
+   AL_INLINE(fixed, fixdiv, (fixed x, fixed y),
+   {
+      if (y == 0) {
+	 *allegro_errno = ERANGE;
+	 return (x < 0) ? -0x7FFFFFFF : 0x7FFFFFFF;
+      }
+      else
+	 return ftofix(fixtof(x) / fixtof(y));
+   })
+#else
+   AL_INLINE(fixed, fixdiv, (fixed x, fixed y),
+   {
+      if (y == 0) {
+	 *allegro_errno = ERANGE;
+	 return (x < 0) ? -0x7FFFFFFF : 0x7FFFFFFF;
+      }
+      else
+	 return (fixed)(((LONG_LONG)(x) << 16) / (LONG_LONG)(y));
+   })
+#endif
 
 
 AL_INLINE(int, fixfloor, (fixed x),

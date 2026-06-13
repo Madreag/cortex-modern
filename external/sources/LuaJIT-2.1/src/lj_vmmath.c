@@ -12,6 +12,7 @@
 #include "lj_obj.h"
 #include "lj_ir.h"
 #include "lj_vm.h"
+#include "lj_detmath.h"
 
 /* -- Wrapper functions --------------------------------------------------- */
 

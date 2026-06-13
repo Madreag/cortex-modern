@@ -68,7 +68,7 @@ namespace RTE {
 			return end;
 		}
 		float t = 1 - progressScalar;
-		return (end - start) * (std::sin(-t * c_HalfPI) + 1) + start;
+		return (end - start) * (DetMath::Sin(-t * c_HalfPI) + 1) + start;
 	}
 
 	float EaseOut(float start, float end, float progressScalar) {
@@ -77,11 +77,11 @@ namespace RTE {
 		} else if (progressScalar >= 1.0F) {
 			return end;
 		}
-		return (end - start) * -std::sin(-progressScalar * c_HalfPI) + start;
+		return (end - start) * -DetMath::Sin(-progressScalar * c_HalfPI) + start;
 	}
 
 	float EaseInOut(float start, float end, float progressScalar) {
-		return start * (2 * std::pow(progressScalar, 3) - 3 * std::pow(progressScalar, 2) + 1) + end * (3 * std::pow(progressScalar, 2) - 2 * std::pow(progressScalar, 3));
+		return start * (2 * DetMath::Pow(progressScalar, 3) - 3 * DetMath::Pow(progressScalar, 2) + 1) + end * (3 * DetMath::Pow(progressScalar, 2) - 2 * DetMath::Pow(progressScalar, 3));
 	}
 
 	bool Clamp(float& value, float upperLimit, float lowerLimit) {
@@ -170,7 +170,7 @@ namespace RTE {
 			floatStream << std::fixed << std::setprecision(precision) << input;
 			return floatStream.str();
 		} else {
-			float precisionMagnitude = std::pow(10.0F, static_cast<float>(precision));
+			float precisionMagnitude = DetMath::Pow(10.0F, static_cast<float>(precision));
 			RTEAssert(precisionMagnitude < std::numeric_limits<float>::max(), "Precision set greater than able to display (exponent too high)!");
 			RTEAssert(precisionMagnitude > 0, "Negative precision will yield divide by zero error!");
 			RTEAssert(input < (std::numeric_limits<float>::max() / precisionMagnitude), "Value will exceed numeric limits with precision " + std::to_string(precision));

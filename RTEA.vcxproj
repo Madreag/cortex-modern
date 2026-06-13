@@ -820,6 +820,7 @@
     <ClInclude Include="Source\Network\SimChecksum.h" />
     <ClInclude Include="Source\AI\MetricsCollector.h" />
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
+    <ClInclude Include="Source\CI\DetMathSweep.h" />
     <ClInclude Include="Source\System\ScenarioRunner.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\DataModule.h" />
@@ -1351,6 +1352,7 @@
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
     <ClCompile Include="Source\AI\MetricsCollector.cpp" />
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />
+    <ClCompile Include="Source\CI\DetMathSweep.cpp" />
     <ClCompile Include="Source\System\ScenarioRunner.cpp" />
     <ClCompile Include="Source\System\ContentFile.cpp" />
     <ClCompile Include="Source\System\DataModule.cpp" />
@@ -1498,6 +1500,9 @@
   <ItemGroup>
     <ProjectReference Include="external\sources\LuaJIT-2.1\libluajit.vcxproj">
       <Project>{9C341649-AA1F-35E8-81E3-228A6A09B2BB}</Project>
+    </ProjectReference>
+    <ProjectReference Include="external\sources\detmath\detmath.vcxproj">
+      <Project>{7E3A2D45-9B1C-4F6E-A2D8-5C4E1B8F9A21}</Project>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

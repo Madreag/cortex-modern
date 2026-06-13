@@ -25,10 +25,12 @@ cd %~dp0\src\
 )
 
 @set LJLIBNAME=%LJLIBNAMESTEM%%BUILDTYPE%%LJLIBNAMEEXT%
+@set DETMATHLIB=..\..\detmath\_Bin\detmath.lib
+@if "%1"=="debug" @set DETMATHLIB=..\..\detmath\_Bin\detmath-debug.lib
 
 %LJCOMPILE% luajit.c
 @if errorlevel 1 goto :BAD
-%LJLINK% /out:luajit.exe luajit.obj %LJLIBNAME%
+%LJLINK% /out:luajit.exe luajit.obj %LJLIBNAME% %DETMATHLIB%
 @if errorlevel 1 goto :BAD
 if exist luajit.exe.manifest^
   %LJMT% -manifest luajit.exe.manifest -outputresource:luajit.exe

@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7E3A2D45-9B1C-4F6E-A2D8-5C4E1B8F9A21}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <Keyword>Win32Proj</Keyword>
+    <Platform>x64</Platform>
+    <ProjectName>detmath</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <OutDir>_Bin\</OutDir>
+    <IntDir>_Bin\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName Condition="'$(Configuration)'=='Debug'">detmath-debug</TargetName>
+    <TargetName Condition="'$(Configuration)'!='Debug'">detmath</TargetName>
+    <TargetExt>.lib</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <CompileAs>CompileAsC</CompileAs>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <FloatingPointModel>Precise</FloatingPointModel>
+      <ForcedIncludeFiles>$(ProjectDir)include\detmath_port.h</ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)include_shim;$(ProjectDir)musl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>_ITERATOR_DEBUG_LEVEL=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="musl\sin.c" />
+    <ClCompile Include="musl\cos.c" />
+    <ClCompile Include="musl\tan.c" />
+    <ClCompile Include="musl\asin.c" />
+    <ClCompile Include="musl\acos.c" />
+    <ClCompile Include="musl\atan.c" />
+    <ClCompile Include="musl\atan2.c" />
+    <ClCompile Include="musl\exp.c" />
+    <ClCompile Include="musl\log.c" />
+    <ClCompile Include="musl\log10.c" />
+    <ClCompile Include="musl\pow.c" />
+    <ClCompile Include="musl\sinh.c" />
+    <ClCompile Include="musl\cosh.c" />
+    <ClCompile Include="musl\tanh.c" />
+    <ClCompile Include="musl\expm1.c" />
+    <ClCompile Include="musl\scalbn.c" />
+    <ClCompile Include="musl\__sin.c" />
+    <ClCompile Include="musl\__cos.c" />
+    <ClCompile Include="musl\__tan.c" />
+    <ClCompile Include="musl\__rem_pio2.c" />
+    <ClCompile Include="musl\__rem_pio2_large.c" />
+    <ClCompile Include="musl\__expo2.c" />
+    <ClCompile Include="musl\__math_oflow.c" />
+    <ClCompile Include="musl\__math_uflow.c" />
+    <ClCompile Include="musl\__math_xflow.c" />
+    <ClCompile Include="musl\__math_divzero.c" />
+    <ClCompile Include="musl\__math_invalid.c" />
+    <ClCompile Include="musl\exp_data.c" />
+    <ClCompile Include="musl\log_data.c" />
+    <ClCompile Include="musl\pow_data.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\detmath.h" />
+    <ClInclude Include="include\detmath_port.h" />
+    <ClInclude Include="include_shim\endian.h" />
+    <ClInclude Include="include_shim\features.h" />
+    <ClInclude Include="musl\libm.h" />
+    <ClInclude Include="musl\fp_arch.h" />
+    <ClInclude Include="musl\exp_data.h" />
+    <ClInclude Include="musl\log_data.h" />
+    <ClInclude Include="musl\pow_data.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

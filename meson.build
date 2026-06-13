@@ -259,6 +259,9 @@ install_rpath = prefix/get_option('fmod_dir')
 tracy_proj = subproject('tracy')
 tracy_dep = dependency('tracy')
 allegro_proj = subproject('allegro 4.4.3.1-custom')
+detmath_proj = subproject('detmath')
+detmath_dep = dependency('detmath')
+
 luajit_proj = subproject('LuaJIT-2.1')
 luajit_dep = dependency('luajit')
 external_inc_dirs += luajit_proj.get_variable('luajit_source_dir')
@@ -270,7 +273,7 @@ raknet_proj = subproject('RakNet')
 raknet_dep = dependency('RakNet')
 nlohmann_json_proj = subproject('nlohmann_json-3.12.0')
 nlohmann_json_dep = dependency('nlohmann_json')
-deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, nlohmann_json_dep]
+deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, nlohmann_json_dep, detmath_dep]
 
 #### Sources Setup ####
 source_inc_dirs = []

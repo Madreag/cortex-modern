@@ -79,7 +79,7 @@ subdir('addons/loadpng')
 
 compiler = meson.get_compiler('c')
 
-if compiler.get_argument_syntax() == 'gcc' 
+if compiler.get_argument_syntax() == 'gcc'
   c_args = ['-Wno-deprecated-declarations', '-DTRACY_ENABLE']
 else
 endif
