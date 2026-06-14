@@ -1,4 +1,5 @@
 #include "ACRocket.h"
+#include "RTETools.h"
 #include "AtomGroup.h"
 #include "Attachable.h"
 #include "Leg.h"
@@ -253,7 +254,7 @@ void ACRocket::PreControllerUpdate() {
 	if ((m_Status == STABLE || m_Status == UNSTABLE) && !m_Controller.IsDisabled()) {
 		if (m_pMThruster) {
 			if (m_MaxGimbalAngle != 0) {
-				m_pMThruster->SetInheritedRotAngleOffset(std::sin(m_Rotation.GetRadAngle()) * m_MaxGimbalAngle - c_HalfPI);
+				m_pMThruster->SetInheritedRotAngleOffset(DeterministicSin(m_Rotation.GetRadAngle()) * m_MaxGimbalAngle - c_HalfPI);
 			}
 
 			if (m_Controller.IsState(MOVE_UP) || m_Controller.IsState(AIM_UP)) {

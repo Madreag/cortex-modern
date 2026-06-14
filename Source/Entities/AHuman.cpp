@@ -2492,7 +2492,7 @@ void AHuman::PreControllerUpdate() {
 			float revertScalar = std::min(static_cast<float>(m_SharpAimRevertTimer.GetElapsedSimTimeMS()) / static_cast<float>(m_SharpAimDelay), 1.0F);
 			aimScalar = (aimScalar > revertScalar) ? aimScalar : 1.0F - revertScalar;
 
-			affectingBodyAngle *= std::abs(std::sin(rot)) * rot * (1.0F - aimScalar);
+			affectingBodyAngle *= std::abs(DeterministicSin(rot)) * rot * (1.0F - aimScalar);
 		}
 		m_pFGArm->SetRotAngle(affectingBodyAngle + adjustedAimAngle);
 
@@ -2509,7 +2509,7 @@ void AHuman::PreControllerUpdate() {
 	// BG Arm rotating, climbing, throw animations, supporting fg weapon
 	if (m_pBGArm) {
 		float affectingBodyAngle = m_Status < INACTIVE ? m_BGArmFlailScalar : 1.0F;
-		m_pBGArm->SetRotAngle(std::abs(std::sin(rot)) * rot * affectingBodyAngle + adjustedAimAngle);
+		m_pBGArm->SetRotAngle(std::abs(DeterministicSin(rot)) * rot * affectingBodyAngle + adjustedAimAngle);
 
 		if (m_Status == STABLE) {
 			if (m_ArmClimbing[BGROUND]) {
@@ -2569,9 +2569,9 @@ void AHuman::PreControllerUpdate() {
 				if (legToSwingWith) {
 					float armMovementRateToUse = m_ArmSwingRate;
 					if (HeldDevice* heldDevice = arm->GetHeldDevice()) {
-						armMovementRateToUse = m_DeviceArmSwayRate * (1.0F - m_SharpAimProgress) * std::sin(std::abs(heldDevice->GetStanceOffset().GetAbsRadAngle()));
+						armMovementRateToUse = m_DeviceArmSwayRate * (1.0F - m_SharpAimProgress) * DeterministicSin(std::abs(heldDevice->GetStanceOffset().GetAbsRadAngle()));
 					}
-					float angleToSwingTo = std::sin(legToSwingWith->GetRotAngle() + (c_HalfPI * GetFlipFactor()));
+					float angleToSwingTo = DeterministicSin(legToSwingWith->GetRotAngle() + (c_HalfPI * GetFlipFactor()));
 					arm->SetHandIdleRotation(angleToSwingTo * armMovementRateToUse);
 				}
 			}
