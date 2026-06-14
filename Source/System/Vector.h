@@ -214,7 +214,7 @@ namespace RTE {
 		/// Get this Vector's absolute angle in radians. e.g: when x = 1, y = 0, the value returned here will be 0. x = 0, y = 1 yields -pi/2 here.
 		/// @return The absolute angle in radians, in the interval [-0.5 pi, 1.5 pi).
 		inline float GetAbsRadAngle() const {
-			const float radAngle = -std::atan2(m_Y, m_X);
+			const float radAngle = -static_cast<float>(DeterministicAtan2(static_cast<double>(m_Y), static_cast<double>(m_X)));
 			return (radAngle < -c_HalfPI) ? (radAngle + c_TwoPI) : radAngle;
 		}
 

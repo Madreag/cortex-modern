@@ -342,6 +342,60 @@ namespace RTE {
 			default: sinOut = sinR; cosOut = cosR; break;
 		}
 	}
+
+	// Deterministic sin/cos convenience wrappers over DeterministicSinCos.
+	inline double DeterministicSin(double angle) { double s, c; DeterministicSinCos(angle, s, c); return s; }
+	inline double DeterministicCos(double angle) { double s, c; DeterministicSinCos(angle, s, c); return c; }
+
+	// Deterministic atan core (fdlibm s_atan, public domain) — platform libm atan differs in the last ULPs cross-toolchain; this rational reduction in basic ops (FP contraction is off) is bit-identical on every toolchain.
+	inline double DeterministicAtan(double x) {
+		static const double atanhi[] = {4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00};
+		static const double atanlo[] = {2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17};
+		static const double aT[] = {3.33333333333329318027e-01, -1.99999999998764832476e-01, 1.42857142725034663711e-01, -1.11111104054623557880e-01, 9.09088713343650656196e-02, -7.69187620504482999495e-02, 6.66107313738753120669e-02, -5.83357013379057348645e-02, 4.97687799461593236017e-02, -3.65315727442169155270e-02, 1.62858201153657823623e-02};
+		const bool sign = x < 0.0;
+		double ax = sign ? -x : x;
+		if (ax >= 7.3786976294838206464e+19) { // |x| >= 2^66: saturates to +-pi/2
+			const double z = atanhi[3] + atanlo[3];
+			return sign ? -z : z;
+		}
+		int id;
+		if (ax < 0.4375) {
+			if (ax < 7.450580596923828125e-09) { return x; } // |x| < 2^-27: atan(x) == x
+			id = -1;
+		} else if (ax < 1.1875) {
+			if (ax < 0.6875) { id = 0; ax = (2.0 * ax - 1.0) / (2.0 + ax); }
+			else { id = 1; ax = (ax - 1.0) / (ax + 1.0); }
+		} else if (ax < 2.4375) {
+			id = 2; ax = (ax - 1.5) / (1.0 + 1.5 * ax);
+		} else {
+			id = 3; ax = -1.0 / ax;
+		}
+		const double z = ax * ax;
+		const double w = z * z;
+		const double s1 = z * (aT[0] + w * (aT[2] + w * (aT[4] + w * (aT[6] + w * (aT[8] + w * aT[10])))));
+		const double s2 = w * (aT[1] + w * (aT[3] + w * (aT[5] + w * (aT[7] + w * aT[9]))));
+		if (id < 0) {
+			const double r = ax - ax * (s1 + s2);
+			return sign ? -r : r;
+		}
+		const double r = atanhi[id] - ((ax * (s1 + s2) - atanlo[id]) - ax);
+		return sign ? -r : r;
+	}
+
+	// Deterministic atan2 — wraps DeterministicAtan with fdlibm quadrant handling.
+	inline double DeterministicAtan2(double y, double x) {
+		const double pi = 3.14159265358979311600e+00;
+		const double piLo = 1.22464679914735317720e-16;
+		const double halfPi = 1.57079632679489655800e+00;
+		if (x == 0.0 && y == 0.0) { return 0.0; }
+		if (x == 0.0) { return y > 0.0 ? halfPi : -halfPi; }
+		if (y == 0.0) { return x > 0.0 ? 0.0 : pi; }
+		const double ay = y < 0.0 ? -y : y;
+		const double axx = x < 0.0 ? -x : x;
+		const double z = DeterministicAtan(ay / axx); // atan(|y/x|), in [0, pi/2)
+		if (x > 0.0) { return y < 0.0 ? -z : z; }
+		return y < 0.0 ? (z - piLo) - pi : pi - (z - piLo);
+	}
 #pragma endregion
 
 #pragma region Strings
