@@ -1270,7 +1270,10 @@ bool MOSRotating::DeepCheck(bool makeMOPs, int skipMOP, int maxMOPs) {
 				if (tally >= 1.0) {
 					tally -= 1.0;
 					(*itr)->SetPos((*itr)->GetPos() - m_Vel.GetNormalized() * depth);
-					(*itr)->SetVel(Vector(velMag * RandomNum(0.0F, splashDir), -RandomNum(0.0F, velMag)));
+					// Order the draws explicitly — unsequenced arg evaluation desyncs cross-compiler.
+					const float splashVelX = velMag * RandomNum(0.0F, splashDir);
+					const float splashVelY = -RandomNum(0.0F, velMag);
+					(*itr)->SetVel(Vector(splashVelX, splashVelY));
 					m_DeepHardness += (*itr)->GetMaterial()->GetIntegrity() * (*itr)->GetMaterial()->GetPixelDensity();
 					g_MovableMan.AddParticle(*itr);
 					*itr = 0;
