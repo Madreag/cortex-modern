@@ -6,6 +6,7 @@
 #include "System.h"
 #include "MetricsCollector.h"
 #include "SimChecksum.h"
+#include "RTETools.h"
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
@@ -32,6 +33,26 @@ namespace {
 		lua_setfield(L, -2, "time");
 		lua_pushcfunction(L, det_os_clock);
 		lua_setfield(L, -2, "clock");
+		lua_pop(L, 1);
+	}
+
+	// Route math.atan/atan2 through the cross-platform poly — AI ballistics aim through these and the platform libm atan2 diverges cross-toolchain.
+	int det_math_atan(lua_State* L) {
+		lua_pushnumber(L, DeterministicAtan2(luaL_checknumber(L, 1), luaL_optnumber(L, 2, 1.0)));
+		return 1;
+	}
+
+	int det_math_atan2(lua_State* L) {
+		lua_pushnumber(L, DeterministicAtan2(luaL_checknumber(L, 1), luaL_checknumber(L, 2)));
+		return 1;
+	}
+
+	void RegisterDeterministicMathOverrides(lua_State* L) {
+		lua_getglobal(L, "math");
+		lua_pushcfunction(L, det_math_atan);
+		lua_setfield(L, -2, "atan");
+		lua_pushcfunction(L, det_math_atan2);
+		lua_setfield(L, -2, "atan2");
 		lua_pop(L, 1);
 	}
 } // namespace
@@ -130,6 +151,9 @@ void LuaStateWrapper::Initialize() {
 
 	// Replace os.time / os.clock with sim-tick stubs so sim Lua can't read the wall clock.
 	RegisterDeterministicOsStubs(m_State);
+
+	// Route math.atan/atan2 through the cross-platform poly so AI ballistics don't diverge on the platform libm.
+	RegisterDeterministicMathOverrides(m_State);
 
 	// From LuaBind documentation:
 	// As mentioned in the Lua documentation, it is possible to pass an error handler function to lua_pcall(). LuaBind makes use of lua_pcall() internally when calling member functions and free functions.

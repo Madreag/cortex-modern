@@ -5,6 +5,7 @@
 #include "System.h"
 
 #include <fstream>
+#include <sstream>
 
 using namespace RTE;
 
