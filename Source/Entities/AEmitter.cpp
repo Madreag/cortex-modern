@@ -492,7 +492,7 @@ void AEmitter::Update() {
 					}
 					// TODO: Optimize making the random angles!")
 					emitVel.SetXY(velMin + RandomNum(0.0F, velRange), 0.0F);
-					emitVel.RadRotate(m_EmitAngle.GetRadAngle() + spread * RandomNormalNum());
+					emitVel.RadRotateDet(m_EmitAngle.GetRadAngle() + spread * RandomNormalNum());
 					emitVel = RotateOffset(emitVel);
 					pParticle->SetVel(parentVel + rotationalVel + emitVel);
 					pParticle->SetRotAngle(emitVel.GetAbsRadAngle() + (m_HFlipped ? -c_PI : 0));
