@@ -249,6 +249,28 @@ namespace RTE {
 			return *this;
 		}
 
+		/// Returns a copy of this Vector rotated by an angle in radians using deterministic sin/cos — for on-wire physics that must be bit-identical cross-platform.
+		/// @param angle The angle in radians to rotate by.
+		/// @return A rotated copy of this Vector.
+		inline Vector GetRadRotatedCopyDet(const float angle) const {
+			double sinA, cosA;
+			DeterministicSinCos(-static_cast<double>(angle), sinA, cosA);
+			const float c = static_cast<float>(cosA);
+			const float s = static_cast<float>(sinA);
+			Vector returnVector;
+			returnVector.m_X = m_X * c - m_Y * s;
+			returnVector.m_Y = m_X * s + m_Y * c;
+			return returnVector;
+		}
+
+		/// Rotate this Vector by an angle in radians using deterministic sin/cos.
+		/// @param angle The angle in radians to rotate by.
+		/// @return Vector reference to this after the operation.
+		inline Vector& RadRotateDet(const float angle) {
+			*this = GetRadRotatedCopyDet(angle);
+			return *this;
+		}
+
 		/// Returns a copy of this Vector, rotated relatively by an angle in degrees.
 		/// @param angle The angle in degrees to rotate by. Positive angles rotate counter-clockwise, and negative angles clockwise.
 		/// @return A rotated copy of this Vector.
