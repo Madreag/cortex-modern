@@ -22,6 +22,8 @@
 #include "tracy/Tracy.hpp"
 
 #include <cstring>
+#include <cstdlib>
+#include <fstream>
 
 using namespace RTE;
 
@@ -461,6 +463,25 @@ void SceneMan::FeedTerrainToSimChecksum() {
 	}
 	HashTerrainBitmap(terrain->GetMaterialBitmap());
 	HashTerrainBitmap(terrain->GetFGColorBitmap());
+
+	// TEMP cross-arch terrain probe (NEVER SHIPS): raw bitmap dump on the first hashed tick for a byte-level x86<->arm64 diff.
+	static bool s_terrainDumped = false;
+	if (!s_terrainDumped && std::getenv("CCCP_TERRAIN_DUMP")) {
+		s_terrainDumped = true;
+		BITMAP* dumpBitmaps[2] = {terrain->GetMaterialBitmap(), terrain->GetFGColorBitmap()};
+		const char* dumpPaths[2] = {"terrain_mat.bin", "terrain_fg.bin"};
+		for (int i = 0; i < 2; ++i) {
+			if (!dumpBitmaps[i]) {
+				continue;
+			}
+			std::ofstream out(dumpPaths[i], std::ios::binary);
+			const int dims[2] = {dumpBitmaps[i]->w, dumpBitmaps[i]->h};
+			out.write(reinterpret_cast<const char*>(dims), sizeof(dims));
+			for (int y = 0; y < dumpBitmaps[i]->h; ++y) {
+				out.write(reinterpret_cast<const char*>(dumpBitmaps[i]->line[y]), dumpBitmaps[i]->w);
+			}
+		}
+	}
 }
 
 void SceneMan::HashTerrainBitmap(BITMAP* bitmap) {
