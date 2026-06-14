@@ -324,6 +324,24 @@ namespace RTE {
 	/// @param angleRadians The angle in radians to be converted.
 	/// @return The converted angle in degrees.
 	inline float RadiansToDegrees(float angleRadians) { return angleRadians / c_PI * 180.0F; }
+
+	// Deterministic sin/cos for on-wire physics — platform libm differs in the last ULP cross-toolchain; this range-reduced polynomial in basic ops (FP contraction is off) is bit-identical on every toolchain.
+	inline void DeterministicSinCos(double angle, double& sinOut, double& cosOut) {
+		const double twoOverPi = 0.63661977236758134308;
+		const double halfPi = 1.57079632679489661923;
+		const double q = angle * twoOverPi;
+		const long k = static_cast<long>(q >= 0.0 ? q + 0.5 : q - 0.5);
+		const double r = angle - static_cast<double>(k) * halfPi;
+		const double r2 = r * r;
+		const double sinR = r * (1.0 + r2 * (-1.0 / 6.0 + r2 * (1.0 / 120.0 + r2 * (-1.0 / 5040.0 + r2 * (1.0 / 362880.0)))));
+		const double cosR = 1.0 + r2 * (-1.0 / 2.0 + r2 * (1.0 / 24.0 + r2 * (-1.0 / 720.0 + r2 * (1.0 / 40320.0 + r2 * (-1.0 / 3628800.0)))));
+		switch (k & 3) {
+			case 1: sinOut = cosR; cosOut = -sinR; break;
+			case 2: sinOut = -sinR; cosOut = -cosR; break;
+			case 3: sinOut = -cosR; cosOut = sinR; break;
+			default: sinOut = sinR; cosOut = cosR; break;
+		}
+	}
 #pragma endregion
 
 #pragma region Strings

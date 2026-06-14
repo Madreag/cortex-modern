@@ -234,10 +234,13 @@ namespace RTE {
 		/// @param angle The angle in radians to rotate by. Positive angles rotate counter-clockwise, and negative angles clockwise.
 		/// @return A rotated copy of this Vector.
 		inline Vector GetRadRotatedCopy(const float angle) const {
+			double sinA, cosA;
+			DeterministicSinCos(-static_cast<double>(angle), sinA, cosA);
+			const float c = static_cast<float>(cosA);
+			const float s = static_cast<float>(sinA);
 			Vector returnVector = *this;
-			const float adjustedAngle = -angle;
-			returnVector.m_X = m_X * std::cos(adjustedAngle) - m_Y * std::sin(adjustedAngle);
-			returnVector.m_Y = m_X * std::sin(adjustedAngle) + m_Y * std::cos(adjustedAngle);
+			returnVector.m_X = m_X * c - m_Y * s;
+			returnVector.m_Y = m_X * s + m_Y * c;
 			return returnVector;
 		}
 
