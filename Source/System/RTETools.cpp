@@ -68,7 +68,7 @@ namespace RTE {
 			return end;
 		}
 		float t = 1 - progressScalar;
-		return (end - start) * (std::sin(-t * c_HalfPI) + 1) + start;
+		return (end - start) * (DeterministicSin(-t * c_HalfPI) + 1) + start;
 	}
 
 	float EaseOut(float start, float end, float progressScalar) {
@@ -77,7 +77,7 @@ namespace RTE {
 		} else if (progressScalar >= 1.0F) {
 			return end;
 		}
-		return (end - start) * -std::sin(-progressScalar * c_HalfPI) + start;
+		return (end - start) * -DeterministicSin(-progressScalar * c_HalfPI) + start;
 	}
 
 	float EaseInOut(float start, float end, float progressScalar) {
