@@ -1,4 +1,5 @@
 #include "HeldDevice.h"
+#include "RTETools.h"
 
 #include "CameraMan.h"
 #include "MovableMan.h"
@@ -238,7 +239,7 @@ void HeldDevice::Destroy(bool notInherited) {
 
 Vector HeldDevice::GetStanceOffset() const {
 	if (m_SharpAim > 0) {
-		float rotAngleScalar = std::abs(std::sin(GetRootParent()->GetRotAngle()));
+		float rotAngleScalar = std::abs(DeterministicSin(GetRootParent()->GetRotAngle()));
 		// Deviate the vertical axis towards regular StanceOffset based on the user's rotation so that sharp aiming doesn't look awkward when prone
 		return Vector(m_SharpStanceOffset.GetX(), m_SharpStanceOffset.GetY() * (1.0F - rotAngleScalar) + m_StanceOffset.GetY() * rotAngleScalar).GetXFlipped(m_HFlipped);
 	} else
