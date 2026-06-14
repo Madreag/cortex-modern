@@ -789,7 +789,10 @@ void Actor::DropAllInventory() {
 			}
 			// Gib is too close to center to always make it rotate in one direction, so give it a baseline rotation and then randomize
 			else {
-				pObject->SetAngularVel((pObject->GetAngularVel() * RandomNum(0.5F, 1.5F)) * (RandomNum() < 0.5F ? 1.0F : -1.0F));
+				// Order the draws explicitly — unsequenced arg evaluation desyncs cross-compiler.
+				const float spinScale = RandomNum(0.5F, 1.5F);
+				const float spinSign = RandomNum() < 0.5F ? 1.0F : -1.0F;
+				pObject->SetAngularVel(pObject->GetAngularVel() * spinScale * spinSign);
 			}
 
 			// TODO: Optimize making the random angles!")

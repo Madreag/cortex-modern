@@ -126,7 +126,12 @@ namespace RTE {
 
 		/// Gets a random point within this box.
 		/// @return The random point within the box.
-		Vector GetRandomPoint() const { return Vector(m_Corner.m_X + RandomNum(0.0F, m_Width), m_Corner.m_Y + RandomNum(0.0F, m_Height)); }
+		Vector GetRandomPoint() const {
+			// Order the draws explicitly — unsequenced arg evaluation desyncs cross-compiler.
+			const float x = RandomNum(0.0F, m_Width);
+			const float y = RandomNum(0.0F, m_Height);
+			return Vector(m_Corner.m_X + x, m_Corner.m_Y + y);
+		}
 
 		/// @brief Gets the intersection of this Box with another Box
 		/// @param rhs The other Box.
