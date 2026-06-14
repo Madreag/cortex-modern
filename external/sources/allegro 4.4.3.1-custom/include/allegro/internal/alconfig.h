@@ -189,9 +189,27 @@
  * only be included if none of the above headers defined custom versions.
  */
 
-#ifndef _AL_SINCOS
-   #define _AL_SINCOS(x, s, c)  do { (c) = cos(x); (s) = sin(x); } while (0)
-#endif
+/* Deterministic sin/cos for rotation: platform libm differs in the last ULP cross-toolchain, shifting rotated sprite corners. */
+static __inline void _al_det_sincos(double _alsc_x, double *_alsc_s, double *_alsc_c)
+{
+   const double two_over_pi = 0.63661977236758134308;
+   const double half_pi = 1.57079632679489661923;
+   double q = _alsc_x * two_over_pi;
+   long k = (long)(q >= 0.0 ? q + 0.5 : q - 0.5);
+   double r = _alsc_x - (double)k * half_pi;
+   double r2 = r * r;
+   double sin_r = r * (1.0 + r2 * (-1.0/6.0 + r2 * (1.0/120.0 + r2 * (-1.0/5040.0 + r2 * (1.0/362880.0)))));
+   double cos_r = 1.0 + r2 * (-1.0/2.0 + r2 * (1.0/24.0 + r2 * (-1.0/720.0 + r2 * (1.0/40320.0 + r2 * (-1.0/3628800.0)))));
+   switch ((int)(k & 3)) {
+      case 1:  *_alsc_s = cos_r;  *_alsc_c = -sin_r; break;
+      case 2:  *_alsc_s = -sin_r; *_alsc_c = -cos_r; break;
+      case 3:  *_alsc_s = -cos_r; *_alsc_c = sin_r;  break;
+      default: *_alsc_s = sin_r;  *_alsc_c = cos_r;  break;
+   }
+}
+
+#undef _AL_SINCOS
+#define _AL_SINCOS(x, s, c)  do { double _alsc_so, _alsc_co; _al_det_sincos((double)(x), &_alsc_so, &_alsc_co); (s) = _alsc_so; (c) = _alsc_co; } while (0)
 
 #ifndef INLINE
    #define INLINE
