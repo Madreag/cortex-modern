@@ -665,11 +665,13 @@ bool SceneMan::TryPenetrate(int posX,
 				float tempMinX = tempMaxX / 2.0F;
 				float tempMaxY = velocity.m_Y * sprayScale;
 				float tempMinY = tempMaxY / 2.0F;
+				// Order the spray draws explicitly — unsequenced arg evaluation desyncs cross-compiler.
+				const float sprayVelX = -RandomNum(tempMinX, tempMaxX);
+				const float sprayVelY = -RandomNum(tempMinY, tempMaxY);
 				MOPixel* pixelMO = new MOPixel(spawnColor,
 				                               spawnMat->GetPixelDensity(),
 				                               Vector(posX, posY),
-				                               Vector(-RandomNum(tempMinX, tempMaxX),
-				                                      -RandomNum(tempMinY, tempMaxY)),
+				                               Vector(sprayVelX, sprayVelY),
 				                               //                                              -(impulse * (sprayScale * RandomNum() / spawnMat.density)),
 				                               new Atom(Vector(), spawnMat->GetIndex(), 0, spawnColor, 2),
 				                               0);
