@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string_view>
 #include <type_traits>
+#include <cmath>
 
 namespace RTE {
 
@@ -396,6 +397,47 @@ namespace RTE {
 		if (x > 0.0) { return y < 0.0 ? -z : z; }
 		return y < 0.0 ? (z - piLo) - pi : pi - (z - piLo);
 	}
+
+	// Deterministic exp (fdlibm e_exp, public domain) — platform libm exp differs cross-toolchain; this range-reduced rational in basic ops + an exact ldexp scale is bit-identical everywhere.
+	inline double DeterministicExp(double x) {
+		const double halF[2] = {0.5, -0.5};
+		const double ln2HI[2] = {6.93147180369123816490e-01, -6.93147180369123816490e-01};
+		const double ln2LO[2] = {1.90821492927058770002e-10, -1.90821492927058770002e-10};
+		const double invln2 = 1.44269504088896338700e+00;
+		const double P1 = 1.66666666666666019037e-01, P2 = -2.77777777770155933842e-03, P3 = 6.61375632143793436117e-05, P4 = -1.65339022054652515390e-06, P5 = 4.13813679705723846039e-08;
+		if (x >= 7.09782712893383973096e+02) { const double huge = 1.0e300; return huge * huge; } // overflow -> +inf
+		if (x <= -7.45133219101941108420e+02) { return 0.0; } // underflow -> 0
+		const int xsb = x < 0.0 ? 1 : 0;
+		const double ax = x < 0.0 ? -x : x;
+		double hi, lo;
+		int k;
+		if (ax > 0.34657359027997264311) { // |x| > 0.5*ln2
+			if (ax < 1.03972077083991796313) { // |x| < 1.5*ln2
+				hi = x - ln2HI[xsb];
+				lo = ln2LO[xsb];
+				k = 1 - xsb - xsb;
+			} else {
+				k = static_cast<int>(invln2 * x + halF[xsb]);
+				const double t = static_cast<double>(k);
+				hi = x - t * ln2HI[0];
+				lo = t * ln2LO[0];
+			}
+			x = hi - lo;
+		} else if (ax < 3.7252902984619140625e-09) { // |x| < 2^-28: exp(x) == 1+x
+			return 1.0 + x;
+		} else {
+			hi = 0.0;
+			lo = 0.0;
+			k = 0;
+		}
+		const double t = x * x;
+		const double c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
+		if (k == 0) {
+			return 1.0 - ((x * c) / (c - 2.0) - x);
+		}
+		const double y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
+		return std::ldexp(y, k);
+	}
 #pragma endregion
 
 #pragma region Strings
@@ -465,7 +507,7 @@ namespace RTE {
 	/// @param deltaTime Amount of time of decay to simulate.
 	/// @returns The decayed value.
 	inline float ExpDecay(float current, float target, float decay, float deltaTime) {
-		return target + (current - target) * std::exp(-decay * deltaTime);
+		return target + (current - target) * static_cast<float>(DeterministicExp(static_cast<double>(-decay * deltaTime)));
 	}
 		
 #pragma endregion
