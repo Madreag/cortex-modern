@@ -25,6 +25,9 @@
 #include "tracy/Tracy.hpp"
 
 #include <execution>
+#include <fstream>
+#include <cstring>
+#include <cstdlib>
 
 using namespace RTE;
 
@@ -1758,6 +1761,18 @@ void MovableMan::Update() {
 			const Vector move = controller->GetAnalogMove();
 			const Vector aim = controller->GetAnalogAim();
 			const Vector cursor = controller->GetAnalogCursor();
+			// TEMP cross-arch carrier hunt: raw per-actor analog bits, env CTRLFIELD_DUMP, sim-update window 74-86.
+			if (const char* ctrlDumpPath = std::getenv("CTRLFIELD_DUMP")) {
+				const long long dumpTick = g_TimerMan.GetSimUpdateCount();
+				if (dumpTick >= 74 && dumpTick <= 86) {
+					static std::ofstream ctrlDump(ctrlDumpPath, std::ios::app);
+					auto rawBits = [](float f) { uint32_t u; std::memcpy(&u, &f, sizeof(u)); return u; };
+					ctrlDump << dumpTick << ',' << static_cast<int64_t>(a->GetUniqueID()) << std::hex
+					         << ',' << rawBits(move.m_X) << ',' << rawBits(move.m_Y)
+					         << ',' << rawBits(aim.m_X) << ',' << rawBits(aim.m_Y)
+					         << ',' << rawBits(cursor.m_X) << ',' << rawBits(cursor.m_Y) << std::dec << '\n';
+				}
+			}
 			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
 			g_SimChecksum.Update("controller", analog, sizeof(analog));
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
