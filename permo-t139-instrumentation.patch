@@ -1,0 +1,53 @@
+diff --git a/Source/Managers/MovableMan.cpp b/Source/Managers/MovableMan.cpp
+index 5734dcbb3..1577f375f 100644
+--- a/Source/Managers/MovableMan.cpp
++++ b/Source/Managers/MovableMan.cpp
+@@ -25,6 +25,9 @@
+ #include "tracy/Tracy.hpp"
+ 
+ #include <execution>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
+ 
+ using namespace RTE;
+ 
+@@ -1744,6 +1747,19 @@ void MovableMan::Update() {
+ 			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
+ 			const float actorAngVel = a->GetAngularVel();
+ 			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
++
++			// TEMP: env-gated per-MO dump (cross-arch t139 residual pin; read-only)
++			static const bool s_angDump = std::getenv("CCCP_ANGVEL_DUMP") != nullptr;
++			if (s_angDump) {
++				const uint64_t dumpTick = g_SimChecksum.GetLastResult().tick + 1;
++				if (dumpTick >= 137 && dumpTick <= 141) {
++					static std::ofstream angOut("permo_t139.csv", std::ios::trunc);
++					auto B = [](float f) { uint32_t u; std::memcpy(&u, &f, sizeof(u)); return u; };
++					angOut << dumpTick << ",actor," << uniqueID << ',' << B(posX) << ',' << B(posY)
++					       << ',' << B(velX) << ',' << B(velY) << ',' << B(actorRotAngle) << ',' << B(actorAngVel) << '\n';
++					angOut.flush();
++				}
++			}
+ 		}
+ 
+ 		// Controller input state per actor — catches control drift the actors fingerprint misses.
+@@ -1778,6 +1794,18 @@ void MovableMan::Update() {
+ 			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
+ 			const float partAngVel = p->GetAngularVel();
+ 			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
++
++			static const bool s_angDumpP = std::getenv("CCCP_ANGVEL_DUMP") != nullptr;
++			if (s_angDumpP) {
++				const uint64_t dumpTick = g_SimChecksum.GetLastResult().tick + 1;
++				if (dumpTick >= 137 && dumpTick <= 141) {
++					static std::ofstream angOutP("permo_t139_part.csv", std::ios::trunc);
++					auto B = [](float f) { uint32_t u; std::memcpy(&u, &f, sizeof(u)); return u; };
++					angOutP << dumpTick << ",part," << particleID << ',' << B(ppX) << ',' << B(ppY)
++					        << ',' << B(pvX) << ',' << B(pvY) << ',' << B(p->GetRotAngle()) << ',' << B(partAngVel) << '\n';
++					angOutP.flush();
++				}
++			}
+ 		}
+ 
+ 		// Lightweight population metadata — catches spawn/delete count drift.
