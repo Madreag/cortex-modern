@@ -47,12 +47,20 @@ namespace {
 		return 1;
 	}
 
+	// Route math.exp through the cross-platform poly — combat AI aim-skill uses it and the platform libm exp diverges cross-toolchain.
+	int det_math_exp(lua_State* L) {
+		lua_pushnumber(L, DeterministicExp(luaL_checknumber(L, 1)));
+		return 1;
+	}
+
 	void RegisterDeterministicMathOverrides(lua_State* L) {
 		lua_getglobal(L, "math");
 		lua_pushcfunction(L, det_math_atan);
 		lua_setfield(L, -2, "atan");
 		lua_pushcfunction(L, det_math_atan2);
 		lua_setfield(L, -2, "atan2");
+		lua_pushcfunction(L, det_math_exp);
+		lua_setfield(L, -2, "exp");
 		lua_pop(L, 1);
 	}
 } // namespace
