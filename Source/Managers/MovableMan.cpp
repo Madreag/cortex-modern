@@ -1739,11 +1739,11 @@ void MovableMan::Update() {
 			g_SimChecksum.Update("actors", &health, sizeof(health));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
 			g_SimChecksum.Update("actors", &aiMode, sizeof(aiMode));
-			// Rotational state is on-wire but absent from the linear actors fingerprint — hash it separately so a rotation/angular-velocity divergence is visible at its root.
+			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
 			const float actorRotAngle = a->GetRotAngle();
-			g_SimChecksum.Update("rotation", &actorRotAngle, sizeof(actorRotAngle));
+			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
 			const float actorAngVel = a->GetAngularVel();
-			g_SimChecksum.Update("rotation", &actorAngVel, sizeof(actorAngVel));
+			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
 		}
 
 		// Controller input state per actor — catches control drift the actors fingerprint misses.
@@ -1777,7 +1777,7 @@ void MovableMan::Update() {
 			const float pvY = p->GetVel().m_Y;
 			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
 			const float partAngVel = p->GetAngularVel();
-			g_SimChecksum.Update("rotation", &partAngVel, sizeof(partAngVel));
+			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
 		}
 
 		// Lightweight population metadata — catches spawn/delete count drift.

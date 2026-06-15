@@ -98,7 +98,8 @@ namespace {
 	    {"scene",       "terrain", "SceneMan global state."},
 	    {"terrain",     "terrain", "SLTerrain pixel state."},
 	    {"carve_math",  "terrain", "Per-carve math intermediate results."},
-	    {"rotation",    "sim",     "Per-MO rotation angle + angular velocity (rotational state, absent from the linear actors/particles fingerprints)."},
+	    {"rot_angle",   "sim",     "Per-MO rotation angle (split from rot_angvel to localize the rotational residual)."},
+	    {"rot_angvel",  "sim",     "Per-MO angular velocity."},
 	};
 
 	// ----- arg matching --------------------------------------------------------
