@@ -1003,7 +1003,10 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 					float angularVel = std::abs(gibParticleClone->GetAngularVel() * 0.5F) + std::abs(gibParticleClone->GetAngularVel() * 0.5F * offCenterRatio);
 					gibParticleClone->SetAngularVel(angularVel * (rotatedGibOffset.m_X > 0 ? -1 : 1));
 				} else {
-					gibParticleClone->SetAngularVel((gibParticleClone->GetAngularVel() * 0.5F + (gibParticleClone->GetAngularVel() * RandomNum())) * (RandomNormalNum() > 0.0F ? 1.0F : -1.0F));
+					// Draw in fixed order — unsequenced RNG eval desyncs across compilers
+					const float gibAngVelRand = RandomNum();
+					const float gibAngVelSign = RandomNormalNum() > 0.0F ? 1.0F : -1.0F;
+					gibParticleClone->SetAngularVel((gibParticleClone->GetAngularVel() * 0.5F + (gibParticleClone->GetAngularVel() * gibAngVelRand)) * gibAngVelSign);
 				}
 
 				gibParticleClone->SetPos(m_Pos + rotatedGibOffset);
