@@ -438,6 +438,39 @@ namespace RTE {
 		const double y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
 		return std::ldexp(y, k);
 	}
+
+	// Deterministic natural log (fdlibm e_log, public domain) via an exact frexp decomposition — platform libm log differs cross-toolchain; this is bit-identical everywhere.
+	inline double DeterministicLog(double x) {
+		const double ln2HI = 6.93147180369123816490e-01;
+		const double ln2LO = 1.90821492927058770002e-10;
+		const double Lg1 = 6.666666666666735130e-01, Lg2 = 3.999999999940941908e-01, Lg3 = 2.857142874366239149e-01, Lg4 = 2.222219843214978396e-01, Lg5 = 1.818357216161805012e-01, Lg6 = 1.531383769920937332e-01, Lg7 = 1.479819860511658591e-01;
+		if (x <= 0.0) { const double huge = 1.0e300; const double inf = huge * huge; return x < 0.0 ? inf - inf : -inf; }
+		int k;
+		double f = std::frexp(x, &k); // x = f * 2^k, f in [0.5, 1)
+		if (f < 0.70710678118654752440) { f += f; --k; } // center the mantissa around 1
+		f -= 1.0;
+		const double s = f / (2.0 + f);
+		const double z = s * s;
+		const double w = z * z;
+		const double t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
+		const double t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
+		const double R = t2 + t1;
+		const double hfsq = 0.5 * f * f;
+		const double dk = static_cast<double>(k);
+		return dk * ln2HI - ((hfsq - (s * (hfsq + R) + dk * ln2LO)) - f);
+	}
+
+	// Deterministic pow — exact integer-exponent path via repeated multiply (the sim's powers are integral), general path through the exp/log polys. Platform libm pow routes through exp(y*log(x)) even for integer y and diverges cross-toolchain.
+	inline double DeterministicPow(double base, double exponent) {
+		const long long intExponent = static_cast<long long>(exponent);
+		if (static_cast<double>(intExponent) == exponent && intExponent >= -1024 && intExponent <= 1024) {
+			double result = 1.0;
+			const long long count = intExponent < 0 ? -intExponent : intExponent;
+			for (long long i = 0; i < count; ++i) { result *= base; }
+			return intExponent < 0 ? 1.0 / result : result;
+		}
+		return DeterministicExp(exponent * DeterministicLog(base));
+	}
 #pragma endregion
 
 #pragma region Strings
