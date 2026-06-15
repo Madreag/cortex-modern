@@ -1,9 +1,5 @@
 #include "MOSRotating.h"
 
-#include <fstream>
-#include <mutex>
-#include <cstring>
-
 #include "CameraMan.h"
 #include "SettingsMan.h"
 #include "PresetMan.h"
@@ -1091,17 +1087,7 @@ void MOSRotating::ApplyForces() {
 
 	for (const auto& [forceVector, forceOffset]: m_Forces) {
 		if (!forceOffset.IsZero()) {
-			const float moiF = m_pAtomGroup->GetMomentOfInertia();
-			const float torqueF = forceOffset.GetPerpendicular().Dot(forceVector);
-			m_AngularVel += (torqueF / moiF) * deltaTime;
-			if (g_TimerMan.GetSimUpdateCount() == 122) {
-				auto fb = [](float f) { uint32_t u = 0; std::memcpy(&u, &f, sizeof(u)); return u; };
-				static std::mutex dumpMtxF;
-				static std::ofstream dumpFileF("angvel_dump_frc.csv");
-				std::lock_guard<std::mutex> lk(dumpMtxF);
-				dumpFileF << "FRC," << GetUniqueID() << "," << std::hex << fb(moiF) << "," << fb(forceOffset.m_X) << "," << fb(forceOffset.m_Y) << "," << fb(forceVector.m_X) << "," << fb(forceVector.m_Y) << "," << fb(torqueF) << "," << fb(m_AngularVel) << std::dec << "\n";
-				dumpFileF.flush();
-			}
+			m_AngularVel += (forceOffset.GetPerpendicular().Dot(forceVector) / m_pAtomGroup->GetMomentOfInertia()) * deltaTime;
 		}
 	}
 
@@ -1111,17 +1097,7 @@ void MOSRotating::ApplyForces() {
 void MOSRotating::ApplyImpulses() {
 	for (const auto& [impulseForceVector, impulseForceOffset]: m_ImpulseForces) {
 		if (!impulseForceOffset.IsZero()) {
-			const float moiImp = m_pAtomGroup->GetMomentOfInertia();
-			const float torqueImp = impulseForceOffset.GetPerpendicular().Dot(impulseForceVector);
-			m_AngularVel += torqueImp / moiImp;
-			if (g_TimerMan.GetSimUpdateCount() == 122) {
-				auto fb = [](float f) { uint32_t u = 0; std::memcpy(&u, &f, sizeof(u)); return u; };
-				static std::mutex dumpMtx;
-				static std::ofstream dumpFile("angvel_dump.csv");
-				std::lock_guard<std::mutex> lk(dumpMtx);
-				dumpFile << "IMP," << GetUniqueID() << "," << std::hex << fb(moiImp) << "," << fb(impulseForceOffset.m_X) << "," << fb(impulseForceOffset.m_Y) << "," << fb(impulseForceVector.m_X) << "," << fb(impulseForceVector.m_Y) << "," << fb(torqueImp) << "," << fb(m_AngularVel) << std::dec << "\n";
-				dumpFile.flush();
-			}
+			m_AngularVel += impulseForceOffset.GetPerpendicular().Dot(impulseForceVector) / m_pAtomGroup->GetMomentOfInertia();
 		}
 	}
 
