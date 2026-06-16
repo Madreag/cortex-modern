@@ -1,0 +1,15 @@
+# arm64 determinism-cs nls sweep — total-trace fp (sha256 of all 900 per-tick total hashes, first 16)
+# NOTE: 'total' includes the OFF-WIRE controller subsystem; cross-nls differences for actor scenarios
+# reflect the per-machine thread-dependent AI (expected on Controller-sync). Lead's sim-gated diff is authoritative.
+scenario,n1,n2,n4,n8,total_identical_across_nls
+SimBaseline,d505204643b4ef33,153b24a850d2f88d,153b24a850d2f88d,153b24a850d2f88d,False
+LuaBaseline,f2b47d5ce1cc2ca8,f2b47d5ce1cc2ca8,f2b47d5ce1cc2ca8,f2b47d5ce1cc2ca8,True
+LuaOsStubTest,31ed913fe859e9ac,31ed913fe859e9ac,31ed913fe859e9ac,31ed913fe859e9ac,True
+LuaPairsStress,31ed913fe859e9ac,31ed913fe859e9ac,31ed913fe859e9ac,31ed913fe859e9ac,True
+LuaRandomStress,153020f21fc31056,153020f21fc31056,153020f21fc31056,153020f21fc31056,True
+ModSmokeLoading,7f1dabb2c443c50f,7f1dabb2c443c50f,7f1dabb2c443c50f,7f1dabb2c443c50f,True
+TerrainStress,cb7ecf70fa3f2ba8,0479f7e077fd0bd7,cb7ecf70fa3f2ba8,cb7ecf70fa3f2ba8,False
+TerrainCarveStress,b606723e77a143da,56e132c7b4e26425,0e52a57ece37cf5b,dfa329b782d8515a,False
+ActorStress,c999c91cf5898ddc,0043e421a0babbcb,d4c62306698dbd1b,1b1a351cad17e61e,False
+ThreadStress,2db12f63f0d4d4c8,aaab4d55e105b668,2db12f63f0d4d4c8,2db12f63f0d4d4c8,False
+PerfBench,86ae36d633e52323,846609d3eb0464c1,630dfed38f7f79fd,82e5ae2c3fe64a36,False
