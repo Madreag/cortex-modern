@@ -1,0 +1,4 @@
+sin : loop_iters=4000000 override_hits=4000000 honored=true (sum=-2.8e+07; if honored sum==-7*iters=-2.8e+07)
+tanh: loop_iters=4000000 override_hits=4000000 honored=true
+asin: loop_iters=4000000 override_hits=4000000 honored=true
+jit status:	true	SSE3	SSE4.1	BMI2	fold	cse	dce	fwd	dse	narrow	loop	abc	sink	fuse
