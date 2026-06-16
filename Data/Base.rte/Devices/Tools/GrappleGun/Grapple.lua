@@ -360,7 +360,7 @@ function Update(self)
 					end
 
 					pullAmountNumber = pullAmountNumber/6.28;
-					self.parent:AddAbsForce(self.lineVec:SetMagnitude(((self.lineLength - self.setLineLength)^3) * pullAmountNumber) + hookVel:SetMagnitude(math.pow(self.lineLength - self.setLineLength, 2) * 0.8), self.parent.Pos);
+					self.parent:AddAbsForce(self.lineVec:SetMagnitude((math.pow(self.lineLength - self.setLineLength, 3)) * pullAmountNumber) + hookVel:SetMagnitude(math.pow(self.lineLength - self.setLineLength, 2) * 0.8), self.parent.Pos);
 
 					local moveToPos = self.Pos + (self.lineVec * -1):SetMagnitude(self.setLineLength);
 					if self.mapWrapsX == true then
@@ -414,14 +414,14 @@ function Update(self)
 							pullAmountNumber = pullAmountNumber * -1;
 						end
 						pullAmountNumber = pullAmountNumber/6.28;
-						self.parent:AddAbsForce(self.lineVec:SetMagnitude(((self.lineLength - self.setLineLength)^3) * pullAmountNumber) + hookVel:SetMagnitude(math.pow(self.lineLength - self.setLineLength, 2) * 0.8), self.parent.Pos);
+						self.parent:AddAbsForce(self.lineVec:SetMagnitude((math.pow(self.lineLength - self.setLineLength, 3)) * pullAmountNumber) + hookVel:SetMagnitude(math.pow(self.lineLength - self.setLineLength, 2) * 0.8), self.parent.Pos);
 
 						pullAmountNumber = (self.lineVec * -1).AbsRadAngle - (hookVel).AbsRadAngle;
 						if pullAmountNumber < 0 then
 							pullAmountNumber = pullAmountNumber * -1;
 						end
 						pullAmountNumber = pullAmountNumber/6.28;
-						local targetforce = ((self.lineVec * -1):SetMagnitude(((self.lineLength - self.setLineLength)^3) * pullAmountNumber) + (self.lineVec * -1):SetMagnitude(math.pow(self.lineLength - self.setLineLength, 2) * 0.8));
+						local targetforce = ((self.lineVec * -1):SetMagnitude((math.pow(self.lineLength - self.setLineLength, 3)) * pullAmountNumber) + (self.lineVec * -1):SetMagnitude(math.pow(self.lineLength - self.setLineLength, 2) * 0.8));
 
 						target:AddAbsForce(targetforce, self.Pos);--target.Pos + SceneMan:ShortestDistance(target.Pos, self.Pos, self.mapWrapsX));
 						target.AngularVel = target.AngularVel * 0.99;

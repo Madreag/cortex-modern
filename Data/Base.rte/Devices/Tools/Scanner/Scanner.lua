@@ -62,8 +62,8 @@ function OnFire(self)
 			end
 
 			if SceneMan:IsUnseen(checkPosX, checkPosY, self.Team) then
-				for _ = 1, (beamFragment^2) do
-					SceneMan:RevealUnseen(checkPosX + math.random(-(beamFragment^2), (beamFragment^2)), checkPosY + math.random(-(beamFragment^2), (beamFragment^2)), self.Team);
+				for _ = 1, (math.pow(beamFragment, 2)) do
+					SceneMan:RevealUnseen(checkPosX + math.random(-(math.pow(beamFragment, 2)), (math.pow(beamFragment, 2))), checkPosY + math.random(-(math.pow(beamFragment, 2)), (math.pow(beamFragment, 2))), self.Team);
 				end
 				beamPower = beamPower - 1;
 				if beamPower <= 0 then

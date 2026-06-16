@@ -672,7 +672,7 @@ function LandingZoneMap:FindStartLZ(team, OccupiedLZs)
 
 	-- add the proximity to the enemy actors to the score
 	for k, LZ in pairs(GoodLZs) do
-		GoodLZs[k].score = LZ.score + 2 * (LZ.prox / bestProxScore)^2; -- normalize the proximity score
+		GoodLZs[k].score = LZ.score + 2 * math.pow(LZ.prox / bestProxScore, 2); -- normalize the proximity score
 	end
 
 	table.sort(GoodLZs, function(A, B) return A.score > B.score end); -- the best LZs first
@@ -733,7 +733,7 @@ function LandingZoneMap:FindSafeLZ(team, OccupiedLZs)
 	-- estimate how visible our descent is to the enemy
 	local GoodLZs = {};
 	for k, LZ in pairs(self.LZs) do
-		local proximityBias = 2 * (BrainProxScore[k] / bestProxScore)^2; -- normalize the brain proximity
+		local proximityBias = 2 * math.pow(BrainProxScore[k] / bestProxScore, 2); -- normalize the brain proximity
 		table.insert(GoodLZs, {X=LZ.X, Y=LZ.Y, score=LZ.value*0.5-(LOSgrid[k] or 0)*3+proximityBias});
 	end
 

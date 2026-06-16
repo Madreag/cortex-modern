@@ -1599,10 +1599,10 @@ function HumanBehaviors.GetAngleToHit(PrjDat, Dist)
 		local D = Dist / GetPPM(); -- convert from pixels to meters
 		if PrjDat.drg < 1 then	-- compensate for air resistance
 			local rng = D.Magnitude;
-			local timeToTarget = math.floor((rng / math.max(PrjDat.vel*PrjDat.drg^math.floor(rng/(PrjDat.vel+1)+0.5), PrjDat.thr)) / TimerMan.DeltaTimeSecs); -- estimate time of flight in frames
+			local timeToTarget = math.floor((rng / math.max(PrjDat.vel*math.pow(PrjDat.drg, math.floor(rng/(PrjDat.vel+1)+0.5)), PrjDat.thr)) / TimerMan.DeltaTimeSecs); -- estimate time of flight in frames
 
 			if timeToTarget > 1 then
-				local muzVel = 0.9*math.max(PrjDat.vel * PrjDat.drg^timeToTarget, PrjDat.thr) + 0.1*PrjDat.vel; -- compensate for velocity reduction during flight
+				local muzVel = 0.9*math.max(PrjDat.vel * math.pow(PrjDat.drg, timeToTarget), PrjDat.thr) + 0.1*PrjDat.vel; -- compensate for velocity reduction during flight
 				muzVelSq = muzVel * muzVel;
 				rootSq = muzVelSq*muzVelSq - PrjDat.g * (PrjDat.g*D.X*D.X + 2*-D.Y*muzVelSq);
 			else
