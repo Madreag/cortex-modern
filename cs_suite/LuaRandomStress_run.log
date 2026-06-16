@@ -1,0 +1,4 @@
+GLAD: ERROR 1280 in glGetIntegerv!
+[scenario] pinned dt 0x3c88893b -> 0x3c888865
+[scenario] wrote report: cs_suite/LuaRandomStress.json
+[scenario] LuaRandomStress passed=yes ticks=599
