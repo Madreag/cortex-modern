@@ -5,10 +5,36 @@
 #include "MovableMan.h"
 #include "Actor.h"
 #include "PieMenu.h"
+#include "TimerMan.h"
 
 #include <array>
+#include <fstream>
+#include <cstring>
+#include <cstdlib>
+#include <cstdint>
+#include <mutex>
+#include <cstdio>
 
 using namespace RTE;
+
+// TEMP cross-arch aim-chain dump (env AIMCHAIN_DUMP, sim-update window 74-86): raw float bits of the analog aim the AI sets, per controlled actor. Chokepoint for every AnalogAim assignment.
+void Controller::SetAnalogAim(const Vector& newAim) {
+	if (const char* path = std::getenv("AIMCHAIN_DUMP")) {
+		const long long t = g_TimerMan.GetSimUpdateCount();
+		if (t >= 74 && t <= 86 && m_ControlledActor) {
+			// Mutex + one formatted write per row — the AI runs multithreaded, so unguarded ofstream writes tear.
+			static std::mutex dumpMutex;
+			static std::ofstream f(path, std::ios::app);
+			auto b = [](float v) { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
+			char line[80];
+			std::snprintf(line, sizeof(line), "%lld,%lld,%08x,%08x\n", t,
+			              static_cast<long long>(m_ControlledActor->GetUniqueID()), b(newAim.m_X), b(newAim.m_Y));
+			std::lock_guard<std::mutex> lock(dumpMutex);
+			f << line;
+		}
+	}
+	m_AnalogAim = newAim;
+}
 
 thread_local Actor* RTE::g_CurrentAIActor = nullptr;
 

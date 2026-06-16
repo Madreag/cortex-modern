@@ -213,7 +213,7 @@ namespace RTE {
 
 		/// Sets the analog aiming vector state of this.
 		/// @param newAim The new analog aiming vector.
-		void SetAnalogAim(const Vector& newAim) { m_AnalogAim = newAim; }
+		void SetAnalogAim(const Vector& newAim);
 
 		/// Gets the analog menu input data.
 		/// @return A vector with the analog menu data, both axes ranging form -1.0 to 1.0.
