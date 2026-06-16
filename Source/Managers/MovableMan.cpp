@@ -25,6 +25,8 @@
 #include "tracy/Tracy.hpp"
 
 #include <execution>
+#include <fstream>
+#include <cstdlib>
 
 using namespace RTE;
 
@@ -1762,6 +1764,20 @@ void MovableMan::Update() {
 			g_SimChecksum.Update("controller", analog, sizeof(analog));
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
 			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+			// TEMP cross-arch carrier hunt: per-actor CONTROLSTATE bitmap + inputMode (env CTRLSTATE_DUMP, ticks 78-82).
+			static const bool s_ctrlDump = std::getenv("CTRLSTATE_DUMP") != nullptr;
+			if (s_ctrlDump) {
+				const uint64_t dumpTick = g_SimChecksum.GetLastResult().tick + 1;
+				if (dumpTick >= 78 && dumpTick <= 82) {
+					static std::ofstream ctrlOut("ctrlstate.csv", std::ios::trunc);
+					ctrlOut << dumpTick << ',' << controllerID << ',';
+					for (int s = 0; s < ControlState::CONTROLSTATECOUNT; ++s) {
+						ctrlOut << (controller->IsState(static_cast<ControlState>(s)) ? '1' : '0');
+					}
+					ctrlOut << ',' << inputMode << '\n';
+					ctrlOut.flush();
+				}
+			}
 		}
 
 		// Compact per-particle fingerprint — uniqueID + pos + vel.
