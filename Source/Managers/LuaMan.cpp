@@ -8,6 +8,8 @@
 #include "SimChecksum.h"
 #include "RTETools.h"
 
+#include <cmath>
+
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
 
@@ -59,6 +61,57 @@ namespace {
 		return 1;
 	}
 
+	// Route the remaining transcendentals through the polys — a LuaJIT/libm probe found sin/cos/tan/asin/acos/tanh/sinh/cosh all diverge cross-toolchain (only log was identical).
+	int det_math_sin(lua_State* L) {
+		lua_pushnumber(L, DeterministicSin(luaL_checknumber(L, 1)));
+		return 1;
+	}
+
+	int det_math_cos(lua_State* L) {
+		lua_pushnumber(L, DeterministicCos(luaL_checknumber(L, 1)));
+		return 1;
+	}
+
+	int det_math_tan(lua_State* L) {
+		const double x = luaL_checknumber(L, 1);
+		lua_pushnumber(L, DeterministicSin(x) / DeterministicCos(x));
+		return 1;
+	}
+
+	int det_math_asin(lua_State* L) {
+		const double x = luaL_checknumber(L, 1);
+		const double t = 1.0 - x * x;
+		lua_pushnumber(L, DeterministicAtan2(x, std::sqrt(t < 0.0 ? 0.0 : t)));
+		return 1;
+	}
+
+	int det_math_acos(lua_State* L) {
+		const double x = luaL_checknumber(L, 1);
+		const double t = 1.0 - x * x;
+		lua_pushnumber(L, DeterministicAtan2(std::sqrt(t < 0.0 ? 0.0 : t), x));
+		return 1;
+	}
+
+	int det_math_tanh(lua_State* L) {
+		const double x = luaL_checknumber(L, 1);
+		const double e = DeterministicExp(-2.0 * (x < 0.0 ? -x : x));
+		const double t = (1.0 - e) / (1.0 + e);
+		lua_pushnumber(L, x < 0.0 ? -t : t);
+		return 1;
+	}
+
+	int det_math_sinh(lua_State* L) {
+		const double x = luaL_checknumber(L, 1);
+		lua_pushnumber(L, (DeterministicExp(x) - DeterministicExp(-x)) * 0.5);
+		return 1;
+	}
+
+	int det_math_cosh(lua_State* L) {
+		const double x = luaL_checknumber(L, 1);
+		lua_pushnumber(L, (DeterministicExp(x) + DeterministicExp(-x)) * 0.5);
+		return 1;
+	}
+
 	void RegisterDeterministicMathOverrides(lua_State* L) {
 		lua_getglobal(L, "math");
 		lua_pushcfunction(L, det_math_atan);
@@ -69,6 +122,22 @@ namespace {
 		lua_setfield(L, -2, "exp");
 		lua_pushcfunction(L, det_math_pow);
 		lua_setfield(L, -2, "pow");
+		lua_pushcfunction(L, det_math_sin);
+		lua_setfield(L, -2, "sin");
+		lua_pushcfunction(L, det_math_cos);
+		lua_setfield(L, -2, "cos");
+		lua_pushcfunction(L, det_math_tan);
+		lua_setfield(L, -2, "tan");
+		lua_pushcfunction(L, det_math_asin);
+		lua_setfield(L, -2, "asin");
+		lua_pushcfunction(L, det_math_acos);
+		lua_setfield(L, -2, "acos");
+		lua_pushcfunction(L, det_math_tanh);
+		lua_setfield(L, -2, "tanh");
+		lua_pushcfunction(L, det_math_sinh);
+		lua_setfield(L, -2, "sinh");
+		lua_pushcfunction(L, det_math_cosh);
+		lua_setfield(L, -2, "cosh");
 		lua_pop(L, 1);
 	}
 } // namespace
