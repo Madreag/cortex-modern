@@ -1,0 +1,15 @@
+scenario,ticks,trace_fp_sha256_24
+SimBaseline,900,f67a49f47ccb0fbbfca709f1
+LuaBaseline,900,f2b47d5ce1cc2ca869872dfb
+LuaOsStubTest,900,31ed913fe859e9ace292ab6b
+LuaPairsStress,900,31ed913fe859e9ace292ab6b
+LuaRandomStress,900,153020f21fc3105644445444
+ModSmokeLoading,900,9de1d1c5fcf4be2bc5f4011f
+TerrainStress,900,7da8e0a63bf8f1d28364360f
+TerrainCarveStress,900,0289f224bd4538f6ddde096d
+ActorStress,900,73d2bb34fa23afc4068ced1b
+ThreadStress,900,343b14fbb5092375a5eca2c4
+PerfBench,900,c1b630bb4e2a35867bf03d9d
+# PerfBench@80 controller = 06e80c659adaf73775da970ec2d13590eb8b85c1d83fe151543c95835057f8c2
+# ActorStress@246 controller = efc21715419b2885fc1d50d13a0d495c779f5088f5ecbc047be20a319abf3866
+# ThreadStress@82 controller = 33a2e3fa7a15071224b4a8a5a21a9cdf6d2dc168df89abc362297bc049b1f68a
