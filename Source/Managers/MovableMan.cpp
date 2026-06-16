@@ -66,16 +66,6 @@ struct ScopedRenderRNG {
 	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
 };
 
-// Orders alarm events by a stable content key (m_AddedAlarmEvents is appended in worker-thread race order).
-struct AlarmEventLess {
-	bool operator()(const AlarmEvent* a, const AlarmEvent* b) const noexcept {
-		if (a->m_Team != b->m_Team) { return a->m_Team < b->m_Team; }
-		if (a->m_ScenePos.m_X != b->m_ScenePos.m_X) { return a->m_ScenePos.m_X < b->m_ScenePos.m_X; }
-		if (a->m_ScenePos.m_Y != b->m_ScenePos.m_Y) { return a->m_ScenePos.m_Y < b->m_ScenePos.m_Y; }
-		return a->m_Range < b->m_Range;
-	}
-};
-
 MovableMan::MovableMan() {
 	Clear();
 }
@@ -1338,8 +1328,6 @@ void MovableMan::Update() {
 		delete alarmEvent;
 	}
 	m_AlarmEvents.clear();
-	// Sort into canonical order before the drain so AI reads alarms deterministically.
-	std::sort(m_AddedAlarmEvents.begin(), m_AddedAlarmEvents.end(), AlarmEventLess());
 	for (std::vector<AlarmEvent*>::iterator aeItr = m_AddedAlarmEvents.begin(); aeItr != m_AddedAlarmEvents.end(); ++aeItr) {
 		m_AlarmEvents.push_back(*aeItr);
 	}
