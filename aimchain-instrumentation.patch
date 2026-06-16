@@ -1,0 +1,41 @@
+diff --git a/Source/Managers/MovableMan.cpp b/Source/Managers/MovableMan.cpp
+index 5734dcbb3..7bb0afbd6 100644
+--- a/Source/Managers/MovableMan.cpp
++++ b/Source/Managers/MovableMan.cpp
+@@ -25,6 +25,9 @@
+ #include "tracy/Tracy.hpp"
+ 
+ #include <execution>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
+ 
+ using namespace RTE;
+ 
+@@ -1762,6 +1765,26 @@ void MovableMan::Update() {
+ 			g_SimChecksum.Update("controller", analog, sizeof(analog));
+ 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
+ 			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
++
++			// TEMP cross-arch aim-chain dump (xref/arm64-aimchain-r18; read-only, env-gated, never ships).
++			// The intended Lua-side decomposition is unreachable on this arm64 build: int64-returning
++			// luabind getters (Timer/UniqueID/Age) segfault the AI worker threads. Since lua_state is
++			// byte-identical at the divergence and the controller hash splits 3-way, the divergent value
++			// is this C++ analog aim. It is captured here in the (single-threaded) checksum loop where the
++			// tick and UniqueID are read directly in C++ -- no luabind, no threading exposure. Raw float
++			// bits, same format as the r15 ctrlfield dump, with GetAimAngle() added.
++			static const bool s_aimChainDump = std::getenv("CCCP_AIMCHAIN_DUMP") != nullptr;
++			if (s_aimChainDump) {
++				const uint64_t dumpTick = g_SimChecksum.GetLastResult().tick + 1;
++				if (dumpTick >= 78 && dumpTick <= 82) {
++					static std::ofstream aimOut("aimchain_arm64.csv", std::ios::trunc);
++					auto B = [](float f) { uint32_t u; std::memcpy(&u, &f, sizeof(u)); return u; };
++					aimOut << dumpTick << ',' << controllerID
++					       << ',' << B(aim.m_X) << ',' << B(aim.m_Y)
++					       << ',' << B(a->GetAimAngle(false)) << ',' << B(a->GetAimAngle(true)) << '\n';
++					aimOut.flush();
++				}
++			}
+ 		}
+ 
+ 		// Compact per-particle fingerprint — uniqueID + pos + vel.
