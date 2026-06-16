@@ -413,8 +413,8 @@ void LuaStateWrapper::Initialize() {
 	luabind::globals(m_State)["SettingsMan"] = &g_SettingsMan;
 	luabind::globals(m_State)["MetricsCollector"] = &g_MetricsCollector;
 
-	const uint64_t seed = RandomNum<uint64_t>(0, std::numeric_limits<uint64_t>::max());
-	m_RandomGenerator.Seed(seed);
+	// Don't draw from the sim RNG here — it would couple the RNG stream to thread count (SeedAllLuaRNGs re-seeds per state at activity start)
+	m_RandomGenerator.Seed(0);
 
 	luaL_dostring(m_State,
 	              "package.path = package.path .. \";Data/Base.rte/LuaIntegration/?.lua;Data/Base.rte/LuaIntegration/?/?.lua;\"\n"
