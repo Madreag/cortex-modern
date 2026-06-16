@@ -14,6 +14,7 @@
 #include "GUIFont.h"
 #include "AllegroBitmap.h"
 
+#include <algorithm>
 #include <array>
 
 using namespace RTE;
@@ -558,7 +559,10 @@ void PieMenu::Update() {
 
 	if (m_MenuMode == MenuMode::Normal) {
 		if (IsEnabled()) {
-			for (const auto& [listenerObject, listenerFunction]: m_WhilePieMenuOpenListeners) {
+			// Invoke listeners in deterministic UniqueID order — the map is pointer-keyed (unordered cross-platform)
+			std::vector<std::pair<const MovableObject*, std::function<void()>>> sortedListeners(m_WhilePieMenuOpenListeners.begin(), m_WhilePieMenuOpenListeners.end());
+			std::sort(sortedListeners.begin(), sortedListeners.end(), [](const auto& lhs, const auto& rhs) { return lhs.first->GetUniqueID() < rhs.first->GetUniqueID(); });
+			for (const auto& [listenerObject, listenerFunction]: sortedListeners) {
 				listenerFunction();
 			}
 
