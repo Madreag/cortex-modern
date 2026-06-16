@@ -288,7 +288,7 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 		m_ControlStates[ControlState::ACTOR_PREV_PREP] = true;
 		m_ReleaseTimer.Reset();
 		// No actions can be performed while switching actors, and short time thereafter
-	} else if (m_ReleaseTimer.IsPastSimMS(m_ReleaseDelay)) {
+	} else if (m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
 		m_ControlStates[ControlState::WEAPON_FIRE] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_FIRE);
 		m_ControlStates[ControlState::AIM_SHARP] = g_UInputMan.ElementHeld(m_Player, InputElements::INPUT_AIM);
 		m_ControlStates[ControlState::BODY_JUMPSTART] = g_UInputMan.ElementPressed(m_Player, InputElements::INPUT_JUMP);
@@ -410,7 +410,7 @@ void Controller::UpdatePlayerAnalogInput() {
 	bool pieMenuActive = m_ControlStates[ControlState::PIE_MENU_ACTIVE];
 
 	// Only change aim and move if not holding actor switch buttons - don't want to mess up AI's aim
-	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && m_ReleaseTimer.IsPastSimMS(m_ReleaseDelay)) {
+	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
 		m_AnalogMove = move;
 	}
 
