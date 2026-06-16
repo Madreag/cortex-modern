@@ -1082,8 +1082,8 @@ function SharedBehaviors.GetProjectileData(Owner)
 		-- half of the theoretical upper limit for the total amount of material strength this weapon can destroy in 250ms
 
 		PrjDat.g = SceneMan.GlobalAcc.Y * 0.67 * Weapon:GetBulletAccScalar(); -- underestimate gravity
-		PrjDat.vsq = PrjDat.vel^2; -- muzzle velocity squared
-		PrjDat.vqu = PrjDat.vsq^2; -- muzzle velocity quad
+		PrjDat.vsq = math.pow(PrjDat.vel, 2); -- muzzle velocity squared
+		PrjDat.vqu = math.pow(PrjDat.vsq, 2); -- muzzle velocity quad
 		PrjDat.drg = 1 - Projectile.AirResistance * TimerMan.DeltaTimeSecs; -- AirResistance is stored as the ini-value times 60
 		PrjDat.thr = math.min(Projectile.AirThreshold, PrjDat.vel);
 		PrjDat.pen = Weapon:GetAIPenetration() * PrjDat.drg;

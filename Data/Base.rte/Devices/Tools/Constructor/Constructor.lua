@@ -550,7 +550,7 @@ function Update(self)
 				--TODO: experiment with different cell sizes?
 				local cellSize = 3;
 				local oneThirdBlock = self.buildList[1][4]/cellSize;
-				local cellsPerBlock = oneThirdBlock^2;
+				local cellsPerBlock = math.pow(oneThirdBlock, 2);
 				if self.buildList[1][3] < cellsPerBlock then
 					local by = math.floor(self.buildList[1][3]/oneThirdBlock);
 					local bx = self.buildList[1][3] - (by * oneThirdBlock);

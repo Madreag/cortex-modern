@@ -81,7 +81,9 @@ namespace RTE {
 	}
 
 	float EaseInOut(float start, float end, float progressScalar) {
-		return start * (2 * std::pow(progressScalar, 3) - 3 * std::pow(progressScalar, 2) + 1) + end * (3 * std::pow(progressScalar, 2) - 2 * std::pow(progressScalar, 3));
+		const float p2 = progressScalar * progressScalar;
+		const float p3 = p2 * progressScalar;
+		return start * (2 * p3 - 3 * p2 + 1) + end * (3 * p2 - 2 * p3);
 	}
 
 	bool Clamp(float& value, float upperLimit, float lowerLimit) {

@@ -501,7 +501,7 @@ function WaveDefense:UpdateActivity()
 					if math.random() < self.AI.bombChance then
 						local bombPosX = self.AI.LZmap:FindBombTarget(self.CPUTeam);
 						if bombPosX then
-							if self.Difficulty > 45 and math.random() < (0.7-(1-self.Difficulty*0.004)^2) then	-- 3% to 34% chance
+							if self.Difficulty > 45 and math.random() < (0.7-math.pow(1-self.Difficulty*0.004, 2)) then	-- 3% to 34% chance
 								self.AI.bombChance = math.max(self.AI.bombChance*0.96, 0.01);
 								self.AI.timeToBomb = self.AI.timeToBomb * 0.75;
 								self:CreateTrollDrop(bombPosX);

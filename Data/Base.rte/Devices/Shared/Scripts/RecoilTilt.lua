@@ -12,5 +12,5 @@ function ThreadedUpdate(self)
 end
 
 function OnFire(self)
-	self.InheritedRotAngleOffset = self.InheritedRotAngleOffset + (self.recoilAngleSize * RangeRand(self.recoilAngleVariation, 1))/(1 + self.InheritedRotAngleOffset)^2;
+	self.InheritedRotAngleOffset = self.InheritedRotAngleOffset + (self.recoilAngleSize * RangeRand(self.recoilAngleVariation, 1))/math.pow(1 + self.InheritedRotAngleOffset, 2);
 end
