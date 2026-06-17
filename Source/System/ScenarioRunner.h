@@ -34,6 +34,7 @@ namespace RTE {
 			std::string controllerLogInPath; // -controller-log-in path
 			bool        controllerLogCanonicalize = true; // record sim uses encoded->decoded frames
 			bool        controllerReplayStrict = false; // strict replay skips local Controller/AI production
+			bool        controllerLogAllowNlsMismatch = false; // cross-nls replay stress only
 			std::string controllerDebugDumpPath; // -controller-debug-dump JSONL path for replay diagnostics
 			std::vector<std::pair<uint64_t, uint64_t>> controllerDebugDumpTicks; // optional inclusive tick ranges
 			bool        tickHashes = false; // -tick-hashes: emit per-tick hash trace into the JSON

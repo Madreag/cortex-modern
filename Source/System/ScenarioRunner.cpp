@@ -118,6 +118,10 @@ namespace RTE {
 			s_Args.controllerReplayStrict = true;
 			return 1;
 		}
+		if (a == "-controller-log-allow-nls-mismatch") {
+			s_Args.controllerLogAllowNlsMismatch = true;
+			return 1;
+		}
 		if (a == "-controller-debug-dump" && hasValue) {
 			s_Args.controllerDebugDumpPath = argValue[startIndex + 1];
 			return 2;
@@ -215,7 +219,10 @@ namespace RTE {
 				if (error) *error = "controller log seed metadata mismatch.";
 				return false;
 			}
-			if (s_ControllerReplayLog->metadata.numLuaStates >= 0 && s_Args.numLuaStates >= 0 && s_ControllerReplayLog->metadata.numLuaStates != s_Args.numLuaStates) {
+			if (!s_Args.controllerLogAllowNlsMismatch &&
+			    s_ControllerReplayLog->metadata.numLuaStates >= 0 &&
+			    s_Args.numLuaStates >= 0 &&
+			    s_ControllerReplayLog->metadata.numLuaStates != s_Args.numLuaStates) {
 				if (error) *error = "controller log num-lua-states mismatch.";
 				return false;
 			}
