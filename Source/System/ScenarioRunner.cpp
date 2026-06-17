@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace RTE {
 
@@ -33,6 +34,31 @@ namespace RTE {
 			std::ostringstream oss;
 			oss << "0x" << std::hex << std::setw(8) << std::setfill('0') << bits;
 			return oss.str();
+		}
+
+		std::vector<std::pair<uint64_t, uint64_t>> ParseTickRanges(const std::string& spec) {
+			std::vector<std::pair<uint64_t, uint64_t>> ranges;
+			std::stringstream ss(spec);
+			std::string token;
+			while (std::getline(ss, token, ',')) {
+				if (token.empty()) {
+					continue;
+				}
+				const size_t dash = token.find('-');
+				uint64_t first = 0;
+				uint64_t last = 0;
+				if (dash == std::string::npos) {
+					first = last = static_cast<uint64_t>(std::strtoull(token.c_str(), nullptr, 10));
+				} else {
+					first = static_cast<uint64_t>(std::strtoull(token.substr(0, dash).c_str(), nullptr, 10));
+					last = static_cast<uint64_t>(std::strtoull(token.substr(dash + 1).c_str(), nullptr, 10));
+					if (last < first) {
+						std::swap(first, last);
+					}
+				}
+				ranges.emplace_back(first, last);
+			}
+			return ranges;
 		}
 	}
 
@@ -91,6 +117,14 @@ namespace RTE {
 		if (a == "-controller-replay-strict") {
 			s_Args.controllerReplayStrict = true;
 			return 1;
+		}
+		if (a == "-controller-debug-dump" && hasValue) {
+			s_Args.controllerDebugDumpPath = argValue[startIndex + 1];
+			return 2;
+		}
+		if (a == "-controller-debug-ticks" && hasValue) {
+			s_Args.controllerDebugDumpTicks = ParseTickRanges(argValue[startIndex + 1]);
+			return 2;
 		}
 		if (a == "-determinism-selftest-perturb") {
 			// Positive-control: arm the one-shot perturbation. Boolean flag — no value.
@@ -207,6 +241,29 @@ namespace RTE {
 
 	bool ScenarioRunner::IsControllerReplayStrict() {
 		return IsControllerLogReplaying() && s_Args.controllerReplayStrict;
+	}
+
+	bool ScenarioRunner::IsControllerDebugDumpEnabled() {
+		return !s_Args.controllerDebugDumpPath.empty();
+	}
+
+	bool ScenarioRunner::ShouldControllerDebugDumpTick(uint64_t tick) {
+		if (!IsControllerDebugDumpEnabled()) {
+			return false;
+		}
+		if (s_Args.controllerDebugDumpTicks.empty()) {
+			return true;
+		}
+		for (const auto& [first, last]: s_Args.controllerDebugDumpTicks) {
+			if (tick >= first && tick <= last) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	const std::string& ScenarioRunner::GetControllerDebugDumpPath() {
+		return s_Args.controllerDebugDumpPath;
 	}
 
 	void ScenarioRunner::RecordControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames) {

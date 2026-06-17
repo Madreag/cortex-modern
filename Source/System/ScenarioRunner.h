@@ -4,8 +4,9 @@
 
 #include <cstdint>
 #include <map>
-#include <vector>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace RTE {
 	/// CLI scenario direct-launch mode.
@@ -33,6 +34,8 @@ namespace RTE {
 			std::string controllerLogInPath; // -controller-log-in path
 			bool        controllerLogCanonicalize = true; // record sim uses encoded->decoded frames
 			bool        controllerReplayStrict = false; // strict replay skips local Controller/AI production
+			std::string controllerDebugDumpPath; // -controller-debug-dump JSONL path for replay diagnostics
+			std::vector<std::pair<uint64_t, uint64_t>> controllerDebugDumpTicks; // optional inclusive tick ranges
 			bool        tickHashes = false; // -tick-hashes: emit per-tick hash trace into the JSON
 			                                 // report, read by the determinism check to diff
 			                                 // multiple runs of the same scenario+seed.
@@ -69,6 +72,9 @@ namespace RTE {
 		static bool IsControllerLogReplaying();
 		static bool ShouldCanonicalizeControllerLog();
 		static bool IsControllerReplayStrict();
+		static bool IsControllerDebugDumpEnabled();
+		static bool ShouldControllerDebugDumpTick(uint64_t tick);
+		static const std::string& GetControllerDebugDumpPath();
 		static void RecordControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames);
 		static bool GetReplayControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames, std::string* error = nullptr);
 		static void SetControllerReplayError(const std::string& error);

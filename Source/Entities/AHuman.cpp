@@ -1279,6 +1279,109 @@ bool AHuman::UnequipBGArm() {
 	return false;
 }
 
+bool AHuman::SyncEquippedItemsByUniqueID(int64_t fgUniqueID, int64_t bgUniqueID) {
+	auto deviceID = [](const HeldDevice* device) -> int64_t {
+		return device ? static_cast<int64_t>(device->GetUniqueID()) : 0;
+	};
+
+	if (deviceID(GetEquippedItem()) == fgUniqueID && deviceID(GetEquippedBGItem()) == bgUniqueID) {
+		return true;
+	}
+
+	struct DetachedDevice {
+		HeldDevice* device = nullptr;
+		bool fromBackgroundArm = false;
+	};
+	std::vector<DetachedDevice> detachedDevices;
+
+	auto detachIfDifferent = [&](Arm* arm, int64_t desiredUniqueID, bool fromBackgroundArm) {
+		if (!arm) {
+			return;
+		}
+		HeldDevice* heldDevice = arm->GetHeldDevice();
+		if (!heldDevice || deviceID(heldDevice) == desiredUniqueID) {
+			return;
+		}
+		heldDevice->Deactivate();
+		if (HeldDevice* detachedDevice = dynamic_cast<HeldDevice*>(arm->RemoveAttachable(heldDevice))) {
+			detachedDevices.push_back({detachedDevice, fromBackgroundArm});
+		}
+	};
+
+	detachIfDifferent(m_pFGArm, fgUniqueID, false);
+	detachIfDifferent(m_pBGArm, bgUniqueID, true);
+
+	auto takeDetachedDevice = [&](int64_t uniqueID) -> HeldDevice* {
+		for (auto itr = detachedDevices.begin(); itr != detachedDevices.end(); ++itr) {
+			if (deviceID(itr->device) == uniqueID) {
+				HeldDevice* device = itr->device;
+				detachedDevices.erase(itr);
+				return device;
+			}
+		}
+		return nullptr;
+	};
+
+	auto takeInventoryDevice = [&](int64_t uniqueID) -> HeldDevice* {
+		for (auto itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+			if (*itr && static_cast<int64_t>((*itr)->GetUniqueID()) == uniqueID) {
+				HeldDevice* device = dynamic_cast<HeldDevice*>(*itr);
+				if (!device) {
+					return nullptr;
+				}
+				m_Inventory.erase(itr);
+				return device;
+			}
+		}
+		return nullptr;
+	};
+
+	auto takeDevice = [&](int64_t uniqueID) -> HeldDevice* {
+		if (uniqueID == 0) {
+			return nullptr;
+		}
+		if (HeldDevice* device = takeDetachedDevice(uniqueID)) {
+			return device;
+		}
+		return takeInventoryDevice(uniqueID);
+	};
+
+	auto equipArm = [&](Arm* arm, int64_t uniqueID) -> bool {
+		if (uniqueID == 0) {
+			return true;
+		}
+		if (!arm) {
+			return false;
+		}
+		if (deviceID(arm->GetHeldDevice()) == uniqueID) {
+			return true;
+		}
+		HeldDevice* device = takeDevice(uniqueID);
+		if (!device) {
+			return false;
+		}
+		arm->SetHeldDevice(device);
+		arm->SetHandPos(m_Pos + RotateOffset(m_HolsterOffset));
+		return true;
+	};
+
+	const bool fgSynced = equipArm(m_pFGArm, fgUniqueID);
+	const bool bgSynced = equipArm(m_pBGArm, bgUniqueID);
+
+	for (DetachedDevice& detachedDevice: detachedDevices) {
+		if (!detachedDevice.device) {
+			continue;
+		}
+		if (detachedDevice.fromBackgroundArm) {
+			AddToInventoryFront(detachedDevice.device);
+		} else {
+			AddToInventoryBack(detachedDevice.device);
+		}
+	}
+
+	return fgSynced && bgSynced;
+}
+
 float AHuman::GetEquippedMass() const {
 	float equippedMass = 0;
 	if (MovableObject* fgDevice = GetEquippedItem()) {

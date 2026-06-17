@@ -1,5 +1,8 @@
 #include "ControllerFrame.h"
 
+#include "Actor.h"
+#include "AHuman.h"
+#include "HeldDevice.h"
 #include "TimerMan.h"
 
 #include <algorithm>
@@ -30,6 +33,12 @@ namespace RTE {
 			out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFU));
 		}
 
+		void AppendU32LE(std::vector<uint8_t>& out, uint32_t value) {
+			for (int i = 0; i < 4; ++i) {
+				out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFU));
+			}
+		}
+
 		void AppendI16LE(std::vector<uint8_t>& out, int16_t value) {
 			AppendU16LE(out, static_cast<uint16_t>(value));
 		}
@@ -42,6 +51,12 @@ namespace RTE {
 
 		void AppendI64LE(std::vector<uint8_t>& out, int64_t value) {
 			AppendU64LE(out, static_cast<uint64_t>(value));
+		}
+
+		void AppendF32LE(std::vector<uint8_t>& out, float value) {
+			uint32_t bits;
+			std::memcpy(&bits, &value, sizeof(bits));
+			AppendU32LE(out, bits);
 		}
 
 		uint8_t ReadU8(const uint8_t*& p) {
@@ -63,6 +78,15 @@ namespace RTE {
 			return static_cast<int16_t>(ReadU16LE(p));
 		}
 
+		uint32_t ReadU32LE(const uint8_t*& p) {
+			uint32_t value = 0;
+			for (int i = 0; i < 4; ++i) {
+				value |= static_cast<uint32_t>(p[i]) << (i * 8);
+			}
+			p += 4;
+			return value;
+		}
+
 		uint64_t ReadU64LE(const uint8_t*& p) {
 			uint64_t value = 0;
 			for (int i = 0; i < 8; ++i) {
@@ -74,6 +98,13 @@ namespace RTE {
 
 		int64_t ReadI64LE(const uint8_t*& p) {
 			return static_cast<int64_t>(ReadU64LE(p));
+		}
+
+		float ReadF32LE(const uint8_t*& p) {
+			const uint32_t bits = ReadU32LE(p);
+			float value;
+			std::memcpy(&value, &bits, sizeof(value));
+			return value;
 		}
 
 		bool NearlyEqual(float lhs, float rhs, float epsilon = 1.0F / static_cast<float>(ControllerFrame::c_AnalogScale)) {
@@ -97,7 +128,15 @@ namespace RTE {
 		}
 	}
 
-	ControllerFrame ControllerFrameCodec::Snapshot(int64_t actorUniqueID, const Controller& controller) {
+	void ControllerFrame::SetActorHFlipped(bool flipped) {
+		if (flipped) {
+			flags |= 0x2U;
+		} else {
+			flags &= static_cast<uint8_t>(~0x2U);
+		}
+	}
+
+	ControllerFrame ControllerFrameCodec::Snapshot(int64_t actorUniqueID, const Controller& controller, const Actor* actor) {
 		static_assert(ControlState::CONTROLSTATECOUNT <= 64, "ControllerFrame state_mask must grow if ControlState exceeds 64 entries.");
 
 		ControllerFrame frame;
@@ -123,6 +162,31 @@ namespace RTE {
 		frame.inputMode = static_cast<uint8_t>(controller.GetInputMode());
 		frame.playerRaw = static_cast<int8_t>(std::clamp(controller.GetPlayerRaw(), -128, 127));
 		frame.SetQuickDisabled(controller.IsQuickDisabled());
+		if (actor) {
+			frame.SetActorHFlipped(actor->IsHFlipped());
+			frame.aimAngle = actor->GetAimAngle(false);
+			const Vector viewPoint = actor->GetViewPoint();
+			frame.viewPointX = viewPoint.m_X;
+			frame.viewPointY = viewPoint.m_Y;
+			if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
+				if (const Arm* fgArm = human->GetFGArm()) {
+					const Vector fgHandPos = fgArm->GetHandPos();
+					frame.fgHandPosX = fgHandPos.m_X;
+					frame.fgHandPosY = fgHandPos.m_Y;
+				}
+				if (const Arm* bgArm = human->GetBGArm()) {
+					const Vector bgHandPos = bgArm->GetHandPos();
+					frame.bgHandPosX = bgHandPos.m_X;
+					frame.bgHandPosY = bgHandPos.m_Y;
+				}
+				if (const HeldDevice* equippedFG = human->GetEquippedItem()) {
+					frame.equippedFGUniqueID = static_cast<int64_t>(equippedFG->GetUniqueID());
+				}
+				if (const HeldDevice* equippedBG = human->GetEquippedBGItem()) {
+					frame.equippedBGUniqueID = static_cast<int64_t>(equippedBG->GetUniqueID());
+				}
+			}
+		}
 		return frame;
 	}
 
@@ -135,7 +199,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
-		if ((frame.flags & static_cast<uint8_t>(~0x1U)) != 0) {
+		if ((frame.flags & static_cast<uint8_t>(~0x3U)) != 0) {
 			SetError(error, "ControllerFrame reserved flags must be zero.");
 			return false;
 		}
@@ -156,6 +220,34 @@ namespace RTE {
 		return true;
 	}
 
+	bool ControllerFrameCodec::ApplyActorState(const ControllerFrame& frame, Actor& actor, std::string* error) {
+		if (!std::isfinite(frame.aimAngle) || !std::isfinite(frame.viewPointX) || !std::isfinite(frame.viewPointY) ||
+		    !std::isfinite(frame.fgHandPosX) || !std::isfinite(frame.fgHandPosY) ||
+		    !std::isfinite(frame.bgHandPosX) || !std::isfinite(frame.bgHandPosY)) {
+			SetError(error, "ControllerFrame actor state fields must be finite.");
+			return false;
+		}
+		actor.SetHFlipped(frame.IsActorHFlipped());
+		actor.SetAimAngle(frame.aimAngle);
+		actor.SetViewPoint(Vector(frame.viewPointX, frame.viewPointY));
+		if (AHuman* human = dynamic_cast<AHuman*>(&actor)) {
+			if (!human->SyncEquippedItemsByUniqueID(frame.equippedFGUniqueID, frame.equippedBGUniqueID)) {
+				SetError(error, "ControllerFrame equipped item UniqueID was not found on actor.");
+				return false;
+			}
+			if (Arm* fgArm = human->GetFGArm()) {
+				fgArm->SetHandPos(Vector(frame.fgHandPosX, frame.fgHandPosY));
+			}
+			if (Arm* bgArm = human->GetBGArm()) {
+				bgArm->SetHandPos(Vector(frame.bgHandPosX, frame.bgHandPosY));
+			}
+		} else if (frame.equippedFGUniqueID != 0 || frame.equippedBGUniqueID != 0) {
+			SetError(error, "ControllerFrame equipped item state targets a non-AHuman actor.");
+			return false;
+		}
+		return true;
+	}
+
 	std::vector<uint8_t> ControllerFrameCodec::Encode(const ControllerFrame& frame) {
 		std::vector<uint8_t> out;
 		out.reserve(ControllerFrame::c_EncodedSize);
@@ -173,6 +265,15 @@ namespace RTE {
 		AppendI8(out, frame.playerRaw);
 		AppendU8(out, frame.flags);
 		AppendU8(out, 0); // reserved
+		AppendF32LE(out, frame.aimAngle);
+		AppendF32LE(out, frame.viewPointX);
+		AppendF32LE(out, frame.viewPointY);
+		AppendI64LE(out, frame.equippedFGUniqueID);
+		AppendI64LE(out, frame.equippedBGUniqueID);
+		AppendF32LE(out, frame.fgHandPosX);
+		AppendF32LE(out, frame.fgHandPosY);
+		AppendF32LE(out, frame.bgHandPosX);
+		AppendF32LE(out, frame.bgHandPosY);
 		return out;
 	}
 
@@ -197,6 +298,15 @@ namespace RTE {
 		frame.playerRaw = ReadI8(p);
 		frame.flags = ReadU8(p);
 		const uint8_t reserved = ReadU8(p);
+		frame.aimAngle = ReadF32LE(p);
+		frame.viewPointX = ReadF32LE(p);
+		frame.viewPointY = ReadF32LE(p);
+		frame.equippedFGUniqueID = ReadI64LE(p);
+		frame.equippedBGUniqueID = ReadI64LE(p);
+		frame.fgHandPosX = ReadF32LE(p);
+		frame.fgHandPosY = ReadF32LE(p);
+		frame.bgHandPosX = ReadF32LE(p);
+		frame.bgHandPosY = ReadF32LE(p);
 
 		if (reserved != 0) {
 			SetError(error, "ControllerFrame reserved byte must be zero.");
@@ -210,8 +320,14 @@ namespace RTE {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
-		if ((frame.flags & static_cast<uint8_t>(~0x1U)) != 0) {
+		if ((frame.flags & static_cast<uint8_t>(~0x3U)) != 0) {
 			SetError(error, "ControllerFrame reserved flags must be zero.");
+			return false;
+		}
+		if (!std::isfinite(frame.aimAngle) || !std::isfinite(frame.viewPointX) || !std::isfinite(frame.viewPointY) ||
+		    !std::isfinite(frame.fgHandPosX) || !std::isfinite(frame.fgHandPosY) ||
+		    !std::isfinite(frame.bgHandPosX) || !std::isfinite(frame.bgHandPosY)) {
+			SetError(error, "ControllerFrame actor state fields must be finite.");
 			return false;
 		}
 		outFrame = frame;
@@ -271,6 +387,16 @@ namespace RTE {
 		frame.mouseDeltaX = -7;
 		frame.mouseDeltaY = 9;
 		frame.SetQuickDisabled(true);
+		frame.SetActorHFlipped(true);
+		frame.aimAngle = 0.125F;
+		frame.viewPointX = 123.5F;
+		frame.viewPointY = -456.25F;
+		frame.equippedFGUniqueID = 22222;
+		frame.equippedBGUniqueID = 33333;
+		frame.fgHandPosX = 10.5F;
+		frame.fgHandPosY = 20.5F;
+		frame.bgHandPosX = -30.5F;
+		frame.bgHandPosY = -40.5F;
 
 		const std::vector<uint8_t> encoded = ControllerFrameCodec::Encode(frame);
 		if (encoded.size() != ControllerFrame::c_EncodedSize) {
@@ -285,7 +411,16 @@ namespace RTE {
 		if (decoded.actorUniqueID != frame.actorUniqueID || decoded.stateMask != frame.stateMask ||
 		    decoded.inputMode != frame.inputMode || decoded.playerRaw != frame.playerRaw ||
 		    decoded.flags != frame.flags || decoded.mouseDeltaX != frame.mouseDeltaX ||
-		    decoded.mouseDeltaY != frame.mouseDeltaY) {
+		    decoded.mouseDeltaY != frame.mouseDeltaY ||
+		    decoded.aimAngle != frame.aimAngle ||
+		    decoded.viewPointX != frame.viewPointX ||
+		    decoded.viewPointY != frame.viewPointY ||
+		    decoded.equippedFGUniqueID != frame.equippedFGUniqueID ||
+		    decoded.equippedBGUniqueID != frame.equippedBGUniqueID ||
+		    decoded.fgHandPosX != frame.fgHandPosX ||
+		    decoded.fgHandPosY != frame.fgHandPosY ||
+		    decoded.bgHandPosX != frame.bgHandPosX ||
+		    decoded.bgHandPosY != frame.bgHandPosY) {
 			return fail("decoded scalar fields differ");
 		}
 
@@ -319,7 +454,7 @@ namespace RTE {
 		}
 
 		ControllerFrame malformed = frame;
-		malformed.flags |= 0x2U;
+		malformed.flags |= 0x4U;
 		const std::vector<uint8_t> malformedFlagsBytes = ControllerFrameCodec::Encode(malformed);
 		if (ControllerFrameCodec::Decode(malformedFlagsBytes.data(), malformedFlagsBytes.size(), decoded, nullptr)) {
 			return fail("malformed flags were accepted");
