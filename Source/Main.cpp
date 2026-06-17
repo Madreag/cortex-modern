@@ -54,6 +54,7 @@
 #include "System.h"
 
 #include "ControllerFrame.h"
+#include "NetLockstepSpikeSelfTest.h"
 #include "NetProtocolSelfTest.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
@@ -517,6 +518,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-protocol-selftest") {
 			return NetProtocolSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-spike-selftest") {
+			return NetLockstepSpikeSelfTest::Run();
 		}
 	}
 
