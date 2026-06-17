@@ -457,6 +457,9 @@
     <ClInclude Include="Source\Network\LoopbackTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetLockstepSpikeSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetProtocol.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -716,6 +719,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\LoopbackTransport.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetLockstepSpikeSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetProtocol.cpp">

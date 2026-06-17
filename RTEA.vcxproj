@@ -820,6 +820,7 @@
     <ClInclude Include="Source\Network\ControllerFrame.h" />
     <ClInclude Include="Source\Network\ControllerLog.h" />
     <ClInclude Include="Source\Network\LoopbackTransport.h" />
+    <ClInclude Include="Source\Network\NetLockstepSpikeSelfTest.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
     <ClInclude Include="Source\Network\NetProtocolSelfTest.h" />
     <ClInclude Include="Source\Network\NetTransport.h" />
@@ -1357,6 +1358,7 @@
     <ClCompile Include="Source\Network\ControllerFrame.cpp" />
     <ClCompile Include="Source\Network\ControllerLog.cpp" />
     <ClCompile Include="Source\Network\LoopbackTransport.cpp" />
+    <ClCompile Include="Source\Network\NetLockstepSpikeSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
