@@ -261,6 +261,10 @@ namespace RTE {
 		/// @return The player this is listening to, regardless of input mode.
 		int GetPlayerRaw() const { return m_Player; }
 
+		/// Sets the raw player index without changing the input mode.
+		/// @param player The player index to store.
+		void SetPlayerRaw(int player) { m_Player = player; }
+
 		/// Gets which player's input this is listening to, if in player input mode.
 		/// @return The player number, or -1 if not in player input mode.
 		int GetPlayer() const { return (m_InputMode == InputMode::CIM_PLAYER) ? m_Player : Players::NoPlayer; }
@@ -293,6 +297,13 @@ namespace RTE {
 		/// Returns whether the AI should be updated this frame.
 		/// @return Whether the AI should be updated this frame.
 		bool ShouldUpdateAIThisFrame() const;
+
+		/// Gets the quick disabled flag, separate from CIM_DISABLED.
+		/// @return Whether the quick disabled flag is set.
+		bool IsQuickDisabled() const { return m_Disabled; }
+
+		/// Replaces the sim-facing controller state from a decoded wire frame.
+		void ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled);
 #pragma endregion
 
 #pragma region Virtual Override Methods
