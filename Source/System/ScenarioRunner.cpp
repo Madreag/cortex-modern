@@ -1,6 +1,7 @@
 #include "ScenarioRunner.h"
 
 #include "Constants.h"
+#include "ControllerLog.h"
 #include "MetricsCollector.h"
 #include "MovableMan.h"
 #include "SettingsMan.h"
@@ -12,14 +13,19 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace RTE {
 
 	namespace {
 		bool s_Active = false;
 		ScenarioRunner::Args s_Args;
+		std::unique_ptr<ControllerLog> s_ControllerRecordLog;
+		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
+		std::string s_ControllerReplayError;
 
 		std::string FloatBitsHex(float value) {
 			uint32_t bits;
@@ -57,9 +63,33 @@ namespace RTE {
 			s_Args.maxTicks = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
 			return 2;
 		}
+		if (a == "-num-lua-states" && hasValue) {
+			s_Args.numLuaStates = static_cast<int>(std::strtol(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
 		if (a == "-tick-hashes") {
 			// Turn on per-tick hash trace recording. Boolean flag — no value.
 			s_Args.tickHashes = true;
+			return 1;
+		}
+		if (a == "-controller-log-out" && hasValue) {
+			s_Args.controllerLogOutPath = argValue[startIndex + 1];
+			return 2;
+		}
+		if (a == "-controller-log-in" && hasValue) {
+			s_Args.controllerLogInPath = argValue[startIndex + 1];
+			return 2;
+		}
+		if (a == "-controller-log-canonicalize") {
+			s_Args.controllerLogCanonicalize = true;
+			return 1;
+		}
+		if (a == "-controller-log-no-canonicalize") {
+			s_Args.controllerLogCanonicalize = false;
+			return 1;
+		}
+		if (a == "-controller-replay-strict") {
+			s_Args.controllerReplayStrict = true;
 			return 1;
 		}
 		if (a == "-determinism-selftest-perturb") {
@@ -85,6 +115,17 @@ namespace RTE {
 		}
 
 		const auto currentRun = g_MetricsCollector.GetCurrentRun();
+		int exitCode = currentRun.passed ? 0 : 1;
+
+		if (s_ControllerRecordLog && !s_Args.controllerLogOutPath.empty()) {
+			std::string error;
+			if (!s_ControllerRecordLog->Write(s_Args.controllerLogOutPath, &error)) {
+				std::cerr << "[scenario] failed to write controller log: " << error << std::endl;
+				exitCode = 1;
+			} else {
+				std::cout << "[scenario] wrote controller log: " << s_Args.controllerLogOutPath << std::endl;
+			}
+		}
 
 		if (!s_Args.outPath.empty()) {
 			if (!g_MetricsCollector.WriteReport(s_Args.outPath)) {
@@ -98,7 +139,108 @@ namespace RTE {
 		          << " passed=" << (currentRun.passed ? "yes" : "no")
 		          << " ticks=" << currentRun.ticks << std::endl;
 
-		return currentRun.passed ? 0 : 1;
+		if (HasControllerReplayError()) {
+			exitCode = 1;
+		}
+		return exitCode;
+	}
+
+	bool ScenarioRunner::PrepareControllerLog(std::string* error) {
+		s_ControllerReplayError.clear();
+		s_ControllerRecordLog.reset();
+		s_ControllerReplayLog.reset();
+
+		if (!s_Args.controllerLogOutPath.empty() && !s_Args.controllerLogInPath.empty()) {
+			if (error) *error = "cannot record and replay a ControllerLog in the same run.";
+			return false;
+		}
+
+		if (!s_Args.controllerLogOutPath.empty()) {
+			s_ControllerRecordLog = std::make_unique<ControllerLog>();
+			s_ControllerRecordLog->metadata.scenario = ResolvePresetName(s_Args.scenario);
+			s_ControllerRecordLog->metadata.commit = "unknown";
+			s_ControllerRecordLog->metadata.seed = s_Args.seed;
+			s_ControllerRecordLog->metadata.maxTicks = s_Args.maxTicks;
+			s_ControllerRecordLog->metadata.numLuaStates = s_Args.numLuaStates;
+			s_ControllerRecordLog->metadata.simConfig = GatherSimConfig();
+		}
+
+		if (!s_Args.controllerLogInPath.empty()) {
+			s_ControllerReplayLog = std::make_unique<ControllerLog>();
+			std::string readError;
+			if (!s_ControllerReplayLog->Read(s_Args.controllerLogInPath, &readError)) {
+				if (error) *error = readError;
+				return false;
+			}
+			const std::string expectedScenario = ResolvePresetName(s_Args.scenario);
+			if (!s_ControllerReplayLog->metadata.scenario.empty() && s_ControllerReplayLog->metadata.scenario != expectedScenario) {
+				if (error) *error = "controller log scenario mismatch: expected " + expectedScenario + ", got " + s_ControllerReplayLog->metadata.scenario;
+				return false;
+			}
+			if (s_ControllerReplayLog->metadata.seed != 0 && s_Args.seed != 0 && s_ControllerReplayLog->metadata.seed != s_Args.seed) {
+				if (error) *error = "controller log seed metadata mismatch.";
+				return false;
+			}
+			if (s_ControllerReplayLog->metadata.numLuaStates >= 0 && s_Args.numLuaStates >= 0 && s_ControllerReplayLog->metadata.numLuaStates != s_Args.numLuaStates) {
+				if (error) *error = "controller log num-lua-states mismatch.";
+				return false;
+			}
+			if (!s_ControllerReplayLog->metadata.simConfig.empty() && s_ControllerReplayLog->metadata.simConfig != GatherSimConfig()) {
+				if (error) *error = "controller log sim config mismatch.";
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ScenarioRunner::IsControllerLogRecording() {
+		return s_ControllerRecordLog != nullptr;
+	}
+
+	bool ScenarioRunner::IsControllerLogReplaying() {
+		return s_ControllerReplayLog != nullptr;
+	}
+
+	bool ScenarioRunner::ShouldCanonicalizeControllerLog() {
+		return IsControllerLogRecording() && s_Args.controllerLogCanonicalize;
+	}
+
+	bool ScenarioRunner::IsControllerReplayStrict() {
+		return IsControllerLogReplaying() && s_Args.controllerReplayStrict;
+	}
+
+	void ScenarioRunner::RecordControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames) {
+		if (s_ControllerRecordLog) {
+			s_ControllerRecordLog->AddTick(tick, std::move(frames));
+		}
+	}
+
+	bool ScenarioRunner::GetReplayControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames, std::string* error) {
+		if (!s_ControllerReplayLog) {
+			if (error) *error = "controller replay log is not loaded.";
+			return false;
+		}
+		const ControllerLogTick* rec = s_ControllerReplayLog->FindTick(tick);
+		if (!rec) {
+			if (error) *error = "controller replay log has no frame for tick " + std::to_string(tick);
+			return false;
+		}
+		outFrames = rec->frames;
+		return true;
+	}
+
+	void ScenarioRunner::SetControllerReplayError(const std::string& error) {
+		s_ControllerReplayError = error;
+		g_MetricsCollector.RecordString("controller_replay_error", error);
+		g_MetricsCollector.SetResult(false);
+	}
+
+	bool ScenarioRunner::HasControllerReplayError() {
+		return !s_ControllerReplayError.empty();
+	}
+
+	const std::string& ScenarioRunner::GetControllerReplayError() {
+		return s_ControllerReplayError;
 	}
 
 	void ScenarioRunner::ApplyDeterministicConfig() {

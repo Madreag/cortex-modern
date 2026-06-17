@@ -53,6 +53,7 @@
 #include "MusicMan.h"
 #include "System.h"
 
+#include "ControllerFrame.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
 #include "DeterminismCheck.h"
@@ -407,6 +408,13 @@ void RunGameLoop() {
 
 			g_LuaMan.ClearScriptTimings();
 			g_MovableMan.Update();
+			if (ScenarioRunner::HasControllerReplayError()) {
+				std::cerr << "[scenario] controller replay failed: " << ScenarioRunner::GetControllerReplayError() << std::endl;
+				System::SetQuit(true);
+				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
+				g_UInputMan.EndFrame();
+				break;
+			}
 			g_PerformanceMan.UpdateSortedScriptTimings(g_LuaMan.GetScriptTimings());
 
 			g_AudioMan.Update();
@@ -502,6 +510,12 @@ static const bool RTESetExceptionHandlers = []() {
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
+			return ControllerFrameSelfTest::Run();
+		}
+	}
+
 	// Determinism-check mode is a pre-init orchestrator: it spawns child game processes and diffs
 	// their JSON traces, so it must short-circuit before SDL / engine bootstrapping.
 	if (DeterminismCheck::IsRequested(argc, argv)) {
@@ -607,11 +621,15 @@ int main(int argc, char** argv) {
 			ScenarioRunner::ApplyDeterministicConfig();
 			// CLI direct-launch into a scenario: skip the menu, start the named GAScripted activity
 			// directly, run the loop, then finalize the JSON report + exit code.
+			std::string controllerLogError;
+			const bool controllerLogPrepared = ScenarioRunner::PrepareControllerLog(&controllerLogError);
 			const std::string presetName = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
 			const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", presetName);
 			const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
 			int startResult = -1;
-			if (presetActivity) {
+			if (!controllerLogPrepared) {
+				std::cerr << "[scenario] controller log setup failed: " << controllerLogError << std::endl;
+			} else if (presetActivity) {
 				const std::string& sceneName = presetActivity->GetSceneName();
 				if (!sceneName.empty()) {
 					g_SceneMan.SetSceneToLoad(sceneName, true, false);
@@ -621,7 +639,9 @@ int main(int argc, char** argv) {
 				std::cerr << "[scenario] no preset \"" << presetName << "\" of class GAScripted" << std::endl;
 			}
 
-			if (startResult < 0) {
+			if (!controllerLogPrepared) {
+				scenarioExitCode = 1;
+			} else if (startResult < 0) {
 				std::cerr << "[scenario] failed to start scenario \"" << presetName << "\"" << std::endl;
 				scenarioExitCode = 1;
 			} else {

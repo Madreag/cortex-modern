@@ -19,12 +19,17 @@
 #include "FrameMan.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "ControllerFrame.h"
+#include "ScenarioRunner.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
 
 #include "tracy/Tracy.hpp"
 
+#include <cstdint>
 #include <execution>
+#include <string>
+#include <vector>
 
 using namespace RTE;
 
@@ -53,6 +58,53 @@ static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& st
 	std::vector<MovableObject*> sorted(registered.begin(), registered.end());
 	std::sort(sorted.begin(), sorted.end(), MOUniqueIDLess());
 	return sorted;
+}
+
+static std::vector<ControllerFrame> SnapshotControllerFrames(const std::deque<Actor*>& actors) {
+	std::vector<ControllerFrame> frames;
+	frames.reserve(actors.size());
+	for (Actor* actor: actors) {
+		frames.push_back(ControllerFrameCodec::Snapshot(static_cast<int64_t>(actor->GetUniqueID()), *actor->GetController()));
+	}
+	return frames;
+}
+
+static bool ApplyControllerFramesToActors(const std::deque<Actor*>& actors, const std::vector<ControllerFrame>& frames, std::string& error) {
+	if (actors.size() != frames.size()) {
+		error = "controller frame count mismatch: actors=" + std::to_string(actors.size()) + " frames=" + std::to_string(frames.size());
+		return false;
+	}
+
+	for (size_t i = 0; i < actors.size(); ++i) {
+		Actor* actor = actors[i];
+		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
+		const ControllerFrame& frame = frames[i];
+		if (actorID != frame.actorUniqueID) {
+			error = "controller frame actor mismatch at index " + std::to_string(i) + ": actor=" + std::to_string(actorID) + " frame=" + std::to_string(frame.actorUniqueID);
+			return false;
+		}
+
+		std::string applyError;
+		if (!ControllerFrameCodec::Apply(frame, *actor->GetController(), &applyError)) {
+			error = "controller frame apply failed for actor " + std::to_string(actorID) + ": " + applyError;
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool CanonicalizeControllerFramesThroughWire(std::vector<ControllerFrame>& frames, std::string& error) {
+	for (ControllerFrame& frame: frames) {
+		const std::vector<uint8_t> encoded = ControllerFrameCodec::Encode(frame);
+		ControllerFrame decoded;
+		std::string decodeError;
+		if (!ControllerFrameCodec::Decode(encoded.data(), encoded.size(), decoded, &decodeError)) {
+			error = "controller frame canonicalization failed for actor " + std::to_string(frame.actorUniqueID) + ": " + decodeError;
+			return false;
+		}
+		frame = decoded;
+	}
+	return true;
 }
 
 // Routes any sim-RNG draws made during a draw to g_RenderRNG, so the draw-rate-dependent
@@ -1359,6 +1411,9 @@ void MovableMan::Update() {
 
 	// Updates AI/user input
 	UpdateControllers();
+	if (ScenarioRunner::HasControllerReplayError()) {
+		return;
+	}
 
 	// Will use some common iterators
 	std::deque<Actor*>::iterator aIt;
@@ -1893,6 +1948,27 @@ void MovableMan::UpdateControllers() {
 		m_ContiguousActorIDs[actor] = actorID++;
 	}
 
+	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+
+	auto applyReplayFrame = [&](const char* phase) -> bool {
+		std::vector<ControllerFrame> frames;
+		std::string error;
+		if (!ScenarioRunner::GetReplayControllerFrames(simTick, frames, &error)) {
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " " + phase + ": " + error);
+			return false;
+		}
+		if (!ApplyControllerFramesToActors(m_Actors, frames, error)) {
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " " + phase + ": " + error);
+			return false;
+		}
+		return true;
+	};
+
+	if (ScenarioRunner::IsControllerReplayStrict()) {
+		applyReplayFrame("strict replay");
+		return;
+	}
+
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
 	{
 		for (Actor* actor: m_Actors) {
@@ -1942,6 +2018,28 @@ void MovableMan::UpdateControllers() {
 		}
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
+
+	if (ScenarioRunner::IsControllerLogReplaying()) {
+		if (!applyReplayFrame("replay")) {
+			return;
+		}
+	}
+
+	if (ScenarioRunner::IsControllerLogRecording()) {
+		std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
+		if (ScenarioRunner::ShouldCanonicalizeControllerLog()) {
+			std::string error;
+			if (!CanonicalizeControllerFramesThroughWire(frames, error)) {
+				ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " record canonicalize: " + error);
+				return;
+			}
+			if (!ApplyControllerFramesToActors(m_Actors, frames, error)) {
+				ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " record canonicalize: " + error);
+				return;
+			}
+		}
+		ScenarioRunner::RecordControllerFrames(simTick, std::move(frames));
+	}
 }
 
 void MovableMan::PreControllerUpdate() {

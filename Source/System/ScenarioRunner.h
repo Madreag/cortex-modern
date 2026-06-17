@@ -1,11 +1,13 @@
 #pragma once
 
+#include "ControllerFrame.h"
+
 #include <cstdint>
 #include <map>
+#include <vector>
 #include <string>
 
 namespace RTE {
-
 	/// CLI scenario direct-launch mode.
 	///
 	/// Activated when the binary is invoked with `-scenario <PresetName>`. Skips the menu loop,
@@ -26,6 +28,11 @@ namespace RTE {
 			std::string outPath;      // JSON output path; empty = no report
 			uint64_t    seed = 0;     // deterministic seed; 0 = use SeedRNG()'s default
 			uint64_t    maxTicks = 0; // 0 = scenario-default safety cap (1800 ticks / 30 sim seconds)
+			int         numLuaStates = -1; // -num-lua-states override, if supplied
+			std::string controllerLogOutPath; // -controller-log-out path
+			std::string controllerLogInPath; // -controller-log-in path
+			bool        controllerLogCanonicalize = true; // record sim uses encoded->decoded frames
+			bool        controllerReplayStrict = false; // strict replay skips local Controller/AI production
 			bool        tickHashes = false; // -tick-hashes: emit per-tick hash trace into the JSON
 			                                 // report, read by the determinism check to diff
 			                                 // multiple runs of the same scenario+seed.
@@ -54,6 +61,19 @@ namespace RTE {
 		/// After the activity ends and RunGameLoop returns, write the metrics report (if -out set).
 		/// Returns exit code: 0 if scenario passed (or no result was set), 1 otherwise.
 		static int FinalizeAndGetExitCode();
+
+		/// Prepare ControllerFrame record/replay state after deterministic config is pinned.
+		static bool PrepareControllerLog(std::string* error = nullptr);
+
+		static bool IsControllerLogRecording();
+		static bool IsControllerLogReplaying();
+		static bool ShouldCanonicalizeControllerLog();
+		static bool IsControllerReplayStrict();
+		static void RecordControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames);
+		static bool GetReplayControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames, std::string* error = nullptr);
+		static void SetControllerReplayError(const std::string& error);
+		static bool HasControllerReplayError();
+		static const std::string& GetControllerReplayError();
 
 		/// Pin the sim-affecting config to canonical values for a deterministic run, so the sim is
 		/// bit-identical across machines regardless of per-machine Settings.ini. Call after settings
