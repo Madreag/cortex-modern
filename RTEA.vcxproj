@@ -819,6 +819,10 @@
     <ClInclude Include="Source\System\Color.h" />
     <ClInclude Include="Source\Network\ControllerFrame.h" />
     <ClInclude Include="Source\Network\ControllerLog.h" />
+    <ClInclude Include="Source\Network\LoopbackTransport.h" />
+    <ClInclude Include="Source\Network\NetProtocol.h" />
+    <ClInclude Include="Source\Network\NetProtocolSelfTest.h" />
+    <ClInclude Include="Source\Network\NetTransport.h" />
     <ClInclude Include="Source\Network\SimChecksum.h" />
     <ClInclude Include="Source\AI\MetricsCollector.h" />
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
@@ -1352,6 +1356,9 @@
     <ClCompile Include="Source\System\Color.cpp" />
     <ClCompile Include="Source\Network\ControllerFrame.cpp" />
     <ClCompile Include="Source\Network\ControllerLog.cpp" />
+    <ClCompile Include="Source\Network\LoopbackTransport.cpp" />
+    <ClCompile Include="Source\Network\NetProtocol.cpp" />
+    <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
     <ClCompile Include="Source\AI\MetricsCollector.cpp" />
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />

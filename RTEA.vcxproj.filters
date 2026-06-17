@@ -454,6 +454,18 @@
     <ClInclude Include="Source\Network\ControllerLog.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\LoopbackTransport.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetProtocol.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetProtocolSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetTransport.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTETools.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -701,6 +713,15 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\ControllerLog.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\LoopbackTransport.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetProtocol.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\PathFinder.cpp">
