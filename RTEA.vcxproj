@@ -817,6 +817,8 @@
     <ClInclude Include="Source\System\StandardIncludes.h" />
     <ClInclude Include="Source\System\Box.h" />
     <ClInclude Include="Source\System\Color.h" />
+    <ClInclude Include="Source\Network\ControllerFrame.h" />
+    <ClInclude Include="Source\Network\ControllerLog.h" />
     <ClInclude Include="Source\Network\SimChecksum.h" />
     <ClInclude Include="Source\AI\MetricsCollector.h" />
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
@@ -1348,6 +1350,8 @@
     </ClCompile>
     <ClCompile Include="Source\System\Box.cpp" />
     <ClCompile Include="Source\System\Color.cpp" />
+    <ClCompile Include="Source\Network\ControllerFrame.cpp" />
+    <ClCompile Include="Source\Network\ControllerLog.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
     <ClCompile Include="Source\AI\MetricsCollector.cpp" />
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />

@@ -210,6 +210,17 @@ bool Controller::ShouldUpdateAIThisFrame() const {
 	return true;
 }
 
+void Controller::ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled) {
+	m_ControlStates = controlStates;
+	m_AnalogMove = analogMove;
+	m_AnalogAim = analogAim;
+	m_AnalogCursor = analogCursor;
+	m_MouseMovement = mouseMovement;
+	m_InputMode = inputMode;
+	m_Player = playerRaw;
+	m_Disabled = quickDisabled;
+}
+
 Controller& Controller::operator=(const Controller& rhs) {
 	if (this == &rhs) {
 		return *this;

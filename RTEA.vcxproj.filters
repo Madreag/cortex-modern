@@ -448,6 +448,12 @@
     <ClInclude Include="Source\Network\SimChecksum.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\ControllerFrame.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\ControllerLog.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTETools.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -689,6 +695,12 @@
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\SimChecksum.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\ControllerFrame.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\ControllerLog.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\PathFinder.cpp">

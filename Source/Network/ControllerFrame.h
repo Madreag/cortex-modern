@@ -1,0 +1,56 @@
+#pragma once
+
+#include "Controller.h"
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace RTE {
+
+	struct ControllerFrame {
+		static constexpr uint16_t c_Version = 1;
+		static constexpr size_t c_EncodedSize = 36;
+		static constexpr int c_AnalogScale = 32767;
+
+		int64_t actorUniqueID = 0;
+		uint64_t stateMask = 0;
+		int16_t analogMoveX = 0;
+		int16_t analogMoveY = 0;
+		int16_t analogAimX = 0;
+		int16_t analogAimY = 0;
+		int16_t analogCursorX = 0;
+		int16_t analogCursorY = 0;
+		int16_t mouseDeltaX = 0;
+		int16_t mouseDeltaY = 0;
+		uint8_t inputMode = static_cast<uint8_t>(Controller::CIM_DISABLED);
+		int8_t playerRaw = Players::NoPlayer;
+		uint8_t flags = 0;
+
+		bool IsQuickDisabled() const { return (flags & 0x1U) != 0; }
+		void SetQuickDisabled(bool disabled);
+	};
+
+	class ControllerFrameCodec {
+	public:
+		static ControllerFrame Snapshot(int64_t actorUniqueID, const Controller& controller);
+		static bool Apply(const ControllerFrame& frame, Controller& controller, std::string* error = nullptr);
+
+		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
+		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr);
+
+		static int16_t QuantizeAnalog(float value);
+		static float DequantizeAnalog(int16_t value);
+		static int16_t QuantizeMouseDelta(float value);
+
+		static uint32_t PayloadChecksum(const std::vector<uint8_t>& bytes);
+		static uint32_t PayloadChecksum(const uint8_t* data, size_t size);
+	};
+
+	class ControllerFrameSelfTest {
+	public:
+		static int Run();
+	};
+
+} // namespace RTE
