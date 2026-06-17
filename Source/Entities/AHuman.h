@@ -11,6 +11,7 @@
 #include "LimbPath.h"
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -336,6 +337,10 @@ namespace RTE {
 		/// Gets the BG Arm's HeldDevice. Ownership is NOT transferred.
 		/// @return The BG Arm's HeldDevice.
 		HeldDevice* GetEquippedBGItem() const { return m_pBGArm ? m_pBGArm->GetHeldDevice() : nullptr; }
+
+		/// Replays a recorded equipped-device selection by UniqueID, moving matching devices between arms and inventory.
+		/// @return Whether every requested non-empty equipped device was found and equipped.
+		bool SyncEquippedItemsByUniqueID(int64_t fgUniqueID, int64_t bgUniqueID);
 
 		/// Gets the total mass of this AHuman's currently equipped devices.
 		/// @return The mass of this AHuman's equipped devices.

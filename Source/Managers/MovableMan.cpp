@@ -24,14 +24,155 @@
 #include "LuaMan.h"
 #include "ThreadMan.h"
 
+#include "nlohmann/json.hpp"
 #include "tracy/Tracy.hpp"
 
 #include <cstdint>
 #include <execution>
+#include <fstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace RTE;
+
+namespace {
+	using json = nlohmann::json;
+
+	json MovableObjectDebugJson(const MovableObject* object) {
+		json j;
+		if (!object) {
+			return j;
+		}
+		j["uid"] = static_cast<int64_t>(object->GetUniqueID());
+		j["moid"] = static_cast<int>(object->GetID());
+		j["root_moid"] = static_cast<int>(object->GetRootID());
+		j["class"] = object->GetClassName();
+		j["preset"] = object->GetPresetName();
+		j["module"] = object->GetModuleName();
+		j["team"] = object->GetTeam();
+		j["pos"] = {object->GetPos().m_X, object->GetPos().m_Y};
+		j["vel"] = {object->GetVel().m_X, object->GetVel().m_Y};
+		j["rot"] = object->GetRotAngle();
+		j["ang_vel"] = object->GetAngularVel();
+		j["h_flipped"] = object->IsHFlipped();
+		j["mass"] = object->GetMass();
+		j["age_ms"] = object->GetAge();
+		j["lifetime_ms"] = object->GetLifetime();
+		j["to_delete"] = object->IsSetToDelete();
+		j["to_settle"] = object->ToSettle();
+		return j;
+	}
+
+	json ControllerFrameDebugJson(const ControllerFrame& frame) {
+		json j;
+		j["actor_uid"] = frame.actorUniqueID;
+		j["state_mask"] = frame.stateMask;
+		j["analog_move"] = {frame.analogMoveX, frame.analogMoveY};
+		j["analog_aim"] = {frame.analogAimX, frame.analogAimY};
+		j["analog_cursor"] = {frame.analogCursorX, frame.analogCursorY};
+		j["mouse_delta"] = {frame.mouseDeltaX, frame.mouseDeltaY};
+		j["input_mode"] = frame.inputMode;
+		j["player_raw"] = frame.playerRaw;
+		j["flags"] = frame.flags;
+		j["h_flipped"] = frame.IsActorHFlipped();
+		j["aim_angle"] = frame.aimAngle;
+		j["view_point"] = {frame.viewPointX, frame.viewPointY};
+		j["equipped_fg_uid"] = frame.equippedFGUniqueID;
+		j["equipped_bg_uid"] = frame.equippedBGUniqueID;
+		j["fg_hand_pos"] = {frame.fgHandPosX, frame.fgHandPosY};
+		j["bg_hand_pos"] = {frame.bgHandPosX, frame.bgHandPosY};
+		return j;
+	}
+
+	json ActorDebugJson(const Actor* actor) {
+		json j = MovableObjectDebugJson(actor);
+		if (!actor) {
+			return j;
+		}
+		j["health"] = actor->GetHealth();
+		j["prev_health"] = actor->GetPrevHealth();
+		j["max_health"] = actor->GetMaxHealth();
+		j["status"] = actor->GetStatus();
+		j["dead"] = actor->IsDead();
+		j["ai_mode"] = actor->GetAIMode();
+		j["movement_state"] = actor->GetMovementState();
+		j["wound_count"] = actor->GetWoundCount(true, true, true);
+		j["gib_wound_limit"] = actor->GetGibWoundLimit(true, true, true);
+		j["inventory_size"] = actor->GetInventorySize();
+		j["inventory_mass"] = actor->GetInventoryMass();
+		j["gold"] = actor->GetGoldCarried();
+		j["aim_angle"] = actor->GetAimAngle(false);
+		j["view_point"] = {actor->GetViewPoint().m_X, actor->GetViewPoint().m_Y};
+
+		json inventory = json::array();
+		if (const std::deque<MovableObject*>* items = actor->GetInventory()) {
+			for (const MovableObject* item: *items) {
+				inventory.push_back(MovableObjectDebugJson(item));
+			}
+		}
+		j["inventory"] = std::move(inventory);
+
+		if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
+			j["equipped_fg"] = MovableObjectDebugJson(human->GetEquippedItem());
+			j["equipped_bg"] = MovableObjectDebugJson(human->GetEquippedBGItem());
+			if (const Arm* fgArm = human->GetFGArm()) {
+				j["fg_hand_pos"] = {fgArm->GetHandPos().m_X, fgArm->GetHandPos().m_Y};
+			}
+			if (const Arm* bgArm = human->GetBGArm()) {
+				j["bg_hand_pos"] = {bgArm->GetHandPos().m_X, bgArm->GetHandPos().m_Y};
+			}
+			j["human_upper_state"] = human->GetUpperBodyState();
+			j["human_prone_state"] = human->GetProneState();
+		}
+		return j;
+	}
+
+	void DumpControllerDebugSnapshot(const std::string& phase,
+	                                 uint64_t tick,
+	                                 const std::deque<Actor*>& actors,
+	                                 const std::vector<ControllerFrame>* frames = nullptr,
+	                                 const std::string* error = nullptr,
+	                                 const std::deque<MovableObject*>* particles = nullptr) {
+		if (!ScenarioRunner::ShouldControllerDebugDumpTick(tick)) {
+			return;
+		}
+
+		json root;
+		root["tick"] = tick;
+		root["phase"] = phase;
+		root["actor_count"] = actors.size();
+		root["actors"] = json::array();
+		for (const Actor* actor: actors) {
+			root["actors"].push_back(ActorDebugJson(actor));
+		}
+		if (particles) {
+			root["particle_count"] = particles->size();
+			root["particles"] = json::array();
+			for (const MovableObject* particle: *particles) {
+				root["particles"].push_back(MovableObjectDebugJson(particle));
+			}
+		}
+		if (frames) {
+			root["frame_count"] = frames->size();
+			root["frames"] = json::array();
+			for (const ControllerFrame& frame: *frames) {
+				root["frames"].push_back(ControllerFrameDebugJson(frame));
+			}
+		}
+		if (error) {
+			root["error"] = *error;
+		}
+
+		const std::string& path = ScenarioRunner::GetControllerDebugDumpPath();
+		static std::unordered_set<std::string> truncatedPaths;
+		const bool firstWrite = truncatedPaths.insert(path).second;
+		std::ofstream out(path, firstWrite ? std::ios::trunc : std::ios::app);
+		if (out.is_open()) {
+			out << root.dump() << '\n';
+		}
+	}
+}
 
 AlarmEvent::AlarmEvent(const Vector& pos, int team, float range) :
 	m_ScenePos(pos),
@@ -64,7 +205,7 @@ static std::vector<ControllerFrame> SnapshotControllerFrames(const std::deque<Ac
 	std::vector<ControllerFrame> frames;
 	frames.reserve(actors.size());
 	for (Actor* actor: actors) {
-		frames.push_back(ControllerFrameCodec::Snapshot(static_cast<int64_t>(actor->GetUniqueID()), *actor->GetController()));
+		frames.push_back(ControllerFrameCodec::Snapshot(static_cast<int64_t>(actor->GetUniqueID()), *actor->GetController(), actor));
 	}
 	return frames;
 }
@@ -85,6 +226,10 @@ static bool ApplyControllerFramesToActors(const std::deque<Actor*>& actors, cons
 		}
 
 		std::string applyError;
+		if (!ControllerFrameCodec::ApplyActorState(frame, *actor, &applyError)) {
+			error = "controller frame actor-state apply failed for actor " + std::to_string(actorID) + ": " + applyError;
+			return false;
+		}
 		if (!ControllerFrameCodec::Apply(frame, *actor->GetController(), &applyError)) {
 			error = "controller frame apply failed for actor " + std::to_string(actorID) + ": " + applyError;
 			return false;
@@ -1767,6 +1912,8 @@ void MovableMan::Update() {
 	// Feed each actor's stable end-of-tick state into the `actors` checksum subsystem.
 	// Fields go in individually with fixed-width types so the byte stream is cross-OS-stable.
 	if (g_SimChecksum.IsActive()) {
+		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_Actors, nullptr, nullptr, &m_Particles);
+
 		for (Actor* a: m_Actors) {
 			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
 			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
@@ -1780,8 +1927,6 @@ void MovableMan::Update() {
 			g_SimChecksum.Update("actors", &velY, sizeof(velY));
 			const float health = a->GetHealth();
 			g_SimChecksum.Update("actors", &health, sizeof(health));
-			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
-			g_SimChecksum.Update("actors", &aiMode, sizeof(aiMode));
 			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
 			const float actorRotAngle = a->GetRotAngle();
 			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
@@ -1805,6 +1950,8 @@ void MovableMan::Update() {
 			g_SimChecksum.Update("controller", analog, sizeof(analog));
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
 			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
+			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
 		}
 
 		// Compact per-particle fingerprint — uniqueID + pos + vel.
@@ -1949,18 +2096,23 @@ void MovableMan::UpdateControllers() {
 	}
 
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	DumpControllerDebugSnapshot("controller_pre", simTick, m_Actors);
 
 	auto applyReplayFrame = [&](const char* phase) -> bool {
 		std::vector<ControllerFrame> frames;
 		std::string error;
 		if (!ScenarioRunner::GetReplayControllerFrames(simTick, frames, &error)) {
+			DumpControllerDebugSnapshot(std::string(phase) + "_missing_frame", simTick, m_Actors, nullptr, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " " + phase + ": " + error);
 			return false;
 		}
+		DumpControllerDebugSnapshot(std::string(phase) + "_pre_apply", simTick, m_Actors, &frames);
 		if (!ApplyControllerFramesToActors(m_Actors, frames, error)) {
+			DumpControllerDebugSnapshot(std::string(phase) + "_apply_error", simTick, m_Actors, &frames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " " + phase + ": " + error);
 			return false;
 		}
+		DumpControllerDebugSnapshot(std::string(phase) + "_post_apply", simTick, m_Actors, &frames);
 		return true;
 	};
 
@@ -2027,17 +2179,21 @@ void MovableMan::UpdateControllers() {
 
 	if (ScenarioRunner::IsControllerLogRecording()) {
 		std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
+		DumpControllerDebugSnapshot("record_pre_canonicalize", simTick, m_Actors, &frames);
 		if (ScenarioRunner::ShouldCanonicalizeControllerLog()) {
 			std::string error;
 			if (!CanonicalizeControllerFramesThroughWire(frames, error)) {
+				DumpControllerDebugSnapshot("record_canonicalize_error", simTick, m_Actors, &frames, &error);
 				ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " record canonicalize: " + error);
 				return;
 			}
 			if (!ApplyControllerFramesToActors(m_Actors, frames, error)) {
+				DumpControllerDebugSnapshot("record_canonicalize_apply_error", simTick, m_Actors, &frames, &error);
 				ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " record canonicalize: " + error);
 				return;
 			}
 		}
+		DumpControllerDebugSnapshot("record_post_canonicalize", simTick, m_Actors, &frames);
 		ScenarioRunner::RecordControllerFrames(simTick, std::move(frames));
 	}
 }

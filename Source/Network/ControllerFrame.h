@@ -9,9 +9,11 @@
 
 namespace RTE {
 
+	class Actor;
+
 	struct ControllerFrame {
-		static constexpr uint16_t c_Version = 1;
-		static constexpr size_t c_EncodedSize = 36;
+		static constexpr uint16_t c_Version = 5;
+		static constexpr size_t c_EncodedSize = 80;
 		static constexpr int c_AnalogScale = 32767;
 
 		int64_t actorUniqueID = 0;
@@ -27,15 +29,27 @@ namespace RTE {
 		uint8_t inputMode = static_cast<uint8_t>(Controller::CIM_DISABLED);
 		int8_t playerRaw = Players::NoPlayer;
 		uint8_t flags = 0;
+		float aimAngle = 0.0F;
+		float viewPointX = 0.0F;
+		float viewPointY = 0.0F;
+		int64_t equippedFGUniqueID = 0;
+		int64_t equippedBGUniqueID = 0;
+		float fgHandPosX = 0.0F;
+		float fgHandPosY = 0.0F;
+		float bgHandPosX = 0.0F;
+		float bgHandPosY = 0.0F;
 
 		bool IsQuickDisabled() const { return (flags & 0x1U) != 0; }
 		void SetQuickDisabled(bool disabled);
+		bool IsActorHFlipped() const { return (flags & 0x2U) != 0; }
+		void SetActorHFlipped(bool flipped);
 	};
 
 	class ControllerFrameCodec {
 	public:
-		static ControllerFrame Snapshot(int64_t actorUniqueID, const Controller& controller);
+		static ControllerFrame Snapshot(int64_t actorUniqueID, const Controller& controller, const Actor* actor = nullptr);
 		static bool Apply(const ControllerFrame& frame, Controller& controller, std::string* error = nullptr);
+		static bool ApplyActorState(const ControllerFrame& frame, Actor& actor, std::string* error = nullptr);
 
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
 		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr);
