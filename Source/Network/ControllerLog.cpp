@@ -223,12 +223,18 @@ namespace RTE {
 			return false;
 		}
 
+		bool hasPreviousTick = false;
+		uint64_t previousTick = 0;
 		while (in.peek() != std::char_traits<char>::eof()) {
 			uint64_t tick = 0;
 			uint32_t frameCount = 0;
 			uint32_t checksum = 0;
 			if (!ReadU64LE(in, tick) || !ReadU32LE(in, frameCount) || !ReadU32LE(in, checksum)) {
 				SetError(error, "ControllerLog tick header is truncated.");
+				return false;
+			}
+			if (hasPreviousTick && tick <= previousTick) {
+				SetError(error, "ControllerLog ticks are not strictly sorted.");
 				return false;
 			}
 			if (frameCount > std::numeric_limits<size_t>::max() / ControllerFrame::c_EncodedSize) {
@@ -263,6 +269,8 @@ namespace RTE {
 				frames.push_back(frame);
 			}
 			ticks.push_back(ControllerLogTick{tick, std::move(frames)});
+			hasPreviousTick = true;
+			previousTick = tick;
 		}
 		return true;
 	}

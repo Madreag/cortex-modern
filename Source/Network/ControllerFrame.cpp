@@ -79,6 +79,14 @@ namespace RTE {
 		bool NearlyEqual(float lhs, float rhs, float epsilon = 1.0F / static_cast<float>(ControllerFrame::c_AnalogScale)) {
 			return std::fabs(lhs - rhs) <= epsilon;
 		}
+
+		bool HasUnknownControlStateBits(uint64_t stateMask) {
+			if constexpr (ControlState::CONTROLSTATECOUNT >= 64) {
+				return false;
+			} else {
+				return (stateMask >> ControlState::CONTROLSTATECOUNT) != 0;
+			}
+		}
 	}
 
 	void ControllerFrame::SetQuickDisabled(bool disabled) {
@@ -123,7 +131,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame input_mode is out of range.");
 			return false;
 		}
-		if ((frame.stateMask >> ControlState::CONTROLSTATECOUNT) != 0) {
+		if (HasUnknownControlStateBits(frame.stateMask)) {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
@@ -198,7 +206,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame input_mode is out of range.");
 			return false;
 		}
-		if ((frame.stateMask >> ControlState::CONTROLSTATECOUNT) != 0) {
+		if (HasUnknownControlStateBits(frame.stateMask)) {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
@@ -301,14 +309,16 @@ namespace RTE {
 			return fail("mode/player/disabled fields failed to apply");
 		}
 
-		ControllerFrame malformed = decoded;
-		malformed.stateMask |= (uint64_t{1} << ControlState::CONTROLSTATECOUNT);
-		const std::vector<uint8_t> malformedBytes = ControllerFrameCodec::Encode(malformed);
-		if (ControllerFrameCodec::Decode(malformedBytes.data(), malformedBytes.size(), decoded, nullptr)) {
-			return fail("malformed state mask was accepted");
+		if constexpr (ControlState::CONTROLSTATECOUNT < 64) {
+			ControllerFrame malformed = decoded;
+			malformed.stateMask |= (uint64_t{1} << ControlState::CONTROLSTATECOUNT);
+			const std::vector<uint8_t> malformedBytes = ControllerFrameCodec::Encode(malformed);
+			if (ControllerFrameCodec::Decode(malformedBytes.data(), malformedBytes.size(), decoded, nullptr)) {
+				return fail("malformed state mask was accepted");
+			}
 		}
 
-		malformed = frame;
+		ControllerFrame malformed = frame;
 		malformed.flags |= 0x2U;
 		const std::vector<uint8_t> malformedFlagsBytes = ControllerFrameCodec::Encode(malformed);
 		if (ControllerFrameCodec::Decode(malformedFlagsBytes.data(), malformedFlagsBytes.size(), decoded, nullptr)) {
