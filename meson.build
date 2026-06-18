@@ -4,6 +4,7 @@ project('Cortex-Command-Community-Project', ['cpp','c'], subproject_dir: 'extern
 
 compiler = meson.get_compiler('cpp')
 cmake = import('cmake')
+fs = import('fs')
 deps=[]
 
 elfname = 'CortexCommand'
@@ -271,6 +272,60 @@ raknet_dep = dependency('RakNet')
 nlohmann_json_proj = subproject('nlohmann_json-3.12.0')
 nlohmann_json_dep = dependency('nlohmann_json')
 deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_dep, boost_dep, tracy_dep, nlohmann_json_dep]
+
+gns_mode = get_option('with_gns')
+if gns_mode != 'disabled'
+  gns_root = get_option('gns_root')
+  gns_dep_root = get_option('gns_dep_root')
+  gns_required = gns_mode == 'enabled'
+  if gns_root == ''
+    if gns_required
+      error('with_gns=enabled requires -Dgns_root=<GameNetworkingSockets install prefix>')
+    endif
+    message('GameNetworkingSockets support disabled: gns_root was not provided')
+  else
+    gns_include_dir = join_paths(gns_root, 'include', 'GameNetworkingSockets')
+    gns_lib_dir = join_paths(gns_root, 'lib')
+    if not fs.is_dir(gns_include_dir) or not fs.is_dir(gns_lib_dir)
+      if gns_required
+        error('gns_root must contain include/GameNetworkingSockets and lib')
+      endif
+      message('GameNetworkingSockets support disabled: gns_root layout was not found')
+    else
+      external_inc_dirs += include_directories(gns_include_dir, is_system: true)
+      gns_lib = compiler.find_library('GameNetworkingSockets_s', dirs: [gns_lib_dir], required: gns_required)
+      if gns_lib.found()
+        deps += [gns_lib]
+        preprocessor_flags += ['-DCCCP_WITH_GNS', '-DSTEAMNETWORKINGSOCKETS_STATIC_LINK']
+        if host_machine.system() == 'windows'
+          preprocessor_flags += ['-DPROTOBUF_USE_DLLS', '-DABSL_CONSUME_DLL']
+          if gns_dep_root == ''
+            if gns_required
+              error('Windows with_gns=enabled requires -Dgns_dep_root=<vcpkg_installed/triplet prefix>')
+            endif
+          else
+            external_inc_dirs += include_directories(join_paths(gns_dep_root, 'include'), is_system: true)
+            gns_dep_lib_dir = join_paths(gns_dep_root, 'lib')
+            deps += [
+              compiler.find_library('libprotobuf', dirs: [gns_dep_lib_dir], required: gns_required),
+              compiler.find_library('utf8_validity', dirs: [gns_dep_lib_dir], required: gns_required),
+              compiler.find_library('abseil_dll', dirs: [gns_dep_lib_dir], required: gns_required),
+              compiler.find_library('libcrypto', dirs: [gns_dep_lib_dir], required: gns_required),
+            ]
+            add_project_link_arguments(['crypt32.lib', 'Iphlpapi.lib'], language: 'cpp')
+          endif
+        else
+          deps += [
+            dependency('protobuf', required: gns_required),
+            dependency('openssl', required: gns_required),
+          ]
+        endif
+      elif gns_required
+        error('GameNetworkingSockets_s library was not found under gns_root')
+      endif
+    endif
+  endif
+endif
 
 #### Sources Setup ####
 source_inc_dirs = []

@@ -1,6 +1,7 @@
 sources += files(
 'ControllerFrame.cpp',
 'ControllerLog.cpp',
+'GnsTransport.cpp',
 'LoopbackTransport.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',

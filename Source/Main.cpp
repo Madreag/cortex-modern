@@ -54,9 +54,11 @@
 #include "System.h"
 
 #include "ControllerFrame.h"
+#include "GnsTransport.h"
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
 #include "NetProtocolSelfTest.h"
+#include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
@@ -73,9 +75,13 @@
 #include <crtdbg.h>
 #endif
 
+#include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <random>
+#include <thread>
+#include <utility>
 
 extern "C" {
 FILE __iob_func[3] = {*stdin, *stdout, *stderr};
@@ -91,6 +97,14 @@ static int s_cliNumLuaStatesOverride = -1;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
+
+// Debug-only P2D transport/session smoke. This exits before gameplay starts.
+static bool s_netHost = false;
+static std::string s_netJoinAddress;
+static uint16_t s_netPort = 41010;
+static std::string s_netSessionReportPath;
+static bool s_netExitAfterReady = false;
+static bool s_netAllowUserdata = false;
 
 /// <summary>
 /// Initializes all the essential managers.
@@ -231,6 +245,42 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-identity-dump") {
 			s_netIdentityDumpPath = argValue[++i];
+			continue;
+		}
+
+		if (currentArg == "-net-host") {
+			s_netHost = true;
+			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-join") {
+			s_netJoinAddress = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port") {
+			const long parsedPort = std::strtol(argValue[++i], nullptr, 10);
+			if (parsedPort > 0 && parsedPort <= 65535) {
+				s_netPort = static_cast<uint16_t>(parsedPort);
+			}
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-session-report") {
+			s_netSessionReportPath = argValue[++i];
+			continue;
+		}
+
+		if (currentArg == "-net-exit-after-ready") {
+			s_netExitAfterReady = true;
+			++i;
+			continue;
+		}
+
+		if (currentArg == "-net-allow-userdata") {
+			s_netAllowUserdata = true;
+			++i;
 			continue;
 		}
 
@@ -518,6 +568,130 @@ static const bool RTESetExceptionHandlers = []() {
 	return true;
 }();
 
+bool NetSessionCliRequested() {
+	return s_netHost || !s_netJoinAddress.empty();
+}
+
+bool WriteNetSessionReport(const NetSession& session, const std::string& path, std::string* error) {
+	if (path.empty()) {
+		return true;
+	}
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	if (!out) {
+		if (error) *error = "could not open report path '" + path + "'";
+		return false;
+	}
+	out << session.BuildReportJson() << '\n';
+	if (!out) {
+		if (error) *error = "could not write report path '" + path + "'";
+		return false;
+	}
+	return true;
+}
+
+NetSessionConfig BuildNetSessionCliConfig(const NetIdentityManifest& manifest, bool host) {
+	NetSessionConfig config;
+	config.localIdentity = manifest;
+	config.displayName = host ? "Host" : "Client";
+	config.port = s_netPort;
+	config.sessionId = 0x5354414745325032ULL;
+	config.localNonce = host ? 0x535441474532484FULL : 0x535441474532434CULL;
+	config.maxPeers = 1;
+	config.heartbeatIntervalMs = 50;
+	config.timeoutMs = 5000;
+	config.rejectUserdataModules = !s_netAllowUserdata;
+	return config;
+}
+
+int RunNetSessionCli() {
+	if (s_netHost && !s_netJoinAddress.empty()) {
+		std::cerr << "[net-session] choose either -net-host or -net-join, not both" << std::endl;
+		return 1;
+	}
+
+	NetIdentityManifest manifest;
+	NetIdentityBuildOptions identityOptions;
+	identityOptions.buildId = "stage2-p2d-local";
+	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	std::string error;
+	if (!NetIdentity::BuildCurrentManifest(manifest, &error, identityOptions)) {
+		std::cerr << "[net-session] identity build failed: " << error << std::endl;
+		return 1;
+	}
+
+	GnsTransport transport;
+	NetSession session;
+	NetSessionConfig config = BuildNetSessionCliConfig(manifest, s_netHost);
+	const bool started = s_netHost
+		? session.StartHost(transport, std::move(config), &error)
+		: session.StartClient(transport, s_netJoinAddress, std::move(config), &error);
+
+	if (!started) {
+		std::cerr << "[net-session] start failed: " << error << std::endl;
+		std::string reportError;
+		if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
+			std::cerr << "[net-session] report failed: " << reportError << std::endl;
+		}
+		return 1;
+	}
+
+	std::cout << "[net-session] " << (s_netHost ? "hosting" : "joining")
+	          << " port=" << s_netPort
+	          << " gns_compiled=" << (GnsTransport::IsCompiledIn() ? "true" : "false")
+	          << " allow_userdata=" << (s_netAllowUserdata ? "true" : "false")
+	          << std::endl;
+
+	const auto startTime = std::chrono::steady_clock::now();
+	constexpr uint64_t c_MaxRunMs = 15000;
+	constexpr uint64_t c_ReadySettleMs = 250;
+	bool sawReady = false;
+
+	while (true) {
+		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - startTime).count());
+		session.Tick(nowMs);
+
+		if (session.IsRejected()) {
+			if (s_netHost) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(c_ReadySettleMs));
+			}
+			break;
+		}
+		if (session.IsFailed() || session.IsClosed()) {
+			break;
+		}
+		if (session.IsReady()) {
+			if (!sawReady) {
+				sawReady = true;
+				std::cout << "[net-session] ready" << std::endl;
+			}
+			if (s_netExitAfterReady && !s_netHost) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(c_ReadySettleMs));
+			}
+			break;
+		}
+		if (nowMs > c_MaxRunMs) {
+			std::cerr << "[net-session] timed out waiting for ready" << std::endl;
+			break;
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+
+	std::string reportError;
+	if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
+		std::cerr << "[net-session] report failed: " << reportError << std::endl;
+		return 1;
+	}
+
+	const bool passed = session.IsReady();
+	std::cout << "[net-session] final_state=" << NetSession::StateName(session.GetState())
+	          << " accepted=" << (passed ? "true" : "false")
+	          << " report=" << (s_netSessionReportPath.empty() ? "<none>" : s_netSessionReportPath)
+	          << std::endl;
+	return passed ? 0 : 1;
+}
+
 /// <summary>
 /// Implementation of the main function.
 /// </summary>
@@ -561,7 +735,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-join") {
 				headless = true;
 			} else if (arg == "-headed") {
 				headless = false;
@@ -630,6 +804,13 @@ int main(int argc, char** argv) {
 		} else {
 			std::cerr << "[net-identity-dump] failed: " << error << std::endl;
 		}
+		std::cout.flush();
+		std::cerr.flush();
+		std::_Exit(exitCode);
+	}
+
+	if (NetSessionCliRequested()) {
+		const int exitCode = RunNetSessionCli();
 		std::cout.flush();
 		std::cerr.flush();
 		std::_Exit(exitCode);

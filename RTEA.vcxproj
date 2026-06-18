@@ -741,6 +741,19 @@
       <OutputFile>$(IntDir)$(TargetName).bsc</OutputFile>
     </Bscmake>
   </ItemDefinitionGroup>
+  <PropertyGroup>
+    <GnsEnabled Condition="'$(GNS_ROOT)' != '' And '$(GNS_DEP_ROOT)' != ''">true</GnsEnabled>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(GnsEnabled)'=='true'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(GNS_ROOT)\include\GameNetworkingSockets;$(GNS_DEP_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CCCP_WITH_GNS;STEAMNETWORKINGSOCKETS_STATIC_LINK;PROTOBUF_USE_DLLS;ABSL_CONSUME_DLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(GNS_ROOT)\lib;$(GNS_DEP_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>GameNetworkingSockets_s.lib;libprotobuf.lib;utf8_validity.lib;abseil_dll.lib;libcrypto.lib;ws2_32.lib;crypt32.lib;winmm.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Source\Entities\Activity.h" />
     <ClInclude Include="Source\Entities\ADSensor.h" />
@@ -819,6 +832,7 @@
     <ClInclude Include="Source\System\Color.h" />
     <ClInclude Include="Source\Network\ControllerFrame.h" />
     <ClInclude Include="Source\Network\ControllerLog.h" />
+    <ClInclude Include="Source\Network\GnsTransport.h" />
     <ClInclude Include="Source\Network\LoopbackTransport.h" />
     <ClInclude Include="Source\Network\NetIdentity.h" />
     <ClInclude Include="Source\Network\NetIdentitySelfTest.h" />
@@ -1360,6 +1374,7 @@
     <ClCompile Include="Source\System\Color.cpp" />
     <ClCompile Include="Source\Network\ControllerFrame.cpp" />
     <ClCompile Include="Source\Network\ControllerLog.cpp" />
+    <ClCompile Include="Source\Network\GnsTransport.cpp" />
     <ClCompile Include="Source\Network\LoopbackTransport.cpp" />
     <ClCompile Include="Source\Network\NetIdentity.cpp" />
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp" />
