@@ -70,6 +70,9 @@ namespace RTE {
 		/// @param moduleName Name of the module to load.
 		void SetSingleModuleToLoad(std::string moduleName) { m_SingleModuleToLoad = std::move(moduleName); }
 
+		/// Gets the single non-official module requested through the launch configuration, if any.
+		const std::string& GetSingleModuleToLoad() const { return m_SingleModuleToLoad; }
+
 		/// Gets a specific loaded DataModule
 		/// @param whichModule The ID of the module to get. (default: 0)
 		/// @return The requested DataModule. Ownership is NOT transferred!

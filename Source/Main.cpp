@@ -54,6 +54,8 @@
 #include "System.h"
 
 #include "ControllerFrame.h"
+#include "NetIdentity.h"
+#include "NetIdentitySelfTest.h"
 #include "NetProtocolSelfTest.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
@@ -85,6 +87,9 @@ static bool s_recordTickHashes = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static int s_cliNumLuaStatesOverride = -1;
+
+// Post-module-load diagnostic. Empty means disabled.
+static std::string s_netIdentityDumpPath;
 
 /// <summary>
 /// Initializes all the essential managers.
@@ -220,6 +225,11 @@ void HandleMainArgs(int argCount, char** argValue) {
 		// Scenario direct-launch + determinism flags (-scenario, -seed, -max-ticks, ...).
 		if (int consumed = ScenarioRunner::ParseArgs(argCount, argValue, i); consumed > 0) {
 			i += consumed;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-identity-dump") {
+			s_netIdentityDumpPath = argValue[++i];
 			continue;
 		}
 
@@ -518,6 +528,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-protocol-selftest") {
 			return NetProtocolSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-identity-selftest") {
+			return NetIdentitySelfTest::Run();
+		}
 	}
 
 	// Determinism-check mode is a pre-init orchestrator: it spawns child game processes and diffs
@@ -601,6 +614,22 @@ int main(int argc, char** argv) {
 	HandleMainArgs(argc, argv);
 
 	g_PresetMan.LoadAllDataModules();
+
+	if (!s_netIdentityDumpPath.empty()) {
+		NetIdentityManifest manifest;
+		std::string error;
+		const int exitCode = NetIdentity::DumpCurrentManifestJson(s_netIdentityDumpPath, &error, &manifest) ? 0 : 1;
+		if (exitCode == 0) {
+			std::cout << "[net-identity-dump] wrote " << s_netIdentityDumpPath
+			          << " session_identity_hash=" << NetIdentity::HashHex(manifest.sessionIdentityHash)
+			          << " hash_duration_ms=" << manifest.hashDurationMs << std::endl;
+		} else {
+			std::cerr << "[net-identity-dump] failed: " << error << std::endl;
+		}
+		std::cout.flush();
+		std::cerr.flush();
+		std::_Exit(exitCode);
+	}
 
 	int scenarioExitCode = 0;
 
