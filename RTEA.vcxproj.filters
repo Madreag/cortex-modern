@@ -457,6 +457,12 @@
     <ClInclude Include="Source\Network\LoopbackTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetIdentity.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetIdentitySelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetProtocol.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -716,6 +722,12 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\LoopbackTransport.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetIdentity.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetProtocol.cpp">
