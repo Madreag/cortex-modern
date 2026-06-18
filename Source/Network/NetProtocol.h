@@ -80,6 +80,7 @@ namespace RTE {
 		NetHash32 deterministicConfigHash{};
 		NetHash32 moduleManifestHash{};
 		NetHash32 sessionRulesHash{};
+		NetHash32 sessionIdentityHash{};
 		bool hasUserdataModules = false;
 
 		bool operator==(const NetClientHello&) const = default;
@@ -96,9 +97,12 @@ namespace RTE {
 		uint8_t hostPlatformId = 0;
 		std::string gameVersion;
 		std::string hostName;
+		std::string buildId;
 		NetHash32 deterministicConfigHash{};
 		NetHash32 moduleManifestHash{};
 		NetHash32 sessionRulesHash{};
+		NetHash32 sessionIdentityHash{};
+		bool hasUserdataModules = false;
 
 		bool operator==(const NetHostHello&) const = default;
 	};

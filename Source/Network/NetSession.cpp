@@ -1,0 +1,685 @@
+#include "NetSession.h"
+
+#include "nlohmann/json.hpp"
+
+#include <algorithm>
+#include <utility>
+#include <variant>
+
+namespace RTE {
+
+	namespace {
+		using json = nlohmann::json;
+
+		constexpr uint8_t c_HostAssignedPeerId = 0;
+
+		std::string HashText(const NetHash32& hash) {
+			return NetIdentity::HashHex(hash);
+		}
+
+		std::string VersionRange(uint16_t minVersion, uint16_t maxVersion) {
+			return std::to_string(minVersion) + "-" + std::to_string(maxVersion);
+		}
+
+		NetIdentityMismatch MakeMismatch(const std::string& key, NetRejectReason reason, std::string expected, std::string actual, std::string summary) {
+			NetIdentityMismatch mismatch;
+			mismatch.key = key;
+			mismatch.rejectReason = reason;
+			mismatch.expectedShortValue = std::move(expected);
+			mismatch.actualShortValue = std::move(actual);
+			mismatch.summary = std::move(summary);
+			return mismatch;
+		}
+
+		NetIdentityMismatch NoMismatch() {
+			return {};
+		}
+
+		bool HasMismatch(const NetIdentityMismatch& mismatch) {
+			return !mismatch.key.empty();
+		}
+
+		bool IsActive(NetSessionState state) {
+			return state == NetSessionState::Handshake ||
+			       state == NetSessionState::Accepted ||
+			       state == NetSessionState::Ready;
+		}
+
+		json HashJson(const NetHash32& hash, bool present) {
+			return present ? json(HashText(hash)) : json("");
+		}
+	}
+
+	bool NetSession::StartHost(INetTransport& transport, NetSessionConfig config, std::string* error) {
+		Close("restart");
+		m_Transport = &transport;
+		m_Config = std::move(config);
+		m_Role = NetSessionRole::Host;
+		m_State = NetSessionState::Stopped;
+		m_StateStartedMs = m_NowMs;
+		m_SessionId = m_Config.sessionId;
+		m_LocalPeerId = c_HostAssignedPeerId;
+		m_RemoteTransportPeerId = c_InvalidNetPeerId;
+		m_NextSequence = 0;
+		m_LastReceivedSequence = 0;
+		m_HasReject = false;
+		m_MismatchKey.clear();
+		m_ExpectedValue.clear();
+		m_ActualValue.clear();
+		m_RejectSummary.clear();
+		m_HasRemoteIdentityHash = false;
+		m_Stats = {};
+		m_Peers.clear();
+		if (m_Config.maxPeers == 0) {
+			if (error) *error = "host maxPeers must be nonzero";
+			m_State = NetSessionState::Failed;
+			return false;
+		}
+		if (!m_Transport->StartHost(m_Config.port, error)) {
+			m_State = NetSessionState::Failed;
+			return false;
+		}
+		m_State = NetSessionState::Listening;
+		m_StateStartedMs = m_NowMs;
+		return true;
+	}
+
+	bool NetSession::StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error) {
+		Close("restart");
+		m_Transport = &transport;
+		m_Config = std::move(config);
+		m_Role = NetSessionRole::Client;
+		m_State = NetSessionState::Connecting;
+		m_StateStartedMs = m_NowMs;
+		m_SessionId = 0;
+		m_LocalPeerId = 0;
+		m_RemoteTransportPeerId = c_InvalidNetPeerId;
+		m_NextSequence = 0;
+		m_LastReceivedSequence = 0;
+		m_LastReceiveMs = m_NowMs;
+		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
+		m_HasReject = false;
+		m_MismatchKey.clear();
+		m_ExpectedValue.clear();
+		m_ActualValue.clear();
+		m_RejectSummary.clear();
+		m_HasRemoteIdentityHash = false;
+		m_Stats = {};
+		m_Peers.clear();
+		if (!m_Transport->Connect(address, m_Config.port, error)) {
+			m_State = NetSessionState::Failed;
+			return false;
+		}
+		return true;
+	}
+
+	void NetSession::Tick(uint64_t nowMs) {
+		m_NowMs = nowMs;
+		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+			return;
+		}
+
+		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
+			ProcessEvent(event);
+		}
+		CheckTimeouts();
+		MaybeSendHeartbeats();
+	}
+
+	void NetSession::Close(const std::string& reason) {
+		if (!m_Transport) {
+			return;
+		}
+		if (m_Role == NetSessionRole::Host) {
+			for (const PeerState& peer : m_Peers) {
+				if (IsActive(peer.state)) {
+					Send(peer.transportPeerId, NetDisconnect{0, reason});
+					m_Transport->Disconnect(peer.transportPeerId, reason);
+				}
+			}
+		} else if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			Send(m_RemoteTransportPeerId, NetDisconnect{0, reason});
+			m_Transport->Disconnect(m_RemoteTransportPeerId, reason);
+		}
+		if (m_State != NetSessionState::Stopped && m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+			m_State = NetSessionState::Closed;
+			m_StateStartedMs = m_NowMs;
+		}
+	}
+
+	bool NetSession::Send(NetPeerId peerId, NetPayload payload, std::string* error) {
+		if (!m_Transport) {
+			if (error) *error = "session has no transport";
+			return false;
+		}
+		std::vector<uint8_t> bytes;
+		NetProtocolError encodeError;
+		NetMessage message;
+		message.sequence = ++m_NextSequence;
+		message.payload = std::move(payload);
+		if (!NetProtocol::Encode(message, bytes, &encodeError)) {
+			if (error) *error = encodeError.message;
+			return false;
+		}
+		if (!m_Transport->Send(peerId, NetTransportLane::ControlReliable, bytes, error)) {
+			return false;
+		}
+		++m_Stats.sentMessages;
+		return true;
+	}
+
+	void NetSession::SendHeartbeat(NetPeerId peerId) {
+		Send(peerId, NetHeartbeat{m_NowMs, m_LastReceivedSequence, static_cast<uint32_t>(m_State)});
+	}
+
+	void NetSession::MaybeSendHeartbeats() {
+		if (m_Config.heartbeatIntervalMs == 0 || m_NowMs < m_NextHeartbeatMs) {
+			return;
+		}
+		if (m_Role == NetSessionRole::Host) {
+			for (const PeerState& peer : m_Peers) {
+				if (peer.state == NetSessionState::Ready) {
+					SendHeartbeat(peer.transportPeerId);
+				}
+			}
+		} else if (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			SendHeartbeat(m_RemoteTransportPeerId);
+		}
+		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
+	}
+
+	void NetSession::ProcessEvent(const NetTransportEvent& event) {
+		switch (event.type) {
+			case NetTransportEventType::PeerConnected:
+				if (m_Role == NetSessionRole::Host) {
+					PeerState peer;
+					peer.transportPeerId = event.peerId;
+					peer.assignedPeerId = static_cast<uint8_t>(event.peerId);
+					peer.state = NetSessionState::Handshake;
+					peer.connectedAtMs = m_NowMs;
+					peer.lastReceiveMs = m_NowMs;
+					m_Peers.push_back(std::move(peer));
+					m_State = NetSessionState::Handshake;
+					m_StateStartedMs = m_NowMs;
+				} else if (m_Role == NetSessionRole::Client) {
+					m_RemoteTransportPeerId = event.peerId;
+					m_LastReceiveMs = m_NowMs;
+					Send(event.peerId, BuildClientHello());
+					m_State = NetSessionState::HelloSent;
+					m_StateStartedMs = m_NowMs;
+				}
+				break;
+			case NetTransportEventType::PeerDisconnected:
+				if (m_Role == NetSessionRole::Host) {
+					if (PeerState* peer = FindPeer(event.peerId)) {
+						peer->state = NetSessionState::Closed;
+					}
+					if (ActivePeerCount() == 0 && m_State != NetSessionState::Failed) {
+						m_State = NetSessionState::Closed;
+					}
+				} else if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+					m_State = NetSessionState::Closed;
+				}
+				break;
+			case NetTransportEventType::PacketReceived:
+				ProcessPacket(event.peerId, event.bytes);
+				break;
+			case NetTransportEventType::ConnectionFailed:
+			case NetTransportEventType::TransportError:
+				SetFailed(NetRejectReason::InternalError, "transport", "", event.reason, event.reason.empty() ? "transport error" : event.reason);
+				break;
+		}
+	}
+
+	void NetSession::ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes) {
+		const NetDecodeResult decoded = NetProtocol::Decode(bytes);
+		if (!decoded.ok) {
+			HandleMalformed(peerId, decoded.error);
+			return;
+		}
+		++m_Stats.receivedMessages;
+		m_LastReceivedSequence = decoded.message.sequence;
+		m_LastReceiveMs = m_NowMs;
+		if (m_Role == NetSessionRole::Host) {
+			if (PeerState* peer = FindPeer(peerId)) {
+				peer->lastReceiveMs = m_NowMs;
+			}
+			HandleHostMessage(peerId, decoded.message);
+		} else {
+			HandleClientMessage(peerId, decoded.message);
+		}
+	}
+
+	void NetSession::HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError) {
+		++m_Stats.malformedMessages;
+		const std::string summary = std::string("malformed ") + NetProtocol::ErrorCodeName(decodeError.code) + ": " + decodeError.message;
+		if (m_Role == NetSessionRole::Host) {
+			if (PeerState* peer = FindPeer(peerId)) {
+				if (peer->state == NetSessionState::Handshake) {
+					RejectPeer(*peer, NetRejectReason::MalformedMessage, "decode", "valid message", summary, summary);
+				} else {
+					Send(peerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::MalformedMessage), summary});
+					m_Transport->Disconnect(peerId, summary);
+					peer->state = NetSessionState::Failed;
+				}
+			}
+		} else {
+			SetFailed(NetRejectReason::MalformedMessage, "decode", "valid message", summary, summary);
+			if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+				m_Transport->Disconnect(m_RemoteTransportPeerId, summary);
+			}
+		}
+	}
+
+	void NetSession::HandleHostMessage(NetPeerId peerId, const NetMessage& message) {
+		PeerState* peer = FindPeer(peerId);
+		if (!peer) {
+			return;
+		}
+		if (const auto* hello = std::get_if<NetClientHello>(&message.payload)) {
+			if (peer->state != NetSessionState::Handshake) {
+				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "handshake", StateName(peer->state), "host is not accepting another hello for this peer");
+				return;
+			}
+			if (ActivePeerCount() > m_Config.maxPeers) {
+				RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
+				return;
+			}
+			for (const PeerState& other : m_Peers) {
+				if (&other != peer && IsActive(other.state) && other.clientNonce == hello->clientNonce) {
+					RejectPeer(*peer, NetRejectReason::DuplicateClientNonce, "client_nonce", "unique", std::to_string(hello->clientNonce), "duplicate client nonce");
+					return;
+				}
+			}
+			const NetIdentityMismatch mismatch = ValidateClientHello(*hello);
+			if (HasMismatch(mismatch)) {
+				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
+				return;
+			}
+			peer->clientNonce = hello->clientNonce;
+			peer->displayName = hello->displayName;
+			peer->identityHash = hello->sessionIdentityHash;
+			m_RemoteIdentityHash = hello->sessionIdentityHash;
+			m_HasRemoteIdentityHash = true;
+			Send(peerId, BuildHostHello(peer->assignedPeerId));
+			Send(peerId, BuildJoinAccepted(peer->assignedPeerId));
+			peer->state = NetSessionState::Accepted;
+			m_State = NetSessionState::Accepted;
+			m_StateStartedMs = m_NowMs;
+			return;
+		}
+		if (const auto* ready = std::get_if<NetReadyState>(&message.payload)) {
+			if (ready->peerId != peer->assignedPeerId ||
+			    ready->deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash ||
+			    ready->moduleManifestHash != m_Config.localIdentity.moduleManifestHash) {
+				RejectPeer(*peer, NetRejectReason::DeterministicConfigMismatch, "ready_state", "matching ready identity", "mismatch", "ready state identity does not match accepted session");
+				return;
+			}
+			peer->state = ready->ready ? NetSessionState::Ready : NetSessionState::Accepted;
+			peer->lastHeartbeatMs = m_NowMs;
+			if (ready->ready) {
+				m_State = NetSessionState::Ready;
+				m_NextHeartbeatMs = m_NowMs;
+			}
+			return;
+		}
+		if (std::holds_alternative<NetHeartbeat>(message.payload)) {
+			peer->lastHeartbeatMs = m_NowMs;
+			return;
+		}
+		if (std::holds_alternative<NetDisconnect>(message.payload)) {
+			peer->state = NetSessionState::Closed;
+			m_Transport->Disconnect(peerId, "peer disconnected");
+			if (ActivePeerCount() == 0) {
+				m_State = NetSessionState::Closed;
+			}
+			return;
+		}
+		if (peer->state == NetSessionState::Handshake) {
+			RejectPeer(*peer, NetRejectReason::MalformedMessage, "message_type", "ClientHello", NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload)), "unexpected handshake message");
+		}
+	}
+
+	void NetSession::HandleClientMessage(NetPeerId peerId, const NetMessage& message) {
+		if (peerId != m_RemoteTransportPeerId) {
+			return;
+		}
+		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
+			SetRejected(rejected->rejectReason, rejected->mismatchKey, rejected->expected, rejected->actual, rejected->humanMessage);
+			m_Transport->Disconnect(peerId, rejected->humanMessage);
+			return;
+		}
+		if (const auto* hostHello = std::get_if<NetHostHello>(&message.payload)) {
+			const NetIdentityMismatch mismatch = ValidateHostHello(*hostHello);
+			if (HasMismatch(mismatch)) {
+				SetRejected(mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
+				Send(peerId, NetDisconnect{static_cast<uint16_t>(mismatch.rejectReason), mismatch.summary});
+				m_Transport->Disconnect(peerId, mismatch.summary);
+				return;
+			}
+			m_SessionId = hostHello->sessionId;
+			m_RemoteIdentityHash = hostHello->sessionIdentityHash;
+			m_HasRemoteIdentityHash = true;
+			return;
+		}
+		if (const auto* accepted = std::get_if<NetJoinAccepted>(&message.payload)) {
+			if (accepted->sessionId == 0 || accepted->selectedProtocolVersion != NetProtocol::c_Version || accepted->assignedPeerId == 0) {
+				SetRejected(NetRejectReason::ProtocolMismatch, "join_accepted", "valid JoinAccepted", "invalid", "invalid JoinAccepted");
+				m_Transport->Disconnect(peerId, "invalid JoinAccepted");
+				return;
+			}
+			m_SessionId = accepted->sessionId;
+			m_LocalPeerId = accepted->assignedPeerId;
+			m_Config.heartbeatIntervalMs = accepted->heartbeatIntervalMs;
+			m_Config.timeoutMs = accepted->timeoutMs;
+			Send(peerId, BuildReadyState(true));
+			m_State = NetSessionState::Ready;
+			m_StateStartedMs = m_NowMs;
+			m_NextHeartbeatMs = m_NowMs;
+			return;
+		}
+		if (std::holds_alternative<NetHeartbeat>(message.payload)) {
+			m_LastReceiveMs = m_NowMs;
+			return;
+		}
+		if (std::holds_alternative<NetDisconnect>(message.payload)) {
+			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+				m_State = NetSessionState::Closed;
+			}
+			return;
+		}
+	}
+
+	void NetSession::CheckTimeouts() {
+		if (m_Config.timeoutMs == 0) {
+			return;
+		}
+		if (m_Role == NetSessionRole::Host) {
+			for (PeerState& peer : m_Peers) {
+				if (!IsActive(peer.state)) {
+					continue;
+				}
+				if (m_NowMs >= peer.lastReceiveMs && m_NowMs - peer.lastReceiveMs > m_Config.timeoutMs) {
+					++m_Stats.timeouts;
+					if (peer.state == NetSessionState::Handshake) {
+						RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "client hello timeout");
+					} else {
+						Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::Timeout), "heartbeat timeout"});
+						m_Transport->Disconnect(peer.transportPeerId, "heartbeat timeout");
+						peer.state = NetSessionState::Failed;
+						SetFailed(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "heartbeat timeout");
+					}
+				}
+			}
+		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
+		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs > m_Config.timeoutMs) {
+			++m_Stats.timeouts;
+			SetFailed(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - m_LastReceiveMs), "session timeout");
+			if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+				m_Transport->Disconnect(m_RemoteTransportPeerId, "session timeout");
+			}
+		}
+	}
+
+	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		Send(peer.transportPeerId, NetJoinRejected{reason, summary, key, expected, actual});
+		if (m_Transport) {
+			m_Transport->Disconnect(peer.transportPeerId, summary);
+		}
+		peer.state = NetSessionState::Rejected;
+		SetRejected(reason, key, expected, actual, summary);
+	}
+
+	void NetSession::SetRejected(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		m_RejectReason = reason;
+		m_HasReject = true;
+		m_MismatchKey = key;
+		m_ExpectedValue = expected;
+		m_ActualValue = actual;
+		m_RejectSummary = summary;
+		m_State = NetSessionState::Rejected;
+		m_StateStartedMs = m_NowMs;
+	}
+
+	void NetSession::SetFailed(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		m_RejectReason = reason;
+		m_HasReject = true;
+		m_MismatchKey = key;
+		m_ExpectedValue = expected;
+		m_ActualValue = actual;
+		m_RejectSummary = summary;
+		m_State = NetSessionState::Failed;
+		m_StateStartedMs = m_NowMs;
+	}
+
+	NetSession::PeerState* NetSession::FindPeer(NetPeerId peerId) {
+		const auto it = std::find_if(m_Peers.begin(), m_Peers.end(), [peerId](const PeerState& peer) {
+			return peer.transportPeerId == peerId;
+		});
+		return it == m_Peers.end() ? nullptr : &*it;
+	}
+
+	const NetSession::PeerState* NetSession::FindPeer(NetPeerId peerId) const {
+		const auto it = std::find_if(m_Peers.begin(), m_Peers.end(), [peerId](const PeerState& peer) {
+			return peer.transportPeerId == peerId;
+		});
+		return it == m_Peers.end() ? nullptr : &*it;
+	}
+
+	uint32_t NetSession::ActivePeerCount() const {
+		return static_cast<uint32_t>(std::count_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+			return IsActive(peer.state);
+		}));
+	}
+
+	NetClientHello NetSession::BuildClientHello() const {
+		NetClientHello hello;
+		hello.clientNonce = m_Config.localNonce;
+		hello.minProtocolVersion = m_Config.minProtocolVersion;
+		hello.maxProtocolVersion = m_Config.maxProtocolVersion;
+		hello.controllerFrameVersion = m_Config.localIdentity.controllerFrameVersion;
+		hello.controllerFrameEncodedSize = m_Config.localIdentity.controllerFrameEncodedSize;
+		hello.platformId = PlatformId(m_Config.localIdentity.platform);
+		hello.displayName = m_Config.displayName;
+		hello.gameVersion = m_Config.localIdentity.gameVersion;
+		hello.buildId = m_Config.localIdentity.buildId;
+		hello.deterministicConfigHash = m_Config.localIdentity.deterministicConfigHash;
+		hello.moduleManifestHash = m_Config.localIdentity.moduleManifestHash;
+		hello.sessionRulesHash = m_Config.localIdentity.sessionRulesHash;
+		hello.sessionIdentityHash = m_Config.localIdentity.sessionIdentityHash;
+		hello.hasUserdataModules = m_Config.localIdentity.hasUserdataModules;
+		return hello;
+	}
+
+	NetHostHello NetSession::BuildHostHello(uint8_t assignedPeerId) const {
+		NetHostHello hello;
+		hello.sessionId = m_SessionId;
+		hello.hostNonce = m_Config.localNonce;
+		hello.selectedProtocolVersion = NetProtocol::c_Version;
+		hello.controllerFrameVersion = m_Config.localIdentity.controllerFrameVersion;
+		hello.controllerFrameEncodedSize = m_Config.localIdentity.controllerFrameEncodedSize;
+		hello.assignedPeerId = assignedPeerId;
+		hello.maxPeers = m_Config.maxPeers;
+		hello.hostPlatformId = PlatformId(m_Config.localIdentity.platform);
+		hello.gameVersion = m_Config.localIdentity.gameVersion;
+		hello.hostName = m_Config.displayName;
+		hello.buildId = m_Config.localIdentity.buildId;
+		hello.deterministicConfigHash = m_Config.localIdentity.deterministicConfigHash;
+		hello.moduleManifestHash = m_Config.localIdentity.moduleManifestHash;
+		hello.sessionRulesHash = m_Config.localIdentity.sessionRulesHash;
+		hello.sessionIdentityHash = m_Config.localIdentity.sessionIdentityHash;
+		hello.hasUserdataModules = m_Config.localIdentity.hasUserdataModules;
+		return hello;
+	}
+
+	NetJoinAccepted NetSession::BuildJoinAccepted(uint8_t assignedPeerId) const {
+		NetJoinAccepted accepted;
+		accepted.sessionId = m_SessionId;
+		accepted.assignedPeerId = assignedPeerId;
+		accepted.maxPeers = m_Config.maxPeers;
+		accepted.selectedProtocolVersion = NetProtocol::c_Version;
+		accepted.heartbeatIntervalMs = m_Config.heartbeatIntervalMs;
+		accepted.timeoutMs = m_Config.timeoutMs;
+		return accepted;
+	}
+
+	NetReadyState NetSession::BuildReadyState(bool ready) const {
+		NetReadyState state;
+		state.peerId = m_LocalPeerId;
+		state.ready = ready;
+		state.deterministicConfigHash = m_Config.localIdentity.deterministicConfigHash;
+		state.moduleManifestHash = m_Config.localIdentity.moduleManifestHash;
+		return state;
+	}
+
+	NetIdentityMismatch NetSession::ValidateClientHello(const NetClientHello& hello) const {
+		if (hello.minProtocolVersion > NetProtocol::c_Version || hello.maxProtocolVersion < NetProtocol::c_Version) {
+			return MakeMismatch("network_protocol_version", NetRejectReason::ProtocolMismatch, std::to_string(NetProtocol::c_Version), VersionRange(hello.minProtocolVersion, hello.maxProtocolVersion), "network protocol version does not match");
+		}
+		if (hello.gameVersion != m_Config.localIdentity.gameVersion) {
+			return MakeMismatch("game_version", NetRejectReason::GameVersionMismatch, m_Config.localIdentity.gameVersion, hello.gameVersion, "game version does not match");
+		}
+		if (hello.buildId != m_Config.localIdentity.buildId) {
+			return MakeMismatch("build_id", NetRejectReason::BuildMismatch, m_Config.localIdentity.buildId, hello.buildId, "build id does not match");
+		}
+		if (hello.controllerFrameVersion != m_Config.localIdentity.controllerFrameVersion) {
+			return MakeMismatch("controller_frame_version", NetRejectReason::ControllerFrameVersionMismatch, std::to_string(m_Config.localIdentity.controllerFrameVersion), std::to_string(hello.controllerFrameVersion), "ControllerFrame version does not match");
+		}
+		if (hello.controllerFrameEncodedSize != m_Config.localIdentity.controllerFrameEncodedSize) {
+			return MakeMismatch("controller_frame_encoded_size", NetRejectReason::ControllerFrameSizeMismatch, std::to_string(m_Config.localIdentity.controllerFrameEncodedSize), std::to_string(hello.controllerFrameEncodedSize), "ControllerFrame encoded size does not match");
+		}
+		if (hello.deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash) {
+			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(m_Config.localIdentity.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
+		}
+		if (m_Config.rejectUserdataModules && hello.hasUserdataModules) {
+			return MakeMismatch("userdata_modules", NetRejectReason::UserdataModulesNotAllowed, "false", "true", "userdata modules are not allowed in network sessions");
+		}
+		if (hello.moduleManifestHash != m_Config.localIdentity.moduleManifestHash) {
+			return MakeMismatch("module_manifest_hash", NetRejectReason::ModuleManifestMismatch, HashText(m_Config.localIdentity.moduleManifestHash), HashText(hello.moduleManifestHash), "module manifest hash does not match");
+		}
+		if (hello.sessionRulesHash != m_Config.localIdentity.sessionRulesHash) {
+			return MakeMismatch("session_rules_hash", NetRejectReason::SessionRulesMismatch, HashText(m_Config.localIdentity.sessionRulesHash), HashText(hello.sessionRulesHash), "session rules hash does not match");
+		}
+		if (hello.sessionIdentityHash != m_Config.localIdentity.sessionIdentityHash) {
+			return MakeMismatch("session_identity_hash", NetRejectReason::BuildMismatch, HashText(m_Config.localIdentity.sessionIdentityHash), HashText(hello.sessionIdentityHash), "session identity hash does not match");
+		}
+		return NoMismatch();
+	}
+
+	NetIdentityMismatch NetSession::ValidateHostHello(const NetHostHello& hello) const {
+		if (hello.selectedProtocolVersion != NetProtocol::c_Version) {
+			return MakeMismatch("network_protocol_version", NetRejectReason::ProtocolMismatch, std::to_string(NetProtocol::c_Version), std::to_string(hello.selectedProtocolVersion), "selected protocol version does not match");
+		}
+		if (hello.gameVersion != m_Config.localIdentity.gameVersion) {
+			return MakeMismatch("game_version", NetRejectReason::GameVersionMismatch, m_Config.localIdentity.gameVersion, hello.gameVersion, "game version does not match");
+		}
+		if (hello.buildId != m_Config.localIdentity.buildId) {
+			return MakeMismatch("build_id", NetRejectReason::BuildMismatch, m_Config.localIdentity.buildId, hello.buildId, "build id does not match");
+		}
+		if (hello.controllerFrameVersion != m_Config.localIdentity.controllerFrameVersion) {
+			return MakeMismatch("controller_frame_version", NetRejectReason::ControllerFrameVersionMismatch, std::to_string(m_Config.localIdentity.controllerFrameVersion), std::to_string(hello.controllerFrameVersion), "ControllerFrame version does not match");
+		}
+		if (hello.controllerFrameEncodedSize != m_Config.localIdentity.controllerFrameEncodedSize) {
+			return MakeMismatch("controller_frame_encoded_size", NetRejectReason::ControllerFrameSizeMismatch, std::to_string(m_Config.localIdentity.controllerFrameEncodedSize), std::to_string(hello.controllerFrameEncodedSize), "ControllerFrame encoded size does not match");
+		}
+		if (hello.deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash) {
+			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(m_Config.localIdentity.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
+		}
+		if (m_Config.rejectUserdataModules && hello.hasUserdataModules) {
+			return MakeMismatch("userdata_modules", NetRejectReason::UserdataModulesNotAllowed, "false", "true", "userdata modules are not allowed in network sessions");
+		}
+		if (hello.moduleManifestHash != m_Config.localIdentity.moduleManifestHash) {
+			return MakeMismatch("module_manifest_hash", NetRejectReason::ModuleManifestMismatch, HashText(m_Config.localIdentity.moduleManifestHash), HashText(hello.moduleManifestHash), "module manifest hash does not match");
+		}
+		if (hello.sessionRulesHash != m_Config.localIdentity.sessionRulesHash) {
+			return MakeMismatch("session_rules_hash", NetRejectReason::SessionRulesMismatch, HashText(m_Config.localIdentity.sessionRulesHash), HashText(hello.sessionRulesHash), "session rules hash does not match");
+		}
+		if (hello.sessionIdentityHash != m_Config.localIdentity.sessionIdentityHash) {
+			return MakeMismatch("session_identity_hash", NetRejectReason::BuildMismatch, HashText(m_Config.localIdentity.sessionIdentityHash), HashText(hello.sessionIdentityHash), "session identity hash does not match");
+		}
+		return NoMismatch();
+	}
+
+	uint8_t NetSession::PlatformId(const std::string& platform) {
+		if (platform == "windows") return 1;
+		if (platform == "linux") return 2;
+		if (platform == "macos") return 3;
+		return 0;
+	}
+
+	std::string NetSession::BuildReportJson() const {
+		json peers = json::array();
+		if (m_Role == NetSessionRole::Host) {
+			for (const PeerState& peer : m_Peers) {
+				peers.push_back(json{
+					{"peer_id", peer.assignedPeerId},
+					{"transport_peer_id", peer.transportPeerId},
+					{"display_name", peer.displayName},
+					{"state", StateName(peer.state)},
+					{"last_heartbeat_ms", peer.lastHeartbeatMs},
+					{"identity_hash", HashJson(peer.identityHash, peer.clientNonce != 0)},
+				});
+			}
+		} else if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			peers.push_back(json{
+				{"peer_id", c_HostAssignedPeerId},
+				{"transport_peer_id", m_RemoteTransportPeerId},
+				{"display_name", "Host"},
+				{"state", StateName(m_State)},
+				{"last_heartbeat_ms", m_LastReceiveMs},
+				{"identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
+			});
+		}
+
+		json report{
+			{"schema", 1},
+			{"session_id", std::to_string(m_SessionId)},
+			{"role", RoleName(m_Role)},
+			{"final_state", StateName(m_State)},
+			{"accepted", m_State == NetSessionState::Accepted || m_State == NetSessionState::Ready},
+			{"rejected", m_State == NetSessionState::Rejected},
+			{"reject_reason", m_HasReject ? NetProtocol::RejectReasonName(m_RejectReason) : ""},
+			{"mismatch_key", m_MismatchKey},
+			{"expected", m_ExpectedValue},
+			{"actual", m_ActualValue},
+			{"summary", m_RejectSummary},
+			{"local_identity_hash", HashText(m_Config.localIdentity.sessionIdentityHash)},
+			{"remote_identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
+			{"peers", peers},
+			{"stats", {
+				{"sent_messages", m_Stats.sentMessages},
+				{"received_messages", m_Stats.receivedMessages},
+				{"malformed_messages", m_Stats.malformedMessages},
+				{"timeouts", m_Stats.timeouts},
+			}},
+		};
+		return report.dump(2);
+	}
+
+	const char* NetSession::RoleName(NetSessionRole role) {
+		switch (role) {
+			case NetSessionRole::None: return "none";
+			case NetSessionRole::Host: return "host";
+			case NetSessionRole::Client: return "client";
+		}
+		return "unknown";
+	}
+
+	const char* NetSession::StateName(NetSessionState state) {
+		switch (state) {
+			case NetSessionState::Stopped: return "Stopped";
+			case NetSessionState::Listening: return "Listening";
+			case NetSessionState::Connecting: return "Connecting";
+			case NetSessionState::HelloSent: return "HelloSent";
+			case NetSessionState::Handshake: return "Handshake";
+			case NetSessionState::Accepted: return "Accepted";
+			case NetSessionState::Ready: return "Ready";
+			case NetSessionState::Rejected: return "Rejected";
+			case NetSessionState::Closed: return "Closed";
+			case NetSessionState::Failed: return "Failed";
+		}
+		return "Unknown";
+	}
+
+} // namespace RTE
