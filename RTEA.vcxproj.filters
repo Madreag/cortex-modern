@@ -454,6 +454,9 @@
     <ClInclude Include="Source\Network\ControllerLog.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\GnsTransport.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\LoopbackTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -725,6 +728,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\ControllerLog.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\GnsTransport.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\LoopbackTransport.cpp">

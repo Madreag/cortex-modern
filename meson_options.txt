@@ -12,6 +12,10 @@ option('dylibbundler_args', type: 'string', value: '', description: 'Additional 
 option('sane_warnings', type: 'boolean', value: false, description: 'Disable certain warnings, that are reasonably safe to ignore, though we should fix them at some point.')
 option('use_prebuilt_libraries', type: 'boolean', value: true, description: 'On windows use the prebuilt libraries')
 
+option('with_gns', type: 'combo', choices: ['enabled','disabled','auto'], value: 'disabled', description: 'Build GameNetworkingSockets transport support')
+option('gns_root', type: 'string', value: '', description: 'GameNetworkingSockets install prefix containing include/GameNetworkingSockets and lib')
+option('gns_dep_root', type: 'string', value: '', description: 'Optional dependency prefix for GNS transitive libraries such as vcpkg_installed/<triplet>')
+
 option('tracy_enable', type: 'boolean', value: true, description: 'Enable Tracy Profiler')
 option('tracy_callstack', type : 'integer', value : 0, description : 'Enfore callstack collection for tracy regions')
 option('tracy_on_demand', type : 'boolean', value : true, description : 'On-demand profiling')
