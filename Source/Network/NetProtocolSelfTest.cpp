@@ -32,6 +32,7 @@ namespace RTE {
 			payload.deterministicConfigHash = MakeHash(1);
 			payload.moduleManifestHash = MakeHash(33);
 			payload.sessionRulesHash = MakeHash(65);
+			payload.sessionIdentityHash = MakeHash(97);
 			payload.hasUserdataModules = false;
 			return payload;
 		}
@@ -90,9 +91,12 @@ namespace RTE {
 			hostHello.hostPlatformId = 2;
 			hostHello.gameVersion = "7.0.0";
 			hostHello.hostName = "Host";
+			hostHello.buildId = "stage2-p2a";
 			hostHello.deterministicConfigHash = MakeHash(1);
 			hostHello.moduleManifestHash = MakeHash(33);
 			hostHello.sessionRulesHash = MakeHash(65);
+			hostHello.sessionIdentityHash = MakeHash(97);
+			hostHello.hasUserdataModules = false;
 
 			const std::vector<NetMessage> messages = {
 				{1, 0, clientHello},

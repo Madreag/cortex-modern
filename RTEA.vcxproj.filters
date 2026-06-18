@@ -469,6 +469,12 @@
     <ClInclude Include="Source\Network\NetProtocolSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetSession.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetSessionSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -734,6 +740,12 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetSession.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetSessionSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\PathFinder.cpp">

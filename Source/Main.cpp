@@ -57,6 +57,7 @@
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
 #include "NetProtocolSelfTest.h"
+#include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
 #include "DeterminismCheck.h"
@@ -530,6 +531,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-identity-selftest") {
 			return NetIdentitySelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-session-selftest") {
+			return NetSessionSelfTest::Run();
 		}
 	}
 

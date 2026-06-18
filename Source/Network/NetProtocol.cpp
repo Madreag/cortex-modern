@@ -223,6 +223,7 @@ namespace RTE {
 			AppendHash(out, payload.deterministicConfigHash);
 			AppendHash(out, payload.moduleManifestHash);
 			AppendHash(out, payload.sessionRulesHash);
+			AppendHash(out, payload.sessionIdentityHash);
 			AppendBool(out, payload.hasUserdataModules);
 			for (int i = 0; i < 7; ++i) {
 				AppendU8(out, 0);
@@ -241,12 +242,18 @@ namespace RTE {
 			AppendU8(out, payload.hostPlatformId);
 			AppendU8(out, 0);
 			if (!AppendString(out, payload.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
-			    !AppendString(out, payload.hostName, NetProtocol::c_MaxDisplayNameBytes, "host_name", error)) {
+			    !AppendString(out, payload.hostName, NetProtocol::c_MaxDisplayNameBytes, "host_name", error) ||
+			    !AppendString(out, payload.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
 				return false;
 			}
 			AppendHash(out, payload.deterministicConfigHash);
 			AppendHash(out, payload.moduleManifestHash);
 			AppendHash(out, payload.sessionRulesHash);
+			AppendHash(out, payload.sessionIdentityHash);
+			AppendBool(out, payload.hasUserdataModules);
+			for (int i = 0; i < 7; ++i) {
+				AppendU8(out, 0);
+			}
 			return true;
 		}
 
@@ -327,7 +334,8 @@ namespace RTE {
 			}
 			if (!ReadOrTruncated(reader.ReadHash(payload.deterministicConfigHash), reader, error, "deterministic_config_hash") ||
 			    !ReadOrTruncated(reader.ReadHash(payload.moduleManifestHash), reader, error, "module_manifest_hash") ||
-			    !ReadOrTruncated(reader.ReadHash(payload.sessionRulesHash), reader, error, "session_rules_hash")) {
+			    !ReadOrTruncated(reader.ReadHash(payload.sessionRulesHash), reader, error, "session_rules_hash") ||
+			    !ReadOrTruncated(reader.ReadHash(payload.sessionIdentityHash), reader, error, "session_identity_hash")) {
 				return false;
 			}
 			uint8_t hasUserdataModules = 0;
@@ -370,12 +378,33 @@ namespace RTE {
 				return false;
 			}
 			if (!reader.ReadString(payload.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
-			    !reader.ReadString(payload.hostName, NetProtocol::c_MaxDisplayNameBytes, "host_name", error)) {
+			    !reader.ReadString(payload.hostName, NetProtocol::c_MaxDisplayNameBytes, "host_name", error) ||
+			    !reader.ReadString(payload.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
 				return false;
 			}
-			return ReadOrTruncated(reader.ReadHash(payload.deterministicConfigHash), reader, error, "deterministic_config_hash") &&
-			       ReadOrTruncated(reader.ReadHash(payload.moduleManifestHash), reader, error, "module_manifest_hash") &&
-			       ReadOrTruncated(reader.ReadHash(payload.sessionRulesHash), reader, error, "session_rules_hash");
+			if (!ReadOrTruncated(reader.ReadHash(payload.deterministicConfigHash), reader, error, "deterministic_config_hash") ||
+			    !ReadOrTruncated(reader.ReadHash(payload.moduleManifestHash), reader, error, "module_manifest_hash") ||
+			    !ReadOrTruncated(reader.ReadHash(payload.sessionRulesHash), reader, error, "session_rules_hash") ||
+			    !ReadOrTruncated(reader.ReadHash(payload.sessionIdentityHash), reader, error, "session_identity_hash")) {
+				return false;
+			}
+			uint8_t hasUserdataModules = 0;
+			if (!ReadOrTruncated(reader.ReadU8(hasUserdataModules), reader, error, "has_userdata_modules")) {
+				return false;
+			}
+			if (hasUserdataModules > 1U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 1, "has_userdata_modules must be 0 or 1");
+				return false;
+			}
+			payload.hasUserdataModules = hasUserdataModules != 0U;
+			for (int i = 0; i < 7; ++i) {
+				uint8_t reservedHostIdentity = 0;
+				if (!ReadOrTruncated(reader.ReadU8(reservedHostIdentity), reader, error, "host identity reserved") || reservedHostIdentity != 0U) {
+					SetError(error, NetProtocolErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "host identity reserved field is nonzero");
+					return false;
+				}
+			}
+			return true;
 		}
 
 		bool DecodePayload(ByteReader& reader, NetJoinAccepted& payload, NetProtocolError* error) {
