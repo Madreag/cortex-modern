@@ -93,6 +93,7 @@ using namespace RTE;
 static bool s_recordTickHashes = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
+static constexpr int c_NetSessionDefaultLuaStates = 4;
 static int s_cliNumLuaStatesOverride = -1;
 
 // Post-module-load diagnostic. Empty means disabled.
@@ -717,12 +718,25 @@ int main(int argc, char** argv) {
 		return DeterminismCheck::Run(argc, argv);
 	}
 
-	// Pick up the -num-lua-states thread-count override before any init runs.
-	for (int i = 1; i + 1 < argc; ++i) {
-		if (argv[i] != nullptr && std::string(argv[i]) == "-num-lua-states") {
-			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
-			break;
+	// Pick up the thread-count override before any init runs. Net-session smoke uses
+	// a fixed default so identity does not depend on each platform's hardware threads.
+	bool explicitLuaStateOverride = false;
+	bool netSessionRequested = false;
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] == nullptr) {
+			continue;
 		}
+		const std::string arg = argv[i];
+		if (arg == "-num-lua-states" && i + 1 < argc) {
+			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
+			explicitLuaStateOverride = true;
+			++i;
+		} else if (arg == "-net-host" || arg == "-net-join") {
+			netSessionRequested = true;
+		}
+	}
+	if (netSessionRequested && !explicitLuaStateOverride) {
+		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
 	}
 
 	// Headless: -tick-hashes (the determinism trace mode, set on every -determinism-check child)

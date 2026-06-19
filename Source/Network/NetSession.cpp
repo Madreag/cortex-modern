@@ -645,6 +645,16 @@ namespace RTE {
 			{"actual", m_ActualValue},
 			{"summary", m_RejectSummary},
 			{"local_identity_hash", HashText(m_Config.localIdentity.sessionIdentityHash)},
+			{"local_identity", {
+				{"build_id", m_Config.localIdentity.buildId},
+				{"deterministic_config_hash", HashText(m_Config.localIdentity.deterministicConfigHash)},
+				{"module_manifest_hash", HashText(m_Config.localIdentity.moduleManifestHash)},
+				{"session_rules_hash", HashText(m_Config.localIdentity.sessionRulesHash)},
+				{"has_userdata_modules", m_Config.localIdentity.hasUserdataModules},
+				{"num_lua_states", m_Config.localIdentity.deterministicConfig.numLuaStates},
+				{"num_lua_states_override", m_Config.localIdentity.deterministicConfig.numLuaStatesOverride},
+				{"selected_module", m_Config.localIdentity.deterministicConfig.selectedModule},
+			}},
 			{"remote_identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
 			{"peers", peers},
 			{"stats", {
