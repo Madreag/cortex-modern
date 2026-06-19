@@ -100,6 +100,12 @@ namespace RTE {
 				*error = "ready report did not contain accepted Ready state";
 				return false;
 			}
+			if (report.find("\"local_identity\"") == std::string::npos ||
+			    report.find("\"deterministic_config_hash\"") == std::string::npos ||
+			    report.find("\"num_lua_states\"") == std::string::npos) {
+				*error = "ready report did not contain local identity diagnostics";
+				return false;
+			}
 			return true;
 		}
 
