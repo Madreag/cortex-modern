@@ -448,7 +448,7 @@ namespace RTE {
 
 			const std::string zipCandidate = module.root + ".zip";
 			if (fs::exists(fs::path(workingDirectory) / fs::path(zipCandidate))) {
-				manifest.warnings.push_back("module " + module.fileName + " was hashed from extracted directory; zip canonicalization remains a P2D follow-up");
+				manifest.warnings.push_back("module " + module.fileName + " was hashed from extracted directory; zip canonicalization remains a follow-up");
 			}
 			manifest.modules.push_back(std::move(module));
 		}

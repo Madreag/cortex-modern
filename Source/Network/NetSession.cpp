@@ -193,6 +193,9 @@ namespace RTE {
 		switch (event.type) {
 			case NetTransportEventType::PeerConnected:
 				if (m_Role == NetSessionRole::Host) {
+					if (FindPeer(event.peerId)) {
+						break;
+					}
 					PeerState peer;
 					peer.transportPeerId = event.peerId;
 					peer.state = NetSessionState::Handshake;
@@ -202,6 +205,9 @@ namespace RTE {
 					m_State = NetSessionState::Handshake;
 					m_StateStartedMs = m_NowMs;
 				} else if (m_Role == NetSessionRole::Client) {
+					if (m_RemoteTransportPeerId == event.peerId && m_State != NetSessionState::Connecting) {
+						break;
+					}
 					m_RemoteTransportPeerId = event.peerId;
 					m_LastReceiveMs = m_NowMs;
 					Send(event.peerId, BuildClientHello());
@@ -214,9 +220,7 @@ namespace RTE {
 					if (PeerState* peer = FindPeer(event.peerId)) {
 						peer->state = NetSessionState::Closed;
 					}
-					if (ActivePeerCount() == 0 && m_State != NetSessionState::Failed) {
-						m_State = NetSessionState::Closed;
-					}
+					RefreshHostState(NetSessionState::Closed);
 				} else if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
 					m_State = NetSessionState::Closed;
 				}
@@ -261,6 +265,7 @@ namespace RTE {
 					Send(peerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::MalformedMessage), summary});
 					m_Transport->Disconnect(peerId, summary);
 					peer->state = NetSessionState::Failed;
+					RefreshHostState(NetSessionState::Failed);
 				}
 			}
 		} else {
@@ -311,10 +316,16 @@ namespace RTE {
 			return;
 		}
 		if (const auto* ready = std::get_if<NetReadyState>(&message.payload)) {
-			if (ready->peerId != peer->assignedPeerId ||
-			    ready->deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash ||
-			    ready->moduleManifestHash != m_Config.localIdentity.moduleManifestHash) {
-				RejectPeer(*peer, NetRejectReason::DeterministicConfigMismatch, "ready_state", "matching ready identity", "mismatch", "ready state identity does not match accepted session");
+			if (ready->peerId != peer->assignedPeerId) {
+				RejectPeer(*peer, NetRejectReason::ProtocolMismatch, "peer_id", std::to_string(peer->assignedPeerId), std::to_string(ready->peerId), "ready state peer id does not match accepted session");
+				return;
+			}
+			if (ready->deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash) {
+				RejectPeer(*peer, NetRejectReason::DeterministicConfigMismatch, "deterministic_config_hash", HashText(m_Config.localIdentity.deterministicConfigHash), HashText(ready->deterministicConfigHash), "ready state deterministic config hash does not match accepted session");
+				return;
+			}
+			if (ready->moduleManifestHash != m_Config.localIdentity.moduleManifestHash) {
+				RejectPeer(*peer, NetRejectReason::ModuleManifestMismatch, "module_manifest_hash", HashText(m_Config.localIdentity.moduleManifestHash), HashText(ready->moduleManifestHash), "ready state module manifest hash does not match accepted session");
 				return;
 			}
 			peer->state = ready->ready ? NetSessionState::Ready : NetSessionState::Accepted;
@@ -332,9 +343,7 @@ namespace RTE {
 		if (std::holds_alternative<NetDisconnect>(message.payload)) {
 			peer->state = NetSessionState::Closed;
 			m_Transport->Disconnect(peerId, "peer disconnected");
-			if (ActivePeerCount() == 0) {
-				m_State = NetSessionState::Closed;
-			}
+			RefreshHostState(NetSessionState::Closed);
 			return;
 		}
 		if (peer->state == NetSessionState::Handshake) {
@@ -409,7 +418,8 @@ namespace RTE {
 						Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::Timeout), "heartbeat timeout"});
 						m_Transport->Disconnect(peer.transportPeerId, "heartbeat timeout");
 						peer.state = NetSessionState::Failed;
-						SetFailed(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "heartbeat timeout");
+						RecordReject(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "heartbeat timeout");
+						RefreshHostState(NetSessionState::Failed);
 					}
 				}
 			}
@@ -429,27 +439,27 @@ namespace RTE {
 			m_Transport->Disconnect(peer.transportPeerId, summary);
 		}
 		peer.state = NetSessionState::Rejected;
-		SetRejected(reason, key, expected, actual, summary);
+		RecordReject(reason, key, expected, actual, summary);
+		RefreshHostState(NetSessionState::Rejected);
 	}
 
-	void NetSession::SetRejected(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		m_RejectReason = reason;
 		m_HasReject = true;
 		m_MismatchKey = key;
 		m_ExpectedValue = expected;
 		m_ActualValue = actual;
 		m_RejectSummary = summary;
+	}
+
+	void NetSession::SetRejected(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		RecordReject(reason, key, expected, actual, summary);
 		m_State = NetSessionState::Rejected;
 		m_StateStartedMs = m_NowMs;
 	}
 
 	void NetSession::SetFailed(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		m_RejectReason = reason;
-		m_HasReject = true;
-		m_MismatchKey = key;
-		m_ExpectedValue = expected;
-		m_ActualValue = actual;
-		m_RejectSummary = summary;
+		RecordReject(reason, key, expected, actual, summary);
 		m_State = NetSessionState::Failed;
 		m_StateStartedMs = m_NowMs;
 	}
@@ -484,6 +494,29 @@ namespace RTE {
 			}
 		}
 		return 0;
+	}
+
+	void NetSession::RefreshHostState(NetSessionState terminalState) {
+		if (m_Role != NetSessionRole::Host) {
+			return;
+		}
+		const bool hasReady = std::any_of(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+			return peer.state == NetSessionState::Ready;
+		});
+		const bool hasAccepted = std::any_of(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+			return peer.state == NetSessionState::Accepted;
+		});
+		const bool hasHandshake = std::any_of(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+			return peer.state == NetSessionState::Handshake;
+		});
+		const NetSessionState nextState = hasReady ? NetSessionState::Ready :
+		                                  hasAccepted ? NetSessionState::Accepted :
+		                                  hasHandshake ? NetSessionState::Handshake :
+		                                  terminalState;
+		if (m_State != nextState) {
+			m_State = nextState;
+			m_StateStartedMs = m_NowMs;
+		}
 	}
 
 	NetClientHello NetSession::BuildClientHello() const {

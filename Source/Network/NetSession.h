@@ -98,12 +98,14 @@ namespace RTE {
 		void HandleClientMessage(NetPeerId peerId, const NetMessage& message);
 		void CheckTimeouts();
 		void RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
+		void RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void SetRejected(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void SetFailed(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		PeerState* FindPeer(NetPeerId peerId);
 		const PeerState* FindPeer(NetPeerId peerId) const;
 		uint32_t ActivePeerCount() const;
 		uint8_t AllocatePeerId() const;
+		void RefreshHostState(NetSessionState terminalState);
 
 		NetClientHello BuildClientHello() const;
 		NetHostHello BuildHostHello(uint8_t assignedPeerId) const;

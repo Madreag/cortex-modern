@@ -314,6 +314,10 @@ namespace RTE {
 				*error = "session full did not reject second client";
 				return false;
 			}
+			if (!host.IsReady() || !clientA.IsReady()) {
+				*error = "session full rejection stopped the accepted peer";
+				return false;
+			}
 			return true;
 		}
 
@@ -352,11 +356,86 @@ namespace RTE {
 				*error = "duplicate client nonce was not rejected";
 				return false;
 			}
+			if (!host.IsReady() || !clientA.IsReady()) {
+				*error = "duplicate nonce rejection stopped the accepted peer";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestPeerTimeoutDoesNotStopHost(std::string* error) {
+			const uint16_t port = 42203;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransportA;
+			LoopbackTransport clientTransportB;
+			NetSession host;
+			NetSession clientA;
+			NetSession clientB;
+			NetSessionConfig hostConfig = MakeConfig(port, 1301, "Host");
+			hostConfig.maxPeers = 2;
+			hostConfig.heartbeatIntervalMs = 10;
+			hostConfig.timeoutMs = 50;
+			if (!host.StartHost(hostTransport, hostConfig, error) ||
+			    !clientA.StartClient(clientTransportA, "loopback", MakeConfig(port, 1401, "A"), error)) {
+				return false;
+			}
+
+			bool startedB = false;
+			bool bothReady = false;
+			uint64_t readyAtMs = 0;
+			for (uint64_t now = 0; now <= 1000; now += 10) {
+				host.Tick(now);
+				clientA.Tick(now);
+				if (startedB) {
+					clientB.Tick(now);
+				}
+				if (!startedB && host.IsReady() && clientA.IsReady()) {
+					if (!clientB.StartClient(clientTransportB, "loopback", MakeConfig(port, 1402, "B"), error)) {
+						return false;
+					}
+					startedB = true;
+				}
+				if (startedB && host.IsReady() && clientA.IsReady() && clientB.IsReady()) {
+					bothReady = true;
+					readyAtMs = now;
+					break;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				clientTransportA.AdvanceTimeMs(10);
+				clientTransportB.AdvanceTimeMs(10);
+			}
+			if (!bothReady) {
+				*error = "two-peer ready state was not reached";
+				return false;
+			}
+
+			for (uint64_t now = readyAtMs + 10; now <= readyAtMs + 200; now += 10) {
+				host.Tick(now);
+				clientA.Tick(now);
+				if (host.IsRejected() || host.IsFailed()) {
+					*error = "one peer timeout stopped the host session";
+					return false;
+				}
+				if (host.GetStats().timeouts > 0) {
+					break;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				clientTransportA.AdvanceTimeMs(10);
+				clientTransportB.AdvanceTimeMs(10);
+			}
+			if (host.GetStats().timeouts == 0) {
+				*error = "second peer did not time out";
+				return false;
+			}
+			if (!host.IsReady() || !clientA.IsReady()) {
+				*error = "one peer timeout did not preserve the ready peer";
+				return false;
+			}
 			return true;
 		}
 
 		bool TestMalformedHandshake(std::string* error) {
-			const uint16_t port = 42203;
+			const uint16_t port = 42204;
 			LoopbackTransport hostTransport;
 			LoopbackTransport rawClient;
 			NetSession host;
@@ -378,7 +457,7 @@ namespace RTE {
 		}
 
 		bool TestTimeout(std::string* error) {
-			const uint16_t port = 42204;
+			const uint16_t port = 42205;
 			LoopbackTransport hostTransport;
 			LoopbackTransport rawClient;
 			NetSession host;
@@ -404,7 +483,7 @@ namespace RTE {
 		}
 
 		bool TestLatencyAndCleanDisconnect(std::string* error) {
-			const uint16_t port = 42205;
+			const uint16_t port = 42206;
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
 			LoopbackTransportConfig faults;
@@ -440,6 +519,7 @@ namespace RTE {
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
 		if (!TestDuplicateNonce(&error)) return fail(error);
+		if (!TestPeerTimeoutDoesNotStopHost(&error)) return fail(error);
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
