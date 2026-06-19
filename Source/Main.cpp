@@ -99,7 +99,7 @@ static int s_cliNumLuaStatesOverride = -1;
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
 
-// Debug-only P2D transport/session smoke. This exits before gameplay starts.
+// Debug-only transport/session smoke. This exits before gameplay starts.
 static bool s_netHost = false;
 static std::string s_netJoinAddress;
 static uint16_t s_netPort = 41010;

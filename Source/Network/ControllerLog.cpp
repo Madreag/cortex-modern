@@ -223,6 +223,15 @@ namespace RTE {
 			return false;
 		}
 
+		const std::streampos firstTickPos = in.tellg();
+		in.seekg(0, std::ios::end);
+		const std::streampos fileEnd = in.tellg();
+		if (firstTickPos == std::streampos(-1) || fileEnd == std::streampos(-1) || fileEnd < firstTickPos) {
+			SetError(error, "ControllerLog file size could not be determined.");
+			return false;
+		}
+		in.seekg(firstTickPos, std::ios::beg);
+
 		bool hasPreviousTick = false;
 		uint64_t previousTick = 0;
 		while (in.peek() != std::char_traits<char>::eof()) {
@@ -242,6 +251,12 @@ namespace RTE {
 				return false;
 			}
 			const size_t payloadSize = static_cast<size_t>(frameCount) * ControllerFrame::c_EncodedSize;
+			const std::streampos payloadPos = in.tellg();
+			if (payloadPos == std::streampos(-1) || fileEnd < payloadPos ||
+			    static_cast<std::streamoff>(payloadSize) > fileEnd - payloadPos) {
+				SetError(error, "ControllerLog tick payload is truncated.");
+				return false;
+			}
 			std::vector<uint8_t> payload(payloadSize);
 			if (!ReadExact(in, reinterpret_cast<char*>(payload.data()), payload.size())) {
 				SetError(error, "ControllerLog tick payload is truncated.");
