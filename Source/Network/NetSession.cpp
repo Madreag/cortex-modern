@@ -195,7 +195,6 @@ namespace RTE {
 				if (m_Role == NetSessionRole::Host) {
 					PeerState peer;
 					peer.transportPeerId = event.peerId;
-					peer.assignedPeerId = static_cast<uint8_t>(event.peerId);
 					peer.state = NetSessionState::Handshake;
 					peer.connectedAtMs = m_NowMs;
 					peer.lastReceiveMs = m_NowMs;
@@ -282,7 +281,8 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "handshake", StateName(peer->state), "host is not accepting another hello for this peer");
 				return;
 			}
-			if (ActivePeerCount() > m_Config.maxPeers) {
+			const uint8_t assignedPeerId = AllocatePeerId();
+			if (assignedPeerId == 0) {
 				RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
 				return;
 			}
@@ -300,6 +300,7 @@ namespace RTE {
 			peer->clientNonce = hello->clientNonce;
 			peer->displayName = hello->displayName;
 			peer->identityHash = hello->sessionIdentityHash;
+			peer->assignedPeerId = assignedPeerId;
 			m_RemoteIdentityHash = hello->sessionIdentityHash;
 			m_HasRemoteIdentityHash = true;
 			Send(peerId, BuildHostHello(peer->assignedPeerId));
@@ -471,6 +472,18 @@ namespace RTE {
 		return static_cast<uint32_t>(std::count_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
 			return IsActive(peer.state);
 		}));
+	}
+
+	uint8_t NetSession::AllocatePeerId() const {
+		for (uint16_t candidate = 1; candidate <= m_Config.maxPeers; ++candidate) {
+			const bool used = std::any_of(m_Peers.begin(), m_Peers.end(), [candidate](const PeerState& peer) {
+				return IsActive(peer.state) && peer.assignedPeerId == candidate;
+			});
+			if (!used) {
+				return static_cast<uint8_t>(candidate);
+			}
+		}
+		return 0;
 	}
 
 	NetClientHello NetSession::BuildClientHello() const {

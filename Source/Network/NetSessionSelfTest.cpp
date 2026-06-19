@@ -8,6 +8,8 @@
 #include <iostream>
 #include <string>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace RTE {
 
@@ -48,6 +50,55 @@ namespace RTE {
 			config.timeoutMs = 250;
 			return config;
 		}
+
+		NetClientHello MakeClientHello(const NetSessionConfig& config) {
+			NetClientHello hello;
+			hello.clientNonce = config.localNonce;
+			hello.minProtocolVersion = config.minProtocolVersion;
+			hello.maxProtocolVersion = config.maxProtocolVersion;
+			hello.controllerFrameVersion = config.localIdentity.controllerFrameVersion;
+			hello.controllerFrameEncodedSize = config.localIdentity.controllerFrameEncodedSize;
+			hello.displayName = config.displayName;
+			hello.gameVersion = config.localIdentity.gameVersion;
+			hello.buildId = config.localIdentity.buildId;
+			hello.deterministicConfigHash = config.localIdentity.deterministicConfigHash;
+			hello.moduleManifestHash = config.localIdentity.moduleManifestHash;
+			hello.sessionRulesHash = config.localIdentity.sessionRulesHash;
+			hello.sessionIdentityHash = config.localIdentity.sessionIdentityHash;
+			hello.hasUserdataModules = config.localIdentity.hasUserdataModules;
+			return hello;
+		}
+
+		class ScriptedHostTransport final : public INetTransport {
+		public:
+			struct SentPacket {
+				NetPeerId peerId = c_InvalidNetPeerId;
+				std::vector<uint8_t> bytes;
+			};
+
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string&, uint16_t, std::string* error) override {
+				if (error) *error = "scripted transport does not connect";
+				return false;
+			}
+			bool Send(NetPeerId peerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string*) override {
+				sentPackets.push_back({peerId, bytes});
+				return true;
+			}
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override { events.clear(); }
+			std::vector<NetTransportEvent> PollEvents() override {
+				std::vector<NetTransportEvent> result = std::move(events);
+				events.clear();
+				return result;
+			}
+			void Push(NetTransportEvent event) { events.push_back(std::move(event)); }
+
+			std::vector<SentPacket> sentPackets;
+
+		private:
+			std::vector<NetTransportEvent> events;
+		};
 
 		bool DrivePair(LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetSession& host, NetSession& client, const std::function<bool()>& done, std::string* error, uint64_t maxMs = 1000, uint64_t stepMs = 10) {
 			for (uint64_t now = 0; now <= maxMs; now += stepMs) {
@@ -104,6 +155,68 @@ namespace RTE {
 			    report.find("\"deterministic_config_hash\"") == std::string::npos ||
 			    report.find("\"num_lua_states\"") == std::string::npos) {
 				*error = "ready report did not contain local identity diagnostics";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestAssignedPeerIdIgnoresTransportPeerId(std::string* error) {
+			const uint16_t port = 42002;
+			ScriptedHostTransport transport;
+			NetSession host;
+			NetSessionConfig hostConfig = MakeConfig(port, 1301, "Host");
+			hostConfig.maxPeers = 1;
+			if (!host.StartHost(transport, hostConfig, error)) {
+				return false;
+			}
+
+			NetMessage helloMessage;
+			helloMessage.sequence = 1;
+			helloMessage.payload = MakeClientHello(MakeConfig(port, 1401, "Player"));
+			std::vector<uint8_t> helloBytes;
+			NetProtocolError encodeError;
+			if (!NetProtocol::Encode(helloMessage, helloBytes, &encodeError)) {
+				*error = "could not encode scripted ClientHello: " + encodeError.message;
+				return false;
+			}
+
+			transport.Push({NetTransportEventType::PeerConnected, 300, NetTransportLane::ControlReliable, {}, ""});
+			transport.Push({NetTransportEventType::PacketReceived, 300, NetTransportLane::ControlReliable, helloBytes, ""});
+			host.Tick(0);
+
+			if (host.GetState() != NetSessionState::Accepted || transport.sentPackets.size() != 2) {
+				*error = "scripted host did not accept and send both accept messages";
+				return false;
+			}
+
+			bool sawHostHello = false;
+			bool sawJoinAccepted = false;
+			for (const ScriptedHostTransport::SentPacket& packet : transport.sentPackets) {
+				if (packet.peerId != 300) {
+					*error = "host sent response to the wrong transport peer";
+					return false;
+				}
+				const NetDecodeResult decoded = NetProtocol::Decode(packet.bytes);
+				if (!decoded.ok) {
+					*error = "host sent undecodable scripted response";
+					return false;
+				}
+				if (const auto* hostHello = std::get_if<NetHostHello>(&decoded.message.payload)) {
+					sawHostHello = true;
+					if (hostHello->assignedPeerId != 1) {
+						*error = "HostHello leaked the transport peer id into the session peer id";
+						return false;
+					}
+				} else if (const auto* accepted = std::get_if<NetJoinAccepted>(&decoded.message.payload)) {
+					sawJoinAccepted = true;
+					if (accepted->assignedPeerId != 1) {
+						*error = "JoinAccepted leaked the transport peer id into the session peer id";
+						return false;
+					}
+				}
+			}
+			if (!sawHostHello || !sawJoinAccepted) {
+				*error = "scripted host did not send HostHello and JoinAccepted";
 				return false;
 			}
 			return true;
@@ -323,6 +436,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestHappyPath(&error)) return fail(error);
+		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
 		if (!TestDuplicateNonce(&error)) return fail(error);
