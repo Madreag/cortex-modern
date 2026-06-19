@@ -175,7 +175,6 @@ namespace RTE {
 			AppendHash(hasher, "deterministic_config_hash", manifest.deterministicConfigHash);
 			AppendHash(hasher, "module_manifest_hash", manifest.moduleManifestHash);
 			AppendHash(hasher, "session_rules_hash", manifest.sessionRulesHash);
-			AppendBool(hasher, "has_userdata_modules", manifest.hasUserdataModules);
 			return hasher.Finalize();
 		}
 
@@ -426,6 +425,14 @@ namespace RTE {
 			module.userdata = dataModule->IsUserdata();
 			module.root = fs::path(g_PresetMan.GetFullModulePath(module.fileName)).generic_string();
 
+			if (module.userdata) {
+				manifest.hasUserdataModules = true;
+				if (!options.includeUserdataModules) {
+					manifest.warnings.push_back("userdata module " + module.fileName + " omitted from network module manifest");
+					continue;
+				}
+			}
+
 			const fs::path rootAbsolute = fs::path(workingDirectory) / fs::path(module.root);
 			std::vector<ModuleFileRecord> files;
 			if (!CollectModuleFiles(rootAbsolute, files, error)) {
@@ -439,9 +446,6 @@ namespace RTE {
 				return false;
 			}
 
-			if (module.userdata) {
-				manifest.hasUserdataModules = true;
-			}
 			const std::string zipCandidate = module.root + ".zip";
 			if (fs::exists(fs::path(workingDirectory) / fs::path(zipCandidate))) {
 				manifest.warnings.push_back("module " + module.fileName + " was hashed from extracted directory; zip canonicalization remains a P2D follow-up");
