@@ -76,6 +76,7 @@ namespace RTE {
 	struct NetIdentityBuildOptions {
 		std::string buildId = "unknown";
 		std::string sessionRulesTag = "p2-session-rules-unset";
+		bool includeUserdataModules = false;
 	};
 
 	class NetIdentity {
