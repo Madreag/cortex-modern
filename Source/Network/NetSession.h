@@ -103,6 +103,7 @@ namespace RTE {
 		PeerState* FindPeer(NetPeerId peerId);
 		const PeerState* FindPeer(NetPeerId peerId) const;
 		uint32_t ActivePeerCount() const;
+		uint8_t AllocatePeerId() const;
 
 		NetClientHello BuildClientHello() const;
 		NetHostHello BuildHostHello(uint8_t assignedPeerId) const;
