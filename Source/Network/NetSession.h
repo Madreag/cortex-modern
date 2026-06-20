@@ -61,6 +61,7 @@ namespace RTE {
 		NetSessionState GetState() const { return m_State; }
 		uint64_t GetSessionId() const { return m_SessionId; }
 		uint8_t GetLocalPeerId() const { return m_LocalPeerId; }
+		NetPeerId GetRemoteTransportPeerId() const;
 		NetRejectReason GetRejectReason() const { return m_RejectReason; }
 		const std::string& GetMismatchKey() const { return m_MismatchKey; }
 		const NetSessionStats& GetStats() const { return m_Stats; }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ControllerFrame.h"
+#include "NetLockstep.h"
 
 #include <cstdint>
 #include <map>
@@ -81,6 +82,13 @@ namespace RTE {
 		static void SetControllerReplayError(const std::string& error);
 		static bool HasControllerReplayError();
 		static const std::string& GetControllerReplayError();
+
+		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator);
+		static bool IsLockstepControllerSyncActive();
+		static bool IsLockstepLocalActor(int64_t actorUniqueID);
+		static uint16_t GetLockstepInputDelayFrames();
+		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
+		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 
 		/// Pin the sim-affecting config to canonical values for a deterministic run, so the sim is
 		/// bit-identical across machines regardless of per-machine Settings.ini. Call after settings

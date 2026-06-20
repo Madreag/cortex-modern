@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <execution>
 #include <fstream>
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -232,6 +233,51 @@ static bool ApplyControllerFramesToActors(const std::deque<Actor*>& actors, cons
 		}
 		if (!ControllerFrameCodec::Apply(frame, *actor->GetController(), &applyError)) {
 			error = "controller frame apply failed for actor " + std::to_string(actorID) + ": " + applyError;
+			return false;
+		}
+	}
+	return true;
+}
+
+static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::deque<Actor*>& actors, bool localOwned) {
+	std::vector<ControllerFrame> frames;
+	frames.reserve(actors.size());
+	for (Actor* actor: actors) {
+		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
+		if (ScenarioRunner::IsLockstepLocalActor(actorID) == localOwned) {
+			frames.push_back(ControllerFrameCodec::Snapshot(actorID, *actor->GetController(), actor));
+		}
+	}
+	return frames;
+}
+
+static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& actors, const std::vector<ControllerFrame>& frames, bool localOwned, std::string& error) {
+	std::map<int64_t, Actor*> actorsByID;
+	for (Actor* actor: actors) {
+		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
+		if (ScenarioRunner::IsLockstepLocalActor(actorID) == localOwned) {
+			actorsByID[actorID] = actor;
+		}
+	}
+
+	for (const ControllerFrame& frame: frames) {
+		if (ScenarioRunner::IsLockstepLocalActor(frame.actorUniqueID) != localOwned) {
+			error = "lockstep frame ownership mismatch for actor " + std::to_string(frame.actorUniqueID);
+			return false;
+		}
+		const auto actorIt = actorsByID.find(frame.actorUniqueID);
+		if (actorIt == actorsByID.end()) {
+			error = "lockstep frame actor not found: " + std::to_string(frame.actorUniqueID);
+			return false;
+		}
+
+		std::string applyError;
+		if (!ControllerFrameCodec::ApplyActorState(frame, *actorIt->second, &applyError)) {
+			error = "lockstep actor-state apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
+			return false;
+		}
+		if (!ControllerFrameCodec::Apply(frame, *actorIt->second->GetController(), &applyError)) {
+			error = "lockstep controller apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
 			return false;
 		}
 	}
@@ -2121,15 +2167,30 @@ void MovableMan::UpdateControllers() {
 		return;
 	}
 
+	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
+	auto isLocalControllerActor = [&](const Actor* actor) {
+		return !lockstepActive || ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()));
+	};
+	if (lockstepActive && ScenarioRunner::GetLockstepInputDelayFrames() != 0) {
+		ScenarioRunner::SetControllerReplayError("lockstep gameplay hook currently supports current-frame stall only; input delay is coordinator-selftest-only.");
+		return;
+	}
+	if (lockstepActive && ScenarioRunner::IsControllerLogReplaying()) {
+		ScenarioRunner::SetControllerReplayError("lockstep controller sync cannot be combined with controller log replay.");
+		return;
+	}
+
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
 	{
 		for (Actor* actor: m_Actors) {
-			actor->GetController()->Update();
+			if (isLocalControllerActor(actor)) {
+				actor->GetController()->Update();
+			}
 		}
 
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
-			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			if (isLocalControllerActor(actor) && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
 				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
@@ -2145,7 +2206,7 @@ void MovableMan::UpdateControllers() {
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
 			                                                     for (Actor* actor: m_Actors) {
-				                                                     if (actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				                                                     if (isLocalControllerActor(actor) && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 					                                                     g_CurrentAIActor = nullptr;
@@ -2158,18 +2219,60 @@ void MovableMan::UpdateControllers() {
 
 		// Drain the equip mutations AHuman::Equip* queued under parallel AI, in MOID order.
 		for (Actor* actor: m_Actors) {
-			if (AHuman* asHuman = dynamic_cast<AHuman*>(actor)) {
-				asHuman->DrainPendingDeferredMutations();
+			if (isLocalControllerActor(actor)) {
+				if (AHuman* asHuman = dynamic_cast<AHuman*>(actor)) {
+					asHuman->DrainPendingDeferredMutations();
+				}
 			}
 		}
 
 		for (Actor* actor: m_Actors) {
-			if (actor->GetController()->ShouldUpdateAIThisFrame()) {
+			if (isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				actor->RunScriptedFunctionInAppropriateScripts("UpdateAI", false, true, {}, {}, {});
 			}
 		}
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
+
+	if (lockstepActive) {
+		std::string error;
+		std::vector<ControllerFrame> localFrames = SnapshotLockstepControllerFrames(m_Actors, true);
+		DumpControllerDebugSnapshot("lockstep_local_pre_canonicalize", simTick, m_Actors, &localFrames);
+		if (!CanonicalizeControllerFramesThroughWire(localFrames, error)) {
+			DumpControllerDebugSnapshot("lockstep_local_canonicalize_error", simTick, m_Actors, &localFrames, &error);
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep canonicalize: " + error);
+			return;
+		}
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, localFrames, true, error)) {
+			DumpControllerDebugSnapshot("lockstep_local_apply_error", simTick, m_Actors, &localFrames, &error);
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep local apply: " + error);
+			return;
+		}
+		if (!ScenarioRunner::QueueLockstepLocalControllerFrames(simTick, localFrames, &error)) {
+			DumpControllerDebugSnapshot("lockstep_local_queue_error", simTick, m_Actors, &localFrames, &error);
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep queue: " + error);
+			return;
+		}
+
+		NetLockstepReadyFrame readyFrame;
+		if (!ScenarioRunner::WaitForLockstepControllerFrame(simTick, readyFrame, &error)) {
+			DumpControllerDebugSnapshot("lockstep_remote_wait_error", simTick, m_Actors, nullptr, &error);
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep wait: " + error);
+			return;
+		}
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, error)) {
+			DumpControllerDebugSnapshot("lockstep_remote_apply_error", simTick, m_Actors, &readyFrame.remoteFrames, &error);
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
+			return;
+		}
+		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
+
+		if (ScenarioRunner::IsControllerLogRecording()) {
+			std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
+			ScenarioRunner::RecordControllerFrames(simTick, std::move(frames));
+		}
+		return;
+	}
 
 	if (ScenarioRunner::IsControllerLogReplaying()) {
 		if (!applyReplayFrame("replay")) {
