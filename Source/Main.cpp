@@ -35,7 +35,9 @@
 
 #include "MenuMan.h"
 #include "ConsoleMan.h"
+#include "Constants.h"
 #include "SettingsMan.h"
+#include "TimerMan.h"
 #include "PresetMan.h"
 #include "UInputMan.h"
 #include "PerformanceMan.h"
@@ -609,6 +611,8 @@ int RunNetSessionCli() {
 		std::cerr << "[net-session] choose either -net-host or -net-join, not both" << std::endl;
 		return 1;
 	}
+
+	g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
 
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
