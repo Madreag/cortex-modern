@@ -148,6 +148,21 @@ namespace RTE {
 		}
 	}
 
+	NetPeerId NetSession::GetRemoteTransportPeerId() const {
+		if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			return m_RemoteTransportPeerId;
+		}
+		if (m_Role == NetSessionRole::Host) {
+			const auto it = std::find_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+				return peer.state == NetSessionState::Accepted || peer.state == NetSessionState::Ready;
+			});
+			if (it != m_Peers.end()) {
+				return it->transportPeerId;
+			}
+		}
+		return c_InvalidNetPeerId;
+	}
+
 	bool NetSession::Send(NetPeerId peerId, NetPayload payload, std::string* error) {
 		if (!m_Transport) {
 			if (error) *error = "session has no transport";

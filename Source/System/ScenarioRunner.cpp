@@ -10,12 +10,14 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -27,6 +29,8 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerRecordLog;
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
+		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		uint64_t s_LockstepPollNowMs = 0;
 
 		std::string FloatBitsHex(float value) {
 			uint32_t bits;
@@ -305,6 +309,62 @@ namespace RTE {
 
 	const std::string& ScenarioRunner::GetControllerReplayError() {
 		return s_ControllerReplayError;
+	}
+
+	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator) {
+		s_LockstepCoordinator = coordinator;
+		s_LockstepPollNowMs = 0;
+	}
+
+	bool ScenarioRunner::IsLockstepControllerSyncActive() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning();
+	}
+
+	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID) {
+		return !s_LockstepCoordinator || s_LockstepCoordinator->IsLocalActor(actorUniqueID);
+	}
+
+	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
+	}
+
+	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {
+		if (!s_LockstepCoordinator) {
+			if (error) *error = "lockstep coordinator is not active";
+			return false;
+		}
+		return s_LockstepCoordinator->QueueLocalInput(tick, frames, error);
+	}
+
+	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
+		if (!s_LockstepCoordinator) {
+			if (error) *error = "lockstep coordinator is not active";
+			return false;
+		}
+
+		const uint32_t timeoutMs = s_LockstepCoordinator->GetConfig().timeoutMs;
+		const uint32_t maxPolls = timeoutMs > 0 ? timeoutMs + 50 : 500;
+		for (uint32_t poll = 0; poll <= maxPolls; ++poll) {
+			s_LockstepCoordinator->Tick(s_LockstepPollNowMs++);
+			NetLockstepReadyFrame ready;
+			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
+				if (ready.frame == tick) {
+					outFrame = std::move(ready);
+					return true;
+				}
+				if (ready.frame > tick) {
+					if (error) *error = "lockstep produced future frame " + std::to_string(ready.frame) + " while waiting for " + std::to_string(tick);
+					return false;
+				}
+			}
+			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
+				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
+				return false;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		if (error) *error = "timed out waiting for lockstep frame " + std::to_string(tick);
+		return false;
 	}
 
 	void ScenarioRunner::ApplyDeterministicConfig() {
