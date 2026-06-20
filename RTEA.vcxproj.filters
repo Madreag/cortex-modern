@@ -466,6 +466,12 @@
     <ClInclude Include="Source\Network\NetIdentitySelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetLockstep.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetLockstepSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetProtocol.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -740,6 +746,12 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetLockstep.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetLockstepSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetProtocol.cpp">

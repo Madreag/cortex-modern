@@ -5,6 +5,8 @@ sources += files(
 'LoopbackTransport.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',
+'NetLockstep.cpp',
+'NetLockstepSelfTest.cpp',
 'NetProtocol.cpp',
 'NetProtocolSelfTest.cpp',
 'NetSession.cpp',
