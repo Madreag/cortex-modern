@@ -53,9 +53,18 @@ void MainMenuGUI::Clear() {
 	m_CreditsTextLabel = nullptr;
 	m_MultiplayerStatusLabel = nullptr;
 	m_MultiplayerErrorLabel = nullptr;
+	m_MultiplayerLandingStatusLabel = nullptr;
+	m_MultiplayerLobbyMatchLabel = nullptr;
 	m_MultiplayerNameTextBox = nullptr;
-	m_MultiplayerAddressTextBox = nullptr;
-	m_MultiplayerPortTextBox = nullptr;
+	m_MultiplayerHostPortTextBox = nullptr;
+	m_MultiplayerJoinAddressTextBox = nullptr;
+	m_MultiplayerJoinPortTextBox = nullptr;
+	m_MultiplayerLandingPanel = nullptr;
+	m_MultiplayerHostPanel = nullptr;
+	m_MultiplayerJoinPanel = nullptr;
+	m_MultiplayerLobbyPanel = nullptr;
+	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -136,23 +145,47 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerScreen"));
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->CenterInParent(true, false);
 
-	m_MainMenuButtons[MenuButton::MultiplayerHostButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerHost"));
-	m_MainMenuButtons[MenuButton::MultiplayerJoinButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerJoin"));
+	m_MultiplayerLandingPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLandingPanel"));
+	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerHostPanel"));
+	m_MultiplayerJoinPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerJoinPanel"));
+	m_MultiplayerLobbyPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLobbyPanel"));
+
+	m_MainMenuButtons[MenuButton::MultiplayerHostGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerHostGame"));
+	m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerJoinGame"));
+	m_MainMenuButtons[MenuButton::MultiplayerCreateButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCreate"));
+	m_MainMenuButtons[MenuButton::MultiplayerConnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerConnect"));
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReady"));
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"));
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerLeave"));
+	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBack"));
+	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinBack"));
+
 	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerName"));
-	m_MultiplayerAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerAddress"));
-	m_MultiplayerPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerPort"));
+	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
+	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
+	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
+
 	m_MultiplayerStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerStatus"));
 	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerError"));
+	m_MultiplayerLandingStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerLandingStatus"));
+	m_MultiplayerLobbyMatchLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatch"));
+	m_MultiplayerLobbyPlayerLabels[0] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer0"));
+	m_MultiplayerLobbyPlayerLabels[1] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer1"));
+	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
+	m_MultiplayerLobbyPlayerLabels[3] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer3"));
+
 	m_MultiplayerNameTextBox->SetText("Player");
 	m_MultiplayerNameTextBox->SetMaxTextLength(24);
-	m_MultiplayerAddressTextBox->SetText("127.0.0.1");
-	m_MultiplayerAddressTextBox->SetMaxTextLength(64);
-	m_MultiplayerPortTextBox->SetText("41010");
-	m_MultiplayerPortTextBox->SetNumericOnly(true);
-	m_MultiplayerPortTextBox->SetMaxNumericValue(65535);
-	m_MultiplayerPortTextBox->SetMaxTextLength(5);
+	m_MultiplayerJoinAddressTextBox->SetText("127.0.0.1");
+	m_MultiplayerJoinAddressTextBox->SetMaxTextLength(64);
+	m_MultiplayerHostPortTextBox->SetText("41010");
+	m_MultiplayerHostPortTextBox->SetNumericOnly(true);
+	m_MultiplayerHostPortTextBox->SetMaxNumericValue(65535);
+	m_MultiplayerHostPortTextBox->SetMaxTextLength(5);
+	m_MultiplayerJoinPortTextBox->SetText("41010");
+	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
+	m_MultiplayerJoinPortTextBox->SetMaxNumericValue(65535);
+	m_MultiplayerJoinPortTextBox->SetMaxTextLength(5);
 }
 
 void MainMenuGUI::CreateMetaGameNoticeScreen() {
@@ -250,8 +283,8 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GUIPanel::AddChild(m_MainMenuButtons[MenuButton::BackToMainButton]);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetVisible(true);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionAbs((m_RootBoxMaxWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetYPos() + 250);
-	m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
-	m_MultiplayerErrorLabel->SetText(g_NetMatchService.GetErrorText());
+	m_MultiplayerSubScreen = g_NetMatchService.GetState() == NetMatchServiceState::Idle ? MultiplayerSubScreen::Landing : MultiplayerSubScreen::Lobby;
+	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
 }
 
@@ -368,19 +401,7 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 			if (m_MenuScreenChange) {
 				ShowMultiplayerScreen();
 			}
-			g_NetMatchService.Update();
-			m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
-			m_MultiplayerErrorLabel->SetText(g_NetMatchService.GetErrorText());
-			{
-				const NetMatchServiceState state = g_NetMatchService.GetState();
-				const bool idleOrFailed = state == NetMatchServiceState::Idle || state == NetMatchServiceState::Failed;
-				const bool starting = state == NetMatchServiceState::Starting;
-				m_MainMenuButtons[MenuButton::MultiplayerHostButton]->SetEnabled(idleOrFailed);
-				m_MainMenuButtons[MenuButton::MultiplayerJoinButton]->SetEnabled(idleOrFailed);
-				m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(starting);
-				m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(starting && g_NetMatchService.GetLocalPeerId() == 1);
-			}
-			MaybeLaunchMultiplayerActivity();
+			UpdateMultiplayerScreen();
 			backToMainMenu = HandleInputEvents();
 			break;
 		case MenuScreen::SaveOrLoadGameScreen:
@@ -517,40 +538,117 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 }
 
 void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl) {
-	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
+	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
+		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::HostSetup;
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton]) {
+		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::JoinSetup;
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] || guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		g_GUISound.BackButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerCreateButton]) {
+		StartMultiplayer(true);
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerConnectButton]) {
+		StartMultiplayer(false);
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
 		g_NetMatchService.SetReady();
-		m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
 		g_GUISound.ButtonPressSound()->Play();
-		return;
-	}
-	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerStartButton]) {
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerStartButton]) {
 		g_NetMatchService.RequestStart();
-		m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
 		g_GUISound.ButtonPressSound()->Play();
-		return;
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]) {
+		g_NetMatchService.Destroy();
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		g_GUISound.BackButtonPressSound()->Play();
 	}
-	if (guiEventControl != m_MainMenuButtons[MenuButton::MultiplayerHostButton] && guiEventControl != m_MainMenuButtons[MenuButton::MultiplayerJoinButton]) {
-		return;
-	}
+}
 
-	const bool host = guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostButton];
-	const long parsedPort = std::strtol(m_MultiplayerPortTextBox->GetText().c_str(), nullptr, 10);
+void MainMenuGUI::StartMultiplayer(bool host) {
+	const std::string portText = (host ? m_MultiplayerHostPortTextBox : m_MultiplayerJoinPortTextBox)->GetText();
+	const long parsedPort = std::strtol(portText.c_str(), nullptr, 10);
 	NetMatchServiceRequest request;
 	request.host = host;
-	request.address = m_MultiplayerAddressTextBox->GetText();
+	if (!host) {
+		request.address = m_MultiplayerJoinAddressTextBox->GetText();
+	}
 	request.port = parsedPort > 0 && parsedPort <= 65535 ? static_cast<uint16_t>(parsedPort) : 41010;
 	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 
 	std::string error;
-	if (!g_NetMatchService.Start(request, &error)) {
-		m_MultiplayerErrorLabel->SetText(error);
+	if (g_NetMatchService.Start(request, &error)) {
+		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else {
-		m_MultiplayerErrorLabel->SetText("");
-		m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
+		m_MultiplayerLandingStatusLabel->SetText(error);
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	}
 	g_GUISound.ButtonPressSound()->Play();
+}
+
+void MainMenuGUI::UpdateMultiplayerScreen() {
+	g_NetMatchService.Update();
+	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+
+	// Reconcile the sub-screen with the live service state.
+	if (snapshot.inLobby || snapshot.running) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+	} else if (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		m_MultiplayerLandingStatusLabel->SetText(snapshot.errorText);
+	}
+
+	RefreshMultiplayerScreenControls(snapshot);
+	MaybeLaunchMultiplayerActivity();
+}
+
+void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
+	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
+	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
+	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
+	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
+	m_MultiplayerLobbyPanel->SetVisible(lobby);
+	if (!lobby) {
+		return;
+	}
+
+	std::string matchInfo = snapshot.activityPreset;
+	if (!snapshot.sceneName.empty()) {
+		matchInfo += " - " + snapshot.sceneName;
+	}
+	if (!snapshot.modeName.empty()) {
+		matchInfo += " - " + snapshot.modeName;
+	}
+	m_MultiplayerLobbyMatchLabel->SetText(matchInfo);
+	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
+		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
+		if (i >= snapshot.members.size()) {
+			label->SetText("");
+			label->SetVisible(false);
+			continue;
+		}
+		const NetLobbyMember& member = snapshot.members[i];
+		std::string row = member.displayName + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
+		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
+		if (!member.isLocal && member.pingMs > 0) {
+			row += " - " + std::to_string(member.pingMs) + "ms";
+		}
+		label->SetText(row);
+		label->SetVisible(true);
+	}
+	m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
+
+	const bool remotePresent = snapshot.members.size() >= 2;
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetVisible(snapshot.isHost);
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && remotePresent);
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
@@ -601,6 +699,16 @@ std::string MainMenuGUI::AutomationMultiplayerStatus() const {
 
 std::string MainMenuGUI::AutomationMultiplayerError() const {
 	return g_NetMatchService.GetErrorText();
+}
+
+std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
+	switch (m_MultiplayerSubScreen) {
+		case MultiplayerSubScreen::Landing: return "Landing";
+		case MultiplayerSubScreen::HostSetup: return "HostSetup";
+		case MultiplayerSubScreen::JoinSetup: return "JoinSetup";
+		case MultiplayerSubScreen::Lobby: return "Lobby";
+		default: return "Unknown";
+	}
 }
 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {

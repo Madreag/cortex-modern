@@ -518,6 +518,17 @@ void ProcessMenuScript() {
 		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
 		const std::string status = menu->AutomationMultiplayerStatus();
 		std::cout << "[menu-script] assert_status \"" << sub << "\" status=\"" << status << "\" " << (status.find(sub) != std::string::npos ? "PASS" : "FAIL") << std::endl;
+	} else if (cmd == "assert_substate") {
+		std::string expected;
+		iss >> expected;
+		const std::string actual = menu->AutomationMultiplayerSubScreen();
+		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (actual == expected ? "PASS" : "FAIL") << std::endl;
+	} else if (cmd == "assert_enabled") {
+		std::string control;
+		int expected = 0;
+		iss >> control >> expected;
+		const int actual = menu->AutomationControlEnabled(control) ? 1 : 0;
+		std::cout << "[menu-script] assert_enabled " << control << " expected=" << expected << " actual=" << actual << " " << (actual == expected ? "PASS" : "FAIL") << std::endl;
 	} else if (cmd == "exit") {
 		System::SetQuit(true);
 	} else {
@@ -1529,6 +1540,13 @@ int main(int argc, char** argv) {
 		// tear down faster than the normal quit flow. The OS reclaims everything on process exit.
 		g_ConsoleMan.SaveAllText("LogConsole.txt");
 		std::_Exit(scenarioExitCode);
+	}
+	if (g_NetMatchService.WasEverStarted()) {
+		// A multiplayer session hits the same FMOD async-thread teardown race; the MP path has no
+		// campaign/meta state to flush, so close the net session and take the scenario-mode fast exit.
+		g_NetMatchService.Destroy();
+		g_ConsoleMan.SaveAllText("LogConsole.txt");
+		std::_Exit(EXIT_SUCCESS);
 	}
 
 	DestroyManagers();

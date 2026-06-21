@@ -18,6 +18,7 @@ namespace RTE {
 	class GUILabel;
 	class GUIControl;
 	class GUITextBox;
+	struct NetLobbySnapshot;
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
 	class MainMenuGUI {
@@ -74,6 +75,9 @@ namespace RTE {
 		std::string AutomationMultiplayerStatus() const;
 		std::string AutomationMultiplayerError() const;
 
+		/// Gets the name of the active multiplayer sub-screen (Landing/HostSetup/JoinSetup/Lobby).
+		std::string AutomationMultiplayerSubScreen() const;
+
 		/// Gets whether a named button is currently enabled.
 		bool AutomationControlEnabled(const std::string& controlName) const;
 #pragma endregion
@@ -106,10 +110,15 @@ namespace RTE {
 			QuitButton,
 			ResumeButton,
 			BackToMainButton,
-			MultiplayerHostButton,
-			MultiplayerJoinButton,
+			MultiplayerHostGameButton,
+			MultiplayerJoinGameButton,
+			MultiplayerCreateButton,
+			MultiplayerConnectButton,
 			MultiplayerReadyButton,
 			MultiplayerStartButton,
+			MultiplayerLeaveButton,
+			MultiplayerHostBackButton,
+			MultiplayerJoinBackButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -120,6 +129,14 @@ namespace RTE {
 			GibEditorButton,
 			ActorEditorButton,
 			ButtonCount
+		};
+
+		/// Enumeration for the sub-screens within the multiplayer menu flow.
+		enum class MultiplayerSubScreen {
+			Landing,
+			HostSetup,
+			JoinSetup,
+			Lobby
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
@@ -153,9 +170,18 @@ namespace RTE {
 		GUILabel* m_CreditsTextLabel;
 		GUILabel* m_MultiplayerStatusLabel;
 		GUILabel* m_MultiplayerErrorLabel;
+		GUILabel* m_MultiplayerLandingStatusLabel;
+		GUILabel* m_MultiplayerLobbyMatchLabel;
 		GUITextBox* m_MultiplayerNameTextBox;
-		GUITextBox* m_MultiplayerAddressTextBox;
-		GUITextBox* m_MultiplayerPortTextBox;
+		GUITextBox* m_MultiplayerHostPortTextBox;
+		GUITextBox* m_MultiplayerJoinAddressTextBox;
+		GUITextBox* m_MultiplayerJoinPortTextBox;
+		GUICollectionBox* m_MultiplayerLandingPanel;
+		GUICollectionBox* m_MultiplayerHostPanel;
+		GUICollectionBox* m_MultiplayerJoinPanel;
+		GUICollectionBox* m_MultiplayerLobbyPanel;
+		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		MultiplayerSubScreen m_MultiplayerSubScreen;
 		GUICollectionBox* m_CreditsScrollPanel;
 		std::array<GUICollectionBox*, MenuScreen::ScreenCount> m_MainMenuScreens;
 		std::array<GUIButton*, MenuButton::ButtonCount> m_MainMenuButtons;
@@ -247,6 +273,15 @@ namespace RTE {
 		/// Updates the currently hovered main screen button text to give the hovered visual and updates the previously hovered button to remove the hovered visual.
 		/// @param hoveredButton Pointer to the currently hovered main screen button, if any. Acquired by GUIControlManager::GetControlUnderPoint.
 		void UpdateMainScreenHoveredButton(const GUIButton* hoveredButton);
+
+		/// Drives the multiplayer screen sub-screen state and refreshes its controls from the service snapshot.
+		void UpdateMultiplayerScreen();
+
+		/// Refreshes the multiplayer sub-panels, labels, and button states from the lobby snapshot.
+		void RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot);
+
+		/// Starts hosting or joining a multiplayer match from the setup screen fields.
+		void StartMultiplayer(bool host);
 
 		/// Launches the activity once the multiplayer runtime reaches lockstep ready.
 		void MaybeLaunchMultiplayerActivity();
