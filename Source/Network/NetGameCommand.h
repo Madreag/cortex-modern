@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace RTE {
 
@@ -11,6 +12,7 @@ namespace RTE {
 	enum class NetGameCommandType : uint16_t {
 		SetTeamFunds = 1,
 		SpawnActor = 2,
+		DeliverCargo = 3,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -34,7 +36,30 @@ namespace RTE {
 		bool operator==(const NetGameSpawnActor&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor>;
+	// One manifest entry for a delivery: a preset to clone into the craft's hold before it ships.
+	struct NetGameCargoItem {
+		std::string className;
+		std::string preset;
+		std::string module;
+
+		bool operator==(const NetGameCargoItem&) const = default;
+	};
+
+	// Deliver a craft loaded with a cargo manifest. The craft flies in under per-machine AI (off-wire); its
+	// spawn, cargo, and physics are on-wire, applied identically on both peers. Owner: the team owner.
+	struct NetGameDeliverCargo {
+		std::string craftClassName;
+		std::string craftPreset;
+		std::string craftModule;
+		float posX = 0.0F;
+		float posY = 0.0F;
+		int32_t team = 0;
+		std::vector<NetGameCargoItem> cargo;
+
+		bool operator==(const NetGameDeliverCargo&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

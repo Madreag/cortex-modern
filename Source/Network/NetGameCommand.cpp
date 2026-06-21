@@ -11,6 +11,8 @@ namespace RTE {
 				return NetGameCommandType::SetTeamFunds;
 			} else if constexpr (std::is_same_v<T, NetGameSpawnActor>) {
 				return NetGameCommandType::SpawnActor;
+			} else if constexpr (std::is_same_v<T, NetGameDeliverCargo>) {
+				return NetGameCommandType::DeliverCargo;
 			}
 		}, payload);
 	}
@@ -21,6 +23,8 @@ namespace RTE {
 				return "SetTeamFunds";
 			case NetGameCommandType::SpawnActor:
 				return "SpawnActor";
+			case NetGameCommandType::DeliverCargo:
+				return "DeliverCargo";
 		}
 		return "Unknown";
 	}
