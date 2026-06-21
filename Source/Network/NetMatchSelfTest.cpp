@@ -73,6 +73,12 @@ namespace RTE {
 				*error = "local alpha validation accepted nonzero input delay";
 				return false;
 			}
+			NetMatchConfig invalidTeam = MakeConfig();
+			invalidTeam.players[0].team = 4;
+			if (NetMatchConfigUtil::ValidateLocalAlpha(invalidTeam, nullptr)) {
+				*error = "local alpha validation accepted out-of-range team 4";
+				return false;
+			}
 			return true;
 		}
 
@@ -264,6 +270,7 @@ namespace RTE {
 			hostConfig.startFrame = 77;
 			hostConfig.displayName = "Host";
 			hostConfig.platform = "windows";
+			hostConfig.peerStateIntervalMs = 10; // exchange names during the handshake (Started is terminal)
 			NetLobbySessionConfig clientConfig = hostConfig;
 			clientConfig.host = false;
 			clientConfig.localPeerId = 2;
@@ -278,6 +285,10 @@ namespace RTE {
 			}
 			if (hostLobby.GetMatchConfigHash() != clientLobby.GetMatchConfigHash() || hostLobby.GetStartFrame() != 77 || clientLobby.GetStartFrame() != 77) {
 				*error = "lobby start did not preserve match hash/start frame";
+				return false;
+			}
+			if (hostLobby.GetRemoteName() != "Client" || clientLobby.GetRemoteName() != "Host") {
+				*error = "lobby did not exchange peer display names (host='" + hostLobby.GetRemoteName() + "' client='" + clientLobby.GetRemoteName() + "')";
 				return false;
 			}
 			const std::string report = hostLobby.BuildReportJson();
