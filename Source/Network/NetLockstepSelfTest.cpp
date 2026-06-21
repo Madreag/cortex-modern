@@ -92,6 +92,7 @@ namespace RTE {
 			frame.senderPeerId = 2;
 			frame.targetFrame = 32;
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}
@@ -352,24 +353,41 @@ namespace RTE {
 				return false;
 			}
 
+			const NetGameCommand fundsCommand{1, NetGameSetTeamFunds{0, 4200}};
 			for (uint64_t producedFrame = 0; producedFrame < 5; ++producedFrame) {
-				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, error) ||
-				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, error)) {
+				const std::vector<NetGameCommand> hostCommands = producedFrame == 0 ? std::vector<NetGameCommand>{fundsCommand} : std::vector<NetGameCommand>{};
+				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, hostCommands, error) ||
+				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, {}, error)) {
 					return false;
 				}
 			}
 
 			std::vector<uint64_t> hostReady;
 			std::vector<uint64_t> clientReady;
+			std::vector<NetGameCommand> hostLocalCommands;
+			std::vector<NetGameCommand> clientRemoteCommands;
 			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
-					DrainReady(host, hostReady);
-					DrainReady(client, clientReady);
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady.push_back(ready.frame);
+						hostLocalCommands.insert(hostLocalCommands.end(), ready.localCommands.begin(), ready.localCommands.end());
+					}
+					while (client.PopReadyFrame(ready)) {
+						clientReady.push_back(ready.frame);
+						clientRemoteCommands.insert(clientRemoteCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+					}
 					return hostReady.size() == 5 && clientReady.size() == 5;
 				}, error)) {
 				return false;
 			}
 			if (hostReady.front() != 2 || clientReady.front() != 2 || host.GetStats().framesAccepted != 5 || client.GetStats().framesAccepted != 5) {
 				*error = "delayed lockstep did not accept the expected ready frames";
+				return false;
+			}
+			// The host's funds command must surface in its own ready frame (localCommands) and on the client (remoteCommands).
+			if (hostLocalCommands.size() != 1 || !(hostLocalCommands.front() == fundsCommand) ||
+			    clientRemoteCommands.size() != 1 || !(clientRemoteCommands.front() == fundsCommand)) {
+				*error = "game command did not surface in the synced ready frame";
 				return false;
 			}
 			const std::string report = host.BuildReportJson();
@@ -446,8 +464,8 @@ namespace RTE {
 			}
 
 			for (uint64_t producedFrame : {1ULL, 0ULL, 2ULL, 3ULL}) {
-				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, error) ||
-				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, error)) {
+				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
+				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, {}, error)) {
 					return false;
 				}
 			}
@@ -494,8 +512,8 @@ namespace RTE {
 			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
 				return false;
 			}
-			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, error) ||
-			    !client.QueueLocalInput(0, {MakeFrame(200, 2)}, error)) {
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) ||
+			    !client.QueueLocalInput(0, {MakeFrame(200, 2)}, {}, error)) {
 				return false;
 			}
 			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsFailed(); }, error, 500)) {

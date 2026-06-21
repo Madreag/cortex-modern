@@ -839,6 +839,7 @@
     <ClInclude Include="Source\Network\NetIdentitySelfTest.h" />
     <ClInclude Include="Source\Network\NetLobbyProtocol.h" />
     <ClInclude Include="Source\Network\NetLobbySession.h" />
+    <ClInclude Include="Source\Network\NetGameCommand.h" />
     <ClInclude Include="Source\Network\NetLockstep.h" />
     <ClInclude Include="Source\Network\NetLockstepSelfTest.h" />
     <ClInclude Include="Source\Network\NetMatchConfig.h" />
@@ -1390,6 +1391,7 @@
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp" />
     <ClCompile Include="Source\Network\NetLobbyProtocol.cpp" />
     <ClCompile Include="Source\Network\NetLobbySession.cpp" />
+    <ClCompile Include="Source\Network\NetGameCommand.cpp" />
     <ClCompile Include="Source\Network\NetLockstep.cpp" />
     <ClCompile Include="Source\Network\NetLockstepSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetMatchConfig.cpp" />

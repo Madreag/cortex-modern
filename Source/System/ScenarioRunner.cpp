@@ -337,7 +337,7 @@ namespace RTE {
 			if (error) *error = "lockstep coordinator is not active";
 			return false;
 		}
-		return s_LockstepCoordinator->QueueLocalInput(tick, frames, error);
+		return s_LockstepCoordinator->QueueLocalInput(tick, frames, {}, error);
 	}
 
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
