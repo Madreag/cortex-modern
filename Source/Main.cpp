@@ -535,9 +535,9 @@ void RunGameLoop() {
 				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				g_SimChecksum.BeginTick(simTick);
 
-				// Positive control — inject exactly one genuine non-determinism at a fixed tick
-				// so the determinism check's selftest sees a guaranteed divergence.
-				if (ScenarioRunner::IsActive() && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
+				// Positive control — inject one genuine non-determinism at a fixed tick so the
+				// determinism check (scenario) or the menu-service E2E gate sees a guaranteed divergence.
+				if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
 					std::random_device perturbDevice;
 					const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
 					for (unsigned k = 0; k < perturbAdvance; ++k) {
