@@ -58,6 +58,9 @@ namespace RTE {
 
 		/// Gets whether the interactive main menu is active (past the title transition).
 		bool IsMainMenuInteractive() const { return m_ActiveMenu == MainMenuActive; }
+
+		/// Forces the title screen straight to the interactive main menu, skipping the intro, for scripted automation.
+		void SkipTitleIntroForAutomation();
 #pragma endregion
 
 	private:
