@@ -4,6 +4,7 @@ sources += files(
 'GnsTransport.cpp',
 'LoopbackTransport.cpp',
 'NetActorOwnership.cpp',
+'NetGameCommand.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',
 'NetLobbyProtocol.cpp',

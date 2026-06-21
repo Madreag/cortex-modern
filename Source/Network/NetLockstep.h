@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ControllerFrame.h"
+#include "NetGameCommand.h"
 #include "NetMatchConfig.h"
 #include "NetTransport.h"
 
@@ -73,6 +74,7 @@ namespace RTE {
 		uint8_t senderPeerId = 0;
 		uint64_t targetFrame = 0;
 		std::vector<ControllerFrame> frames;
+		std::vector<NetGameCommand> commands;
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -135,6 +137,8 @@ namespace RTE {
 		uint64_t frame = 0;
 		std::vector<ControllerFrame> localFrames;
 		std::vector<ControllerFrame> remoteFrames;
+		std::vector<NetGameCommand> localCommands;
+		std::vector<NetGameCommand> remoteCommands;
 	};
 
 	struct NetLockstepStats {
@@ -171,6 +175,7 @@ namespace RTE {
 		static constexpr size_t c_MaxOwnershipPolicyBytes = 128;
 		static constexpr size_t c_MaxDiagnosticBytes = 512;
 		static constexpr size_t c_MaxFramesPerPacket = 512;
+		static constexpr size_t c_MaxCommandsPerPacket = 256;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
 		static constexpr uint8_t c_MaxPeerCount = 16;
 
@@ -187,7 +192,7 @@ namespace RTE {
 	class NetLockstepCoordinator {
 	public:
 		bool Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
-		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, std::string* error = nullptr);
+		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
 		void Tick(uint64_t nowMs);
 		void Complete(const std::string& message = "complete");
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
@@ -223,6 +228,8 @@ namespace RTE {
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_RemoteFrames;
+		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
+		std::map<uint64_t, std::vector<NetGameCommand>> m_RemoteCommands;
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 	};
 

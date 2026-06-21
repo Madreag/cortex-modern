@@ -272,6 +272,10 @@ namespace RTE {
 			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id") || !ValidateSortedFrames(payload.frames, error)) {
 				return false;
 			}
+			if (payload.commands.size() > NetLockstepCodec::c_MaxCommandsPerPacket) {
+				SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "frame packet has too many game commands");
+				return false;
+			}
 			AppendU8(out, payload.senderPeerId);
 			AppendU8(out, 0);
 			AppendU16LE(out, static_cast<uint16_t>(payload.frames.size()));
@@ -279,6 +283,20 @@ namespace RTE {
 			for (const ControllerFrame& frame : payload.frames) {
 				const std::vector<uint8_t> encodedFrame = ControllerFrameCodec::Encode(frame);
 				out.insert(out.end(), encodedFrame.begin(), encodedFrame.end());
+			}
+			AppendU16LE(out, static_cast<uint16_t>(payload.commands.size()));
+			for (const NetGameCommand& command : payload.commands) {
+				const NetGameCommandType type = NetGameCommandTypeOf(command.payload);
+				AppendU8(out, command.senderPeerId);
+				AppendU16LE(out, static_cast<uint16_t>(type));
+				switch (type) {
+					case NetGameCommandType::SetTeamFunds: {
+						const NetGameSetTeamFunds& funds = std::get<NetGameSetTeamFunds>(command.payload);
+						AppendU32LE(out, static_cast<uint32_t>(funds.team));
+						AppendU32LE(out, static_cast<uint32_t>(funds.funds));
+						break;
+					}
+				}
 			}
 			return true;
 		}
@@ -362,6 +380,42 @@ namespace RTE {
 			if (!ValidateSortedFrames(payload.frames, error)) {
 				return false;
 			}
+			uint16_t commandCount = 0;
+			if (!ReadOrTruncated(reader.ReadU16LE(commandCount), reader, error, "command_count")) {
+				return false;
+			}
+			if (commandCount > NetLockstepCodec::c_MaxCommandsPerPacket) {
+				SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "command_count exceeds maximum");
+				return false;
+			}
+			payload.commands.reserve(commandCount);
+			for (uint16_t i = 0; i < commandCount; ++i) {
+				NetGameCommand command;
+				uint16_t rawType = 0;
+				if (!ReadOrTruncated(reader.ReadU8(command.senderPeerId), reader, error, "command_sender_peer_id") ||
+				    !ReadOrTruncated(reader.ReadU16LE(rawType), reader, error, "command_type")) {
+					return false;
+				}
+				switch (static_cast<NetGameCommandType>(rawType)) {
+					case NetGameCommandType::SetTeamFunds: {
+						uint32_t team = 0;
+						uint32_t amount = 0;
+						if (!ReadOrTruncated(reader.ReadU32LE(team), reader, error, "set_team_funds_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(amount), reader, error, "set_team_funds_amount")) {
+							return false;
+						}
+						NetGameSetTeamFunds funds;
+						funds.team = static_cast<int32_t>(team);
+						funds.funds = static_cast<int32_t>(amount);
+						command.payload = funds;
+						break;
+					}
+					default:
+						SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
+						return false;
+				}
+				payload.commands.push_back(std::move(command));
+			}
 			out = std::move(payload);
 			return true;
 		}
@@ -420,7 +474,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepFrame::operator==(const NetLockstepFrame& rhs) const {
-		if (senderPeerId != rhs.senderPeerId || targetFrame != rhs.targetFrame || frames.size() != rhs.frames.size()) {
+		if (senderPeerId != rhs.senderPeerId || targetFrame != rhs.targetFrame || frames.size() != rhs.frames.size() || commands != rhs.commands) {
 			return false;
 		}
 		for (size_t i = 0; i < frames.size(); ++i) {
@@ -645,6 +699,8 @@ namespace RTE {
 		m_LastStallFrame = UINT64_MAX;
 		m_LocalFrames.clear();
 		m_RemoteFrames.clear();
+		m_LocalCommands.clear();
+		m_RemoteCommands.clear();
 		m_ReadyFrames.clear();
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
@@ -662,7 +718,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, std::string* error) {
+	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error) {
 		if (m_State != NetLockstepState::Running) {
 			if (error) *error = "lockstep coordinator is not running";
 			return false;
@@ -682,10 +738,14 @@ namespace RTE {
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.targetFrame = targetFrame;
 		packet.frames = frames;
+		packet.commands = commands;
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
 		m_LocalFrames[targetFrame] = frames;
+		if (!commands.empty()) {
+			m_LocalCommands[targetFrame] = commands;
+		}
 		++m_Stats.framePacketsSent;
 		m_Stats.localControllerFramesSent += frames.size();
 		return true;
@@ -873,6 +933,9 @@ namespace RTE {
 		}
 		m_Stats.remoteControllerFramesReceived += frame.frames.size();
 		m_RemoteFrames[frame.targetFrame] = frame.frames;
+		if (!frame.commands.empty()) {
+			m_RemoteCommands[frame.targetFrame] = frame.commands;
+		}
 		AdvanceReadyFrames(nowMs);
 	}
 
@@ -895,6 +958,14 @@ namespace RTE {
 			ready.frame = m_Stats.nextFrame;
 			ready.localFrames = std::move(localIt->second);
 			ready.remoteFrames = std::move(remoteIt->second);
+			if (auto localCmdIt = m_LocalCommands.find(ready.frame); localCmdIt != m_LocalCommands.end()) {
+				ready.localCommands = std::move(localCmdIt->second);
+				m_LocalCommands.erase(localCmdIt);
+			}
+			if (auto remoteCmdIt = m_RemoteCommands.find(ready.frame); remoteCmdIt != m_RemoteCommands.end()) {
+				ready.remoteCommands = std::move(remoteCmdIt->second);
+				m_RemoteCommands.erase(remoteCmdIt);
+			}
 			m_Stats.remoteControllerFramesAccepted += ready.remoteFrames.size();
 			m_LocalFrames.erase(localIt);
 			m_RemoteFrames.erase(remoteIt);
