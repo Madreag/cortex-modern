@@ -67,7 +67,9 @@ namespace RTE {
 			m_IsHost = request.host;
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.host ? 0 : 1;
+			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		}
+		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest));
 		return true;
 	}
@@ -92,6 +94,7 @@ namespace RTE {
 			m_IsHost = false;
 			m_LocalPeerId = 0;
 			m_LocalTeam = -1;
+			m_LocalName.clear();
 			m_ActivityPreset.clear();
 			m_State = NetMatchServiceState::Idle;
 			m_StatusText = "Idle";
@@ -124,6 +127,7 @@ namespace RTE {
 			m_IsHost = false;
 			m_LocalPeerId = 0;
 			m_LocalTeam = -1;
+			m_LocalName.clear();
 			m_State = NetMatchServiceState::Failed;
 			m_StatusText = "Match stopped";
 			m_ErrorText = error;
@@ -211,6 +215,18 @@ namespace RTE {
 		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
+		if (snapshot.activityPreset.empty()) {
+			snapshot.activityPreset = m_ActivityPreset;
+		}
+		if (snapshot.members.empty() && snapshot.active) {
+			NetLobbyMember local;
+			local.peerId = m_LocalPeerId;
+			local.displayName = m_LocalName;
+			local.team = m_LocalTeam >= 0 ? static_cast<uint8_t>(m_LocalTeam) : 0;
+			local.isLocal = true;
+			local.connected = true;
+			snapshot.members.push_back(local);
+		}
 		return snapshot;
 	}
 

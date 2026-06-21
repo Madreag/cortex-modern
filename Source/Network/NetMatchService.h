@@ -48,6 +48,7 @@ namespace RTE {
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		NetMatchServiceState GetState() const;
+		bool WasEverStarted() const { return m_EverStarted.load(); }
 		NetLobbySnapshot GetLobbySnapshot() const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
@@ -74,6 +75,7 @@ namespace RTE {
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
 		int m_LocalTeam = -1;
+		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
 
 		std::unique_ptr<GnsTransport> m_Transport;
@@ -83,6 +85,7 @@ namespace RTE {
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelRequested{false};
+		std::atomic<bool> m_EverStarted{false};
 	};
 
 } // namespace RTE
