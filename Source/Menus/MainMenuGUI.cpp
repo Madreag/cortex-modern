@@ -641,7 +641,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			continue;
 		}
 		const NetLobbyMember& member = snapshot.members[i];
-		std::string row = member.displayName + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
+		const std::string name = member.displayName.size() > 14 ? member.displayName.substr(0, 13) + "." : member.displayName;
+		std::string row = name + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 		if (!member.isLocal && member.connected) {
 			row += " - ";
