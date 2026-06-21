@@ -61,6 +61,9 @@ namespace RTE {
 
 		/// Forces the title screen straight to the interactive main menu, skipping the intro, for scripted automation.
 		void SkipTitleIntroForAutomation();
+
+		/// Forces an in-progress title transition straight to its game-start end, skipping the scroll animation, for scripted automation.
+		void SkipTitleTransitionForAutomation();
 #pragma endregion
 
 	private:

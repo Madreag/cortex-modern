@@ -109,6 +109,10 @@ void MenuMan::SkipTitleIntroForAutomation() {
 	SetActiveMenu();
 }
 
+void MenuMan::SkipTitleTransitionForAutomation() {
+	m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::TransitionEnd);
+}
+
 void MenuMan::HandleTransitionIntoMenuLoop() {
 	if (g_MetaMan.GameInProgress()) {
 		if (g_ActivityMan.SkipPauseMenuWhenPausingActivity()) {

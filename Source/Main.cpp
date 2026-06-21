@@ -459,6 +459,8 @@ void ProcessMenuScript() {
 	static size_t stepIndex = 0;
 	static int waitFrames = 0;
 	static bool loaded = false;
+	static std::string waitCond;
+	static int waitCondTimeout = 0;
 
 	if (!loaded) {
 		std::ifstream in(s_menuScriptPath);
@@ -471,12 +473,36 @@ void ProcessMenuScript() {
 		loaded = true;
 		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
 	}
+	static bool introSkipped = false;
 	if (!g_MenuMan.IsMainMenuInteractive()) {
-		g_MenuMan.SkipTitleIntroForAutomation();
+		if (!introSkipped) {
+			g_MenuMan.SkipTitleIntroForAutomation();
+		} else if (g_ActivityMan.ActivitySetToRestart()) {
+			// A match is launching; the scroll-out animation doesn't complete under the automation's forced
+			// title state, so force the transition straight to the game start.
+			g_MenuMan.SkipTitleTransitionForAutomation();
+		}
 		return;
 	}
+	introSkipped = true;
 	if (waitFrames > 0) {
 		--waitFrames;
+		return;
+	}
+	// Condition wait: block until the service reaches a member count / state, robust to variable FPS across
+	// two contending instances (frame-count waits can't synchronize two real-time peers reliably).
+	if (!waitCond.empty()) {
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+		bool met = false;
+		if (waitCond.rfind("members:", 0) == 0) {
+			met = static_cast<int>(snapshot.members.size()) >= std::atoi(waitCond.c_str() + 8);
+		} else if (waitCond.rfind("state:", 0) == 0) {
+			met = snapshot.serviceState == waitCond.substr(6);
+		}
+		if (met || --waitCondTimeout <= 0) {
+			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
+			waitCond.clear();
+		}
 		return;
 	}
 	if (stepIndex >= steps.size()) {
@@ -490,6 +516,16 @@ void ProcessMenuScript() {
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
 	if (cmd == "wait") {
 		iss >> waitFrames;
+	} else if (cmd == "wait_members") {
+		int n = 0;
+		iss >> n;
+		waitCond = "members:" + std::to_string(n);
+		waitCondTimeout = 4000;
+	} else if (cmd == "wait_state") {
+		std::string s;
+		iss >> s;
+		waitCond = "state:" + s;
+		waitCondTimeout = 4000;
 	} else if (cmd == "screenshot") {
 		std::string name;
 		iss >> name;
