@@ -284,6 +284,29 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 	return true;
 }
 
+static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
+	if (readyFrame.localCommands.empty() && readyFrame.remoteCommands.empty()) {
+		return;
+	}
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity) {
+		return;
+	}
+	// Merge local + remote and sort by sender so both peers apply the identical, identically-ordered set.
+	std::vector<NetGameCommand> commands;
+	commands.reserve(readyFrame.localCommands.size() + readyFrame.remoteCommands.size());
+	commands.insert(commands.end(), readyFrame.localCommands.begin(), readyFrame.localCommands.end());
+	commands.insert(commands.end(), readyFrame.remoteCommands.begin(), readyFrame.remoteCommands.end());
+	std::stable_sort(commands.begin(), commands.end(), [](const NetGameCommand& lhs, const NetGameCommand& rhs) {
+		return lhs.senderPeerId < rhs.senderPeerId;
+	});
+	for (const NetGameCommand& command: commands) {
+		if (const NetGameSetTeamFunds* funds = std::get_if<NetGameSetTeamFunds>(&command.payload)) {
+			activity->SetTeamFunds(static_cast<float>(funds->funds), funds->team);
+		}
+	}
+}
+
 static bool CanonicalizeControllerFramesThroughWire(std::vector<ControllerFrame>& frames, std::string& error) {
 	for (ControllerFrame& frame: frames) {
 		const std::vector<uint8_t> encoded = ControllerFrameCodec::Encode(frame);
@@ -2027,6 +2050,12 @@ void MovableMan::Update() {
 			const int32_t rosterSize = static_cast<int32_t>(m_ActorRoster[team].size());
 			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
 		}
+		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				const float teamFunds = activity->GetTeamFunds(team);
+				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
+			}
+		}
 
 		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
 		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
@@ -2266,6 +2295,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
+		ApplyLockstepGameCommands(readyFrame);
 
 		if (ScenarioRunner::IsControllerLogRecording()) {
 			std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
