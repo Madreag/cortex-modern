@@ -1,6 +1,7 @@
 #include "NetLockstep.h"
 
 #include "NetActorOwnership.h"
+#include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 
 #include <algorithm>
@@ -814,7 +815,7 @@ namespace RTE {
 			case NetTransportEventType::PacketReceived: {
 				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes);
 				if (!decoded.ok) {
-					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetProtocol::Decode(event.bytes).ok) {
+					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (NetProtocol::Decode(event.bytes).ok || NetLobbyProtocol::Decode(event.bytes).ok)) {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}
