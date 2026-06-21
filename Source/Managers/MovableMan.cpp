@@ -304,6 +304,10 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		if (const NetGameSetTeamFunds* funds = std::get_if<NetGameSetTeamFunds>(&command.payload)) {
 			activity->SetTeamFunds(static_cast<float>(funds->funds), funds->team);
 		} else if (const NetGameSpawnActor* spawn = std::get_if<NetGameSpawnActor>(&command.payload)) {
+			// Reject an out-of-range team (would index past the team arrays). Ownership authority is deferred to PvP.
+			if (spawn->team < Activity::TeamOne || spawn->team >= Activity::MaxTeamCount) {
+				continue;
+			}
 			if (const Entity* preset = g_PresetMan.GetEntityPreset(spawn->className, spawn->preset, spawn->module)) {
 				if (Actor* actor = dynamic_cast<Actor*>(preset->Clone())) {
 					actor->SetTeam(spawn->team);

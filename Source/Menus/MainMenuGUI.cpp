@@ -656,12 +656,22 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
 
-	const bool remotePresent = snapshot.members.size() >= 2;
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetVisible(snapshot.isHost);
-	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && remotePresent);
+	// Start only once the remote peer is actually ready, not merely present.
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
+}
+
+// True only if the control and every ancestor panel are enabled and visible, i.e. a human could actually click it.
+static bool IsControlClickable(GUIControl* control) {
+	for (GUIControl* node = control; node; node = node->GetParent()) {
+		if (!node->GetEnabled() || !node->GetVisible()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
@@ -669,7 +679,7 @@ bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
 	}
-	if (!control) {
+	if (!control || !IsControlClickable(control)) {
 		return false;
 	}
 	switch (m_ActiveMenuScreen) {
