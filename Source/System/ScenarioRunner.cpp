@@ -150,6 +150,11 @@ namespace RTE {
 			s_Args.selftestSpawnCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-deliver-command") {
+			// Arm the host-issued delivery command. Boolean flag.
+			s_Args.selftestDeliverCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 

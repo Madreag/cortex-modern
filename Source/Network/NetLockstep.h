@@ -176,6 +176,7 @@ namespace RTE {
 		static constexpr size_t c_MaxDiagnosticBytes = 512;
 		static constexpr size_t c_MaxFramesPerPacket = 512;
 		static constexpr size_t c_MaxCommandsPerPacket = 256;
+		static constexpr size_t c_MaxCargoPerDelivery = 64;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
 		static constexpr uint8_t c_MaxPeerCount = 16;
 

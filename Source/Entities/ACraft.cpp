@@ -184,6 +184,8 @@ void ACraft::Clear() {
 	m_HatchState = CLOSED;
 	m_HatchTimer.Reset();
 	m_HatchDelay = 0;
+	m_NetworkDelivery = false;
+	m_NetworkDeliveryTimer.Reset();
 	m_HatchOpenSound = nullptr;
 	m_HatchCloseSound = nullptr;
 	m_CollectedInventory.clear();
@@ -422,6 +424,10 @@ bool ACraft::HandlePieCommand(PieSliceType pieSliceIndex) {
 }
 
 void ACraft::OpenHatch() {
+	// A network delivery unloads on a deterministic schedule, not via off-wire AI hatch control.
+	if (m_NetworkDelivery) {
+		return;
+	}
 	if (m_HatchState == CLOSED || m_HatchState == CLOSING) {
 		m_HatchState = OPENING;
 		m_HatchTimer.Reset();
@@ -433,7 +439,18 @@ void ACraft::OpenHatch() {
 	}
 }
 
+void ACraft::SetNetworkDelivery(bool networkDelivery) {
+	m_NetworkDelivery = networkDelivery;
+	if (networkDelivery) {
+		m_NetworkDeliveryTimer.Reset();
+	}
+}
+
 void ACraft::CloseHatch() {
+	// A network delivery's hatch is driven deterministically, so off-wire AI cannot close it either.
+	if (m_NetworkDelivery) {
+		return;
+	}
 	if (m_HatchState == OPEN || m_HatchState == OPENING) {
 		m_HatchState = CLOSING;
 		m_HatchTimer.Reset();
@@ -656,6 +673,18 @@ void ACraft::Update() {
 				m_CrashSound->Play(m_Pos);
 			}
 			m_CrashTimer.Reset();
+		}
+	}
+
+	///////////////////////////////////////////////////
+	// Network delivery: open the hatch deterministically on every peer once landed or after a fallback timeout.
+	if (m_NetworkDelivery && m_HatchState == CLOSED) {
+		if (g_SceneMan.FindAltitude(m_Pos, 1000, 20) < 100.0F || m_NetworkDeliveryTimer.IsPastSimMS(4000)) {
+			m_HatchState = OPENING;
+			m_HatchTimer.Reset();
+			if (m_HatchOpenSound) {
+				m_HatchOpenSound->Play(m_Pos);
+			}
 		}
 	}
 

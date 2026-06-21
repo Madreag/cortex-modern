@@ -7,6 +7,7 @@
 #include "PresetMan.h"
 #include "AEmitter.h"
 #include "AHuman.h"
+#include "ACraft.h"
 #include "MOPixel.h"
 #include "HeldDevice.h"
 #include "SLTerrain.h"
@@ -319,6 +320,40 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					delete clone;
 				}
 			}
+		} else if (const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload)) {
+			// Reject an out-of-range team or a non-finite spawn before building the craft.
+			if (delivery->team < Activity::TeamOne || delivery->team >= Activity::MaxTeamCount || !std::isfinite(delivery->posX) || !std::isfinite(delivery->posY)) {
+				continue;
+			}
+			const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery->craftClassName, delivery->craftPreset, delivery->craftModule);
+			if (!craftPreset) {
+				continue;
+			}
+			Entity* craftClone = craftPreset->Clone();
+			ACraft* craft = dynamic_cast<ACraft*>(craftClone);
+			if (!craft) {
+				delete craftClone;
+				continue;
+			}
+			// Load the manifest in order so both peers clone the same presets and assign matching unique ids.
+			for (const NetGameCargoItem& item : delivery->cargo) {
+				const Entity* itemPreset = g_PresetMan.GetEntityPreset(item.className, item.preset, item.module);
+				if (!itemPreset) {
+					continue;
+				}
+				Entity* itemClone = itemPreset->Clone();
+				if (MovableObject* cargo = dynamic_cast<MovableObject*>(itemClone)) {
+					craft->AddInventoryItem(cargo);
+				} else {
+					delete itemClone;
+				}
+			}
+			craft->SetTeam(delivery->team);
+			craft->SetPos(Vector(delivery->posX, delivery->posY));
+			craft->SetControllerMode(Controller::CIM_AI);
+			craft->SetAIMode(Actor::AIMODE_DELIVER);
+			craft->SetNetworkDelivery(true);
+			g_MovableMan.AddActor(craft);
 		}
 	}
 }

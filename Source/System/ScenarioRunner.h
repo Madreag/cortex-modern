@@ -46,6 +46,7 @@ namespace RTE {
 			                                 // check's positive control).
 			bool        selftestFundsCommand = false; // -net-match-e2e-funds-command: host-issued funds command at tick 50.
 			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host-issued spawn command at tick 50.
+			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
 		};
 
 		/// True if `-scenario` was supplied on the command line.

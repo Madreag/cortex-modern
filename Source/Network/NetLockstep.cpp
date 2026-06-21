@@ -320,6 +320,30 @@ namespace RTE {
 						AppendU32LE(out, static_cast<uint32_t>(spawn.team));
 						break;
 					}
+					case NetGameCommandType::DeliverCargo: {
+						const NetGameDeliverCargo& delivery = std::get<NetGameDeliverCargo>(command.payload);
+						if (delivery.cargo.size() > NetLockstepCodec::c_MaxCargoPerDelivery) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "delivery has too many cargo items");
+							return false;
+						}
+						if (!AppendString(out, delivery.craftClassName, NetLockstepCodec::c_MaxScenarioBytes, "delivery_craft_class_name", error) ||
+						    !AppendString(out, delivery.craftPreset, NetLockstepCodec::c_MaxScenarioBytes, "delivery_craft_preset", error) ||
+						    !AppendString(out, delivery.craftModule, NetLockstepCodec::c_MaxScenarioBytes, "delivery_craft_module", error)) {
+							return false;
+						}
+						AppendU32LE(out, FloatToBitsLE(delivery.posX));
+						AppendU32LE(out, FloatToBitsLE(delivery.posY));
+						AppendU32LE(out, static_cast<uint32_t>(delivery.team));
+						AppendU16LE(out, static_cast<uint16_t>(delivery.cargo.size()));
+						for (const NetGameCargoItem& item : delivery.cargo) {
+							if (!AppendString(out, item.className, NetLockstepCodec::c_MaxScenarioBytes, "delivery_cargo_class_name", error) ||
+							    !AppendString(out, item.preset, NetLockstepCodec::c_MaxScenarioBytes, "delivery_cargo_preset", error) ||
+							    !AppendString(out, item.module, NetLockstepCodec::c_MaxScenarioBytes, "delivery_cargo_module", error)) {
+								return false;
+							}
+						}
+						break;
+					}
 				}
 			}
 			return true;
@@ -451,6 +475,41 @@ namespace RTE {
 						spawn.posY = FloatFromBitsLE(posYBits);
 						spawn.team = static_cast<int32_t>(team);
 						command.payload = spawn;
+						break;
+					}
+					case NetGameCommandType::DeliverCargo: {
+						NetGameDeliverCargo delivery;
+						uint32_t posXBits = 0;
+						uint32_t posYBits = 0;
+						uint32_t team = 0;
+						uint16_t cargoCount = 0;
+						if (!reader.ReadString(delivery.craftClassName, NetLockstepCodec::c_MaxScenarioBytes, "delivery_craft_class_name", error) ||
+						    !reader.ReadString(delivery.craftPreset, NetLockstepCodec::c_MaxScenarioBytes, "delivery_craft_preset", error) ||
+						    !reader.ReadString(delivery.craftModule, NetLockstepCodec::c_MaxScenarioBytes, "delivery_craft_module", error) ||
+						    !ReadOrTruncated(reader.ReadU32LE(posXBits), reader, error, "delivery_pos_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(posYBits), reader, error, "delivery_pos_y") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "delivery_team") ||
+						    !ReadOrTruncated(reader.ReadU16LE(cargoCount), reader, error, "delivery_cargo_count")) {
+							return false;
+						}
+						if (cargoCount > NetLockstepCodec::c_MaxCargoPerDelivery) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "delivery_cargo_count exceeds maximum");
+							return false;
+						}
+						delivery.cargo.reserve(cargoCount);
+						for (uint16_t c = 0; c < cargoCount; ++c) {
+							NetGameCargoItem item;
+							if (!reader.ReadString(item.className, NetLockstepCodec::c_MaxScenarioBytes, "delivery_cargo_class_name", error) ||
+							    !reader.ReadString(item.preset, NetLockstepCodec::c_MaxScenarioBytes, "delivery_cargo_preset", error) ||
+							    !reader.ReadString(item.module, NetLockstepCodec::c_MaxScenarioBytes, "delivery_cargo_module", error)) {
+								return false;
+							}
+							delivery.cargo.push_back(std::move(item));
+						}
+						delivery.posX = FloatFromBitsLE(posXBits);
+						delivery.posY = FloatFromBitsLE(posYBits);
+						delivery.team = static_cast<int32_t>(team);
+						command.payload = std::move(delivery);
 						break;
 					}
 					default:

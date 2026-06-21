@@ -731,6 +731,10 @@ void RunGameLoop() {
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestSpawnCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1000.0F, 200.0F, 0}});
 			}
+			// E2E control: host-issued delivery at tick 50; both peers must build the identical craft, hold, and flight.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
+			}
 
 			g_UInputMan.Update();
 

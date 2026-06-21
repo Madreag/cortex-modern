@@ -217,6 +217,15 @@ namespace RTE {
 		/// Closes the hatch doors, if they're open or opening.
 		void CloseHatch();
 
+		/// Sets whether this delivers as a network-synced delivery, unloading on a deterministic schedule on
+		/// every peer instead of via off-wire AI hatch control.
+		/// @param networkDelivery Whether this is a network-synced delivery.
+		void SetNetworkDelivery(bool networkDelivery);
+
+		/// Gets whether this delivers as a network-synced delivery.
+		/// @return Whether this is a network-synced delivery.
+		bool IsNetworkDelivery() const { return m_NetworkDelivery; }
+
 		/// Adds an inventory item to this Actor.
 		/// @param pItemToAdd An pointer to the new item to add. Ownership IS TRANSFERRED!
 		/// @return None..
@@ -399,6 +408,10 @@ namespace RTE {
 		float m_AltitudeControl;
 		// Mutliplier to apply to default delivery time
 		float m_DeliveryDelayMultiplier;
+		// Whether this unloads on a deterministic schedule on every peer instead of via off-wire AI hatch control.
+		bool m_NetworkDelivery;
+		// Times a network delivery for its deterministic unload fallback.
+		Timer m_NetworkDeliveryTimer;
 
 		/// Private member variable and method declarations
 	private:
