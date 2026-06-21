@@ -677,13 +677,20 @@ void ACraft::Update() {
 	}
 
 	///////////////////////////////////////////////////
-	// Network delivery: open the hatch deterministically on every peer once landed or after a fallback timeout.
-	if (m_NetworkDelivery && m_HatchState == CLOSED) {
-		if (g_SceneMan.FindAltitude(m_Pos, 1000, 20) < 100.0F || m_NetworkDeliveryTimer.IsPastSimMS(4000)) {
+	// Network delivery: drive the hatch deterministically on every peer instead of via off-wire AI control.
+	if (m_NetworkDelivery) {
+		// Open once landed or after a fallback timeout while still carrying cargo; close once the hold is empty.
+		if (m_HatchState == CLOSED && !IsInventoryEmpty() && (g_SceneMan.FindAltitude(m_Pos, 1000, 20) < 100.0F || m_NetworkDeliveryTimer.IsPastSimMS(4000))) {
 			m_HatchState = OPENING;
 			m_HatchTimer.Reset();
 			if (m_HatchOpenSound) {
 				m_HatchOpenSound->Play(m_Pos);
+			}
+		} else if (m_HatchState == OPEN && IsInventoryEmpty()) {
+			m_HatchState = CLOSING;
+			m_HatchTimer.Reset();
+			if (m_HatchCloseSound) {
+				m_HatchCloseSound->Play(m_Pos);
 			}
 		}
 	}
