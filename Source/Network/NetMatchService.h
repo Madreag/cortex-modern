@@ -1,5 +1,6 @@
 #pragma once
 
+#include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
 #include "Singleton.h"
 
@@ -47,6 +48,7 @@ namespace RTE {
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		NetMatchServiceState GetState() const;
+		NetLobbySnapshot GetLobbySnapshot() const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
@@ -72,6 +74,7 @@ namespace RTE {
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
 		int m_LocalTeam = -1;
+		NetLobbySnapshot m_LobbySnapshot;
 
 		std::unique_ptr<GnsTransport> m_Transport;
 		std::unique_ptr<NetSession> m_Session;

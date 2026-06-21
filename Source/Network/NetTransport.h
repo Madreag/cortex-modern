@@ -42,6 +42,9 @@ namespace RTE {
 		virtual void Disconnect(NetPeerId peerId, const std::string& reason) = 0;
 		virtual void Stop() = 0;
 		virtual std::vector<NetTransportEvent> PollEvents() = 0;
+
+		/// Gets the round-trip ping to a peer in milliseconds, or 0 if unavailable.
+		virtual uint32_t GetPeerPingMs(NetPeerId) const { return 0; }
 	};
 
 } // namespace RTE

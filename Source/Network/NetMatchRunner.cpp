@@ -171,6 +171,9 @@ namespace RTE {
 			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now() - startTime).count());
 			m_Lobby.Tick(nowMs);
+			if (m_Config.publishLobby) {
+				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
+			}
 			if (m_Lobby.IsStarted()) {
 				m_MatchConfig = m_Lobby.GetMatchConfig();
 				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
@@ -235,6 +238,32 @@ namespace RTE {
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		return true;
+	}
+
+	NetLobbySnapshot NetMatchRunner::BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const {
+		NetLobbySnapshot snapshot;
+		snapshot.lobbyPhase = StateName(m_State);
+		snapshot.activityPreset = m_MatchConfig.activityPreset;
+		snapshot.sceneName = m_MatchConfig.sceneName;
+		snapshot.modeName = NetMatchConfigUtil::ModeName(m_MatchConfig.mode);
+		snapshot.localReady = m_Lobby.IsLocalReady();
+		snapshot.remoteReady = m_Lobby.IsRemoteReady();
+
+		const uint8_t localId = LocalPeerFor(m_Config.host);
+		const uint32_t remotePing = transport.GetPeerPingMs(session.GetRemoteTransportPeerId());
+		for (const NetMatchPlayerSlot& slot: m_MatchConfig.players) {
+			NetLobbyMember member;
+			member.peerId = slot.peerId;
+			member.displayName = slot.displayName;
+			member.team = slot.team;
+			member.cpu = slot.cpu;
+			member.isLocal = slot.peerId == localId;
+			member.ready = member.isLocal ? snapshot.localReady : snapshot.remoteReady;
+			member.connected = true;
+			member.pingMs = member.isLocal ? 0 : remotePing;
+			snapshot.members.push_back(member);
+		}
+		return snapshot;
 	}
 
 	void NetMatchRunner::SetFailed(const std::string& error) {

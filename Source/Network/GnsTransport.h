@@ -22,6 +22,7 @@ namespace RTE {
 		void Disconnect(NetPeerId peerId, const std::string& reason) override;
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
+		uint32_t GetPeerPingMs(NetPeerId peerId) const override;
 
 		static bool IsCompiledIn();
 
