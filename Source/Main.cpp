@@ -1148,7 +1148,26 @@ int RunNetMatchServiceE2E() {
 	}
 
 	if (setupError.empty()) {
+		// Arm the per-tick determinism trace so the gate can sim-gate-compare host vs client.
+		// Don't use ScenarioRunner::SetActive — that also arms the -scenario stop path and the
+		// selftest-perturb hook. BeginRun sets the run scenario; SetRecordTickHashes force-arms the
+		// trace regardless of IsActive(). The e2e tick loop still owns termination.
+		const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
+		if (traceRun) {
+			g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
+			g_MetricsCollector.SetRecordTickHashes(true);
+		}
 		RunGameLoop();
+		if (traceRun) {
+			g_MetricsCollector.EndRun();
+			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
+			if (!g_MetricsCollector.WriteReport(tracePath)) {
+				std::cerr << "[net-match-service-e2e] trace write failed: " << tracePath << std::endl;
+				s_netMatchServiceE2EExitCode = 1;
+			} else {
+				std::cout << "[net-match-service-e2e] wrote trace: " << tracePath << std::endl;
+			}
+		}
 	} else {
 		std::cerr << "[net-match-service-e2e] setup failed: " << setupError << std::endl;
 	}
