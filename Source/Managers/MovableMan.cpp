@@ -5,6 +5,7 @@
 #include "PostProcessMan.h"
 #include "PerformanceMan.h"
 #include "PresetMan.h"
+#include "ConsoleMan.h"
 #include "AEmitter.h"
 #include "AHuman.h"
 #include "ACraft.h"
@@ -319,6 +320,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				} else {
 					delete clone;
 				}
+			} else {
+				g_ConsoleMan.PrintString("ERROR: Deploy rejected - unknown preset \"" + spawn->preset + "\"");
 			}
 		} else if (const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload)) {
 			// Reject an out-of-range team or a non-finite spawn before building the craft.
@@ -327,6 +330,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 			const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery->craftClassName, delivery->craftPreset, delivery->craftModule);
 			if (!craftPreset) {
+				g_ConsoleMan.PrintString("ERROR: Delivery rejected - unknown craft preset \"" + delivery->craftPreset + "\"");
 				continue;
 			}
 			Entity* craftClone = craftPreset->Clone();
@@ -339,6 +343,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			for (const NetGameCargoItem& item : delivery->cargo) {
 				const Entity* itemPreset = g_PresetMan.GetEntityPreset(item.className, item.preset, item.module);
 				if (!itemPreset) {
+					g_ConsoleMan.PrintString("ERROR: Delivery cargo skipped - unknown preset \"" + item.preset + "\"");
 					continue;
 				}
 				Entity* itemClone = itemPreset->Clone();
