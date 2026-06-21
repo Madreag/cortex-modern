@@ -1148,10 +1148,8 @@ int RunNetMatchServiceE2E() {
 	}
 
 	if (setupError.empty()) {
-		// Arm the per-tick determinism trace so the gate can sim-gate-compare host vs client.
-		// Don't use ScenarioRunner::SetActive — that also arms the -scenario stop path and the
-		// selftest-perturb hook. BeginRun sets the run scenario; SetRecordTickHashes force-arms the
-		// trace regardless of IsActive(). The e2e tick loop still owns termination.
+		// Per-tick trace for the host/client sim-gated compare. Not SetActive() — that also arms the
+		// -scenario stop path + perturb hook; SetRecordTickHashes arms the trace alone.
 		const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
 		if (traceRun) {
 			g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);

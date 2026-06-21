@@ -257,6 +257,7 @@ namespace RTE {
 		runnerConfig.matchConfig = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId);
 		runnerConfig.useLobbyProtocol = true;
 		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
+		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
 		runnerConfig.scenario = request.activityPreset;
 		runnerConfig.autoReady = request.host;
