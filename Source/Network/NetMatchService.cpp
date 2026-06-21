@@ -290,6 +290,8 @@ namespace RTE {
 		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request);
 		runnerConfig.matchConfig = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId);
 		runnerConfig.useLobbyProtocol = true;
+		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
+		runnerConfig.sessionWaitMs = c_MenuLobbyWaitMs;
 		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;

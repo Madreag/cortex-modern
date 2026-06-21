@@ -7,6 +7,7 @@
 #include "SettingsMan.h"
 #include "ConsoleMan.h"
 #include "NetMatchService.h"
+#include "NetConnectionQuality.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
@@ -25,7 +26,9 @@
 
 #include "Resources/Credits.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 
 using namespace RTE;
 
@@ -594,6 +597,12 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	g_NetMatchService.Update();
 	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 
+	// While a connection is being established, cap the menu update rate so the GNS I/O service thread
+	// isn't CPU-starved by the menu rendering flat-out (the headless path yields the same way).
+	if (snapshot.inLobby) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+
 	// Reconcile the sub-screen with the live service state.
 	if (snapshot.inLobby || snapshot.running) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
@@ -634,8 +643,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const NetLobbyMember& member = snapshot.members[i];
 		std::string row = member.displayName + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
-		if (!member.isLocal && member.pingMs > 0) {
-			row += " - " + std::to_string(member.pingMs) + "ms";
+		if (!member.isLocal && member.connected) {
+			row += " - ";
+			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
+			if (member.pingMs > 0) {
+				row += " (" + std::to_string(member.pingMs) + "ms)";
+			}
 		}
 		label->SetText(row);
 		label->SetVisible(true);
