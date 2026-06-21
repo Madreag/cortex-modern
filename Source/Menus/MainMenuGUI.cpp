@@ -553,6 +553,64 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	g_GUISound.ButtonPressSound()->Play();
 }
 
+bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
+	}
+	if (!control) {
+		return false;
+	}
+	switch (m_ActiveMenuScreen) {
+		case MenuScreen::MainScreen: HandleMainScreenInputEvents(control); break;
+		case MenuScreen::MetaGameNoticeScreen: HandleMetaGameNoticeScreenInputEvents(control); break;
+		case MenuScreen::MultiplayerScreen: HandleMultiplayerScreenInputEvents(control); break;
+		case MenuScreen::EditorScreen: HandleEditorsScreenInputEvents(control); break;
+		case MenuScreen::QuitScreen: HandleQuitScreenInputEvents(control); break;
+		default: return false;
+	}
+	return true;
+}
+
+bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::string& text) {
+	if (GUITextBox* textBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName))) {
+		textBox->SetText(text);
+		return true;
+	}
+	return false;
+}
+
+std::string MainMenuGUI::AutomationActiveScreenName() const {
+	switch (m_ActiveMenuScreen) {
+		case MenuScreen::MainScreen: return "MainScreen";
+		case MenuScreen::MetaGameNoticeScreen: return "MetaGameNoticeScreen";
+		case MenuScreen::MultiplayerScreen: return "MultiplayerScreen";
+		case MenuScreen::SaveOrLoadGameScreen: return "SaveOrLoadGameScreen";
+		case MenuScreen::SettingsScreen: return "SettingsScreen";
+		case MenuScreen::ModManagerScreen: return "ModManagerScreen";
+		case MenuScreen::EditorScreen: return "EditorScreen";
+		case MenuScreen::CreditsScreen: return "CreditsScreen";
+		case MenuScreen::QuitScreen: return "QuitScreen";
+		default: return "Unknown";
+	}
+}
+
+std::string MainMenuGUI::AutomationMultiplayerStatus() const {
+	return g_NetMatchService.GetStatusText();
+}
+
+std::string MainMenuGUI::AutomationMultiplayerError() const {
+	return g_NetMatchService.GetErrorText();
+}
+
+bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
+	}
+	return control && control->GetEnabled();
+}
+
 void MainMenuGUI::HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl) {
 	if (guiEventControl == m_MainMenuButtons[MenuButton::PlayTutorialButton]) {
 		m_UpdateResult = MainMenuUpdateResult::ActivityStarted;

@@ -52,6 +52,12 @@ namespace RTE {
 		/// Sets if we're currently in a menu screen.
 		/// @param isInMenuScreen Whether we're in any menu screen.
 		void SetIsInMenuScreen(bool isInMenuScreen) { m_IsInMenuScreen = isInMenuScreen; }
+
+		/// Gets the main menu GUI, for scripted automation/testing.
+		MainMenuGUI* GetMainMenu() const { return m_MainMenu.get(); }
+
+		/// Gets whether the interactive main menu is active (past the title transition).
+		bool IsMainMenuInteractive() const { return m_ActiveMenu == MainMenuActive; }
 #pragma endregion
 
 	private:
