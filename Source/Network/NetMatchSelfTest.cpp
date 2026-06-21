@@ -104,6 +104,20 @@ namespace RTE {
 				*error = "ownership summary counts are wrong";
 				return false;
 			}
+			// A team's economy-command authority is its human peer, or the host for an unassigned team.
+			NetMatchConfig authorityConfig = MakeConfig();
+			if (NetActorOwnership::ResolveTeamCommandAuthority(authorityConfig, 0) != 1 ||
+			    NetActorOwnership::ResolveTeamCommandAuthority(authorityConfig, 1) != 2 ||
+			    NetActorOwnership::ResolveTeamCommandAuthority(authorityConfig, 2) != authorityConfig.hostPeerId) {
+				*error = "team command authority resolved the wrong peer";
+				return false;
+			}
+			NetMatchConfig emptyConfig = authorityConfig;
+			emptyConfig.players.clear();
+			if (NetActorOwnership::ResolveTeamCommandAuthority(emptyConfig, 0) != 0) {
+				*error = "team command authority should be unenforced when no teams are defined";
+				return false;
+			}
 			return true;
 		}
 

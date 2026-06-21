@@ -46,6 +46,16 @@ namespace RTE {
 		return ResolveOwnerPeer(config, query) == localPeerId;
 	}
 
+	uint8_t NetActorOwnership::ResolveTeamCommandAuthority(const NetMatchConfig& config, uint8_t team) {
+		if (config.players.empty()) {
+			return 0;
+		}
+		if (const uint8_t teamPeer = FindHumanPeerForTeam(config, team)) {
+			return teamPeer;
+		}
+		return config.hostPeerId;
+	}
+
 	NetActorOwnershipSummary NetActorOwnership::Summarize(const NetMatchConfig& config, const std::vector<NetActorOwnershipQuery>& actors) {
 		NetActorOwnershipSummary summary;
 		for (const NetActorOwnershipQuery& actor : actors) {

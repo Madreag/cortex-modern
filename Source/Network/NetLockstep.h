@@ -205,6 +205,7 @@ namespace RTE {
 		const NetLockstepStats& GetStats() const { return m_Stats; }
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
+		uint8_t ResolveTeamCommandAuthority(int team) const;
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLockstepState state);

@@ -304,10 +304,20 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
+		// Only the peer that controls a team may issue economy commands for it; both peers resolve this identically.
+		const int32_t commandTeam = NetGameCommandTeam(command.payload);
+		const uint8_t teamAuthority = ScenarioRunner::ResolveTeamCommandAuthority(commandTeam);
+		if (teamAuthority != 0 && command.senderPeerId != teamAuthority) {
+			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
+			continue;
+		}
 		if (const NetGameSetTeamFunds* funds = std::get_if<NetGameSetTeamFunds>(&command.payload)) {
+			if (funds->team < Activity::TeamOne || funds->team >= Activity::MaxTeamCount) {
+				continue;
+			}
 			activity->SetTeamFunds(static_cast<float>(funds->funds), funds->team);
 		} else if (const NetGameSpawnActor* spawn = std::get_if<NetGameSpawnActor>(&command.payload)) {
-			// Reject an out-of-range team or a non-finite position before applying. Ownership authority is deferred to PvP.
+			// Reject an out-of-range team or a non-finite position before applying.
 			if (spawn->team < Activity::TeamOne || spawn->team >= Activity::MaxTeamCount || !std::isfinite(spawn->posX) || !std::isfinite(spawn->posY)) {
 				continue;
 			}

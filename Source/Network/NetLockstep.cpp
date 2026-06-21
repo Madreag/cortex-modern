@@ -910,6 +910,13 @@ namespace RTE {
 		return ownerPeerId == m_Config.localPeerId;
 	}
 
+	uint8_t NetLockstepCoordinator::ResolveTeamCommandAuthority(int team) const {
+		if (team < 0) {
+			return 0;
+		}
+		return NetActorOwnership::ResolveTeamCommandAuthority(m_Config.matchConfig, static_cast<uint8_t>(team));
+	}
+
 	std::string NetLockstepCoordinator::BuildReportJson() const {
 		std::ostringstream out;
 		out << "{";
