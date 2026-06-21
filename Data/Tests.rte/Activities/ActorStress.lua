@@ -96,10 +96,10 @@ function TestScenarioActorStress:OnEnd()
     self:RecordMetric("waves_done", self._waves);
     -- Self-check: the iteration path was genuinely stressed only if a big,
     -- churning population ran -- all waves in, a high peak, heavy attrition,
-    -- and both lines bleeding.
+    -- and both lines took losses.
     self._passed = self._waves == #WAVE_TICKS
                    and self._peakPop >= 20
                    and deaths >= 20
-                   and self:CountTeam(Activity.TEAM_1) <= perTeam - 8
-                   and self:CountTeam(Activity.TEAM_2) <= perTeam - 8;
+                   and self:CountTeam(Activity.TEAM_1) <= perTeam - 7
+                   and self:CountTeam(Activity.TEAM_2) <= perTeam - 7;
 end

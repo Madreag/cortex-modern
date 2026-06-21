@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ControllerFrame.h"
+#include "NetMatchConfig.h"
 #include "NetTransport.h"
 
 #include <cstdint>
@@ -127,6 +128,7 @@ namespace RTE {
 		NetTransportLane frameLane = NetTransportLane::ControlReliable;
 		std::string scenario = "lockstep";
 		std::string ownershipPolicy = "unique-id-split";
+		NetMatchConfig matchConfig;
 	};
 
 	struct NetLockstepReadyFrame {
@@ -196,7 +198,7 @@ namespace RTE {
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
-		bool IsLocalActor(int64_t actorUniqueID) const;
+		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLockstepState state);

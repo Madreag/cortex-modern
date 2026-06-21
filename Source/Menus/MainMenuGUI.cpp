@@ -6,7 +6,13 @@
 #include "UInputMan.h"
 #include "SettingsMan.h"
 #include "ConsoleMan.h"
+#include "NetMatchService.h"
+#include "PresetMan.h"
+#include "SceneMan.h"
+#include "ScenarioRunner.h"
 
+#include "Activity.h"
+#include "Entity.h"
 #include "GameVersion.h"
 
 #include "GUI.h"
@@ -15,8 +21,11 @@
 #include "GUICollectionBox.h"
 #include "GUIButton.h"
 #include "GUILabel.h"
+#include "GUITextBox.h"
 
 #include "Resources/Credits.h"
+
+#include <cstdlib>
 
 using namespace RTE;
 
@@ -42,6 +51,11 @@ void MainMenuGUI::Clear() {
 
 	m_VersionLabel = nullptr;
 	m_CreditsTextLabel = nullptr;
+	m_MultiplayerStatusLabel = nullptr;
+	m_MultiplayerErrorLabel = nullptr;
+	m_MultiplayerNameTextBox = nullptr;
+	m_MultiplayerAddressTextBox = nullptr;
+	m_MultiplayerPortTextBox = nullptr;
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -74,6 +88,7 @@ void MainMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 
 	CreateMainScreen();
 	CreateMetaGameNoticeScreen();
+	CreateMultiplayerScreen();
 	CreateEditorsScreen();
 	CreateCreditsScreen();
 	CreateQuitScreen();
@@ -92,6 +107,7 @@ void MainMenuGUI::CreateMainScreen() {
 
 	m_MainMenuButtons[MenuButton::MetaGameButton] = dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControl("ButtonMainToMetaGame"));
 	m_MainMenuButtons[MenuButton::ScenarioButton] = dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControl("ButtonMainToSkirmish"));
+	m_MainMenuButtons[MenuButton::MultiplayerButton] = dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControl("ButtonMainToMultiplayer"));
 	m_MainMenuButtons[MenuButton::SaveOrLoadGameButton] = dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControl("ButtonSaveOrLoadGame"));
 	m_MainMenuButtons[MenuButton::SettingsButton] = dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControl("ButtonMainToOptions"));
 	m_MainMenuButtons[MenuButton::ModManagerButton] = dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControl("ButtonMainToModManager"));
@@ -114,6 +130,29 @@ void MainMenuGUI::CreateMainScreen() {
 	m_VersionLabel = dynamic_cast<GUILabel*>(m_MainMenuScreenGUIControlManager->GetControl("VersionLabel"));
 	m_VersionLabel->SetText("Community Project\nv" + c_GameVersion.str());
 	m_VersionLabel->SetPositionAbs(10, g_WindowMan.GetResY() - m_VersionLabel->GetTextHeight() - 5);
+}
+
+void MainMenuGUI::CreateMultiplayerScreen() {
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerScreen"));
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->CenterInParent(true, false);
+
+	m_MainMenuButtons[MenuButton::MultiplayerHostButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerHost"));
+	m_MainMenuButtons[MenuButton::MultiplayerJoinButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerJoin"));
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReady"));
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"));
+	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerName"));
+	m_MultiplayerAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerAddress"));
+	m_MultiplayerPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerPort"));
+	m_MultiplayerStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerStatus"));
+	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerError"));
+	m_MultiplayerNameTextBox->SetText("Player");
+	m_MultiplayerNameTextBox->SetMaxTextLength(24);
+	m_MultiplayerAddressTextBox->SetText("127.0.0.1");
+	m_MultiplayerAddressTextBox->SetMaxTextLength(64);
+	m_MultiplayerPortTextBox->SetText("41010");
+	m_MultiplayerPortTextBox->SetNumericOnly(true);
+	m_MultiplayerPortTextBox->SetMaxNumericValue(65535);
+	m_MultiplayerPortTextBox->SetMaxTextLength(5);
 }
 
 void MainMenuGUI::CreateMetaGameNoticeScreen() {
@@ -197,12 +236,22 @@ void MainMenuGUI::SetActiveMenuScreen(MenuScreen screenToShow, bool playButtonPr
 void MainMenuGUI::ShowMainScreen() {
 	m_VersionLabel->SetVisible(true);
 
-	m_MainMenuScreens[MenuScreen::MainScreen]->Resize(300, 196);
+	m_MainMenuScreens[MenuScreen::MainScreen]->Resize(300, 220);
 	m_MainMenuScreens[MenuScreen::MainScreen]->SetVisible(true);
 
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetVisible(false);
 	m_MainMenuButtons[MenuButton::ResumeButton]->SetVisible(false);
 
+	m_MenuScreenChange = false;
+}
+
+void MainMenuGUI::ShowMultiplayerScreen() {
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->SetVisible(true);
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GUIPanel::AddChild(m_MainMenuButtons[MenuButton::BackToMainButton]);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetVisible(true);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionAbs((m_RootBoxMaxWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetYPos() + 250);
+	m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
+	m_MultiplayerErrorLabel->SetText(g_NetMatchService.GetErrorText());
 	m_MenuScreenChange = false;
 }
 
@@ -315,6 +364,25 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 			}
 			backToMainMenu = HandleInputEvents();
 			break;
+		case MenuScreen::MultiplayerScreen:
+			if (m_MenuScreenChange) {
+				ShowMultiplayerScreen();
+			}
+			g_NetMatchService.Update();
+			m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
+			m_MultiplayerErrorLabel->SetText(g_NetMatchService.GetErrorText());
+			{
+				const NetMatchServiceState state = g_NetMatchService.GetState();
+				const bool idleOrFailed = state == NetMatchServiceState::Idle || state == NetMatchServiceState::Failed;
+				const bool starting = state == NetMatchServiceState::Starting;
+				m_MainMenuButtons[MenuButton::MultiplayerHostButton]->SetEnabled(idleOrFailed);
+				m_MainMenuButtons[MenuButton::MultiplayerJoinButton]->SetEnabled(idleOrFailed);
+				m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(starting);
+				m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(starting && g_NetMatchService.GetLocalPeerId() == 1);
+			}
+			MaybeLaunchMultiplayerActivity();
+			backToMainMenu = HandleInputEvents();
+			break;
 		case MenuScreen::SaveOrLoadGameScreen:
 			backToMainMenu = m_SaveLoadMenu->HandleInputEvents();
 			break;
@@ -360,6 +428,8 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 					m_SettingsMenu->RefreshActiveSettingsMenuScreen();
 				}
 				g_SettingsMan.UpdateSettingsFile();
+			} else if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen) {
+				g_NetMatchService.Destroy();
 			} else if (m_ActiveMenuScreen == MenuScreen::CreditsScreen) {
 				m_UpdateResult = MainMenuUpdateResult::BackToMainFromCredits;
 			}
@@ -396,6 +466,9 @@ bool MainMenuGUI::HandleInputEvents() {
 				case MenuScreen::MetaGameNoticeScreen:
 					HandleMetaGameNoticeScreenInputEvents(guiEvent.GetControl());
 					break;
+				case MenuScreen::MultiplayerScreen:
+					HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
+					break;
 				case MenuScreen::EditorScreen:
 					HandleEditorsScreenInputEvents(guiEvent.GetControl());
 					break;
@@ -422,6 +495,8 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 		}
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ScenarioButton]) {
 		m_UpdateResult = MainMenuUpdateResult::ScenarioStarted;
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerButton]) {
+		SetActiveMenuScreen(MenuScreen::MultiplayerScreen);
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::SaveOrLoadGameButton]) {
 		SetActiveMenuScreen(MenuScreen::SaveOrLoadGameScreen);
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::SettingsButton]) {
@@ -439,6 +514,43 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 		m_UpdateResult = MainMenuUpdateResult::ActivityResumed;
 		g_GUISound.BackButtonPressSound()->Play();
 	}
+}
+
+void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl) {
+	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
+		g_NetMatchService.SetReady();
+		m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
+		g_GUISound.ButtonPressSound()->Play();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerStartButton]) {
+		g_NetMatchService.RequestStart();
+		m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
+		g_GUISound.ButtonPressSound()->Play();
+		return;
+	}
+	if (guiEventControl != m_MainMenuButtons[MenuButton::MultiplayerHostButton] && guiEventControl != m_MainMenuButtons[MenuButton::MultiplayerJoinButton]) {
+		return;
+	}
+
+	const bool host = guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostButton];
+	const long parsedPort = std::strtol(m_MultiplayerPortTextBox->GetText().c_str(), nullptr, 10);
+	NetMatchServiceRequest request;
+	request.host = host;
+	request.address = m_MultiplayerAddressTextBox->GetText();
+	request.port = parsedPort > 0 && parsedPort <= 65535 ? static_cast<uint16_t>(parsedPort) : 41010;
+	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
+	request.activityPreset = "P4 Alpha Duel";
+	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+
+	std::string error;
+	if (!g_NetMatchService.Start(request, &error)) {
+		m_MultiplayerErrorLabel->SetText(error);
+	} else {
+		m_MultiplayerErrorLabel->SetText("");
+		m_MultiplayerStatusLabel->SetText(g_NetMatchService.GetStatusText());
+	}
+	g_GUISound.ButtonPressSound()->Play();
 }
 
 void MainMenuGUI::HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl) {
@@ -499,6 +611,43 @@ void MainMenuGUI::UpdateMainScreenHoveredButton(const GUIButton* hoveredButton) 
 	} else {
 		m_MainScreenHoveredButton = nullptr;
 	}
+}
+
+void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
+	std::string activityPreset;
+	if (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
+		return;
+	}
+	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
+	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
+	if (!presetActivity) {
+		m_MultiplayerErrorLabel->SetText("Could not find multiplayer activity preset.");
+		g_NetMatchService.Destroy();
+		return;
+	}
+	if (!presetActivity->GetSceneName().empty()) {
+		g_SceneMan.SetSceneToLoad(presetActivity->GetSceneName(), true, false);
+	}
+	Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
+	if (!activity) {
+		m_MultiplayerErrorLabel->SetText("Could not create multiplayer activity.");
+		g_NetMatchService.Destroy();
+		return;
+	}
+	const int localTeam = g_NetMatchService.GetLocalTeam();
+	if (localTeam >= Activity::TeamOne && localTeam < Activity::MaxTeamCount) {
+		activity->ClearPlayers(false);
+		activity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
+		activity->ForceSetTeamAsActive(Activity::TeamOne);
+		activity->ForceSetTeamAsActive(Activity::TeamTwo);
+		activity->SetTeamFunds(0, Activity::TeamOne);
+		activity->SetTeamFunds(0, Activity::TeamTwo);
+	}
+	ScenarioRunner::ApplyDeterministicConfig();
+	g_ActivityMan.SetStartActivity(activity);
+	m_UpdateResult = MainMenuUpdateResult::ActivityStarted;
+	SetActiveMenuScreen(MenuScreen::MainScreen, false);
+	g_GUISound.ExitMenuSound()->Play();
 }
 
 void MainMenuGUI::Draw() {

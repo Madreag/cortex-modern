@@ -80,12 +80,13 @@ namespace RTE {
 		static void RecordControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames);
 		static bool GetReplayControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames, std::string* error = nullptr);
 		static void SetControllerReplayError(const std::string& error);
+		static void ClearControllerReplayError();
 		static bool HasControllerReplayError();
 		static const std::string& GetControllerReplayError();
 
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator);
 		static bool IsLockstepControllerSyncActive();
-		static bool IsLockstepLocalActor(int64_t actorUniqueID);
+		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		static uint16_t GetLockstepInputDelayFrames();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);

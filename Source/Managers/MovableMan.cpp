@@ -239,12 +239,16 @@ static bool ApplyControllerFramesToActors(const std::deque<Actor*>& actors, cons
 	return true;
 }
 
+static bool IsLockstepLocalActor(const Actor* actor) {
+	return ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
+}
+
 static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::deque<Actor*>& actors, bool localOwned) {
 	std::vector<ControllerFrame> frames;
 	frames.reserve(actors.size());
 	for (Actor* actor: actors) {
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
-		if (ScenarioRunner::IsLockstepLocalActor(actorID) == localOwned) {
+		if (IsLockstepLocalActor(actor) == localOwned) {
 			frames.push_back(ControllerFrameCodec::Snapshot(actorID, *actor->GetController(), actor));
 		}
 	}
@@ -255,16 +259,12 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 	std::map<int64_t, Actor*> actorsByID;
 	for (Actor* actor: actors) {
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
-		if (ScenarioRunner::IsLockstepLocalActor(actorID) == localOwned) {
+		if (IsLockstepLocalActor(actor) == localOwned) {
 			actorsByID[actorID] = actor;
 		}
 	}
 
 	for (const ControllerFrame& frame: frames) {
-		if (ScenarioRunner::IsLockstepLocalActor(frame.actorUniqueID) != localOwned) {
-			error = "lockstep frame ownership mismatch for actor " + std::to_string(frame.actorUniqueID);
-			return false;
-		}
 		const auto actorIt = actorsByID.find(frame.actorUniqueID);
 		if (actorIt == actorsByID.end()) {
 			error = "lockstep frame actor not found: " + std::to_string(frame.actorUniqueID);
@@ -2169,7 +2169,7 @@ void MovableMan::UpdateControllers() {
 
 	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
 	auto isLocalControllerActor = [&](const Actor* actor) {
-		return !lockstepActive || ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()));
+		return !lockstepActive || IsLockstepLocalActor(actor);
 	};
 	if (lockstepActive && ScenarioRunner::GetLockstepInputDelayFrames() != 0) {
 		ScenarioRunner::SetControllerReplayError("lockstep gameplay hook currently supports current-frame stall only; input delay is coordinator-selftest-only.");

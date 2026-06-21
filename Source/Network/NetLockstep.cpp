@@ -1,5 +1,6 @@
 #include "NetLockstep.h"
 
+#include "NetActorOwnership.h"
 #include "NetProtocol.h"
 
 #include <algorithm>
@@ -725,9 +726,18 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID) const {
+	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
 			return true;
+		}
+		if (!m_Config.matchConfig.players.empty()) {
+			const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
+			const uint8_t ownerPeerId = NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {
+				actorUniqueID,
+				team,
+				cpuControlled,
+			});
+			return ownerPeerId == m_Config.localPeerId;
 		}
 		const uint64_t normalized = actorUniqueID < 0 ? static_cast<uint64_t>(-(actorUniqueID + 1)) + 1U : static_cast<uint64_t>(actorUniqueID);
 		const uint8_t ownerPeerId = static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
