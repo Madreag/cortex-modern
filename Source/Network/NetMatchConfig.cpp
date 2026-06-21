@@ -114,7 +114,8 @@ namespace RTE {
 			}
 			seen[player.peerId] = true;
 			sawHost = sawHost || player.peerId == config.hostPeerId;
-			if (player.team > 4) {
+			if (player.team >= 4) {
+				// Engine teams are 0..3; MaxTeamCount (4) is the exclusive sentinel, so team 4 is invalid.
 				if (error) *error = "player team is out of range";
 				return false;
 			}

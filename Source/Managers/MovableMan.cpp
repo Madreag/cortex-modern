@@ -310,10 +310,13 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			if (const Entity* preset = g_PresetMan.GetEntityPreset(spawn->className, spawn->preset, spawn->module)) {
-				if (Actor* actor = dynamic_cast<Actor*>(preset->Clone())) {
+				Entity* clone = preset->Clone();
+				if (Actor* actor = dynamic_cast<Actor*>(clone)) {
 					actor->SetTeam(spawn->team);
 					actor->SetPos(Vector(spawn->posX, spawn->posY));
 					g_MovableMan.AddActor(actor);
+				} else {
+					delete clone;
 				}
 			}
 		}
