@@ -70,5 +70,6 @@ namespace RTE {
 
 	NetGameCommandType NetGameCommandTypeOf(const NetGameCommandPayload& payload);
 	const char* NetGameCommandTypeName(NetGameCommandType type);
+	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload);
 
 } // namespace RTE

@@ -344,6 +344,10 @@ namespace RTE {
 		return !s_LockstepCoordinator || s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
 	}
 
+	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
+	}
+
 	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
 	}

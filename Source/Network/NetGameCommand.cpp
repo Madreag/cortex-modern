@@ -17,6 +17,12 @@ namespace RTE {
 		}, payload);
 	}
 
+	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload) {
+		return std::visit([](const auto& specific) -> int32_t {
+			return specific.team;
+		}, payload);
+	}
+
 	const char* NetGameCommandTypeName(NetGameCommandType type) {
 		switch (type) {
 			case NetGameCommandType::SetTeamFunds:
