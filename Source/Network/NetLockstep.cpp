@@ -78,6 +78,18 @@ namespace RTE {
 			return true;
 		}
 
+		uint32_t FloatToBitsLE(float value) {
+			uint32_t bits = 0;
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
+		}
+
+		float FloatFromBitsLE(uint32_t bits) {
+			float value = 0.0F;
+			std::memcpy(&value, &bits, sizeof(value));
+			return value;
+		}
+
 		class ByteReader {
 		public:
 			ByteReader(const uint8_t* data, size_t size) : m_Data(data), m_Size(size) {}
@@ -296,6 +308,18 @@ namespace RTE {
 						AppendU32LE(out, static_cast<uint32_t>(funds.funds));
 						break;
 					}
+					case NetGameCommandType::SpawnActor: {
+						const NetGameSpawnActor& spawn = std::get<NetGameSpawnActor>(command.payload);
+						if (!AppendString(out, spawn.className, NetLockstepCodec::c_MaxScenarioBytes, "spawn_class_name", error) ||
+						    !AppendString(out, spawn.preset, NetLockstepCodec::c_MaxScenarioBytes, "spawn_preset", error) ||
+						    !AppendString(out, spawn.module, NetLockstepCodec::c_MaxScenarioBytes, "spawn_module", error)) {
+							return false;
+						}
+						AppendU32LE(out, FloatToBitsLE(spawn.posX));
+						AppendU32LE(out, FloatToBitsLE(spawn.posY));
+						AppendU32LE(out, static_cast<uint32_t>(spawn.team));
+						break;
+					}
 				}
 			}
 			return true;
@@ -408,6 +432,25 @@ namespace RTE {
 						funds.team = static_cast<int32_t>(team);
 						funds.funds = static_cast<int32_t>(amount);
 						command.payload = funds;
+						break;
+					}
+					case NetGameCommandType::SpawnActor: {
+						NetGameSpawnActor spawn;
+						uint32_t posXBits = 0;
+						uint32_t posYBits = 0;
+						uint32_t team = 0;
+						if (!reader.ReadString(spawn.className, NetLockstepCodec::c_MaxScenarioBytes, "spawn_class_name", error) ||
+						    !reader.ReadString(spawn.preset, NetLockstepCodec::c_MaxScenarioBytes, "spawn_preset", error) ||
+						    !reader.ReadString(spawn.module, NetLockstepCodec::c_MaxScenarioBytes, "spawn_module", error) ||
+						    !ReadOrTruncated(reader.ReadU32LE(posXBits), reader, error, "spawn_pos_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(posYBits), reader, error, "spawn_pos_y") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "spawn_team")) {
+							return false;
+						}
+						spawn.posX = FloatFromBitsLE(posXBits);
+						spawn.posY = FloatFromBitsLE(posYBits);
+						spawn.team = static_cast<int32_t>(team);
+						command.payload = spawn;
 						break;
 					}
 					default:

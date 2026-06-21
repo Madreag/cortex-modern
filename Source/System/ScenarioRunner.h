@@ -45,6 +45,7 @@ namespace RTE {
 			                                 // non-determinism at a fixed tick (the determinism
 			                                 // check's positive control).
 			bool        selftestFundsCommand = false; // -net-match-e2e-funds-command: host issues a synced SetTeamFunds at tick 50.
+			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host spawns an actor via command at tick 50.
 		};
 
 		/// True if `-scenario` was supplied on the command line.

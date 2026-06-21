@@ -9,6 +9,8 @@ namespace RTE {
 			using T = std::decay_t<decltype(specific)>;
 			if constexpr (std::is_same_v<T, NetGameSetTeamFunds>) {
 				return NetGameCommandType::SetTeamFunds;
+			} else if constexpr (std::is_same_v<T, NetGameSpawnActor>) {
+				return NetGameCommandType::SpawnActor;
 			}
 		}, payload);
 	}
@@ -17,6 +19,8 @@ namespace RTE {
 		switch (type) {
 			case NetGameCommandType::SetTeamFunds:
 				return "SetTeamFunds";
+			case NetGameCommandType::SpawnActor:
+				return "SpawnActor";
 		}
 		return "Unknown";
 	}

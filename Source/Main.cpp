@@ -699,6 +699,11 @@ void RunGameLoop() {
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestFundsCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
 			}
+			// M4.2 control — the host spawns an actor via command at a fixed tick; both peers must clone the
+			// identical actor (same id + physics), so the actors subsystem stays bit-identical.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestSpawnCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1000.0F, 200.0F, 0}});
+			}
 
 			g_UInputMan.Update();
 
