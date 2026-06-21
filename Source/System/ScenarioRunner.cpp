@@ -141,12 +141,12 @@ namespace RTE {
 			return 1;
 		}
 		if (a == "-net-match-e2e-funds-command") {
-			// M4 channel control: arm the host-issued SetTeamFunds command. Boolean flag — no value.
+			// Arm the host-issued funds command. Boolean flag.
 			s_Args.selftestFundsCommand = true;
 			return 1;
 		}
 		if (a == "-net-match-e2e-spawn-command") {
-			// M4.2 control: arm the host-issued SpawnActor command. Boolean flag — no value.
+			// Arm the host-issued spawn command. Boolean flag.
 			s_Args.selftestSpawnCommand = true;
 			return 1;
 		}

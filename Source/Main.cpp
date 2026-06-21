@@ -471,6 +471,9 @@ void ProcessMenuScript() {
 
 	if (!loaded) {
 		std::ifstream in(s_menuScriptPath);
+		if (!in) {
+			MenuScriptFail("could not open menu-script file: " + s_menuScriptPath);
+		}
 		std::string line;
 		while (std::getline(in, line)) {
 			if (!line.empty() && line.back() == '\r') { line.pop_back(); }
@@ -479,6 +482,9 @@ void ProcessMenuScript() {
 		}
 		loaded = true;
 		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
+		if (steps.empty()) {
+			MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
+		}
 	}
 	static bool introSkipped = false;
 	if (!g_MenuMan.IsMainMenuInteractive()) {
@@ -717,13 +723,11 @@ void RunGameLoop() {
 
 			g_LuaMan.Update();
 
-			// M4 command-channel control — the host issues a synced SetTeamFunds command at a fixed tick; both
-			// peers must apply it identically, so the funds subsystem stays bit-identical.
+			// E2E control: host-issued funds command at tick 50; both peers must apply it identically.
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestFundsCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
 			}
-			// M4.2 control — the host spawns an actor via command at a fixed tick; both peers must clone the
-			// identical actor (same id + physics), so the actors subsystem stays bit-identical.
+			// E2E control: host-issued spawn command at tick 50; both peers must clone the identical actor.
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestSpawnCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1000.0F, 200.0F, 0}});
 			}

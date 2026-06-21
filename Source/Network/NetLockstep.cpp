@@ -298,8 +298,8 @@ namespace RTE {
 			}
 			AppendU16LE(out, static_cast<uint16_t>(payload.commands.size()));
 			for (const NetGameCommand& command : payload.commands) {
+				// The command's sender is the authenticated frame sender; it is set at decode, not encoded here.
 				const NetGameCommandType type = NetGameCommandTypeOf(command.payload);
-				AppendU8(out, command.senderPeerId);
 				AppendU16LE(out, static_cast<uint16_t>(type));
 				switch (type) {
 					case NetGameCommandType::SetTeamFunds: {
@@ -415,9 +415,9 @@ namespace RTE {
 			payload.commands.reserve(commandCount);
 			for (uint16_t i = 0; i < commandCount; ++i) {
 				NetGameCommand command;
+				command.senderPeerId = payload.senderPeerId;
 				uint16_t rawType = 0;
-				if (!ReadOrTruncated(reader.ReadU8(command.senderPeerId), reader, error, "command_sender_peer_id") ||
-				    !ReadOrTruncated(reader.ReadU16LE(rawType), reader, error, "command_type")) {
+				if (!ReadOrTruncated(reader.ReadU16LE(rawType), reader, error, "command_type")) {
 					return false;
 				}
 				switch (static_cast<NetGameCommandType>(rawType)) {
