@@ -303,6 +303,10 @@ namespace RTE {
 		g_MetricsCollector.SetResult(false);
 	}
 
+	void ScenarioRunner::ClearControllerReplayError() {
+		s_ControllerReplayError.clear();
+	}
+
 	bool ScenarioRunner::HasControllerReplayError() {
 		return !s_ControllerReplayError.empty();
 	}
@@ -320,8 +324,8 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning();
 	}
 
-	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID) {
-		return !s_LockstepCoordinator || s_LockstepCoordinator->IsLocalActor(actorUniqueID);
+	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		return !s_LockstepCoordinator || s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
 	}
 
 	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {

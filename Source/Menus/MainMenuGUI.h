@@ -17,6 +17,7 @@ namespace RTE {
 	class GUIButton;
 	class GUILabel;
 	class GUIControl;
+	class GUITextBox;
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
 	class MainMenuGUI {
@@ -63,6 +64,7 @@ namespace RTE {
 		enum MenuScreen {
 			MainScreen,
 			MetaGameNoticeScreen,
+			MultiplayerScreen,
 			SaveOrLoadGameScreen,
 			SettingsScreen,
 			ModManagerScreen,
@@ -76,6 +78,7 @@ namespace RTE {
 		enum MenuButton {
 			MetaGameButton,
 			ScenarioButton,
+			MultiplayerButton,
 			SaveOrLoadGameButton,
 			SettingsButton,
 			ModManagerButton,
@@ -84,6 +87,10 @@ namespace RTE {
 			QuitButton,
 			ResumeButton,
 			BackToMainButton,
+			MultiplayerHostButton,
+			MultiplayerJoinButton,
+			MultiplayerReadyButton,
+			MultiplayerStartButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -125,6 +132,11 @@ namespace RTE {
 		/// GUI elements that compose the main menu screen.
 		GUILabel* m_VersionLabel;
 		GUILabel* m_CreditsTextLabel;
+		GUILabel* m_MultiplayerStatusLabel;
+		GUILabel* m_MultiplayerErrorLabel;
+		GUITextBox* m_MultiplayerNameTextBox;
+		GUITextBox* m_MultiplayerAddressTextBox;
+		GUITextBox* m_MultiplayerPortTextBox;
 		GUICollectionBox* m_CreditsScrollPanel;
 		std::array<GUICollectionBox*, MenuScreen::ScreenCount> m_MainMenuScreens;
 		std::array<GUIButton*, MenuButton::ButtonCount> m_MainMenuButtons;
@@ -135,6 +147,9 @@ namespace RTE {
 
 		/// Creates all the elements that compose the MetaGame notice menu screen.
 		void CreateMetaGameNoticeScreen();
+
+		/// Creates all the elements that compose the multiplayer menu screen.
+		void CreateMultiplayerScreen();
 
 		/// Creates all the elements that compose the editor selection menu screen.
 		void CreateEditorsScreen();
@@ -160,6 +175,9 @@ namespace RTE {
 
 		/// Makes the MetaGame notice menu screen visible to be interacted with by the player.
 		void ShowMetaGameNoticeScreen();
+
+		/// Makes the multiplayer menu screen visible to be interacted with by the player.
+		void ShowMultiplayerScreen();
 
 		/// Makes the editor selection menu screen visible to be interacted with by the player.
 		void ShowEditorsScreen();
@@ -195,6 +213,10 @@ namespace RTE {
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl);
 
+		/// Handles the player interaction with the multiplayer screen GUI elements.
+		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
+		void HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl);
+
 		/// Handles the player interaction with the editor selection screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleEditorsScreenInputEvents(const GUIControl* guiEventControl);
@@ -206,6 +228,9 @@ namespace RTE {
 		/// Updates the currently hovered main screen button text to give the hovered visual and updates the previously hovered button to remove the hovered visual.
 		/// @param hoveredButton Pointer to the currently hovered main screen button, if any. Acquired by GUIControlManager::GetControlUnderPoint.
 		void UpdateMainScreenHoveredButton(const GUIButton* hoveredButton);
+
+		/// Launches the activity once the multiplayer runtime reaches lockstep ready.
+		void MaybeLaunchMultiplayerActivity();
 #pragma endregion
 
 		/// Clears all the member variables of this MainMenuGUI, effectively resetting the members of this object.

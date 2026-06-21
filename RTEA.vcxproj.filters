@@ -460,16 +460,37 @@
     <ClInclude Include="Source\Network\LoopbackTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetActorOwnership.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetIdentity.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetIdentitySelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetLobbyProtocol.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetLobbySession.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetLockstep.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetLockstepSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetMatchConfig.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetMatchRunner.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetMatchService.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetMatchSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetProtocol.h">
@@ -742,16 +763,37 @@
     <ClCompile Include="Source\Network\LoopbackTransport.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetActorOwnership.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetIdentity.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetLobbyProtocol.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetLobbySession.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetLockstep.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetLockstepSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetMatchConfig.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetMatchRunner.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetMatchService.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetMatchSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetProtocol.cpp">

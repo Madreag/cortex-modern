@@ -49,6 +49,7 @@
 #include "GLResourceMan.h"
 #include "CameraMan.h"
 #include "ActivityMan.h"
+#include "GameActivity.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -61,6 +62,9 @@
 #include "NetIdentitySelfTest.h"
 #include "NetLockstep.h"
 #include "NetLockstepSelfTest.h"
+#include "NetMatchRunner.h"
+#include "NetMatchService.h"
+#include "NetMatchSelfTest.h"
 #include "NetProtocolSelfTest.h"
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
@@ -113,9 +117,24 @@ static std::string s_netSessionReportPath;
 static bool s_netExitAfterReady = false;
 static bool s_netAllowUserdata = false;
 static bool s_netLockstep = false;
+static bool s_netMatch = false;
+static bool s_netMatchServiceE2E = false;
+static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netLockstepReportPath;
 static uint64_t s_netLockstepTicks = 0;
 static uint16_t s_netLockstepInputDelay = 0;
+static std::string s_netMatchOwnershipPolicy = "team-owner";
+static bool s_netMatchServiceE2EEnteredEditor = false;
+static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
+static uint64_t s_netMatchServiceE2ERunningTicks = 0;
+static int s_netMatchServiceE2EExitCode = 0;
+static std::string s_netMatchServiceE2EError;
+
+bool NetGameplayRequested() {
+	return s_netLockstep || s_netMatch;
+}
+
+const char* ActivityStateName(Activity::ActivityState state);
 
 /// <summary>
 /// Initializes all the essential managers.
@@ -146,6 +165,7 @@ void InitializeManagers() {
 	LoadingScreen::Construct();
 	MetricsCollector::Construct();
 	SimChecksum::Construct();
+	NetMatchService::Construct();
 
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
@@ -189,6 +209,7 @@ void InitializeManagers() {
 /// </summary>
 void DestroyManagers() {
 	g_SimChecksum.Destroy();
+	g_NetMatchService.Destroy();
 	g_MetricsCollector.Destroy();
 	g_MetaMan.Destroy();
 	g_PerformanceMan.Destroy();
@@ -301,7 +322,29 @@ void HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (currentArg == "-net-match") {
+			s_netMatch = true;
+			++i;
+			continue;
+		}
+
+		if (currentArg == "-net-match-service-e2e") {
+			s_netMatchServiceE2E = true;
+			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-service-preset") {
+			s_netMatchServiceE2EPreset = argValue[++i];
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-lockstep-report") {
+			s_netLockstepReportPath = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-report") {
 			s_netLockstepReportPath = argValue[++i];
 			continue;
 		}
@@ -311,9 +354,25 @@ void HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-match-ticks") {
+			s_netLockstepTicks = static_cast<uint64_t>(std::strtoull(argValue[++i], nullptr, 10));
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-lockstep-input-delay") {
 			const unsigned long parsedDelay = std::strtoul(argValue[++i], nullptr, 10);
 			s_netLockstepInputDelay = static_cast<uint16_t>(std::min<unsigned long>(parsedDelay, NetLockstepCodec::c_MaxInputDelayFrames));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-input-delay") {
+			const unsigned long parsedDelay = std::strtoul(argValue[++i], nullptr, 10);
+			s_netLockstepInputDelay = static_cast<uint16_t>(std::min<unsigned long>(parsedDelay, NetLockstepCodec::c_MaxInputDelayFrames));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-ownership-policy") {
+			s_netMatchOwnershipPolicy = argValue[++i];
 			continue;
 		}
 
@@ -451,6 +510,7 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool serverUpdated = false;
+		bool returnToMenuAfterNetworkError = false;
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
 		PollSDLEvents();
@@ -504,8 +564,39 @@ void RunGameLoop() {
 			g_LuaMan.ClearScriptTimings();
 			g_MovableMan.Update();
 			if (ScenarioRunner::HasControllerReplayError()) {
-				std::cerr << "[scenario] controller replay failed: " << ScenarioRunner::GetControllerReplayError() << std::endl;
-				System::SetQuit(true);
+				const std::string error = ScenarioRunner::GetControllerReplayError();
+				if (ScenarioRunner::IsActive()) {
+					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
+					System::SetQuit(true);
+				} else {
+					const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+					const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
+					const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
+						(error.rfind("Complete:", 0) == 0 ||
+						 error.find("MissingFrameTimeout") != std::string::npos ||
+						 error.find("PeerDisconnected") != std::string::npos);
+					if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
+						g_NetMatchService.Complete("e2e complete");
+						g_ActivityMan.EndActivity();
+						ScenarioRunner::ClearControllerReplayError();
+						System::SetQuit(true);
+					} else {
+						std::cerr << "[net-match] controller sync failed: " << error << std::endl;
+						g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
+						g_ConsoleMan.SetEnabled(true);
+						g_NetMatchService.ReportRuntimeError(error);
+						g_ActivityMan.EndActivity();
+						g_ActivityMan.SetInActivity(false);
+						ScenarioRunner::ClearControllerReplayError();
+						if (s_netMatchServiceE2E) {
+							s_netMatchServiceE2EError = error;
+							s_netMatchServiceE2EExitCode = 1;
+							System::SetQuit(true);
+						} else {
+							returnToMenuAfterNetworkError = true;
+						}
+					}
+				}
 				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 				g_UInputMan.EndFrame();
 				break;
@@ -543,7 +634,7 @@ void RunGameLoop() {
 				}
 				const uint64_t elapsedTicks = nowTick - s_scenarioStartTick;
 				const uint64_t scenarioTickCap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800;
-				const uint64_t tickCap = s_netLockstep && s_netLockstepTicks > 0 ? s_netLockstepTicks : scenarioTickCap;
+				const uint64_t tickCap = NetGameplayRequested() && s_netLockstepTicks > 0 ? s_netLockstepTicks : scenarioTickCap;
 				const Activity* scenarioActivity = g_ActivityMan.GetActivity();
 				if ((scenarioActivity && scenarioActivity->IsOver()) || elapsedTicks >= tickCap) {
 					// Finalize so the scenario's Lua OnEnd grades the run even when the CLI tick cap
@@ -551,6 +642,47 @@ void RunGameLoop() {
 					g_ActivityMan.EndActivity();
 					System::SetQuit(true);
 					break;
+				}
+			}
+
+			if (s_netMatchServiceE2E) {
+				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				Activity* activity = g_ActivityMan.GetActivity();
+				if (!activity) {
+					s_netMatchServiceE2EError = "activity ended before e2e tick cap";
+					s_netMatchServiceE2EExitCode = 1;
+					System::SetQuit(true);
+					break;
+				}
+				const Activity::ActivityState activityState = activity->GetActivityState();
+				if (activityState == Activity::Editing) {
+					s_netMatchServiceE2EEnteredEditor = true;
+					s_netMatchServiceE2EError = "activity entered unsynchronized setup editor";
+					s_netMatchServiceE2EExitCode = 1;
+					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
+					g_ActivityMan.EndActivity();
+					System::SetQuit(true);
+					break;
+				}
+				if (activityState == Activity::HasError || activityState == Activity::Over) {
+					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
+					s_netMatchServiceE2EExitCode = 1;
+					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
+					System::SetQuit(true);
+					break;
+				}
+				if (activityState == Activity::Running) {
+					if (s_netMatchServiceE2EStartTick == UINT64_MAX) {
+						s_netMatchServiceE2EStartTick = nowTick;
+					}
+					s_netMatchServiceE2ERunningTicks = nowTick - s_netMatchServiceE2EStartTick;
+					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+					if (s_netMatchServiceE2ERunningTicks > tickCap) {
+						g_NetMatchService.Complete("e2e complete");
+						g_ActivityMan.EndActivity();
+						System::SetQuit(true);
+						break;
+					}
 				}
 			}
 
@@ -574,6 +706,15 @@ void RunGameLoop() {
 				g_PerformanceMan.ResetSimUpdateTimer();
 				updateStartTime = g_TimerMan.GetAbsoluteTime();
 			}
+		}
+
+		if (returnToMenuAfterNetworkError && !System::IsSetToQuit()) {
+			g_TimerMan.PauseSim(true);
+			if (!g_ActivityMan.ActivitySetToRestart()) {
+				g_MenuMan.HandleTransitionIntoMenuLoop();
+				RunMenuLoop();
+			}
+			continue;
 		}
 
 		updateEndAndDrawStartTime = g_TimerMan.GetAbsoluteTime();
@@ -603,7 +744,7 @@ static const bool RTESetExceptionHandlers = []() {
 }();
 
 bool NetSessionCliRequested() {
-	return (s_netHost || !s_netJoinAddress.empty()) && !s_netLockstep;
+	return (s_netHost || !s_netJoinAddress.empty()) && !NetGameplayRequested() && !s_netMatchServiceE2E;
 }
 
 bool WriteNetSessionReport(const NetSession& session, const std::string& path, std::string* error) {
@@ -633,7 +774,23 @@ NetSessionConfig BuildNetSessionCliConfig(const NetIdentityManifest& manifest, b
 	config.maxPeers = 1;
 	config.heartbeatIntervalMs = 50;
 	config.timeoutMs = 5000;
-	config.rejectUserdataModules = !s_netAllowUserdata;
+	config.rejectUserdataModules = !s_netAllowUserdata && !s_netMatch;
+	return config;
+}
+
+NetMatchConfig BuildNetMatchCliConfig(bool useLobbyProtocol) {
+	NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x5354414745325032ULL);
+	config.activityPreset = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
+	config.inputDelayFrames = s_netLockstepInputDelay;
+	config.modePreset = useLobbyProtocol ? "PvP" : "P3";
+	if (useLobbyProtocol) {
+		NetActorOwnershipPolicy policy;
+		if (NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, policy)) {
+			config.ownershipPolicy = policy;
+		}
+	} else {
+		config.ownershipPolicy = NetActorOwnershipPolicy::UniqueIdModPeerCount;
+	}
 	return config;
 }
 
@@ -761,20 +918,24 @@ bool WriteTextFile(const std::string& path, const std::string& text, std::string
 	return true;
 }
 
-bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error) {
-	if (!s_netLockstep) {
+bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, NetMatchRunner& runner, std::string* error) {
+	if (!NetGameplayRequested()) {
 		return true;
 	}
 	if (!ScenarioRunner::IsActive()) {
-		if (error) *error = "-net-lockstep requires -scenario";
+		if (error) *error = "network gameplay requires -scenario";
+		return false;
+	}
+	if (s_netLockstep && s_netMatch) {
+		if (error) *error = "choose either -net-lockstep or -net-match, not both";
 		return false;
 	}
 	if (s_netHost == !s_netJoinAddress.empty()) {
-		if (error) *error = "-net-lockstep requires exactly one of -net-host or -net-join <address>";
+		if (error) *error = "network gameplay requires exactly one of -net-host or -net-join <address>";
 		return false;
 	}
 	if (s_netLockstepInputDelay != 0) {
-		if (error) *error = "P3 gameplay lockstep currently requires -net-lockstep-input-delay 0";
+		if (error) *error = s_netMatch ? "local alpha gameplay currently requires -net-match-input-delay 0" : "P3 gameplay lockstep currently requires -net-lockstep-input-delay 0";
 		return false;
 	}
 
@@ -788,99 +949,57 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 		return false;
 	}
 
-	NetSessionConfig config = BuildNetSessionCliConfig(manifest, s_netHost);
-	const bool started = s_netHost
-		? session.StartHost(transport, std::move(config), error)
-		: session.StartClient(transport, s_netJoinAddress, std::move(config), error);
-	if (!started) {
-		return false;
-	}
+	NetMatchRunnerConfig runnerConfig;
+	runnerConfig.host = s_netHost;
+	runnerConfig.joinAddress = s_netJoinAddress;
+	runnerConfig.sessionConfig = BuildNetSessionCliConfig(manifest, s_netHost);
+	runnerConfig.matchConfig = BuildNetMatchCliConfig(s_netMatch);
+	runnerConfig.useLobbyProtocol = s_netMatch;
+	runnerConfig.startFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U;
+	runnerConfig.scenario = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
+	runnerConfig.lockstepWaitMs = 5000;
 
-	std::cout << "[net-lockstep] " << (s_netHost ? "hosting" : "joining")
+	const char* tag = s_netMatch ? "[net-match]" : "[net-lockstep]";
+	std::cout << tag << " " << (s_netHost ? "hosting" : "joining")
 	          << " port=" << s_netPort
 	          << " gns_compiled=" << (GnsTransport::IsCompiledIn() ? "true" : "false")
 	          << " allow_userdata=" << (s_netAllowUserdata ? "true" : "false")
+	          << " lobby=" << (s_netMatch ? "true" : "false")
 	          << std::endl;
-
-	const auto startTime = std::chrono::steady_clock::now();
-	constexpr uint64_t c_MaxSessionMs = 15000;
-	while (true) {
-		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - startTime).count());
-		session.Tick(nowMs);
-		if (session.IsReady()) {
-			break;
-		}
-		if (session.IsRejected() || session.IsFailed() || session.IsClosed()) {
-			if (error) *error = std::string("session did not reach Ready; state=") + NetSession::StateName(session.GetState());
-			return false;
-		}
-		if (nowMs > c_MaxSessionMs) {
-			if (error) *error = "timed out waiting for session Ready";
-			return false;
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(5));
-	}
-
-	std::this_thread::sleep_for(std::chrono::milliseconds(250));
-	std::string reportError;
-	if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
-		std::cerr << "[net-lockstep] session report failed: " << reportError << std::endl;
-	}
-
-	NetLockstepConfig lockstepConfig;
-	lockstepConfig.sessionId = session.GetSessionId();
-	lockstepConfig.startFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U;
-	lockstepConfig.inputDelayFrames = s_netLockstepInputDelay;
-	lockstepConfig.timeoutMs = 5000;
-	lockstepConfig.localPeerId = s_netHost ? 1 : 2;
-	lockstepConfig.remotePeerId = s_netHost ? 2 : 1;
-	lockstepConfig.peerCount = 2;
-	lockstepConfig.remoteTransportPeerId = session.GetRemoteTransportPeerId();
-	lockstepConfig.frameLane = NetTransportLane::ControlReliable;
-	lockstepConfig.scenario = ScenarioRunner::ResolvePresetName(ScenarioRunner::GetArgs().scenario);
-	lockstepConfig.ownershipPolicy = "unique-id-mod-peer-count";
-	if (!coordinator.Start(transport, lockstepConfig, error)) {
+	if (!runner.Start(transport, session, coordinator, runnerConfig, error)) {
 		return false;
 	}
-
-	const auto lockstepStartTime = std::chrono::steady_clock::now();
-	while (!coordinator.IsRunning()) {
-		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - lockstepStartTime).count());
-		coordinator.Tick(nowMs);
-		if (coordinator.IsFailed() || coordinator.IsStopped()) {
-			if (error) *error = coordinator.GetStats().timeoutReason;
-			return false;
-		}
-		if (nowMs > 5000) {
-			if (error) *error = "timed out waiting for lockstep start";
-			return false;
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	std::string reportError;
+	if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
+		std::cerr << tag << " session report failed: " << reportError << std::endl;
 	}
 
 	ScenarioRunner::SetLockstepCoordinator(&coordinator);
-	std::cout << "[net-lockstep] running local_peer=" << static_cast<int>(lockstepConfig.localPeerId)
-	          << " remote_peer=" << static_cast<int>(lockstepConfig.remotePeerId)
-	          << " start_frame=" << lockstepConfig.startFrame << std::endl;
+	std::cout << tag << " running local_peer=" << static_cast<int>(coordinator.GetConfig().localPeerId)
+	          << " remote_peer=" << static_cast<int>(coordinator.GetConfig().remotePeerId)
+	          << " start_frame=" << coordinator.GetConfig().startFrame
+	          << " match_config_hash=" << NetIdentity::HashHex(runner.GetMatchConfigHash()) << std::endl;
 	return true;
 }
 
-std::string BuildNetLockstepReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator, int scenarioExitCode, const std::string& setupError) {
+std::string BuildNetLockstepReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator, const NetMatchRunner& runner, int scenarioExitCode, const std::string& setupError) {
 	const MetricsCollector::AggregatedRun run = g_MetricsCollector.GetCurrentRun();
 	const NetLockstepStats& stats = coordinator.GetStats();
 	const bool completed = stats.timeoutReason.rfind("Complete:", 0) == 0;
+	const char* finalState = !setupError.empty() ? "Failed" : NetLockstepCoordinator::StateName(coordinator.GetState());
 	std::ostringstream out;
 	out << "{";
-	out << "\"final_state\":\"" << NetLockstepCoordinator::StateName(coordinator.GetState()) << "\",";
+	out << "\"final_state\":\"" << finalState << "\",";
 	out << "\"setup_error\":\"" << JsonEscape(setupError) << "\",";
 	out << "\"scenario_exit_code\":" << scenarioExitCode << ",";
 	out << "\"session_role\":\"" << NetSession::RoleName(session.GetRole()) << "\",";
 	out << "\"session_peer_id\":" << static_cast<int>(session.GetLocalPeerId()) << ",";
 	out << "\"lockstep_peer_id\":" << static_cast<int>(stats.localPeerId) << ",";
 	out << "\"scenario\":\"" << JsonEscape(ScenarioRunner::GetArgs().scenario) << "\",";
-	out << "\"ownership_policy\":\"" << JsonEscape(coordinator.GetConfig().ownershipPolicy) << "\",";
+	out << "\"uses_lobby_protocol\":" << (runner.UsesLobbyProtocol() ? "true" : "false") << ",";
+	out << "\"match_runtime_state\":\"" << NetMatchRunner::StateName(runner.GetState()) << "\",";
+	out << "\"match_config_hash\":\"" << JsonEscape(NetIdentity::HashHex(runner.GetMatchConfigHash())) << "\",";
+	out << "\"ownership_policy\":\"" << JsonEscape(NetMatchConfigUtil::OwnershipPolicyName(runner.GetMatchConfig().ownershipPolicy)) << "\",";
 	out << "\"input_delay_frames\":" << stats.inputDelayFrames << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : ScenarioRunner::GetArgs().maxTicks) << ",";
 	out << "\"frames_sent\":" << stats.framePacketsSent << ",";
@@ -900,10 +1019,151 @@ std::string BuildNetLockstepReportJson(const NetSession& session, const NetLocks
 	out << "\"final_total_hash\":\"" << JsonEscape(run.finalTotalHashHex) << "\",";
 	out << "\"controller_frame_actor_state_payload\":true,";
 	out << "\"controller_frame_payload_note\":\"controls plus pose/equip/aim/facing/hand/device state\",";
+	out << "\"match_config\":" << NetMatchConfigUtil::BuildReportJson(runner.GetMatchConfig()) << ",";
 	out << "\"session\":" << session.BuildReportJson() << ",";
-	out << "\"lockstep\":" << coordinator.BuildReportJson();
+	out << "\"lockstep\":" << coordinator.BuildReportJson() << ",";
+	out << "\"match_runner\":" << runner.BuildReportJson(session, coordinator);
 	out << "}";
 	return out.str();
+}
+
+const char* ActivityStateName(Activity::ActivityState state) {
+	switch (state) {
+		case Activity::NoActivity: return "NoActivity";
+		case Activity::NotStarted: return "NotStarted";
+		case Activity::Starting: return "Starting";
+		case Activity::Editing: return "Editing";
+		case Activity::PreGame: return "PreGame";
+		case Activity::Running: return "Running";
+		case Activity::HasError: return "HasError";
+		case Activity::Over: return "Over";
+	}
+	return "Unknown";
+}
+
+std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& setupError) {
+	const Activity* activity = g_ActivityMan.GetActivity();
+	const Activity::ActivityState activityState = activity ? activity->GetActivityState() : Activity::NoActivity;
+	std::ostringstream out;
+	out << "{";
+	out << "\"exit_code\":" << exitCode << ",";
+	out << "\"setup_error\":\"" << JsonEscape(setupError) << "\",";
+	out << "\"runtime_error\":\"" << JsonEscape(s_netMatchServiceE2EError) << "\",";
+	out << "\"activity_preset\":\"" << JsonEscape(s_netMatchServiceE2EPreset) << "\",";
+	out << "\"activity_state\":\"" << ActivityStateName(activityState) << "\",";
+	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
+	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
+	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
+	out << "\"setup_surface\":\"fixed-alpha-duel\",";
+	out << "\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",";
+	out << "\"service\":" << g_NetMatchService.BuildReportJson();
+	out << "}";
+	return out.str();
+}
+
+bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
+	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
+	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
+	if (!presetActivity) {
+		if (error) *error = "could not find multiplayer activity preset";
+		return false;
+	}
+	if (!presetActivity->GetSceneName().empty()) {
+		g_SceneMan.SetSceneToLoad(presetActivity->GetSceneName(), true, false);
+	}
+	Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
+	if (!activity) {
+		if (error) *error = "could not create multiplayer activity";
+		return false;
+	}
+	const int localTeam = g_NetMatchService.GetLocalTeam();
+	if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
+		delete activity;
+		if (error) *error = "invalid local team";
+		return false;
+	}
+	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
+		gameActivity->ClearPlayers(false);
+		gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
+		gameActivity->ForceSetTeamAsActive(Activity::TeamOne);
+		gameActivity->ForceSetTeamAsActive(Activity::TeamTwo);
+		gameActivity->SetTeamFunds(0, Activity::TeamOne);
+		gameActivity->SetTeamFunds(0, Activity::TeamTwo);
+	}
+	ScenarioRunner::ApplyDeterministicConfig();
+	g_ActivityMan.SetStartActivity(activity);
+	g_ActivityMan.SetRestartActivity(true);
+	return true;
+}
+
+int RunNetMatchServiceE2E() {
+	std::string setupError;
+	if (s_netHost == !s_netJoinAddress.empty()) {
+		setupError = "-net-match-service-e2e requires exactly one of -net-host or -net-join <address>";
+	} else if (s_netLockstepInputDelay != 0) {
+		setupError = "local alpha gameplay currently requires input delay 0";
+	}
+
+	if (setupError.empty()) {
+		ScenarioRunner::ApplyDeterministicConfig();
+		NetMatchServiceRequest request;
+		request.host = s_netHost;
+		request.address = s_netJoinAddress.empty() ? "127.0.0.1" : s_netJoinAddress;
+		request.port = s_netPort;
+		request.playerName = s_netHost ? "Host" : "Client";
+		request.activityPreset = s_netMatchServiceE2EPreset;
+		request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+		if (!g_NetMatchService.Start(request, &setupError)) {
+			s_netMatchServiceE2EExitCode = 1;
+		}
+	}
+
+	std::string activityPreset;
+	if (setupError.empty()) {
+		g_NetMatchService.SetReady();
+		if (s_netHost) {
+			g_NetMatchService.RequestStart();
+		}
+		const auto waitStart = std::chrono::steady_clock::now();
+		while (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
+			const NetMatchServiceState state = g_NetMatchService.GetState();
+			if (state == NetMatchServiceState::Failed) {
+				setupError = g_NetMatchService.GetErrorText();
+				s_netMatchServiceE2EExitCode = 1;
+				break;
+			}
+			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now() - waitStart).count());
+			if (nowMs > 60000) {
+				setupError = "timed out waiting for service launch";
+				s_netMatchServiceE2EExitCode = 1;
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+	}
+
+	if (setupError.empty() && !ConfigureNetMatchServiceE2EActivity(activityPreset, &setupError)) {
+		s_netMatchServiceE2EExitCode = 1;
+	}
+
+	if (setupError.empty()) {
+		RunGameLoop();
+	} else {
+		std::cerr << "[net-match-service-e2e] setup failed: " << setupError << std::endl;
+	}
+
+	std::string reportError;
+	const int exitCode = setupError.empty() ? s_netMatchServiceE2EExitCode : 1;
+	const std::string report = BuildNetMatchServiceE2EReportJson(exitCode, setupError);
+	if (!WriteTextFile(s_netLockstepReportPath, report, &reportError)) {
+		std::cerr << "[net-match-service-e2e] report failed: " << reportError << std::endl;
+		return 1;
+	}
+	if (!s_netLockstepReportPath.empty()) {
+		std::cout << "[net-match-service-e2e] wrote report: " << s_netLockstepReportPath << std::endl;
+	}
+	return exitCode;
 }
 
 /// <summary>
@@ -925,6 +1185,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {
 			return NetLockstepSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
+			return NetMatchSelfTest::Run();
 		}
 	}
 
@@ -965,7 +1228,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-join" || arg == "-net-lockstep") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e") {
 				headless = true;
 			} else if (arg == "-headed") {
 				headless = false;
@@ -1046,6 +1309,13 @@ int main(int argc, char** argv) {
 		std::_Exit(exitCode);
 	}
 
+	if (s_netMatchServiceE2E) {
+		const int exitCode = RunNetMatchServiceE2E();
+		std::cout.flush();
+		std::cerr.flush();
+		std::_Exit(exitCode);
+	}
+
 	int scenarioExitCode = 0;
 
 	if (!System::IsInExternalModuleValidationMode()) {
@@ -1070,8 +1340,9 @@ int main(int argc, char** argv) {
 			GnsTransport netLockstepTransport;
 			NetSession netLockstepSession;
 			NetLockstepCoordinator netLockstepCoordinator;
+			NetMatchRunner netMatchRunner;
 			std::string netLockstepSetupError;
-			const bool netLockstepPrepared = !s_netLockstep || PrepareNetLockstepScenario(netLockstepTransport, netLockstepSession, netLockstepCoordinator, &netLockstepSetupError);
+			const bool netLockstepPrepared = !NetGameplayRequested() || PrepareNetLockstepScenario(netLockstepTransport, netLockstepSession, netLockstepCoordinator, netMatchRunner, &netLockstepSetupError);
 			// CLI direct-launch into a scenario: skip the menu, start the named GAScripted activity
 			// directly, run the loop, then finalize the JSON report + exit code.
 			std::string controllerLogError;
@@ -1084,7 +1355,7 @@ int main(int argc, char** argv) {
 				std::cerr << "[scenario] controller log setup failed: " << controllerLogError << std::endl;
 			}
 			if (!netLockstepPrepared) {
-				std::cerr << "[net-lockstep] setup failed: " << netLockstepSetupError << std::endl;
+				std::cerr << (s_netMatch ? "[net-match]" : "[net-lockstep]") << " setup failed: " << netLockstepSetupError << std::endl;
 			}
 			if (controllerLogPrepared && netLockstepPrepared && presetActivity) {
 				const std::string& sceneName = presetActivity->GetSceneName();
@@ -1104,19 +1375,19 @@ int main(int argc, char** argv) {
 			} else {
 				RunGameLoop();
 				scenarioExitCode = ScenarioRunner::FinalizeAndGetExitCode();
-				if (s_netLockstep) {
+				if (NetGameplayRequested()) {
 					netLockstepCoordinator.Complete(scenarioExitCode == 0 ? "scenario complete" : "scenario failed");
 				}
 			}
-			if (s_netLockstep) {
+			if (NetGameplayRequested()) {
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				std::string reportError;
-				const std::string report = BuildNetLockstepReportJson(netLockstepSession, netLockstepCoordinator, scenarioExitCode, netLockstepSetupError);
+				const std::string report = BuildNetLockstepReportJson(netLockstepSession, netLockstepCoordinator, netMatchRunner, scenarioExitCode, netLockstepSetupError);
 				if (!WriteTextFile(s_netLockstepReportPath, report, &reportError)) {
-					std::cerr << "[net-lockstep] report failed: " << reportError << std::endl;
+					std::cerr << (s_netMatch ? "[net-match]" : "[net-lockstep]") << " report failed: " << reportError << std::endl;
 					scenarioExitCode = 1;
 				} else if (!s_netLockstepReportPath.empty()) {
-					std::cout << "[net-lockstep] wrote report: " << s_netLockstepReportPath << std::endl;
+					std::cout << (s_netMatch ? "[net-match]" : "[net-lockstep]") << " wrote report: " << s_netLockstepReportPath << std::endl;
 				}
 			}
 		} else {

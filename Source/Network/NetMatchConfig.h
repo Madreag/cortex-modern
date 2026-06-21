@@ -1,0 +1,69 @@
+#pragma once
+
+#include "NetProtocol.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace RTE {
+
+	enum class NetMatchMode : uint8_t {
+		PvPSkirmish = 1,
+		CoopPvE = 2,
+		PvPvE = 3,
+	};
+
+	enum class NetActorOwnershipPolicy : uint8_t {
+		UniqueIdModPeerCount = 1,
+		TeamOwner = 2,
+		HostCpuRemoteHuman = 3,
+	};
+
+	struct NetMatchPlayerSlot {
+		uint8_t peerId = 0;
+		uint8_t team = 0;
+		bool cpu = false;
+		std::string displayName;
+
+		bool operator==(const NetMatchPlayerSlot&) const = default;
+	};
+
+	struct NetMatchConfig {
+		uint16_t version = 1;
+		uint64_t sessionId = 0;
+		uint8_t hostPeerId = 1;
+		uint8_t peerCount = 2;
+		uint16_t inputDelayFrames = 0;
+		NetMatchMode mode = NetMatchMode::PvPSkirmish;
+		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+		std::string activityType = "GAScripted";
+		std::string activityPreset = "Skirmish Defense";
+		std::string sceneName;
+		std::string modePreset = "PvP";
+		std::vector<NetMatchPlayerSlot> players;
+
+		bool operator==(const NetMatchConfig&) const = default;
+	};
+
+	class NetMatchConfigUtil {
+	public:
+		static constexpr uint16_t c_Version = 1;
+		static constexpr uint8_t c_MinPeerCount = 2;
+		static constexpr uint8_t c_MaxPeerCount = 4;
+		static constexpr size_t c_MaxPlayers = 4;
+		static constexpr size_t c_MaxNameBytes = 64;
+		static constexpr size_t c_MaxPresetBytes = 128;
+
+		static NetMatchConfig MakeDefault(uint64_t sessionId = 0);
+		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
+		static NetHash32 HashConfig(const NetMatchConfig& config);
+		static std::string BuildReportJson(const NetMatchConfig& config);
+
+		static const char* ModeName(NetMatchMode mode);
+		static const char* OwnershipPolicyName(NetActorOwnershipPolicy policy);
+		static bool ParseOwnershipPolicy(const std::string& text, NetActorOwnershipPolicy& outPolicy);
+	};
+
+} // namespace RTE
