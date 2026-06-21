@@ -694,6 +694,12 @@ void RunGameLoop() {
 
 			g_LuaMan.Update();
 
+			// M4 command-channel control — the host issues a synced SetTeamFunds command at a fixed tick; both
+			// peers must apply it identically, so the funds subsystem stays bit-identical.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestFundsCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
+			}
+
 			g_UInputMan.Update();
 
 			g_FrameMan.Update();

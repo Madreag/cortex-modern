@@ -44,6 +44,7 @@ namespace RTE {
 			bool        selftestPerturb = false; // -determinism-selftest-perturb: inject one genuine
 			                                 // non-determinism at a fixed tick (the determinism
 			                                 // check's positive control).
+			bool        selftestFundsCommand = false; // -net-match-e2e-funds-command: host issues a synced SetTeamFunds at tick 50.
 		};
 
 		/// True if `-scenario` was supplied on the command line.
@@ -90,6 +91,11 @@ namespace RTE {
 		static uint16_t GetLockstepInputDelayFrames();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
+
+		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
+		/// the sender and both peers apply it at the synced frame.
+		static void EnqueueLocalGameCommand(const NetGameCommand& command);
+		static std::vector<NetGameCommand> DrainLocalGameCommands();
 
 		/// Pin the sim-affecting config to canonical values for a deterministic run, so the sim is
 		/// bit-identical across machines regardless of per-machine Settings.ini. Call after settings

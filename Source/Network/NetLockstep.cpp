@@ -739,12 +739,15 @@ namespace RTE {
 		packet.targetFrame = targetFrame;
 		packet.frames = frames;
 		packet.commands = commands;
+		for (NetGameCommand& command : packet.commands) {
+			command.senderPeerId = m_Config.localPeerId;
+		}
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
 		m_LocalFrames[targetFrame] = frames;
-		if (!commands.empty()) {
-			m_LocalCommands[targetFrame] = commands;
+		if (!packet.commands.empty()) {
+			m_LocalCommands[targetFrame] = packet.commands;
 		}
 		++m_Stats.framePacketsSent;
 		m_Stats.localControllerFramesSent += frames.size();

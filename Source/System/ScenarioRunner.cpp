@@ -31,6 +31,7 @@ namespace RTE {
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
 		uint64_t s_LockstepPollNowMs = 0;
+		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 
 		std::string FloatBitsHex(float value) {
 			uint32_t bits;
@@ -137,6 +138,11 @@ namespace RTE {
 		if (a == "-determinism-selftest-perturb") {
 			// Positive-control: arm the one-shot perturbation. Boolean flag — no value.
 			s_Args.selftestPerturb = true;
+			return 1;
+		}
+		if (a == "-net-match-e2e-funds-command") {
+			// M4 channel control: arm the host-issued SetTeamFunds command. Boolean flag — no value.
+			s_Args.selftestFundsCommand = true;
 			return 1;
 		}
 		return 0;
@@ -337,7 +343,17 @@ namespace RTE {
 			if (error) *error = "lockstep coordinator is not active";
 			return false;
 		}
-		return s_LockstepCoordinator->QueueLocalInput(tick, frames, {}, error);
+		return s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error);
+	}
+
+	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		s_PendingLocalGameCommands.push_back(command);
+	}
+
+	std::vector<NetGameCommand> ScenarioRunner::DrainLocalGameCommands() {
+		std::vector<NetGameCommand> drained = std::move(s_PendingLocalGameCommands);
+		s_PendingLocalGameCommands.clear();
+		return drained;
 	}
 
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
