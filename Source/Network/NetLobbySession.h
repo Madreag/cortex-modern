@@ -58,6 +58,7 @@ namespace RTE {
 		bool IsRejected() const { return m_State == NetLobbyState::Rejected; }
 		bool IsLocalReady() const { return m_LocalReady; }
 		bool IsRemoteReady() const { return m_RemoteReady; }
+		const std::string& GetRemoteName() const { return m_RemoteDisplayName; }
 		bool IsStartRequested() const { return m_StartRequested; }
 		const NetMatchConfig& GetMatchConfig() const { return m_Config.matchConfig; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
@@ -102,6 +103,7 @@ namespace RTE {
 		bool m_RemoteReady = false;
 		bool m_StartRequested = false;
 		std::string m_FailureReason;
+		std::string m_RemoteDisplayName;
 		NetLobbyStats m_Stats;
 	};
 

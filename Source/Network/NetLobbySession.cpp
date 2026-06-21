@@ -283,6 +283,10 @@ namespace RTE {
 				if (payload.peerId == m_Config.remotePeerId) {
 					Reject(payload.reason);
 				}
+			} else if constexpr (std::is_same_v<Payload, NetLobbyPeerState>) {
+				if (payload.peerId == m_Config.remotePeerId) {
+					m_RemoteDisplayName = payload.displayName;
+				}
 			}
 		}, message.payload);
 	}

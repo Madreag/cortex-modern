@@ -254,10 +254,11 @@ namespace RTE {
 		for (const NetMatchPlayerSlot& slot: m_MatchConfig.players) {
 			NetLobbyMember member;
 			member.peerId = slot.peerId;
-			member.displayName = slot.displayName;
 			member.team = slot.team;
 			member.cpu = slot.cpu;
 			member.isLocal = slot.peerId == localId;
+			// The remote peer's typed name arrives via its periodic peer-state; the slot only has the default.
+			member.displayName = (!member.isLocal && !m_Lobby.GetRemoteName().empty()) ? m_Lobby.GetRemoteName() : slot.displayName;
 			member.ready = member.isLocal ? snapshot.localReady : snapshot.remoteReady;
 			member.connected = true;
 			member.pingMs = member.isLocal ? 0 : remotePing;
