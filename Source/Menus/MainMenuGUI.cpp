@@ -571,13 +571,24 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 
 void MainMenuGUI::StartMultiplayer(bool host) {
 	const std::string portText = (host ? m_MultiplayerHostPortTextBox : m_MultiplayerJoinPortTextBox)->GetText();
-	const long parsedPort = std::strtol(portText.c_str(), nullptr, 10);
+	char* parseEnd = nullptr;
+	const long parsedPort = std::strtol(portText.c_str(), &parseEnd, 10);
+	if (portText.empty() || *parseEnd != '\0' || parsedPort < 1 || parsedPort > 65535) {
+		m_MultiplayerLandingStatusLabel->SetText("Port must be a whole number from 1 to 65535.");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		return;
+	}
+	if (!host && m_MultiplayerJoinAddressTextBox->GetText().empty()) {
+		m_MultiplayerLandingStatusLabel->SetText("Enter the host's address to join.");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		return;
+	}
 	NetMatchServiceRequest request;
 	request.host = host;
 	if (!host) {
 		request.address = m_MultiplayerJoinAddressTextBox->GetText();
 	}
-	request.port = parsedPort > 0 && parsedPort <= 65535 ? static_cast<uint16_t>(parsedPort) : 41010;
+	request.port = static_cast<uint16_t>(parsedPort);
 	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
@@ -654,7 +665,11 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		label->SetText(row);
 		label->SetVisible(true);
 	}
-	m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady) {
+		m_MultiplayerStatusLabel->SetText(snapshot.members.size() < 2 ? "Waiting for a player to join..." : "Waiting for the other player to ready up...");
+	} else {
+		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	}
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -695,7 +710,8 @@ bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
 }
 
 bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::string& text) {
-	if (GUITextBox* textBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName))) {
+	GUITextBox* textBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
+	if (textBox && IsControlClickable(textBox)) {
 		textBox->SetText(text);
 		return true;
 	}
@@ -740,7 +756,8 @@ bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
 	}
-	return control && control->GetEnabled();
+	// "Enabled" for automation means interactable as a human would see it: enabled and visible up the chain.
+	return control && IsControlClickable(control);
 }
 
 void MainMenuGUI::HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl) {
