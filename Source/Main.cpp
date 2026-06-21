@@ -472,6 +472,7 @@ void ProcessMenuScript() {
 		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
 	}
 	if (!g_MenuMan.IsMainMenuInteractive()) {
+		g_MenuMan.SkipTitleIntroForAutomation();
 		return;
 	}
 	if (waitFrames > 0) {
@@ -492,9 +493,9 @@ void ProcessMenuScript() {
 	} else if (cmd == "screenshot") {
 		std::string name;
 		iss >> name;
-		const std::string base = s_menuScriptOutDir.empty() ? name : (s_menuScriptOutDir + "/" + name);
-		g_FrameMan.SaveScreenToPNG(base.c_str());
-		std::cout << "[menu-script] screenshot " << base << " screen=" << menu->AutomationActiveScreenName() << std::endl;
+		// SaveScreenToPNG prepends System::GetScreenshotDirectory() ("ScreenShots/"); use a plain name.
+		g_FrameMan.SaveScreenToPNG(name.c_str());
+		std::cout << "[menu-script] screenshot ScreenShots/" << name << " screen=" << menu->AutomationActiveScreenName() << std::endl;
 	} else if (cmd == "activate") {
 		std::string control;
 		iss >> control;
