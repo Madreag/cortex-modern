@@ -59,6 +59,25 @@ namespace RTE {
 		void Draw();
 #pragma endregion
 
+#pragma region Automation
+		/// Activates a control by name, dispatching to the active screen handler exactly as a click does.
+		/// @return Whether the control was found.
+		bool AutomationActivateControl(const std::string& controlName);
+
+		/// Sets a text box's text by control name.
+		bool AutomationSetText(const std::string& controlName, const std::string& text);
+
+		/// Gets the name of the active menu screen.
+		std::string AutomationActiveScreenName() const;
+
+		/// Gets the multiplayer status and error label text.
+		std::string AutomationMultiplayerStatus() const;
+		std::string AutomationMultiplayerError() const;
+
+		/// Gets whether a named button is currently enabled.
+		bool AutomationControlEnabled(const std::string& controlName) const;
+#pragma endregion
+
 	private:
 		/// Enumeration for the different sub-menu screens of the main menu.
 		enum MenuScreen {

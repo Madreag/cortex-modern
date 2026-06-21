@@ -24,6 +24,7 @@
 
 #include "GUI.h"
 #include "GUIInputWrapper.h"
+#include "MainMenuGUI.h"
 #include "AllegroScreen.h"
 #include "AllegroBitmap.h"
 
@@ -129,6 +130,8 @@ static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
 static uint64_t s_netMatchServiceE2ERunningTicks = 0;
 static int s_netMatchServiceE2EExitCode = 0;
 static std::string s_netMatchServiceE2EError;
+static std::string s_menuScriptPath;
+static std::string s_menuScriptOutDir;
 
 bool NetGameplayRequested() {
 	return s_netLockstep || s_netMatch;
@@ -339,6 +342,16 @@ void HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-menu-script") {
+			s_menuScriptPath = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-menu-script-out") {
+			s_menuScriptOutDir = argValue[++i];
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-lockstep-report") {
 			s_netLockstepReportPath = argValue[++i];
 			continue;
@@ -439,6 +452,78 @@ void PollSDLEvents() {
 /// <summary>
 /// Game menus loop.
 /// </summary>
+// Drives the real MainMenuGUI from a script for automated UI testing: one step per call, after the
+// interactive main menu is up. Screenshots use the normal render path. Quits when the script ends.
+void ProcessMenuScript() {
+	static std::vector<std::string> steps;
+	static size_t stepIndex = 0;
+	static int waitFrames = 0;
+	static bool loaded = false;
+
+	if (!loaded) {
+		std::ifstream in(s_menuScriptPath);
+		std::string line;
+		while (std::getline(in, line)) {
+			if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+			if (line.empty() || line[0] == '#') { continue; }
+			steps.push_back(line);
+		}
+		loaded = true;
+		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
+	}
+	if (!g_MenuMan.IsMainMenuInteractive()) {
+		return;
+	}
+	if (waitFrames > 0) {
+		--waitFrames;
+		return;
+	}
+	if (stepIndex >= steps.size()) {
+		std::cout << "[menu-script] complete" << std::endl;
+		System::SetQuit(true);
+		return;
+	}
+	std::istringstream iss(steps[stepIndex++]);
+	std::string cmd;
+	iss >> cmd;
+	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+	if (cmd == "wait") {
+		iss >> waitFrames;
+	} else if (cmd == "screenshot") {
+		std::string name;
+		iss >> name;
+		const std::string base = s_menuScriptOutDir.empty() ? name : (s_menuScriptOutDir + "/" + name);
+		g_FrameMan.SaveScreenToPNG(base.c_str());
+		std::cout << "[menu-script] screenshot " << base << " screen=" << menu->AutomationActiveScreenName() << std::endl;
+	} else if (cmd == "activate") {
+		std::string control;
+		iss >> control;
+		std::cout << "[menu-script] activate " << control << " ok=" << menu->AutomationActivateControl(control) << std::endl;
+	} else if (cmd == "settext") {
+		std::string control;
+		std::string text;
+		iss >> control;
+		std::getline(iss, text);
+		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
+		menu->AutomationSetText(control, text);
+	} else if (cmd == "assert_screen") {
+		std::string expected;
+		iss >> expected;
+		const std::string actual = menu->AutomationActiveScreenName();
+		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (actual == expected ? "PASS" : "FAIL") << std::endl;
+	} else if (cmd == "assert_status") {
+		std::string sub;
+		std::getline(iss, sub);
+		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
+		const std::string status = menu->AutomationMultiplayerStatus();
+		std::cout << "[menu-script] assert_status \"" << sub << "\" status=\"" << status << "\" " << (status.find(sub) != std::string::npos ? "PASS" : "FAIL") << std::endl;
+	} else if (cmd == "exit") {
+		System::SetQuit(true);
+	} else {
+		std::cout << "[menu-script] unknown command: " << cmd << std::endl;
+	}
+}
+
 void RunMenuLoop() {
 	g_MenuMan.SetIsInMenuScreen(true);
 	g_UInputMan.DisableKeys(false);
@@ -477,6 +562,10 @@ void RunMenuLoop() {
 		g_ConsoleMan.Draw(g_FrameMan.GetBackBuffer32());
 		g_WindowMan.GetScreenBuffer()->End();
 		g_WindowMan.UploadFrame();
+
+		if (!s_menuScriptPath.empty()) {
+			ProcessMenuScript();
+		}
 	}
 
 	g_MenuMan.SetIsInMenuScreen(false);
