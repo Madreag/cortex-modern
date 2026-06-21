@@ -1233,6 +1233,20 @@ int RunNetMatchServiceE2E() {
 		}
 	}
 
+	if (setupError.empty()) {
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+		std::cout << "[net-match-service-e2e] lobby_snapshot: state=" << snapshot.serviceState
+				  << " is_host=" << (snapshot.isHost ? 1 : 0) << " members=" << snapshot.members.size()
+				  << " local_ready=" << (snapshot.localReady ? 1 : 0) << " remote_ready=" << (snapshot.remoteReady ? 1 : 0)
+				  << " activity=" << snapshot.activityPreset << " scene=" << snapshot.sceneName << " mode=" << snapshot.modeName;
+		for (const NetLobbyMember& member: snapshot.members) {
+			std::cout << " | peer" << static_cast<int>(member.peerId) << "=" << member.displayName
+					  << "(team" << static_cast<int>(member.team) << (member.isLocal ? ",local" : ",remote")
+					  << (member.ready ? ",ready" : ",notready") << ",ping" << member.pingMs << "ms)";
+		}
+		std::cout << std::endl;
+	}
+
 	if (setupError.empty() && !ConfigureNetMatchServiceE2EActivity(activityPreset, &setupError)) {
 		s_netMatchServiceE2EExitCode = 1;
 	}

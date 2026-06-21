@@ -245,6 +245,18 @@ namespace RTE {
 			return events;
 		}
 
+		uint32_t GetPeerPingMs(NetPeerId peerId) {
+			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
+			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end()) {
+				return 0;
+			}
+			SteamNetConnectionRealTimeStatus_t status{};
+			if (m_Interface->GetConnectionRealTimeStatus(connectionIt->second, &status, 0, nullptr) != k_EResultOK) {
+				return 0;
+			}
+			return status.m_nPing > 0 ? static_cast<uint32_t>(status.m_nPing) : 0;
+		}
+
 		bool Acquire(std::string* error) {
 			if (m_HasGnsRef) {
 				return true;
@@ -440,6 +452,7 @@ namespace RTE {
 		void Disconnect(NetPeerId, const std::string&) {}
 		void Stop() {}
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
+		uint32_t GetPeerPingMs(NetPeerId) { return 0; }
 	};
 
 #endif
@@ -473,6 +486,10 @@ namespace RTE {
 
 	std::vector<NetTransportEvent> GnsTransport::PollEvents() {
 		return m_Impl->PollEvents();
+	}
+
+	uint32_t GnsTransport::GetPeerPingMs(NetPeerId peerId) const {
+		return m_Impl->GetPeerPingMs(peerId);
 	}
 
 	bool GnsTransport::IsCompiledIn() {

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "NetLobbySession.h"
+#include "NetLobbySnapshot.h"
 #include "NetLockstep.h"
 #include "NetSession.h"
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace RTE {
@@ -37,6 +39,7 @@ namespace RTE {
 		const std::atomic<bool>* readyRequested = nullptr;
 		const std::atomic<bool>* startRequested = nullptr;
 		const std::atomic<bool>* cancelRequested = nullptr;
+		std::function<void(const NetLobbySnapshot&)> publishLobby;
 	};
 
 	class NetMatchRunner {
@@ -59,6 +62,7 @@ namespace RTE {
 		bool RunLobby(INetTransport& transport, const NetSession& session, uint64_t maxWaitMs, std::string* error);
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error);
+		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		void SetFailed(const std::string& error);
 
 		NetMatchRuntimeState m_State = NetMatchRuntimeState::Idle;

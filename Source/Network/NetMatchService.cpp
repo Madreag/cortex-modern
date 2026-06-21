@@ -96,6 +96,7 @@ namespace RTE {
 			m_State = NetMatchServiceState::Idle;
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
+			m_LobbySnapshot = {};
 		}
 		runner.reset();
 		coordinator.reset();
@@ -126,6 +127,7 @@ namespace RTE {
 			m_State = NetMatchServiceState::Failed;
 			m_StatusText = "Match stopped";
 			m_ErrorText = error;
+			m_LobbySnapshot = {};
 		}
 		runner.reset();
 		coordinator.reset();
@@ -194,6 +196,22 @@ namespace RTE {
 	NetMatchServiceState NetMatchService::GetState() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_State;
+	}
+
+	NetLobbySnapshot NetMatchService::GetLobbySnapshot() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		NetLobbySnapshot snapshot = m_LobbySnapshot;
+		snapshot.serviceState = StateName(m_State);
+		snapshot.statusText = m_StatusText;
+		snapshot.errorText = m_ErrorText;
+		snapshot.isHost = m_IsHost;
+		snapshot.localPeerId = m_LocalPeerId;
+		snapshot.localTeam = m_LocalTeam;
+		snapshot.active = m_State != NetMatchServiceState::Idle;
+		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
+		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
+		snapshot.failed = m_State == NetMatchServiceState::Failed;
+		return snapshot;
 	}
 
 	std::string NetMatchService::GetStatusText() const {
@@ -265,6 +283,10 @@ namespace RTE {
 		runnerConfig.readyRequested = &m_ReadyRequested;
 		runnerConfig.startRequested = &m_StartRequested;
 		runnerConfig.cancelRequested = &m_CancelRequested;
+		runnerConfig.publishLobby = [this](const NetLobbySnapshot& snapshot) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_LobbySnapshot = snapshot;
+		};
 
 		std::string error;
 		const bool started = runner->Start(*transport, *session, *coordinator, runnerConfig, &error);
