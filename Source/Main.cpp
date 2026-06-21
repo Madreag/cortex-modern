@@ -523,6 +523,15 @@ void ProcessMenuScript() {
 		iss >> expected;
 		const std::string actual = menu->AutomationMultiplayerSubScreen();
 		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (actual == expected ? "PASS" : "FAIL") << std::endl;
+	} else if (cmd == "dump_lobby") {
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
+				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\"";
+		for (const NetLobbyMember& member: snapshot.members) {
+			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
+					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
+		}
+		std::cout << std::endl;
 	} else if (cmd == "assert_enabled") {
 		std::string control;
 		int expected = 0;
