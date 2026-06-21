@@ -303,6 +303,14 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	for (const NetGameCommand& command: commands) {
 		if (const NetGameSetTeamFunds* funds = std::get_if<NetGameSetTeamFunds>(&command.payload)) {
 			activity->SetTeamFunds(static_cast<float>(funds->funds), funds->team);
+		} else if (const NetGameSpawnActor* spawn = std::get_if<NetGameSpawnActor>(&command.payload)) {
+			if (const Entity* preset = g_PresetMan.GetEntityPreset(spawn->className, spawn->preset, spawn->module)) {
+				if (Actor* actor = dynamic_cast<Actor*>(preset->Clone())) {
+					actor->SetTeam(spawn->team);
+					actor->SetPos(Vector(spawn->posX, spawn->posY));
+					g_MovableMan.AddActor(actor);
+				}
+			}
 		}
 	}
 }

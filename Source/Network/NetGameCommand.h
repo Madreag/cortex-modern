@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <variant>
 
 namespace RTE {
@@ -11,6 +12,7 @@ namespace RTE {
 	// at the same frame, sorted by sender, so the on-wire result stays bit-identical.
 	enum class NetGameCommandType : uint16_t {
 		SetTeamFunds = 1,
+		SpawnActor = 2,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -21,7 +23,21 @@ namespace RTE {
 		bool operator==(const NetGameSetTeamFunds&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds>;
+	// Spawn an actor from a preset at an exact position for a team — the atom of deploy/buy/delivery. Owner: the
+	// team owner. Both peers clone the same preset at the same synced frame and identical sim state, so the new
+	// actor's unique id and physics match; its AI/controller stays off-wire.
+	struct NetGameSpawnActor {
+		std::string className;
+		std::string preset;
+		std::string module;
+		float posX = 0.0F;
+		float posY = 0.0F;
+		int32_t team = 0;
+
+		bool operator==(const NetGameSpawnActor&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

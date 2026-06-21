@@ -92,7 +92,7 @@ namespace RTE {
 			frame.senderPeerId = 2;
 			frame.targetFrame = 32;
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
-			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}

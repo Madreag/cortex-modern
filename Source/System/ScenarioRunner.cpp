@@ -145,6 +145,11 @@ namespace RTE {
 			s_Args.selftestFundsCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-spawn-command") {
+			// M4.2 control: arm the host-issued SpawnActor command. Boolean flag — no value.
+			s_Args.selftestSpawnCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 
