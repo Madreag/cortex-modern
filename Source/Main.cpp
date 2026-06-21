@@ -755,6 +755,23 @@ void RunGameLoop() {
 				}
 			}
 
+			// Menu-launched MP match with tracing armed: cap at -max-ticks so the trace is bounded for the
+			// host-vs-client sim-gated compare (the menu has no scenario/e2e cap of its own).
+			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
+				static uint64_t s_menuMpStartTick = UINT64_MAX;
+				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				if (s_menuMpStartTick == UINT64_MAX) {
+					s_menuMpStartTick = nowTick;
+				}
+				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
+				if (nowTick - s_menuMpStartTick >= cap) {
+					g_NetMatchService.Complete("menu mp trace complete");
+					g_ActivityMan.EndActivity();
+					System::SetQuit(true);
+					break;
+				}
+			}
+
 			if (s_netMatchServiceE2E) {
 				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				Activity* activity = g_ActivityMan.GetActivity();
@@ -1536,7 +1553,23 @@ int main(int argc, char** argv) {
 				RunMenuLoop();
 			}
 
+			// If the menu launched a multiplayer match with tracing armed, record the per-tick trace so the
+			// menu-driven match can be sim-gated host vs client (same compare as the headless gate).
+			const bool traceMenuMp = g_NetMatchService.WasEverStarted() && s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
+			if (traceMenuMp) {
+				g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
+				g_MetricsCollector.SetRecordTickHashes(true);
+			}
+
 			RunGameLoop();
+
+			if (traceMenuMp) {
+				g_MetricsCollector.EndRun();
+				const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
+				if (g_MetricsCollector.WriteReport(tracePath)) {
+					std::cout << "[menu-mp] wrote trace: " << tracePath << std::endl;
+				}
+			}
 		}
 	}
 
