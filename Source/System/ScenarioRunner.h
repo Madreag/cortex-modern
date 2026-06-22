@@ -91,6 +91,7 @@ namespace RTE {
 		static bool IsLockstepControllerSyncActive();
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		static uint8_t ResolveTeamCommandAuthority(int team);
+		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
 		static uint16_t GetLockstepInputDelayFrames();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);

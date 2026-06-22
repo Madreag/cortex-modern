@@ -348,6 +348,10 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}
 
+	bool ScenarioRunner::SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->SubmitLocalChecksum(tick, hash);
+	}
+
 	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
 	}

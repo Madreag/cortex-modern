@@ -103,6 +103,13 @@ namespace RTE {
 			if (!RoundTrip({NetLockstepStop{2, NetLockstepStopReason::Complete, 120, "done"}}, error)) {
 				return false;
 			}
+			std::array<uint8_t, 32> checksumHash{};
+			for (size_t i = 0; i < checksumHash.size(); ++i) {
+				checksumHash[i] = static_cast<uint8_t>(i * 7 + 3);
+			}
+			if (!RoundTrip({NetLockstepChecksum{1, 99, checksumHash}}, error)) {
+				return false;
+			}
 			return true;
 		}
 

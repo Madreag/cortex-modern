@@ -372,6 +372,18 @@ namespace RTE {
 			return AppendString(out, payload.message, NetLockstepCodec::c_MaxDiagnosticBytes, "message", error);
 		}
 
+		bool EncodePayload(const NetLockstepChecksum& payload, std::vector<uint8_t>& out, NetLockstepError* error) {
+			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id")) {
+				return false;
+			}
+			AppendU8(out, payload.senderPeerId);
+			AppendU8(out, 0);
+			AppendU16LE(out, 0);
+			AppendU64LE(out, payload.frame);
+			out.insert(out.end(), payload.hash.begin(), payload.hash.end());
+			return true;
+		}
+
 		bool DecodeStart(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error) {
 			NetLockstepStart payload;
 			if (!ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
@@ -561,6 +573,28 @@ namespace RTE {
 			return true;
 		}
 
+		bool DecodeChecksum(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error) {
+			NetLockstepChecksum payload;
+			uint8_t reserved0 = 0;
+			uint16_t reserved16 = 0;
+			const uint8_t* hashBytes = nullptr;
+			if (!ReadOrTruncated(reader.ReadU8(payload.senderPeerId), reader, error, "sender_peer_id") ||
+			    !ReadOrTruncated(reader.ReadU8(reserved0), reader, error, "reserved") ||
+			    !ReadOrTruncated(reader.ReadU16LE(reserved16), reader, error, "reserved") ||
+			    !ReadOrTruncated(reader.ReadU64LE(payload.frame), reader, error, "frame") ||
+			    !ReadOrTruncated(reader.ReadBytes(hashBytes, payload.hash.size()), reader, error, "checksum_hash") ||
+			    !ValidatePeerId(payload.senderPeerId, error, "sender_peer_id")) {
+				return false;
+			}
+			if (reserved0 != 0 || reserved16 != 0) {
+				SetError(error, NetLockstepErrorCode::ReservedFieldNonZero, 1, "checksum reserved fields must be zero");
+				return false;
+			}
+			std::memcpy(payload.hash.data(), hashBytes, payload.hash.size());
+			out = payload;
+			return true;
+		}
+
 		std::string EscapeJson(const std::string& value) {
 			std::string escaped;
 			escaped.reserve(value.size());
@@ -593,6 +627,7 @@ namespace RTE {
 			[](const NetLockstepFrame&) { return NetLockstepPacketType::Frame; },
 			[](const NetLockstepAck&) { return NetLockstepPacketType::Ack; },
 			[](const NetLockstepStop&) { return NetLockstepPacketType::Stop; },
+			[](const NetLockstepChecksum&) { return NetLockstepPacketType::Checksum; },
 		}, payload);
 	}
 
@@ -602,6 +637,7 @@ namespace RTE {
 			case NetLockstepPacketType::Frame: return "Frame";
 			case NetLockstepPacketType::Ack: return "Ack";
 			case NetLockstepPacketType::Stop: return "Stop";
+			case NetLockstepPacketType::Checksum: return "Checksum";
 		}
 		return "Unknown";
 	}
@@ -648,6 +684,7 @@ namespace RTE {
 			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepAck& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepStop& payload) { return EncodePayload(payload, payloadBytes, error); },
+			[&](const NetLockstepChecksum& payload) { return EncodePayload(payload, payloadBytes, error); },
 		}, packet.payload);
 		if (!payloadOk) {
 			if (error && error->code == NetLockstepErrorCode::None) {
@@ -719,6 +756,7 @@ namespace RTE {
 			case NetLockstepPacketType::Frame:
 			case NetLockstepPacketType::Ack:
 			case NetLockstepPacketType::Stop:
+			case NetLockstepPacketType::Checksum:
 				packetType = static_cast<NetLockstepPacketType>(rawPacketType);
 				break;
 			default:
@@ -741,6 +779,9 @@ namespace RTE {
 				break;
 			case NetLockstepPacketType::Stop:
 				payloadOk = DecodeStop(payloadReader, payload, &payloadError);
+				break;
+			case NetLockstepPacketType::Checksum:
+				payloadOk = DecodeChecksum(payloadReader, payload, &payloadError);
 				break;
 		}
 		if (!payloadOk) {
@@ -803,6 +844,8 @@ namespace RTE {
 		m_RemoteFrames.clear();
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
+		m_LocalChecksums.clear();
+		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
@@ -854,6 +897,45 @@ namespace RTE {
 		++m_Stats.framePacketsSent;
 		m_Stats.localControllerFramesSent += frames.size();
 		return true;
+	}
+
+	bool NetLockstepCoordinator::SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error) {
+		if (m_State != NetLockstepState::Running) {
+			return true;
+		}
+		m_LocalChecksums[frame] = hash;
+		NetLockstepChecksum packet;
+		packet.senderPeerId = m_Config.localPeerId;
+		packet.frame = frame;
+		packet.hash = hash;
+		if (!SendPacket({packet}, m_Config.frameLane, error)) {
+			return false;
+		}
+		CompareChecksums(frame);
+		return true;
+	}
+
+	void NetLockstepCoordinator::HandleChecksum(const NetLockstepChecksum& checksum) {
+		if (checksum.senderPeerId != m_Config.remotePeerId) {
+			return;
+		}
+		m_RemoteChecksums[checksum.frame] = checksum.hash;
+		CompareChecksums(checksum.frame);
+	}
+
+	void NetLockstepCoordinator::CompareChecksums(uint64_t frame) {
+		const auto localIt = m_LocalChecksums.find(frame);
+		const auto remoteIt = m_RemoteChecksums.find(frame);
+		if (localIt == m_LocalChecksums.end() || remoteIt == m_RemoteChecksums.end()) {
+			return;
+		}
+		if (localIt->second != remoteIt->second) {
+			Fail(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame));
+			return;
+		}
+		// Matched — drop this tick and any older so the maps stay bounded.
+		m_LocalChecksums.erase(m_LocalChecksums.begin(), m_LocalChecksums.upper_bound(frame));
+		m_RemoteChecksums.erase(m_RemoteChecksums.begin(), m_RemoteChecksums.upper_bound(frame));
 	}
 
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
@@ -1006,6 +1088,7 @@ namespace RTE {
 			[&](const NetLockstepFrame& frame) { HandleFrame(frame, nowMs); },
 			[&](const NetLockstepAck&) {},
 			[&](const NetLockstepStop& stop) { HandleStop(stop); },
+			[&](const NetLockstepChecksum& checksum) { HandleChecksum(checksum); },
 		}, packet.payload);
 	}
 

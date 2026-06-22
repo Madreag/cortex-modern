@@ -5,6 +5,7 @@
 #include "NetMatchConfig.h"
 #include "NetTransport.h"
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -19,6 +20,7 @@ namespace RTE {
 		Frame = 2,
 		Ack = 3,
 		Stop = 4,
+		Checksum = 5,
 	};
 
 	enum class NetLockstepStopReason : uint16_t {
@@ -96,7 +98,16 @@ namespace RTE {
 		bool operator==(const NetLockstepStop&) const = default;
 	};
 
-	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop>;
+	// A sim-gated state hash for one tick, exchanged periodically so the peers detect a silent divergence.
+	struct NetLockstepChecksum {
+		uint8_t senderPeerId = 0;
+		uint64_t frame = 0;
+		std::array<uint8_t, 32> hash{};
+
+		bool operator==(const NetLockstepChecksum&) const = default;
+	};
+
+	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum>;
 
 	struct NetLockstepPacket {
 		NetLockstepPayload payload;
@@ -194,6 +205,7 @@ namespace RTE {
 	public:
 		bool Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
 		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
+		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr);
 		void Tick(uint64_t nowMs);
 		void Complete(const std::string& message = "complete");
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
@@ -217,6 +229,8 @@ namespace RTE {
 		void HandleStart(const NetLockstepStart& start);
 		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs);
 		void HandleStop(const NetLockstepStop& stop);
+		void HandleChecksum(const NetLockstepChecksum& checksum);
+		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 
@@ -232,6 +246,8 @@ namespace RTE {
 		std::map<uint64_t, std::vector<ControllerFrame>> m_RemoteFrames;
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::vector<NetGameCommand>> m_RemoteCommands;
+		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
+		std::map<uint64_t, std::array<uint8_t, 32>> m_RemoteChecksums;
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 	};
 
