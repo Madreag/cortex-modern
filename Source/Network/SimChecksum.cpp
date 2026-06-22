@@ -121,6 +121,24 @@ namespace RTE {
 		return m_LastResult;
 	}
 
+	SimChecksum::Hash SimChecksum::SimGatedHash(const Result& result) {
+		// Combine name || hash in sorted name order, skipping the off-wire controller subsystem.
+		std::map<std::string, const Hash*> sorted;
+		for (const auto& [name, hash]: result.per_subsystem) {
+			if (name != "controller") {
+				sorted.emplace(name, &hash);
+			}
+		}
+		ChecksumHasher combined;
+		for (const auto& [name, hash]: sorted) {
+			combined.update(name.data(), name.size());
+			combined.update(hash->data(), hash->size());
+		}
+		Hash out{};
+		combined.finalize(out.data(), out.size());
+		return out;
+	}
+
 	bool SimChecksum::IsActive() const {
 		return m_Impl->active;
 	}

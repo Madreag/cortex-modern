@@ -706,18 +706,24 @@ void RunGameLoop() {
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
-			if (s_recordTickHashes) {
-				const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			// Sample the sim hash on an interval during live lockstep for the runtime desync check. NOT under
+			// -tick-hashes recording (the offline gate is the check there); a real menu match has no -tick-hashes.
+			constexpr uint64_t c_DesyncCheckIntervalTicks = 30;
+			const bool desyncSampleTick = ScenarioRunner::IsLockstepControllerSyncActive() && !s_recordTickHashes &&
+			                              (simTick % c_DesyncCheckIntervalTicks == 0);
+			const bool hashThisTick = s_recordTickHashes || desyncSampleTick;
+			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);
+			}
 
-				// Positive control — inject one genuine non-determinism at a fixed tick so the
-				// determinism check (scenario) or the menu-service E2E gate sees a guaranteed divergence.
-				if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
-					std::random_device perturbDevice;
-					const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
-					for (unsigned k = 0; k < perturbAdvance; ++k) {
-						g_SimRNG.RandomNum<uint32_t>();
-					}
+			// Positive control — inject one genuine non-determinism at a fixed tick so the offline determinism
+			// gate OR the runtime desync detector sees a guaranteed divergence.
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
+				std::random_device perturbDevice;
+				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
+				for (unsigned k = 0; k < perturbAdvance; ++k) {
+					g_SimRNG.RandomNum<uint32_t>();
 				}
 			}
 
@@ -798,10 +804,15 @@ void RunGameLoop() {
 
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
-			if (s_recordTickHashes) {
+			if (hashThisTick) {
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
-				g_MetricsCollector.RecordTickHash(tickResult);
+				if (s_recordTickHashes) {
+					g_MetricsCollector.RecordTickHash(tickResult);
+				}
+				if (desyncSampleTick) {
+					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
+				}
 			}
 
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.

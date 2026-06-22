@@ -50,6 +50,13 @@ namespace RTE {
 		/// Get the most recent result. Thread-safe (returns a copy).
 		Result GetLastResult() const;
 
+		/// Combines a result's subsystem hashes EXCEPT `controller` into one hash, name-sorted so it is
+		/// registration-order-independent. This is the on-wire (sim-gated) hash both peers must agree on; the
+		/// `controller` subsystem is off-wire (per-machine AI) and excluded.
+		/// @param result A finalized tick result.
+		/// @return The sim-gated hash of all on-wire subsystems.
+		static Hash SimGatedHash(const Result& result);
+
 		/// Whether a tick is currently being accumulated (between BeginTick and EndTick). Thread-safe.
 		bool IsActive() const;
 
