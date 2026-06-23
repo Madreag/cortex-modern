@@ -13,6 +13,8 @@ namespace RTE {
 				return NetGameCommandType::SpawnActor;
 			} else if constexpr (std::is_same_v<T, NetGameDeliverCargo>) {
 				return NetGameCommandType::DeliverCargo;
+			} else if constexpr (std::is_same_v<T, NetGameScuttleCraft>) {
+				return NetGameCommandType::ScuttleCraft;
 			}
 		}, payload);
 	}
@@ -31,6 +33,8 @@ namespace RTE {
 				return "SpawnActor";
 			case NetGameCommandType::DeliverCargo:
 				return "DeliverCargo";
+			case NetGameCommandType::ScuttleCraft:
+				return "ScuttleCraft";
 		}
 		return "Unknown";
 	}

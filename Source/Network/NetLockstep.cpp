@@ -344,6 +344,12 @@ namespace RTE {
 						}
 						break;
 					}
+					case NetGameCommandType::ScuttleCraft: {
+						const NetGameScuttleCraft& scuttle = std::get<NetGameScuttleCraft>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(scuttle.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(scuttle.team));
+						break;
+					}
 				}
 			}
 			return true;
@@ -522,6 +528,19 @@ namespace RTE {
 						delivery.posY = FloatFromBitsLE(posYBits);
 						delivery.team = static_cast<int32_t>(team);
 						command.payload = std::move(delivery);
+						break;
+					}
+					case NetGameCommandType::ScuttleCraft: {
+						NetGameScuttleCraft scuttle;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "scuttle_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "scuttle_team")) {
+							return false;
+						}
+						scuttle.actorUID = static_cast<int64_t>(actorUID);
+						scuttle.team = static_cast<int32_t>(team);
+						command.payload = scuttle;
 						break;
 					}
 					default:

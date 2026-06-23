@@ -741,6 +741,12 @@ void RunGameLoop() {
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
 			}
+			// E2E control: host scuttles the delivered craft at tick 100; both peers must gib it identically.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestScuttleCommand && simTick == 100) {
+				if (const int64_t craftUID = g_MovableMan.GetFirstCraftUniqueID(0)) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
+				}
+			}
 
 			g_UInputMan.Update();
 

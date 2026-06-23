@@ -369,6 +369,13 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			craft->SetAIMode(Actor::AIMODE_DELIVER);
 			craft->SetNetworkDelivery(true);
 			g_MovableMan.AddActor(craft);
+		} else if (const NetGameScuttleCraft* scuttle = std::get_if<NetGameScuttleCraft>(&command.payload)) {
+			// Set the scuttle AI mode on every peer so the gib (which runs in both peers' ungated physics) matches.
+			if (MovableObject* mo = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(scuttle->actorUID))) {
+				if (ACraft* craft = dynamic_cast<ACraft*>(mo)) {
+					craft->SetAIMode(Actor::AIMODE_SCUTTLE);
+				}
+			}
 		}
 	}
 }
@@ -397,6 +404,15 @@ struct ScopedRenderRNG {
 	ScopedRenderRNG(const ScopedRenderRNG&) = delete;
 	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
 };
+
+int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
+	for (Actor* actor: m_Actors) {
+		if (actor->GetTeam() == team && dynamic_cast<const ACraft*>(actor)) {
+			return static_cast<int64_t>(actor->GetUniqueID());
+		}
+	}
+	return 0;
+}
 
 MovableMan::MovableMan() {
 	Clear();

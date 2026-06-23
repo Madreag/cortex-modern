@@ -494,6 +494,11 @@ namespace RTE {
 				return 0;
 		}
 
+		/// Gets the unique id of the first ACraft on a team, for the network-command harness.
+		/// @param team The team to search.
+		/// @return The unique id, or 0 if no craft is on that team.
+		int64_t GetFirstCraftUniqueID(int team) const;
+
 		/// Returns the size of the object registry collection
 		/// @return Size of the objects registry.
 		unsigned int GetKnownObjectsCount() { return m_KnownObjects.size(); }
