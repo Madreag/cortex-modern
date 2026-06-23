@@ -13,6 +13,7 @@ namespace RTE {
 		SetTeamFunds = 1,
 		SpawnActor = 2,
 		DeliverCargo = 3,
+		ScuttleCraft = 4,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -59,7 +60,16 @@ namespace RTE {
 		bool operator==(const NetGameDeliverCargo&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo>;
+	// Scuttle (self-destruct) a craft the issuing peer's team controls. The gib runs in both peers' ungated
+	// physics, so the trigger must cross the wire or only the owner gibs.
+	struct NetGameScuttleCraft {
+		int64_t actorUID = 0;
+		int32_t team = 0;
+
+		bool operator==(const NetGameScuttleCraft&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

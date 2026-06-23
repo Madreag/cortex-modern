@@ -11,6 +11,8 @@
 #include "Scene.h"
 #include "SettingsMan.h"
 #include "FrameMan.h"
+#include "ScenarioRunner.h"
+#include "NetGameCommand.h"
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
@@ -415,7 +417,12 @@ bool ACraft::HandlePieCommand(PieSliceType pieSliceIndex) {
 			m_DeliveryState = FALL;
 			ClearAIWaypoints();
 		} else if (pieSliceIndex == PieSliceType::Scuttle) {
-			m_AIMode = AIMODE_SCUTTLE;
+			// In lockstep, scuttle crosses the wire so both peers gib at the same tick; locally it is immediate.
+			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{static_cast<int64_t>(GetUniqueID()), GetTeam()}});
+			} else {
+				m_AIMode = AIMODE_SCUTTLE;
+			}
 		} else {
 			return Actor::HandlePieCommand(pieSliceIndex);
 		}
