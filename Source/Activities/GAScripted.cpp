@@ -5,6 +5,7 @@
 #include "MovableMan.h"
 #include "UInputMan.h"
 #include "ConsoleMan.h"
+#include "ScenarioRunner.h"
 #include "AudioMan.h"
 #include "SettingsMan.h"
 #include "AHuman.h"
@@ -342,6 +343,9 @@ void GAScripted::UpdateGlobalScripts(bool lateUpdate) {
 	// Update all global scripts
 	for (std::vector<GlobalScript*>::iterator sItr = m_GlobalScriptsList.begin(); sItr < m_GlobalScriptsList.end(); ++sItr) {
 		if ((*sItr)->ShouldLateUpdate() == lateUpdate) {
+			if (ScenarioRunner::IsLockstepControllerSyncActive() && (*sItr)->GetPresetName() == "Debug Functions") {
+				continue;
+			}
 			(*sItr)->Update();
 		}
 	}
