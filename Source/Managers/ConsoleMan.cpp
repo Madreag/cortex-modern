@@ -5,6 +5,7 @@
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "PresetMan.h"
+#include "ScenarioRunner.h"
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
@@ -365,7 +366,11 @@ void ConsoleMan::FeedString(bool feedEmptyString) {
 			if (!line.empty() && line != "\r") {
 				g_LuaMan.GetMasterScriptState().ClearErrors();
 				m_OutputLog.emplace_back("\n" + line);
-				g_LuaMan.GetMasterScriptState().RunScriptString(line, false);
+				if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+					m_OutputLog.emplace_back("\nDISABLED during a multiplayer match -- running console scripts would desync the peers.");
+				} else {
+					g_LuaMan.GetMasterScriptState().RunScriptString(line, false);
+				}
 
 				if (g_LuaMan.GetMasterScriptState().ErrorExists()) {
 					m_OutputLog.emplace_back("\nERROR: " + g_LuaMan.GetMasterScriptState().GetLastError());
