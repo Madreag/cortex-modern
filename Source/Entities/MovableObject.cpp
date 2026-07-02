@@ -1079,6 +1079,8 @@ bool MovableObject::DrawToTerrain(SLTerrain* terrain) {
 	if (!terrain) {
 		return false;
 	}
+	// Settling bakes into sim terrain; the deposit must land at the sim pose on every peer, not the frame-timed lerp.
+	SnapRenderPoseToSim();
 	if (dynamic_cast<MOSprite*>(this)) {
 		auto wrappedMaskedBlit = [](BITMAP* sourceBitmap, BITMAP* destinationBitmap, const Vector& bitmapPos, bool swapSourceWithDestination) {
 			std::array<BITMAP*, 2> bitmaps = {sourceBitmap, destinationBitmap};

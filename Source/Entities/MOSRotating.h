@@ -325,6 +325,9 @@ namespace RTE {
 		/// Recursively snaps m_PrevPos = m_Pos for this and every nested attachable / wound. Used after a teleport so the render lerp does not drag the tree from old locations.
 		void SnapAttachableTreePrevPositions();
 
+		/// Also snaps every nested attachable's render pose.
+		void SnapRenderPoseToSim() override;
+
 		/// Does stuff that needs to be done before Travel(). Always call before calling Travel.
 		virtual void PreTravel();
 

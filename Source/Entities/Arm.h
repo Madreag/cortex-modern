@@ -99,6 +99,12 @@ namespace RTE {
 		/// @return The previous position of this Arm's hand in absolute Scene coordinates.
 		Vector GetHandPrevPos() const { return m_HandPrevPos; }
 
+		/// Also snaps the hand's render lerp.
+		void SnapRenderPoseToSim() override {
+			Attachable::SnapRenderPoseToSim();
+			m_HandPrevPos = m_HandPos;
+		}
+
 		/// Sets the current position of this Arm's hand to an absolute scene coordinate. If needed, the set position is modified so its distance from the joint position of the Arm is capped to the max length of the Arm.
 		/// @param newHandPos The new current position of this Arm's hand as absolute scene coordinate.
 		void SetHandPos(const Vector& newHandPos);

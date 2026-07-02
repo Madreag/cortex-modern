@@ -163,6 +163,9 @@ namespace RTE {
 		/// @return A Vector describing the render position vector.
 		Vector GetRenderPos() const;
 
+		/// Snaps the render lerp to the sim pose, for sim-side draws that must not depend on frame timing.
+		virtual void SnapRenderPoseToSim() { m_PrevPos = m_Pos; }
+
 		/// Gets the velocity vector of this MovableObject.
 		/// @return A Vector describing the current velocity vector.
 		const Vector& GetVel() const { return m_Vel; }
