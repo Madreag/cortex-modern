@@ -494,6 +494,10 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 	if (team == Teams::NoTeam)
 		return false;
 
+	// One-shot LZ stacking offset from the multi-order handler; consume it on every path.
+	const float multiOrderYOffset = m_NextMultiOrderYOffset[player];
+	m_NextMultiOrderYOffset[player] = 0.0F;
+
 	// Prepare the Craft, stuff everything into it and add it to the queue
 	// Retrieve the ordered craft and its inventory
 	std::list<const SceneObject*> purchaseList;
@@ -589,15 +593,11 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 		buyOrder.waypointY = waypoint.m_Y;
 		buyOrder.targetUID = pTargetMO ? static_cast<int64_t>(pTargetMO->GetUniqueID()) : 0;
 		buyOrder.orderedByPlayer = static_cast<int8_t>(player);
-		buyOrder.multiOrderYOffset = m_NextMultiOrderYOffset[player];
-		m_NextMultiOrderYOffset[player] = 0.0F;
+		buyOrder.multiOrderYOffset = multiOrderYOffset;
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buyOrder});
 		std::cout << "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size() << std::endl;
 
-		// Go 'ding!', but only if player is human, or it may be confusing
-		if (PlayerHuman(player))
-			g_GUISound.ConfirmSound()->Play(player);
-
+		// The confirm ding plays when the order applies through QueuePurchaseDelivery.
 		// Clear out the override purchase list, whether anything was in there or not, it should not override twice.
 		m_PurchaseOverride[player].clear();
 
@@ -614,8 +614,7 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 	order.orderedByPlayer = player;
 	order.aiReturnCraft = m_AIReturnCraft[player];
 	order.landingZone = m_LandingZone[player];
-	order.multiOrderYOffset = m_NextMultiOrderYOffset[player];
-	m_NextMultiOrderYOffset[player] = 0.0F;
+	order.multiOrderYOffset = multiOrderYOffset;
 
 	ACraft* pDeliveryCraft = dynamic_cast<ACraft*>(pCraftPreset->Clone());
 	if (!QueuePurchaseDelivery(pDeliveryCraft, order)) {
