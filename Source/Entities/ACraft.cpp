@@ -713,6 +713,10 @@ void ACraft::Update() {
 		else if (m_Status == STABLE && m_ExitTimer.IsPastSimMS(EXITSUCKDELAYMS)) {
 			// See if any of the exits have sucked in an MO
 			for (std::list<Exit>::iterator exit = m_Exits.begin(); exit != m_Exits.end(); ++exit) {
+				// Recheck clearance here; the last write may be DrawHUD's, which only the viewing machine runs
+				if (!exit->CheckIfClear(m_Pos, m_Rotation, 18)) {
+					continue;
+				}
 				// If exit sucked in an MO, add it to invetory
 				MOSRotating* pNewObject = exit->SuckInMOs(this);
 				if (pNewObject && !pNewObject->IsSetToDelete()) {
