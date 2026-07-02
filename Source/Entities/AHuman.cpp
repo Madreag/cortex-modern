@@ -1288,6 +1288,29 @@ bool AHuman::SyncEquippedItemsByUniqueID(int64_t fgUniqueID, int64_t bgUniqueID)
 		return true;
 	}
 
+	// Refuse without mutating when a referenced item is absent or the arm for it is gone; the frame
+	// is stale (the item died while it was in flight) and the owner's sim no longer has it either.
+	auto canEquip = [&](const Arm* arm, int64_t uniqueID) -> bool {
+		if (uniqueID == 0) {
+			return true;
+		}
+		if (!arm) {
+			return false;
+		}
+		if (deviceID(GetEquippedItem()) == uniqueID || deviceID(GetEquippedBGItem()) == uniqueID) {
+			return true;
+		}
+		for (const MovableObject* item: m_Inventory) {
+			if (item && static_cast<int64_t>(item->GetUniqueID()) == uniqueID && dynamic_cast<const HeldDevice*>(item)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (!canEquip(m_pFGArm, fgUniqueID) || !canEquip(m_pBGArm, bgUniqueID)) {
+		return false;
+	}
+
 	struct DetachedDevice {
 		HeldDevice* device = nullptr;
 		bool fromBackgroundArm = false;

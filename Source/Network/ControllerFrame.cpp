@@ -231,10 +231,10 @@ namespace RTE {
 		actor.SetAimAngle(frame.aimAngle);
 		actor.SetViewPoint(Vector(frame.viewPointX, frame.viewPointY));
 		if (AHuman* human = dynamic_cast<AHuman*>(&actor)) {
-			if (!human->SyncEquippedItemsByUniqueID(frame.equippedFGUniqueID, frame.equippedBGUniqueID)) {
-				SetError(error, "ControllerFrame equipped item UniqueID was not found on actor.");
-				return false;
-			}
+			// The referenced item can be deterministically destroyed while this frame is in flight, so a
+			// failed equip sync is skipped; both peers make the same call on the same state, and real
+			// divergence is policed by the sim-hash exchange.
+			human->SyncEquippedItemsByUniqueID(frame.equippedFGUniqueID, frame.equippedBGUniqueID);
 			if (Arm* fgArm = human->GetFGArm()) {
 				fgArm->SetHandPos(Vector(frame.fgHandPosX, frame.fgHandPosY));
 			}
