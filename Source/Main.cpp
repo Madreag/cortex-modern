@@ -856,6 +856,12 @@ void RunGameLoop() {
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
 			}
+			// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
+			// through the original brain's death because the team still has the spawned one.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainSpawnCommand && simTick == 40) {
+				std::cout << "[net-match-service-e2e] brain spawn: team 1 at 1250,700" << std::endl;
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Brain Robot", "Base.rte", 1250.0F, 700.0F, 1}});
+			}
 			// Test control: the host delivers two crafts just above the enemy brain and scuttles each as
 			// its hatch opens; both peers must trace the identical game-over transition. The spawn height
 			// is computed from the terrain and rides the synced command, so both peers see the same drop.

@@ -227,6 +227,11 @@ namespace RTE {
 			s_Args.selftestBuyCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-brain-spawn-command") {
+			// Arm the second-brain spawn for this peer's team. Boolean flag.
+			s_Args.selftestBrainSpawnCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 
