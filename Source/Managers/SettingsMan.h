@@ -206,6 +206,10 @@ namespace RTE {
 		/// Gets whether gold gathered by Actors is automatically added into team funds.
 		/// @return Whether gold gathered by Actors is automatically added into team funds.
 		bool GetAutomaticGoldDeposit() const { return m_AutomaticGoldDeposit; }
+
+		/// Sets whether gold gathered by Actors is automatically added into team funds.
+		/// @param automaticGoldDeposit Whether to deposit gathered gold automatically.
+		void SetAutomaticGoldDeposit(bool automaticGoldDeposit) { m_AutomaticGoldDeposit = automaticGoldDeposit; }
 #pragma endregion
 
 #pragma region Network Settings

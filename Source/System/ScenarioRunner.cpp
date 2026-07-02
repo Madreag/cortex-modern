@@ -529,6 +529,11 @@ namespace RTE {
 		// every deterministic match must hand out the same IDs on every peer — including a rematch, where
 		// each process has created a different number of MOs by launch time. The base clears load-time IDs.
 		MovableObject::PinUniqueIDCounter(1 << 20);
+		// Gold pickups route to team funds or carried gold off this per-machine setting; pin it.
+		g_SettingsMan.SetAutomaticGoldDeposit(true);
+		// Crab bombs gib a craft's ejected crabs past a threshold; both are per-machine settings on a sim path.
+		g_SettingsMan.SetCrabBombsEnabled(false);
+		g_SettingsMan.SetCrabBombThreshold(42);
 	}
 
 	std::map<std::string, std::string> ScenarioRunner::GatherSimConfig() {
@@ -542,6 +547,18 @@ namespace RTE {
 		config["recommended_moid_count"] = std::to_string(g_SettingsMan.RecommendedMOIDCount());
 		config["particle_settling"] = g_MovableMan.IsParticleSettlingEnabled() ? "1" : "0";
 		config["mo_subtraction"] = g_MovableMan.IsMOSubtractionEnabled() ? "1" : "0";
+		config["automatic_gold_deposit"] = g_SettingsMan.GetAutomaticGoldDeposit() ? "1" : "0";
+		config["crab_bombs"] = g_SettingsMan.CrabBombsEnabled() ? std::to_string(g_SettingsMan.GetCrabBombThreshold()) : "off";
+		// Which sim-mutating global scripts run is per-machine Settings state; a mismatch must read
+		// as a config difference, not a sim divergence.
+		std::string enabledGlobalScripts;
+		std::map<std::string, bool> sortedGlobalScripts(g_SettingsMan.GetEnabledGlobalScriptMap().begin(), g_SettingsMan.GetEnabledGlobalScriptMap().end());
+		for (const auto& [scriptName, enabled]: sortedGlobalScripts) {
+			if (enabled) {
+				enabledGlobalScripts += (enabledGlobalScripts.empty() ? "" : ",") + scriptName;
+			}
+		}
+		config["enabled_global_scripts"] = enabledGlobalScripts;
 		return config;
 	}
 
