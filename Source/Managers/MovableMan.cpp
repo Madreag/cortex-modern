@@ -2142,6 +2142,22 @@ void MovableMan::Update() {
 			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
 		}
 
+		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
+		for (MovableObject* i: m_Items) {
+			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
+			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
+			const float ipX = i->GetPos().m_X;
+			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
+			const float ipY = i->GetPos().m_Y;
+			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
+			const float ivX = i->GetVel().m_X;
+			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
+			const float ivY = i->GetVel().m_Y;
+			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
+			const float itemAngVel = i->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
+		}
+
 		// Lightweight population metadata — catches spawn/delete count drift.
 		const int32_t actorCount = static_cast<int32_t>(m_Actors.size());
 		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
