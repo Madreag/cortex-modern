@@ -1260,10 +1260,12 @@ void RunGameLoop() {
 		updateTotalTime = updateEndAndDrawStartTime - updateStartTime;
 		drawStartTime = updateEndAndDrawStartTime;
 
-		// Frame rendering must not advance the sim RNG stream — its cadence is host frame-rate
-		// dependent, so redirect any cosmetic draws here to the render RNG.
+		// Frame rendering must not advance the sim RNG stream or feed the MOID grid — its cadence is
+		// host frame-rate dependent, so redirect cosmetic draws to the render RNG and suspend
+		// MOID-grid registration for the frame.
 		RandomGenerator* prevSimRNG = t_simRNGOverride;
 		t_simRNGOverride = &g_RenderRNG;
+		g_SceneMan.SetRenderDrawContext(true);
 
 		g_UInputMan.Update();
 		g_ActivityMan.RenderUpdate();
@@ -1272,6 +1274,7 @@ void RunGameLoop() {
 		g_FrameMan.Draw();
 		g_WindowMan.DrawPostProcessBuffer();
 		g_WindowMan.UploadFrame();
+		g_SceneMan.SetRenderDrawContext(false);
 		t_simRNGOverride = prevSimRNG;
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
