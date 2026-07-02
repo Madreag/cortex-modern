@@ -283,6 +283,10 @@ namespace RTE {
 		/// @param radius The radius of the drawn area.
 		void RegisterDrawing(const BITMAP* bitmap, int moid, const Vector& center, float radius);
 
+		/// Suspends MOID-grid registration during render-frame draws; the grid is sim state and
+		/// per-frame draws would feed it frame-timed positions.
+		void SetRenderDrawContext(bool render) { m_RenderDrawContext = render; }
+
 		/// Clears all registered drawn areas of the MOID layer to the g_NoMOID color and clears the registrations too. Should be done each sim update.
 		void ClearAllMOIDDrawings();
 
@@ -1000,6 +1004,8 @@ namespace RTE {
 		SceneLayerTracked* m_pMOColorLayer;
 		// A spatial partitioning grid of MOIDs, used to optimize collision and distance queries
 		SpatialPartitionGrid m_MOIDsGrid;
+		// True while the render frame draws, so MOID-grid registration stays sim-only
+		bool m_RenderDrawContext = false;
 
 		// Debug layer for seeing cast rays etc
 		SceneLayer* m_pDebugLayer;

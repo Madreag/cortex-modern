@@ -434,6 +434,9 @@ Vector SceneMan::GetGlobalAcc() const {
 void SceneMan::RegisterDrawing(const BITMAP* bitmap, int moid, int left, int top, int right, int bottom) {
 	if (m_pMOColorLayer && m_pMOColorLayer->GetBitmap() == bitmap) {
 		m_pMOColorLayer->RegisterDrawing(left, top, right, bottom);
+	} else if (m_RenderDrawContext) {
+		// The MOID grid is sim state; render-frame draws happen at frame-timed positions and must not feed it.
+		return;
 	} else if (const MovableObject* mo = g_MovableMan.GetMOFromID(moid)) {
 		IntRect rect(left, top, right, bottom);
 		m_MOIDsGrid.Add(rect, *mo);
