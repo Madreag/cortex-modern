@@ -165,6 +165,12 @@ namespace RTE {
 		/// Lerped render rotation between previous and current sim rotation, for visual consistency with GetRenderPos.
 		Matrix GetRenderRotMatrix() const;
 
+		/// Also snaps the render rotation to the sim rotation.
+		void SnapRenderPoseToSim() override {
+			MovableObject::SnapRenderPoseToSim();
+			m_PrevRotation = m_Rotation;
+		}
+
 		/// Gets the current rotational angle of of this, in radians.
 		/// @return The rotational angle of this, in radians.
 		float GetRotAngle() const override { return m_Rotation.GetRadAngle(); }

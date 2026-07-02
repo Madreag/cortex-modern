@@ -1315,6 +1315,16 @@ void MOSRotating::SnapAttachableTreePrevPositions() {
 	}
 }
 
+void MOSRotating::SnapRenderPoseToSim() {
+	MOSprite::SnapRenderPoseToSim();
+	for (Attachable* attachable: m_Attachables) {
+		attachable->SnapRenderPoseToSim();
+	}
+	for (Attachable* wound: m_Wounds) {
+		wound->SnapRenderPoseToSim();
+	}
+}
+
 void MOSRotating::PreTravel() {
 	MOSprite::PreTravel();
 
