@@ -235,6 +235,11 @@ namespace RTE {
 			s_Args.selftestBrainSpawnCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-pause-command") {
+			// Arm the synced pause + unpause. Boolean flag.
+			s_Args.selftestPauseCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 

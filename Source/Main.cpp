@@ -768,6 +768,15 @@ void RunGameLoop() {
 				}
 			}
 
+			// E2E control: the host pauses at tick 250 and unpauses at 430; both sims must stop and
+			// resume on the same frame with sim time frozen across the gap.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestPauseCommand) {
+				if (simTick == 250) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, true}});
+				} else if (simTick == 430) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, false}});
+				}
+			}
 			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
 			if (lockstepPausedTick) {
 				// The sim holds still: keep input alive for the resume key, exchange an empty frame so
