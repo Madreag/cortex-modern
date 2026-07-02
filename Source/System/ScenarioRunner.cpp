@@ -45,6 +45,10 @@ namespace RTE {
 		bool s_LockstepStallOverlayEnabled = false;
 		bool s_LockstepPaused = false;
 		int s_LockstepResumeCountdown = -1;
+		bool s_SimSettingsPinned = false;
+		bool s_SavedAutomaticGoldDeposit = true;
+		bool s_SavedCrabBombsEnabled = false;
+		int s_SavedCrabBombThreshold = 42;
 
 		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
 		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
@@ -427,6 +431,13 @@ namespace RTE {
 			g_TimerMan.SetSimTimeFrozen(false);
 		}
 		s_LockstepResumeCountdown = -1;
+		// A closing session hands the user's per-machine sim settings back.
+		if (!coordinator && s_SimSettingsPinned) {
+			s_SimSettingsPinned = false;
+			g_SettingsMan.SetAutomaticGoldDeposit(s_SavedAutomaticGoldDeposit);
+			g_SettingsMan.SetCrabBombsEnabled(s_SavedCrabBombsEnabled);
+			g_SettingsMan.SetCrabBombThreshold(s_SavedCrabBombThreshold);
+		}
 	}
 
 	bool ScenarioRunner::IsLockstepControllerSyncActive() {
@@ -588,6 +599,13 @@ namespace RTE {
 		// every deterministic match must hand out the same IDs on every peer — including a rematch, where
 		// each process has created a different number of MOs by launch time. The base clears load-time IDs.
 		MovableObject::PinUniqueIDCounter(1 << 20);
+		// Remember the user's values so the closing session can hand them back.
+		if (!s_SimSettingsPinned) {
+			s_SimSettingsPinned = true;
+			s_SavedAutomaticGoldDeposit = g_SettingsMan.GetAutomaticGoldDeposit();
+			s_SavedCrabBombsEnabled = g_SettingsMan.CrabBombsEnabled();
+			s_SavedCrabBombThreshold = g_SettingsMan.GetCrabBombThreshold();
+		}
 		// Gold pickups route to team funds or carried gold off this per-machine setting; pin it.
 		g_SettingsMan.SetAutomaticGoldDeposit(true);
 		// Crab bombs gib a craft's ejected crabs past a threshold; both are per-machine settings on a sim path.
