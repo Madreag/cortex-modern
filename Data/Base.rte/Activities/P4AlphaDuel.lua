@@ -59,16 +59,18 @@ function P4AlphaDuel:UpdateActivity()
 	-- The win check reads only team-level sim state; player bindings differ per peer in a net match.
 	self.TeamHadBrain = self.TeamHadBrain or {};
 	local liveBrains = {};
-	for _, team in ipairs({Activity.TEAM_1, Activity.TEAM_2}) do
-		liveBrains[team] = MovableMan:GetFirstBrainActor(team) ~= nil and 1 or 0;
-		if liveBrains[team] > 0 then
-			self.TeamHadBrain[team] = true;
+	for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
+		if self:TeamActive(team) then
+			liveBrains[team] = MovableMan:GetFirstBrainActor(team) ~= nil and 1 or 0;
+			if liveBrains[team] > 0 then
+				self.TeamHadBrain[team] = true;
+			end
 		end
 	end
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if self:PlayerActive(player) and self:PlayerHuman(player) then
 			local team = self:GetTeamOfPlayer(player);
-			if self.TeamHadBrain[team] and liveBrains[team] < 1 then
+			if self.TeamHadBrain[team] and (liveBrains[team] or 0) < 1 then
 				self:ResetMessageTimer(player);
 				local screen = self:ScreenOfPlayer(player);
 				FrameMan:ClearScreenText(screen);
@@ -76,18 +78,22 @@ function P4AlphaDuel:UpdateActivity()
 			end
 		end
 	end
-	-- A team is out only once a brain it HAD is gone; newly queued spawns aren't residents yet.
-	local teamOneOut = self.TeamHadBrain[Activity.TEAM_1] and liveBrains[Activity.TEAM_1] < 1;
-	local teamTwoOut = self.TeamHadBrain[Activity.TEAM_2] and liveBrains[Activity.TEAM_2] < 1;
-	if teamOneOut or teamTwoOut then
-		-- The surviving brained team wins; a double kill or a sole-brained world ends as a draw.
-		local teamOneAlive = self.TeamHadBrain[Activity.TEAM_1] and not teamOneOut;
-		local teamTwoAlive = self.TeamHadBrain[Activity.TEAM_2] and not teamTwoOut;
-		if teamTwoAlive then
-			self.WinnerTeam = Activity.TEAM_2;
-			MovableMan:KillAllEnemyActors(self.WinnerTeam);
-		elseif teamOneAlive then
-			self.WinnerTeam = Activity.TEAM_1;
+	-- A team is out only once a brain it HAD is gone; the match ends when at most one team stands.
+	local aliveTeams = {};
+	local anyTeamOut = false;
+	for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
+		if self.TeamHadBrain[team] then
+			if (liveBrains[team] or 0) < 1 then
+				anyTeamOut = true;
+			else
+				table.insert(aliveTeams, team);
+			end
+		end
+	end
+	if anyTeamOut and #aliveTeams <= 1 then
+		-- The last brained team wins; a double kill or a sole-brained world ends as a draw.
+		if #aliveTeams == 1 then
+			self.WinnerTeam = aliveTeams[1];
 			MovableMan:KillAllEnemyActors(self.WinnerTeam);
 		end
 		ActivityMan:EndActivity();
