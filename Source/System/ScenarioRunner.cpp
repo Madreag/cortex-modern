@@ -6,6 +6,7 @@
 #include "FrameMan.h"
 #include "MetricsCollector.h"
 #include "MovableMan.h"
+#include "MovableObject.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
