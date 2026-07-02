@@ -160,6 +160,11 @@ namespace RTE {
 			s_Args.selftestScuttleCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-brain-kill-command") {
+			// Arm the host-issued brain-kill delivery. Boolean flag.
+			s_Args.selftestBrainKillCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 

@@ -759,6 +759,22 @@ void RunGameLoop() {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
 				}
 			}
+			// E2E control: the host delivers two crafts just above the enemy brain and scuttles each as
+			// its hatch opens; both peers must trace the identical game-over transition. The spawn height
+			// is computed from the terrain and rides the synced command, so both peers see the same drop.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainKillCommand) {
+				if (simTick == 50 || simTick == 70) {
+					const float dropX = simTick == 50 ? 1120.0F : 1112.0F;
+					const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 140.0F;
+					std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
+				} else if (simTick > 100 && simTick % 5 == 0) {
+					if (const int64_t craftUID = g_MovableMan.GetFirstUnloadingCraftUniqueID(0)) {
+						std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
+					}
+				}
+			}
 
 			g_UInputMan.Update();
 
@@ -792,6 +808,15 @@ void RunGameLoop() {
 						g_ActivityMan.EndActivity();
 						ScenarioRunner::ClearControllerReplayError();
 						System::SetQuit(true);
+					} else if (!s_netMatchServiceE2E && error.rfind("Complete:", 0) == 0 && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+						// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
+						const std::string result = BuildNetMatchResultText();
+						g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+						g_NetMatchService.FinishMatch(result);
+						g_ActivityMan.EndActivity();
+						g_ActivityMan.SetInActivity(false);
+						ScenarioRunner::ClearControllerReplayError();
+						returnToMenuAfterNetworkEnd = true;
 					} else {
 						std::cerr << "[net-match] controller sync failed: " << error << std::endl;
 						g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
@@ -808,15 +833,6 @@ void RunGameLoop() {
 							returnToMenuAfterNetworkEnd = true;
 						}
 					}
-					} else if (!s_netMatchServiceE2E && error.rfind("Complete:", 0) == 0 && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
-						// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
-						const std::string result = BuildNetMatchResultText();
-						g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
-						g_NetMatchService.FinishMatch(result);
-						g_ActivityMan.EndActivity();
-						g_ActivityMan.SetInActivity(false);
-						ScenarioRunner::ClearControllerReplayError();
-						returnToMenuAfterNetworkEnd = true;
 				}
 				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 				g_UInputMan.EndFrame();
@@ -888,22 +904,6 @@ void RunGameLoop() {
 				}
 			}
 
-			if (s_netMatchServiceE2E) {
-				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-				Activity* activity = g_ActivityMan.GetActivity();
-				if (!activity) {
-					s_netMatchServiceE2EError = "activity ended before e2e tick cap";
-					s_netMatchServiceE2EExitCode = 1;
-					System::SetQuit(true);
-					break;
-				}
-				const Activity::ActivityState activityState = activity->GetActivityState();
-				if (activityState == Activity::Editing) {
-					s_netMatchServiceE2EEnteredEditor = true;
-					s_netMatchServiceE2EError = "activity entered unsynchronized setup editor";
-					s_netMatchServiceE2EExitCode = 1;
-					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
-					g_ActivityMan.EndActivity();
 			// Interactive menu-launched match: end it when the activity is over. The win condition and
 			// this tick window are sim-state, so both peers finish on the same tick without a timeout.
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && !s_recordTickHashes && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
@@ -930,17 +930,35 @@ void RunGameLoop() {
 				}
 			}
 
+			if (s_netMatchServiceE2E) {
+				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				Activity* activity = g_ActivityMan.GetActivity();
+				if (!activity) {
+					s_netMatchServiceE2EError = "activity ended before e2e tick cap";
+					s_netMatchServiceE2EExitCode = 1;
 					System::SetQuit(true);
 					break;
 				}
-				if (activityState == Activity::HasError || activityState == Activity::Over) {
+				const Activity::ActivityState activityState = activity->GetActivityState();
+				if (activityState == Activity::Editing) {
+					s_netMatchServiceE2EEnteredEditor = true;
+					s_netMatchServiceE2EError = "activity entered unsynchronized setup editor";
+					s_netMatchServiceE2EExitCode = 1;
+					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
+					g_ActivityMan.EndActivity();
+					System::SetQuit(true);
+					break;
+				}
+				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
+				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchServiceE2ERunningTicks < 100)) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
 					System::SetQuit(true);
 					break;
 				}
-				if (activityState == Activity::Running) {
+				if (activityState == Activity::Running || activityState == Activity::Over) {
 					if (s_netMatchServiceE2EStartTick == UINT64_MAX) {
 						s_netMatchServiceE2EStartTick = nowTick;
 					}
@@ -1320,6 +1338,8 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"runtime_error\":\"" << JsonEscape(s_netMatchServiceE2EError) << "\",";
 	out << "\"activity_preset\":\"" << JsonEscape(s_netMatchServiceE2EPreset) << "\",";
 	out << "\"activity_state\":\"" << ActivityStateName(activityState) << "\",";
+	const GameActivity* reportGameActivity = dynamic_cast<const GameActivity*>(activity);
+	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
