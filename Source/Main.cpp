@@ -45,6 +45,7 @@
 #include "FrameMan.h"
 #include "PostProcessMan.h"
 #include "SceneMan.h"
+#include "SLTerrain.h"
 #include "MetaMan.h"
 #include "WindowMan.h"
 #include "GLResourceMan.h"
@@ -700,6 +701,46 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 	g_MovableMan.DumpSimState(simTick, s_out);
 }
 
+// CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
+// (and on a runtime Desync stop), for host-vs-client terrain-layer divergence forensics.
+static void DumpTerrainNow(const std::string& suffix) {
+	if (!g_SceneMan.GetScene() || !g_SceneMan.GetScene()->GetTerrain()) {
+		return;
+	}
+	const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+	auto dumpRaw = [&](const char* name, BITMAP* bitmap) {
+		std::ofstream out(base + "." + suffix + "." + name + ".bin", std::ios::binary | std::ios::trunc);
+		const int32_t dims[2] = {bitmap->w, bitmap->h};
+		out.write(reinterpret_cast<const char*>(dims), sizeof(dims));
+		for (int y = 0; y < bitmap->h; ++y) {
+			out.write(reinterpret_cast<const char*>(bitmap->line[y]), bitmap->w);
+		}
+	};
+	dumpRaw("mat", g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap());
+	dumpRaw("fg", g_SceneMan.GetScene()->GetTerrain()->GetFGColorBitmap());
+	std::cout << "[terrain-dump] " << suffix << " saved" << std::endl;
+}
+
+static bool TerrainDumpArmed() {
+	static const bool s_armed = std::getenv("CC_TERRAIN_DUMP") != nullptr;
+	return s_armed;
+}
+
+static void DumpTerrainIfArmed(uint64_t simTick) {
+	static uint64_t s_tick = 0;
+	static bool s_checked = false;
+	if (!s_checked) {
+		s_checked = true;
+		if (const char* env = std::getenv("CC_TERRAIN_DUMP")) {
+			s_tick = std::strtoull(env, nullptr, 10);
+		}
+	}
+	if (s_tick == 0 || simTick != s_tick) {
+		return;
+	}
+	DumpTerrainNow("t" + std::to_string(simTick));
+}
+
 /// </summary>
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
@@ -921,6 +962,9 @@ void RunGameLoop() {
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
 				const std::string error = ScenarioRunner::GetControllerReplayError();
+				if (TerrainDumpArmed() && error.find("Desync") != std::string::npos) {
+					DumpTerrainNow("desync");
+				}
 				if (ScenarioRunner::IsActive()) {
 					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
 					System::SetQuit(true);
@@ -977,6 +1021,7 @@ void RunGameLoop() {
 			}
 
 			DumpSimStateIfArmed(simTick);
+			DumpTerrainIfArmed(simTick);
 
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
