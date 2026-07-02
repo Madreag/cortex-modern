@@ -8,6 +8,7 @@
 #include "FrameMan.h"
 #include "MetaMan.h"
 #include "SceneMan.h"
+#include "ScenarioRunner.h"
 #include "LuaMan.h"
 
 #include "ACraft.h"
@@ -513,6 +514,11 @@ std::string Activity::GetTeamName(int whichTeam) const {
 }
 
 bool Activity::IsHumanTeam(int whichTeam) const {
+	// Local player bindings are per-peer in a lockstep match; the synced match config owns team
+	// humanity so sim mutations gated on it (AI jetpack fuel, refunds) are identical on every peer.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return ScenarioRunner::IsLockstepHumanTeam(whichTeam);
+	}
 	if (whichTeam >= Teams::TeamOne && whichTeam < Teams::MaxTeamCount) {
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			if (m_IsActive[player] && m_Team[player] == whichTeam && m_IsHuman[player]) {
