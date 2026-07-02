@@ -78,6 +78,9 @@ namespace RTE {
 		/// @return A const reference to the current Atom.
 		const Atom* GetAtom() const { return m_Atom; }
 
+		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
+		void SnapRenderPoseToSim() override;
+
 		/// Replaces the current Atom of this MOPixel with a new one.
 		/// @param newAtom A reference to the new Atom. Ownership IS transferred!
 		void SetAtom(Atom* newAtom);

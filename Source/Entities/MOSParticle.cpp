@@ -88,6 +88,13 @@ void MOSParticle::SetAtom(Atom* newAtom) {
 	m_Atom->SetOwner(this);
 }
 
+void MOSParticle::SnapRenderPoseToSim() {
+	MOSprite::SnapRenderPoseToSim();
+	if (m_Atom) {
+		m_Atom->CommitTrailPointsForSimDraw();
+	}
+}
+
 void MOSParticle::RestDetection() {
 	MOSprite::RestDetection();
 
