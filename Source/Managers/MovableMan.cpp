@@ -376,6 +376,10 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				if (ACraft* craft = dynamic_cast<ACraft*>(mo)) {
 					craft->SetAIMode(Actor::AIMODE_SCUTTLE);
 				}
+			} else {
+				// A synced command that silently no-ops on one peer is a desync in the making; say so.
+				g_ConsoleMan.PrintString("NETWORK: scuttle command target not found: UID " + std::to_string(scuttle->actorUID));
+				std::cout << "[net-match] scuttle command target not found: UID " << scuttle->actorUID << std::endl;
 			}
 		}
 	}
