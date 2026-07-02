@@ -12,6 +12,7 @@
 #include "ACraft.h"
 #include "MOPixel.h"
 #include "HeldDevice.h"
+#include "HDFirearm.h"
 #include "SLTerrain.h"
 #include "Controller.h"
 #include "AtomGroup.h"
@@ -523,10 +524,20 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				if (const AEJetpack* jetpack = human->GetJetpack()) {
 					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
 				}
+				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(const_cast<AHuman*>(human)->GetEquippedItem())) {
+					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading();
+				}
 			}
 		}
 		out << std::defaultfloat << "\n";
 	};
+	if (const Activity* activity = g_ActivityMan.GetActivity()) {
+		out << tick << " activity state=" << static_cast<int>(activity->GetActivityState());
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			out << " t" << team << "=" << (GetFirstBrainActor(team) ? 1 : 0) << "/" << m_ActorRoster[team].size();
+		}
+		out << "\n";
+	}
 	for (Actor* actor: m_Actors) {
 		dumpMO("actor", actor);
 	}
