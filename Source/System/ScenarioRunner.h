@@ -104,6 +104,10 @@ namespace RTE {
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
 		static uint16_t GetLockstepInputDelayFrames();
 		static uint8_t GetLockstepLocalPeerId();
+
+		/// Whether a team has a human player in the synced match config. Local player bindings are
+		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
+		static bool IsLockstepHumanTeam(int team);
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 
