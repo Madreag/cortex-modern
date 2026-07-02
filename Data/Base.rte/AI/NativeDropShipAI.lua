@@ -354,10 +354,10 @@ function NativeDropShipAI:Update(Owner)
 		self.StuckTimer.ElapsedSimTimeMS = 35000;
 	end
 
-	-- If we are hopelessly stuck, self destruct
+	-- If we are hopelessly stuck, self destruct through the scuttle sequence; a direct AI gib forks net peers
 	if Owner.Vel.Largest > 3 or Owner.AIMode == Actor.AIMODE_STAY or Owner.AIMode == Actor.AIMODE_SENTRY or Owner.AIMode == Actor.AIMODE_GOTO then
 		self.StuckTimer:Reset();
 	elseif Owner.AIMode == Actor.AIMODE_SCUTTLE or self.StuckTimer:IsPastSimMS(40000) then
-		Owner:GibThis();
+		Owner.AIMode = Actor.AIMODE_SCUTTLE;
 	end
 end
