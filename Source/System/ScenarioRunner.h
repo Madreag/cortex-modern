@@ -48,6 +48,7 @@ namespace RTE {
 			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host-issued spawn command at tick 50.
 			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
 			bool        selftestScuttleCommand = false; // -net-match-e2e-scuttle-command: host scuttles the delivered craft at tick 100.
+			bool        selftestBrainKillCommand = false; // -net-match-e2e-brain-kill-command: host delivers + scuttles a craft onto the enemy brain.
 		};
 
 		/// True if `-scenario` was supplied on the command line.

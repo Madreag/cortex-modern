@@ -415,6 +415,20 @@ int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
 	return 0;
 }
 
+int64_t MovableMan::GetFirstUnloadingCraftUniqueID(int team) const {
+	for (Actor* actor: m_Actors) {
+		if (actor->GetTeam() != team) {
+			continue;
+		}
+		if (const ACraft* craft = dynamic_cast<const ACraft*>(actor)) {
+			if (craft->GetHatchState() == ACraft::OPENING || craft->GetHatchState() == ACraft::OPEN) {
+				return static_cast<int64_t>(actor->GetUniqueID());
+			}
+		}
+	}
+	return 0;
+}
+
 MovableMan::MovableMan() {
 	Clear();
 }
