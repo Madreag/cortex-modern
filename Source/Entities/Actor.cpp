@@ -758,6 +758,38 @@ MovableObject* Actor::SetInventoryItemAtIndex(MovableObject* newInventoryItem, i
 	return currentInventoryItemAtIndex;
 }
 
+void Actor::LaunchDroppedItem(MovableObject* itemToLaunch, const Vector* dropDirection) {
+	Vector itemPosition = m_Pos;
+	Vector throwForce(0.75F + (0.25F * RandomNum()), 0);
+	if (dropDirection && dropDirection->MagnitudeIsGreaterThan(0.5F)) {
+		itemPosition += Vector(GetRadius(), 0).AbsRotateTo(*dropDirection);
+		throwForce.SetX(throwForce.GetX() + 5.0F);
+		throwForce.AbsRotateTo(*dropDirection);
+		throwForce *= dropDirection->GetMagnitude();
+	} else {
+		itemPosition += Vector(m_HFlipped ? -10 : 10, -8);
+		throwForce += Vector(5.0F, -1.0F + RandomNum());
+		throwForce.FlipX(m_HFlipped);
+		throwForce *= GetRotAngle();
+	}
+	itemToLaunch->SetPos(itemPosition);
+	throwForce.CapMagnitude(itemToLaunch->GetMass() * 100);
+	itemToLaunch->AddImpulseForce(throwForce);
+	g_MovableMan.AddMO(itemToLaunch);
+}
+
+bool Actor::DropHeldOrInventoryItem(int equippedItemIndex, int inventoryItemIndex, const Vector* dropDirection) {
+	if (equippedItemIndex > -1 || inventoryItemIndex < 0 || inventoryItemIndex >= GetInventorySize()) {
+		return false;
+	}
+	MovableObject* itemToLaunch = RemoveInventoryItemAtIndex(inventoryItemIndex);
+	if (!itemToLaunch) {
+		return false;
+	}
+	LaunchDroppedItem(itemToLaunch, dropDirection);
+	return true;
+}
+
 void Actor::DropAllInventory() {
 	MovableObject* pObject = 0;
 	Actor* pPassenger = 0;

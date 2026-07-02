@@ -581,6 +581,14 @@ namespace RTE {
 		/// @return The inventory item that used to be at the inventory index. Ownership IS transferred.
 		MovableObject* SetInventoryItemAtIndex(MovableObject* newInventoryItem, int inventoryIndex);
 
+		/// Removes an inventory item and launches it into the world. Subclasses with equipped
+		/// slots also accept an equipped index.
+		/// @param equippedItemIndex Equipped slot to drop from; the base actor has none, so -1.
+		/// @param inventoryItemIndex The inventory slot to drop when no equipped index is given.
+		/// @param dropDirection Optional direction to throw the item in.
+		/// @return Whether an item was dropped.
+		virtual bool DropHeldOrInventoryItem(int equippedItemIndex, int inventoryItemIndex, const Vector* dropDirection);
+
 		/// Ejects all inventory items that this is carrying. It may not happen
 		/// instantaneously, so check for ejection being complete with
 		/// IsInventoryEmpty().
@@ -855,6 +863,11 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		/// Throws a just-removed item into the world with the standard drop position and force.
+		/// @param itemToLaunch The item to launch. Ownership IS transferred to MovableMan.
+		/// @param dropDirection Optional direction to throw the item in.
+		void LaunchDroppedItem(MovableObject* itemToLaunch, const Vector* dropDirection);
+
 		/// Function that is called when we get a new movepath.
 		/// This processes and cleans up the movepath.
 		virtual void OnNewMovePath();

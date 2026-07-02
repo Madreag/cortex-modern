@@ -16,6 +16,13 @@ local function SpawnHuman(presetName, x, team, aimode)
 		actor:AddInventoryItem(weapon);
 		actor:EquipNamedDevice("Base.rte", "Battle Rifle", true);
 	end
+	-- Two carried spares give the inventory-op sync (swap/reorder/drop) something to work on.
+	for _ = 1, 2 do
+		local spare = CreateHDFirearm("Battle Rifle", "Base.rte");
+		if spare then
+			actor:AddInventoryItem(spare);
+		end
+	end
 	MovableMan:AddActor(actor);
 	return actor;
 end

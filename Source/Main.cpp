@@ -755,6 +755,37 @@ void RunGameLoop() {
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
 			}
+			// E2E control: host-issued inventory ops on its brain at fixed ticks; both peers must mutate identically.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestInventoryCommand &&
+			    (simTick == 210 || simTick == 240 || simTick == 270 || simTick == 300)) {
+				if (const Actor* brain = g_MovableMan.GetFirstBrainActor(0)) {
+					NetGameInventoryOp op;
+					op.actorUID = static_cast<int64_t>(brain->GetUniqueID());
+					op.team = 0;
+					if (simTick == 210) {
+						op.op = NetGameInventoryOp::Reorder;
+						op.a = 0;
+						op.b = 1;
+					} else if (simTick == 240) {
+						op.op = NetGameInventoryOp::SwapEquipped;
+						op.a = 0;
+						op.b = 0;
+					} else if (simTick == 270) {
+						op.op = NetGameInventoryOp::Reload;
+						op.a = 0;
+						op.b = -1;
+					} else {
+						op.op = NetGameInventoryOp::Drop;
+						op.a = -1;
+						op.b = 0;
+						op.hasDropDirection = true;
+						op.dirX = 0.7F;
+						op.dirY = -0.7F;
+					}
+					std::cout << "[net-match-service-e2e] inventory op " << static_cast<int>(op.op) << " at tick " << simTick << " actor " << op.actorUID << std::endl;
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, op});
+				}
+			}
 			// E2E control: host scuttles the delivered craft at tick 100; both peers must gib it identically.
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestScuttleCommand && simTick == 100) {
 				if (const int64_t craftUID = g_MovableMan.GetFirstCraftUniqueID(0)) {

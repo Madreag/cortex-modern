@@ -350,6 +350,14 @@ namespace RTE {
 		/// Handles set swap button press command events from the GUIControls of this InventoryMenuGUI.
 		// void SwapEquippedItemSet() {}
 
+		/// In a lockstep net match, sends the inventory action as a synced game command instead of mutating locally.
+		/// @param op The NetGameInventoryOp operation.
+		/// @param a The operation's first index.
+		/// @param b The operation's second index.
+		/// @param dropDirection Optional drop direction for drop operations.
+		/// @return Whether the action was sent as a command (and local mutation must be skipped).
+		bool HandleLockstepInventoryOp(uint8_t op, int a, int b, const Vector* dropDirection = nullptr);
+
 		/// Swaps the equipped item at the given equipped item index with one in the inventory Actor's inventory at the given inventory item index.
 		/// Accounts for either index pointing to empty buttons and any other potential complications.
 		/// @param equippedItemIndex The index of the equipped item being swapped out.

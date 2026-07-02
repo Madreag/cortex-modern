@@ -350,6 +350,18 @@ namespace RTE {
 						AppendU32LE(out, static_cast<uint32_t>(scuttle.team));
 						break;
 					}
+					case NetGameCommandType::InventoryOp: {
+						const NetGameInventoryOp& inventoryOp = std::get<NetGameInventoryOp>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(inventoryOp.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(inventoryOp.team));
+						AppendU8(out, inventoryOp.op);
+						AppendU8(out, inventoryOp.hasDropDirection ? 1 : 0);
+						AppendU16LE(out, static_cast<uint16_t>(inventoryOp.a));
+						AppendU16LE(out, static_cast<uint16_t>(inventoryOp.b));
+						AppendU32LE(out, FloatToBitsLE(inventoryOp.dirX));
+						AppendU32LE(out, FloatToBitsLE(inventoryOp.dirY));
+						break;
+					}
 				}
 			}
 			return true;
@@ -541,6 +553,39 @@ namespace RTE {
 						scuttle.actorUID = static_cast<int64_t>(actorUID);
 						scuttle.team = static_cast<int32_t>(team);
 						command.payload = scuttle;
+						break;
+					}
+					case NetGameCommandType::InventoryOp: {
+						NetGameInventoryOp inventoryOp;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						uint8_t hasDropDirection = 0;
+						uint16_t a = 0;
+						uint16_t b = 0;
+						uint32_t dirXBits = 0;
+						uint32_t dirYBits = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "inventory_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "inventory_team") ||
+						    !ReadOrTruncated(reader.ReadU8(inventoryOp.op), reader, error, "inventory_op") ||
+						    !ReadOrTruncated(reader.ReadU8(hasDropDirection), reader, error, "inventory_has_drop_direction") ||
+						    !ReadOrTruncated(reader.ReadU16LE(a), reader, error, "inventory_a") ||
+						    !ReadOrTruncated(reader.ReadU16LE(b), reader, error, "inventory_b") ||
+						    !ReadOrTruncated(reader.ReadU32LE(dirXBits), reader, error, "inventory_dir_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(dirYBits), reader, error, "inventory_dir_y")) {
+							return false;
+						}
+						if (inventoryOp.op > NetGameInventoryOp::Drop) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "inventory op is invalid");
+							return false;
+						}
+						inventoryOp.actorUID = static_cast<int64_t>(actorUID);
+						inventoryOp.team = static_cast<int32_t>(team);
+						inventoryOp.hasDropDirection = hasDropDirection != 0;
+						inventoryOp.a = static_cast<int16_t>(a);
+						inventoryOp.b = static_cast<int16_t>(b);
+						inventoryOp.dirX = FloatFromBitsLE(dirXBits);
+						inventoryOp.dirY = FloatFromBitsLE(dirYBits);
+						command.payload = inventoryOp;
 						break;
 					}
 					default:
