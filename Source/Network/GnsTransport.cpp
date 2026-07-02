@@ -1,7 +1,9 @@
 #include "GnsTransport.h"
 
+#include <chrono>
 #include <limits>
 #include <map>
+#include <thread>
 #include <utility>
 
 #ifdef CCCP_WITH_GNS
@@ -194,7 +196,10 @@ namespace RTE {
 				return;
 			}
 			const HSteamNetConnection connection = connectionIt->second;
+			// Bypass the Nagle timer so queued reliable data (e.g. a join-reject) beats the close onto the wire.
+			m_Interface->FlushMessagesOnConnection(connection);
 			m_Interface->CloseConnection(connection, 0, reason.c_str(), true);
+			m_HasLingeringClose = true;
 			ForgetConnection(connection);
 		}
 
@@ -204,6 +209,12 @@ namespace RTE {
 				m_IsStarted = false;
 				m_PendingEvents.clear();
 				return;
+			}
+
+			// A lingering close transmits on the GNS service thread; give it a beat before teardown.
+			if (m_HasLingeringClose) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				m_HasLingeringClose = false;
 			}
 
 			std::vector<HSteamNetConnection> connections;
@@ -236,8 +247,10 @@ namespace RTE {
 
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
-				PollCallbacks();
+				// Drain delivered messages first: a close callback forgets the connection, which would
+				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
+				PollCallbacks();
 			}
 
 			std::vector<NetTransportEvent> events;
@@ -415,6 +428,7 @@ namespace RTE {
 		bool m_HasGnsRef = false;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
+		bool m_HasLingeringClose = false;
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;
