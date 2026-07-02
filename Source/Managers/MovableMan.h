@@ -14,6 +14,7 @@
 #include <mutex>
 #include <map>
 #include <future>
+#include <ostream>
 #include <unordered_set>
 
 #define g_MovableMan MovableMan::Instance()
@@ -503,6 +504,11 @@ namespace RTE {
 		/// @param team The team to search.
 		/// @return The unique id, or 0 if no craft on that team is unloading.
 		int64_t GetFirstUnloadingCraftUniqueID(int team) const;
+
+		/// Writes every MO's exact-bit pos/vel/rotation for one tick; the CC_SIM_DUMP forensic hook.
+		/// @param tick The sim tick to label the lines with.
+		/// @param out The stream to append to.
+		void DumpSimState(uint64_t tick, std::ostream& out) const;
 
 		/// Returns the size of the object registry collection
 		/// @return Size of the objects registry.
