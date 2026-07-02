@@ -200,7 +200,7 @@ namespace RTE {
 		lockstepConfig.sessionId = session.GetSessionId();
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.inputDelayFrames = m_MatchConfig.inputDelayFrames;
-		lockstepConfig.timeoutMs = config.lockstepWaitMs;
+		lockstepConfig.timeoutMs = config.missingFrameGraceMs;
 		lockstepConfig.localPeerId = LocalPeerFor(config.host);
 		lockstepConfig.remotePeerId = RemotePeerFor(config.host);
 		lockstepConfig.peerCount = m_MatchConfig.peerCount;
