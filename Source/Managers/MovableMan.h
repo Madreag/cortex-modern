@@ -578,6 +578,9 @@ namespace RTE {
 		// These are the actors/items/particles which were added during a frame.
 		// They are moved to the containers above at the end of the frame.
 		std::deque<Actor*> m_AddedActors;
+		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
+		// their per-machine controllers until the next tick's controller update hands them to the wire.
+		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
 		std::deque<MovableObject*> m_AddedItems;
 		std::deque<MovableObject*> m_AddedParticles;
 

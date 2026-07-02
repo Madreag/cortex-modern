@@ -2129,7 +2129,7 @@ void AHuman::PreControllerUpdate() {
 	// Also deal with certain reload cases and setting sharp aim progress for HeldDevices.
 
 	ThrownDevice* thrownDevice = nullptr;
-	if (HeldDevice* device = GetEquippedItem(); device && m_Status != INACTIVE) {
+	if (HeldDevice* device = GetEquippedItem(); device && m_Status != INACTIVE && !m_Controller.IsDisabled()) {
 		if (!dynamic_cast<ThrownDevice*>(device)) {
 			device->SetSharpAim(m_SharpAimProgress);
 
@@ -2251,7 +2251,7 @@ void AHuman::PreControllerUpdate() {
 		m_CanActivateBGItem = true;
 	}
 
-	if (HeldDevice* device = GetEquippedBGItem(); device && m_Status != INACTIVE) {
+	if (HeldDevice* device = GetEquippedBGItem(); device && m_Status != INACTIVE && !m_Controller.IsDisabled()) {
 		if (HDFirearm* deviceAsFirearm = dynamic_cast<HDFirearm*>(device)) {
 			if (m_Controller.IsState(WEAPON_FIRE)) {
 				if (m_CanActivateBGItem && (!m_TriggerPulled || (deviceAsFirearm->IsFullAuto() && deviceAsFirearm->HalfwayToNextRound()))) {
@@ -2393,6 +2393,14 @@ void AHuman::PreControllerUpdate() {
 		}
 
 		m_EquipHUDTimer.Reset();
+	}
+
+	// Controller disabled
+	if (m_Controller.IsDisabled()) {
+		m_MovementState = STAND;
+		if (m_pJetpack && m_pJetpack->IsAttached()) {
+			m_pJetpack->EnableEmission(false);
+		}
 	}
 
 	///////////////////////////////////////////////////
