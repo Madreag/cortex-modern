@@ -444,6 +444,9 @@ namespace RTE {
 
 		/// Folds the master Lua state's RNG into the lua_state SimChecksum subsystem.
 		void HashAllLuaStatesIntoSimChecksum();
+
+		/// Blocks until any in-flight async GC finishes.
+		void WaitForAsyncGarbageCollection();
 #pragma endregion
 
 		/// Clears Script Timings.

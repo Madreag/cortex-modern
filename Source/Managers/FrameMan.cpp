@@ -857,7 +857,7 @@ void FrameMan::Draw() {
 		g_CameraMan.Update(playerScreen);
 		g_SceneMan.Update(playerScreen);
 
-		Vector targetPos = g_CameraMan.GetOffset(playerScreen);
+		Vector targetPos = g_CameraMan.GetRenderOffset(playerScreen);
 
 		// Adjust the drawing position on the target screen for if the target screen is larger than the scene in non-wrapping dimension.
 		// Scene needs to be displayed centered on the target bitmap then, and that has to be adjusted for when drawing to the screen

@@ -171,6 +171,12 @@ void PostProcessMan::RegisterPostEffect(const Vector& effectPos, BITMAP* effect,
 	}
 }
 
+void PostProcessMan::RegisterPostEffect(const Vector& effectPos, BITMAP* effect, size_t hash, int strength, float angle, MOID attachedToMOID) {
+	if (effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
+		m_PostSceneEffects.push_back(PostEffect(effectPos, effect, hash, strength, angle, attachedToMOID));
+	}
+}
+
 bool PostProcessMan::GetPostScreenEffectsWrapped(const Vector& boxPos, int boxWidth, int boxHeight, std::list<PostEffect>& effectsList, int team) {
 	bool found = false;
 
@@ -258,13 +264,21 @@ bool PostProcessMan::GetPostScreenEffects(Vector boxPos, int boxWidth, int boxHe
 
 	if (g_SceneMan.GetScene()) {
 		for (PostEffect& scenePostEffect: m_PostSceneEffects) {
-			if (team != Activity::NoTeam) {
-				unseen = g_SceneMan.IsUnseen(scenePostEffect.m_Pos.GetFloorIntX(), scenePostEffect.m_Pos.GetFloorIntY(), team);
+			// If attached to an MO, look up its current render pos so the effect tracks the sprite (handles activity-paused placement teleports and the render-vs-sim interp delta).
+			Vector effectScenePos = scenePostEffect.m_Pos;
+			if (scenePostEffect.m_AttachedToMOID != g_NoMOID) {
+				if (MovableObject* attachedMO = g_MovableMan.GetMOFromID(scenePostEffect.m_AttachedToMOID)) {
+					effectScenePos = attachedMO->GetRenderPos();
+				}
 			}
 
-			if (WithinBox(scenePostEffect.m_Pos, boxPos, static_cast<float>(boxWidth), static_cast<float>(boxHeight)) && !unseen) {
+			if (team != Activity::NoTeam) {
+				unseen = g_SceneMan.IsUnseen(effectScenePos.GetFloorIntX(), effectScenePos.GetFloorIntY(), team);
+			}
+
+			if (WithinBox(effectScenePos, boxPos, static_cast<float>(boxWidth), static_cast<float>(boxHeight)) && !unseen) {
 				found = true;
-				postEffectPosRelativeToBox = scenePostEffect.m_Pos - boxPos;
+				postEffectPosRelativeToBox = effectScenePos - boxPos;
 				effectsList.push_back(PostEffect(postEffectPosRelativeToBox, scenePostEffect.m_Bitmap, scenePostEffect.m_BitmapHash, scenePostEffect.m_Strength, scenePostEffect.m_Angle));
 			}
 		}
@@ -278,13 +292,20 @@ bool PostProcessMan::GetPostScreenEffects(int left, int top, int right, int bott
 	Vector postEffectPosRelativeToBox;
 
 	for (PostEffect& scenePostEffect: m_PostSceneEffects) {
-		if (team != Activity::NoTeam) {
-			unseen = g_SceneMan.IsUnseen(scenePostEffect.m_Pos.GetFloorIntX(), scenePostEffect.m_Pos.GetFloorIntY(), team);
+		Vector effectScenePos = scenePostEffect.m_Pos;
+		if (scenePostEffect.m_AttachedToMOID != g_NoMOID) {
+			if (MovableObject* attachedMO = g_MovableMan.GetMOFromID(scenePostEffect.m_AttachedToMOID)) {
+				effectScenePos = attachedMO->GetRenderPos();
+			}
 		}
 
-		if (WithinBox(scenePostEffect.m_Pos, static_cast<float>(left), static_cast<float>(top), static_cast<float>(right), static_cast<float>(bottom)) && !unseen) {
+		if (team != Activity::NoTeam) {
+			unseen = g_SceneMan.IsUnseen(effectScenePos.GetFloorIntX(), effectScenePos.GetFloorIntY(), team);
+		}
+
+		if (WithinBox(effectScenePos, static_cast<float>(left), static_cast<float>(top), static_cast<float>(right), static_cast<float>(bottom)) && !unseen) {
 			found = true;
-			postEffectPosRelativeToBox = Vector(scenePostEffect.m_Pos.m_X - static_cast<float>(left), scenePostEffect.m_Pos.m_Y - static_cast<float>(top));
+			postEffectPosRelativeToBox = Vector(effectScenePos.m_X - static_cast<float>(left), effectScenePos.m_Y - static_cast<float>(top));
 			effectsList.push_back(PostEffect(postEffectPosRelativeToBox, scenePostEffect.m_Bitmap, scenePostEffect.m_BitmapHash, scenePostEffect.m_Strength, scenePostEffect.m_Angle));
 		}
 	}

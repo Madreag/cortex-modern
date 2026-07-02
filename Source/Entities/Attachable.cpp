@@ -511,6 +511,8 @@ void Attachable::SetParent(MOSRotating* newParent) {
 			m_AngularVel = 0.0F;
 		}
 		UpdatePositionAndJointPositionBasedOnOffsets();
+		// Snap prev to current on reparent so the render lerp doesn't fling from the old standalone position
+		m_PrevPos = m_Pos;
 		if (CanCollideWithTerrain()) {
 			AddOrRemoveAtomsFromRootParentAtomGroup(true, true);
 		}
@@ -563,7 +565,6 @@ void Attachable::SetParent(MOSRotating* newParent) {
 void Attachable::UpdatePositionAndJointPositionBasedOnOffsets() {
 	if (m_Parent) {
 		m_JointPos = m_Parent->GetPos() + m_Parent->RotateOffset(GetParentOffset());
-		m_PrevPos = m_Pos;
 		m_Pos = m_JointPos - RotateOffset(m_JointOffset);
 	} else {
 		m_JointPos = m_Pos + RotateOffset(m_JointOffset);

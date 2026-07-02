@@ -725,7 +725,6 @@ void RunGameLoop() {
 	long long drawTotalTime = 0;
 
 	while (!System::IsSetToQuit()) {
-		bool serverUpdated = false;
 		bool returnToMenuAfterNetworkEnd = false;
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
@@ -738,8 +737,6 @@ void RunGameLoop() {
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
-
-			serverUpdated = false;
 
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
@@ -779,10 +776,9 @@ void RunGameLoop() {
 			}
 			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
 			if (lockstepPausedTick) {
-				// The sim holds still: keep input alive for the resume key, exchange an empty frame so
+				// The sim holds still: read the sim-rate resume key, exchange an empty frame so
 				// commands and stops still flow, and step the shared resume countdown.
-				g_UInputMan.Update();
-				if (!s_netMatchServiceE2E && g_UInputMan.KeyPressed(SDLK_P)) {
+				if (!s_netMatchServiceE2E && g_UInputMan.KeyPressedSim(SDLK_P)) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), false}});
 				}
 				g_MovableMan.RunLockstepPausedTick();
@@ -904,10 +900,8 @@ void RunGameLoop() {
 					}
 				}
 
-				g_UInputMan.Update();
-
 				// P pauses the match for every peer; the command applies on the same synced frame.
-				if (ScenarioRunner::IsLockstepControllerSyncActive() && !s_netMatchServiceE2E && g_UInputMan.KeyPressed(SDLK_P)) {
+				if (ScenarioRunner::IsLockstepControllerSyncActive() && !s_netMatchServiceE2E && g_UInputMan.KeyPressedSim(SDLK_P)) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), true}});
 				}
 
@@ -971,7 +965,6 @@ void RunGameLoop() {
 					}
 				}
 				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
-				g_UInputMan.EndFrame();
 				break;
 			}
 			g_PerformanceMan.UpdateSortedScriptTimings(g_LuaMan.GetScriptTimings());
@@ -998,12 +991,19 @@ void RunGameLoop() {
 				}
 			}
 
+			// Start async GC after all main-thread Lua work for this tick is done. Earlier (inside MovableMan::Update)
+			// it overlapped with LateUpdateGlobalScripts on main, opening a window for ABBA between main holding one
+			// state for the global script and a worker GC __gc finalizer wanting it from another state.
+			g_LuaMan.StartAsyncGarbageCollection();
+
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
 			g_PresetMan.ClearReloadEntityPresetCalledThisUpdate();
 
+			// Sim consumed this tick's accumulated input edges; clear before next tick reads
+			g_UInputMan.EndSimUpdate();
+
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
-			g_UInputMan.EndFrame();
 
 			// Scenario direct-launch: quit when the activity reaches OVER or the -max-ticks cap hits,
 			// instead of bouncing to the menu. The cap counts global sim ticks, so the trace length
@@ -1219,6 +1219,11 @@ void RunGameLoop() {
 		// dependent, so redirect any cosmetic draws here to the render RNG.
 		RandomGenerator* prevSimRNG = t_simRNGOverride;
 		t_simRNGOverride = &g_RenderRNG;
+
+		g_UInputMan.Update();
+		g_ActivityMan.RenderUpdate();
+		g_UInputMan.EndFrame();
+
 		g_FrameMan.Draw();
 		g_WindowMan.DrawPostProcessBuffer();
 		g_WindowMan.UploadFrame();

@@ -319,6 +319,15 @@ namespace RTE {
 		/// @return Whether deep penetration was detected and erasure was done.
 		bool DeepCheck(bool makeMOPs = true, int skipMOP = 2, int maxMOP = 100);
 
+		/// Teleports this MOSRotating; refreshes attachable positions immediately so the rendered tree does not fly into place over the next sim tick.
+		void SetPos(const Vector& newPos) override;
+
+		/// Recursively snaps m_PrevPos = m_Pos for this and every nested attachable / wound. Used after a teleport so the render lerp does not drag the tree from old locations.
+		void SnapAttachableTreePrevPositions();
+
+		/// Does stuff that needs to be done before Travel(). Always call before calling Travel.
+		virtual void PreTravel();
+
 		/// Travels this MOSRotating, using its physical representation.
 		void Travel() override;
 

@@ -159,7 +159,10 @@ void MOSParticle::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode m
 		return;
 	}
 
-	Vector spritePos(m_Pos + m_SpriteOffset - targetPos);
+	// Sim-bound modes (MOID, material baking) snap to sim pos; visual modes lerp.
+	const bool simBoundMode = mode == g_DrawMOID || mode == g_DrawMaterial || mode == g_DrawDoor;
+	const float fLerp = simBoundMode ? 1.0f : g_TimerMan.GetSimUpdateProportion();
+	Vector spritePos(Lerp(GetPrevPos(), GetPos(), fLerp) + m_SpriteOffset - targetPos);
 
 	// TODO I think this is an array with 4 elements to account for Y wrapping. Y wrapping is not really handled in this game, so this can probably be knocked down to 2 elements. Also, I'm sure this code can be simplified.
 	std::array<Vector, 4> drawPositions = {spritePos};
@@ -215,5 +218,9 @@ void MOSParticle::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode m
 		}
 
 		g_SceneMan.RegisterDrawing(targetBitmap, m_MOID, spriteX, spriteY, spriteX + m_aSprite[m_Frame]->w, spriteY + m_aSprite[m_Frame]->h);
+	}
+
+	if (m_Atom && mode != g_DrawMOID) {
+		m_Atom->DrawTrail(targetBitmap, targetPos);
 	}
 }

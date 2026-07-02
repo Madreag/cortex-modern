@@ -170,6 +170,7 @@ int MovableObject::Create(const float mass,
                           bool getHitByMOs) {
 	m_Mass = mass;
 	m_Pos = position;
+	m_PrevPos = position;
 	m_Vel = velocity;
 	m_AgeTimer.Reset();
 	m_RestTimer.Reset();
@@ -195,6 +196,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_MOType = reference.m_MOType;
 	m_Mass = reference.m_Mass;
 	m_Pos = reference.m_Pos;
+	m_PrevPos = reference.m_Pos;
 	m_Vel = reference.m_Vel;
 	m_Scale = reference.m_Scale;
 	m_GlobalAccScalar = reference.m_GlobalAccScalar;
@@ -509,6 +511,10 @@ void MovableObject::DestroyScriptState() {
 	}
 }
 
+Vector MovableObject::GetRenderPos() const {
+	return Lerp(GetPrevPos(), GetPos(), g_TimerMan.GetSimUpdateProportion());
+}
+
 void MovableObject::Destroy(bool notInherited) {
 	// Unfortunately, shit can still get destroyed at random from Lua states having ownership and their GC deciding to delete it.
 	// This skips the DestroyScriptState call... so there's leftover stale script state that we just can't do shit about.
@@ -751,7 +757,7 @@ void MovableObject::RestDetection() {
 	} else {
 		m_VelOscillations = 0;
 	}
-	if ((m_Pos - m_PrevPos).MagnitudeIsGreaterThan(1.0F)) {
+	if ((m_Pos - GetPrevPos()).MagnitudeIsGreaterThan(1.0F)) {
 		m_RestTimer.Reset();
 	}
 }
@@ -1134,7 +1140,8 @@ bool MovableObject::DrawToTerrain(SLTerrain* terrain) {
 void MovableObject::SetPostScreenEffectToDraw() const {
 	if (m_AgeTimer.GetElapsedSimTimeMS() >= m_EffectStartTime && (m_EffectStopTime == 0 || !m_AgeTimer.IsPastSimMS(m_EffectStopTime))) {
 		if (m_EffectAlwaysShows || !g_SceneMan.ObscuredPoint(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY())) {
-			g_PostProcessMan.RegisterPostEffect(m_Pos, m_pScreenEffect, m_ScreenEffectHash, Lerp(m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength, m_AgeTimer.GetElapsedSimTimeMS()), m_EffectRotAngle);
+			// Attach to this MO so the effect tracks the sprite via GetRenderPos at draw time instead of being a sim-tick snapshot. Fixes the "shadow trailing the actor" and stale glow during activity-paused placement.
+			g_PostProcessMan.RegisterPostEffect(m_Pos, m_pScreenEffect, m_ScreenEffectHash, Lerp(m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength, m_AgeTimer.GetElapsedSimTimeMS()), m_EffectRotAngle, m_MOID);
 		}
 	}
 }

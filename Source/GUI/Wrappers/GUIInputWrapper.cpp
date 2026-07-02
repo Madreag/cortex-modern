@@ -133,11 +133,16 @@ void GUIInputWrapper::UpdateMouseInput() {
 	m_MouseY = mousePos.GetFloorIntY();
 
 	for (int button = 0; button < 3; button++) {
+		// GUI runs from sim-tick context in-activity (BuyMenuGUI::Update etc.); the render-rate
+		// change[] gets cleared by EndFrame between iters, eating clicks that arrive on render-only
+		// iters. OR-in the sim-rate accumulators (which survive across render frames until the next
+		// sim tick consumes via EndSimUpdate) so the GUI sees the event either way.
+		bool changed = buttonChange[button + 1] || g_UInputMan.MouseButtonPressedSim(button + 1, m_Player) || g_UInputMan.MouseButtonReleasedSim(button + 1, m_Player);
 		m_MouseButtonsStates[button] = buttonStates[button + 1] ? Down : Up;
 		if (m_MouseButtonsStates[button] == Down) {
-			m_MouseButtonsEvents[button] = buttonChange[button + 1] ? Pushed : Repeat;
+			m_MouseButtonsEvents[button] = changed ? Pushed : Repeat;
 		} else {
-			m_MouseButtonsEvents[button] = buttonChange[button + 1] ? Released : None;
+			m_MouseButtonsEvents[button] = changed ? Released : None;
 		}
 	}
 }

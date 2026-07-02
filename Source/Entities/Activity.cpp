@@ -894,6 +894,15 @@ void Activity::Update() {
 	}
 }
 
+void Activity::RenderUpdate() {
+	// Keep player controllers' analog cursor tracking latest mouse/stick each render frame
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_IsActive[player]) {
+			m_PlayerController[player].RenderUpdate();
+		}
+	}
+}
+
 bool Activity::CanBeUserSaved() const {
 	if (const Scene* scene = g_SceneMan.GetScene(); (scene && scene->IsMetagameInternal()) || g_MetaMan.GameInProgress()) {
 		return false;

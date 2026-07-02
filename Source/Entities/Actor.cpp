@@ -808,6 +808,7 @@ void Actor::DropAllInventory() {
 			gibROffset.RadRotate(c_PI * RandomNormalNum());
 			// Set up its position and velocity according to the parameters of this AEmitter.
 			pObject->SetPos(m_Pos + gibROffset);
+			pObject->SetPrevPos(GetPrevPos() + gibROffset);
 			pObject->SetRotAngle(m_Rotation.GetRadAngle() + pObject->GetRotMatrix().GetRadAngle());
 			// Rotational angle
 			pObject->SetAngularVel((pObject->GetAngularVel() * 0.35F) + (pObject->GetAngularVel() * 0.65F / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F)) * RandomNum());
@@ -933,6 +934,7 @@ void Actor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToI
 		gibROffset.SetXY(gibOffsetX, gibOffsetY);
 		// Set up its position and velocity according to the parameters of this AEmitter.
 		pObject->SetPos(m_Pos + gibROffset /*Vector(m_Pos.m_X + 5 * NormalRand(), m_Pos.m_Y + 5 * NormalRand())*/);
+		pObject->SetPrevPos(GetPrevPos() + gibROffset);
 		pObject->SetRotAngle(m_Rotation.GetRadAngle() + pObject->GetRotMatrix().GetRadAngle());
 		// Rotational angle
 		pObject->SetAngularVel((pObject->GetAngularVel() * 0.35F) + (pObject->GetAngularVel() * 0.65F / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F)) * RandomNum());
@@ -1389,18 +1391,20 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 
 	GUIFont* pSymbolFont = g_FrameMan.GetLargeFont();
 	GUIFont* pSmallFont = g_FrameMan.GetSmallFont();
-	Vector drawPos = m_Pos - targetPos;
-	Vector cpuPos = GetCPUPos() - targetPos;
+
+	Vector currentPos = GetRenderPos();
+	Vector drawPos(currentPos - targetPos);
+	Vector cpuPos = GetRenderCPUPos() - targetPos;
 
 	// If we have something to draw, adjust the draw position to work if drawn to a target screen bitmap that is straddling a scene seam
 	if ((m_HUDVisible || m_PieMenu->IsVisible()) && !targetPos.IsZero()) {
 		// Spans vertical scene seam
 		int sceneWidth = g_SceneMan.GetSceneWidth();
 		if (g_SceneMan.SceneWrapsX() && pTargetBitmap->w < sceneWidth) {
-			if ((targetPos.m_X < 0) && (m_Pos.m_X > (sceneWidth - pTargetBitmap->w))) {
+			if ((targetPos.m_X < 0) && (currentPos.m_X > (sceneWidth - pTargetBitmap->w))) {
 				drawPos.m_X -= sceneWidth;
 				cpuPos.m_X -= sceneWidth;
-			} else if (((targetPos.m_X + pTargetBitmap->w) > sceneWidth) && (m_Pos.m_X < pTargetBitmap->w)) {
+			} else if (((targetPos.m_X + pTargetBitmap->w) > sceneWidth) && (currentPos.m_X < pTargetBitmap->w)) {
 				drawPos.m_X += sceneWidth;
 				cpuPos.m_X += sceneWidth;
 			}
@@ -1409,10 +1413,10 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 		// Spans horizontal scene seam
 		int sceneHeight = g_SceneMan.GetSceneHeight();
 		if (g_SceneMan.SceneWrapsY() && pTargetBitmap->h < sceneHeight) {
-			if ((targetPos.m_Y < 0) && (m_Pos.m_Y > (sceneHeight - pTargetBitmap->h))) {
+			if ((targetPos.m_Y < 0) && (currentPos.m_Y > (sceneHeight - pTargetBitmap->h))) {
 				drawPos.m_Y -= sceneHeight;
 				cpuPos.m_Y -= sceneHeight;
-			} else if (((targetPos.m_Y + pTargetBitmap->h) > sceneHeight) && (m_Pos.m_Y < pTargetBitmap->h)) {
+			} else if (((targetPos.m_Y + pTargetBitmap->h) > sceneHeight) && (currentPos.m_Y < pTargetBitmap->h)) {
 				drawPos.m_Y += sceneHeight;
 				cpuPos.m_Y += sceneHeight;
 			}
@@ -1422,6 +1426,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 	int actorScreen = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetPlayer()) : -1;
 	bool screenTeamIsSameAsActorTeam = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen)) == m_Team : true;
 	if (m_PieMenu->IsVisible() && screenTeamIsSameAsActorTeam && (!m_PieMenu->IsInNormalAnimationMode() || (actorScreen == whichScreen))) {
+		m_PieMenu->RenderUpdate();
 		m_PieMenu->Draw(pTargetBitmap, targetPos);
 	}
 
@@ -1545,7 +1550,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 			}
 
 			// Draw the line between the current position and to the start of the movepath, backwards so the dotted lines doesn't crawl
-			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MovePath.front() - targetPos, m_Pos - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MovePath.front() - targetPos, GetRenderPos() - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
 
 			// Draw the first destination/waypoint point
 			waypoint = m_MovePath.back() - targetPos;
@@ -1557,7 +1562,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 			// No points left on movepath, so draw straight line to the movetarget
 
 			// Draw it backwards so the dotted lines doesn't crawl
-			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MoveTarget - targetPos, m_Pos - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MoveTarget - targetPos, GetRenderPos() - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
 
 			// Draw the first destination/waypoint point
 			waypoint = m_MoveTarget - targetPos;
@@ -1621,19 +1626,19 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 					pNextAdj = *nextItr;
 					if (pPrevAdj != pNextAdj) {
 						// Only draw both lines if they're not pointing to the same thing
-						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pPrevAdj->GetCPUPos() - targetPos, prevColor, prevColor, prevSpacing, 0, true);
-						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pNextAdj->GetCPUPos() - targetPos, nextColor, nextColor, nextSpacing, 0, true);
+						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pPrevAdj->GetRenderCPUPos() - targetPos, prevColor, prevColor, prevSpacing, 0, true);
+						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pNextAdj->GetRenderCPUPos() - targetPos, nextColor, nextColor, nextSpacing, 0, true);
 					} else {
 						// If only one other available Actor, only draw one yellow line to it
-						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pNextAdj->GetCPUPos() - targetPos, 122, 122, 3, 0, true);
+						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pNextAdj->GetRenderCPUPos() - targetPos, 122, 122, 3, 0, true);
 					}
 
 					// Prev selected icon
-					iconPos = pPrevAdj->GetCPUPos() - targetPos;
+					iconPos = pPrevAdj->GetRenderCPUPos() - targetPos;
 					draw_sprite(pTargetBitmap, pPrevAdj->GetAIModeIcon(), iconPos.m_X - 6, iconPos.m_Y - 6);
 
 					// Next selected icon
-					iconPos = pNextAdj->GetCPUPos() - targetPos;
+					iconPos = pNextAdj->GetRenderCPUPos() - targetPos;
 					draw_sprite(pTargetBitmap, pNextAdj->GetAIModeIcon(), iconPos.m_X - 6, iconPos.m_Y - 6);
 				}
 

@@ -2620,7 +2620,7 @@ void SceneMan::Update(int screenId) {
 
 	m_LastUpdatedScreen = screenId;
 
-	const Vector& offset = g_CameraMan.GetOffset(screenId);
+	const Vector offset = g_CameraMan.GetRenderOffset(screenId);
 	m_pMOColorLayer->SetOffset(offset);
 	if (m_pDebugLayer) {
 		m_pDebugLayer->SetOffset(offset);
@@ -2686,12 +2686,21 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 				terrain->SetLayerToDraw(SLTerrain::LayerType::BackgroundLayer);
 				terrain->Draw(targetDimensions, targetBox);
 			}
+
+			// TODO- it would really be much nicer to draw direct-to-screen, with no intermediate MO layer
+			// but this is awkward with draw order due to how the GPU interacts
+			if (m_LastUpdatedScreen == 0) {
+				g_SceneMan.ClearMOColorLayer();
+				g_MovableMan.Draw(g_SceneMan.GetMOColorBitmap());
+			}
+
 			m_pMOColorLayer->Draw(targetDimensions, targetBox);
 
 			if (!skipTerrain) {
 				terrain->SetLayerToDraw(SLTerrain::LayerType::ForegroundLayer);
 				terrain->Draw(targetDimensions, targetBox);
 			}
+			
 			int teamId = g_CameraMan.GetScreenTeam(m_LastUpdatedScreen);
 			if (SceneLayer* unseenLayer = (teamId != Activity::NoTeam) ? m_pCurrentScene->GetUnseenLayer(teamId) : nullptr) {
 				unseenLayer->Draw(targetDimensions, targetBox);

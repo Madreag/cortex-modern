@@ -1839,18 +1839,10 @@ void MovableMan::Update() {
 
 	m_SimUpdateFrameNumber++;
 
-	// ---TEMP ---
-	// These are here for multithreaded AI, but will be unnecessary when multithreaded-sim-and-render is in!
-	// Clear the MO color layer only if this is a drawn update
-	if (g_TimerMan.DrawnSimUpdate()) {
-		g_SceneMan.ClearMOColorLayer();
-	}
-
 	// If this is the first sim update since a drawn one, then clear the post effects
 	if (g_TimerMan.SimUpdatesSinceDrawn() == 0) {
 		g_PostProcessMan.ClearScenePostEffects();
 	}
-	// ---TEMP---
 
 	// Reset the draw HUD roster line settings
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -2368,20 +2360,12 @@ void MovableMan::Update() {
 		                                                                         }
 	                                                                         });
 
-	// We've finished stuff that can interact with lua script, so it's the ideal time to start a gc run
-	g_LuaMan.StartAsyncGarbageCollection();
+	// GC kicked off from Main after LateUpdateGlobalScripts, when no more Lua runs on main this tick.
 
 	// Draw the MO matter and IDs to their layers for next frame
 	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
 		UpdateDrawMOIDs();
 	});
-
-	////////////////////////////////////////////////////////////////////
-	// Draw the MO colors ONLY if this is a drawn update!
-
-	if (g_TimerMan.DrawnSimUpdate()) {
-		Draw(g_SceneMan.GetMOColorBitmap());
-	}
 
 	// Sort team rosters if necessary
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {

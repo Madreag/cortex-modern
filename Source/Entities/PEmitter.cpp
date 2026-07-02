@@ -374,10 +374,10 @@ void PEmitter::Update() {
 					pParticle = dynamic_cast<MovableObject*>(emission->GetEmissionParticlePreset()->Clone());
 					// Set up its position and velocity according to the parameters of this.
 					// Emission point offset not set
-					if (m_EmissionOffset.IsZero())
-						pParticle->SetPos(m_Pos /*Vector(m_Pos.m_X + 5 * NormalRand(), m_Pos.m_Y + 5 * NormalRand())*/);
-					else
-						pParticle->SetPos(m_Pos + RotateOffset(m_EmissionOffset));
+					// Carry emitter's prev pos through to the particle so first render lerps emitter prev->current.
+					Vector emissionOffset = m_EmissionOffset.IsZero() ? Vector() : RotateOffset(m_EmissionOffset);
+					pParticle->SetPos(m_Pos + emissionOffset);
+					pParticle->SetPrevPos(GetPrevPos() + emissionOffset);
 					// TODO: Optimize making the random angles!")
 					emitVel.SetXY(velMin + RandomNum(0.0F, velRange), 0);
 					emitVel.RadRotate(m_EmitAngle.GetRadAngle() + spread * RandomNormalNum());

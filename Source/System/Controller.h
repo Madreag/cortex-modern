@@ -307,8 +307,11 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Virtual Override Methods
-		/// Updates this Controller. Supposed to be done every frame.
+		/// Updates this Controller's discrete state from sim-rate input edges. Called once per sim tick.
 		void Update();
+
+		/// Refreshes analog values (mouse, joystick) so the visual cursor tracks the latest input each render frame. Player-controlled only; no ControlStates writes.
+		void RenderUpdate();
 #pragma endregion
 
 #pragma region Operator Overloads
