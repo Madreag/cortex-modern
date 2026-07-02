@@ -53,10 +53,21 @@ namespace RTE {
 		std::string craftClassName;
 		std::string craftPreset;
 		std::string craftModule;
-		float posX = 0.0F;
+		float posX = 0.0F; // the landing zone when queuedPurchase
 		float posY = 0.0F;
 		int32_t team = 0;
 		std::vector<NetGameCargoItem> cargo;
+		// A committed buy-menu order: rides the single-player purchase core (arrival delay, passenger
+		// nesting, funds deduction) instead of spawning the craft outright.
+		bool queuedPurchase = false;
+		float cost = 0.0F;
+		bool returnCraft = true;
+		int32_t passengerAIMode = 0;
+		float waypointX = -1.0F;
+		float waypointY = -1.0F;
+		int64_t targetUID = 0;
+		int8_t orderedByPlayer = -1; // display-only; honored only on the issuing peer
+		float multiOrderYOffset = 0.0F;
 
 		bool operator==(const NetGameDeliverCargo&) const = default;
 	};
