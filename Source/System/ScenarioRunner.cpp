@@ -1,6 +1,7 @@
 #include "ScenarioRunner.h"
 
 #include "Constants.h"
+#include "ConsoleMan.h"
 #include "ControllerLog.h"
 #include "FrameMan.h"
 #include "MetricsCollector.h"
@@ -41,6 +42,8 @@ namespace RTE {
 		uint64_t s_LockstepPollNowMs = 0;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		bool s_LockstepStallOverlayEnabled = false;
+		bool s_LockstepPaused = false;
+		int s_LockstepResumeCountdown = -1;
 
 		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
 		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
@@ -411,6 +414,13 @@ namespace RTE {
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator) {
 		s_LockstepCoordinator = coordinator;
 		s_LockstepPollNowMs = 0;
+		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
+		// Touch the timer singleton only when actually frozen — selftests run this before manager init.
+		if (s_LockstepPaused) {
+			s_LockstepPaused = false;
+			g_TimerMan.SetSimTimeFrozen(false);
+		}
+		s_LockstepResumeCountdown = -1;
 	}
 
 	bool ScenarioRunner::IsLockstepControllerSyncActive() {
@@ -435,6 +445,44 @@ namespace RTE {
 
 	uint8_t ScenarioRunner::GetLockstepLocalPeerId() {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
+	}
+
+	bool ScenarioRunner::IsLockstepPaused() {
+		return s_LockstepPaused;
+	}
+
+	int ScenarioRunner::GetLockstepResumeCountdown() {
+		return s_LockstepResumeCountdown;
+	}
+
+	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause) {
+		if (pause && !s_LockstepPaused) {
+			s_LockstepPaused = true;
+			s_LockstepResumeCountdown = -1;
+			g_TimerMan.SetSimTimeFrozen(true);
+			const std::string line = "match paused at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " sim ms " + std::to_string(g_TimerMan.GetSimTimeMS());
+			g_ConsoleMan.PrintString("NETWORK: " + line);
+			std::cout << "[net-match] " << line << std::endl;
+		} else if (!pause && s_LockstepPaused && s_LockstepResumeCountdown < 0) {
+			s_LockstepResumeCountdown = static_cast<int>(3.0F / c_DefaultDeltaTimeS + 0.5F);
+			const std::string line = "match resuming in " + std::to_string(s_LockstepResumeCountdown) + " ticks";
+			g_ConsoleMan.PrintString("NETWORK: " + line);
+			std::cout << "[net-match] " << line << std::endl;
+		}
+	}
+
+	void ScenarioRunner::AdvanceLockstepPausedTick() {
+		if (!s_LockstepPaused || s_LockstepResumeCountdown <= 0) {
+			return;
+		}
+		if (--s_LockstepResumeCountdown == 0) {
+			s_LockstepPaused = false;
+			s_LockstepResumeCountdown = -1;
+			g_TimerMan.SetSimTimeFrozen(false);
+			const std::string line = "match resumed at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " sim ms " + std::to_string(g_TimerMan.GetSimTimeMS());
+			g_ConsoleMan.PrintString("NETWORK: " + line);
+			std::cout << "[net-match] " << line << std::endl;
+		}
 	}
 
 	bool ScenarioRunner::IsLockstepHumanTeam(int team) {

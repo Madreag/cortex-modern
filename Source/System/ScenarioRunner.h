@@ -110,6 +110,13 @@ namespace RTE {
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
 		static bool IsLockstepHumanTeam(int team);
+
+		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
+		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
+		static bool IsLockstepPaused();
+		static int GetLockstepResumeCountdown();
+		static void ApplyLockstepPauseCommand(bool pause);
+		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 

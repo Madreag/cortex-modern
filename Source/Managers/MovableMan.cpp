@@ -473,6 +473,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("NETWORK: inventory command did not apply: op " + std::to_string(inventoryOp->op) + " UID " + std::to_string(inventoryOp->actorUID));
 				std::cout << "[net-match] inventory command did not apply: op " << static_cast<int>(inventoryOp->op) << " UID " << inventoryOp->actorUID << std::endl;
 			}
+		} else if (const NetGamePauseMatch* pauseMatch = std::get_if<NetGamePauseMatch>(&command.payload)) {
+			ScenarioRunner::ApplyLockstepPauseCommand(pauseMatch->pause);
 		}
 	}
 }
@@ -501,6 +503,23 @@ struct ScopedRenderRNG {
 	ScopedRenderRNG(const ScopedRenderRNG&) = delete;
 	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
 };
+
+bool MovableMan::RunLockstepPausedTick() {
+	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	std::string error;
+	if (!ScenarioRunner::QueueLockstepLocalControllerFrames(simTick, {}, &error)) {
+		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused queue: " + error);
+		return false;
+	}
+	NetLockstepReadyFrame readyFrame;
+	if (!ScenarioRunner::WaitForLockstepControllerFrame(simTick, readyFrame, &error)) {
+		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
+		return false;
+	}
+	// Only the game commands apply on a paused tick; the sim itself holds still.
+	ApplyLockstepGameCommands(readyFrame);
+	return true;
+}
 
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 	auto dumpMO = [&](const char* kind, MovableObject* mo) {

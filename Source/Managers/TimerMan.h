@@ -49,6 +49,11 @@ namespace RTE {
 				m_SimAccumulator = 0.0F;
 		}
 
+		/// Sets whether sim updates advance the update count but not sim time, so sim timers hold
+		/// still across the synced lockstep pause while the frame exchange keeps ticking.
+		/// @param frozen Frozen or not.
+		void SetSimTimeFrozen(bool frozen) { m_SimTimeFrozen = frozen; }
+
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
 		/// @return Whether there is enough sim time to do a physics update.
 		bool TimeForSimUpdate() const { return m_SimAccumulator >= m_DeltaTime; }
@@ -96,7 +101,7 @@ namespace RTE {
 
 		/// Gets a current global simulation time measured in ms ticks from the start of the simulation up to the last UpdateSim of this TimerMan.
 		/// @return The number of ms passed since the simulation started.
-		long long GetSimTimeMS() const { return static_cast<long long>((static_cast<float>(m_SimTimeTicks) / static_cast<float>(m_TicksPerSecond)) * 0.001F); }
+		long long GetSimTimeMS() const { return m_SimTimeTicks * 1000 / m_TicksPerSecond; }
 
 		/// Gets the current number of ticks that the simulation should be updating with.
 		/// @return The current fixed delta time that the simulation should be updating with, in ticks.
@@ -169,6 +174,7 @@ namespace RTE {
 		float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.
 
 		bool m_SimPaused; //!< Simulation paused; no real time ticks will go to the sim accumulator.
+		bool m_SimTimeFrozen; //!< Sim updates advance the update count but not sim time (the synced lockstep pause).
 
 	private:
 		/// Clears all the member variables of this TimerMan, effectively resetting the members of this abstraction level only.
