@@ -371,6 +371,12 @@ namespace RTE {
 						AppendU32LE(out, FloatToBitsLE(inventoryOp.dirY));
 						break;
 					}
+					case NetGameCommandType::PauseMatch: {
+						const NetGamePauseMatch& pauseMatch = std::get<NetGamePauseMatch>(command.payload);
+						AppendU32LE(out, static_cast<uint32_t>(pauseMatch.team));
+						AppendU8(out, pauseMatch.pause ? 1 : 0);
+						break;
+					}
 				}
 			}
 			return true;
@@ -624,6 +630,19 @@ namespace RTE {
 						inventoryOp.dirX = FloatFromBitsLE(dirXBits);
 						inventoryOp.dirY = FloatFromBitsLE(dirYBits);
 						command.payload = inventoryOp;
+						break;
+					}
+					case NetGameCommandType::PauseMatch: {
+						NetGamePauseMatch pauseMatch;
+						uint32_t team = 0;
+						uint8_t pause = 0;
+						if (!ReadOrTruncated(reader.ReadU32LE(team), reader, error, "pause_team") ||
+						    !ReadOrTruncated(reader.ReadU8(pause), reader, error, "pause_flag")) {
+							return false;
+						}
+						pauseMatch.team = static_cast<int32_t>(team);
+						pauseMatch.pause = pause != 0;
+						command.payload = pauseMatch;
 						break;
 					}
 					default:

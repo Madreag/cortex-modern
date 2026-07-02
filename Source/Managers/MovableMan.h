@@ -510,6 +510,11 @@ namespace RTE {
 		/// @param out The stream to append to.
 		void DumpSimState(uint64_t tick, std::ostream& out) const;
 
+		/// Runs one paused lockstep tick: exchanges an empty controller frame and applies only the
+		/// game commands it carries, so an unpause can arrive while the sim holds still.
+		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
+		bool RunLockstepPausedTick();
+
 		/// Returns the size of the object registry collection
 		/// @return Size of the objects registry.
 		unsigned int GetKnownObjectsCount() { return m_KnownObjects.size(); }

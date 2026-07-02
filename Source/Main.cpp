@@ -768,133 +768,154 @@ void RunGameLoop() {
 				}
 			}
 
-			g_LuaMan.Update();
-
-			// E2E control: host-issued funds command at tick 50; both peers must apply it identically.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestFundsCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
-				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
-			}
-			// E2E control: host-issued spawn command at tick 50; both peers must clone the identical actor.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestSpawnCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
-				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1000.0F, 200.0F, 0}});
-			}
-			// E2E control: host-issued delivery at tick 50; both peers must build the identical craft, hold, and flight.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
-				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
-			}
-			// E2E control: host-issued inventory ops on its brain at fixed ticks; both peers must mutate identically.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestInventoryCommand &&
-			    (simTick == 210 || simTick == 240 || simTick == 270 || simTick == 300)) {
-				if (const Actor* brain = g_MovableMan.GetFirstBrainActor(0)) {
-					NetGameInventoryOp op;
-					op.actorUID = static_cast<int64_t>(brain->GetUniqueID());
-					op.team = 0;
-					if (simTick == 210) {
-						op.op = NetGameInventoryOp::Reorder;
-						op.a = 0;
-						op.b = 1;
-					} else if (simTick == 240) {
-						op.op = NetGameInventoryOp::SwapEquipped;
-						op.a = 0;
-						op.b = 0;
-					} else if (simTick == 270) {
-						op.op = NetGameInventoryOp::Reload;
-						op.a = 0;
-						op.b = -1;
-					} else {
-						op.op = NetGameInventoryOp::Drop;
-						op.a = -1;
-						op.b = 0;
-						op.hasDropDirection = true;
-						op.dirX = 0.7F;
-						op.dirY = -0.7F;
-					}
-					std::cout << "[net-match-service-e2e] inventory op " << static_cast<int>(op.op) << " at tick " << simTick << " actor " << op.actorUID << std::endl;
-					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, op});
+			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
+			if (lockstepPausedTick) {
+				// The sim holds still: keep input alive for the resume key, exchange an empty frame so
+				// commands and stops still flow, and step the shared resume countdown.
+				g_UInputMan.Update();
+				if (!s_netMatchServiceE2E && g_UInputMan.KeyPressed(SDLK_P)) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), false}});
+				}
+				g_MovableMan.RunLockstepPausedTick();
+				ScenarioRunner::AdvanceLockstepPausedTick();
+				if (ScenarioRunner::IsLockstepPaused() && simTick % 30 == 0) {
+					g_FrameMan.SetScreenText(ScenarioRunner::GetLockstepResumeCountdown() > 0 ? "Match resuming..." : "Match paused - press P to resume", 0);
 				}
 			}
-			// E2E control: the host grants funds then places a REAL buy order through GameActivity::CreateDelivery,
-			// exercising the confirm seam -> wire -> queued arrival -> identical funds deduction on both peers.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBuyCommand) {
-				if (simTick == 50) {
+			if (!lockstepPausedTick) {
+				g_LuaMan.Update();
+
+				// E2E control: host-issued funds command at tick 50; both peers must apply it identically.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestFundsCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
-				} else if (simTick == 80) {
-					if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
-						const SceneObject* craft = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
-						const SceneObject* dummy = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
-						if (craft && dummy) {
-							gameActivity->AddOverridePurchase(craft, 0);
-							gameActivity->AddOverridePurchase(dummy, 0);
-							gameActivity->AddOverridePurchase(dummy, 0);
-							gameActivity->SetLandingZone(Vector(900.0F, 0.0F), 0);
-							const bool ordered = gameActivity->CreateDelivery(0);
-							std::cout << "[net-match-service-e2e] buy order placed: " << (ordered ? "ok" : "FAILED") << std::endl;
+				}
+				// E2E control: host-issued spawn command at tick 50; both peers must clone the identical actor.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestSpawnCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1000.0F, 200.0F, 0}});
+				}
+				// E2E control: host-issued delivery at tick 50; both peers must build the identical craft, hold, and flight.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
+				}
+				// E2E control: host-issued inventory ops on its brain at fixed ticks; both peers must mutate identically.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestInventoryCommand &&
+				    (simTick == 210 || simTick == 240 || simTick == 270 || simTick == 300)) {
+					if (const Actor* brain = g_MovableMan.GetFirstBrainActor(0)) {
+						NetGameInventoryOp op;
+						op.actorUID = static_cast<int64_t>(brain->GetUniqueID());
+						op.team = 0;
+						if (simTick == 210) {
+							op.op = NetGameInventoryOp::Reorder;
+							op.a = 0;
+							op.b = 1;
+						} else if (simTick == 240) {
+							op.op = NetGameInventoryOp::SwapEquipped;
+							op.a = 0;
+							op.b = 0;
+						} else if (simTick == 270) {
+							op.op = NetGameInventoryOp::Reload;
+							op.a = 0;
+							op.b = -1;
+						} else {
+							op.op = NetGameInventoryOp::Drop;
+							op.a = -1;
+							op.b = 0;
+							op.hasDropDirection = true;
+							op.dirX = 0.7F;
+							op.dirY = -0.7F;
+						}
+						std::cout << "[net-match-service-e2e] inventory op " << static_cast<int>(op.op) << " at tick " << simTick << " actor " << op.actorUID << std::endl;
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, op});
+					}
+				}
+				// E2E control: the host grants funds then places a REAL buy order through GameActivity::CreateDelivery,
+				// exercising the confirm seam -> wire -> queued arrival -> identical funds deduction on both peers.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBuyCommand) {
+					if (simTick == 50) {
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
+					} else if (simTick == 80) {
+						if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
+							const SceneObject* craft = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+							const SceneObject* dummy = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
+							if (craft && dummy) {
+								gameActivity->AddOverridePurchase(craft, 0);
+								gameActivity->AddOverridePurchase(dummy, 0);
+								gameActivity->AddOverridePurchase(dummy, 0);
+								gameActivity->SetLandingZone(Vector(900.0F, 0.0F), 0);
+								const bool ordered = gameActivity->CreateDelivery(0);
+								std::cout << "[net-match-service-e2e] buy order placed: " << (ordered ? "ok" : "FAILED") << std::endl;
+							}
+						}
+					} else if (simTick == 700) {
+						if (const Activity* activity = g_ActivityMan.GetActivity()) {
+							std::cout << "[net-match-service-e2e] team 0 funds at tick 700: " << activity->GetTeamFunds(0) << std::endl;
 						}
 					}
-				} else if (simTick == 700) {
-					if (const Activity* activity = g_ActivityMan.GetActivity()) {
-						std::cout << "[net-match-service-e2e] team 0 funds at tick 700: " << activity->GetTeamFunds(0) << std::endl;
-					}
 				}
-			}
-			// E2E control: host scuttles the delivered craft at tick 100; both peers must gib it identically.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestScuttleCommand && simTick == 100) {
-				if (const int64_t craftUID = g_MovableMan.GetFirstCraftUniqueID(0)) {
-					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
-				}
-			}
-			// Test control: fake a hung peer — this peer stops producing frames for 8s; the other side
-			// must ride out the stall within the grace window and both must still finish identical.
-			// Works in e2e AND interactive matches so the headed stall overlay can be exercised.
-			if (ScenarioRunner::GetArgs().selftestStall && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
-				std::cout << "[net-match] stall: sleeping 8s at tick 300" << std::endl;
-				std::this_thread::sleep_for(std::chrono::seconds(8));
-			}
-			// Test control: leave the match at tick 300 like a pause-menu quit; the peer must get a clean end.
-			if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
-				std::cout << "[net-match] leave: quitting to menu at tick 300" << std::endl;
-				g_ActivityMan.EndActivity();
-				g_ActivityMan.SetInActivity(false);
-			}
-			// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
-			// through the original brain's death because the team still has the spawned one.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainSpawnCommand && simTick == 40) {
-				std::cout << "[net-match-service-e2e] brain spawn: team 1 at 1250,700" << std::endl;
-				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Brain Robot", "Base.rte", 1250.0F, 700.0F, 1}});
-			}
-			// Test control: the host delivers two crafts just above the enemy brain and scuttles each as
-			// its hatch opens; both peers must trace the identical game-over transition. The spawn height
-			// is computed from the terrain and rides the synced command, so both peers see the same drop.
-			// Works in interactive matches too, so a headed match can be ended deterministically.
-			if (ScenarioRunner::GetArgs().selftestBrainKillCommand && ScenarioRunner::IsLockstepControllerSyncActive()) {
-				if (simTick == 50 || simTick == 70) {
-					const float dropX = simTick == 50 ? 1120.0F : 1112.0F;
-					const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 140.0F;
-					std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
-					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
-				} else if (simTick > 100 && simTick % 5 == 0) {
-					if (const int64_t craftUID = g_MovableMan.GetFirstUnloadingCraftUniqueID(0)) {
-						std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
+				// E2E control: host scuttles the delivered craft at tick 100; both peers must gib it identically.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestScuttleCommand && simTick == 100) {
+					if (const int64_t craftUID = g_MovableMan.GetFirstCraftUniqueID(0)) {
 						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
 					}
 				}
+				// Test control: fake a hung peer — this peer stops producing frames for 8s; the other side
+				// must ride out the stall within the grace window and both must still finish identical.
+				// Works in e2e AND interactive matches so the headed stall overlay can be exercised.
+				if (ScenarioRunner::GetArgs().selftestStall && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
+					std::cout << "[net-match] stall: sleeping 8s at tick 300" << std::endl;
+					std::this_thread::sleep_for(std::chrono::seconds(8));
+				}
+				// Test control: leave the match at tick 300 like a pause-menu quit; the peer must get a clean end.
+				if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
+					std::cout << "[net-match] leave: quitting to menu at tick 300" << std::endl;
+					g_ActivityMan.EndActivity();
+					g_ActivityMan.SetInActivity(false);
+				}
+				// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
+				// through the original brain's death because the team still has the spawned one.
+				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainSpawnCommand && simTick == 40) {
+					std::cout << "[net-match-service-e2e] brain spawn: team 1 at 1250,700" << std::endl;
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Brain Robot", "Base.rte", 1250.0F, 700.0F, 1}});
+				}
+				// Test control: the host delivers two crafts just above the enemy brain and scuttles each as
+				// its hatch opens; both peers must trace the identical game-over transition. The spawn height
+				// is computed from the terrain and rides the synced command, so both peers see the same drop.
+				// Works in interactive matches too, so a headed match can be ended deterministically.
+				if (ScenarioRunner::GetArgs().selftestBrainKillCommand && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					if (simTick == 50 || simTick == 70) {
+						const float dropX = simTick == 50 ? 1120.0F : 1112.0F;
+						const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 140.0F;
+						std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
+					} else if (simTick > 100 && simTick % 5 == 0) {
+						if (const int64_t craftUID = g_MovableMan.GetFirstUnloadingCraftUniqueID(0)) {
+							std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
+							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
+						}
+					}
+				}
+
+				g_UInputMan.Update();
+
+				// P pauses the match for every peer; the command applies on the same synced frame.
+				if (ScenarioRunner::IsLockstepControllerSyncActive() && !s_netMatchServiceE2E && g_UInputMan.KeyPressed(SDLK_P)) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), true}});
+				}
+
+				g_FrameMan.Update();
+
+				g_MovableMan.CompleteQueuedMOIDDrawings();
+
+				g_ConsoleMan.Update();
+				g_ActivityMan.Update();
+
+				if (g_SceneMan.GetScene()) {
+					g_SceneMan.GetScene()->Update();
+				}
+
+				g_LuaMan.ClearScriptTimings();
+				g_MovableMan.Update();
 			}
-
-			g_UInputMan.Update();
-
-			g_FrameMan.Update();
-
-			g_MovableMan.CompleteQueuedMOIDDrawings();
-
-			g_ConsoleMan.Update();
-			g_ActivityMan.Update();
-
-			if (g_SceneMan.GetScene()) {
-				g_SceneMan.GetScene()->Update();
-			}
-
-			g_LuaMan.ClearScriptTimings();
-			g_MovableMan.Update();
 			if (ScenarioRunner::HasControllerReplayError()) {
 				const std::string error = ScenarioRunner::GetControllerReplayError();
 				if (ScenarioRunner::IsActive()) {
@@ -949,7 +970,9 @@ void RunGameLoop() {
 			g_AudioMan.Update();
 			g_MusicMan.Update();
 
-			g_ActivityMan.LateUpdateGlobalScripts();
+			if (!lockstepPausedTick) {
+				g_ActivityMan.LateUpdateGlobalScripts();
+			}
 
 			DumpSimStateIfArmed(simTick);
 

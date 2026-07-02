@@ -15,6 +15,7 @@ namespace RTE {
 		DeliverCargo = 3,
 		ScuttleCraft = 4,
 		InventoryOp = 5,
+		PauseMatch = 6,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -104,7 +105,16 @@ namespace RTE {
 		bool operator==(const NetGameInventoryOp&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp>;
+	// Pause or resume the match; both sims stop after the same synced frame and resume together
+	// after a shared null-tick countdown. Owner: any peer, issued for its own team.
+	struct NetGamePauseMatch {
+		int32_t team = 0;
+		bool pause = true;
+
+		bool operator==(const NetGamePauseMatch&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
