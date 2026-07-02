@@ -211,12 +211,6 @@ namespace RTE {
 				return;
 			}
 
-			// A lingering close transmits on the GNS service thread; give it a beat before teardown.
-			if (m_HasLingeringClose) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(100));
-				m_HasLingeringClose = false;
-			}
-
 			std::vector<HSteamNetConnection> connections;
 			connections.reserve(m_PeersByConnection.size());
 			for (const auto& [connection, peerId] : m_PeersByConnection) {
@@ -224,8 +218,17 @@ namespace RTE {
 				connections.push_back(connection);
 			}
 			for (HSteamNetConnection connection : connections) {
-				m_Interface->CloseConnection(connection, 0, "transport stopped", false);
+				// Flush + linger so a queued goodbye (lockstep stop, session close) reaches the peer.
+				m_Interface->FlushMessagesOnConnection(connection);
+				m_Interface->CloseConnection(connection, 0, "transport stopped", true);
+				m_HasLingeringClose = true;
 				ForgetConnection(connection);
+			}
+
+			// A lingering close transmits on the GNS service thread; give it a beat before teardown.
+			if (m_HasLingeringClose) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				m_HasLingeringClose = false;
 			}
 
 			if (m_ListenSocket != k_HSteamListenSocket_Invalid) {
