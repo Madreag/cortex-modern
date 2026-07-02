@@ -1,6 +1,7 @@
 #include "NetLobbySession.h"
 
 #include "NetIdentity.h"
+#include "NetLockstep.h"
 #include "NetProtocol.h"
 
 #include "nlohmann/json.hpp"
@@ -253,7 +254,10 @@ namespace RTE {
 				m_LastReceiveMs = nowMs;
 				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(event.bytes);
 				if (!decoded.ok) {
-					if (decoded.error.code == NetLobbyErrorCode::BadMagic && NetProtocol::Decode(event.bytes).ok) {
+					// Another phase's packet on the shared wire: session leftovers, or the prior
+					// match's in-flight lockstep frames when a rematch lobby round starts.
+					if (decoded.error.code == NetLobbyErrorCode::BadMagic &&
+					    (NetProtocol::Decode(event.bytes).ok || NetLockstepCodec::Decode(event.bytes).ok)) {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}
