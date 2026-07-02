@@ -33,6 +33,8 @@
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
 
+#include <iostream>
+
 #define BRAINLZWIDTHDEFAULT 640
 
 using namespace RTE;
@@ -565,6 +567,41 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 
 		if (purchaseItem)
 			boughtList.push_back(*itr);
+	}
+
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		// The committed order crosses the wire and applies on both peers at the synced frame; nothing mutates here.
+		NetGameDeliverCargo buyOrder;
+		buyOrder.craftClassName = pCraftPreset->GetClassName();
+		buyOrder.craftPreset = pCraftPreset->GetPresetName();
+		buyOrder.craftModule = pCraftPreset->GetModuleName();
+		buyOrder.posX = m_LandingZone[player].m_X;
+		buyOrder.posY = m_LandingZone[player].m_Y;
+		buyOrder.team = team;
+		for (const SceneObject* item: boughtList) {
+			buyOrder.cargo.push_back({item->GetClassName(), item->GetPresetName(), item->GetModuleName()});
+		}
+		buyOrder.queuedPurchase = true;
+		buyOrder.cost = totalCost;
+		buyOrder.returnCraft = m_AIReturnCraft[player];
+		buyOrder.passengerAIMode = mode;
+		buyOrder.waypointX = waypoint.m_X;
+		buyOrder.waypointY = waypoint.m_Y;
+		buyOrder.targetUID = pTargetMO ? static_cast<int64_t>(pTargetMO->GetUniqueID()) : 0;
+		buyOrder.orderedByPlayer = static_cast<int8_t>(player);
+		buyOrder.multiOrderYOffset = m_NextMultiOrderYOffset[player];
+		m_NextMultiOrderYOffset[player] = 0.0F;
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buyOrder});
+		std::cout << "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size() << std::endl;
+
+		// Go 'ding!', but only if player is human, or it may be confusing
+		if (PlayerHuman(player))
+			g_GUISound.ConfirmSound()->Play(player);
+
+		// Clear out the override purchase list, whether anything was in there or not, it should not override twice.
+		m_PurchaseOverride[player].clear();
+
+		return true;
 	}
 
 	PurchaseOrder order;
@@ -1799,8 +1836,9 @@ void GameActivity::Update() {
 		// Delivery status update
 
 		if (!m_Deliveries[team].empty()) {
+			// A remote peer's delivery carries no local ordering player; the countdown is theirs to see.
 			int player = m_Deliveries[team].front().orderedByPlayer;
-			if (m_MessageTimer[player].IsPastSimMS(1000)) {
+			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_MessageTimer[player].IsPastSimMS(1000)) {
 				char message[512];
 				std::snprintf(message, sizeof(message), "Next delivery in %i secs", ((int)m_Deliveries[team].front().delay - (int)m_Deliveries[team].front().timer.GetElapsedSimTimeMS()) / 1000);
 				g_FrameMan.SetScreenText(message, ScreenOfPlayer(player));
@@ -1814,8 +1852,10 @@ void GameActivity::Update() {
 			ACraft* pDeliveryCraft = m_Deliveries[team].front().pCraft;
 			int player = m_Deliveries[team].front().orderedByPlayer;
 			if (pDeliveryCraft) {
-				g_FrameMan.SetScreenText("Your order has arrived!", ScreenOfPlayer(player), 333);
-				m_MessageTimer[player].Reset();
+				if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+					g_FrameMan.SetScreenText("Your order has arrived!", ScreenOfPlayer(player), 333);
+					m_MessageTimer[player].Reset();
+				}
 
 				pDeliveryCraft->ResetAllTimers();
 				pDeliveryCraft->Update();
