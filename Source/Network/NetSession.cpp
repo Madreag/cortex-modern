@@ -237,6 +237,10 @@ namespace RTE {
 					}
 					RefreshHostState(NetSessionState::Closed);
 				} else if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+					// Keep the close reason the host sent with the disconnect so the UI can show why.
+					if (!m_HasReject) {
+						RecordReject(NetRejectReason::InternalError, "", "", "", event.reason.empty() ? "connection closed by peer" : event.reason);
+					}
 					m_State = NetSessionState::Closed;
 				}
 				break;
@@ -449,12 +453,13 @@ namespace RTE {
 	}
 
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		RecordReject(reason, key, expected, actual, summary);
 		Send(peer.transportPeerId, NetJoinRejected{reason, summary, key, expected, actual});
 		if (m_Transport) {
-			m_Transport->Disconnect(peer.transportPeerId, summary);
+			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
+			m_Transport->Disconnect(peer.transportPeerId, BuildRejectText());
 		}
 		peer.state = NetSessionState::Rejected;
-		RecordReject(reason, key, expected, actual, summary);
 		RefreshHostState(NetSessionState::Rejected);
 	}
 
@@ -477,6 +482,21 @@ namespace RTE {
 		RecordReject(reason, key, expected, actual, summary);
 		m_State = NetSessionState::Failed;
 		m_StateStartedMs = m_NowMs;
+	}
+
+	std::string NetSession::BuildRejectText() const {
+		if (!m_HasReject) {
+			return "";
+		}
+		// Long values are identity hashes; the leading bytes are enough to tell two apart on screen.
+		auto shortValue = [](const std::string& value) {
+			return value.size() > 12 ? value.substr(0, 8) + ".." : value;
+		};
+		std::string text = m_RejectSummary.empty() ? NetProtocol::RejectReasonName(m_RejectReason) : m_RejectSummary;
+		if (!m_MismatchKey.empty()) {
+			text += " (" + m_MismatchKey + ": " + shortValue(m_ExpectedValue) + " vs " + shortValue(m_ActualValue) + ")";
+		}
+		return text;
 	}
 
 	NetSession::PeerState* NetSession::FindPeer(NetPeerId peerId) {

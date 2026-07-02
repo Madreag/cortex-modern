@@ -64,7 +64,14 @@ namespace RTE {
 		NetPeerId GetRemoteTransportPeerId() const;
 		NetRejectReason GetRejectReason() const { return m_RejectReason; }
 		const std::string& GetMismatchKey() const { return m_MismatchKey; }
+		bool HasReject() const { return m_HasReject; }
+		const std::string& GetRejectSummary() const { return m_RejectSummary; }
 		const NetSessionStats& GetStats() const { return m_Stats; }
+
+		/// Builds a one-line human-readable reject/failure reason from the recorded mismatch,
+		/// e.g. "deterministic config hash does not match (deterministic_config_hash: 4d31cc89.. vs 77ab01ff..)".
+		/// @return The reason text, or an empty string when nothing was rejected.
+		std::string BuildRejectText() const;
 
 		bool IsReady() const { return m_State == NetSessionState::Ready; }
 		bool IsRejected() const { return m_State == NetSessionState::Rejected; }
