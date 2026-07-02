@@ -54,6 +54,7 @@ namespace RTE {
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
 			bool        selftestInventoryCommand = false; // -net-match-e2e-inventory-command: host-issued inventory ops at fixed ticks.
 			bool        selftestBuyCommand = false; // -net-match-e2e-buy-command: host grants funds then places a real buy order through CreateDelivery.
+			bool        selftestBrainSpawnCommand = false; // -net-match-e2e-brain-spawn-command: this peer spawns a second brain for its team at tick 40.
 		};
 
 		/// True if `-scenario` was supplied on the command line.
