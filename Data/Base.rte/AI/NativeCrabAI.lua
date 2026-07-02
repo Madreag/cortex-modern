@@ -191,7 +191,7 @@ function NativeCrabAI:Update(Owner)
 								end
 							else
 								if Owner.FirearmIsEmpty then
-									Owner:ReloadFirearms();
+									Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 								end
 							end
 						end
@@ -390,7 +390,7 @@ function NativeCrabAI:CreateAttackBehavior(Owner)
 		self.NextBehaviorName = "ShootTarget";
 	else
 		if Owner.FirearmIsEmpty then
-			Owner:ReloadFirearms();
+			Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 		end
 		return;
 	end
@@ -408,7 +408,7 @@ function NativeCrabAI:CreateSuppressBehavior(Owner)
 		self.NextBehaviorName = "ShootArea";
 	else
 		if self.FirearmIsEmpty then
-			self:ReloadFirearms();
+			Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 		end
 		return;
 	end

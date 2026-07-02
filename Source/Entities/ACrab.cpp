@@ -845,7 +845,7 @@ void ACrab::PreControllerUpdate() {
 	////////////////////////////////////
 	// Reload held MO, if applicable
 
-	if (m_Controller.IsState(WEAPON_RELOAD) && !FirearmsAreFull() && m_Status != INACTIVE) {
+	if (m_Controller.IsState(WEAPON_RELOAD) && !FirearmsAreFull() && m_Status != INACTIVE && !m_Controller.IsDisabled()) {
 		ReloadFirearms();
 
 		if (m_DeviceSwitchSound) {

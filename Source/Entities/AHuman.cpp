@@ -1988,7 +1988,7 @@ void AHuman::PreControllerUpdate() {
 			}
 		}
 	}
-	if (m_Controller.IsState(ControlState::WEAPON_RELOAD)) {
+	if (m_Controller.IsState(ControlState::WEAPON_RELOAD) && !m_Controller.IsDisabled()) {
 		ReloadFirearms();
 	}
 	if (m_WaitingToReloadOffhand) {
