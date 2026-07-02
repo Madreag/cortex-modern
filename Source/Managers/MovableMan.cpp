@@ -2490,9 +2490,8 @@ void MovableMan::UpdateControllers() {
 	auto isLocalControllerActor = [&](const Actor* actor) {
 		return !lockstepActive || IsLockstepLocalActor(actor);
 	};
-	// Joiners were quarantined off their per-machine controllers at add; release last tick's here,
-	// where the controller wire takes over. A same-tick joiner stays held through its join tick,
-	// and a corpse stays disabled.
+	// Release last tick's quarantined joiners here, where the controller wire takes over;
+	// a same-tick joiner stays held through its join tick and a corpse stays disabled.
 	if (lockstepActive && !m_LockstepJoinQuarantine.empty()) {
 		std::vector<long int> released;
 		{
