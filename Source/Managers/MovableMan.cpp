@@ -1948,6 +1948,12 @@ void MovableMan::Update() {
 					// Report the death of the actor to the game
 					g_ActivityMan.GetActivity()->ReportDeath((*aIt)->GetTeam());
 
+					// The corpse leaves the controller wire here, so its per-machine controller must
+					// stop driving sim effects like the jetpack.
+					if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+						(*aIt)->GetController()->SetDisabled(true);
+					}
+
 					// Add to the particles list
 					m_Particles.push_back(*aIt);
 					m_ValidParticles.insert(*aIt);
