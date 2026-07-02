@@ -727,6 +727,7 @@ void MovableMan::PurgeAllMOs() {
 	m_SortTeamRoster[Activity::TeamFour] = false;
 	m_AddedAlarmEvents.clear();
 	m_AlarmEvents.clear();
+	m_LockstepJoinQuarantine.clear();
 	m_MOIDIndex.clear();
 	// We want to keep known objects around, 'cause these can exist even when not in the simulation (they're here from creation till deletion, regardless of whether they are in sim)
 	// m_KnownObjects.clear();
@@ -1182,6 +1183,13 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 			std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
 			m_AddedActors.push_back(actorToAdd);
 			m_ValidActors.insert(actorToAdd);
+
+			// A joiner's per-machine controller must not drive sim effects on its join tick; the
+			// wire takes over from the next tick's controller update.
+			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+				actorToAdd->GetController()->SetDisabled(true);
+				m_LockstepJoinQuarantine.emplace_back(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), actorToAdd->GetUniqueID());
+			}
 
 			// This will call SetTeam and subsequently force the team as active.
 			AddActorToTeamRoster(actorToAdd);
@@ -2413,6 +2421,30 @@ void MovableMan::UpdateControllers() {
 	auto isLocalControllerActor = [&](const Actor* actor) {
 		return !lockstepActive || IsLockstepLocalActor(actor);
 	};
+	// Joiners were quarantined off their per-machine controllers at add; release last tick's here,
+	// where the controller wire takes over. A same-tick joiner stays held through its join tick,
+	// and a corpse stays disabled.
+	if (lockstepActive && !m_LockstepJoinQuarantine.empty()) {
+		std::vector<long int> released;
+		{
+			std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
+			std::vector<std::pair<uint64_t, long int>> stillHeld;
+			for (const auto& entry: m_LockstepJoinQuarantine) {
+				if (entry.first < simTick) {
+					released.push_back(entry.second);
+				} else {
+					stillHeld.push_back(entry);
+				}
+			}
+			m_LockstepJoinQuarantine.swap(stillHeld);
+		}
+		for (long int uid: released) {
+			Actor* joined = dynamic_cast<Actor*>(FindObjectByUniqueID(uid));
+			if (joined && IsActor(joined)) {
+				joined->GetController()->SetDisabled(false);
+			}
+		}
+	}
 	if (lockstepActive && ScenarioRunner::GetLockstepInputDelayFrames() != 0) {
 		ScenarioRunner::SetControllerReplayError("lockstep gameplay hook currently supports current-frame stall only; input delay is coordinator-selftest-only.");
 		return;
