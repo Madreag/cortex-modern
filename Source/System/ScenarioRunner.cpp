@@ -217,6 +217,11 @@ namespace RTE {
 			s_Args.selftestLeave = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-inventory-command") {
+			// Arm the host-issued inventory ops. Boolean flag.
+			s_Args.selftestInventoryCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 

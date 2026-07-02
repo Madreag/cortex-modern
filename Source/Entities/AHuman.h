@@ -342,6 +342,29 @@ namespace RTE {
 		/// @return Whether every requested non-empty equipped device was found and equipped.
 		bool SyncEquippedItemsByUniqueID(int64_t fgUniqueID, int64_t bgUniqueID);
 
+		/// Swaps the HeldDevices between the FG and BG arms.
+		/// @return Whether both arms held a device to swap.
+		bool SwapEquippedHeldDevices();
+
+		/// Swaps an equipped HeldDevice with an inventory slot, stowing the offhand if the new item needs both hands.
+		/// @param equippedItemIndex 0 for the FG arm, 1 for the BG arm.
+		/// @param inventoryItemIndex The inventory slot to swap with; past-the-end unequips into a new slot.
+		/// @return Whether the swap happened.
+		bool SwapEquippedItemAndInventoryItem(int equippedItemIndex, int inventoryItemIndex);
+
+		/// Reloads a specific firearm: an equipped one, an inventory one (equipping it first), or all when neither is given.
+		/// @param equippedItemIndex 0 for the FG arm, 1 for the BG arm, -1 for none.
+		/// @param inventoryItemIndex The inventory slot holding the firearm, -1 for none.
+		/// @return Whether a reload was started.
+		bool ReloadEquippedOrInventoryFirearm(int equippedItemIndex, int inventoryItemIndex);
+
+		/// Removes an equipped or inventory item and launches it into the world.
+		/// @param equippedItemIndex 0 for the FG arm, 1 for the BG arm, -1 to drop from the inventory instead.
+		/// @param inventoryItemIndex The inventory slot to drop when no equipped index is given.
+		/// @param dropDirection Optional direction to throw the item in.
+		/// @return Whether an item was dropped.
+		bool DropHeldOrInventoryItem(int equippedItemIndex, int inventoryItemIndex, const Vector* dropDirection) override;
+
 		/// Gets the total mass of this AHuman's currently equipped devices.
 		/// @return The mass of this AHuman's equipped devices.
 		float GetEquippedMass() const;

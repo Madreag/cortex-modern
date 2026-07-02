@@ -15,6 +15,8 @@ namespace RTE {
 				return NetGameCommandType::DeliverCargo;
 			} else if constexpr (std::is_same_v<T, NetGameScuttleCraft>) {
 				return NetGameCommandType::ScuttleCraft;
+			} else if constexpr (std::is_same_v<T, NetGameInventoryOp>) {
+				return NetGameCommandType::InventoryOp;
 			}
 		}, payload);
 	}
@@ -35,6 +37,8 @@ namespace RTE {
 				return "DeliverCargo";
 			case NetGameCommandType::ScuttleCraft:
 				return "ScuttleCraft";
+			case NetGameCommandType::InventoryOp:
+				return "InventoryOp";
 		}
 		return "Unknown";
 	}

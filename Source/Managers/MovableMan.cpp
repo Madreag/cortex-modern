@@ -381,6 +381,45 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("NETWORK: scuttle command target not found: UID " + std::to_string(scuttle->actorUID));
 				std::cout << "[net-match] scuttle command target not found: UID " << scuttle->actorUID << std::endl;
 			}
+		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
+			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
+			AHuman* human = dynamic_cast<AHuman*>(actor);
+			bool applied = false;
+			// The authority gate checks the CLAIMED team; the actor must really be on it.
+			if (actor && actor->GetTeam() == inventoryOp->team) {
+				switch (inventoryOp->op) {
+					case NetGameInventoryOp::SwapHands:
+						applied = human && human->SwapEquippedHeldDevices();
+						break;
+					case NetGameInventoryOp::SwapEquipped:
+						applied = human && human->SwapEquippedItemAndInventoryItem(inventoryOp->a, inventoryOp->b);
+						break;
+					case NetGameInventoryOp::Reorder:
+						if (inventoryOp->a >= 0 && inventoryOp->a < actor->GetInventorySize()) {
+							if (inventoryOp->b >= actor->GetInventorySize()) {
+								actor->AddInventoryItem(actor->RemoveInventoryItemAtIndex(inventoryOp->a));
+								applied = true;
+							} else {
+								applied = actor->SwapInventoryItemsByIndex(inventoryOp->a, inventoryOp->b);
+							}
+						}
+						break;
+					case NetGameInventoryOp::Reload:
+						applied = human && human->ReloadEquippedOrInventoryFirearm(inventoryOp->a, inventoryOp->b);
+						break;
+					case NetGameInventoryOp::Drop: {
+						const Vector dropDirection(inventoryOp->dirX, inventoryOp->dirY);
+						applied = actor->DropHeldOrInventoryItem(inventoryOp->a, inventoryOp->b, inventoryOp->hasDropDirection ? &dropDirection : nullptr);
+						break;
+					}
+					default:
+						break;
+				}
+			}
+			if (!applied) {
+				g_ConsoleMan.PrintString("NETWORK: inventory command did not apply: op " + std::to_string(inventoryOp->op) + " UID " + std::to_string(inventoryOp->actorUID));
+				std::cout << "[net-match] inventory command did not apply: op " << static_cast<int>(inventoryOp->op) << " UID " << inventoryOp->actorUID << std::endl;
+			}
 		}
 	}
 }

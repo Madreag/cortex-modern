@@ -10,6 +10,7 @@
 #include "FrameMan.h"
 #include "AEJetpack.h"
 #include "HDFirearm.h"
+#include "Magazine.h"
 #include "SLTerrain.h"
 #include "PresetMan.h"
 #include "Scene.h"
@@ -1403,6 +1404,77 @@ bool AHuman::SyncEquippedItemsByUniqueID(int64_t fgUniqueID, int64_t bgUniqueID)
 	}
 
 	return fgSynced && bgSynced;
+}
+
+bool AHuman::SwapEquippedHeldDevices() {
+	HeldDevice* fgDevice = GetEquippedItem();
+	HeldDevice* bgDevice = GetEquippedBGItem();
+	if (!m_pFGArm || !m_pBGArm || !fgDevice || !bgDevice) {
+		return false;
+	}
+	m_pFGArm->RemoveAttachable(fgDevice);
+	m_pBGArm->RemoveAttachable(bgDevice);
+	m_pFGArm->SetHeldDevice(bgDevice);
+	m_pBGArm->SetHeldDevice(fgDevice);
+	return true;
+}
+
+bool AHuman::SwapEquippedItemAndInventoryItem(int equippedItemIndex, int inventoryItemIndex) {
+	const HeldDevice* inventoryItemToSwapIn = inventoryItemIndex < GetInventorySize() ? dynamic_cast<const HeldDevice*>(GetInventory()->at(inventoryItemIndex)) : nullptr;
+	if (!inventoryItemToSwapIn && inventoryItemIndex < GetInventorySize()) {
+		return false;
+	}
+	const bool inventoryItemCanGoInOffhand = !inventoryItemToSwapIn || inventoryItemToSwapIn->IsDualWieldable() || inventoryItemToSwapIn->HasObjectInGroup("Shields");
+
+	equippedItemIndex = !inventoryItemCanGoInOffhand || !m_pBGArm ? 0 : equippedItemIndex;
+	if (equippedItemIndex == 0 && !m_pFGArm) {
+		return false;
+	}
+	MovableObject* offhandEquippedItem = GetEquippedBGItem();
+
+	Arm* equippedItemArm = equippedItemIndex == 0 ? m_pFGArm : m_pBGArm;
+	equippedItemArm->SetHeldDevice(dynamic_cast<HeldDevice*>(SetInventoryItemAtIndex(equippedItemArm->RemoveAttachable(equippedItemArm->GetHeldDevice()), inventoryItemIndex)));
+	equippedItemArm->SetHandPos(m_Pos + GetHolsterOffset().GetXFlipped(m_HFlipped));
+	if (!inventoryItemCanGoInOffhand && offhandEquippedItem) {
+		AddInventoryItem(m_pBGArm->RemoveAttachable(m_pBGArm->GetHeldDevice()));
+		m_pBGArm->SetHandPos(m_Pos + GetHolsterOffset().GetXFlipped(m_HFlipped));
+	}
+	return true;
+}
+
+bool AHuman::ReloadEquippedOrInventoryFirearm(int equippedItemIndex, int inventoryItemIndex) {
+	if (equippedItemIndex < 0 && inventoryItemIndex < 0) {
+		ReloadFirearms();
+		return true;
+	}
+	if (equippedItemIndex < 0) {
+		const int equippedItemIndexToUse = m_pFGArm ? 0 : 1;
+		if (!SwapEquippedItemAndInventoryItem(equippedItemIndexToUse, inventoryItemIndex)) {
+			return false;
+		}
+		equippedItemIndex = equippedItemIndexToUse;
+	}
+	HDFirearm* firearm = dynamic_cast<HDFirearm*>(equippedItemIndex == 0 ? GetEquippedItem() : GetEquippedBGItem());
+	if (!firearm || !firearm->GetMagazine()) {
+		return false;
+	}
+	// Zeroing the round count reloads only this firearm without breaking one-at-a-time reloading.
+	firearm->GetMagazine()->SetRoundCount(0);
+	ReloadFirearms(true);
+	return true;
+}
+
+bool AHuman::DropHeldOrInventoryItem(int equippedItemIndex, int inventoryItemIndex, const Vector* dropDirection) {
+	if (equippedItemIndex > -1) {
+		Arm* arm = equippedItemIndex == 0 ? m_pFGArm : m_pBGArm;
+		MovableObject* itemToLaunch = arm ? arm->RemoveAttachable(arm->GetHeldDevice()) : nullptr;
+		if (!itemToLaunch) {
+			return false;
+		}
+		LaunchDroppedItem(itemToLaunch, dropDirection);
+		return true;
+	}
+	return Actor::DropHeldOrInventoryItem(equippedItemIndex, inventoryItemIndex, dropDirection);
 }
 
 float AHuman::GetEquippedMass() const {

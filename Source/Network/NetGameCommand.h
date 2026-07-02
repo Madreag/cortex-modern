@@ -14,6 +14,7 @@ namespace RTE {
 		SpawnActor = 2,
 		DeliverCargo = 3,
 		ScuttleCraft = 4,
+		InventoryOp = 5,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -69,7 +70,30 @@ namespace RTE {
 		bool operator==(const NetGameScuttleCraft&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft>;
+	// A player's inventory-menu action on an actor the issuing peer's team controls. The menu is per-machine
+	// UI, so the committed mutation crosses the wire and applies on both peers at the same synced frame.
+	struct NetGameInventoryOp {
+		enum Op : uint8_t {
+			SwapHands = 0,
+			SwapEquipped = 1,
+			Reorder = 2,
+			Reload = 3,
+			Drop = 4,
+		};
+
+		int64_t actorUID = 0;
+		int32_t team = 0;
+		uint8_t op = SwapHands;
+		int16_t a = -1;
+		int16_t b = -1;
+		bool hasDropDirection = false;
+		float dirX = 0.0F;
+		float dirY = 0.0F;
+
+		bool operator==(const NetGameInventoryOp&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
