@@ -293,8 +293,8 @@ function ThreadedUpdateAI(self)
 		end
 	elseif self.Vel.Largest > 3 then
 		self.StuckTimer:Reset();
-	-- If we are hopelessly stuck, self destruct
+	-- If we are hopelessly stuck, self destruct through the scuttle sequence; a direct AI gib forks net peers
 	elseif self.AIMode == Actor.AIMODE_SCUTTLE or self.StuckTimer:IsPastSimMS(40000) then
-		self:GibThis();
+		self.AIMode = Actor.AIMODE_SCUTTLE;
 	end
 end
