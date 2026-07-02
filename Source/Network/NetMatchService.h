@@ -40,6 +40,10 @@ namespace RTE {
 		~NetMatchService();
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
+
+		/// Reconvenes a completed match's still-connected session in the lobby for a rematch.
+		/// Fails (and settles the service into Failed) when the session was lost.
+		bool ReturnToLobby(std::string* error = nullptr);
 		void Destroy();
 		void Update();
 		void SetReady();
@@ -62,6 +66,7 @@ namespace RTE {
 
 	private:
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
+		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");

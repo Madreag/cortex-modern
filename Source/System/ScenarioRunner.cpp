@@ -207,6 +207,11 @@ namespace RTE {
 			s_Args.selftestStall = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-rematch") {
+			// Arm the return-to-lobby rematch ride-through. Boolean flag.
+			s_Args.selftestRematch = true;
+			return 1;
+		}
 		return 0;
 	}
 
@@ -489,6 +494,10 @@ namespace RTE {
 		if (loaded != pinned) {
 			std::cerr << "[scenario] pinned dt " << loaded << " -> " << pinned << std::endl;
 		}
+		// Pin the MO unique-ID counter too: UniqueIDs cross the wire (equip sync, scuttle commands), so
+		// every deterministic match must hand out the same IDs on every peer — including a rematch, where
+		// each process has created a different number of MOs by launch time. The base clears load-time IDs.
+		MovableObject::PinUniqueIDCounter(1 << 20);
 	}
 
 	std::map<std::string, std::string> ScenarioRunner::GatherSimConfig() {

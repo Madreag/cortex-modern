@@ -607,6 +607,11 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 
 void MainMenuGUI::UpdateMultiplayerScreen() {
 	g_NetMatchService.Update();
+	// A completed match leaves the session connected; reconvene both peers in the lobby for a rematch.
+	// On a lost session this settles the service into Failed once, so it is not retried every frame.
+	if (g_NetMatchService.GetState() == NetMatchServiceState::Completed) {
+		g_NetMatchService.ReturnToLobby();
+	}
 	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 
 	// While a connection is being established, cap the menu update rate so the GNS I/O service thread

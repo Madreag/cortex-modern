@@ -82,6 +82,33 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error) {
+		if (!session.IsReady()) {
+			SetFailed(std::string("session is no longer connected") + (session.HasReject() ? ": " + session.BuildRejectText() : ""));
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		m_SetupError.clear();
+		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
+
+		if (m_UseLobbyProtocol) {
+			m_State = NetMatchRuntimeState::LobbySync;
+			if (!RunLobby(transport, session, m_Config.lobbyWaitMs, error)) {
+				return false;
+			}
+			if (m_Config.postLobbySettleMs > 0) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(m_Config.postLobbySettleMs));
+			}
+		}
+
+		m_State = NetMatchRuntimeState::LockstepStarting;
+		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
+			return false;
+		}
+		m_State = NetMatchRuntimeState::Running;
+		return true;
+	}
+
 	std::string NetMatchRunner::BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const {
 		json report{
 			{"state", StateName(m_State)},

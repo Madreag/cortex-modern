@@ -74,6 +74,71 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetMatchService::ReturnToLobby(std::string* error) {
+		JoinWorkerIfDone();
+		std::unique_ptr<GnsTransport> transport;
+		std::unique_ptr<NetSession> session;
+		std::unique_ptr<NetLockstepCoordinator> coordinator;
+		std::unique_ptr<NetMatchRunner> runner;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_State != NetMatchServiceState::Completed || !m_Transport || !m_Session || !m_Runner) {
+				if (error) *error = "no completed match to rematch";
+				return false;
+			}
+			if (!m_Session->IsReady()) {
+				// Session lost (the other player quit); settle so the UI stops offering a rematch.
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Rematch unavailable";
+				m_ErrorText = m_Session->HasReject() ? m_Session->BuildRejectText() : "the other player left";
+				if (error) *error = m_ErrorText;
+				return false;
+			}
+			transport = std::move(m_Transport);
+			session = std::move(m_Session);
+			runner = std::move(m_Runner);
+			m_Coordinator.reset();
+			coordinator = std::make_unique<NetLockstepCoordinator>();
+			m_WorkerDone = false;
+			m_State = NetMatchServiceState::Starting;
+			m_StatusText += " - ready up for a rematch";
+			m_ErrorText.clear();
+		}
+		m_CancelRequested.store(false);
+		m_ReadyRequested.store(false);
+		m_StartRequested.store(false);
+		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, transport.release(), session.release(), coordinator.release(), runner.release());
+		return true;
+	}
+
+	// Same shape as WorkerMain: the objects live as worker locals while the lobby round runs, so
+	// report/snapshot readers never race a mid-mutation runner; they move back in when it settles.
+	void NetMatchService::WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw) {
+		std::unique_ptr<GnsTransport> transport(transportRaw);
+		std::unique_ptr<NetSession> session(sessionRaw);
+		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
+		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
+		std::string error;
+		const bool started = runner->StartNextMatch(*transport, *session, *coordinator, &error);
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Transport = std::move(transport);
+			m_Session = std::move(session);
+			m_Coordinator = std::move(coordinator);
+			m_Runner = std::move(runner);
+			if (started) {
+				m_State = NetMatchServiceState::ReadyToLaunch;
+				m_StatusText = "Ready to launch match";
+				m_ErrorText.clear();
+			} else {
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Rematch setup failed";
+				m_ErrorText = error;
+			}
+			m_WorkerDone = true;
+		}
+	}
+
 	void NetMatchService::Destroy() {
 		m_CancelRequested.store(true);
 		if (m_Worker.joinable()) {

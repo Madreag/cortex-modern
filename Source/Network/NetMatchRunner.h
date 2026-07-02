@@ -48,6 +48,10 @@ namespace RTE {
 	public:
 		bool Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error = nullptr);
 
+		/// Runs the next match over an already-established session: re-runs the lobby round and starts a
+		/// fresh coordinator, reusing the config from Start(). The prior match must have ended cleanly.
+		bool StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error = nullptr);
+
 		NetMatchRuntimeState GetState() const { return m_State; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }

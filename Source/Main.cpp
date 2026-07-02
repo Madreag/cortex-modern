@@ -129,7 +129,9 @@ static bool s_netMatchServiceE2EEnteredEditor = false;
 static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
 static uint64_t s_netMatchServiceE2ERunningTicks = 0;
 static int s_netMatchServiceE2EExitCode = 0;
+static int s_netMatchServiceE2ERematches = 0;
 static std::string s_netMatchServiceE2EError;
+bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
 static std::string s_menuScriptPath;
 static std::string s_menuScriptOutDir;
 
@@ -956,6 +958,68 @@ void RunGameLoop() {
 					System::SetQuit(true);
 					break;
 				}
+				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
+				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
+				if (ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
+				    activityState == Activity::Over && s_netMatchServiceE2ERunningTicks >= 100) {
+					s_netMatchServiceE2ERematches = 1;
+					const std::string result = BuildNetMatchResultText();
+					std::cout << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby" << std::endl;
+					g_NetMatchService.FinishMatch(result);
+					g_ActivityMan.EndActivity();
+					g_ActivityMan.SetInActivity(false);
+					std::string rematchError;
+					if (!g_NetMatchService.ReturnToLobby(&rematchError)) {
+						s_netMatchServiceE2EError = "rematch return-to-lobby failed: " + rematchError;
+						s_netMatchServiceE2EExitCode = 1;
+						System::SetQuit(true);
+						break;
+					}
+					g_NetMatchService.SetReady();
+					if (s_netHost) {
+						g_NetMatchService.RequestStart();
+					}
+					std::string rematchPreset;
+					bool rematchReady = false;
+					const auto rematchWaitStart = std::chrono::steady_clock::now();
+					while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
+						if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
+							rematchReady = true;
+							break;
+						}
+						if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
+							break;
+						}
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					}
+					std::string rematchConfigureError;
+					if (!rematchReady) {
+						s_netMatchServiceE2EError = "rematch launch failed: " + g_NetMatchService.GetErrorText();
+						s_netMatchServiceE2EExitCode = 1;
+						System::SetQuit(true);
+						break;
+					} else if (!ConfigureNetMatchServiceE2EActivity(rematchPreset, &rematchConfigureError)) {
+						s_netMatchServiceE2EError = "rematch configure failed: " + rematchConfigureError;
+						s_netMatchServiceE2EExitCode = 1;
+						System::SetQuit(true);
+						break;
+					}
+					// Restart NOW: the fresh coordinator expects frame 1, so no sim tick may run before
+					// RestartActivity resets the sim count (the poll above also left real-time debt in
+					// the sim accumulator, which ResetTime clears).
+					g_TimerMan.PauseSim(true);
+					if (!g_ActivityMan.RestartActivity()) {
+						s_netMatchServiceE2EError = "rematch activity restart failed";
+						s_netMatchServiceE2EExitCode = 1;
+						System::SetQuit(true);
+						break;
+					}
+					std::cout << "[net-match-service-e2e] rematch: round 2 launching" << std::endl;
+					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
+					s_netMatchServiceE2EStartTick = UINT64_MAX;
+					s_netMatchServiceE2ERunningTicks = 0;
+					break;
+				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
 				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
 				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchServiceE2ERunningTicks < 100)) {
@@ -1348,6 +1412,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	const GameActivity* reportGameActivity = dynamic_cast<const GameActivity*>(activity);
 	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
+	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
