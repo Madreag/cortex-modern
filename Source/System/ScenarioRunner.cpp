@@ -423,6 +423,10 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
 	}
 
+	uint8_t ScenarioRunner::GetLockstepLocalPeerId() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
+	}
+
 	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";

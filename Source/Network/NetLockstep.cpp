@@ -342,6 +342,15 @@ namespace RTE {
 								return false;
 							}
 						}
+						AppendU8(out, delivery.queuedPurchase ? 1 : 0);
+						AppendU32LE(out, FloatToBitsLE(delivery.cost));
+						AppendU8(out, delivery.returnCraft ? 1 : 0);
+						AppendU32LE(out, static_cast<uint32_t>(delivery.passengerAIMode));
+						AppendU32LE(out, FloatToBitsLE(delivery.waypointX));
+						AppendU32LE(out, FloatToBitsLE(delivery.waypointY));
+						AppendU64LE(out, static_cast<uint64_t>(delivery.targetUID));
+						AppendU8(out, static_cast<uint8_t>(delivery.orderedByPlayer));
+						AppendU32LE(out, FloatToBitsLE(delivery.multiOrderYOffset));
 						break;
 					}
 					case NetGameCommandType::ScuttleCraft: {
@@ -536,9 +545,38 @@ namespace RTE {
 							}
 							delivery.cargo.push_back(std::move(item));
 						}
+						uint8_t queuedPurchase = 0;
+						uint32_t costBits = 0;
+						uint8_t returnCraft = 0;
+						uint32_t passengerAIMode = 0;
+						uint32_t waypointXBits = 0;
+						uint32_t waypointYBits = 0;
+						uint64_t targetUID = 0;
+						uint8_t orderedByPlayer = 0;
+						uint32_t multiOrderYOffsetBits = 0;
+						if (!ReadOrTruncated(reader.ReadU8(queuedPurchase), reader, error, "delivery_queued_purchase") ||
+						    !ReadOrTruncated(reader.ReadU32LE(costBits), reader, error, "delivery_cost") ||
+						    !ReadOrTruncated(reader.ReadU8(returnCraft), reader, error, "delivery_return_craft") ||
+						    !ReadOrTruncated(reader.ReadU32LE(passengerAIMode), reader, error, "delivery_passenger_ai_mode") ||
+						    !ReadOrTruncated(reader.ReadU32LE(waypointXBits), reader, error, "delivery_waypoint_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(waypointYBits), reader, error, "delivery_waypoint_y") ||
+						    !ReadOrTruncated(reader.ReadU64LE(targetUID), reader, error, "delivery_target_uid") ||
+						    !ReadOrTruncated(reader.ReadU8(orderedByPlayer), reader, error, "delivery_ordered_by_player") ||
+						    !ReadOrTruncated(reader.ReadU32LE(multiOrderYOffsetBits), reader, error, "delivery_multi_order_y_offset")) {
+							return false;
+						}
 						delivery.posX = FloatFromBitsLE(posXBits);
 						delivery.posY = FloatFromBitsLE(posYBits);
 						delivery.team = static_cast<int32_t>(team);
+						delivery.queuedPurchase = queuedPurchase != 0;
+						delivery.cost = FloatFromBitsLE(costBits);
+						delivery.returnCraft = returnCraft != 0;
+						delivery.passengerAIMode = static_cast<int32_t>(passengerAIMode);
+						delivery.waypointX = FloatFromBitsLE(waypointXBits);
+						delivery.waypointY = FloatFromBitsLE(waypointYBits);
+						delivery.targetUID = static_cast<int64_t>(targetUID);
+						delivery.orderedByPlayer = static_cast<int8_t>(orderedByPlayer);
+						delivery.multiOrderYOffset = FloatFromBitsLE(multiOrderYOffsetBits);
 						command.payload = std::move(delivery);
 						break;
 					}
