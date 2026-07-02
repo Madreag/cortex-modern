@@ -58,6 +58,7 @@ void GameActivity::Clear() {
 		m_pLastMarkedActor[player] = 0;
 		m_LandingZone[player].Reset();
 		m_AIReturnCraft[player] = true;
+		m_NextMultiOrderYOffset[player] = 0.0F;
 		m_StrategicModePieMenu.at(player) = nullptr;
 		m_LZCursorWidth[player] = 0;
 		m_InventoryMenuGUI[player] = nullptr;
@@ -495,15 +496,14 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 	// Retrieve the ordered craft and its inventory
 	std::list<const SceneObject*> purchaseList;
 
-	ACraft* pDeliveryCraft = 0;
+	const ACraft* pCraftPreset = nullptr;
 	// If we have a list to purchase that overrides the buy GUI, then use it and clear it
 	if (!m_PurchaseOverride[player].empty()) {
-		const ACraft* pCraftPreset = 0;
 		for (std::list<const SceneObject*>::iterator itr = m_PurchaseOverride[player].begin(); itr != m_PurchaseOverride[player].end(); ++itr) {
 			// Find the first craft to use as the delivery craft
-			pCraftPreset = dynamic_cast<const ACraft*>(*itr);
-			if (!pDeliveryCraft && pCraftPreset)
-				pDeliveryCraft = dynamic_cast<ACraft*>((*itr)->Clone());
+			const ACraft* pCraft = dynamic_cast<const ACraft*>(*itr);
+			if (!pCraftPreset && pCraft)
+				pCraftPreset = pCraft;
 			else
 				purchaseList.push_back(*itr);
 		}
@@ -511,137 +511,164 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 	// Otherwise, use what's set in the buy GUI as usual
 	else {
 		m_pBuyGUI[player]->GetOrderList(purchaseList);
-		pDeliveryCraft = dynamic_cast<ACraft*>(m_pBuyGUI[player]->GetDeliveryCraftPreset()->Clone());
+		pCraftPreset = dynamic_cast<const ACraft*>(m_pBuyGUI[player]->GetDeliveryCraftPreset());
 		// If we don't have any loadout presets in the menu, save the current config for later
 		if (m_pBuyGUI[player]->GetLoadoutPresets().empty())
 			m_pBuyGUI[player]->SaveCurrentLoadout();
 	}
 
-	if (pDeliveryCraft && (!m_HadBrain[player] || m_Brain[player])) {
-		// Take metaplayer tech modifiers into account when calculating costs of this delivery
-		int nativeModule = 0;
-		float foreignCostMult = 1.0;
-		float nativeCostMult = 1.0;
-		MetaPlayer* pMetaPlayer = g_MetaMan.GetMetaPlayerOfInGamePlayer(player);
-		if (g_MetaMan.GameInProgress() && pMetaPlayer) {
-			nativeModule = pMetaPlayer->GetNativeTechModule();
-			foreignCostMult = pMetaPlayer->GetForeignCostMultiplier();
-			nativeCostMult = pMetaPlayer->GetNativeCostMultiplier();
+	if (!pCraftPreset || (m_HadBrain[player] && !m_Brain[player]))
+		return false;
+
+	// Take metaplayer tech modifiers into account when calculating costs of this delivery
+	int nativeModule = 0;
+	float foreignCostMult = 1.0;
+	float nativeCostMult = 1.0;
+	MetaPlayer* pMetaPlayer = g_MetaMan.GetMetaPlayerOfInGamePlayer(player);
+	if (g_MetaMan.GameInProgress() && pMetaPlayer) {
+		nativeModule = pMetaPlayer->GetNativeTechModule();
+		foreignCostMult = pMetaPlayer->GetForeignCostMultiplier();
+		nativeCostMult = pMetaPlayer->GetNativeCostMultiplier();
+	}
+	// Start with counting the craft
+	float totalCost = 0;
+
+	if (m_pBuyGUI[player]->GetOnlyShowOwnedItems()) {
+		if (!m_pBuyGUI[player]->CommitPurchase(pCraftPreset->GetModuleAndPresetName())) {
+			if (m_pBuyGUI[player]->IsAlwaysAllowedItem(pCraftPreset->GetModuleAndPresetName()))
+				totalCost = pCraftPreset->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
+			else
+				return false;
 		}
-		// Start with counting the craft
-		float totalCost = 0;
-
-		if (m_pBuyGUI[player]->GetOnlyShowOwnedItems()) {
-			if (!m_pBuyGUI[player]->CommitPurchase(pDeliveryCraft->GetModuleAndPresetName())) {
-				if (m_pBuyGUI[player]->IsAlwaysAllowedItem(pDeliveryCraft->GetModuleAndPresetName()))
-					totalCost = pDeliveryCraft->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
-				else
-					return false;
-			}
-		} else {
-			if (!m_pBuyGUI[player]->CommitPurchase(pDeliveryCraft->GetModuleAndPresetName()))
-				totalCost = pDeliveryCraft->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
-		}
-
-		// Go through the list of things ordered, and give any actors all the items that is present after them, until the next actor.
-		MovableObject* pInventoryObject = nullptr;
-		Actor* pPassenger = nullptr;
-		Actor* pLastPassenger = nullptr;
-
-		for (std::list<const SceneObject*>::iterator itr = purchaseList.begin(); itr != purchaseList.end(); ++itr) {
-			bool purchaseItem = true;
-
-			// Add to the total cost tally
-			if (m_pBuyGUI[player]->GetOnlyShowOwnedItems()) {
-				if (!m_pBuyGUI[player]->CommitPurchase((*itr)->GetModuleAndPresetName())) {
-					if (m_pBuyGUI[player]->IsAlwaysAllowedItem((*itr)->GetModuleAndPresetName()))
-						totalCost += (*itr)->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
-					else
-						purchaseItem = false;
-				}
-			} else {
-				if (!m_pBuyGUI[player]->CommitPurchase((*itr)->GetModuleAndPresetName()))
-					totalCost += (*itr)->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
-			}
-
-			if (purchaseItem) {
-				// Make copy of the preset instance in the list
-				pInventoryObject = dynamic_cast<MovableObject*>((*itr)->Clone());
-
-				if (pPassenger) {
-					pLastPassenger = pPassenger;
-				}
-
-				pPassenger = dynamic_cast<Actor*>(pInventoryObject);
-
-				// If it's an actor, then set its team and add it to the Craft's inventory!
-				if (pPassenger) {
-					// Set the team etc for the current passenger and stuff him into the craft
-					pPassenger->SetTeam(team);
-					pPassenger->SetControllerMode(Controller::CIM_AI);
-					pPassenger->SetAIMode((Actor::AIMode)mode);
-
-					if (Actor* pTarget = dynamic_cast<Actor*>(pTargetMO)) {
-						pPassenger->AddAIMOWaypoint(pTarget);
-					} else if (waypoint.m_X > 0 && waypoint.m_Y > 0) {
-						pPassenger->AddAISceneWaypoint(waypoint);
-					}
-
-					pDeliveryCraft->AddInventoryItem(pPassenger);
-				} else if (dynamic_cast<AHuman*>(pLastPassenger)) {
-					// Add ourselves to the last passenger's inventory
-					pLastPassenger->AddInventoryItem(pInventoryObject);
-				} else {
-					// No valid AHuman actor before us, just add ourself to the craft inventory
-					pDeliveryCraft->AddInventoryItem(pInventoryObject);
-				}
-			}
-		}
-
-		float spawnY = 0.0f;
-		if (g_SceneMan.GetTerrain() && g_SceneMan.GetTerrain()->GetOrbitDirection() == Directions::Down) {
-			spawnY = g_SceneMan.GetSceneHeight();
-		}
-
-		// Delivery craft appear straight over the selected LZ
-		pDeliveryCraft->SetPos(Vector(m_LandingZone[player].m_X, spawnY));
-		//        pDeliveryCraft->SetPos(Vector(m_LandingZone[player].m_X, 300));
-
-		pDeliveryCraft->SetTeam(team);
-		// TODO: The after-delivery AI mode needs to be set depending on what the user has set in teh LZ selection mode
-		pDeliveryCraft->SetControllerMode(Controller::CIM_AI);
-		pDeliveryCraft->SetAIMode(m_AIReturnCraft[player] ? Actor::AIMODE_DELIVER : Actor::AIMODE_STAY);
-
-		// Prepare the Delivery struct and stuff the ready to go craft in there
-		Delivery newDelivery;
-		// Pass ownership of the craft to the new Delivery struct
-		newDelivery.pCraft = pDeliveryCraft;
-		newDelivery.orderedByPlayer = player;
-		newDelivery.landingZone = m_LandingZone[player];
-		newDelivery.multiOrderYOffset = 0;
-		newDelivery.delay = m_DeliveryDelay * pDeliveryCraft->GetDeliveryDelayMultiplier();
-		newDelivery.timer.Reset();
-
-		// Add the new Delivery to the queue
-		m_Deliveries[team].push_back(newDelivery);
-
-		pDeliveryCraft = 0;
-		pLastPassenger = 0;
-
-		// Deduct cost from team's funds
-		m_TeamFunds[team] -= totalCost;
-
-		// Go 'ding!', but only if player is human, or it may be confusing
-		if (PlayerHuman(player))
-			g_GUISound.ConfirmSound()->Play(player);
-
-		// Clear out the override purchase list, whether anything was in there or not, it should not override twice.
-		m_PurchaseOverride[player].clear();
-
-		return true;
+	} else {
+		if (!m_pBuyGUI[player]->CommitPurchase(pCraftPreset->GetModuleAndPresetName()))
+			totalCost = pCraftPreset->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
 	}
 
-	return false;
+	// Tally the ordered items and keep the ones actually purchasable
+	std::list<const SceneObject*> boughtList;
+	for (std::list<const SceneObject*>::iterator itr = purchaseList.begin(); itr != purchaseList.end(); ++itr) {
+		bool purchaseItem = true;
+
+		// Add to the total cost tally
+		if (m_pBuyGUI[player]->GetOnlyShowOwnedItems()) {
+			if (!m_pBuyGUI[player]->CommitPurchase((*itr)->GetModuleAndPresetName())) {
+				if (m_pBuyGUI[player]->IsAlwaysAllowedItem((*itr)->GetModuleAndPresetName()))
+					totalCost += (*itr)->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
+				else
+					purchaseItem = false;
+			}
+		} else {
+			if (!m_pBuyGUI[player]->CommitPurchase((*itr)->GetModuleAndPresetName()))
+				totalCost += (*itr)->GetGoldValue(nativeModule, foreignCostMult, nativeCostMult);
+		}
+
+		if (purchaseItem)
+			boughtList.push_back(*itr);
+	}
+
+	PurchaseOrder order;
+	order.purchases = std::move(boughtList);
+	order.team = team;
+	order.passengerAIMode = mode;
+	order.waypoint = waypoint;
+	order.pTargetMO = pTargetMO;
+	order.totalCost = totalCost;
+	order.orderedByPlayer = player;
+	order.aiReturnCraft = m_AIReturnCraft[player];
+	order.landingZone = m_LandingZone[player];
+	order.multiOrderYOffset = m_NextMultiOrderYOffset[player];
+	m_NextMultiOrderYOffset[player] = 0.0F;
+
+	ACraft* pDeliveryCraft = dynamic_cast<ACraft*>(pCraftPreset->Clone());
+	if (!QueuePurchaseDelivery(pDeliveryCraft, order)) {
+		delete pDeliveryCraft;
+		return false;
+	}
+
+	// Clear out the override purchase list, whether anything was in there or not, it should not override twice.
+	m_PurchaseOverride[player].clear();
+
+	return true;
+}
+
+bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseOrder& order) {
+	if (!pDeliveryCraft || order.team <= Teams::NoTeam || order.team >= Teams::MaxTeamCount)
+		return false;
+
+	// Go through the list of things ordered, and give any actors all the items that is present after them, until the next actor.
+	MovableObject* pInventoryObject = nullptr;
+	Actor* pPassenger = nullptr;
+	Actor* pLastPassenger = nullptr;
+
+	for (std::list<const SceneObject*>::const_iterator itr = order.purchases.begin(); itr != order.purchases.end(); ++itr) {
+		// Make copy of the preset instance in the list
+		pInventoryObject = dynamic_cast<MovableObject*>((*itr)->Clone());
+
+		if (pPassenger) {
+			pLastPassenger = pPassenger;
+		}
+
+		pPassenger = dynamic_cast<Actor*>(pInventoryObject);
+
+		// If it's an actor, then set its team and add it to the Craft's inventory!
+		if (pPassenger) {
+			// Set the team etc for the current passenger and stuff him into the craft
+			pPassenger->SetTeam(order.team);
+			pPassenger->SetControllerMode(Controller::CIM_AI);
+			pPassenger->SetAIMode((Actor::AIMode)order.passengerAIMode);
+
+			if (Actor* pTarget = dynamic_cast<Actor*>(order.pTargetMO)) {
+				pPassenger->AddAIMOWaypoint(pTarget);
+			} else if (order.waypoint.m_X > 0 && order.waypoint.m_Y > 0) {
+				pPassenger->AddAISceneWaypoint(order.waypoint);
+			}
+
+			pDeliveryCraft->AddInventoryItem(pPassenger);
+		} else if (dynamic_cast<AHuman*>(pLastPassenger)) {
+			// Add ourselves to the last passenger's inventory
+			pLastPassenger->AddInventoryItem(pInventoryObject);
+		} else {
+			// No valid AHuman actor before us, just add ourself to the craft inventory
+			pDeliveryCraft->AddInventoryItem(pInventoryObject);
+		}
+	}
+
+	float spawnY = 0.0f;
+	if (g_SceneMan.GetTerrain() && g_SceneMan.GetTerrain()->GetOrbitDirection() == Directions::Down) {
+		spawnY = g_SceneMan.GetSceneHeight();
+	}
+
+	// Delivery craft appear straight over the selected LZ
+	pDeliveryCraft->SetPos(Vector(order.landingZone.m_X, spawnY));
+	//        pDeliveryCraft->SetPos(Vector(m_LandingZone[player].m_X, 300));
+
+	pDeliveryCraft->SetTeam(order.team);
+	// TODO: The after-delivery AI mode needs to be set depending on what the user has set in teh LZ selection mode
+	pDeliveryCraft->SetControllerMode(Controller::CIM_AI);
+	pDeliveryCraft->SetAIMode(order.aiReturnCraft ? Actor::AIMODE_DELIVER : Actor::AIMODE_STAY);
+
+	// Prepare the Delivery struct and stuff the ready to go craft in there
+	Delivery newDelivery;
+	// Pass ownership of the craft to the new Delivery struct
+	newDelivery.pCraft = pDeliveryCraft;
+	newDelivery.orderedByPlayer = order.orderedByPlayer;
+	newDelivery.landingZone = order.landingZone;
+	newDelivery.multiOrderYOffset = order.multiOrderYOffset;
+	newDelivery.delay = m_DeliveryDelay * pDeliveryCraft->GetDeliveryDelayMultiplier();
+	newDelivery.timer.Reset();
+
+	// Add the new Delivery to the queue
+	m_Deliveries[order.team].push_back(newDelivery);
+
+	// Deduct cost from team's funds
+	m_TeamFunds[order.team] -= order.totalCost;
+
+	// Go 'ding!', but only if player is human, or it may be confusing
+	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && PlayerHuman(order.orderedByPlayer))
+		g_GUISound.ConfirmSound()->Play(order.orderedByPlayer);
+
+	return true;
 }
 
 void GameActivity::SetupPlayers() {
@@ -1535,8 +1562,8 @@ void GameActivity::Update() {
 							m_ViewState[player] = ViewState::Normal;
 						}
 					} else {
+						m_NextMultiOrderYOffset[player] = lzOffsetY;
 						CreateDelivery(player);
-						m_Deliveries[team].rbegin()->multiOrderYOffset = lzOffsetY;
 					}
 				}
 				// Revert the Y offset so that the cursor doesn't flinch.
