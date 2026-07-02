@@ -1,6 +1,10 @@
 #include "MOSRotating.h"
 
 #include "CameraMan.h"
+#include "TimerMan.h"
+
+#include <cstdlib>
+#include <iostream>
 #include "SettingsMan.h"
 #include "PresetMan.h"
 #include "AtomGroup.h"
@@ -885,6 +889,14 @@ void MOSRotating::GibThis(const Vector& impactImpulse, MovableObject* movableObj
 		return;
 	}
 
+	// CC_SIM_DUMP forensics: gibs cascade, so log every entry with its trigger impulse.
+	static const bool s_gibLogArmed = std::getenv("CC_SIM_DUMP") != nullptr;
+	if (s_gibLogArmed) {
+		std::cout << "[gib] tick=" << g_TimerMan.GetSimUpdateCount() << " uid=" << GetUniqueID() << " " << GetPresetName()
+		          << " impact=" << impactImpulse.GetMagnitude() << " travel=" << m_TravelImpulse.GetMagnitude()
+		          << " wounds=" << GetWoundCount() << std::endl;
+	}
+
 	if (impactImpulse.MagnitudeIsGreaterThan(GetGibImpulseLimit())) {
 		// Add a counterforce equal to GibImpulseLimit to the impulse list in order to simulate the force spent on breaking the object apart
 		Vector counterForce = impactImpulse;
@@ -1379,6 +1391,10 @@ void MOSRotating::PostTravel() {
 
 	// For some reason MovableObject lifetime death is in post travel rather than update, so this is done here too
 	if (m_GibAtEndOfLifetime && m_Lifetime && m_AgeTimer.GetElapsedSimTimeMS() > m_Lifetime) {
+		static const bool s_gibLogArmed = std::getenv("CC_SIM_DUMP") != nullptr;
+		if (s_gibLogArmed) {
+			std::cout << "[gib-cause] lifetime uid=" << GetUniqueID() << " age=" << m_AgeTimer.GetElapsedSimTimeMS() << " life=" << m_Lifetime << std::endl;
+		}
 		GibThis();
 	}
 

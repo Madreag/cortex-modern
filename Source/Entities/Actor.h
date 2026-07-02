@@ -158,6 +158,9 @@ namespace RTE {
 		/// @return A float describing this Actor's health.
 		float GetHealth() const { return m_Health; }
 
+		/// Gets the elapsed sim ms on the death timer, for the sim state dump.
+		double GetDeathTimerElapsedSimMS() const { return m_DeathTmr.GetElapsedSimTimeMS(); }
+
 		/// Gets this Actor's previous health value, prior to this frame.
 		/// @return A float describing this Actor's previous health.
 		float GetPrevHealth() const { return m_PrevHealth; }
