@@ -2395,8 +2395,8 @@ void AHuman::PreControllerUpdate() {
 		m_EquipHUDTimer.Reset();
 	}
 
-	// Controller disabled
-	if (m_Controller.IsDisabled()) {
+	// Controller disabled; a player's menu/waypoint disable keeps its latched states so hovering holds.
+	if (m_Controller.IsDisabled() && !m_Controller.IsPlayerControlled()) {
 		m_MovementState = STAND;
 		if (m_pJetpack && m_pJetpack->IsAttached()) {
 			m_pJetpack->EnableEmission(false);
