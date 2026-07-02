@@ -31,6 +31,8 @@ namespace RTE {
 		uint32_t sessionWaitMs = 15000;
 		uint32_t lobbyWaitMs = 15000;
 		uint32_t lockstepWaitMs = 5000;
+		// In-match missing-frame grace before the match is declared dead; the setup wait above stays short.
+		uint32_t missingFrameGraceMs = 20000;
 		uint32_t postSessionSettleMs = 250;
 		uint32_t postLobbySettleMs = 250;
 		std::string scenario;

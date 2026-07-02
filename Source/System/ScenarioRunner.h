@@ -49,6 +49,7 @@ namespace RTE {
 			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
 			bool        selftestScuttleCommand = false; // -net-match-e2e-scuttle-command: host scuttles the delivered craft at tick 100.
 			bool        selftestBrainKillCommand = false; // -net-match-e2e-brain-kill-command: host delivers + scuttles a craft onto the enemy brain.
+			bool        selftestStall = false; // -net-match-e2e-stall: this peer stops producing frames for 8s at tick 300 (stall-grace test).
 		};
 
 		/// True if `-scenario` was supplied on the command line.
@@ -90,6 +91,10 @@ namespace RTE {
 		static const std::string& GetControllerReplayError();
 
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator);
+
+		/// Enable the "waiting for peer" overlay drawn while the lockstep wait is stalled. Interactive
+		/// matches only — automated runs keep their output clean and have no visible window.
+		static void SetLockstepStallOverlayEnabled(bool enabled);
 		static bool IsLockstepControllerSyncActive();
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		static uint8_t ResolveTeamCommandAuthority(int team);

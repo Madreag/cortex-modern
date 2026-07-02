@@ -2,10 +2,18 @@
 
 #include "Constants.h"
 #include "ControllerLog.h"
+#include "FrameMan.h"
 #include "MetricsCollector.h"
 #include "MovableMan.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
+#include "WindowMan.h"
+
+#include "GUI.h"
+#include "AllegroBitmap.h"
+#include "RenderTarget.h"
+
+#include <SDL3/SDL.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -32,6 +40,30 @@ namespace RTE {
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
 		uint64_t s_LockstepPollNowMs = 0;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
+		bool s_LockstepStallOverlayEnabled = false;
+
+		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
+		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
+		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs) {
+			SDL_PumpEvents();
+			BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+			GUIFont* largeFont = g_FrameMan.GetLargeFont();
+			GUIFont* smallFont = g_FrameMan.GetSmallFont();
+			if (!backbuffer || !largeFont || !smallFont) {
+				return;
+			}
+			clear_to_color(backbuffer, 0);
+			AllegroBitmap drawBitmap(backbuffer);
+			const int centerX = backbuffer->w / 2;
+			const int centerY = backbuffer->h / 2;
+			largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for the other player... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
+			if (graceMs > stallMs) {
+				smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
+			}
+			g_WindowMan.ClearBackbuffer(false);
+			g_WindowMan.GetScreenBuffer()->Begin();
+			g_WindowMan.UploadFrame();
+		}
 
 		std::string FloatBitsHex(float value) {
 			uint32_t bits;
@@ -163,6 +195,11 @@ namespace RTE {
 		if (a == "-net-match-e2e-brain-kill-command") {
 			// Arm the host-issued brain-kill delivery. Boolean flag.
 			s_Args.selftestBrainKillCommand = true;
+			return 1;
+		}
+		if (a == "-net-match-e2e-stall") {
+			// Arm the one-shot 8s frame stall. Boolean flag.
+			s_Args.selftestStall = true;
 			return 1;
 		}
 		return 0;
@@ -384,6 +421,10 @@ namespace RTE {
 		return drained;
 	}
 
+	void ScenarioRunner::SetLockstepStallOverlayEnabled(bool enabled) {
+		s_LockstepStallOverlayEnabled = enabled;
+	}
+
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";
@@ -392,11 +433,19 @@ namespace RTE {
 
 		const uint32_t timeoutMs = s_LockstepCoordinator->GetConfig().timeoutMs;
 		const uint32_t maxPolls = timeoutMs > 0 ? timeoutMs + 50 : 500;
+		const auto waitStart = std::chrono::steady_clock::now();
+		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
+		uint32_t nextOverlayMs = 1500;
+		bool stalled = false;
 		for (uint32_t poll = 0; poll <= maxPolls; ++poll) {
 			s_LockstepCoordinator->Tick(s_LockstepPollNowMs++);
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
+					if (stalled) {
+						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
+					}
 					outFrame = std::move(ready);
 					return true;
 				}
@@ -408,6 +457,17 @@ namespace RTE {
 			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;
+			}
+			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
+			if (stallMs >= nextOverlayMs) {
+				if (!stalled) {
+					stalled = true;
+					std::cout << "[net-match] waiting on peer frames (tick " << tick << ")" << std::endl;
+				}
+				if (s_LockstepStallOverlayEnabled) {
+					DrawLockstepStallOverlay(stallMs, timeoutMs);
+				}
+				nextOverlayMs = stallMs + 200;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
