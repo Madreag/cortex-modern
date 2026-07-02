@@ -125,7 +125,9 @@ namespace RTE {
 				return true;
 			}
 			if (session.IsRejected() || session.IsFailed() || session.IsClosed()) {
-				SetFailed(std::string("session did not reach Ready; state=") + NetSession::StateName(session.GetState()));
+				// Surface the recorded mismatch (mod/config/version, timeout) instead of the bare state name.
+				const std::string rejectText = session.BuildRejectText();
+				SetFailed(!rejectText.empty() ? rejectText : std::string("session did not reach Ready; state=") + NetSession::StateName(session.GetState()));
 				if (error) *error = m_SetupError;
 				return false;
 			}

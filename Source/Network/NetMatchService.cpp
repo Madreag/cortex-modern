@@ -334,6 +334,11 @@ namespace RTE {
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
 			} else {
+				// Keep the objects on failure too — the report needs the session's reject record.
+				m_Transport = std::move(transport);
+				m_Session = std::move(session);
+				m_Coordinator = std::move(coordinator);
+				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Network setup failed";
 				m_ErrorText = error;
