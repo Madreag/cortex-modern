@@ -304,6 +304,25 @@ namespace RTE {
 			return CreateDelivery(player, Actor::AIMODE_SENTRY, point, NULL);
 		};
 
+		/// One committed purchase: everything QueuePurchaseDelivery needs to build and queue the delivery.
+		struct PurchaseOrder {
+			std::list<const SceneObject*> purchases; //!< Item presets to clone into the craft; not owned.
+			int team = Teams::NoTeam;
+			int passengerAIMode = Actor::AIMODE_SENTRY;
+			Vector waypoint = Vector(-1, -1);
+			Actor* pTargetMO = nullptr;
+			float totalCost = 0.0F;
+			int orderedByPlayer = Players::NoPlayer;
+			bool aiReturnCraft = true;
+			Vector landingZone;
+			float multiOrderYOffset = 0.0F;
+		};
+
+		/// Nests a purchase order into the delivery craft, queues the craft for arrival over the landing
+		/// zone, and deducts the cost from the team's funds. Takes craft ownership on success.
+		/// @return Whether the delivery was queued.
+		bool QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseOrder& order);
+
 		/// Shows how many deliveries this team has pending.
 		/// @param m_Deliveries[team].size( Which team to check the delivery count for.
 		/// @return The number of deliveries this team has coming.
@@ -555,6 +574,8 @@ namespace RTE {
 		Vector m_LandingZone[Players::MaxPlayerCount];
 		// Whether the last craft was set to return or not after delivering
 		bool m_AIReturnCraft[Players::MaxPlayerCount];
+		// Icon Y offset the LZ handler hands the next queued delivery for multi-order stacking
+		float m_NextMultiOrderYOffset[Players::MaxPlayerCount];
 		std::array<std::unique_ptr<PieMenu>, Players::MaxPlayerCount> m_StrategicModePieMenu; //!< The strategic mode PieMenus for each Player.
 		// The inventory menu gui for each player
 		InventoryMenuGUI* m_InventoryMenuGUI[Players::MaxPlayerCount];
