@@ -538,7 +538,13 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 					states |= 1ULL << s;
 				}
 			}
-			out << std::defaultfloat << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus());
+			out << std::defaultfloat << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " aimode=" << static_cast<int>(actor->GetAIMode()) << " health=" << std::hexfloat << actor->GetHealth() << std::defaultfloat;
+			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
+				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS();
+			}
+			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+				out << " imp=" << std::hexfloat << rotating->GetTravelImpulse().GetMagnitude() << std::defaultfloat << " wounds=" << rotating->GetWoundCount();
+			}
 			if (const AHuman* human = dynamic_cast<const AHuman*>(mo)) {
 				if (const AEJetpack* jetpack = human->GetJetpack()) {
 					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
@@ -1576,6 +1582,10 @@ int MovableMan::KillAllTeamActors(int teamToKill) const {
 }
 
 int MovableMan::KillAllEnemyActors(int teamNotToKill) const {
+	static const bool s_gibLogArmed = std::getenv("CC_SIM_DUMP") != nullptr;
+	if (s_gibLogArmed) {
+		std::cout << "[gib-cause] killall sparing team " << teamNotToKill << " at tick " << g_TimerMan.GetSimUpdateCount() << std::endl;
+	}
 	int killCount = 0;
 
 	for (std::deque<Actor*> actorList: {m_Actors, m_AddedActors}) {

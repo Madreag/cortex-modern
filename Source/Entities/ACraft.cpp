@@ -2,6 +2,9 @@
 
 #include "AtomGroup.h"
 #include "Leg.h"
+
+#include <cstdlib>
+#include <iostream>
 #include "Controller.h"
 #include "Matrix.h"
 #include "AEmitter.h"
@@ -773,6 +776,10 @@ void ACraft::Update() {
 	
 	if (m_Status == DEAD) {
 		if (m_ScuttleOnDeath || m_AIMode == AIMODE_SCUTTLE) {
+			static const bool s_gibLogArmed = std::getenv("CC_SIM_DUMP") != nullptr;
+			if (s_gibLogArmed) {
+				std::cout << "[gib-cause] dead-path uid=" << GetUniqueID() << std::endl;
+			}
 			GibThis();
 		}
 	} else if (m_Status == DYING) {
