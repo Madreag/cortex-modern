@@ -294,6 +294,10 @@ namespace RTE {
 		/// @param scriptName Global script to check.
 		/// @return Whether the global script is enabled via settings.
 		bool IsGlobalScriptEnabled(const std::string& scriptName) const { return (m_EnabledGlobalScripts.find(scriptName) != m_EnabledGlobalScripts.end()) ? m_EnabledGlobalScripts.at(scriptName) : false; }
+
+		/// Gets the enabled global script names as a sorted comma-separated list, for config fingerprints.
+		/// @return The sorted comma-separated enabled global script names.
+		std::string GetEnabledGlobalScriptsCSV() const;
 #pragma endregion
 
 #pragma region Misc Settings

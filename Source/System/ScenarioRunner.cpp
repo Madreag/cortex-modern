@@ -610,14 +610,7 @@ namespace RTE {
 		config["crab_bombs"] = g_SettingsMan.CrabBombsEnabled() ? std::to_string(g_SettingsMan.GetCrabBombThreshold()) : "off";
 		// Which sim-mutating global scripts run is per-machine Settings state; a mismatch must read
 		// as a config difference, not a sim divergence.
-		std::string enabledGlobalScripts;
-		std::map<std::string, bool> sortedGlobalScripts(g_SettingsMan.GetEnabledGlobalScriptMap().begin(), g_SettingsMan.GetEnabledGlobalScriptMap().end());
-		for (const auto& [scriptName, enabled]: sortedGlobalScripts) {
-			if (enabled) {
-				enabledGlobalScripts += (enabledGlobalScripts.empty() ? "" : ",") + scriptName;
-			}
-		}
-		config["enabled_global_scripts"] = enabledGlobalScripts;
+		config["enabled_global_scripts"] = g_SettingsMan.GetEnabledGlobalScriptsCSV();
 		return config;
 	}
 
