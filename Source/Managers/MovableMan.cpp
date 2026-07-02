@@ -7,6 +7,7 @@
 #include "PresetMan.h"
 #include "ConsoleMan.h"
 #include "AEmitter.h"
+#include "AEJetpack.h"
 #include "AHuman.h"
 #include "ACraft.h"
 #include "MOPixel.h"
@@ -499,6 +500,44 @@ struct ScopedRenderRNG {
 	ScopedRenderRNG(const ScopedRenderRNG&) = delete;
 	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
 };
+
+void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
+	auto dumpMO = [&](const char* kind, MovableObject* mo) {
+		out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
+		    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
+		    << " vel=" << mo->GetVel().m_X << "," << mo->GetVel().m_Y
+		    << " angvel=" << mo->GetAngularVel();
+		if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
+			out << " rot=" << sprite->GetRotAngle();
+		}
+		if (Actor* actor = dynamic_cast<Actor*>(mo)) {
+			Controller* controller = actor->GetController();
+			uint64_t states = 0;
+			for (int s = 0; s < ControlState::CONTROLSTATECOUNT && s < 64; ++s) {
+				if (controller->IsState(static_cast<ControlState>(s))) {
+					states |= 1ULL << s;
+				}
+			}
+			out << std::defaultfloat << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus());
+			if (const AHuman* human = dynamic_cast<const AHuman*>(mo)) {
+				if (const AEJetpack* jetpack = human->GetJetpack()) {
+					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
+				}
+			}
+		}
+		out << std::defaultfloat << "\n";
+	};
+	for (Actor* actor: m_Actors) {
+		dumpMO("actor", actor);
+	}
+	for (MovableObject* item: m_Items) {
+		dumpMO("item", item);
+	}
+	for (MovableObject* particle: m_Particles) {
+		dumpMO("particle", particle);
+	}
+	out.flush();
+}
 
 int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
 	for (Actor* actor: m_Actors) {

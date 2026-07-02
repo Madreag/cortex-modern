@@ -673,6 +673,33 @@ static std::string BuildNetMatchResultText() {
 
 /// <summary>
 /// Game simulation loop.
+// CC_SIM_DUMP=<from>:<to> writes every MO's exact-bit state per tick beside the -out trace
+// (".simdump.txt"), for host-vs-client divergence forensics.
+static void DumpSimStateIfArmed(uint64_t simTick) {
+	static uint64_t s_from = 1;
+	static uint64_t s_to = 0;
+	static std::ofstream s_out;
+	static bool s_checked = false;
+	if (!s_checked) {
+		s_checked = true;
+		const char* env = std::getenv("CC_SIM_DUMP");
+		unsigned long long from = 0;
+		unsigned long long to = 0;
+		if (env && std::sscanf(env, "%llu:%llu", &from, &to) == 2 && to >= from) {
+			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+			s_out.open(base + ".simdump.txt", std::ios::trunc);
+			if (s_out.is_open()) {
+				s_from = from;
+				s_to = to;
+			}
+		}
+	}
+	if (!s_out.is_open() || simTick < s_from || simTick > s_to) {
+		return;
+	}
+	g_MovableMan.DumpSimState(simTick, s_out);
+}
+
 /// </summary>
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
@@ -893,6 +920,8 @@ void RunGameLoop() {
 			g_MusicMan.Update();
 
 			g_ActivityMan.LateUpdateGlobalScripts();
+
+			DumpSimStateIfArmed(simTick);
 
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
