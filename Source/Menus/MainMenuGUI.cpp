@@ -286,7 +286,8 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GUIPanel::AddChild(m_MainMenuButtons[MenuButton::BackToMainButton]);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetVisible(true);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionAbs((m_RootBoxMaxWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetYPos() + 250);
-	m_MultiplayerSubScreen = g_NetMatchService.GetState() == NetMatchServiceState::Idle ? MultiplayerSubScreen::Landing : MultiplayerSubScreen::Lobby;
+	const NetMatchServiceState netMatchState = g_NetMatchService.GetState();
+	m_MultiplayerSubScreen = (netMatchState == NetMatchServiceState::Idle || netMatchState == NetMatchServiceState::Completed) ? MultiplayerSubScreen::Landing : MultiplayerSubScreen::Lobby;
 	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
 }

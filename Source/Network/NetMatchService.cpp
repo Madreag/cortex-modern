@@ -150,6 +150,20 @@ namespace RTE {
 		}
 	}
 
+	// Terminal clean end; the session objects stay alive for the next Start or quit.
+	void NetMatchService::FinishMatch(const std::string& result) {
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_Coordinator) {
+			m_Coordinator->Complete(result.empty() ? "match over" : result);
+		}
+		if (m_State == NetMatchServiceState::Running) {
+			m_State = NetMatchServiceState::Completed;
+			m_StatusText = result.empty() ? "Match complete" : result;
+			m_ErrorText.clear();
+		}
+	}
+
 	void NetMatchService::Update() {
 		JoinWorkerIfDone();
 	}
@@ -273,6 +287,7 @@ namespace RTE {
 			case NetMatchServiceState::Starting: return "Starting";
 			case NetMatchServiceState::ReadyToLaunch: return "ReadyToLaunch";
 			case NetMatchServiceState::Running: return "Running";
+			case NetMatchServiceState::Completed: return "Completed";
 			case NetMatchServiceState::Failed: return "Failed";
 		}
 		return "Unknown";

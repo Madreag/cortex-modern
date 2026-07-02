@@ -21,6 +21,7 @@ namespace RTE {
 		Starting,
 		ReadyToLaunch,
 		Running,
+		Completed,
 		Failed,
 	};
 
@@ -45,6 +46,7 @@ namespace RTE {
 		void RequestStart();
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
+		void FinishMatch(const std::string& result);
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		NetMatchServiceState GetState() const;
