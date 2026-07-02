@@ -270,8 +270,9 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 	for (const ControllerFrame& frame: frames) {
 		const auto actorIt = actorsByID.find(frame.actorUniqueID);
 		if (actorIt == actorsByID.end()) {
-			error = "lockstep frame actor not found: " + std::to_string(frame.actorUniqueID);
-			return false;
+			// The actor can die deterministically on both peers while its frame is in flight; skip it.
+			// A real roster divergence is caught by the periodic sim-hash exchange, not here.
+			continue;
 		}
 
 		std::string applyError;
