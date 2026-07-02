@@ -955,7 +955,7 @@ void ACrab::PreControllerUpdate() {
 	if (m_pTurret && m_pTurret->IsAttached() && m_Status != INACTIVE) {
 		for (HeldDevice* mountedDevice: m_pTurret->GetMountedDevices()) {
 			mountedDevice->SetSharpAim(m_SharpAimProgress);
-			if (m_Controller.IsState(WEAPON_FIRE)) {
+			if (m_Controller.IsState(WEAPON_FIRE) && !m_Controller.IsDisabled()) {
 				mountedDevice->Activate();
 				if (mountedDevice->IsEmpty()) {
 					mountedDevice->Reload();
@@ -963,7 +963,7 @@ void ACrab::PreControllerUpdate() {
 			} else {
 				mountedDevice->Deactivate();
 			}
-			if (m_Controller.IsState(WEAPON_PRIMARY_HOTKEY)) {
+			if (m_Controller.IsState(WEAPON_PRIMARY_HOTKEY) && !m_Controller.IsDisabled()) {
 				mountedDevice->ActivateHotkeyAction(HeldDeviceHotkeyType::PRIMARYHOTKEY);
 			} else {
 				mountedDevice->DeactivateHotkeyAction(HeldDeviceHotkeyType::PRIMARYHOTKEY);
