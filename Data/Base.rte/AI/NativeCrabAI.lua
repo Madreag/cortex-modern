@@ -407,7 +407,7 @@ function NativeCrabAI:CreateSuppressBehavior(Owner)
 		self.NextBehavior = coroutine.create(CrabBehaviors.ShootArea);
 		self.NextBehaviorName = "ShootArea";
 	else
-		if self.FirearmIsEmpty then
+		if Owner.FirearmIsEmpty then
 			Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 		end
 		return;
