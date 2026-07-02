@@ -323,7 +323,7 @@ function NativeHumanAI:Update(Owner)
 
 		if self.ReloadTimer:IsPastSimMS(8000) then	-- check if we need to reload
 			if Owner.FirearmNeedsReload then
-				Owner:ReloadFirearms();
+				Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 				if not Owner.FirearmNeedsReload then -- account for BG weapon needing to reload separately
 					self.ReloadTimer:Reset();
 				end
@@ -414,7 +414,7 @@ function NativeHumanAI:Update(Owner)
 											end
 										else
 											if Owner.FirearmIsEmpty then
-												Owner:ReloadFirearms();
+												Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 											elseif Owner.InventorySize > 0 and not Owner:EquipDeviceInGroup("Weapons - Primary", true) then
 												Owner:EquipFirearm(true);
 											end
@@ -859,7 +859,7 @@ function NativeHumanAI:CreateSuppressBehavior(Owner)
 		self.NextBehaviorName = "ShootArea";
 	else
 		if Owner.FirearmIsEmpty then
-			Owner:ReloadFirearms();
+			Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 		end
 		return;
 	end

@@ -385,7 +385,7 @@ end
 function HumanBehaviors.GoldDig(AI, Owner, Abort)
 	-- make sure our weapon have ammo before we start to dig, just in case we encounter an enemy while digging
 	if Owner.EquippedItem and (Owner.FirearmNeedsReload or Owner.FirearmIsEmpty) and Owner.EquippedItem:HasObjectInGroup("Weapons") then
-		Owner:ReloadFirearms();
+		Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 
 		repeat
 			local _ai, _ownr, _abrt = coroutine.yield(); -- wait until next frame
@@ -1268,7 +1268,7 @@ function HumanBehaviors.ShootTarget(AI, Owner, Abort)
 					-- we might have a different weapon equipped now check if FirearmIsEmpty again
 					if Owner.FirearmIsEmpty then
 						-- TODO: check if ducking is appropriate while reloading (when we can make the actor stand up reliably)
-						Owner:ReloadFirearms();
+						Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 
 						-- increase the TargetLostTimer limit so we don't end this behavior before the reload is finished
 						if Owner.EquippedItem and IsHDFirearm(Owner.EquippedItem) then
@@ -1317,7 +1317,7 @@ function HumanBehaviors.ShootTarget(AI, Owner, Abort)
 	end
 
 	if Owner.FirearmIsEmpty then
-		Owner:ReloadFirearms();
+		Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 	end
 
 	return true;
@@ -1723,7 +1723,7 @@ function HumanBehaviors.ShootArea(AI, Owner, Abort)
 
 			ShootTimer:Reset();
 			if Owner.FirearmIsEmpty then
-				Owner:ReloadFirearms();
+				Owner:GetController():SetState(Controller.WEAPON_RELOAD, true);
 			end
 
 			break; -- stop this behavior when the mag is empty
