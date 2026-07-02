@@ -125,6 +125,13 @@ void MOPixel::SetAtom(Atom* newAtom) {
 	m_Atom->SetOwner(this);
 }
 
+void MOPixel::SnapRenderPoseToSim() {
+	MovableObject::SnapRenderPoseToSim();
+	if (m_Atom) {
+		m_Atom->CommitTrailPointsForSimDraw();
+	}
+}
+
 void MOPixel::SetLethalRange(float range) {
 	m_LethalRange = range;
 	if (m_MinLethalRange < m_MaxLethalRange) {

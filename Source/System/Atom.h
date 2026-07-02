@@ -201,6 +201,13 @@ namespace RTE {
 		bool CalculateNormal(BITMAP* sprite, Vector spriteCenter);
 
 		void DrawTrail(BITMAP* targetBitmap, const Vector& targetPos) const;
+
+		/// Folds the current trail points into the last-update set so a sim-bound draw renders the
+		/// full trail instead of the frame-timed partial one.
+		void CommitTrailPointsForSimDraw() {
+			m_LastTrailPoints.insert(m_LastTrailPoints.end(), m_TrailPoints.begin(), m_TrailPoints.end());
+			m_TrailPoints.clear();
+		}
 #pragma endregion
 
 #pragma region Collision
