@@ -986,6 +986,11 @@ namespace RTE {
 		/// @return Returns the next unique id.
 		static long GetNextUniqueID() { return ++m_UniqueIDCounter; }
 
+		/// Pins the unique ID counter to a fixed base so a deterministic match hands out the same
+		/// IDs on every peer regardless of how many MOs each process created beforehand.
+		/// @param base The value the next created MO's ID will follow.
+		static void PinUniqueIDCounter(long base) { m_UniqueIDCounter = base; }
+
 		/// Returns this MO's unique persistent ID
 		/// @return Returns this MO's unique persistent ID
 		long GetUniqueID() const { return m_UniqueID; }
