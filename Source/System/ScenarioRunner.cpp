@@ -212,6 +212,11 @@ namespace RTE {
 			s_Args.selftestRematch = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-leave") {
+			// Arm the one-shot quit-to-menu at tick 300. Boolean flag.
+			s_Args.selftestLeave = true;
+			return 1;
+		}
 		return 0;
 	}
 

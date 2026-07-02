@@ -768,6 +768,12 @@ void RunGameLoop() {
 				std::cout << "[net-match] stall: sleeping 8s at tick 300" << std::endl;
 				std::this_thread::sleep_for(std::chrono::seconds(8));
 			}
+			// Test control: leave the match at tick 300 like a pause-menu quit; the peer must get a clean end.
+			if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
+				std::cout << "[net-match] leave: quitting to menu at tick 300" << std::endl;
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+			}
 			// E2E control: the host delivers two crafts just above the enemy brain and scuttles each as
 			// its hatch opens; both peers must trace the identical game-over transition. The spawn height
 			// is computed from the terrain and rides the synced command, so both peers see the same drop.
@@ -809,7 +815,7 @@ void RunGameLoop() {
 					const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
 					const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
-						(error.rfind("Complete:", 0) == 0 ||
+						(error.find("Complete:") != std::string::npos ||
 						 error.find("MissingFrameTimeout") != std::string::npos ||
 						 error.find("PeerDisconnected") != std::string::npos);
 					if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
@@ -817,9 +823,11 @@ void RunGameLoop() {
 						g_ActivityMan.EndActivity();
 						ScenarioRunner::ClearControllerReplayError();
 						System::SetQuit(true);
-					} else if (!s_netMatchServiceE2E && error.rfind("Complete:", 0) == 0 && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+					} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 						// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
-						const std::string result = BuildNetMatchResultText();
+						// If our activity is not over, they left mid-match rather than finishing it.
+						const Activity* skewActivity = g_ActivityMan.GetActivity();
+						const std::string result = (skewActivity && skewActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
 						g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
 						g_NetMatchService.FinishMatch(result);
 						g_ActivityMan.EndActivity();
@@ -1048,6 +1056,11 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
+					// Leaving a running net match: finish it cleanly so the peer hears "player left", not a stall.
+					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+						g_ConsoleMan.PrintString("NETWORK: Match left");
+						g_NetMatchService.FinishMatch("Match left");
+					}
 					g_MenuMan.HandleTransitionIntoMenuLoop();
 					RunMenuLoop();
 				}
