@@ -72,15 +72,17 @@ function P4AlphaDuel:UpdateActivity()
 	-- A team is out only once a brain it HAD is gone; newly queued spawns aren't residents yet.
 	local teamOneOut = self.TeamHadBrain[Activity.TEAM_1] and liveBrains[Activity.TEAM_1] < 1;
 	local teamTwoOut = self.TeamHadBrain[Activity.TEAM_2] and liveBrains[Activity.TEAM_2] < 1;
-	if teamOneOut and not teamTwoOut and self.TeamHadBrain[Activity.TEAM_2] then
-		self.WinnerTeam = Activity.TEAM_2;
-		MovableMan:KillAllEnemyActors(self.WinnerTeam);
-		ActivityMan:EndActivity();
-	elseif teamTwoOut and not teamOneOut and self.TeamHadBrain[Activity.TEAM_1] then
-		self.WinnerTeam = Activity.TEAM_1;
-		MovableMan:KillAllEnemyActors(self.WinnerTeam);
-		ActivityMan:EndActivity();
-	elseif teamOneOut and teamTwoOut then
+	if teamOneOut or teamTwoOut then
+		-- The surviving brained team wins; a double kill or a sole-brained world ends as a draw.
+		local teamOneAlive = self.TeamHadBrain[Activity.TEAM_1] and not teamOneOut;
+		local teamTwoAlive = self.TeamHadBrain[Activity.TEAM_2] and not teamTwoOut;
+		if teamTwoAlive then
+			self.WinnerTeam = Activity.TEAM_2;
+			MovableMan:KillAllEnemyActors(self.WinnerTeam);
+		elseif teamOneAlive then
+			self.WinnerTeam = Activity.TEAM_1;
+			MovableMan:KillAllEnemyActors(self.WinnerTeam);
+		end
 		ActivityMan:EndActivity();
 	end
 end
