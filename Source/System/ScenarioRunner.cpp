@@ -63,6 +63,11 @@ namespace RTE {
 			g_WindowMan.ClearBackbuffer(false);
 			g_WindowMan.GetScreenBuffer()->Begin();
 			g_WindowMan.UploadFrame();
+			static bool s_LoggedOnce = false;
+			if (!s_LoggedOnce) {
+				s_LoggedOnce = true;
+				std::cout << "[net-match] stall overlay drawn" << std::endl;
+			}
 		}
 
 		std::string FloatBitsHex(float value) {

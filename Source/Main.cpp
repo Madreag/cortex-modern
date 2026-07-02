@@ -759,10 +759,11 @@ void RunGameLoop() {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
 				}
 			}
-			// E2E control: fake a hung peer — this peer stops producing frames for 8s; the other side
+			// Test control: fake a hung peer — this peer stops producing frames for 8s; the other side
 			// must ride out the stall within the grace window and both must still finish identical.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestStall && simTick == 300) {
-				std::cout << "[net-match-service-e2e] stall: sleeping 8s at tick 300" << std::endl;
+			// Works in e2e AND interactive matches so the headed stall overlay can be exercised.
+			if (ScenarioRunner::GetArgs().selftestStall && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
+				std::cout << "[net-match] stall: sleeping 8s at tick 300" << std::endl;
 				std::this_thread::sleep_for(std::chrono::seconds(8));
 			}
 			// E2E control: the host delivers two crafts just above the enemy brain and scuttles each as
