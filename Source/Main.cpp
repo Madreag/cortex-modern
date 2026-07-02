@@ -774,10 +774,11 @@ void RunGameLoop() {
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
 			}
-			// E2E control: the host delivers two crafts just above the enemy brain and scuttles each as
+			// Test control: the host delivers two crafts just above the enemy brain and scuttles each as
 			// its hatch opens; both peers must trace the identical game-over transition. The spawn height
 			// is computed from the terrain and rides the synced command, so both peers see the same drop.
-			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainKillCommand) {
+			// Works in interactive matches too, so a headed match can be ended deterministically.
+			if (ScenarioRunner::GetArgs().selftestBrainKillCommand && ScenarioRunner::IsLockstepControllerSyncActive()) {
 				if (simTick == 50 || simTick == 70) {
 					const float dropX = simTick == 50 ? 1120.0F : 1112.0F;
 					const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 140.0F;
