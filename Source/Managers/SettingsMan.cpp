@@ -10,6 +10,8 @@
 #include "UInputMan.h"
 #include "System.h"
 
+#include <map>
+
 using namespace RTE;
 
 const std::string SettingsMan::c_ClassName = "SettingsMan";
@@ -102,6 +104,18 @@ int SettingsMan::Initialize() {
 void SettingsMan::UpdateSettingsFile() const {
 	Writer settingsWriter(m_SettingsPath);
 	g_SettingsMan.Save(settingsWriter);
+}
+
+std::string SettingsMan::GetEnabledGlobalScriptsCSV() const {
+	// Sorted so every machine renders the same Settings map as the same string.
+	const std::map<std::string, bool> sortedGlobalScripts(m_EnabledGlobalScripts.begin(), m_EnabledGlobalScripts.end());
+	std::string csv;
+	for (const auto& [scriptName, enabled]: sortedGlobalScripts) {
+		if (enabled) {
+			csv += (csv.empty() ? "" : ",") + scriptName;
+		}
+	}
+	return csv;
 }
 
 int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) {

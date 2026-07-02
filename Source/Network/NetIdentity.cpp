@@ -410,13 +410,7 @@ namespace RTE {
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = NetLockstepCodec::c_Version;
-		// Sorted so both peers hash the same order regardless of Settings map iteration.
-		std::map<std::string, bool> sortedGlobalScripts(g_SettingsMan.GetEnabledGlobalScriptMap().begin(), g_SettingsMan.GetEnabledGlobalScriptMap().end());
-		for (const auto& [scriptName, enabled]: sortedGlobalScripts) {
-			if (enabled) {
-				manifest.deterministicConfig.enabledGlobalScripts += (manifest.deterministicConfig.enabledGlobalScripts.empty() ? "" : ",") + scriptName;
-			}
-		}
+		manifest.deterministicConfig.enabledGlobalScripts = g_SettingsMan.GetEnabledGlobalScriptsCSV();
 
 		const std::string workingDirectory = System::GetWorkingDirectory();
 		const int moduleCount = g_PresetMan.GetTotalModuleCount();
