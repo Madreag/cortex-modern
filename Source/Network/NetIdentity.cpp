@@ -5,6 +5,7 @@
 #include "GameVersion.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
+#include "NetLockstep.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "System.h"
@@ -134,6 +135,8 @@ namespace RTE {
 			AppendSignedInt(hasher, "num_lua_states_override", config.numLuaStatesOverride);
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
+			AppendInt(hasher, "lockstep_codec_version", config.lockstepCodecVersion);
+			AppendField(hasher, "enabled_global_scripts", config.enabledGlobalScripts);
 			return hasher.Finalize();
 		}
 
@@ -313,6 +316,8 @@ namespace RTE {
 				{"num_lua_states_override", config.numLuaStatesOverride},
 				{"selected_module", config.selectedModule},
 				{"scenario_test_module_loaded", config.scenarioTestModuleLoaded},
+				{"lockstep_codec_version", config.lockstepCodecVersion},
+				{"enabled_global_scripts", config.enabledGlobalScripts},
 			};
 		}
 
@@ -404,6 +409,14 @@ namespace RTE {
 		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetNumberOfLuaStatesOverride();
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
+		manifest.deterministicConfig.lockstepCodecVersion = NetLockstepCodec::c_Version;
+		// Sorted so both peers hash the same order regardless of Settings map iteration.
+		std::map<std::string, bool> sortedGlobalScripts(g_SettingsMan.GetEnabledGlobalScriptMap().begin(), g_SettingsMan.GetEnabledGlobalScriptMap().end());
+		for (const auto& [scriptName, enabled]: sortedGlobalScripts) {
+			if (enabled) {
+				manifest.deterministicConfig.enabledGlobalScripts += (manifest.deterministicConfig.enabledGlobalScripts.empty() ? "" : ",") + scriptName;
+			}
+		}
 
 		const std::string workingDirectory = System::GetWorkingDirectory();
 		const int moduleCount = g_PresetMan.GetTotalModuleCount();
