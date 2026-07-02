@@ -1469,6 +1469,10 @@ void LuaMan::Update() {
 	LuabindObjectWrapper::ApplyQueuedDeletions();
 }
 
+void LuaMan::WaitForAsyncGarbageCollection() {
+	m_GarbageCollectionTask.wait();
+}
+
 void LuaMan::StartAsyncGarbageCollection() {
 	ZoneScoped;
 

@@ -1903,6 +1903,10 @@ void GameActivity::Update() {
 	*/
 }
 
+void GameActivity::RenderUpdate() {
+	Activity::RenderUpdate();
+}
+
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {
 	if (which < 0 || which >= c_MaxScreenCount)
 		return;

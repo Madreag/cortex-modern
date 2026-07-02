@@ -752,6 +752,10 @@ bool UInputMan::GetKeyboardButtonState(SDL_Scancode scancodeToTest, InputState w
 			return keyboard.keyStates[scancodeToTest] && keyboard.changedKeyStates[scancodeToTest];
 		case InputState::Released:
 			return !keyboard.keyStates[scancodeToTest] && keyboard.changedKeyStates[scancodeToTest];
+		case InputState::PressedSim:
+			return keyboard.pressedSinceSim[scancodeToTest];
+		case InputState::ReleasedSim:
+			return keyboard.releasedSinceSim[scancodeToTest];
 		default:
 			RTEAbort("Undefined InputState value passed in. See InputState enumeration.");
 			return false;
@@ -791,6 +795,10 @@ bool UInputMan::GetMouseButtonState(int whichPlayer, int whichButton, InputState
 			return mouseIterator->second.state[whichButton] && mouseIterator->second.change[whichButton];
 		case InputState::Released:
 			return !mouseIterator->second.state[whichButton] && mouseIterator->second.change[whichButton];
+		case InputState::PressedSim:
+			return mouseIterator->second.pressedSinceSim[whichButton];
+		case InputState::ReleasedSim:
+			return mouseIterator->second.releasedSinceSim[whichButton];
 		default:
 			RTEAbort("Undefined InputState value passed in. See InputState enumeration.");
 			return false;
@@ -811,6 +819,10 @@ bool UInputMan::GetJoystickButtonState(int whichJoy, int whichButton, InputState
 			return buttonState && s_ChangedJoystickStates[whichJoy].m_Buttons[whichButton];
 		case InputState::Released:
 			return !buttonState && s_ChangedJoystickStates[whichJoy].m_Buttons[whichButton];
+		case InputState::PressedSim:
+			return s_PrevJoystickStates[whichJoy].m_ButtonsPressedSinceSim[whichButton];
+		case InputState::ReleasedSim:
+			return s_PrevJoystickStates[whichJoy].m_ButtonsReleasedSinceSim[whichButton];
 		default:
 			RTEAbort("Undefined InputState value passed in. See InputState enumeration.");
 			return false;
@@ -830,8 +842,10 @@ bool UInputMan::GetJoystickDirectionState(int whichJoy, int whichAxis, int which
 			case InputState::Held:
 				return axisState == -1;
 			case InputState::Pressed:
+			case InputState::PressedSim: // TODO- analog axis direction lacks per-sim edge accumulators; D-pad uses button events which do
 				return axisState == -1 && s_ChangedJoystickStates[whichJoy].m_DigitalAxis[whichAxis] < 0;
 			case InputState::Released:
+			case InputState::ReleasedSim:
 				return axisState == 0 && s_ChangedJoystickStates[whichJoy].m_DigitalAxis[whichAxis] > 0;
 			default:
 				RTEAbort("Undefined InputState value passed in. See InputState enumeration");
@@ -842,8 +856,10 @@ bool UInputMan::GetJoystickDirectionState(int whichJoy, int whichAxis, int which
 			case InputState::Held:
 				return axisState == 1;
 			case InputState::Pressed:
+			case InputState::PressedSim:
 				return axisState == 1 && s_ChangedJoystickStates[whichJoy].m_DigitalAxis[whichAxis] > 0;
 			case InputState::Released:
+			case InputState::ReleasedSim:
 				return axisState == 0 && s_ChangedJoystickStates[whichJoy].m_DigitalAxis[whichAxis] < 0;
 			default:
 				RTEAbort("Undefined InputState value passed in. See InputState enumeration.");
@@ -860,12 +876,21 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 		case SDL_EVENT_KEY_DOWN: {
 			Keyboard& keyboard = m_KeyboardStates[inputEvent.key.which];
 			keyboard.id = inputEvent.key.which;
-			keyboard.changedKeyStates[inputEvent.key.scancode] = (inputEvent.key.down != keyboard.keyStates[inputEvent.key.scancode]);
+			bool transitioned = (inputEvent.key.down != keyboard.keyStates[inputEvent.key.scancode]);
+			keyboard.changedKeyStates[inputEvent.key.scancode] = transitioned;
+			if (transitioned) {
+				(inputEvent.key.down ? keyboard.pressedSinceSim : keyboard.releasedSinceSim)[inputEvent.key.scancode] = true;
+			}
 			keyboard.keyStates[inputEvent.key.scancode] = inputEvent.key.down;
 
 			if (inputEvent.key.which != 0) {
-				m_KeyboardStates[0].changedKeyStates[inputEvent.key.scancode] = (inputEvent.key.down != m_KeyboardStates[0].keyStates[inputEvent.key.scancode]);
-				m_KeyboardStates[0].keyStates[inputEvent.key.scancode] = inputEvent.key.down;
+				Keyboard& combined = m_KeyboardStates[0];
+				bool transitionedCombined = (inputEvent.key.down != combined.keyStates[inputEvent.key.scancode]);
+				combined.changedKeyStates[inputEvent.key.scancode] = transitionedCombined;
+				if (transitionedCombined) {
+					(inputEvent.key.down ? combined.pressedSinceSim : combined.releasedSinceSim)[inputEvent.key.scancode] = true;
+				}
+				combined.keyStates[inputEvent.key.scancode] = inputEvent.key.down;
 			}
 
 			break;
@@ -939,11 +964,20 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			}
 			Mouse& mouse = m_MouseStates[inputEvent.motion.which];
 			mouse.id = inputEvent.button.which;
-			mouse.change[inputEvent.button.button] = inputEvent.button.down != mouse.state[inputEvent.button.button];
+			bool transitioned = inputEvent.button.down != mouse.state[inputEvent.button.button];
+			mouse.change[inputEvent.button.button] = transitioned;
+			if (transitioned) {
+				(inputEvent.button.down ? mouse.pressedSinceSim : mouse.releasedSinceSim)[inputEvent.button.button] = true;
+			}
 			mouse.state[inputEvent.button.button] = inputEvent.button.down;
 			if (inputEvent.button.which != 0) {
-				m_MouseStates[0].change[inputEvent.button.button] = inputEvent.button.down != m_MouseStates[0].state[inputEvent.button.button];
-				m_MouseStates[0].state[inputEvent.button.button] = inputEvent.button.down;
+				Mouse& combined = m_MouseStates[0];
+				bool transitionedCombined = inputEvent.button.down != combined.state[inputEvent.button.button];
+				combined.change[inputEvent.button.button] = transitionedCombined;
+				if (transitionedCombined) {
+					(inputEvent.button.down ? combined.pressedSinceSim : combined.releasedSinceSim)[inputEvent.button.button] = true;
+				}
+				combined.state[inputEvent.button.button] = inputEvent.button.down;
 			}
 			break;
 		}
@@ -1003,7 +1037,11 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 					down = inputEvent.jbutton.down;
 				}
 				size_t index = device - s_PrevJoystickStates.begin();
-				s_ChangedJoystickStates[index].m_Buttons[button] = down != device->m_Buttons[button];
+				bool transitioned = down != device->m_Buttons[button];
+				s_ChangedJoystickStates[index].m_Buttons[button] = transitioned;
+				if (transitioned) {
+					(down ? device->m_ButtonsPressedSinceSim : device->m_ButtonsReleasedSinceSim)[button] = true;
+				}
 				device->m_Buttons[button] = down;
 			}
 			break;
@@ -1064,6 +1102,29 @@ void UInputMan::EndFrame() {
 		mouse.wheelChange = 0;
 		mouse.relativeMotion.Reset();
 		mouse.change.fill(false);
+	}
+
+	// Drop sim-rate edges only when no sim tick is going to read them. During a
+	// running activity sim ticks own this buffer and clear via EndSimUpdate;
+	// clearing here every render frame would eat presses that landed on iterations
+	// where TimeForSimUpdate happened to return false.
+	if (g_ActivityMan.ActivityPaused()) {
+		EndSimUpdate();
+	}
+}
+
+void UInputMan::EndSimUpdate() {
+	for (auto& [keyboardID, keyboard]: m_KeyboardStates) {
+		keyboard.pressedSinceSim.fill(false);
+		keyboard.releasedSinceSim.fill(false);
+	}
+	for (auto& [mouseID, mouse]: m_MouseStates) {
+		mouse.pressedSinceSim.fill(false);
+		mouse.releasedSinceSim.fill(false);
+	}
+	for (Gamepad& gamepad: s_PrevJoystickStates) {
+		std::fill(gamepad.m_ButtonsPressedSinceSim.begin(), gamepad.m_ButtonsPressedSinceSim.end(), false);
+		std::fill(gamepad.m_ButtonsReleasedSinceSim.begin(), gamepad.m_ButtonsReleasedSinceSim.end(), false);
 	}
 }
 

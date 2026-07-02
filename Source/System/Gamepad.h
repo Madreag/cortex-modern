@@ -12,6 +12,8 @@ namespace RTE {
 		std::vector<int> m_Axis; //!< Array of analog axis states.
 		std::vector<int> m_DigitalAxis; //!< Array of digital axis states. Should be updated when analog axis crosses half value 8192.
 		std::vector<bool> m_Buttons; //!< Array of button states.
+		std::vector<bool> m_ButtonsPressedSinceSim; //!< Per-button press events accumulated since last sim-tick clear.
+		std::vector<bool> m_ButtonsReleasedSinceSim; //!< Per-button release events accumulated since last sim-tick clear.
 
 #pragma region Creation
 		/// Constructor method used to instantiate a Gamepad object in system memory and make it ready for use.
@@ -23,7 +25,7 @@ namespace RTE {
 		/// @param numAxis Number of analog axis.
 		/// @param numButtons Number of buttons.
 		Gamepad(int deviceIndex, SDL_JoystickID id, int numAxis, int numButtons) :
-		    m_DeviceIndex(deviceIndex), m_JoystickID(id), m_Axis(numAxis), m_DigitalAxis(numAxis), m_Buttons(numButtons) {}
+		    m_DeviceIndex(deviceIndex), m_JoystickID(id), m_Axis(numAxis), m_DigitalAxis(numAxis), m_Buttons(numButtons), m_ButtonsPressedSinceSim(numButtons), m_ButtonsReleasedSinceSim(numButtons) {}
 #pragma endregion
 
 #pragma region Operator Overloads

@@ -154,9 +154,16 @@ namespace RTE {
 		/// @return Whether flipped or not.
 		bool IsHFlipped() const override { return m_HFlipped; }
 
+		/// Gets the previous rotational Matrix of of this.
+		/// @return The previous rotational Matrix of this MovableObject.
+		Matrix GetPrevRotMatrix() const { return m_PrevRotation; }
+
 		/// Gets the current rotational Matrix of of this.
 		/// @return The rotational Matrix of this MovableObject.
 		Matrix GetRotMatrix() const override { return m_Rotation; }
+
+		/// Lerped render rotation between previous and current sim rotation, for visual consistency with GetRenderPos.
+		Matrix GetRenderRotMatrix() const;
 
 		/// Gets the current rotational angle of of this, in radians.
 		/// @return The rotational angle of this, in radians.

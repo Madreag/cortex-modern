@@ -158,6 +158,11 @@ namespace RTE {
 		/// @return A Vector describing the previous position vector.
 		const Vector& GetPrevPos() const { return m_PrevPos; }
 
+		/// Gets the render position vector of this MovableObject. Returned by value
+		/// because Lerp produces a temporary -- handing back const& would dangle.
+		/// @return A Vector describing the render position vector.
+		Vector GetRenderPos() const;
+
 		/// Gets the velocity vector of this MovableObject.
 		/// @return A Vector describing the current velocity vector.
 		const Vector& GetVel() const { return m_Vel; }
@@ -372,6 +377,14 @@ namespace RTE {
 		/// Sets the position at the start of the sim update.
 		/// @param newPrevPos A Vector specifying the new 'prev' pos.
 		void SetPrevPos(const Vector& newPrevPos) { m_PrevPos = newPrevPos; }
+
+		/// Teleports this MovableObject to a new absolute position. m_PrevPos is snapped so the render lerp does not fly the sprite from its old location to the new one.
+		/// Travel-driven motion bypasses this by writing m_Pos directly so PreTravel can still snapshot a meaningful prev.
+		/// @param newPos A Vector describing the new absolute position in pixels.
+		void SetPos(const Vector& newPos) override {
+			m_Pos = newPos;
+			m_PrevPos = newPos;
+		}
 
 		/// Sets the velocity vector of this MovableObject.
 		/// @param newVel A Vector specifying the new velocity vector.

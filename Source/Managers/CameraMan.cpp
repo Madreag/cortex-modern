@@ -6,8 +6,14 @@
 #include "Scene.h"
 #include "SceneMan.h"
 #include "SLTerrain.h"
+#include "TimerMan.h"
 
 using namespace RTE;
+
+Vector CameraMan::GetRenderOffset(int screenId) const {
+	const Screen& screen = m_Screens[screenId];
+	return Lerp(screen.PrevOffset, screen.Offset, g_TimerMan.GetSimUpdateProportion());
+}
 
 CameraMan::CameraMan() {
 	Clear();
@@ -196,6 +202,8 @@ void CameraMan::Update(int screenId) {
 	Screen& screen = m_Screens[screenId];
 	const SLTerrain* terrain = g_SceneMan.GetScene()->GetTerrain();
 
+	screen.PrevOffset = screen.Offset;
+
 	if (g_TimerMan.DrawnSimUpdate()) {
 		// Adjust for wrapping if the scroll target jumped a seam this frame, as reported by whatever screen set it (the scroll target) this frame. This is to avoid big, scene-wide jumps in scrolling when traversing the seam.
 		if (screen.TargetXWrapped) {
@@ -204,6 +212,7 @@ void CameraMan::Update(int screenId) {
 				screen.Offset.SetX(screen.Offset.GetX() - (static_cast<float>(terrain->GetBitmap()->w * wrappingScrollDirection)));
 				screen.SeamCrossCount[Axes::X] += wrappingScrollDirection;
 			}
+			screen.PrevOffset = screen.Offset; // wrap moves Offset by a whole map width; disable interp this frame
 			screen.TargetXWrapped = false;
 		}
 
@@ -213,6 +222,7 @@ void CameraMan::Update(int screenId) {
 				screen.Offset.SetY(screen.Offset.GetY() - (static_cast<float>(terrain->GetBitmap()->h * wrappingScrollDirection)));
 				screen.SeamCrossCount[Axes::Y] += wrappingScrollDirection;
 			}
+			screen.PrevOffset = screen.Offset;
 			screen.TargetYWrapped = false;
 		}
 	}

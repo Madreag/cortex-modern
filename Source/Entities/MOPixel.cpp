@@ -236,10 +236,17 @@ void MOPixel::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode,
 			break;
 	}
 
-	Vector pixelPos = m_Pos - targetPos;
+	// Modes that bake into sim state (MOID for hit detection, material/door for terrain) snap to current sim pos; visual modes lerp.
+	const bool simBoundMode = mode == g_DrawMOID || mode == g_DrawMaterial || mode == g_DrawDoor;
+	const float fLerp = simBoundMode ? 1.0f : g_TimerMan.GetSimUpdateProportion();
+	Vector spritePos = Lerp(GetPrevPos(), GetPos(), fLerp) - targetPos;
 	if (mode != DrawMode::g_DrawMOID) {
-		putpixel(targetBitmap, pixelPos.GetFloorIntX(), pixelPos.GetFloorIntY(), drawColor);
+		putpixel(targetBitmap, spritePos.GetFloorIntX(), spritePos.GetFloorIntY(), drawColor);
 	}
 
-	g_SceneMan.RegisterDrawing(targetBitmap, m_MOID, pixelPos, 1.0F);
+	g_SceneMan.RegisterDrawing(targetBitmap, m_MOID, spritePos, 1.0F);
+
+	if (m_Atom && mode != g_DrawMOID) {
+		m_Atom->DrawTrail(targetBitmap, targetPos);
+	}
 }

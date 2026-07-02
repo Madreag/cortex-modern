@@ -26,6 +26,8 @@ void Arm::Clear() {
 	m_HandIdleRotation = 0;
 
 	m_HandCurrentOffset.Reset();
+	m_HandPrevPos.Reset();
+	m_HandPos.Reset();
 
 	m_HandTargets = {};
 	m_HandMovementDelayTimer.Reset();
@@ -217,6 +219,14 @@ void Arm::Update() {
 	}
 
 	m_HandIdleRotation = 0;
+
+	bool firstUpdate = m_HandPos.IsZero();
+	m_HandPrevPos = m_HandPos;
+	m_HandPos = m_JointPos + m_HandCurrentOffset + (m_Recoiled ? m_RecoilOffset : Vector());
+	// Snap prev to current on first frame so render lerp doesn't fly from origin
+	if (firstUpdate) {
+		m_HandPrevPos = m_HandPos;
+	}
 }
 
 void Arm::UpdateHandCurrentOffset(bool armHasParent, bool heldDeviceIsAThrownDevice) {
@@ -357,7 +367,8 @@ void Arm::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode, boo
 }
 
 void Arm::DrawHand(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode) const {
-	Vector handPos(m_JointPos + m_HandCurrentOffset + (m_Recoiled ? m_RecoilOffset : Vector()) - targetPos);
+	const float fLerp = mode == g_DrawMOID ? 1.0f : g_TimerMan.GetSimUpdateProportion();
+	Vector handPos(Lerp(GetHandPrevPos(), GetHandPos(), fLerp) - targetPos);
 	handPos -= Vector(static_cast<float>(m_HandSpriteBitmap->w / 2), static_cast<float>(m_HandSpriteBitmap->h / 2));
 
 	if (!m_HFlipped) {

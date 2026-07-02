@@ -200,7 +200,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, PerformanceMan) 
 LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, PostProcessMan) {
 	return luabind::class_<PostProcessMan>("PostProcessManager")
 
-	    .def("RegisterPostEffect", &PostProcessMan::RegisterPostEffect);
+	    .def("RegisterPostEffect", (void(PostProcessMan::*)(const Vector&, BITMAP*, size_t, int, float)) & PostProcessMan::RegisterPostEffect);
 }
 
 LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, PresetMan) {
@@ -386,6 +386,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, CameraMan) {
 	return luabind::class_<CameraMan>("CameraManager")
 
 	    .def("GetOffset", &CameraMan::GetOffset)
+	    .def("GetRenderOffset", &CameraMan::GetRenderOffset)
 	    .def("SetOffset", &CameraMan::SetOffset)
 	    .def("GetScreenOcclusion", &CameraMan::GetScreenOcclusion)
 	    .def("SetScreenOcclusion", &CameraMan::SetScreenOcclusion)
@@ -453,6 +454,8 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, UInputMan) {
 	    .def("ElementPressed", &UInputMan::ElementPressed)
 	    .def("ElementReleased", &UInputMan::ElementReleased)
 	    .def("ElementHeld", &UInputMan::ElementHeld)
+	    .def("ElementPressedSim", &UInputMan::ElementPressedSim)
+	    .def("ElementReleasedSim", &UInputMan::ElementReleasedSim)
 	    .def("KeyPressed", (bool(UInputMan::*)(SDL_Keycode, int) const) & UInputMan::KeyPressed)
 	    .def("KeyPressed", (bool(UInputMan::*)(SDL_Keycode) const) & UInputMan::KeyPressedKeycode)
 	    .def("KeyReleased", (bool(UInputMan::*)(SDL_Keycode, int) const) & UInputMan::KeyReleased)
@@ -468,6 +471,8 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, UInputMan) {
 	    .def("MouseButtonPressed", &UInputMan::MouseButtonPressed)
 	    .def("MouseButtonReleased", &UInputMan::MouseButtonReleased)
 	    .def("MouseButtonHeld", &UInputMan::MouseButtonHeld)
+	    .def("MouseButtonPressedSim", &UInputMan::MouseButtonPressedSim)
+	    .def("MouseButtonReleasedSim", &UInputMan::MouseButtonReleasedSim)
 	    .def("GetMousePos", &UInputMan::GetAbsoluteMousePosition)
 	    .def("MouseWheelMoved", &UInputMan::MouseWheelMoved)
 	    .def("JoyButtonPressed", &UInputMan::JoyButtonPressed)

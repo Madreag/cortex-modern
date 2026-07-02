@@ -745,6 +745,8 @@ void HDFirearm::Update() {
 					// Only make the particles separate back behind the nozzle, not in front. This is to avoid silly penetration firings
 					particlePos = tempNozzle + (roundVel.GetNormalized() * (-RandomNum()) * pRound->GetSeparation());
 					pParticle->SetPos(m_Pos + particlePos);
+					// Inherit firearm's prev pos so the bullet doesn't snap to the firearm's sim pos while the firearm renders interpolated forward.
+					pParticle->SetPrevPos(GetPrevPos() + particlePos);
 
 					particleVel = roundVel;
 					particleSpread = m_ParticleSpreadRange * RandomNormalNum();
@@ -805,6 +807,7 @@ void HDFirearm::Update() {
 					shellSpread = m_ShellSpreadRange * RandomNormalNum();
 					tempEject.DegRotate(degAimAngle + shellSpread);
 					pShell->SetPos(m_Pos + tempEject);
+					pShell->SetPrevPos(GetPrevPos() + tempEject);
 
 					// ##@#@@$ TEMP
 					shellVel.SetXY(pRound->GetShellVel() * (1.0F - RandomNum(0.0F, m_ShellVelVariation)), 0);
@@ -1056,9 +1059,12 @@ void HDFirearm::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whic
 	sharpLength -= static_cast<float>(pointSpacing * pointCount) * 0.5F;
 	Vector muzzleOffset(std::max(m_MuzzleOff.m_X, m_SpriteRadius), m_MuzzleOff.m_Y);
 
+	Vector currentPos = GetRenderPos();
+	Matrix renderRot = GetRenderRotMatrix();
+
 	for (int i = 0; i < pointCount; ++i) {
 		Vector aimPoint(sharpLength + static_cast<float>(pointSpacing * i), 0);
-		aimPoint = RotateOffset(aimPoint + muzzleOffset) + m_Pos;
+		aimPoint = (aimPoint + muzzleOffset).GetXFlipped(m_HFlipped) * renderRot + currentPos;
 
 		g_PostProcessMan.RegisterGlowDotEffect(aimPoint, YellowDot, glowStrength);
 		aimPoint -= targetPos;

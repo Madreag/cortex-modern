@@ -961,6 +961,7 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 
 				float radius = std::sqrt(static_cast<float>(count - i));
 				gibParticleClone->SetPos(m_Pos + rotatedGibOffset);
+				gibParticleClone->SetPrevPos(GetPrevPos() + rotatedGibOffset);
 				gibParticleClone->SetHFlipped(m_HFlipped);
 				Vector gibVelocity(radius * scale + minVelocity, 0);
 				gibVelocity.RadRotate(randAngle + RandomNum(0.0F, spread) + static_cast<float>(i) * goldenAngle);
@@ -1010,6 +1011,7 @@ void MOSRotating::CreateGibsWhenGibbing(const Vector& impactImpulse, MovableObje
 				}
 
 				gibParticleClone->SetPos(m_Pos + rotatedGibOffset);
+				gibParticleClone->SetPrevPos(GetPrevPos() + rotatedGibOffset);
 				gibParticleClone->SetHFlipped(m_HFlipped);
 				Vector gibVelocity = Vector(minVelocity + RandomNum(0.0F, velocityRange), 0.0F);
 
@@ -1173,8 +1175,6 @@ void MOSRotating::RestDetection() {
 			m_ToSettle = false;
 		}
 	}
-	m_PrevRotation = m_Rotation;
-	m_PrevAngVel = m_AngularVel;
 }
 
 bool MOSRotating::IsAtRest() {
@@ -1294,6 +1294,36 @@ bool MOSRotating::DeepCheck(bool makeMOPs, int skipMOP, int maxMOPs) {
 	}
 
 	return false;
+}
+
+void MOSRotating::SetPos(const Vector& newPos) {
+	MovableObject::SetPos(newPos);
+	// Refresh attachables to the new joint-relative positions and recursively snap every node's m_PrevPos so the
+	// render lerp does not drag the limb tree in from pre-teleport locations on the next frame.
+	CorrectAttachableAndWoundPositionsAndRotations();
+	SnapAttachableTreePrevPositions();
+}
+
+void MOSRotating::SnapAttachableTreePrevPositions() {
+	for (Attachable* attachable: m_Attachables) {
+		attachable->SetPrevPos(attachable->GetPos());
+		attachable->SnapAttachableTreePrevPositions();
+	}
+	for (Attachable* wound: m_Wounds) {
+		wound->SetPrevPos(wound->GetPos());
+		wound->SnapAttachableTreePrevPositions();
+	}
+}
+
+void MOSRotating::PreTravel() {
+	MOSprite::PreTravel();
+
+	m_PrevRotation = m_Rotation;
+	m_PrevAngVel = m_AngularVel;
+
+	for (Attachable* attachable: m_Attachables) {
+		attachable->PreTravel();
+	}
 }
 
 void MOSRotating::Travel() {
@@ -1613,6 +1643,23 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 	RTEAssert(!m_aSprite.empty(), "No sprite bitmaps loaded to draw!");
 	RTEAssert(m_Frame >= 0 && m_Frame < m_FrameCount, "Frame is out of bounds!");
 
+	// Sim-bound modes (MOID, material baking, door material) must match sim pos/rotation; visual modes lerp.
+	const bool simBoundMode = mode == g_DrawMOID || mode == g_DrawMaterial || mode == g_DrawDoor;
+	const float fLerp = simBoundMode ? 1.0f : g_TimerMan.GetSimUpdateProportion();
+	Matrix currentRotation = Lerp(GetPrevRotMatrix(), GetRotMatrix(), fLerp);
+	Vector currentPos = Lerp(GetPrevPos(), GetPos(), fLerp);
+	Vector spritePos(currentPos - targetPos);
+
+	if (pTargetBitmap) {
+		// Don't bother drawing at all if this is out of bounds
+		const Vector corner = Vector(m_SpriteRadius, m_SpriteRadius) * m_Scale;
+		const Box spriteBounds(spritePos - corner, spritePos + corner);
+		const Box targetBounds(Vector(0, 0), Vector(pTargetBitmap->w, pTargetBitmap->h));
+		if (!spriteBounds.IntersectsBox(targetBounds)) {
+			return;
+		}
+	}
+
 	// Only draw MOID if this has a valid MOID assigned to it
 	if (mode == g_DrawMOID && m_MOID == g_NoMOID) {
 		return;
@@ -1642,8 +1689,6 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 	BITMAP* pTempBitmap = m_pTempBitmap;
 	BITMAP* pFlipBitmap = m_pFlipBitmap;
 	int keyColor = g_MaskColor;
-
-	Vector spritePos(m_Pos.GetRounded() - targetPos);
 
 	if (m_Recoiled) {
 		spritePos += m_RecoilOffset;
@@ -1725,7 +1770,7 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 				DrawTexturePro(m_aSprite[m_Frame],
 					{0.0f, 0.0f, -1.0f * m_aSprite[m_Frame]->w, static_cast<float>(m_aSprite[m_Frame]->h)},
 					{aDrawPos[i].m_X, aDrawPos[i].m_Y, static_cast<float>(m_aSprite[m_Frame]->w), static_cast<float>(m_aSprite[m_Frame]->h)},
-					{m_aSprite[m_Frame]->w + m_SpriteOffset.m_X , -m_SpriteOffset.m_Y}, m_Rotation.GetRadAngle(), {255, 255, 255, g_FrameMan.GetCurrentAlpha()});
+					{m_aSprite[m_Frame]->w + m_SpriteOffset.m_X , -m_SpriteOffset.m_Y}, currentRotation.GetRadAngle(), {255, 255, 255, g_FrameMan.GetCurrentAlpha()});
 				g_SceneMan.RegisterDrawing(pTargetBitmap, g_NoMOID, spriteX, spriteY, spriteX + pTempBitmap->w, spriteY + pTempBitmap->h);
 			}
 		} else {
@@ -1739,7 +1784,7 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 				}
 
 				// Take into account the h-flipped pivot point
-				pivot_scaled_sprite(pTargetBitmap, pFlipBitmap, spriteX, spriteY, pFlipBitmap->w + m_SpriteOffset.GetFloorIntX(), -(m_SpriteOffset.GetFloorIntY()), ftofix(m_Rotation.GetAllegroAngle()), ftofix(m_Scale));
+				pivot_scaled_sprite(pTargetBitmap, pFlipBitmap, spriteX, spriteY, pFlipBitmap->w + m_SpriteOffset.GetFloorIntX(), -(m_SpriteOffset.GetFloorIntY()), ftofix(currentRotation.GetAllegroAngle()), ftofix(m_Scale));
 			}
 		}
 	} else {
@@ -1750,7 +1795,7 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 				DrawTexturePro(m_aSprite[m_Frame],
 					{0.0f, 0.0f, static_cast<float>(m_aSprite[m_Frame]->w), static_cast<float>(m_aSprite[m_Frame]->h)},
 					{aDrawPos[i].m_X, aDrawPos[i].m_Y, static_cast<float>(m_aSprite[m_Frame]->w), static_cast<float>(m_aSprite[m_Frame]->h)},
-					-m_SpriteOffset, m_Rotation.GetRadAngle(), {255, 255, 255, g_FrameMan.GetCurrentAlpha()});
+					-m_SpriteOffset, currentRotation.GetRadAngle(), {255, 255, 255, g_FrameMan.GetCurrentAlpha()});
 				int spriteX = aDrawPos[i].GetFloorIntX() - (pTempBitmap->w / 2);
 				int spriteY = aDrawPos[i].GetFloorIntY() - (pTempBitmap->h / 2);
 				g_SceneMan.RegisterDrawing(pTargetBitmap, g_NoMOID, spriteX, spriteY, spriteX + pTempBitmap->w, spriteY + pTempBitmap->h);
@@ -1764,7 +1809,7 @@ void MOSRotating::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode 
 					continue;
 				}
 
-				pivot_scaled_sprite(pTargetBitmap, mode == g_DrawColor ? m_aSprite[m_Frame] : pTempBitmap, spriteX, spriteY, -m_SpriteOffset.GetFloorIntX(), -m_SpriteOffset.GetFloorIntY(), ftofix(m_Rotation.GetAllegroAngle()), ftofix(m_Scale));
+				pivot_scaled_sprite(pTargetBitmap, mode == g_DrawColor ? m_aSprite[m_Frame] : pTempBitmap, spriteX, spriteY, -m_SpriteOffset.GetFloorIntX(), -m_SpriteOffset.GetFloorIntY(), ftofix(currentRotation.GetAllegroAngle()), ftofix(m_Scale));
 			}
 		}
 	}

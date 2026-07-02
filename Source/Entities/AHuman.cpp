@@ -419,6 +419,13 @@ Vector AHuman::GetCPUPos() const {
 	return m_Pos;
 }
 
+Vector AHuman::GetRenderCPUPos() const {
+	if (m_pHead && m_pHead->IsAttached())
+		return GetRenderPos() + ((m_pHead->GetParentOffset().GetXFlipped(m_HFlipped) * GetRenderRotMatrix()) * 1.5);
+
+	return GetRenderPos();
+}
+
 Vector AHuman::GetEyePos() const {
 	if (m_pHead && m_pHead->IsAttached()) {
 		return m_Pos + m_pHead->GetParentOffset() * 1.2F;
@@ -1823,7 +1830,7 @@ void AHuman::UpdateCrouching() {
 		}
 	}
 
-	float finalWalkPathYOffset = std::clamp(Lerp(0.0F, 1.0F, -m_WalkPathOffset.m_Y, desiredWalkPathYOffset, 0.3F), 0.0F, m_MaxWalkPathCrouchShift);
+	float finalWalkPathYOffset = std::clamp(Lerp(-m_WalkPathOffset.m_Y, desiredWalkPathYOffset, 0.3F), 0.0F, m_MaxWalkPathCrouchShift);
 	m_CrouchAmount = std::clamp(finalWalkPathYOffset / (m_MaxWalkPathCrouchShift - 0.1f), 0.0F, 1.0F); // because it's lerped, it never hits 1 exactly. thus the -0.1F
 	m_WalkPathOffset.m_Y = -finalWalkPathYOffset;
 
@@ -1840,7 +1847,7 @@ void AHuman::UpdateLimbPathSpeed() {
 		
 		// If crouching, move at reduced speed
 		if (m_MovementState == WALK) {
-			travelSpeedMultiplier *= Lerp(0.0F, 1.0F, 1.0F, m_CrouchWalkSpeedMultiplier, m_CrouchAmount);
+			travelSpeedMultiplier *= Lerp(1.0F, m_CrouchWalkSpeedMultiplier, m_CrouchAmount);
 		}
 
 		// If we're moving slowly horizontally, move at reduced speed (otherwise our legs kick about wildly as we're not yet up to speed)
@@ -2910,7 +2917,7 @@ void AHuman::Update() {
 				// In crouch state the above is rotated already, but in any other state we do the incremental lean here
 				float crouchAngleAdjust = m_HFlipped ? -m_RotAngleTargets[CROUCH] : m_RotAngleTargets[CROUCH];
 				float difference = crouchAngleAdjust - rotTarget;
-				rotTarget += Lerp(0.0F, 1.0F, 0.0F, difference, m_CrouchAmount);
+				rotTarget += Lerp(0.0F, difference, m_CrouchAmount);
 			}
 			
 			float rotDiff = rot - rotTarget;
@@ -3105,24 +3112,25 @@ void AHuman::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 		            m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->HoldsHeldDevice())
 		            m_pFGArm->GetHeldDevice()->DrawHUD(pTargetBitmap, targetPos, whichScreen);*/
 
-		Vector drawPos = m_Pos - targetPos;
+		Vector currentPos = GetRenderPos();
+		Vector drawPos(currentPos - targetPos);
 
 		// Adjust the draw position to work if drawn to a target screen bitmap that is straddling a scene seam
 		if (!targetPos.IsZero()) {
 			// Spans vertical scene seam
 			int sceneWidth = g_SceneMan.GetSceneWidth();
 			if (g_SceneMan.SceneWrapsX() && pTargetBitmap->w < sceneWidth) {
-				if ((targetPos.m_X < 0) && (m_Pos.m_X > (sceneWidth - pTargetBitmap->w)))
+				if ((targetPos.m_X < 0) && (currentPos.m_X > (sceneWidth - pTargetBitmap->w)))
 					drawPos.m_X -= sceneWidth;
-				else if (((targetPos.m_X + pTargetBitmap->w) > sceneWidth) && (m_Pos.m_X < pTargetBitmap->w))
+				else if (((targetPos.m_X + pTargetBitmap->w) > sceneWidth) && (currentPos.m_X < pTargetBitmap->w))
 					drawPos.m_X += sceneWidth;
 			}
 			// Spans horizontal scene seam
 			int sceneHeight = g_SceneMan.GetSceneHeight();
 			if (g_SceneMan.SceneWrapsY() && pTargetBitmap->h < sceneHeight) {
-				if ((targetPos.m_Y < 0) && (m_Pos.m_Y > (sceneHeight - pTargetBitmap->h)))
+				if ((targetPos.m_Y < 0) && (currentPos.m_Y > (sceneHeight - pTargetBitmap->h)))
 					drawPos.m_Y -= sceneHeight;
-				else if (((targetPos.m_Y + pTargetBitmap->h) > sceneHeight) && (m_Pos.m_Y < pTargetBitmap->h))
+				else if (((targetPos.m_Y + pTargetBitmap->h) > sceneHeight) && (currentPos.m_Y < pTargetBitmap->h))
 					drawPos.m_Y += sceneHeight;
 			}
 		}
