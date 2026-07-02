@@ -222,6 +222,11 @@ namespace RTE {
 			s_Args.selftestInventoryCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-buy-command") {
+			// Arm the funds grant + real buy order through CreateDelivery. Boolean flag.
+			s_Args.selftestBuyCommand = true;
+			return 1;
+		}
 		return 0;
 	}
 

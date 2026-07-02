@@ -813,6 +813,30 @@ void RunGameLoop() {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, op});
 				}
 			}
+			// E2E control: the host grants funds then places a REAL buy order through GameActivity::CreateDelivery,
+			// exercising the confirm seam -> wire -> queued arrival -> identical funds deduction on both peers.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBuyCommand) {
+				if (simTick == 50) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetTeamFunds{0, 5000}});
+				} else if (simTick == 80) {
+					if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
+						const SceneObject* craft = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+						const SceneObject* dummy = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
+						if (craft && dummy) {
+							gameActivity->AddOverridePurchase(craft, 0);
+							gameActivity->AddOverridePurchase(dummy, 0);
+							gameActivity->AddOverridePurchase(dummy, 0);
+							gameActivity->SetLandingZone(Vector(900.0F, 0.0F), 0);
+							const bool ordered = gameActivity->CreateDelivery(0);
+							std::cout << "[net-match-service-e2e] buy order placed: " << (ordered ? "ok" : "FAILED") << std::endl;
+						}
+					}
+				} else if (simTick == 700) {
+					if (const Activity* activity = g_ActivityMan.GetActivity()) {
+						std::cout << "[net-match-service-e2e] team 0 funds at tick 700: " << activity->GetTeamFunds(0) << std::endl;
+					}
+				}
+			}
 			// E2E control: host scuttles the delivered craft at tick 100; both peers must gib it identically.
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestScuttleCommand && simTick == 100) {
 				if (const int64_t craftUID = g_MovableMan.GetFirstCraftUniqueID(0)) {
