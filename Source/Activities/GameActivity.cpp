@@ -11,6 +11,7 @@
 #include "ConsoleMan.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
+#include "ScenarioRunner.h"
 #include "DataModule.h"
 #include "PostProcessMan.h"
 #include "Controller.h"
@@ -1691,7 +1692,8 @@ void GameActivity::Update() {
 		}
 
 		// After a while of game over, change messages to the final one for everyone
-		if (m_ActivityState == ActivityState::Over && m_GameOverTimer.IsPastRealMS(m_GameOverPeriod)) {
+		// A lockstep match ends on the shared sim clock instead, so skip this local real-time exit.
+		if (m_ActivityState == ActivityState::Over && !ScenarioRunner::IsLockstepControllerSyncActive() && m_GameOverTimer.IsPastRealMS(m_GameOverPeriod)) {
 			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 			// g_FrameMan.SetScreenText("Press [Esc] to leave the battlefield", ScreenOfPlayer(player), 750);
 			g_FrameMan.SetScreenText("Press [SPACE] or [START] to continue!", ScreenOfPlayer(player), 750);

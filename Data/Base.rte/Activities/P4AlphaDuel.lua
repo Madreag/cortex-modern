@@ -44,3 +44,43 @@ function P4AlphaDuel:StartActivity()
 		end
 	end
 end
+
+function P4AlphaDuel:UpdateActivity()
+	if self.ActivityState ~= Activity.RUNNING then
+		return;
+	end
+	-- The win check reads only team-level sim state; player bindings differ per peer in a net match.
+	self.TeamHadBrain = self.TeamHadBrain or {};
+	local liveBrains = {};
+	for _, team in ipairs({Activity.TEAM_1, Activity.TEAM_2}) do
+		liveBrains[team] = MovableMan:GetFirstBrainActor(team) ~= nil and 1 or 0;
+		if liveBrains[team] > 0 then
+			self.TeamHadBrain[team] = true;
+		end
+	end
+	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
+		if self:PlayerActive(player) and self:PlayerHuman(player) then
+			local team = self:GetTeamOfPlayer(player);
+			if self.TeamHadBrain[team] and liveBrains[team] < 1 then
+				self:ResetMessageTimer(player);
+				local screen = self:ScreenOfPlayer(player);
+				FrameMan:ClearScreenText(screen);
+				FrameMan:SetScreenText("Your brain has been destroyed!", screen, 2000, -1, false);
+			end
+		end
+	end
+	-- A team is out only once a brain it HAD is gone; newly queued spawns aren't residents yet.
+	local teamOneOut = self.TeamHadBrain[Activity.TEAM_1] and liveBrains[Activity.TEAM_1] < 1;
+	local teamTwoOut = self.TeamHadBrain[Activity.TEAM_2] and liveBrains[Activity.TEAM_2] < 1;
+	if teamOneOut and not teamTwoOut and self.TeamHadBrain[Activity.TEAM_2] then
+		self.WinnerTeam = Activity.TEAM_2;
+		MovableMan:KillAllEnemyActors(self.WinnerTeam);
+		ActivityMan:EndActivity();
+	elseif teamTwoOut and not teamOneOut and self.TeamHadBrain[Activity.TEAM_1] then
+		self.WinnerTeam = Activity.TEAM_1;
+		MovableMan:KillAllEnemyActors(self.WinnerTeam);
+		ActivityMan:EndActivity();
+	elseif teamOneOut and teamTwoOut then
+		ActivityMan:EndActivity();
+	end
+end

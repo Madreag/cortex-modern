@@ -658,6 +658,18 @@ void RunMenuLoop() {
 }
 
 /// <summary>
+/// Local-perspective result text for a finished network match.
+/// </summary>
+static std::string BuildNetMatchResultText() {
+	const GameActivity* gameActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+	const int winnerTeam = gameActivity ? gameActivity->GetWinnerTeam() : Activity::NoTeam;
+	if (winnerTeam == Activity::NoTeam) {
+		return "Match over: draw";
+	}
+	return winnerTeam == g_NetMatchService.GetLocalTeam() ? "Victory!" : "Defeat";
+}
+
+/// <summary>
 /// Game simulation loop.
 /// </summary>
 void RunGameLoop() {
@@ -685,7 +697,7 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool serverUpdated = false;
-		bool returnToMenuAfterNetworkError = false;
+		bool returnToMenuAfterNetworkEnd = false;
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
 		PollSDLEvents();
@@ -793,9 +805,18 @@ void RunGameLoop() {
 							s_netMatchServiceE2EExitCode = 1;
 							System::SetQuit(true);
 						} else {
-							returnToMenuAfterNetworkError = true;
+							returnToMenuAfterNetworkEnd = true;
 						}
 					}
+					} else if (!s_netMatchServiceE2E && error.rfind("Complete:", 0) == 0 && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+						// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
+						const std::string result = BuildNetMatchResultText();
+						g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+						g_NetMatchService.FinishMatch(result);
+						g_ActivityMan.EndActivity();
+						g_ActivityMan.SetInActivity(false);
+						ScenarioRunner::ClearControllerReplayError();
+						returnToMenuAfterNetworkEnd = true;
 				}
 				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 				g_UInputMan.EndFrame();
@@ -883,6 +904,32 @@ void RunGameLoop() {
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
 					g_ActivityMan.EndActivity();
+			// Interactive menu-launched match: end it when the activity is over. The win condition and
+			// this tick window are sim-state, so both peers finish on the same tick without a timeout.
+			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && !s_recordTickHashes && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				static uint64_t s_matchOverTick = UINT64_MAX;
+				const Activity* matchActivity = g_ActivityMan.GetActivity();
+				if (matchActivity && matchActivity->IsOver()) {
+					const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					if (s_matchOverTick == UINT64_MAX) {
+						s_matchOverTick = nowTick;
+					}
+					const uint64_t graceTicks = static_cast<uint64_t>(5.0f / g_TimerMan.GetDeltaTimeSecs());
+					if (nowTick - s_matchOverTick >= graceTicks) {
+						s_matchOverTick = UINT64_MAX;
+						const std::string result = BuildNetMatchResultText();
+						g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+						g_NetMatchService.FinishMatch(result);
+						g_ActivityMan.EndActivity();
+						g_ActivityMan.SetInActivity(false);
+						returnToMenuAfterNetworkEnd = true;
+						break;
+					}
+				} else {
+					s_matchOverTick = UINT64_MAX;
+				}
+			}
+
 					System::SetQuit(true);
 					break;
 				}
@@ -930,7 +977,7 @@ void RunGameLoop() {
 			}
 		}
 
-		if (returnToMenuAfterNetworkError && !System::IsSetToQuit()) {
+		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
 			if (!g_ActivityMan.ActivitySetToRestart()) {
 				g_MenuMan.HandleTransitionIntoMenuLoop();
