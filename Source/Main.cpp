@@ -1056,6 +1056,9 @@ void RunGameLoop() {
 			// it overlapped with LateUpdateGlobalScripts on main, opening a window for ABBA between main holding one
 			// state for the global script and a worker GC __gc finalizer wanting it from another state.
 			g_LuaMan.StartAsyncGarbageCollection();
+			// Join before leaving the tick: an unfinished GC races the next tick's Lua for the state
+			// mutexes, so collection timing (and per-peer sim state) would follow wall-clock scheduling.
+			g_LuaMan.WaitForAsyncGarbageCollection();
 
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
