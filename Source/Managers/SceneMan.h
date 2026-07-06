@@ -948,6 +948,28 @@ namespace RTE {
 		/// @param screenId Which screen to update for. (default: 0)
 		void Update(int screenId = 0);
 
+		/// Records one terrain-mutation event into the env-gated in-memory trace
+		/// (CC_TERRAIN_EVENTS=<from>:<to>), for host-vs-client divergence forensics.
+		static void TraceTerrainEvent(const char* tag, int x, int y, int a = 0, int b = 0, int c = 0);
+
+		/// Tags subsequent terrain events with the traveling MO's UniqueID. Serial travel; main thread only.
+		static void SetTerrainEventContext(long uid);
+
+		/// Gets the current terrain event context UID.
+		static long GetTerrainEventContext();
+
+		/// Whether the UID is in the CC_TRACK_UID list (empty list tracks nothing).
+		static bool IsTrackedUID(long uid);
+
+		/// The CC_TRACK_UID list itself (empty when unset).
+		static const std::vector<long>& GetTrackedUIDs();
+
+		/// Writes the collected terrain events to the given path. Keeps them for later flushes.
+		static void FlushTerrainEvents(const std::string& filePath);
+
+		/// Flushes the terrain events once when the trace window has passed.
+		static void FlushTerrainEventsAtWindowEnd(uint64_t simTick, const std::string& filePath);
+
 		/// Draws this SceneMan's current graphical representation to a BITMAP of choice.
 		/// @param targetBitmap A pointer to a BITMAP to draw on, appropriately sized for the split screen segment.
 		/// @param targetGUIBitmap The offset into the scene where the target bitmap's upper left corner is located.

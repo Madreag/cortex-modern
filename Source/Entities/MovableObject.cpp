@@ -1,5 +1,7 @@
 #include "MovableObject.h"
 
+#include <bit>
+
 #include "ActivityMan.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
@@ -747,7 +749,15 @@ void MovableObject::AddAbsImpulseForce(const Vector& impulse, const Vector& absP
 #ifndef RELEASE_BUILD
 	RTEAssert(impulse.GetLargest() < 500000, "HUEG IMPULSE FORCE");
 #endif
+	TraceImpulseForTrackedMO(m_UniqueID, impulse, g_SceneMan.ShortestDistance(m_Pos, absPos) * c_MPP);
 	m_ImpulseForces.push_back(std::make_pair(impulse, g_SceneMan.ShortestDistance(m_Pos, absPos) * c_MPP));
+}
+
+void RTE::TraceImpulseForTrackedMO(long uid, const Vector& impulse, const Vector& offset) {
+	if (!SceneMan::IsTrackedUID(uid)) {
+		return;
+	}
+	SceneMan::TraceTerrainEvent("aimp", std::bit_cast<int32_t>(impulse.m_X), std::bit_cast<int32_t>(impulse.m_Y), std::bit_cast<int32_t>(offset.m_X), static_cast<int>(SceneMan::GetTerrainEventContext()), static_cast<int>(uid));
 }
 
 void MovableObject::RestDetection() {
@@ -1081,6 +1091,7 @@ bool MovableObject::DrawToTerrain(SLTerrain* terrain) {
 	}
 	// Settling bakes into sim terrain; the deposit must land at the sim pose on every peer, not the frame-timed lerp.
 	SnapRenderPoseToSim();
+	SceneMan::TraceTerrainEvent("bake", m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), static_cast<int>(m_UniqueID));
 	if (dynamic_cast<MOSprite*>(this)) {
 		auto wrappedMaskedBlit = [](BITMAP* sourceBitmap, BITMAP* destinationBitmap, const Vector& bitmapPos, bool swapSourceWithDestination) {
 			std::array<BITMAP*, 2> bitmaps = {sourceBitmap, destinationBitmap};

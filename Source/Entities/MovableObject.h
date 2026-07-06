@@ -26,6 +26,9 @@ namespace RTE {
 	class SLTerrain;
 	class LuaStateWrapper;
 
+	/// Env-gated (CC_TRACK_UID) impulse trace for the desync forensics; no-op otherwise.
+	void TraceImpulseForTrackedMO(long uid, const Vector& impulse, const Vector& offset);
+
 	/// A movable object with mass.
 	class MovableObject : public SceneObject {
 
@@ -652,6 +655,7 @@ namespace RTE {
 			RTEAssert(impulse.MagnitudeIsLessThan(500000.0F), "HUEG IMPULSE FORCE");
 			RTEAssert(offset.MagnitudeIsLessThan(5000.0F), "HUGE IMPULSE FORCE OFFSET");
 #endif
+			TraceImpulseForTrackedMO(m_UniqueID, impulse, offset);
 			m_ImpulseForces.push_back({impulse, offset});
 		}
 

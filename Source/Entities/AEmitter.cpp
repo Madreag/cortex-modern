@@ -366,6 +366,8 @@ void AEmitter::SetFlash(Attachable* newFlash) {
 void AEmitter::Update() {
 	Attachable::PreUpdate();
 
+	SceneMan::SetTerrainEventContext(static_cast<long>(GetUniqueID()));
+
 	if (m_FrameCount > 1) {
 		if (m_EmitEnabled && m_SpriteAnimMode == NOANIM) {
 			m_SpriteAnimMode = ALWAYSLOOP;

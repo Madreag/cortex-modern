@@ -86,6 +86,9 @@
 #endif
 
 #include <algorithm>
+#include <bit>
+#include <cfloat>
+#include <immintrin.h>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -728,21 +731,101 @@ static bool TerrainDumpArmed() {
 
 // CC_TICK_PROBE=1 appends one counts+RNG line per tick beside the -out trace; light enough not to
 // disturb the pacing the desync hunt depends on.
+// CC_TICK_PROBE_BOX=<x1>:<y1>:<x2>:<y2> adds per-tick FNV hashes of the boxed terrain mat+fg bytes.
+static uint64_t BoxedTerrainHash(BITMAP* bitmap, int x1, int y1, int x2, int y2) {
+	uint64_t hash = 1469598103934665603ULL;
+	if (!bitmap) {
+		return hash;
+	}
+	x1 = std::max(0, x1);
+	y1 = std::max(0, y1);
+	x2 = std::min(bitmap->w - 1, x2);
+	y2 = std::min(bitmap->h - 1, y2);
+	for (int y = y1; y <= y2; ++y) {
+		for (int x = x1; x <= x2; ++x) {
+			hash = (hash ^ static_cast<uint64_t>(bitmap->line[y][x])) * 1099511628211ULL;
+		}
+	}
+	return hash;
+}
+
 static void TickProbeIfArmed(uint64_t simTick) {
 	static std::ofstream s_out;
 	static int s_state = 0;
+	static int s_box[4] = {0, 0, -1, -1};
+	static bool s_boxArmed = false;
 	if (s_state == 0) {
 		s_state = std::getenv("CC_TICK_PROBE") ? 1 : -1;
 		if (s_state == 1) {
 			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
 			s_out.open(base + ".tickprobe.txt", std::ios::trunc);
+			if (const char* boxEnv = std::getenv("CC_TICK_PROBE_BOX")) {
+				s_boxArmed = std::sscanf(boxEnv, "%d:%d:%d:%d", &s_box[0], &s_box[1], &s_box[2], &s_box[3]) == 4;
+			}
 		}
 	}
 	if (s_state != 1 || !s_out.is_open()) {
 		return;
 	}
 	const std::string rngState = g_SimRNG.SerializeStateForHashing();
-	s_out << simTick << " a=" << g_MovableMan.GetActorCount() << " p=" << g_MovableMan.GetParticleCount() << " rng=" << std::hash<std::string>{}(rngState) << "\n";
+	s_out << simTick << " a=" << g_MovableMan.GetActorCount() << " p=" << g_MovableMan.GetParticleCount() << " rng=" << std::hash<std::string>{}(rngState);
+	if (s_boxArmed && g_SceneMan.GetScene() && g_SceneMan.GetScene()->GetTerrain()) {
+		s_out << " tm=" << std::hex
+		      << BoxedTerrainHash(g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap(), s_box[0], s_box[1], s_box[2], s_box[3])
+		      << " tf=" << BoxedTerrainHash(g_SceneMan.GetScene()->GetTerrain()->GetFGColorBitmap(), s_box[0], s_box[1], s_box[2], s_box[3])
+		      << std::dec;
+	}
+	s_out << "\n";
+}
+
+// CC_TRACK_UID=<uid>[,<uid>...] appends per-tick bit-exact pose/vel/rest rows for those MOs into the
+// terrain event trace (tags trk/trk2); in-memory, so it keeps the pacing the desync hunt depends on.
+static void TrackUidsIfArmed(uint64_t simTick) {
+	static std::vector<long> s_uids;
+	static int s_state = 0;
+	if (s_state == 0) {
+		s_state = -1;
+		if (const char* env = std::getenv("CC_TRACK_UID")) {
+			const std::string list(env);
+			size_t start = 0;
+			while (start < list.size()) {
+				size_t end = list.find(',', start);
+				if (end == std::string::npos) {
+					end = list.size();
+				}
+				const long uid = std::strtol(list.substr(start, end - start).c_str(), nullptr, 10);
+				if (uid > 0) {
+					s_uids.push_back(uid);
+				}
+				start = end + 1;
+			}
+			if (!s_uids.empty()) {
+				s_state = 1;
+			}
+		}
+	}
+	if (s_state != 1) {
+		return;
+	}
+	// One FP-state row per tick: a driver flipping MXCSR (FTZ/DAZ) mid-run would fork denormal math.
+	SceneMan::TraceTerrainEvent("fpu", static_cast<int32_t>(_mm_getcsr()), static_cast<int32_t>(_control87(0, 0)), 0, 0, 0);
+	for (long uid: s_uids) {
+		const MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
+		if (!mo) {
+			continue;
+		}
+		const auto bits = [](float value) { return std::bit_cast<int32_t>(value); };
+		SceneMan::TraceTerrainEvent("trk", bits(mo->GetPos().m_X), bits(mo->GetPos().m_Y), bits(mo->GetVel().m_X), bits(mo->GetVel().m_Y), static_cast<int>(uid));
+		float rotAngle = 0.0F;
+		float angVel = 0.0F;
+		if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
+			rotAngle = sprite->GetRotAngle();
+			angVel = sprite->GetAngularVel();
+		}
+		SceneMan::TraceTerrainEvent("trk2", bits(rotAngle), bits(angVel), static_cast<int>(mo->GetRestTimerElapsedSimMS()), mo->GetVelOscillations(), static_cast<int>(uid));
+		const int flags = (mo->GetsHitByMOs() ? 1 : 0) | (mo->IgnoresAtomGroupHits() ? 2 : 0) | (mo->GetTraveling() ? 4 : 0) | (mo->ToSettle() ? 8 : 0) | (mo->ToDelete() ? 16 : 0) | (mo->HitsMOs() ? 32 : 0);
+		SceneMan::TraceTerrainEvent("trk3", flags, bits(mo->GetPrevPos().m_X), bits(mo->GetPrevPos().m_Y), 0, static_cast<int>(uid));
+	}
 }
 
 // One-shot per-MO state dump for the Desync stop; pacing-neutral, unlike the per-tick CC_SIM_DUMP.
@@ -996,9 +1079,13 @@ void RunGameLoop() {
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
 				const std::string error = ScenarioRunner::GetControllerReplayError();
-				if (TerrainDumpArmed() && error.find("Desync") != std::string::npos) {
-					DumpTerrainNow("desync");
-					DumpSimStateNow("desync");
+				if (error.find("Desync") != std::string::npos) {
+					if (TerrainDumpArmed()) {
+						DumpTerrainNow("desync");
+						DumpSimStateNow("desync");
+					}
+					const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+					SceneMan::FlushTerrainEvents(base + ".desync.terrainevents.txt");
 				}
 				if (ScenarioRunner::IsActive()) {
 					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
@@ -1057,7 +1144,12 @@ void RunGameLoop() {
 
 			DumpSimStateIfArmed(simTick);
 			TickProbeIfArmed(simTick);
+			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
+			{
+				static const std::string s_wendPath = (!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".wend.terrainevents.txt";
+				SceneMan::FlushTerrainEventsAtWindowEnd(simTick, s_wendPath);
+			}
 
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
