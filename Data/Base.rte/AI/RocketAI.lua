@@ -132,7 +132,7 @@ function ThreadedUpdateAI(self)
 		end
 
 		if self.AIMode == Actor.AIMODE_DELIVER and self:IsInventoryEmpty() then
-			self.AIMode = Actor.AIMODE_RETURN;
+			self:RequestAIMode(Actor.AIMODE_RETURN);
 			self.DeliveryState = ACraft.LAUNCH;	-- Don't descend if we have nothing to deliver
 			self.LZpos.Y = -10000;	-- Go to orbit
 		else
@@ -147,7 +147,7 @@ function ThreadedUpdateAI(self)
 	elseif self.DeliveryState == ACraft.UNLOAD then
 		if self:IsInventoryEmpty() and self.AIMode ~= Actor.AIMODE_STAY then	-- Return to orbit if empty
 			if self.DoorTimer:IsPastSimMS(750) then	-- Pause before returning to orbit
-				self.AIMode = Actor.AIMODE_RETURN;
+				self:RequestAIMode(Actor.AIMODE_RETURN);
 				self.DeliveryState = ACraft.LAUNCH;
 				self.LZpos.Y = -10000;	-- Go to orbit
 				if self.HatchState == ACraft.OPEN then
@@ -295,6 +295,6 @@ function ThreadedUpdateAI(self)
 		self.StuckTimer:Reset();
 	-- If we are hopelessly stuck, self destruct through the scuttle sequence; a direct AI gib forks net peers
 	elseif self.AIMode == Actor.AIMODE_SCUTTLE or self.StuckTimer:IsPastSimMS(40000) then
-		self.AIMode = Actor.AIMODE_SCUTTLE;
+		self:RequestAIMode(Actor.AIMODE_SCUTTLE);
 	end
 end

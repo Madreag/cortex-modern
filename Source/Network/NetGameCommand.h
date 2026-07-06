@@ -16,6 +16,7 @@ namespace RTE {
 		ScuttleCraft = 4,
 		InventoryOp = 5,
 		PauseMatch = 6,
+		SetActorAIMode = 7,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -105,6 +106,16 @@ namespace RTE {
 		bool operator==(const NetGameInventoryOp&) const = default;
 	};
 
+	// Set an actor's AI mode from its owner. The AI decides per-machine (off-wire), but the mode is
+	// sim state the craft death gates read, so the write must land on both peers.
+	struct NetGameSetActorAIMode {
+		int64_t actorUID = 0;
+		int32_t team = 0;
+		uint8_t aiMode = 0;
+
+		bool operator==(const NetGameSetActorAIMode&) const = default;
+	};
+
 	// Pause or resume the match; both sims stop after the same synced frame and resume together
 	// after a shared null-tick countdown. Owner: any peer, issued for its own team.
 	struct NetGamePauseMatch {
@@ -114,7 +125,7 @@ namespace RTE {
 		bool operator==(const NetGamePauseMatch&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
