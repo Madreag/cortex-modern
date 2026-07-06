@@ -459,6 +459,9 @@ namespace RTE {
 		/// Updates the MOIDs of all current MOs.
 		void UpdateDrawMOIDs();
 
+		/// Starts the async MOID draw. Call only once main-thread sim mutation for the tick is done.
+		void StartMOIDDrawTask();
+
 		// Forces MOID drawing to complete (should be done before any physics sim or collision detection etc)
 		void CompleteQueuedMOIDDrawings();
 
