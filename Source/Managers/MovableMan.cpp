@@ -2404,10 +2404,9 @@ void MovableMan::Update() {
 
 	// GC kicked off from Main after LateUpdateGlobalScripts, when no more Lua runs on main this tick.
 
-	// Draw the MO matter and IDs to their layers for next frame
-	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
-		UpdateDrawMOIDs();
-	});
+	// The MOID draw task is kicked off from Main after LateUpdateGlobalScripts, once no more
+	// main-thread sim code can mutate MO state this tick; an earlier kick let the async draw
+	// read mid-mutation state, making the layer a per-peer wall-clock snapshot.
 
 	// Sort team rosters if necessary
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -2783,6 +2782,12 @@ void MovableMan::UpdateDrawMOIDs() {
 			}
 		}
 	}
+}
+
+void MovableMan::StartMOIDDrawTask() {
+	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
+		UpdateDrawMOIDs();
+	});
 }
 
 void MovableMan::CompleteQueuedMOIDDrawings() {

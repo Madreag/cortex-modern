@@ -1140,6 +1140,9 @@ void RunGameLoop() {
 
 			if (!lockstepPausedTick) {
 				g_ActivityMan.LateUpdateGlobalScripts();
+				// Kick the async MOID draw after the last main-thread sim mutation of the tick; it
+				// completes before the render frames below, which share draw scratch state with it.
+				g_MovableMan.StartMOIDDrawTask();
 			}
 
 			DumpSimStateIfArmed(simTick);
@@ -1175,6 +1178,10 @@ void RunGameLoop() {
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
 			g_PresetMan.ClearReloadEntityPresetCalledThisUpdate();
+
+			// The MOID draw must not overlap the render frames: both rotate sprites through shared
+			// scratch bitmaps, so an overlap corrupts the hit layer per-peer.
+			g_MovableMan.CompleteQueuedMOIDDrawings();
 
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
