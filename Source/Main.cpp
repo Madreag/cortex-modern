@@ -726,6 +726,25 @@ static bool TerrainDumpArmed() {
 	return s_armed;
 }
 
+// CC_TICK_PROBE=1 appends one counts+RNG line per tick beside the -out trace; light enough not to
+// disturb the pacing the desync hunt depends on.
+static void TickProbeIfArmed(uint64_t simTick) {
+	static std::ofstream s_out;
+	static int s_state = 0;
+	if (s_state == 0) {
+		s_state = std::getenv("CC_TICK_PROBE") ? 1 : -1;
+		if (s_state == 1) {
+			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+			s_out.open(base + ".tickprobe.txt", std::ios::trunc);
+		}
+	}
+	if (s_state != 1 || !s_out.is_open()) {
+		return;
+	}
+	const std::string rngState = g_SimRNG.SerializeStateForHashing();
+	s_out << simTick << " a=" << g_MovableMan.GetActorCount() << " p=" << g_MovableMan.GetParticleCount() << " rng=" << std::hash<std::string>{}(rngState) << "\n";
+}
+
 // One-shot per-MO state dump for the Desync stop; pacing-neutral, unlike the per-tick CC_SIM_DUMP.
 static void DumpSimStateNow(const std::string& suffix) {
 	const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
@@ -1037,6 +1056,7 @@ void RunGameLoop() {
 			}
 
 			DumpSimStateIfArmed(simTick);
+			TickProbeIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
 
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
