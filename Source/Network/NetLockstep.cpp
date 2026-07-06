@@ -359,6 +359,13 @@ namespace RTE {
 						AppendU32LE(out, static_cast<uint32_t>(scuttle.team));
 						break;
 					}
+					case NetGameCommandType::SetActorAIMode: {
+						const NetGameSetActorAIMode& setMode = std::get<NetGameSetActorAIMode>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(setMode.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(setMode.team));
+						AppendU8(out, setMode.aiMode);
+						break;
+					}
 					case NetGameCommandType::InventoryOp: {
 						const NetGameInventoryOp& inventoryOp = std::get<NetGameInventoryOp>(command.payload);
 						AppendU64LE(out, static_cast<uint64_t>(inventoryOp.actorUID));
@@ -597,6 +604,20 @@ namespace RTE {
 						scuttle.actorUID = static_cast<int64_t>(actorUID);
 						scuttle.team = static_cast<int32_t>(team);
 						command.payload = scuttle;
+						break;
+					}
+					case NetGameCommandType::SetActorAIMode: {
+						NetGameSetActorAIMode setMode;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "set_ai_mode_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "set_ai_mode_team") ||
+						    !ReadOrTruncated(reader.ReadU8(setMode.aiMode), reader, error, "set_ai_mode_mode")) {
+							return false;
+						}
+						setMode.actorUID = static_cast<int64_t>(actorUID);
+						setMode.team = static_cast<int32_t>(team);
+						command.payload = setMode;
 						break;
 					}
 					case NetGameCommandType::InventoryOp: {

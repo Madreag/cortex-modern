@@ -434,6 +434,14 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("NETWORK: scuttle command target not found: UID " + std::to_string(scuttle->actorUID));
 				std::cout << "[net-match] scuttle command target not found: UID " << scuttle->actorUID << std::endl;
 			}
+		} else if (const NetGameSetActorAIMode* setMode = std::get_if<NetGameSetActorAIMode>(&command.payload)) {
+			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(setMode->actorUID)));
+			if (actor && actor->GetTeam() == setMode->team && setMode->aiMode < Actor::AIMODE_COUNT) {
+				actor->SetAIMode(static_cast<Actor::AIMode>(setMode->aiMode));
+			} else {
+				g_ConsoleMan.PrintString("NETWORK: AI mode command target not found: UID " + std::to_string(setMode->actorUID));
+				std::cout << "[net-match] AI mode command target not found: UID " << setMode->actorUID << std::endl;
+			}
 		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
 			AHuman* human = dynamic_cast<AHuman*>(actor);

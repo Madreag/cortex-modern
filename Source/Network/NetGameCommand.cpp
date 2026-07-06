@@ -19,6 +19,8 @@ namespace RTE {
 				return NetGameCommandType::InventoryOp;
 			} else if constexpr (std::is_same_v<T, NetGamePauseMatch>) {
 				return NetGameCommandType::PauseMatch;
+			} else if constexpr (std::is_same_v<T, NetGameSetActorAIMode>) {
+				return NetGameCommandType::SetActorAIMode;
 			}
 		}, payload);
 	}
@@ -43,6 +45,8 @@ namespace RTE {
 				return "InventoryOp";
 			case NetGameCommandType::PauseMatch:
 				return "PauseMatch";
+			case NetGameCommandType::SetActorAIMode:
+				return "SetActorAIMode";
 		}
 		return "Unknown";
 	}

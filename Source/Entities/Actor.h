@@ -388,6 +388,10 @@ namespace RTE {
 		/// @param newMode The new AI mode. (default: AIMODE_SENTRY)
 		void SetAIMode(AIMode newMode = AIMODE_SENTRY) { m_AIMode = newMode; }
 
+		/// Sets this' AI mode through the lockstep wire when a net match is running, directly otherwise.
+		/// @param newMode The new AI mode.
+		void RequestAIMode(AIMode newMode);
+
 		/// Adds an absolute scene point to the list of waypoints this is going to
 		/// go to, in order
 		/// @param m_Waypoints.push_back(std::pair<Vector The new scene point this should try to get to after all other waypoints

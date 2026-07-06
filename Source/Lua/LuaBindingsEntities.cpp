@@ -196,6 +196,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Actor) {
 	    .property("SharpAimProgress", &Actor::GetSharpAimProgress)
 	    .property("Height", &Actor::GetHeight)
 	    .property("AIMode", &Actor::GetAIMode, &Actor::SetAIMode)
+	    .def("RequestAIMode", &Actor::RequestAIMode)
 	    .property("DeploymentID", &Actor::GetDeploymentID)
 	    .property("PassengerSlots", &Actor::GetPassengerSlots, &Actor::SetPassengerSlots)
 	    .property("Perceptiveness", &Actor::GetPerceptiveness, &Actor::SetPerceptiveness)

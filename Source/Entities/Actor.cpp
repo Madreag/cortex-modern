@@ -23,6 +23,8 @@
 #include "PerformanceMan.h"
 #include "PostProcessMan.h"
 #include "PieMenu.h"
+#include "ScenarioRunner.h"
+#include "NetGameCommand.h"
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
@@ -652,6 +654,19 @@ void Actor::RestDetection() {
 		m_VelOscillations = 0;
 		m_RestTimer.Reset();
 		m_ToSettle = false;
+	}
+}
+
+void Actor::RequestAIMode(AIMode newMode) {
+	if (m_AIMode == newMode) {
+		return;
+	}
+	// The AI decides per-machine, but the mode is sim state the craft death gates read, so under
+	// lockstep the write crosses the wire and lands on both peers at the same frame.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetActorAIMode{static_cast<int64_t>(GetUniqueID()), GetTeam(), static_cast<uint8_t>(newMode)}});
+	} else {
+		SetAIMode(newMode);
 	}
 }
 

@@ -178,7 +178,7 @@ function NativeDropShipAI:Update(Owner)
 			local Dist = SceneMan:ShortestDistance(Owner.Pos, self.Waypoint, false);
 			if Dist.Magnitude < 20 then
 				if Owner:GetWaypointListSize() == 0 then
-					Owner.AIMode = Actor.AIMODE_SENTRY;
+					Owner:RequestAIMode(Actor.AIMODE_SENTRY);
 					self.Waypoint = Owner.Pos;
 				else
 					Owner:ClearMovePath();
@@ -296,7 +296,7 @@ function NativeDropShipAI:Update(Owner)
 				Owner:OpenHatch();
 
 				if Owner.AIMode == Actor.AIMODE_BRAINHUNT and Owner:HasObjectInGroup("Brains") then
-					Owner.AIMode = Actor.AIMODE_RETURN;
+					Owner:RequestAIMode(Actor.AIMODE_RETURN);
 				else
 					self.DeliveryState = ACraft.FALL;
 				end
@@ -358,6 +358,6 @@ function NativeDropShipAI:Update(Owner)
 	if Owner.Vel.Largest > 3 or Owner.AIMode == Actor.AIMODE_STAY or Owner.AIMode == Actor.AIMODE_SENTRY or Owner.AIMode == Actor.AIMODE_GOTO then
 		self.StuckTimer:Reset();
 	elseif Owner.AIMode == Actor.AIMODE_SCUTTLE or self.StuckTimer:IsPastSimMS(40000) then
-		Owner.AIMode = Actor.AIMODE_SCUTTLE;
+		Owner:RequestAIMode(Actor.AIMODE_SCUTTLE);
 	end
 end
