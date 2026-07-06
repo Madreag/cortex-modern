@@ -525,8 +525,11 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 	auto dumpMO = [&](const char* kind, MovableObject* mo) {
 		out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
 		    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
+		    << " prev=" << mo->GetPrevPos().m_X << "," << mo->GetPrevPos().m_Y
 		    << " vel=" << mo->GetVel().m_X << "," << mo->GetVel().m_Y
-		    << " angvel=" << mo->GetAngularVel();
+		    << " angvel=" << mo->GetAngularVel()
+		    << " rest=" << mo->GetRestTimerElapsedSimMS() << std::defaultfloat
+		    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat;
 		if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
 			out << " rot=" << sprite->GetRotAngle();
 		}

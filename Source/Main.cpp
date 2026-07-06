@@ -726,6 +726,16 @@ static bool TerrainDumpArmed() {
 	return s_armed;
 }
 
+// One-shot per-MO state dump for the Desync stop; pacing-neutral, unlike the per-tick CC_SIM_DUMP.
+static void DumpSimStateNow(const std::string& suffix) {
+	const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::trunc);
+	if (out.is_open()) {
+		g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), out);
+		std::cout << "[sim-dump] " << suffix << " saved" << std::endl;
+	}
+}
+
 static void DumpTerrainIfArmed(uint64_t simTick) {
 	static uint64_t s_tick = 0;
 	static bool s_checked = false;
@@ -969,6 +979,7 @@ void RunGameLoop() {
 				const std::string error = ScenarioRunner::GetControllerReplayError();
 				if (TerrainDumpArmed() && error.find("Desync") != std::string::npos) {
 					DumpTerrainNow("desync");
+					DumpSimStateNow("desync");
 				}
 				if (ScenarioRunner::IsActive()) {
 					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
