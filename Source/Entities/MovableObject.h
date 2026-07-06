@@ -712,6 +712,10 @@ namespace RTE {
 		/// @return Whether this MO is marked for settling ontot the terrain or not.
 		bool ToSettle() const { return !m_MissionCritical && m_ToSettle; }
 
+		/// Forensic accessors for the CC_SIM_DUMP rest/settle fields.
+		double GetRestTimerElapsedSimMS() const { return m_RestTimer.GetElapsedSimTimeMS(); }
+		int GetVelOscillations() const { return m_VelOscillations; }
+
 		/// Indicates whether this MO is marked for deletion at the end of the
 		/// MovableMan update.
 		/// @return Whether this MO is marked for deletion or not.
