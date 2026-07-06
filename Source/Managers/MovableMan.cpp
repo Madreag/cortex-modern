@@ -29,6 +29,8 @@
 #include "LuaMan.h"
 #include "ThreadMan.h"
 
+#include <bit>
+
 #include "nlohmann/json.hpp"
 #include "tracy/Tracy.hpp"
 
@@ -1309,6 +1311,7 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 
 void MovableMan::AddParticle(MovableObject* particleToAdd) {
 	if (particleToAdd && g_ActivityMan.GetActivity()) {
+		SceneMan::TraceTerrainEvent("spwn", std::bit_cast<int32_t>(particleToAdd->GetPos().m_X), std::bit_cast<int32_t>(particleToAdd->GetPos().m_Y), static_cast<int>(particleToAdd->GetUniqueID()), static_cast<int>(SceneMan::GetTerrainEventContext()), std::bit_cast<int32_t>(particleToAdd->GetVel().m_X));
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(particleToAdd->GetTeam());
 
 		particleToAdd->SetAsAddedToMovableMan();
@@ -1850,6 +1853,16 @@ void MovableMan::ReloadLuaScripts() {
 	}
 }
 
+// Phase-stamped pose/vel rows for CC_TRACK_UID MOs, to bisect which update phase forks first.
+static void TraceTrackedPhase(const char* tag) {
+	for (long uid: SceneMan::GetTrackedUIDs()) {
+		const MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
+		if (mo) {
+			SceneMan::TraceTerrainEvent(tag, std::bit_cast<int32_t>(mo->GetPos().m_X), std::bit_cast<int32_t>(mo->GetPos().m_Y), std::bit_cast<int32_t>(mo->GetVel().m_X), std::bit_cast<int32_t>(mo->GetVel().m_Y), static_cast<int>(uid));
+		}
+	}
+}
+
 void MovableMan::Update() {
 	ZoneScoped;
 
@@ -1885,8 +1898,12 @@ void MovableMan::Update() {
 	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
 	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
+	TraceTrackedPhase("phA");
+
 	// Travel MOs
 	Travel();
+
+	TraceTrackedPhase("phB");
 
 	// If our debug settings switch is forcing all pathing requests to immediately complete, make sure they're done here
 	if (g_SettingsMan.GetForceImmediatePathingRequestCompletion() && g_SceneMan.GetScene()) {
@@ -1909,6 +1926,8 @@ void MovableMan::Update() {
 	if (ScenarioRunner::HasControllerReplayError()) {
 		return;
 	}
+
+	TraceTrackedPhase("phC");
 
 	// Will use some common iterators
 	std::deque<Actor*>::iterator aIt;
@@ -2055,6 +2074,8 @@ void MovableMan::Update() {
 				particle->PostUpdate();
 			}
 		}
+
+		TraceTrackedPhase("phD");
 	} // namespace RTE
 
 	//////////////////////////////////////////////////////////////////////

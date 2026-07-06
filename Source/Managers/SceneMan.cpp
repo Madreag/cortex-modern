@@ -18,10 +18,17 @@
 #include "Material.h"
 #include "SoundContainer.h"
 #include "SimChecksum.h"
+#include "TimerMan.h"
 
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iostream>
+#include <mutex>
 
 using namespace RTE;
 
@@ -35,6 +42,118 @@ thread_local Vector s_LastRayHitPos;
 
 // While set on a worker, GetTerrMatter reads the frozen material copy so the threaded vision pass can't race concurrent carves.
 thread_local bool s_ReadTerrainFromCopy = false;
+
+namespace {
+	struct TerrainEvent {
+		uint32_t Tick;
+		char Tag[6];
+		int32_t X;
+		int32_t Y;
+		int32_t A;
+		int32_t B;
+		int32_t C;
+	};
+	// Spawn hooks can fire from threaded Lua adds, so appends take the lock.
+	std::mutex s_TerrainEventsMutex;
+	std::vector<TerrainEvent> s_TerrainEvents;
+	uint64_t s_TerrainEventsFrom = 1;
+	uint64_t s_TerrainEventsTo = 0;
+	bool s_TerrainEventsFlushedAtEnd = false;
+	long s_TerrainEventContextUID = 0;
+} // namespace
+
+void SceneMan::SetTerrainEventContext(long uid) {
+	s_TerrainEventContextUID = uid;
+}
+
+long SceneMan::GetTerrainEventContext() {
+	return s_TerrainEventContextUID;
+}
+
+const std::vector<long>& SceneMan::GetTrackedUIDs() {
+	static std::vector<long> s_trackedUIDs;
+	static bool s_parsed = false;
+	if (!s_parsed) {
+		s_parsed = true;
+		if (const char* env = std::getenv("CC_TRACK_UID")) {
+			const std::string list(env);
+			size_t start = 0;
+			while (start < list.size()) {
+				size_t end = list.find(',', start);
+				if (end == std::string::npos) {
+					end = list.size();
+				}
+				const long parsed = std::strtol(list.substr(start, end - start).c_str(), nullptr, 10);
+				if (parsed > 0) {
+					s_trackedUIDs.push_back(parsed);
+				}
+				start = end + 1;
+			}
+		}
+	}
+	return s_trackedUIDs;
+}
+
+bool SceneMan::IsTrackedUID(long uid) {
+	const std::vector<long>& trackedUIDs = GetTrackedUIDs();
+	if (trackedUIDs.empty()) {
+		return false;
+	}
+	return std::find(trackedUIDs.begin(), trackedUIDs.end(), uid) != trackedUIDs.end();
+}
+
+void SceneMan::TraceTerrainEvent(const char* tag, int x, int y, int a, int b, int c) {
+	static int s_state = 0;
+	if (s_state == 0) {
+		const char* env = std::getenv("CC_TERRAIN_EVENTS");
+		unsigned long long from = 0;
+		unsigned long long to = 0;
+		if (env && std::sscanf(env, "%llu:%llu", &from, &to) == 2 && to >= from) {
+			s_TerrainEventsFrom = from;
+			s_TerrainEventsTo = to;
+			s_TerrainEvents.reserve(1 << 20);
+			s_state = 1;
+		} else {
+			s_state = -1;
+		}
+	}
+	if (s_state != 1) {
+		return;
+	}
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	if (tick < s_TerrainEventsFrom || tick > s_TerrainEventsTo) {
+		return;
+	}
+	TerrainEvent event{};
+	event.Tick = static_cast<uint32_t>(tick);
+	std::snprintf(event.Tag, sizeof(event.Tag), "%s", tag);
+	event.X = x;
+	event.Y = y;
+	event.A = a;
+	event.B = b;
+	event.C = c;
+	std::lock_guard<std::mutex> lock(s_TerrainEventsMutex);
+	s_TerrainEvents.push_back(event);
+}
+
+void SceneMan::FlushTerrainEvents(const std::string& filePath) {
+	if (s_TerrainEvents.empty()) {
+		return;
+	}
+	std::ofstream out(filePath, std::ios::trunc);
+	for (const TerrainEvent& event: s_TerrainEvents) {
+		out << event.Tick << " " << event.Tag << " " << event.X << "," << event.Y << " " << event.A << " " << event.B << " " << event.C << "\n";
+	}
+	std::cout << "[terrain-events] " << s_TerrainEvents.size() << " events -> " << filePath << std::endl;
+}
+
+void SceneMan::FlushTerrainEventsAtWindowEnd(uint64_t simTick, const std::string& filePath) {
+	if (s_TerrainEventsFlushedAtEnd || s_TerrainEventsTo == 0 || simTick <= s_TerrainEventsTo) {
+		return;
+	}
+	s_TerrainEventsFlushedAtEnd = true;
+	FlushTerrainEvents(filePath);
+}
 
 SceneMan::ScopedTerrainCopyRead::ScopedTerrainCopyRead() :
     m_Previous(s_ReadTerrainFromCopy) {
@@ -599,6 +718,7 @@ int SceneMan::RemoveOrphans(int posX, int posY,
 			g_MovableMan.AddParticle(pixelMO);
 			pixelMO = 0;
 		}
+		TraceTerrainEvent("orph", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 		m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 		m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
 	}
@@ -687,11 +807,13 @@ bool SceneMan::TryPenetrate(int posX,
 				g_MovableMan.AddParticle(pixelMO);
 				pixelMO = 0;
 			}
+			TraceTerrainEvent("dis", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 			m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 			m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
 		}
 		// TODO: Improve / tweak randomized pushing away of terrain")
 		else if (RandomNum() <= airRatio) {
+			TraceTerrainEvent("disa", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 			m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 			m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
 		}
@@ -739,6 +861,7 @@ bool SceneMan::TryPenetrate(int posX,
 							}
 							RemoveOrphans(posX + testY % 2 ? -1 : 1, testY, removeOrphansRadius + 5, removeOrphansMaxArea + 10, true);
 						}
+						TraceTerrainEvent("disc", posX, testY, testMaterialID, 0, static_cast<int>(s_TerrainEventContextUID));
 						_putpixel(pFGColor, posX, testY, g_MaskColor);
 						_putpixel(pMaterial, posX, testY, g_MaterialAir);
 					} else {
@@ -2647,6 +2770,7 @@ void SceneMan::Update(int screenId) {
 	}
 
 	if (m_CleanTimer.GetElapsedSimTimeMS() > CLEANAIRINTERVAL) {
+		TraceTerrainEvent("clean", screenId, 0);
 		terrain->CleanAir();
 		m_CleanTimer.Reset();
 	}

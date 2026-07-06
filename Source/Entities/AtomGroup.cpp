@@ -8,6 +8,8 @@
 
 #include "tracy/Tracy.hpp"
 
+#include <bit>
+
 using namespace RTE;
 
 ConcreteClassInfo(AtomGroup, Entity, 500);
@@ -325,6 +327,8 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 	ZoneScoped;
 
 	RTEAssert(m_OwnerMOSR, "Tried to travel an AtomGroup that has no parent!");
+
+	SceneMan::SetTerrainEventContext(static_cast<long>(m_OwnerMOSR->GetUniqueID()));
 
 	m_MomentOfInertia = GetMomentOfInertia();
 
@@ -761,6 +765,7 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 
 // TODO: Break down and rework this dumpsterfire.
 Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pushForce, bool& didWrap, float travelTime, bool callOnBounce, bool callOnSink) {
+	SceneMan::SetTerrainEventContext(m_OwnerMOSR ? static_cast<long>(m_OwnerMOSR->GetUniqueID()) : 0);
 	ZoneScoped;
 
 	RTEAssert(m_OwnerMOSR, "Tried to push-travel an AtomGroup that has no parent!");
@@ -1051,6 +1056,9 @@ Vector AtomGroup::PushTravel(Vector& position, const Vector& velocity, float pus
 							RTEAssert(hitData.Body[HITEE], "Hitee MO is 0 in AtomGroup::PushTravel!");
 #endif
 
+							if (SceneMan::IsTrackedUID(m_OwnerMOSR->GetUniqueID()) || SceneMan::IsTrackedUID(hitData.Body[HITEE]->GetUniqueID())) {
+								SceneMan::TraceTerrainEvent("ghit", std::bit_cast<int32_t>(hitData.HitPoint.m_X), std::bit_cast<int32_t>(hitData.HitPoint.m_Y), static_cast<int>(hitData.Body[HITEE]->GetUniqueID()), std::bit_cast<int32_t>(ownerVel.m_X), static_cast<int>(m_OwnerMOSR->GetUniqueID()));
+							}
 							hitData.Body[HITEE]->CollideAtPoint(hitData);
 
 							// Save the impulse force resulting from the MO collision response calculation.
@@ -1289,6 +1297,7 @@ bool AtomGroup::PushAsLimb(const Vector& jointPos, const float limbRadius, const
 		}
 	}
 
+	SceneMan::TraceTerrainEvent("limb", std::bit_cast<int32_t>(m_LimbPos.m_X), std::bit_cast<int32_t>(m_LimbPos.m_Y), std::bit_cast<int32_t>(pushImpulse.m_X), std::bit_cast<int32_t>(pushImpulse.m_Y), static_cast<int>(m_OwnerMOSR->GetUniqueID()));
 	m_OwnerMOSR->AddImpulseForce(pushImpulse, affectRotation ? (g_SceneMan.ShortestDistance(m_OwnerMOSR->GetPos(), adjustedJointPos) * c_MPP) : Vector());
 
 	return true;

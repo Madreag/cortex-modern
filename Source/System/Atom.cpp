@@ -10,6 +10,8 @@
 
 #include "tracy/Tracy.hpp"
 
+#include <bit>
+
 using namespace RTE;
 
 const std::string Atom::c_ClassName = "Atom";
@@ -403,6 +405,9 @@ bool Atom::MOHitResponse() {
 			m_LastHit.RootBody[HITEE] = m_LastHit.Body[HITEE]->GetRootParent();
 		}
 
+		if (SceneMan::IsTrackedUID(m_OwnerMO->GetUniqueID()) || SceneMan::IsTrackedUID(m_LastHit.Body[HITEE]->GetUniqueID())) {
+			SceneMan::TraceTerrainEvent("ghit", std::bit_cast<int32_t>(m_LastHit.HitPoint.m_X), std::bit_cast<int32_t>(m_LastHit.HitPoint.m_Y), static_cast<int>(m_LastHit.Body[HITEE]->GetUniqueID()), std::bit_cast<int32_t>(m_OwnerMO->GetVel().m_X), static_cast<int>(m_OwnerMO->GetUniqueID()));
+		}
 		validHit = validHit && m_LastHit.Body[HITEE]->CollideAtPoint(m_LastHit);
 
 		return validHit;
@@ -727,6 +732,8 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	m_LastTrailPoints = m_TrailPoints;
 	m_TrailPoints.clear();
 
+	SceneMan::SetTerrainEventContext(m_OwnerMO ? static_cast<long>(m_OwnerMO->GetUniqueID()) : 0);
+
 	didWrap = false;
 	int removeOrphansRadius = m_OwnerMO->m_RemoveOrphanTerrainRadius;
 	int removeOrphansMaxArea = m_OwnerMO->m_RemoveOrphanTerrainMaxArea;
@@ -927,6 +934,9 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 				// is updated and the impulses produced in this hit are taken into effect.
 				AddMOIDToIgnore(m_MOIDHit);
 
+				if (SceneMan::IsTrackedUID(m_OwnerMO->GetUniqueID()) || SceneMan::IsTrackedUID(m_LastHit.Body[HITEE]->GetUniqueID())) {
+					SceneMan::TraceTerrainEvent("ghit", std::bit_cast<int32_t>(m_LastHit.HitPoint.m_X), std::bit_cast<int32_t>(m_LastHit.HitPoint.m_Y), static_cast<int>(m_LastHit.Body[HITEE]->GetUniqueID()), std::bit_cast<int32_t>(velocity.m_X), static_cast<int>(m_OwnerMO->GetUniqueID()));
+				}
 				m_LastHit.Body[HITEE]->CollideAtPoint(m_LastHit);
 				hitAccel = m_LastHit.ResImpulse[HITOR] / mass;
 
@@ -996,6 +1006,7 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 								Vector stickPos(intPos[X], intPos[Y]);
 								stickPos += velocity * (c_PPM * g_TimerMan.GetDeltaTimeSecs()) * RandomNum();
 								int terrainMaterialID = g_SceneMan.GetTerrain()->GetMaterialPixel(stickPos.GetFloorIntX(), stickPos.GetFloorIntY());
+								SceneMan::TraceTerrainEvent("stnr", stickPos.GetFloorIntX(), stickPos.GetFloorIntY(), terrainMaterialID, intPos[X], intPos[Y]);
 								if (terrainMaterialID != g_MaterialAir && terrainMaterialID != g_MaterialDoor) {
 									m_OwnerMO->SetPos(Vector(stickPos.GetRoundIntX(), stickPos.GetRoundIntY()));
 								} else {

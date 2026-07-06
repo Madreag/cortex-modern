@@ -346,6 +346,7 @@ void ACRocket::PreControllerUpdate() {
 
 	if (m_pMThruster) {
 		m_GearState = m_pMThruster->IsEmitting() ? LandingGearState::RAISED : LandingGearState::LOWERED;
+		SceneMan::TraceTerrainEvent("gear", static_cast<int>(m_GearState), m_pMThruster->IsEmitting() ? 1 : 0, static_cast<int>(GetStatus()), 0, static_cast<int>(GetUniqueID()));
 
 		m_Paths[RIGHT][m_GearState].SetHFlip(m_HFlipped);
 		m_Paths[LEFT][m_GearState].SetHFlip(!m_HFlipped);
