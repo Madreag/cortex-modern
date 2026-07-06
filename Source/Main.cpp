@@ -928,9 +928,14 @@ void RunGameLoop() {
 				// is computed from the terrain and rides the synced command, so both peers see the same drop.
 				// Works in interactive matches too, so a headed match can be ended deterministically.
 				if (ScenarioRunner::GetArgs().selftestBrainKillCommand && ScenarioRunner::IsLockstepControllerSyncActive()) {
-					if (simTick == 50 || simTick == 70) {
-						const float dropX = simTick == 50 ? 1120.0F : 1112.0F;
-						const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 140.0F;
+					// Not before tick 80: an activity Over inside the first 100 running ticks reads as a broken setup.
+					if (simTick == 80 || simTick == 100) {
+						// Aim at the live brain and drop low; static coordinates drift off on a different sim's physics.
+						float dropX = simTick == 80 ? 1120.0F : 1112.0F;
+						if (const Actor* enemyBrain = g_MovableMan.GetFirstBrainActor(1)) {
+							dropX = enemyBrain->GetPos().m_X + (simTick == 80 ? 4.0F : -4.0F);
+						}
+						const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 60.0F;
 						std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
 						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
 					} else if (simTick > 100 && simTick % 5 == 0) {
