@@ -302,17 +302,20 @@ namespace RTE {
 	}
 
 	NetLobbySnapshot NetMatchRunner::BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const {
+		// A client adopts the host's roster mid-round; read it from the live lobby so the member
+		// list grows to the real player count instead of the local placeholder config's.
+		const NetMatchConfig& rosterConfig = m_Lobby.GetState() != NetLobbyState::Idle ? m_Lobby.GetMatchConfig() : m_MatchConfig;
 		NetLobbySnapshot snapshot;
 		snapshot.lobbyPhase = StateName(m_State);
-		snapshot.activityPreset = m_MatchConfig.activityPreset;
-		snapshot.sceneName = m_MatchConfig.sceneName;
-		snapshot.modeName = NetMatchConfigUtil::ModeName(m_MatchConfig.mode);
+		snapshot.activityPreset = rosterConfig.activityPreset;
+		snapshot.sceneName = rosterConfig.sceneName;
+		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();
 		snapshot.remoteReady = m_Lobby.IsRemoteReady();
 
 		const uint8_t localId = LocalLockstepPeerId(session);
 		const std::map<uint8_t, NetPeerId> remoteTransports = BuildRemoteTransportMap(session);
-		for (const NetMatchPlayerSlot& slot: m_MatchConfig.players) {
+		for (const NetMatchPlayerSlot& slot: rosterConfig.players) {
 			NetLobbyMember member;
 			member.peerId = slot.peerId;
 			member.team = slot.team;
@@ -322,10 +325,17 @@ namespace RTE {
 			const std::string& remoteName = m_Lobby.GetRemoteName(slot.peerId);
 			member.displayName = (!member.isLocal && !remoteName.empty()) ? remoteName : slot.displayName;
 			member.ready = member.isLocal ? snapshot.localReady : m_Lobby.IsRemoteReady(slot.peerId);
-			// Host-star: the host has a transport for every client; a client only knows the host directly.
+			// Host-star: the host has a transport for every client; a client sees its SIBLINGS through
+			// the host's peer-state relay, with the host's measured ping standing in for theirs.
 			const auto transportIt = remoteTransports.find(slot.peerId);
-			member.connected = member.isLocal || slot.cpu || transportIt != remoteTransports.end();
-			member.pingMs = (member.isLocal || transportIt == remoteTransports.end()) ? 0 : transport.GetPeerPingMs(transportIt->second);
+			member.connected = member.isLocal || slot.cpu || transportIt != remoteTransports.end() || m_Lobby.HasHeardFrom(slot.peerId);
+			if (member.isLocal) {
+				member.pingMs = 0;
+			} else if (transportIt != remoteTransports.end()) {
+				member.pingMs = transport.GetPeerPingMs(transportIt->second);
+			} else {
+				member.pingMs = m_Lobby.GetRemotePingMs(slot.peerId);
+			}
 			snapshot.members.push_back(member);
 		}
 		return snapshot;

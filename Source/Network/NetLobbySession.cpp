@@ -40,6 +40,7 @@ namespace RTE {
 		m_ConfigAckedByPeer.clear();
 		m_RemoteReadyByPeer.clear();
 		m_RemoteNamesByPeer.clear();
+		m_RemotePingByPeer.clear();
 		if (!config.remoteTransportPeerIds.empty()) {
 			for (const auto& [peerId, transportId] : config.remoteTransportPeerIds) {
 				m_RemotePeerIds.push_back(peerId);
@@ -123,6 +124,15 @@ namespace RTE {
 	bool NetLobbySession::IsRemoteReady(uint8_t peerId) const {
 		const auto it = m_RemoteReadyByPeer.find(peerId);
 		return it != m_RemoteReadyByPeer.end() && it->second;
+	}
+
+	bool NetLobbySession::HasHeardFrom(uint8_t peerId) const {
+		return m_RemoteNamesByPeer.find(peerId) != m_RemoteNamesByPeer.end();
+	}
+
+	uint32_t NetLobbySession::GetRemotePingMs(uint8_t peerId) const {
+		const auto it = m_RemotePingByPeer.find(peerId);
+		return it != m_RemotePingByPeer.end() ? it->second : 0;
 	}
 
 	const std::string& NetLobbySession::GetRemoteName() const {
@@ -458,10 +468,27 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandlePeerState(const NetLobbyPeerState& message) {
-		if (IsKnownRemote(message.peerId)) {
-			m_RemoteNamesByPeer[message.peerId] = message.displayName;
-			// The explicit Ready message is the authoritative edge; the periodic state keeps views live.
-			m_RemoteReadyByPeer[message.peerId] = message.ready;
+		// Accept any roster peer, not just direct remotes: a client hears its SIBLINGS through the
+		// host's relay, so every lobby shows real names and readies for the whole roster.
+		if (message.peerId == 0 || message.peerId == m_Config.localPeerId) {
+			return;
+		}
+		m_RemoteNamesByPeer[message.peerId] = message.displayName;
+		// The explicit Ready message is the authoritative edge; the periodic state keeps views live.
+		m_RemoteReadyByPeer[message.peerId] = message.ready;
+		m_RemotePingByPeer[message.peerId] = message.pingMs;
+		// The host forwards each client's state to the others, stamped with its measured ping so
+		// everyone sees an honest star-hub-relative connection quality.
+		if (m_Config.host && m_Transport && IsKnownRemote(message.peerId)) {
+			NetLobbyPeerState relayed = message;
+			relayed.pingMs = m_Transport->GetPeerPingMs(m_RemoteTransports[message.peerId]);
+			m_RemotePingByPeer[message.peerId] = relayed.pingMs;
+			for (uint8_t peerId: m_RemotePeerIds) {
+				if (peerId != message.peerId) {
+					std::string ignored;
+					(void)SendTo(m_RemoteTransports[peerId], relayed, &ignored);
+				}
+			}
 		}
 	}
 
