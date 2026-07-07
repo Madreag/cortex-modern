@@ -229,6 +229,8 @@ namespace RTE {
 		/// Whether the actor's owner peer has left as of the given frame; the lockstep gate means every
 		/// survivor answers this identically when consuming that frame, so the stand-down is synced.
 		bool IsActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) const;
+		/// Whether the peer has cleanly left as of the given frame (never true for the local peer).
+		bool IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const;
 		/// Peers that announced a clean leave, each with the first frame that lacks their data.
 		const std::map<uint8_t, uint64_t>& GetPeerLeaveFrames() const { return m_PeerLeaveFrames; }
 		/// Names the required peers the next frame still waits on; empty when none are missing.
@@ -251,6 +253,7 @@ namespace RTE {
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs);
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
+		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 
 		INetTransport* m_Transport = nullptr;

@@ -468,6 +468,19 @@ namespace RTE {
 		s_LockstepControlOverrides[actorUniqueID] = ownerPeerId;
 	}
 
+	void ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(uint64_t frame) {
+		if (!s_LockstepCoordinator || s_LockstepControlOverrides.empty()) {
+			return;
+		}
+		for (auto it = s_LockstepControlOverrides.begin(); it != s_LockstepControlOverrides.end();) {
+			if (s_LockstepCoordinator->IsPeerGoneAtFrame(it->second, frame)) {
+				it = s_LockstepControlOverrides.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
+
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId) {
 		if (!s_LockstepCoordinator || team < 0) {
 			return true;
@@ -568,7 +581,16 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
-		return s_LockstepCoordinator && s_LockstepCoordinator->IsActorOwnerGone(actorUniqueID, actorTeam, cpuControlled, frame);
+		if (!s_LockstepCoordinator) {
+			return false;
+		}
+		// A control handoff resolves the owner just like production does; the purge normally erases
+		// gone owners' handoffs first, so this branch mostly answers for live takers.
+		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
+		if (overrideIt != s_LockstepControlOverrides.end()) {
+			return s_LockstepCoordinator->IsPeerGoneAtFrame(overrideIt->second, frame);
+		}
+		return s_LockstepCoordinator->IsActorOwnerGone(actorUniqueID, actorTeam, cpuControlled, frame);
 	}
 
 	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {

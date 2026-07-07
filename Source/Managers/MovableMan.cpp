@@ -2650,7 +2650,10 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
-		// A leaver's actors dropped off the wire; stand them down on every survivor at the same tick.
+		// A leaver's actors dropped off the wire: their control handoffs revert to the policy owner
+		// (a surviving teammate's AI picks them up), and actors with no surviving owner stand down —
+		// on every survivor at the same tick.
+		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
 		for (Actor* actor: m_Actors) {
 			if (ScenarioRunner::IsLockstepActorOwnerGone(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
 				actor->GetController()->SetDisabled(true);

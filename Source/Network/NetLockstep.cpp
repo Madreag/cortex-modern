@@ -1228,11 +1228,16 @@ namespace RTE {
 		}
 		if (!m_Config.matchConfig.players.empty()) {
 			const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-			const uint8_t ownerPeerId = NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {
+			uint8_t ownerPeerId = NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {
 				actorUniqueID,
 				team,
 				cpuControlled,
 			});
+			// A leaver's team falls to its next surviving human peer, so the units play on. The
+			// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
+			if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
+				ownerPeerId = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+			}
 			return ownerPeerId == m_Config.localPeerId;
 		}
 		const uint64_t normalized = actorUniqueID < 0 ? static_cast<uint64_t>(-(actorUniqueID + 1)) + 1U : static_cast<uint64_t>(actorUniqueID);
@@ -1252,12 +1257,31 @@ namespace RTE {
 			return false;
 		}
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-		const uint8_t ownerPeerId = NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled});
-		if (ownerPeerId == m_Config.localPeerId) {
+		if (!IsPeerGoneAtFrame(NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled}), frame)) {
 			return false;
 		}
-		const auto leaveIt = m_PeerLeaveFrames.find(ownerPeerId);
+		// The team's units fall to the next surviving human peer; only an ownerless team stands down.
+		return FirstAliveHumanPeerForTeam(team, frame) == 0;
+	}
+
+	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
+		if (peerId == m_Config.localPeerId) {
+			return false;
+		}
+		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
 		return leaveIt != m_PeerLeaveFrames.end() && frame >= leaveIt->second;
+	}
+
+	uint8_t NetLockstepCoordinator::FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const {
+		for (const NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
+			if (slot.cpu || slot.team != team || slot.peerId == 0 || slot.peerId > m_Config.peerCount) {
+				continue;
+			}
+			if (!IsPeerGoneAtFrame(slot.peerId, frame)) {
+				return slot.peerId;
+			}
+		}
+		return 0;
 	}
 
 	std::string NetLockstepCoordinator::DescribePeer(uint8_t peerId) const {
