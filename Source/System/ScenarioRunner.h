@@ -122,6 +122,10 @@ namespace RTE {
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
+		/// Drops handoffs held by peers that have left as of this frame, so their actors revert to the
+		/// team's policy owner (a surviving teammate's AI picks them up). Synced: every peer consumes
+		/// the frame with identical leave knowledge.
+		static void PurgeLockstepControlOverridesForGonePeers(uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
 		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
 		/// The local peer's index among the team's human slots in the synced roster, or -1 outside a
