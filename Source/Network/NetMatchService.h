@@ -53,6 +53,9 @@ namespace RTE {
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
+		/// Ends the match locally as a clean leave: the other peers keep playing (N-peer) or hear
+		/// "player left" (2-peer); the session objects stay alive exactly like FinishMatch.
+		void LeaveMatch(const std::string& result);
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		NetMatchServiceState GetState() const;

@@ -2635,6 +2635,12 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
+		// A leaver's actors dropped off the wire; stand them down on every survivor at the same tick.
+		for (Actor* actor: m_Actors) {
+			if (ScenarioRunner::IsLockstepActorOwnerGone(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
+				actor->GetController()->SetDisabled(true);
+			}
+		}
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		ApplyLockstepGameCommands(readyFrame);
 

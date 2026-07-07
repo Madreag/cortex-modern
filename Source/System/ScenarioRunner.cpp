@@ -526,6 +526,10 @@ namespace RTE {
 		return false;
 	}
 
+	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsActorOwnerGone(actorUniqueID, actorTeam, cpuControlled, frame);
+	}
+
 	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";

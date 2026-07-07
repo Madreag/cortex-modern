@@ -115,6 +115,10 @@ namespace RTE {
 		/// Whether any player slot (human or CPU) in the synced match config plays this team.
 		static bool IsLockstepActiveTeam(int team);
 
+		/// Whether the actor's owner peer has cleanly left as of the given frame; survivors stand the
+		/// leaver's actors down at the identical tick because the lockstep gate syncs the knowledge.
+		static bool IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
+
 		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();

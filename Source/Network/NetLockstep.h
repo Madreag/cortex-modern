@@ -31,6 +31,7 @@ namespace RTE {
 		ProtocolError = 4,
 		PeerDisconnected = 5,
 		InternalError = 6,
+		PeerLeft = 7, // A clean leave: the frame field is the FIRST frame without the leaver's data; survivors continue.
 	};
 
 	enum class NetLockstepErrorCode {
@@ -182,7 +183,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 4;
+		static constexpr uint16_t c_Version = 5;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -211,6 +212,10 @@ namespace RTE {
 		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr);
 		void Tick(uint64_t nowMs);
 		void Complete(const std::string& message = "complete");
+		/// Announces a clean local leave: peers keep our frames through the last produced one, then
+		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
+		/// so a host leave completes the match for everyone instead.
+		void Leave(const std::string& message = "player left");
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
 
 		NetLockstepState GetState() const { return m_State; }
@@ -221,6 +226,15 @@ namespace RTE {
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		uint8_t ResolveTeamCommandAuthority(int team) const;
+		/// Whether the actor's owner peer has left as of the given frame; the lockstep gate means every
+		/// survivor answers this identically when consuming that frame, so the stand-down is synced.
+		bool IsActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) const;
+		/// Peers that announced a clean leave, each with the first frame that lacks their data.
+		const std::map<uint8_t, uint64_t>& GetPeerLeaveFrames() const { return m_PeerLeaveFrames; }
+		/// Names the required peers the next frame still waits on; empty when none are missing.
+		std::string DescribeMissingPeers() const;
+		/// The peer's roster display name, or "peer N" when the roster has none.
+		std::string DescribePeer(uint8_t peerId) const;
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLockstepState state);
@@ -231,10 +245,12 @@ namespace RTE {
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs);
 		void HandleStart(const NetLockstepStart& start);
 		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs);
-		void HandleStop(const NetLockstepStop& stop);
+		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs);
 		void HandleChecksum(const NetLockstepChecksum& checksum);
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs);
+		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 
 		INetTransport* m_Transport = nullptr;
@@ -244,6 +260,8 @@ namespace RTE {
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every peer except local; derived at Start.
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
+		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;

@@ -239,6 +239,19 @@ namespace RTE {
 		}
 	}
 
+	void NetMatchService::LeaveMatch(const std::string& result) {
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_Coordinator) {
+			m_Coordinator->Leave(result.empty() ? "player left" : result);
+		}
+		if (m_State == NetMatchServiceState::Running) {
+			m_State = NetMatchServiceState::Completed;
+			m_StatusText = result.empty() ? "Left the match" : result;
+			m_ErrorText.clear();
+		}
+	}
+
 	void NetMatchService::Update() {
 		JoinWorkerIfDone();
 	}

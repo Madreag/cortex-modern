@@ -103,6 +103,9 @@ namespace RTE {
 			if (!RoundTrip({NetLockstepStop{2, NetLockstepStopReason::Complete, 120, "done"}}, error)) {
 				return false;
 			}
+			if (!RoundTrip({NetLockstepStop{3, NetLockstepStopReason::PeerLeft, 240, "left"}}, error)) {
+				return false;
+			}
 			std::array<uint8_t, 32> checksumHash{};
 			for (size_t i = 0; i < checksumHash.size(); ++i) {
 				checksumHash[i] = static_cast<uint8_t>(i * 7 + 3);
@@ -124,7 +127,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x04, 0x00,
+				0x05, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -629,6 +632,108 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		bool TestCoordinatorPeerLeave(std::string* error) {
+			const uint16_t port = 43011;
+			const uint64_t sessionId = 0x7000000000000011ULL;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 500;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			auto drive = [&](const std::function<bool()>& done) {
+				for (uint64_t now = 0; now <= 2000; now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+				*error = "leave test did not reach Running";
+				return false;
+			}
+			// Everyone produces frames 0-1, then B leaves cleanly.
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !clientB.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			clientB.Leave("bye");
+			if (!clientB.IsStopped()) {
+				*error = "leaver did not stop after Leave";
+				return false;
+			}
+			// The survivors keep producing; frames 2-3 must advance WITHOUT B.
+			for (uint64_t f = 2; f < 4; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::map<uint64_t, size_t> hostRemotesByFrame, aRemotesByFrame;
+			auto collect = [](NetLockstepCoordinator& c, std::map<uint64_t, size_t>& out) {
+				NetLockstepReadyFrame ready;
+				while (c.PopReadyFrame(ready)) {
+					out[ready.frame] = ready.remoteFrames.size();
+				}
+			};
+			if (!drive([&] {
+					collect(host, hostRemotesByFrame);
+					collect(clientA, aRemotesByFrame);
+					return hostRemotesByFrame.size() >= 4 && aRemotesByFrame.size() >= 4;
+				})) {
+				*error = "survivors did not advance past the leaver (host=" + std::to_string(hostRemotesByFrame.size()) +
+				         " a=" + std::to_string(aRemotesByFrame.size()) + ")";
+				return false;
+			}
+			if (host.IsFailed() || clientA.IsFailed()) {
+				*error = "a survivor failed after a clean leave";
+				return false;
+			}
+			// Frames through the leaver's last one carry its data; later frames drop to one remote.
+			if (hostRemotesByFrame[1] != 2 || hostRemotesByFrame[2] != 1 || aRemotesByFrame[1] != 2 || aRemotesByFrame[2] != 1) {
+				*error = "leave boundary merged the wrong remote sets";
+				return false;
+			}
+			if (host.GetPeerLeaveFrames().count(3) == 0 || clientA.GetPeerLeaveFrames().count(3) == 0) {
+				*error = "survivors did not record the leaver";
+				return false;
+			}
+			// A 2-peer leave ends the peer's match: with B gone, A leaving leaves the host alone.
+			clientA.Leave("bye too");
+			drive([&] { return host.IsStopped(); });
+			if (!host.IsStopped()) {
+				*error = "host did not stop after every peer left";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -646,7 +751,8 @@ namespace RTE {
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
-		    !TestCoordinatorThreePeer(&error)) {
+		    !TestCoordinatorThreePeer(&error) ||
+		    !TestCoordinatorPeerLeave(&error)) {
 			return fail(error);
 		}
 
