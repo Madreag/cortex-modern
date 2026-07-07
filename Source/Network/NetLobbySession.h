@@ -64,6 +64,10 @@ namespace RTE {
 		bool IsRemoteReady(uint8_t peerId) const;
 		const std::string& GetRemoteName() const;
 		const std::string& GetRemoteName(uint8_t peerId) const;
+		/// Whether this peer's periodic state has been heard at all (directly or host-relayed).
+		bool HasHeardFrom(uint8_t peerId) const;
+		/// The peer's last reported ping in ms (the host stamps relayed states with its measurement).
+		uint32_t GetRemotePingMs(uint8_t peerId) const;
 		bool IsStartRequested() const { return m_StartRequested; }
 		const NetMatchConfig& GetMatchConfig() const { return m_Config.matchConfig; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
@@ -115,8 +119,9 @@ namespace RTE {
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every remote lockstep peerId; derived at Start.
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::map<uint8_t, bool> m_ConfigAckedByPeer; //!< Host: which remotes accepted the config.
-		std::map<uint8_t, bool> m_RemoteReadyByPeer; //!< Host: which remotes are ready.
-		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Remote display names from periodic peer-state.
+		std::map<uint8_t, bool> m_RemoteReadyByPeer; //!< Which peers are ready, from direct or relayed peer-state.
+		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
+		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
 		NetLobbyStats m_Stats;
 	};
 
