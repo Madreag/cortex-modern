@@ -266,7 +266,7 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	return true;
 }
 
-bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
+bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Scene>& outScene, std::unique_ptr<GAScripted>& outActivity, std::string& outOriginalScenePresetName, bool& outPlaceObjects, bool& outPlaceUnits) {
 	std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
 
 	// load zip sav file
@@ -359,30 +359,42 @@ bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
 
 	Reader reader(std::make_unique<std::istringstream>(buffer), filePath + "/Save.ini", true, nullptr, false);
 
-	std::unique_ptr<Scene> scene(std::make_unique<Scene>());
-	std::unique_ptr<GAScripted> activity(std::make_unique<GAScripted>());
+	outScene = std::make_unique<Scene>();
+	outActivity = std::make_unique<GAScripted>();
 
-	std::string originalScenePresetName = fileName;
-	bool placeObjectsIfSceneIsRestarted = true;
-	bool placeUnitsIfSceneIsRestarted = true;
+	outOriginalScenePresetName = fileName;
+	outPlaceObjects = true;
+	outPlaceUnits = true;
 	while (reader.NextProperty()) {
 		std::string propName = reader.ReadPropName();
 		if (propName == "Activity") {
-			reader >> activity.get();
+			reader >> outActivity.get();
 		} else if (propName == "OriginalScenePresetName") {
-			reader >> originalScenePresetName;
+			reader >> outOriginalScenePresetName;
 		} else if (propName == "PlaceObjectsIfSceneIsRestarted") {
-			reader >> placeObjectsIfSceneIsRestarted;
+			reader >> outPlaceObjects;
 		} else if (propName == "PlaceUnitsIfSceneIsRestarted") {
-			reader >> placeUnitsIfSceneIsRestarted;
+			reader >> outPlaceUnits;
 		} else if (propName == "Scene") {
-			reader >> scene.get();
+			reader >> outScene.get();
 		}
 	}
 
 	free(buffer);
 
 	unzClose(zippedSaveFile);
+	return true;
+}
+
+bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
+	std::unique_ptr<Scene> scene;
+	std::unique_ptr<GAScripted> activity;
+	std::string originalScenePresetName;
+	bool placeObjectsIfSceneIsRestarted = true;
+	bool placeUnitsIfSceneIsRestarted = true;
+	if (!ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted)) {
+		return false;
+	}
 
 	// SetSceneToLoad() doesn't Clone(), but when the Activity starts, it will eventually call LoadScene(), which does a Clone() of scene internally.
 	g_SceneMan.SetSceneToLoad(scene.get(), true, true);
@@ -395,6 +407,29 @@ bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
 	g_SceneMan.SetSceneToLoad(originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted);
 
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" loaded!");
+
+	return true;
+}
+
+bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
+	std::unique_ptr<Scene> scene;
+	std::unique_ptr<GAScripted> activity;
+	std::string originalScenePresetName;
+	bool placeObjectsIfSceneIsRestarted = true;
+	bool placeUnitsIfSceneIsRestarted = true;
+	if (!ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted)) {
+		return false;
+	}
+
+	scene->SetPresetName(originalScenePresetName);
+	// The deferred restart clones the scene later, so it must outlive this call.
+	m_PendingLoadedScene = std::move(scene);
+	g_SceneMan.SetSceneToLoad(m_PendingLoadedScene.get(), true, true);
+	// The caller adjusts the staged activity (per-peer players, deterministic config) before restarting.
+	SetStartActivity(dynamic_cast<GAScripted*>(activity->Clone()));
+	SetRestartActivity(true);
+
+	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" staged for restart!");
 
 	return true;
 }
