@@ -9,6 +9,9 @@
 
 namespace RTE {
 
+	class Scene;
+	class GAScripted;
+
 	/// The singleton manager of the Activities and rules of Cortex Command.
 	class ActivityMan : public Singleton<ActivityMan> {
 		friend class SettingsMan;
@@ -130,6 +133,12 @@ namespace RTE {
 		/// @return Whether or not the saved game was successfully loaded.
 		bool LoadAndLaunchGame(const std::string& fileName);
 
+		/// Loads a saved game and stages it for a deferred restart, so the caller can adjust the
+		/// staged Activity (per-peer players, deterministic config) before it starts.
+		/// @param fileName Path to the file.
+		/// @return Whether or not the saved game was successfully staged.
+		bool LoadGameToRestart(const std::string& fileName);
+
 		/// Waits for the task that saves the game to complete.
 		void WaitForSaveGameTask() const {
 			if (m_SaveGameTask.valid()) {
@@ -203,11 +212,16 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
+		/// stage-for-restart load paths.
+		bool ReadSavedGame(const std::string& fileName, std::unique_ptr<Scene>& outScene, std::unique_ptr<GAScripted>& outActivity, std::string& outOriginalScenePresetName, bool& outPlaceObjects, bool& outPlaceUnits);
+
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
 		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
 
 		std::unique_ptr<Activity> m_Activity; //!< The currently active Activity.
 		std::unique_ptr<Activity> m_StartActivity; //!< The starting condition of the next Activity to be (re)started.
+		std::unique_ptr<Scene> m_PendingLoadedScene; //!< A loaded save's Scene, kept alive until its deferred restart clones it.
 
 		std::future<void> m_SaveGameTask; //!< The current save game task.
 
