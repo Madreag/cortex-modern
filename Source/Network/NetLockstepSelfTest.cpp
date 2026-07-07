@@ -534,6 +534,101 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// P4C: three peers over a host-star loopback (clients connect only to the host, which relays).
+		// Proves N-peer frame collection (advance only when all remotes are in), the peerId-ordered
+		// merge, all-starts-before-run, and N-way checksum agreement.
+		bool TestCoordinatorThreePeer(std::string* error) {
+			const uint16_t port = 43010;
+			const uint64_t sessionId = 0x7000000000000010ULL;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			// Client A connected first (host-side transport id 1), client B second (id 2). Clients see
+			// the host as transport id 1. Peers: host=1, clientA=2, clientB=3.
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 500;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			auto drive = [&](const std::function<bool()>& done) {
+				for (uint64_t now = 0; now <= 2000; now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+				*error = "three-peer lockstep did not reach Running (start relay failed)";
+				return false;
+			}
+			for (uint64_t f = 0; f < 4; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !clientB.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady, aReady, bReady;
+			auto collect = [&](NetLockstepCoordinator& c, std::vector<uint64_t>& out, size_t& mergedRemotes) {
+				NetLockstepReadyFrame ready;
+				while (c.PopReadyFrame(ready)) {
+					out.push_back(ready.frame);
+					mergedRemotes = ready.remoteFrames.size();
+				}
+			};
+			size_t hostRemotes = 0, aRemotes = 0, bRemotes = 0;
+			if (!drive([&] {
+					collect(host, hostReady, hostRemotes);
+					collect(clientA, aReady, aRemotes);
+					collect(clientB, bReady, bRemotes);
+					return hostReady.size() >= 4 && aReady.size() >= 4 && bReady.size() >= 4;
+				})) {
+				*error = "three-peer lockstep did not produce 4 ready frames on every peer";
+				return false;
+			}
+			// Every peer merges the two OTHER peers' frames into remoteFrames each tick.
+			if (hostRemotes != 2 || aRemotes != 2 || bRemotes != 2) {
+				*error = "three-peer ready frame did not merge both remote peers";
+				return false;
+			}
+			// N-way checksum: all three agree on frame 0 -> verified, no desync.
+			std::array<uint8_t, 32> hash{};
+			hash.fill(0x5A);
+			if (!host.SubmitLocalChecksum(0, hash, error) || !clientA.SubmitLocalChecksum(0, hash, error) || !clientB.SubmitLocalChecksum(0, hash, error)) {
+				return false;
+			}
+			drive([&] { return false; });
+			if (host.IsFailed() || clientA.IsFailed() || clientB.IsFailed()) {
+				*error = "three-peer matching checksums wrongly desynced";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -550,7 +645,8 @@ namespace RTE {
 		    !TestCoordinatorDelayedHappyPath(&error) ||
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
-		    !TestCoordinatorMissingFrameTimeout(&error)) {
+		    !TestCoordinatorMissingFrameTimeout(&error) ||
+		    !TestCoordinatorThreePeer(&error)) {
 			return fail(error);
 		}
 

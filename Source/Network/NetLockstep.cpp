@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -951,14 +952,41 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
-		if (config.remoteTransportPeerId == c_InvalidNetPeerId) {
-			if (error) *error = "remote transport peer id must be valid";
+		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
+		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
+			if (error) *error = "lockstep peer identity is invalid";
 			return false;
 		}
-		if (config.localPeerId == 0 || config.remotePeerId == 0 || config.localPeerId == config.remotePeerId ||
-		    config.peerCount == 0 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
-		    config.localPeerId > config.peerCount || config.remotePeerId > config.peerCount) {
-			if (error) *error = "lockstep peer identity is invalid";
+
+		// The RECEIVE set is every peer except local — peerIds are 1..peerCount per the match config.
+		// The SEND routing is separate (host-star): the host sends directly to every client, but a
+		// client sends only to the host, which relays. So derive the receive set from peerCount, and
+		// take the send targets from the explicit transport map (or the 2-peer single-remote fields).
+		std::vector<uint8_t> remotePeerIds;
+		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
+			if (peerId != config.localPeerId) {
+				remotePeerIds.push_back(peerId);
+			}
+		}
+		std::map<uint8_t, NetPeerId> remoteTransports;
+		if (!config.remoteTransportPeerIds.empty()) {
+			for (const auto& [peerId, transportId]: config.remoteTransportPeerIds) {
+				if (peerId == 0 || peerId == config.localPeerId || peerId > config.peerCount || transportId == c_InvalidNetPeerId) {
+					if (error) *error = "lockstep remote transport map is invalid";
+					return false;
+				}
+				remoteTransports[peerId] = transportId;
+			}
+		} else {
+			if (config.remotePeerId == 0 || config.remotePeerId == config.localPeerId ||
+			    config.remotePeerId > config.peerCount || config.remoteTransportPeerId == c_InvalidNetPeerId) {
+				if (error) *error = "lockstep peer identity is invalid";
+				return false;
+			}
+			remoteTransports[config.remotePeerId] = config.remoteTransportPeerId;
+		}
+		if (remoteTransports.empty()) {
+			if (error) *error = "lockstep has no remote transport targets";
 			return false;
 		}
 		NetLockstepStart start;
@@ -981,8 +1009,11 @@ namespace RTE {
 
 		m_Transport = &transport;
 		m_Config = config;
+		m_RemotePeerIds = std::move(remotePeerIds);
+		m_RemoteTransports = std::move(remoteTransports);
+		m_RelayHost = config.relayToOtherPeers;
 		m_State = NetLockstepState::WaitingForStart;
-		m_RemoteStartReceived = false;
+		m_RemoteStartsReceived.clear();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
 		m_LastStallFrame = UINT64_MAX;
@@ -1062,10 +1093,11 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandleChecksum(const NetLockstepChecksum& checksum) {
-		if (checksum.senderPeerId != m_Config.remotePeerId) {
+		if (!IsKnownRemotePeer(checksum.senderPeerId)) {
 			return;
 		}
-		m_RemoteChecksums[checksum.frame] = checksum.hash;
+		m_RemoteChecksums[checksum.frame][checksum.senderPeerId] = checksum.hash;
+		RelayToOtherRemotes({checksum}, checksum.senderPeerId);
 		CompareChecksums(checksum.frame);
 	}
 
@@ -1075,8 +1107,14 @@ namespace RTE {
 		if (localIt == m_LocalChecksums.end() || remoteIt == m_RemoteChecksums.end()) {
 			return;
 		}
-		if (localIt->second != remoteIt->second) {
-			Fail(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame));
+		// A desync on ANY peer aborts, naming it; only verify (and prune) once every remote agrees.
+		for (const auto& [peerId, hash]: remoteIt->second) {
+			if (localIt->second != hash) {
+				Fail(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame) + " (peer " + std::to_string(peerId) + ")");
+				return;
+			}
+		}
+		if (remoteIt->second.size() != m_RemotePeerIds.size()) {
 			return;
 		}
 		// Matched — drop this tick and any older so the maps stay bounded.
@@ -1192,10 +1230,35 @@ namespace RTE {
 			if (error) *error = encodeError.message;
 			return false;
 		}
-		if (!m_Transport->Send(m_Config.remoteTransportPeerId, lane, bytes, error)) {
-			return false;
+		// Send to every remote peer's transport (a set of one in the 2-peer case).
+		for (const auto& [peerId, transportId]: m_RemoteTransports) {
+			if (!m_Transport->Send(transportId, lane, bytes, error)) {
+				return false;
+			}
 		}
 		return true;
+	}
+
+	bool NetLockstepCoordinator::IsKnownRemotePeer(uint8_t peerId) const {
+		return std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peerId) != m_RemotePeerIds.end();
+	}
+
+	// Host-star: forward a packet received from one remote to the OTHER remotes, preserving its
+	// sender id, so every peer sees every peer's frames without a client<->client mesh.
+	void NetLockstepCoordinator::RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId) {
+		if (!m_RelayHost) {
+			return;
+		}
+		std::vector<uint8_t> bytes;
+		if (!NetLockstepCodec::Encode(packet, bytes)) {
+			return;
+		}
+		for (const auto& [peerId, transportId]: m_RemoteTransports) {
+			if (peerId != fromPeerId) {
+				std::string ignored;
+				(void)m_Transport->Send(transportId, m_Config.frameLane, bytes, &ignored);
+			}
+		}
 	}
 
 	void NetLockstepCoordinator::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
@@ -1245,15 +1308,18 @@ namespace RTE {
 		    start.inputDelayFrames != m_Config.inputDelayFrames ||
 		    start.controllerFrameVersion != ControllerFrame::c_Version ||
 		    start.controllerFrameEncodedSize != ControllerFrame::c_EncodedSize ||
-		    start.localPeerId != m_Config.remotePeerId ||
+		    !IsKnownRemotePeer(start.localPeerId) ||
 		    start.peerCount != m_Config.peerCount ||
 		    start.scenario != m_Config.scenario ||
 		    start.ownershipPolicy != m_Config.ownershipPolicy) {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch");
 			return;
 		}
-		m_RemoteStartReceived = true;
-		if (m_State == NetLockstepState::WaitingForStart) {
+		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
+		if (firstFromThisPeer) {
+			RelayToOtherRemotes({start}, start.localPeerId);
+		}
+		if (m_State == NetLockstepState::WaitingForStart && AllRemoteStartsReceived()) {
 			m_State = NetLockstepState::Running;
 			m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		}
@@ -1261,11 +1327,12 @@ namespace RTE {
 
 	void NetLockstepCoordinator::HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs) {
 		++m_Stats.framePacketsReceived;
-		if (!m_RemoteStartReceived || frame.senderPeerId != m_Config.remotePeerId) {
+		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end() || !IsKnownRemotePeer(frame.senderPeerId)) {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch");
 			return;
 		}
-		if (frame.targetFrame < m_Stats.nextFrame || m_RemoteFrames.find(frame.targetFrame) != m_RemoteFrames.end()) {
+		auto& peerFrames = m_RemoteFrames[frame.targetFrame];
+		if (frame.targetFrame < m_Stats.nextFrame || peerFrames.find(frame.senderPeerId) != peerFrames.end()) {
 			++m_Stats.duplicateFrames;
 			return;
 		}
@@ -1273,10 +1340,11 @@ namespace RTE {
 			++m_Stats.outOfOrderFrames;
 		}
 		m_Stats.remoteControllerFramesReceived += frame.frames.size();
-		m_RemoteFrames[frame.targetFrame] = frame.frames;
+		peerFrames[frame.senderPeerId] = frame.frames;
 		if (!frame.commands.empty()) {
-			m_RemoteCommands[frame.targetFrame] = frame.commands;
+			m_RemoteCommands[frame.targetFrame][frame.senderPeerId] = frame.commands;
 		}
+		RelayToOtherRemotes({frame}, frame.senderPeerId);
 		AdvanceReadyFrames(nowMs);
 	}
 
@@ -1292,19 +1360,27 @@ namespace RTE {
 		while (true) {
 			const auto localIt = m_LocalFrames.find(m_Stats.nextFrame);
 			const auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
-			if (localIt == m_LocalFrames.end() || remoteIt == m_RemoteFrames.end()) {
+			// Advance only when the local frame AND every remote peer's frame for this tick are in.
+			if (localIt == m_LocalFrames.end() || remoteIt == m_RemoteFrames.end() ||
+			    remoteIt->second.size() != m_RemotePeerIds.size()) {
 				break;
 			}
 			NetLockstepReadyFrame ready;
 			ready.frame = m_Stats.nextFrame;
 			ready.localFrames = std::move(localIt->second);
-			ready.remoteFrames = std::move(remoteIt->second);
+			// Merge every remote peer's frames in ascending peerId order (std::map iteration) so every
+			// peer builds the byte-identical apply set. This is the one N-peer determinism-sensitive spot.
+			for (auto& [peerId, frames]: remoteIt->second) {
+				ready.remoteFrames.insert(ready.remoteFrames.end(), std::make_move_iterator(frames.begin()), std::make_move_iterator(frames.end()));
+			}
 			if (auto localCmdIt = m_LocalCommands.find(ready.frame); localCmdIt != m_LocalCommands.end()) {
 				ready.localCommands = std::move(localCmdIt->second);
 				m_LocalCommands.erase(localCmdIt);
 			}
 			if (auto remoteCmdIt = m_RemoteCommands.find(ready.frame); remoteCmdIt != m_RemoteCommands.end()) {
-				ready.remoteCommands = std::move(remoteCmdIt->second);
+				for (auto& [peerId, cmds]: remoteCmdIt->second) {
+					ready.remoteCommands.insert(ready.remoteCommands.end(), std::make_move_iterator(cmds.begin()), std::make_move_iterator(cmds.end()));
+				}
 				m_RemoteCommands.erase(remoteCmdIt);
 			}
 			m_Stats.remoteControllerFramesAccepted += ready.remoteFrames.size();

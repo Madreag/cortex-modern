@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -135,9 +136,11 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
-		uint8_t remotePeerId = 0;
+		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
 		uint8_t peerCount = 2;
-		NetPeerId remoteTransportPeerId = c_InvalidNetPeerId;
+		NetPeerId remoteTransportPeerId = c_InvalidNetPeerId; // 2-peer convenience; see remoteTransportPeerIds.
+		std::map<uint8_t, NetPeerId> remoteTransportPeerIds; // Lockstep peerId -> transport id for each remote; empty = derive the 2-peer pair.
+		bool relayToOtherPeers = false; // Host-star: this (host) peer forwards each remote's frames/checksums to the other remotes.
 		NetTransportLane frameLane = NetTransportLane::ControlReliable;
 		std::string scenario = "lockstep";
 		std::string ownershipPolicy = "unique-id-split";
@@ -238,17 +241,24 @@ namespace RTE {
 		NetLockstepConfig m_Config;
 		NetLockstepState m_State = NetLockstepState::Idle;
 		NetLockstepStats m_Stats;
-		bool m_RemoteStartReceived = false;
+		std::vector<uint8_t> m_RemotePeerIds; //!< Every peer except local; derived at Start.
+		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
+		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
+		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
-		std::map<uint64_t, std::vector<ControllerFrame>> m_RemoteFrames;
+		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
-		std::map<uint64_t, std::vector<NetGameCommand>> m_RemoteCommands;
+		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
-		std::map<uint64_t, std::array<uint8_t, 32>> m_RemoteChecksums;
+		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
+
+		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
+		bool IsKnownRemotePeer(uint8_t peerId) const;
+		void RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId);
 	};
 
 } // namespace RTE
