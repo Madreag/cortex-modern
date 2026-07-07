@@ -6,8 +6,10 @@
 #include "NetSession.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 
 namespace RTE {
@@ -64,11 +66,14 @@ namespace RTE {
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
-		bool WaitForSessionReady(NetSession& session, uint64_t maxWaitMs, std::string* error);
-		bool RunLobby(INetTransport& transport, const NetSession& session, uint64_t maxWaitMs, std::string* error);
+		bool WaitForSessionReady(NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
+		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error);
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
+		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
+		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
+		uint8_t LocalLockstepPeerId(const NetSession& session) const;
 		void SetFailed(const std::string& error);
 
 		NetMatchRuntimeState m_State = NetMatchRuntimeState::Idle;
@@ -78,6 +83,7 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		bool m_UseLobbyProtocol = false;
 		std::string m_SetupError;
+		std::chrono::steady_clock::time_point m_RunStartTime; //!< One continuous clock across the setup phases for the session keepalive.
 	};
 
 } // namespace RTE

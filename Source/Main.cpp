@@ -128,6 +128,7 @@ static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netLockstepReportPath;
 static uint64_t s_netLockstepTicks = 0;
 static uint16_t s_netLockstepInputDelay = 0;
+static uint8_t s_netMatchPeers = 2;
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
 static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
@@ -392,6 +393,12 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-ownership-policy") {
 			s_netMatchOwnershipPolicy = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-peers") {
+			const unsigned long parsedPeers = std::strtoul(argValue[++i], nullptr, 10);
+			s_netMatchPeers = static_cast<uint8_t>(std::clamp<unsigned long>(parsedPeers, 2, NetMatchConfigUtil::c_MaxPeerCount));
 			continue;
 		}
 
@@ -1802,6 +1809,7 @@ int RunNetMatchServiceE2E() {
 		request.activityPreset = s_netMatchServiceE2EPreset;
 		request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
+		request.peerCount = s_netMatchPeers;
 		if (!g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}
