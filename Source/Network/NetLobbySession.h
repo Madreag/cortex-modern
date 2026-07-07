@@ -4,7 +4,9 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
+#include <vector>
 
 namespace RTE {
 
@@ -21,8 +23,9 @@ namespace RTE {
 	struct NetLobbySessionConfig {
 		bool host = false;
 		uint8_t localPeerId = 0;
-		uint8_t remotePeerId = 0;
-		NetPeerId remoteTransportPeerId = c_InvalidNetPeerId;
+		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from remoteTransportPeerIds.
+		NetPeerId remoteTransportPeerId = c_InvalidNetPeerId; // 2-peer convenience; see remoteTransportPeerIds.
+		std::map<uint8_t, NetPeerId> remoteTransportPeerIds; // Lockstep peerId -> transport id for each remote; empty = derive the 2-peer pair.
 		NetMatchConfig matchConfig;
 		uint64_t startFrame = 0;
 		uint32_t resendIntervalMs = 250;
@@ -57,8 +60,10 @@ namespace RTE {
 		bool IsFailed() const { return m_State == NetLobbyState::Failed; }
 		bool IsRejected() const { return m_State == NetLobbyState::Rejected; }
 		bool IsLocalReady() const { return m_LocalReady; }
-		bool IsRemoteReady() const { return m_RemoteReady; }
-		const std::string& GetRemoteName() const { return m_RemoteDisplayName; }
+		bool IsRemoteReady() const { return AllRemoteReady(); }
+		bool IsRemoteReady(uint8_t peerId) const;
+		const std::string& GetRemoteName() const;
+		const std::string& GetRemoteName(uint8_t peerId) const;
 		bool IsStartRequested() const { return m_StartRequested; }
 		const NetMatchConfig& GetMatchConfig() const { return m_Config.matchConfig; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
@@ -74,7 +79,8 @@ namespace RTE {
 		static const char* StateName(NetLobbyState state);
 
 	private:
-		bool Send(NetLobbyPayload payload, std::string* error = nullptr);
+		bool SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error = nullptr);
+		bool Send(const NetLobbyPayload& payload, std::string* error = nullptr); // Broadcast to every remote transport.
 		void SendConfigIfDue(uint64_t nowMs);
 		void SendPeerState();
 		void SendPeerStateIfDue(uint64_t nowMs);
@@ -86,8 +92,13 @@ namespace RTE {
 		void HandleConfigAck(const NetLobbyConfigAck& message);
 		void HandleReady(const NetLobbyReady& message);
 		void HandleStart(const NetLobbyStart& message);
+		void HandlePeerState(const NetLobbyPeerState& message);
 		void Reject(const std::string& reason);
 		void Fail(const std::string& reason);
+
+		bool IsKnownRemote(uint8_t peerId) const;
+		bool AllConfigAcked() const;
+		bool AllRemoteReady() const;
 
 		INetTransport* m_Transport = nullptr;
 		NetLobbySessionConfig m_Config;
@@ -97,13 +108,15 @@ namespace RTE {
 		uint64_t m_LastConfigSentMs = 0;
 		uint64_t m_LastPeerStateSentMs = 0;
 		uint64_t m_LastReceiveMs = 0;
-		bool m_ConfigAcked = false;
 		bool m_LocalReady = false;
 		bool m_ReadySent = false;
-		bool m_RemoteReady = false;
 		bool m_StartRequested = false;
 		std::string m_FailureReason;
-		std::string m_RemoteDisplayName;
+		std::vector<uint8_t> m_RemotePeerIds; //!< Every remote lockstep peerId; derived at Start.
+		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
+		std::map<uint8_t, bool> m_ConfigAckedByPeer; //!< Host: which remotes accepted the config.
+		std::map<uint8_t, bool> m_RemoteReadyByPeer; //!< Host: which remotes are ready.
+		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Remote display names from periodic peer-state.
 		NetLobbyStats m_Stats;
 	};
 
