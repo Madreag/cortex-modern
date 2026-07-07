@@ -138,6 +138,7 @@ namespace RTE {
 		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
 		std::deque<NetLobbyStateChunk> m_OutgoingChunks; //!< Host: queued state-file chunks, paced out through Tick.
+		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
 		uint32_t m_IncomingTotalBytes = 0;
 		uint32_t m_IncomingReceivedBytes = 0;

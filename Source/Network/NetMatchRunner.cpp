@@ -94,7 +94,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error) {
+	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream) {
 		m_RunStartTime = std::chrono::steady_clock::now();
 		const uint32_t expectedReadyPeers = m_Config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
 		if (!session.IsReady() || session.GetReadyPeerCount() < expectedReadyPeers) {
@@ -103,6 +103,8 @@ namespace RTE {
 			return false;
 		}
 		m_SetupError.clear();
+		m_StateToStream = std::move(stateToStream);
+		m_ReceivedStateBytes.clear();
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 
 		if (m_UseLobbyProtocol) {
@@ -210,6 +212,11 @@ namespace RTE {
 			SetFailed(error ? *error : "lobby start failed");
 			return false;
 		}
+		// A resync round streams the host's match state; the Start queues behind the last chunk.
+		if (m_Config.host && !m_StateToStream.empty()) {
+			m_Lobby.BeginStateTransfer(std::move(m_StateToStream));
+			m_StateToStream.clear();
+		}
 
 		const auto startTime = std::chrono::steady_clock::now();
 		while (true) {
@@ -237,6 +244,9 @@ namespace RTE {
 			if (m_Lobby.IsStarted()) {
 				m_MatchConfig = m_Lobby.GetMatchConfig();
 				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+				if (m_Lobby.HasCompleteStateTransfer()) {
+					m_ReceivedStateBytes = m_Lobby.TakeReceivedState();
+				}
 				return true;
 			}
 			if (m_Lobby.IsFailed() || m_Lobby.IsRejected()) {

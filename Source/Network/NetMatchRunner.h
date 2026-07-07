@@ -11,6 +11,8 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace RTE {
 
@@ -52,7 +54,11 @@ namespace RTE {
 
 		/// Runs the next match over an already-established session: re-runs the lobby round and starts a
 		/// fresh coordinator, reusing the config from Start(). The prior match must have ended cleanly.
-		bool StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error = nullptr);
+		/// A host may hand in a match-state file to stream to every peer during the round (a resync).
+		bool StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error = nullptr, std::vector<uint8_t> stateToStream = {});
+
+		/// Takes the state file the lobby round received (empty when the round carried none).
+		std::vector<uint8_t> TakeReceivedState() { return std::move(m_ReceivedStateBytes); }
 
 		NetMatchRuntimeState GetState() const { return m_State; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
@@ -84,6 +90,8 @@ namespace RTE {
 		bool m_UseLobbyProtocol = false;
 		std::string m_SetupError;
 		std::chrono::steady_clock::time_point m_RunStartTime; //!< One continuous clock across the setup phases for the session keepalive.
+		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
+		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
 	};
 
 } // namespace RTE

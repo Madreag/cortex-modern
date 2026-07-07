@@ -29,8 +29,25 @@ local function SpawnHuman(presetName, x, team, aimode)
 	return actor;
 end
 
-function P4AlphaDuel:StartActivity()
+function P4AlphaDuel:StartActivity(startNewGame)
 	self.ActivityState = Activity.RUNNING;
+	if startNewGame == false then
+		-- A resumed save (a resync/rejoin): the world already holds everything, funds included;
+		-- just reseat the local players at their teams' brains.
+		for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
+			if self:PlayerActive(player) and self:PlayerHuman(player) then
+				local team = self:GetTeamOfPlayer(player);
+				local brain = MovableMan:GetFirstBrainActor(team);
+				if brain then
+					self:SetPlayerBrain(brain, player);
+					self:SwitchToActor(brain, player, team);
+					self:SetLandingZone(brain.Pos, player);
+					self:SetObservationTarget(brain.Pos, player);
+				end
+			end
+		end
+		return;
+	end
 	self:SetTeamFunds(0, Activity.TEAM_1);
 	self:SetTeamFunds(0, Activity.TEAM_2);
 

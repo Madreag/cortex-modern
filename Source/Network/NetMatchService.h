@@ -35,6 +35,7 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
 		uint8_t peerCount = 2; // Total players (2..4); the host listens for peerCount-1 clients.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
+		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {
@@ -47,6 +48,13 @@ namespace RTE {
 		/// Reconvenes a completed match's still-connected session in the lobby for a rematch.
 		/// Fails (and settles the service into Failed) when the session was lost.
 		bool ReturnToLobby(std::string* error = nullptr);
+
+		/// Recovers a desynced match: the host snapshots its state and streams it through the lobby
+		/// round; every peer relaunches from the identical file. Requires the session to be alive.
+		bool ResyncMatch(std::string* error = nullptr);
+		bool IsResyncOnDesyncEnabled() const { return m_ResyncOnDesync; }
+		/// The snapshot file the next launch must load instead of a fresh activity ("" = none).
+		std::string TakePendingResyncLoad();
 		void Destroy();
 		void Update();
 		void SetReady();
@@ -73,6 +81,7 @@ namespace RTE {
 	private:
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
+		void WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
@@ -88,6 +97,8 @@ namespace RTE {
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
 		int m_LocalTeam = -1;
+		bool m_ResyncOnDesync = false;
+		std::string m_PendingResyncLoad;
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
 

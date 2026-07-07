@@ -136,8 +136,11 @@ static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
 static uint64_t s_netMatchServiceE2ERunningTicks = 0;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
+static int s_netMatchResyncs = 0;
+static bool s_netMatchResyncOnDesync = false;
 static std::string s_netMatchServiceE2EError;
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
+bool StageResyncedMatchActivity(std::string* error);
 static std::string s_menuScriptPath;
 static std::string s_menuScriptOutDir;
 
@@ -405,6 +408,12 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-mode") {
 			s_netMatchMode = argValue[++i];
+			continue;
+		}
+
+		if (currentArg == "-net-match-e2e-resync") {
+			s_netMatchResyncOnDesync = true;
+			++i;
 			continue;
 		}
 
@@ -926,8 +935,11 @@ void RunGameLoop() {
 			}
 
 			// Positive control — inject one genuine non-determinism at a fixed tick so the offline determinism
-			// gate OR the runtime desync detector sees a guaranteed divergence.
-			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50) {
+			// gate OR the runtime desync detector sees a guaranteed divergence. One-shot: a resynced
+			// match reuses tick numbers, and the healed round must NOT be re-poisoned.
+			static bool s_perturbFired = false;
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50 && !s_perturbFired) {
+				s_perturbFired = true;
 				std::random_device perturbDevice;
 				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
 				for (unsigned k = 0; k < perturbAdvance; ++k) {
@@ -1156,6 +1168,64 @@ void RunGameLoop() {
 						g_ActivityMan.SetInActivity(false);
 						ScenarioRunner::ClearControllerReplayError();
 						returnToMenuAfterNetworkEnd = true;
+					} else if (error.find("Desync") != std::string::npos && g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
+					           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+						// A desync heals in place: the host snapshots its state, every peer reloads the
+						// identical file over the live session, and the match plays on.
+						++s_netMatchResyncs;
+						g_ConsoleMan.PrintString("NETWORK: Desync detected - resyncing from the host (" + std::to_string(s_netMatchResyncs) + ")");
+						std::cout << "[net-match] resync: desync detected, reloading from the host snapshot" << std::endl;
+						ScenarioRunner::ClearControllerReplayError();
+						std::string resyncError;
+						bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+						if (resyncOk) {
+							std::string launchPreset;
+							const auto resyncWaitStart = std::chrono::steady_clock::now();
+							while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
+								if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
+									resyncError = g_NetMatchService.GetErrorText();
+									resyncOk = false;
+									break;
+								}
+								if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count() > 60) {
+									resyncError = "timed out waiting for the resync round";
+									resyncOk = false;
+									break;
+								}
+								std::this_thread::sleep_for(std::chrono::milliseconds(5));
+							}
+						}
+						if (resyncOk) {
+							resyncOk = StageResyncedMatchActivity(&resyncError);
+						}
+						if (resyncOk) {
+							g_TimerMan.PauseSim(true);
+							if (!g_ActivityMan.RestartActivity()) {
+								resyncError = "resync activity restart failed";
+								resyncOk = false;
+							}
+						}
+						if (resyncOk) {
+							std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
+							if (s_netMatchServiceE2E) {
+								// Round accounting restarts with the zeroed sim count.
+								s_netMatchServiceE2EStartTick = UINT64_MAX;
+								s_netMatchServiceE2ERunningTicks = 0;
+							}
+						} else {
+							std::cerr << "[net-match] resync failed: " << resyncError << std::endl;
+							g_ConsoleMan.PrintString("NETWORK: Resync failed: " + resyncError);
+							g_NetMatchService.ReportRuntimeError("resync failed: " + resyncError);
+							g_ActivityMan.EndActivity();
+							g_ActivityMan.SetInActivity(false);
+							if (s_netMatchServiceE2E) {
+								s_netMatchServiceE2EError = "resync failed: " + resyncError;
+								s_netMatchServiceE2EExitCode = 1;
+								System::SetQuit(true);
+							} else {
+								returnToMenuAfterNetworkEnd = true;
+							}
+						}
 					} else {
 						std::cerr << "[net-match] controller sync failed: " << error << std::endl;
 						g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
@@ -1789,6 +1859,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
+	out << "\"resyncs\":" << s_netMatchResyncs << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
@@ -1796,6 +1867,31 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"service\":" << g_NetMatchService.BuildReportJson();
 	out << "}";
 	return out.str();
+}
+
+// Stages the resync snapshot every peer now holds: the world state is the file's, but the player
+// seats are per-peer, and the funds/roster ride the snapshot untouched.
+bool StageResyncedMatchActivity(std::string* error) {
+	const std::string pendingLoad = g_NetMatchService.TakePendingResyncLoad();
+	if (pendingLoad.empty()) {
+		if (error) *error = "no resync snapshot to load";
+		return false;
+	}
+	if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+		if (error) *error = "resync snapshot load failed: " + pendingLoad;
+		return false;
+	}
+	const int localTeam = g_NetMatchService.GetLocalTeam();
+	if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
+		if (error) *error = "invalid local team";
+		return false;
+	}
+	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetStartActivity())) {
+		gameActivity->ClearPlayers(false);
+		gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
+	}
+	ScenarioRunner::ApplyDeterministicConfig();
+	return true;
 }
 
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
@@ -1857,6 +1953,7 @@ int RunNetMatchServiceE2E() {
 		if (NetMatchConfigUtil::ParseMode(s_netMatchMode, parsedMode)) {
 			request.mode = parsedMode;
 		}
+		request.resyncOnDesync = s_netMatchResyncOnDesync;
 		if (!g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}
