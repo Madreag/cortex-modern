@@ -52,7 +52,7 @@ namespace RTE {
 
 		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
 		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
-		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs) {
+		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn) {
 			SDL_PumpEvents();
 			BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 			GUIFont* largeFont = g_FrameMan.GetLargeFont();
@@ -64,7 +64,8 @@ namespace RTE {
 			AllegroBitmap drawBitmap(backbuffer);
 			const int centerX = backbuffer->w / 2;
 			const int centerY = backbuffer->h / 2;
-			largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for the other player... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
+			const std::string who = waitingOn.empty() ? "the other player" : waitingOn;
+			largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for " + who + "... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
 			if (graceMs > stallMs) {
 				smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
 			}
@@ -596,12 +597,13 @@ namespace RTE {
 			}
 			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
 			if (stallMs >= nextOverlayMs) {
+				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
-					std::cout << "[net-match] waiting on peer frames (tick " << tick << ")" << std::endl;
+					std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 				}
 				if (s_LockstepStallOverlayEnabled) {
-					DrawLockstepStallOverlay(stallMs, timeoutMs);
+					DrawLockstepStallOverlay(stallMs, timeoutMs, missing);
 				}
 				nextOverlayMs = stallMs + 200;
 			}
