@@ -91,11 +91,16 @@ namespace RTE {
 			listenAddress.Clear();
 			listenAddress.m_port = port;
 
-			SteamNetworkingConfigValue_t callbackConfig;
-			callbackConfig.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
+			SteamNetworkingConfigValue_t connectionConfigs[4];
+			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
+			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
+			// move faster than the conservative default send rate (~256KB/s would take seconds).
+			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 
 			m_Interface = SteamNetworkingSockets();
-			m_ListenSocket = m_Interface->CreateListenSocketIP(listenAddress, 1, &callbackConfig);
+			m_ListenSocket = m_Interface->CreateListenSocketIP(listenAddress, 4, connectionConfigs);
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) {
 				SetError(error, "CreateListenSocketIP failed");
 				return false;
@@ -143,11 +148,16 @@ namespace RTE {
 				remoteAddress.m_port = port;
 			}
 
-			SteamNetworkingConfigValue_t callbackConfig;
-			callbackConfig.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
+			SteamNetworkingConfigValue_t connectionConfigs[4];
+			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
+			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
+			// move faster than the conservative default send rate (~256KB/s would take seconds).
+			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 
 			m_Interface = SteamNetworkingSockets();
-			m_ServerConnection = m_Interface->ConnectByIPAddress(remoteAddress, 1, &callbackConfig);
+			m_ServerConnection = m_Interface->ConnectByIPAddress(remoteAddress, 4, connectionConfigs);
 			if (m_ServerConnection == k_HSteamNetConnection_Invalid) {
 				SetError(error, "ConnectByIPAddress failed");
 				return false;
