@@ -476,6 +476,68 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		bool TestLobbyThreePeer(std::string* error) {
+			const uint16_t port = 43007;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			// Client A connected first (host-side transport id 1), client B second (id 2). Clients see
+			// the host as transport id 1. Peers: host=1, clientA=2, clientB=3.
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = 3;
+			matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client B"});
+			auto cfg = [&](bool host, uint8_t local, std::map<uint8_t, NetPeerId> transports, const char* name) {
+				NetLobbySessionConfig c;
+				c.host = host;
+				c.localPeerId = local;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.matchConfig = matchConfig;
+				c.startFrame = 5;
+				c.displayName = name;
+				c.platform = "windows";
+				c.peerStateIntervalMs = 10;
+				return c;
+			};
+			NetLobbySession host, clientA, clientB;
+			if (!host.Start(hostT, cfg(true, 1, {{2, 1}, {3, 2}}, "Host"), error) ||
+			    !clientA.Start(clientAT, cfg(false, 2, {{1, 1}}, "Client A"), error) ||
+			    !clientB.Start(clientBT, cfg(false, 3, {{1, 1}}, "Client B"), error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 2000; now += 10) {
+				host.Tick(now);
+				clientA.Tick(now);
+				clientB.Tick(now);
+				if (host.IsStarted() && clientA.IsStarted() && clientB.IsStarted()) {
+					break;
+				}
+				if (host.IsFailed() || host.IsRejected() || clientA.IsFailed() || clientA.IsRejected() || clientB.IsFailed() || clientB.IsRejected()) {
+					*error = "three-peer lobby failed; host=" + std::string(NetLobbySession::StateName(host.GetState())) +
+					         " a=" + NetLobbySession::StateName(clientA.GetState()) + " b=" + NetLobbySession::StateName(clientB.GetState());
+					return false;
+				}
+				hostT.AdvanceTimeMs(10);
+				clientAT.AdvanceTimeMs(10);
+				clientBT.AdvanceTimeMs(10);
+			}
+			if (!host.IsStarted() || !clientA.IsStarted() || !clientB.IsStarted()) {
+				*error = "three-peer lobby did not reach Started on every peer";
+				return false;
+			}
+			// The host waited for BOTH clients' acks + readies; all adopt the same config + start frame.
+			if (host.GetMatchConfigHash() != clientA.GetMatchConfigHash() || host.GetMatchConfigHash() != clientB.GetMatchConfigHash() ||
+			    clientA.GetStartFrame() != 5 || clientB.GetStartFrame() != 5) {
+				*error = "three-peer lobby did not converge on the config and start frame";
+				return false;
+			}
+			if (host.GetRemoteName(2) != "Client A" || host.GetRemoteName(3) != "Client B" || !host.IsRemoteReady(2) || !host.IsRemoteReady(3)) {
+				*error = "host lobby did not track both clients' names and readies";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetMatchSelfTest::Run() {
@@ -494,6 +556,7 @@ namespace RTE {
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
+		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;

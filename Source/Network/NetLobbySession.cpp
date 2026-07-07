@@ -21,17 +21,47 @@ namespace RTE {
 		bool IsTerminal(NetLobbyState state) {
 			return state == NetLobbyState::Started || state == NetLobbyState::Rejected || state == NetLobbyState::Failed;
 		}
+
+		const std::string& EmptyName() {
+			static const std::string empty;
+			return empty;
+		}
 	}
 
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
-		if (config.remoteTransportPeerId == c_InvalidNetPeerId) {
-			if (error) *error = "lobby remote transport peer id must be valid";
+		if (config.localPeerId == 0) {
+			if (error) *error = "lobby local peer id is invalid";
 			return false;
 		}
-		if (config.localPeerId == 0 || config.remotePeerId == 0 || config.localPeerId == config.remotePeerId) {
-			if (error) *error = "lobby peer ids are invalid";
-			return false;
+
+		// Derive the remote set from the N-peer map, or the 2-peer convenience pair.
+		m_RemotePeerIds.clear();
+		m_RemoteTransports.clear();
+		m_ConfigAckedByPeer.clear();
+		m_RemoteReadyByPeer.clear();
+		m_RemoteNamesByPeer.clear();
+		if (!config.remoteTransportPeerIds.empty()) {
+			for (const auto& [peerId, transportId] : config.remoteTransportPeerIds) {
+				m_RemotePeerIds.push_back(peerId);
+				m_RemoteTransports[peerId] = transportId;
+			}
+		} else {
+			m_RemotePeerIds.push_back(config.remotePeerId);
+			m_RemoteTransports[config.remotePeerId] = config.remoteTransportPeerId;
 		}
+		for (uint8_t peerId : m_RemotePeerIds) {
+			if (peerId == 0 || peerId == config.localPeerId) {
+				if (error) *error = "lobby peer ids are invalid";
+				return false;
+			}
+			if (m_RemoteTransports[peerId] == c_InvalidNetPeerId) {
+				if (error) *error = "lobby remote transport peer id must be valid";
+				return false;
+			}
+			m_ConfigAckedByPeer[peerId] = false;
+			m_RemoteReadyByPeer[peerId] = false;
+		}
+
 		std::string validateError;
 		if (!NetMatchConfigUtil::ValidateLocalAlpha(config.matchConfig, &validateError)) {
 			if (error) *error = validateError;
@@ -46,10 +76,8 @@ namespace RTE {
 		m_LastConfigSentMs = 0;
 		m_LastPeerStateSentMs = 0;
 		m_LastReceiveMs = 0;
-		m_ConfigAcked = false;
 		m_LocalReady = config.host || config.autoReady;
 		m_ReadySent = false;
-		m_RemoteReady = false;
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
 		m_Stats = {};
@@ -92,18 +120,45 @@ namespace RTE {
 		}
 	}
 
+	bool NetLobbySession::IsRemoteReady(uint8_t peerId) const {
+		const auto it = m_RemoteReadyByPeer.find(peerId);
+		return it != m_RemoteReadyByPeer.end() && it->second;
+	}
+
+	const std::string& NetLobbySession::GetRemoteName() const {
+		if (m_RemotePeerIds.empty()) {
+			return EmptyName();
+		}
+		return GetRemoteName(m_RemotePeerIds.front());
+	}
+
+	const std::string& NetLobbySession::GetRemoteName(uint8_t peerId) const {
+		const auto it = m_RemoteNamesByPeer.find(peerId);
+		return it != m_RemoteNamesByPeer.end() ? it->second : EmptyName();
+	}
+
 	std::string NetLobbySession::BuildReportJson() const {
+		json remotePeers = json::array();
+		for (uint8_t peerId : m_RemotePeerIds) {
+			remotePeers.push_back(json{
+				{"peer_id", static_cast<int>(peerId)},
+				{"config_acked", AllConfigAcked() || (m_ConfigAckedByPeer.count(peerId) && m_ConfigAckedByPeer.at(peerId))},
+				{"ready", IsRemoteReady(peerId)},
+				{"display_name", GetRemoteName(peerId)},
+			});
+		}
 		json report{
 			{"state", StateName(m_State)},
 			{"role", m_Config.host ? "host" : "client"},
 			{"local_peer_id", static_cast<int>(m_Config.localPeerId)},
-			{"remote_peer_id", static_cast<int>(m_Config.remotePeerId)},
+			{"remote_peer_id", static_cast<int>(m_RemotePeerIds.empty() ? 0 : m_RemotePeerIds.front())},
+			{"remote_peers", remotePeers},
 			{"match_config_hash", HashText(m_MatchConfigHash)},
 			{"start_frame", m_StartFrame},
 			{"failure_reason", m_FailureReason},
-			{"config_acked", m_ConfigAcked},
+			{"config_acked", AllConfigAcked()},
 			{"local_ready", m_LocalReady},
-			{"remote_ready", m_RemoteReady},
+			{"remote_ready", AllRemoteReady()},
 			{"start_requested", m_StartRequested},
 			{"match_config", json::parse(NetMatchConfigUtil::BuildReportJson(m_Config.matchConfig))},
 			{"stats", {
@@ -155,37 +210,80 @@ namespace RTE {
 		return "Unknown";
 	}
 
-	bool NetLobbySession::Send(NetLobbyPayload payload, std::string* error) {
+	bool NetLobbySession::IsKnownRemote(uint8_t peerId) const {
+		return m_RemoteTransports.find(peerId) != m_RemoteTransports.end();
+	}
+
+	bool NetLobbySession::AllConfigAcked() const {
+		for (uint8_t peerId : m_RemotePeerIds) {
+			const auto it = m_ConfigAckedByPeer.find(peerId);
+			if (it == m_ConfigAckedByPeer.end() || !it->second) {
+				return false;
+			}
+		}
+		return !m_RemotePeerIds.empty();
+	}
+
+	bool NetLobbySession::AllRemoteReady() const {
+		for (uint8_t peerId : m_RemotePeerIds) {
+			const auto it = m_RemoteReadyByPeer.find(peerId);
+			if (it == m_RemoteReadyByPeer.end() || !it->second) {
+				return false;
+			}
+		}
+		return !m_RemotePeerIds.empty();
+	}
+
+	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error) {
 		if (!m_Transport) {
 			if (error) *error = "lobby has no transport";
 			return false;
 		}
 		std::vector<uint8_t> bytes;
 		NetLobbyError encodeError;
-		if (!NetLobbyProtocol::Encode({std::move(payload)}, bytes, &encodeError)) {
+		if (!NetLobbyProtocol::Encode({payload}, bytes, &encodeError)) {
 			if (error) *error = encodeError.message;
 			return false;
 		}
-		if (!m_Transport->Send(m_Config.remoteTransportPeerId, NetTransportLane::ControlReliable, bytes, error)) {
+		if (!m_Transport->Send(transport, NetTransportLane::ControlReliable, bytes, error)) {
 			return false;
 		}
 		++m_Stats.messagesSent;
 		return true;
 	}
 
+	bool NetLobbySession::Send(const NetLobbyPayload& payload, std::string* error) {
+		for (uint8_t peerId : m_RemotePeerIds) {
+			if (!SendTo(m_RemoteTransports[peerId], payload, error)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	void NetLobbySession::SendConfigIfDue(uint64_t nowMs) {
-		if (!m_Config.host || m_ConfigAcked || m_State != NetLobbyState::WaitingForConfigAck) {
+		if (!m_Config.host || AllConfigAcked() || m_State != NetLobbyState::WaitingForConfigAck) {
 			return;
 		}
 		if (m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
 			return;
 		}
-		std::string error;
-		if (Send(NetLobbyMatchConfig{m_Config.matchConfig}, &error)) {
+		bool sentAny = false;
+		for (uint8_t peerId : m_RemotePeerIds) {
+			if (m_ConfigAckedByPeer[peerId]) {
+				continue;
+			}
+			std::string error;
+			if (SendTo(m_RemoteTransports[peerId], NetLobbyMatchConfig{m_Config.matchConfig}, &error)) {
+				sentAny = true;
+			} else {
+				Fail(error);
+				return;
+			}
+		}
+		if (sentAny) {
 			++m_Stats.configPacketsSent;
 			m_LastConfigSentMs = nowMs;
-		} else {
-			Fail(error);
 		}
 	}
 
@@ -196,7 +294,7 @@ namespace RTE {
 		state.displayName = m_Config.displayName;
 		state.platform = m_Config.platform;
 		std::string error;
-		if (!Send(std::move(state), &error)) {
+		if (!Send(state, &error)) {
 			Fail(error);
 		}
 	}
@@ -222,7 +320,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendStartIfReady() {
-		if (!m_Config.host || !m_ConfigAcked || !m_RemoteReady || !m_StartRequested || IsTerminal(m_State)) {
+		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || IsTerminal(m_State)) {
 			return;
 		}
 		NetLobbyStart start;
@@ -284,13 +382,11 @@ namespace RTE {
 			} else if constexpr (std::is_same_v<Payload, NetLobbyStart>) {
 				HandleStart(payload);
 			} else if constexpr (std::is_same_v<Payload, NetLobbyAbort>) {
-				if (payload.peerId == m_Config.remotePeerId) {
+				if (IsKnownRemote(payload.peerId)) {
 					Reject(payload.reason);
 				}
 			} else if constexpr (std::is_same_v<Payload, NetLobbyPeerState>) {
-				if (payload.peerId == m_Config.remotePeerId) {
-					m_RemoteDisplayName = payload.displayName;
-				}
+				HandlePeerState(payload);
 			}
 		}, message.payload);
 	}
@@ -299,14 +395,20 @@ namespace RTE {
 		if (m_Config.host) {
 			return;
 		}
+		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
+		// The host resends config until every client acks; a repeat of the accepted config just re-acks.
+		if (m_State != NetLobbyState::WaitingForConfig && incomingHash == m_MatchConfigHash) {
+			Send(NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash, ""});
+			return;
+		}
 		std::string validateError;
 		if (!NetMatchConfigUtil::ValidateLocalAlpha(message.config, &validateError)) {
-			Send(NetLobbyConfigAck{m_Config.localPeerId, false, NetMatchConfigUtil::HashConfig(message.config), validateError});
+			Send(NetLobbyConfigAck{m_Config.localPeerId, false, incomingHash, validateError});
 			Reject(validateError);
 			return;
 		}
 		m_Config.matchConfig = message.config;
-		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
+		m_MatchConfigHash = incomingHash;
 		m_StartFrame = 0;
 		Send(NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash, ""});
 		m_State = NetLobbyState::WaitingForReady;
@@ -314,7 +416,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandleConfigAck(const NetLobbyConfigAck& message) {
-		if (!m_Config.host || message.peerId != m_Config.remotePeerId) {
+		if (!m_Config.host || !IsKnownRemote(message.peerId)) {
 			return;
 		}
 		++m_Stats.configAcksReceived;
@@ -326,16 +428,18 @@ namespace RTE {
 			Reject("match config hash mismatch");
 			return;
 		}
-		m_ConfigAcked = true;
-		m_State = NetLobbyState::WaitingForReady;
+		m_ConfigAckedByPeer[message.peerId] = true;
+		if (AllConfigAcked() && m_State == NetLobbyState::WaitingForConfigAck) {
+			m_State = NetLobbyState::WaitingForReady;
+		}
 	}
 
 	void NetLobbySession::HandleReady(const NetLobbyReady& message) {
-		if (!m_Config.host || message.peerId != m_Config.remotePeerId) {
+		if (!m_Config.host || !IsKnownRemote(message.peerId)) {
 			return;
 		}
 		++m_Stats.readyPacketsReceived;
-		m_RemoteReady = message.ready;
+		m_RemoteReadyByPeer[message.peerId] = message.ready;
 	}
 
 	void NetLobbySession::HandleStart(const NetLobbyStart& message) {
@@ -351,6 +455,14 @@ namespace RTE {
 		}
 		m_StartFrame = message.startFrame;
 		m_State = NetLobbyState::Started;
+	}
+
+	void NetLobbySession::HandlePeerState(const NetLobbyPeerState& message) {
+		if (IsKnownRemote(message.peerId)) {
+			m_RemoteNamesByPeer[message.peerId] = message.displayName;
+			// The explicit Ready message is the authoritative edge; the periodic state keeps views live.
+			m_RemoteReadyByPeer[message.peerId] = message.ready;
+		}
 	}
 
 	void NetLobbySession::Reject(const std::string& reason) {
