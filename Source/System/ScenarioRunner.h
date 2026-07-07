@@ -112,6 +112,9 @@ namespace RTE {
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
 		static bool IsLockstepHumanTeam(int team);
 
+		/// Whether any player slot (human or CPU) in the synced match config plays this team.
+		static bool IsLockstepActiveTeam(int team);
+
 		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();

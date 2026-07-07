@@ -372,6 +372,15 @@ void Activity::SetupPlayers() {
 		m_TeamActive[team] = false;
 	}
 
+	// Local players only cover this peer's team; a lockstep match must run the synced roster's
+	// full team set on every peer or the sims diverge on the first TeamActive read.
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		if (ScenarioRunner::IsLockstepActiveTeam(team)) {
+			m_TeamActive[team] = true;
+			m_TeamCount++;
+		}
+	}
+
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_IsActive[player]) {
 			m_PlayerCount++;
