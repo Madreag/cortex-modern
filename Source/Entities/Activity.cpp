@@ -738,6 +738,10 @@ void Activity::ReassignSquadLeader(const int player, const int team) {
 	}
 }
 
+int Activity::GetLockstepHumanSlotIndex(int team) const {
+	return ScenarioRunner::GetLockstepHumanSlotIndex(team);
+}
+
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsHuman[player]) {
 		return false;
@@ -774,6 +778,16 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 
 	ReassignSquadLeader(player, team);
 	m_ViewState[player] = Normal;
+
+	// Taking control of a teammate's actor in a lockstep match moves its frame production here;
+	// the handoff crosses the wire so every peer flips the actor's owner at the same frame.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		const int64_t actorUID = static_cast<int64_t>(m_ControlledActor[player]->GetUniqueID());
+		if (!ScenarioRunner::IsLockstepLocalActor(actorUID, team, false)) {
+			const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{localPeerId, NetGameSwitchControl{actorUID, team, localPeerId}});
+		}
+	}
 
 	return true;
 }

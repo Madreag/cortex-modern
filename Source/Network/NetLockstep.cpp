@@ -370,6 +370,13 @@ namespace RTE {
 						AppendU8(out, setMode.aiMode);
 						break;
 					}
+					case NetGameCommandType::SwitchControl: {
+						const NetGameSwitchControl& switchControl = std::get<NetGameSwitchControl>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(switchControl.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(switchControl.team));
+						AppendU8(out, switchControl.newOwnerPeerId);
+						break;
+					}
 					case NetGameCommandType::InventoryOp: {
 						const NetGameInventoryOp& inventoryOp = std::get<NetGameInventoryOp>(command.payload);
 						AppendU64LE(out, static_cast<uint64_t>(inventoryOp.actorUID));
@@ -625,6 +632,20 @@ namespace RTE {
 						setMode.actorUID = static_cast<int64_t>(actorUID);
 						setMode.team = static_cast<int32_t>(team);
 						command.payload = setMode;
+						break;
+					}
+					case NetGameCommandType::SwitchControl: {
+						NetGameSwitchControl switchControl;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "switch_control_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "switch_control_team") ||
+						    !ReadOrTruncated(reader.ReadU8(switchControl.newOwnerPeerId), reader, error, "switch_control_new_owner")) {
+							return false;
+						}
+						switchControl.actorUID = static_cast<int64_t>(actorUID);
+						switchControl.team = static_cast<int32_t>(team);
+						command.payload = switchControl;
 						break;
 					}
 					case NetGameCommandType::InventoryOp: {

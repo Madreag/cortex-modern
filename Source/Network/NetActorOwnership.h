@@ -30,6 +30,10 @@ namespace RTE {
 		/// @param team The team the command targets.
 		/// @return The authorized peer id, or 0 if team ownership is undefined.
 		static uint8_t ResolveTeamCommandAuthority(const NetMatchConfig& config, uint8_t team);
+
+		/// Whether a peer may issue team commands for the team: ANY of a shared team's human peers may
+		/// (co-op teammates all buy for the team), or the host for a CPU/unassigned team.
+		static bool IsTeamCommandAuthority(const NetMatchConfig& config, uint8_t team, uint8_t senderPeerId);
 		static bool IsLocalActor(const NetMatchConfig& config, uint8_t localPeerId, const NetActorOwnershipQuery& query);
 		static NetActorOwnershipSummary Summarize(const NetMatchConfig& config, const std::vector<NetActorOwnershipQuery>& actors);
 		static std::string BuildSummaryJson(const NetActorOwnershipSummary& summary);

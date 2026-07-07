@@ -7,6 +7,7 @@
 #include "MetricsCollector.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "NetActorOwnership.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
@@ -42,6 +43,7 @@ namespace RTE {
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
 		uint64_t s_LockstepPollNowMs = 0;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
+		std::map<int64_t, uint8_t> s_LockstepControlOverrides; //!< Synced per-actor control handoffs (co-op shared teams).
 		bool s_LockstepStallOverlayEnabled = false;
 		bool s_LockstepPaused = false;
 		int s_LockstepResumeCountdown = -1;
@@ -425,6 +427,7 @@ namespace RTE {
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator) {
 		s_LockstepCoordinator = coordinator;
 		s_LockstepPollNowMs = 0;
+		s_LockstepControlOverrides.clear();
 		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
 		// Touch the timer singleton only when actually frozen — selftests run this before manager init.
 		if (s_LockstepPaused) {
@@ -446,11 +449,48 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
-		return !s_LockstepCoordinator || s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
+		if (!s_LockstepCoordinator) {
+			return true;
+		}
+		// A synced control handoff overrides the per-team policy for that actor.
+		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
+		if (overrideIt != s_LockstepControlOverrides.end()) {
+			return overrideIt->second == s_LockstepCoordinator->GetConfig().localPeerId;
+		}
+		return s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
 	}
 
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
+	}
+
+	void ScenarioRunner::SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId) {
+		s_LockstepControlOverrides[actorUniqueID] = ownerPeerId;
+	}
+
+	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId) {
+		if (!s_LockstepCoordinator || team < 0) {
+			return true;
+		}
+		return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
+	}
+
+	int ScenarioRunner::GetLockstepHumanSlotIndex(int team) {
+		if (!s_LockstepCoordinator || team < 0) {
+			return -1;
+		}
+		const uint8_t localPeerId = s_LockstepCoordinator->GetConfig().localPeerId;
+		int slotIndex = 0;
+		for (const NetMatchPlayerSlot& slot: s_LockstepCoordinator->GetConfig().matchConfig.players) {
+			if (slot.cpu || static_cast<int>(slot.team) != team) {
+				continue;
+			}
+			if (slot.peerId == localPeerId) {
+				return slotIndex;
+			}
+			++slotIndex;
+		}
+		return -1;
 	}
 
 	bool ScenarioRunner::SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash) {
