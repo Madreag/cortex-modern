@@ -615,6 +615,8 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
+	request.resyncOnDesync = true;
 	// The host picks the roster size and the lockstep input-delay buffer; clients adopt both via
 	// the lobby config sync. The delay box writes back to the setting so the choice persists.
 	if (host) {
@@ -876,6 +878,19 @@ void MainMenuGUI::UpdateMainScreenHoveredButton(const GUIButton* hoveredButton) 
 void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 	std::string activityPreset;
 	if (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
+		return;
+	}
+	// A joiner whose lobby round carried a live match's snapshot launches from it instead.
+	if (g_NetMatchService.HasPendingResyncLoad()) {
+		std::string stageError;
+		if (!g_NetMatchService.StageResyncedMatchLaunch(&stageError)) {
+			m_MultiplayerErrorLabel->SetText(stageError);
+			g_NetMatchService.Destroy();
+			return;
+		}
+		m_UpdateResult = MainMenuUpdateResult::ActivityStarted;
+		SetActiveMenuScreen(MenuScreen::MainScreen, false);
+		g_GUISound.ExitMenuSound()->Play();
 		return;
 	}
 	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);

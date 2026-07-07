@@ -55,6 +55,10 @@ namespace RTE {
 		bool IsResyncOnDesyncEnabled() const { return m_ResyncOnDesync; }
 		/// The snapshot file the next launch must load instead of a fresh activity ("" = none).
 		std::string TakePendingResyncLoad();
+		bool HasPendingResyncLoad() const;
+		/// Stages the pending snapshot for launch: the world state is the file's, the player seats
+		/// are per-peer, and the funds/roster ride the snapshot untouched.
+		bool StageResyncedMatchLaunch(std::string* error = nullptr);
 		void Destroy();
 		void Update();
 		void SetReady();
@@ -67,6 +71,10 @@ namespace RTE {
 		void LeaveMatch(const std::string& result);
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
+
+		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
+		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
+		void PumpSessionEvents();
 		NetMatchServiceState GetState() const;
 		bool WasEverStarted() const { return m_EverStarted.load(); }
 		NetLobbySnapshot GetLobbySnapshot() const;
@@ -106,6 +114,8 @@ namespace RTE {
 		std::unique_ptr<NetSession> m_Session;
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
+		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
+		uint64_t m_SessionPumpNowMs = 0;
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelRequested{false};
