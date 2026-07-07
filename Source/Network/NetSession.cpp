@@ -1,5 +1,8 @@
 #include "NetSession.h"
 
+#include "NetLobbyProtocol.h"
+#include "NetLockstep.h"
+
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -114,7 +117,8 @@ namespace RTE {
 	}
 
 	void NetSession::Tick(uint64_t nowMs) {
-		m_NowMs = nowMs;
+		// Callers clock each setup phase from its own start; never let a later phase rewind us.
+		m_NowMs = std::max(m_NowMs, nowMs);
 		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
 		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
 			return;
@@ -124,6 +128,15 @@ namespace RTE {
 			ProcessEvent(event);
 		}
 		CheckTimeouts();
+		MaybeSendHeartbeats();
+	}
+
+	void NetSession::TickKeepalive(uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+			return;
+		}
 		MaybeSendHeartbeats();
 	}
 
@@ -161,6 +174,33 @@ namespace RTE {
 			}
 		}
 		return c_InvalidNetPeerId;
+	}
+
+	std::vector<NetSessionPeerInfo> NetSession::GetReadyPeers() const {
+		std::vector<NetSessionPeerInfo> peers;
+		if (m_Role == NetSessionRole::Host) {
+			for (const PeerState& peer : m_Peers) {
+				if (peer.state == NetSessionState::Ready) {
+					peers.push_back({peer.transportPeerId, peer.assignedPeerId, peer.displayName, true});
+				}
+			}
+			// Stable order (by session-assigned id) so both peers derive the same lockstep peer set.
+			std::sort(peers.begin(), peers.end(), [](const NetSessionPeerInfo& lhs, const NetSessionPeerInfo& rhs) {
+				return lhs.assignedPeerId < rhs.assignedPeerId;
+			});
+		} else if (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			peers.push_back({m_RemoteTransportPeerId, c_HostAssignedPeerId, "Host", true});
+		}
+		return peers;
+	}
+
+	uint32_t NetSession::GetReadyPeerCount() const {
+		if (m_Role == NetSessionRole::Host) {
+			return static_cast<uint32_t>(std::count_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+				return peer.state == NetSessionState::Ready;
+			}));
+		}
+		return (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) ? 1U : 0U;
 	}
 
 	bool NetSession::Send(NetPeerId peerId, NetPayload payload, std::string* error) {
@@ -257,6 +297,14 @@ namespace RTE {
 	void NetSession::ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes) {
 		const NetDecodeResult decoded = NetProtocol::Decode(bytes);
 		if (!decoded.ok) {
+			// Another phase's packet on the shared wire: a peer that finished its session handshake
+			// starts its lobby round while we still wait for the others (N-peer), or a prior match's
+			// in-flight lockstep frames. The lobby protocol tolerates our packets the same way.
+			if (decoded.error.code == NetProtocolErrorCode::BadMagic &&
+			    (NetLobbyProtocol::Decode(bytes).ok || NetLockstepCodec::Decode(bytes).ok)) {
+				++m_Stats.ignoredPhasePackets;
+				return;
+			}
 			HandleMalformed(peerId, decoded.error);
 			return;
 		}
@@ -742,6 +790,7 @@ namespace RTE {
 				{"sent_messages", m_Stats.sentMessages},
 				{"received_messages", m_Stats.receivedMessages},
 				{"malformed_messages", m_Stats.malformedMessages},
+				{"ignored_phase_packets", m_Stats.ignoredPhasePackets},
 				{"timeouts", m_Stats.timeouts},
 			}},
 		};
