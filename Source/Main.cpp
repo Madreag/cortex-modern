@@ -1050,16 +1050,30 @@ void RunGameLoop() {
 				// Works in interactive matches too, so a headed match can be ended deterministically.
 				if (ScenarioRunner::GetArgs().selftestBrainKillCommand && ScenarioRunner::IsLockstepControllerSyncActive()) {
 					// Not before tick 80: an activity Over inside the first 100 running ticks reads as a broken setup.
-					if (simTick == 80 || simTick == 100) {
+					// Teams 2/3 exist only in 3/4-peer matches; their kill windows are query-gated no-ops otherwise.
+					const bool teamOneWindow = simTick == 80 || simTick == 100;
+					const bool teamTwoWindow = simTick == 130 || simTick == 150;
+					const bool teamThreeWindow = simTick == 180 || simTick == 200;
+					if (teamOneWindow || teamTwoWindow || teamThreeWindow) {
+						const int targetTeam = teamOneWindow ? 1 : (teamTwoWindow ? 2 : 3);
+						const bool firstDrop = simTick == 80 || simTick == 130 || simTick == 180;
 						// Aim at the live brain and drop low; static coordinates drift off on a different sim's physics.
-						float dropX = simTick == 80 ? 1120.0F : 1112.0F;
-						if (const Actor* enemyBrain = g_MovableMan.GetFirstBrainActor(1)) {
-							dropX = enemyBrain->GetPos().m_X + (simTick == 80 ? 4.0F : -4.0F);
+						if (const Actor* enemyBrain = g_MovableMan.GetFirstBrainActor(targetTeam)) {
+							const float dropX = enemyBrain->GetPos().m_X + (firstDrop ? 4.0F : -4.0F);
+							const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 60.0F;
+							std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " team=" << targetTeam << " x=" << dropX << " y=" << dropY << std::endl;
+							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
+						} else if (teamOneWindow) {
+							// The tuned 2-peer fallback: keep the original blind drop when team 1's brain query misses.
+							const float dropX = simTick == 80 ? 1120.0F : 1112.0F;
+							const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 60.0F;
+							std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
+							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
 						}
-						const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 60.0F;
-						std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
-						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
-					} else if (simTick > 100 && simTick % 5 == 0) {
+					}
+					// The poll's own bounds already skip the original 80/100 windows, so it must not be
+					// an else of the (new, wider) window check or the added windows would eat poll ticks.
+					if (simTick > 100 && simTick % 5 == 0) {
 						if (const int64_t craftUID = g_MovableMan.GetFirstUnloadingCraftUniqueID(0)) {
 							std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
