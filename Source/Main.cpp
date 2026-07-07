@@ -1371,10 +1371,16 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
-					// Leaving a running net match: finish it cleanly so the peer hears "player left", not a stall.
+					// Leaving a running net match: a clean leave lets N-peer survivors keep playing;
+					// with one peer left it ends their match as before, never a stall.
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
-						g_NetMatchService.FinishMatch("Match left");
+						g_NetMatchService.LeaveMatch("Match left");
+					}
+					// The e2e has no menu to return to; a leaver's run ends here.
+					if (s_netMatchServiceE2E) {
+						System::SetQuit(true);
+						break;
 					}
 					g_MenuMan.HandleTransitionIntoMenuLoop();
 					RunMenuLoop();
