@@ -6,6 +6,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <type_traits>
 #include <utility>
 
@@ -81,6 +82,13 @@ namespace RTE {
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
+		m_OutgoingChunks.clear();
+		m_IncomingStateId = 0;
+		m_IncomingTotalBytes = 0;
+		m_IncomingReceivedBytes = 0;
+		m_IncomingChunks.clear();
+		m_IncomingStateComplete = false;
+		m_ReceivedState.clear();
 		m_Stats = {};
 
 		SendPeerState();
@@ -113,12 +121,88 @@ namespace RTE {
 		}
 		if (m_Config.host) {
 			SendConfigIfDue(nowMs);
+			SendQueuedStateChunks();
 			SendStartIfReady();
 		}
 		if (m_Config.timeoutMs > 0 && nowMs >= m_LastReceiveMs && nowMs - m_LastReceiveMs > m_Config.timeoutMs) {
 			++m_Stats.timeouts;
 			Fail("lobby timed out");
 		}
+	}
+
+	void NetLobbySession::BeginStateTransfer(std::vector<uint8_t> fileBytes) {
+		if (!m_Config.host || fileBytes.empty() || IsTerminal(m_State)) {
+			return;
+		}
+		const uint32_t totalBytes = static_cast<uint32_t>(fileBytes.size());
+		const uint16_t chunkCount = static_cast<uint16_t>((fileBytes.size() + NetLobbyProtocol::c_MaxStateChunkBytes - 1) / NetLobbyProtocol::c_MaxStateChunkBytes);
+		// Steady-clock ns would be nicer but the id only disambiguates transfers within one lobby round.
+		const uint64_t transferId = 0x50355354ULL ^ totalBytes ^ (static_cast<uint64_t>(chunkCount) << 32);
+		m_OutgoingChunks.clear();
+		for (uint16_t index = 0; index < chunkCount; ++index) {
+			NetLobbyStateChunk chunk;
+			chunk.transferId = transferId;
+			chunk.totalBytes = totalBytes;
+			chunk.chunkIndex = index;
+			chunk.chunkCount = chunkCount;
+			const size_t begin = static_cast<size_t>(index) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			const size_t end = std::min(fileBytes.size(), begin + NetLobbyProtocol::c_MaxStateChunkBytes);
+			chunk.bytes.assign(fileBytes.begin() + begin, fileBytes.begin() + end);
+			m_OutgoingChunks.push_back(std::move(chunk));
+		}
+	}
+
+	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
+		m_IncomingStateComplete = false;
+		m_IncomingStateId = 0;
+		return std::move(m_ReceivedState);
+	}
+
+	void NetLobbySession::SendQueuedStateChunks() {
+		// A few chunks per tick keeps each remote's reliable send buffer under its cap.
+		int budget = 4;
+		while (!m_OutgoingChunks.empty() && budget-- > 0) {
+			std::string error;
+			if (!Send(m_OutgoingChunks.front(), &error)) {
+				Fail(error);
+				return;
+			}
+			m_OutgoingChunks.pop_front();
+		}
+	}
+
+	void NetLobbySession::HandleStateChunk(const NetLobbyStateChunk& message) {
+		if (m_Config.host) {
+			return;
+		}
+		if (m_IncomingStateId != message.transferId) {
+			// A new transfer supersedes any partial one.
+			m_IncomingStateId = message.transferId;
+			m_IncomingTotalBytes = message.totalBytes;
+			m_IncomingReceivedBytes = 0;
+			m_IncomingChunks.clear();
+			m_IncomingStateComplete = false;
+			m_ReceivedState.clear();
+		}
+		if (m_IncomingStateComplete || m_IncomingChunks.find(message.chunkIndex) != m_IncomingChunks.end()) {
+			return;
+		}
+		m_IncomingReceivedBytes += static_cast<uint32_t>(message.bytes.size());
+		m_IncomingChunks[message.chunkIndex] = message.bytes;
+		if (m_IncomingChunks.size() < message.chunkCount) {
+			return;
+		}
+		m_ReceivedState.clear();
+		m_ReceivedState.reserve(m_IncomingTotalBytes);
+		for (const auto& [index, bytes]: m_IncomingChunks) {
+			m_ReceivedState.insert(m_ReceivedState.end(), bytes.begin(), bytes.end());
+		}
+		m_IncomingChunks.clear();
+		if (m_ReceivedState.size() != m_IncomingTotalBytes) {
+			Fail("state transfer size mismatch");
+			return;
+		}
+		m_IncomingStateComplete = true;
 	}
 
 	bool NetLobbySession::IsRemoteReady(uint8_t peerId) const {
@@ -330,7 +414,8 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendStartIfReady() {
-		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || IsTerminal(m_State)) {
+		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
+		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || !m_OutgoingChunks.empty() || IsTerminal(m_State)) {
 			return;
 		}
 		NetLobbyStart start;
@@ -397,6 +482,8 @@ namespace RTE {
 				}
 			} else if constexpr (std::is_same_v<Payload, NetLobbyPeerState>) {
 				HandlePeerState(payload);
+			} else if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) {
+				HandleStateChunk(payload);
 			}
 		}, message.payload);
 	}

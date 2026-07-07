@@ -144,6 +144,13 @@ namespace RTE {
 				return true;
 			}
 
+			bool ReadBytes(std::vector<uint8_t>& out, size_t count) {
+				if (!CanRead(count)) return false;
+				out.assign(m_Data + m_Offset, m_Data + m_Offset + count);
+				m_Offset += count;
+				return true;
+			}
+
 			bool ReadString(std::string& out, size_t maxBytes, const char* fieldName, NetLobbyError* error) {
 				uint16_t length = 0;
 				const size_t lengthOffset = m_Offset;
@@ -356,6 +363,20 @@ namespace RTE {
 			return AppendString(out, payload.reason, NetLobbyProtocol::c_MaxShortTextBytes, "reason", error);
 		}
 
+		bool EncodePayload(const NetLobbyStateChunk& payload, std::vector<uint8_t>& out, NetLobbyError* error) {
+			if (payload.bytes.size() > NetLobbyProtocol::c_MaxStateChunkBytes) {
+				SetError(error, NetLobbyErrorCode::PayloadTooLarge, out.size(), "state chunk exceeds max size");
+				return false;
+			}
+			AppendU64LE(out, payload.transferId);
+			AppendU32LE(out, payload.totalBytes);
+			AppendU16LE(out, payload.chunkIndex);
+			AppendU16LE(out, payload.chunkCount);
+			AppendU32LE(out, static_cast<uint32_t>(payload.bytes.size()));
+			out.insert(out.end(), payload.bytes.begin(), payload.bytes.end());
+			return true;
+		}
+
 		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error) {
 			switch (type) {
 				case NetLobbyMessageType::Hello: {
@@ -455,6 +476,25 @@ namespace RTE {
 					out = std::move(payload);
 					return true;
 				}
+				case NetLobbyMessageType::StateChunk: {
+					NetLobbyStateChunk payload;
+					uint32_t byteCount = 0;
+					if (!ReadOrTruncated(reader.ReadU64LE(payload.transferId), reader, error, "transfer_id") ||
+					    !ReadOrTruncated(reader.ReadU32LE(payload.totalBytes), reader, error, "total_bytes") ||
+					    !ReadOrTruncated(reader.ReadU16LE(payload.chunkIndex), reader, error, "chunk_index") ||
+					    !ReadOrTruncated(reader.ReadU16LE(payload.chunkCount), reader, error, "chunk_count") ||
+					    !ReadOrTruncated(reader.ReadU32LE(byteCount), reader, error, "byte_count")) return false;
+					if (byteCount > NetLobbyProtocol::c_MaxStateChunkBytes || payload.chunkIndex >= payload.chunkCount || payload.chunkCount == 0) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), "state chunk header is invalid");
+						return false;
+					}
+					if (!reader.ReadBytes(payload.bytes, byteCount)) {
+						SetError(error, NetLobbyErrorCode::TruncatedPayload, reader.Offset(), "state chunk bytes are truncated");
+						return false;
+					}
+					out = std::move(payload);
+					return true;
+				}
 			}
 			SetError(error, NetLobbyErrorCode::UnknownMessageType, reader.Offset(), "unknown lobby message type");
 			return false;
@@ -469,6 +509,7 @@ namespace RTE {
 				case NetLobbyMessageType::Ready:
 				case NetLobbyMessageType::Start:
 				case NetLobbyMessageType::Abort:
+				case NetLobbyMessageType::StateChunk:
 					out = static_cast<NetLobbyMessageType>(raw);
 					return true;
 			}
@@ -485,6 +526,7 @@ namespace RTE {
 			[](const NetLobbyReady&) { return NetLobbyMessageType::Ready; },
 			[](const NetLobbyStart&) { return NetLobbyMessageType::Start; },
 			[](const NetLobbyAbort&) { return NetLobbyMessageType::Abort; },
+			[](const NetLobbyStateChunk&) { return NetLobbyMessageType::StateChunk; },
 		}, payload);
 	}
 
@@ -497,6 +539,7 @@ namespace RTE {
 			case NetLobbyMessageType::Ready: return "Ready";
 			case NetLobbyMessageType::Start: return "Start";
 			case NetLobbyMessageType::Abort: return "Abort";
+			case NetLobbyMessageType::StateChunk: return "StateChunk";
 		}
 		return "Unknown";
 	}
