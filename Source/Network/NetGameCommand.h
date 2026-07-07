@@ -36,6 +36,7 @@ namespace RTE {
 		float posX = 0.0F;
 		float posY = 0.0F;
 		int32_t team = 0;
+		int32_t aiMode = -1; // -1 keeps the preset's default; >=0 sets Actor::AIMode after spawn.
 
 		bool operator==(const NetGameSpawnActor&) const = default;
 	};
