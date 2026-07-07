@@ -1790,8 +1790,6 @@ int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (s_netHost == !s_netJoinAddress.empty()) {
 		setupError = "-net-match-service-e2e requires exactly one of -net-host or -net-join <address>";
-	} else if (s_netLockstepInputDelay != 0) {
-		setupError = "local alpha gameplay currently requires input delay 0";
 	}
 
 	if (setupError.empty()) {
@@ -1803,6 +1801,7 @@ int RunNetMatchServiceE2E() {
 		request.playerName = s_netHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
 		request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+		request.inputDelayFrames = s_netLockstepInputDelay;
 		if (!g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}

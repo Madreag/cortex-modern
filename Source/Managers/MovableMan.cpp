@@ -2541,10 +2541,6 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 	}
-	if (lockstepActive && ScenarioRunner::GetLockstepInputDelayFrames() != 0) {
-		ScenarioRunner::SetControllerReplayError("lockstep gameplay hook currently supports current-frame stall only; input delay is coordinator-selftest-only.");
-		return;
-	}
 	if (lockstepActive && ScenarioRunner::IsControllerLogReplaying()) {
 		ScenarioRunner::SetControllerReplayError("lockstep controller sync cannot be combined with controller log replay.");
 		return;
@@ -2606,16 +2602,15 @@ void MovableMan::UpdateControllers() {
 
 	if (lockstepActive) {
 		std::string error;
+		// Sample this tick's local AI decisions and schedule them to APPLY inputDelayFrames ticks from
+		// now (QueueLocalInput stamps targetFrame = simTick + D). Actors are then driven this tick by
+		// the frame COMMITTED for simTick — sampled D ticks ago — so local and remote apply in phase.
+		// At D=0 the committed local frame is this tick's snapshot, so behavior is unchanged.
 		std::vector<ControllerFrame> localFrames = SnapshotLockstepControllerFrames(m_Actors, true);
 		DumpControllerDebugSnapshot("lockstep_local_pre_canonicalize", simTick, m_Actors, &localFrames);
 		if (!CanonicalizeControllerFramesThroughWire(localFrames, error)) {
 			DumpControllerDebugSnapshot("lockstep_local_canonicalize_error", simTick, m_Actors, &localFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep canonicalize: " + error);
-			return;
-		}
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, localFrames, true, error)) {
-			DumpControllerDebugSnapshot("lockstep_local_apply_error", simTick, m_Actors, &localFrames, &error);
-			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep local apply: " + error);
 			return;
 		}
 		if (!ScenarioRunner::QueueLockstepLocalControllerFrames(simTick, localFrames, &error)) {
@@ -2628,6 +2623,11 @@ void MovableMan::UpdateControllers() {
 		if (!ScenarioRunner::WaitForLockstepControllerFrame(simTick, readyFrame, &error)) {
 			DumpControllerDebugSnapshot("lockstep_remote_wait_error", simTick, m_Actors, nullptr, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep wait: " + error);
+			return;
+		}
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, error)) {
+			DumpControllerDebugSnapshot("lockstep_local_apply_error", simTick, m_Actors, &readyFrame.localFrames, &error);
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep local apply: " + error);
 			return;
 		}
 		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, error)) {

@@ -51,6 +51,7 @@ void SettingsMan::Clear() {
 	m_DisableFactionBuyMenuThemeCursors = false;
 	m_PathFinderGridNodeSize = SCENEGRIDSIZE;
 	m_AIUpdateInterval = 2;
+	m_NetworkInputDelayFrames = 0;
 	m_NumberOfLuaStatesOverride = -1;
 	m_ForceImmediatePathingRequestCompletion = false;
 
@@ -179,6 +180,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("DisableFactionBuyMenuThemeCursors", { reader >> m_DisableFactionBuyMenuThemeCursors; });
 	MatchProperty("PathFinderGridNodeSize", { reader >> m_PathFinderGridNodeSize; });
 	MatchProperty("AIUpdateInterval", { reader >> m_AIUpdateInterval; });
+	MatchProperty("NetworkInputDelayFrames", { reader >> m_NetworkInputDelayFrames; });
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
 	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.m_SettlingEnabled; });
@@ -306,6 +308,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("DisableFactionBuyMenuThemeCursors", m_DisableFactionBuyMenuThemeCursors);
 	writer.NewPropertyWithValue("PathFinderGridNodeSize", m_PathFinderGridNodeSize);
 	writer.NewPropertyWithValue("AIUpdateInterval", m_AIUpdateInterval);
+	writer.NewPropertyWithValue("NetworkInputDelayFrames", m_NetworkInputDelayFrames);
 	writer.NewPropertyWithValue("NumberOfLuaStatesOverride", m_NumberOfLuaStatesOverride);
 	writer.NewPropertyWithValue("ForceImmediatePathingRequestCompletion", m_ForceImmediatePathingRequestCompletion);
 	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.m_SettlingEnabled);

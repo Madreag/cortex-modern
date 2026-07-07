@@ -52,6 +52,7 @@ namespace RTE {
 		static constexpr uint16_t c_Version = 1;
 		static constexpr uint8_t c_MinPeerCount = 2;
 		static constexpr uint8_t c_MaxPeerCount = 4;
+		static constexpr uint16_t c_MaxInputDelayFrames = 60; // Mirrors NetLockstepCodec::c_MaxInputDelayFrames.
 		static constexpr size_t c_MaxPlayers = 4;
 		static constexpr size_t c_MaxNameBytes = 64;
 		static constexpr size_t c_MaxPresetBytes = 128;

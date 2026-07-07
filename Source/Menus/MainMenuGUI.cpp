@@ -593,6 +593,12 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+	// The host picks the lockstep input-delay buffer; the client adopts it via the lobby config sync.
+	if (host) {
+		int inputDelay = g_SettingsMan.GetNetworkInputDelayFrames();
+		inputDelay = inputDelay < 0 ? 0 : (inputDelay > NetMatchConfigUtil::c_MaxInputDelayFrames ? NetMatchConfigUtil::c_MaxInputDelayFrames : inputDelay);
+		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
+	}
 
 	std::string error;
 	if (g_NetMatchService.Start(request, &error)) {
