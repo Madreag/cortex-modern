@@ -118,6 +118,25 @@ namespace RTE {
 				*error = "team command authority resolved the wrong peer";
 				return false;
 			}
+			// A shared co-op team authorizes EVERY one of its human peers; outsiders and the CPU
+			// team's non-host peers stay rejected.
+			NetMatchConfig coopConfig = MakeConfig();
+			coopConfig.peerCount = 3;
+			coopConfig.players = {
+			    NetMatchPlayerSlot{1, 0, false, "Host"},
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 2, false, "Client B"},
+			    NetMatchPlayerSlot{0, 1, true, "CPU"},
+			};
+			if (!NetActorOwnership::IsTeamCommandAuthority(coopConfig, 0, 1) ||
+			    !NetActorOwnership::IsTeamCommandAuthority(coopConfig, 0, 2) ||
+			    NetActorOwnership::IsTeamCommandAuthority(coopConfig, 0, 3) ||
+			    !NetActorOwnership::IsTeamCommandAuthority(coopConfig, 1, coopConfig.hostPeerId) ||
+			    NetActorOwnership::IsTeamCommandAuthority(coopConfig, 1, 2) ||
+			    !NetActorOwnership::IsTeamCommandAuthority(coopConfig, 2, 3)) {
+				*error = "shared-team command authority resolved wrong";
+				return false;
+			}
 			NetMatchConfig emptyConfig = authorityConfig;
 			emptyConfig.players.clear();
 			if (NetActorOwnership::ResolveTeamCommandAuthority(emptyConfig, 0) != 0) {
