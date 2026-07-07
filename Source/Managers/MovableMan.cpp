@@ -2530,6 +2530,13 @@ void MovableMan::UpdateControllers() {
 	}
 
 	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
+	// A stopped coordinator still owns the sim: surface its stop reason so the match-level
+	// handling (resync, clean end, error) runs — never silently degrade to per-machine control.
+	if (!lockstepActive && ScenarioRunner::HasLockstepCoordinator()) {
+		const std::string reason = ScenarioRunner::GetLockstepStopReason();
+		ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep stopped: " + (reason.empty() ? "coordinator not running" : reason));
+		return;
+	}
 	auto isLocalControllerActor = [&](const Actor* actor) {
 		return !lockstepActive || IsLockstepLocalActor(actor);
 	};
