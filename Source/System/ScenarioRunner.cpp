@@ -514,6 +514,18 @@ namespace RTE {
 		return false;
 	}
 
+	bool ScenarioRunner::IsLockstepActiveTeam(int team) {
+		if (!s_LockstepCoordinator) {
+			return false;
+		}
+		for (const NetMatchPlayerSlot& slot: s_LockstepCoordinator->GetConfig().matchConfig.players) {
+			if (static_cast<int>(slot.team) == team) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";

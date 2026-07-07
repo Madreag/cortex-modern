@@ -2,6 +2,8 @@ package.loaded.Constants = nil; require("Constants");
 
 local TEAM_ONE_X = 880;
 local TEAM_TWO_X = 1120;
+local TEAM_THREE_X = 640;
+local TEAM_FOUR_X = 1360;
 
 local function SpawnHuman(presetName, x, team, aimode)
 	local actor = CreateAHuman(presetName, "Base.rte");
@@ -37,6 +39,15 @@ function P4AlphaDuel:StartActivity()
 	brains[Activity.TEAM_2] = SpawnHuman("Brain Robot", TEAM_TWO_X, Activity.TEAM_2, Actor.AIMODE_SENTRY);
 	SpawnHuman("Green Dummy", TEAM_ONE_X - 45, Activity.TEAM_1, Actor.AIMODE_SENTRY);
 	SpawnHuman("Green Dummy", TEAM_TWO_X + 45, Activity.TEAM_2, Actor.AIMODE_SENTRY);
+	-- 3/4-player rosters bring extra teams; the added spawns keep the 2-team match untouched.
+	if self:TeamActive(Activity.TEAM_3) then
+		brains[Activity.TEAM_3] = SpawnHuman("Brain Robot", TEAM_THREE_X, Activity.TEAM_3, Actor.AIMODE_SENTRY);
+		SpawnHuman("Green Dummy", TEAM_THREE_X - 45, Activity.TEAM_3, Actor.AIMODE_SENTRY);
+	end
+	if self:TeamActive(Activity.TEAM_4) then
+		brains[Activity.TEAM_4] = SpawnHuman("Brain Robot", TEAM_FOUR_X, Activity.TEAM_4, Actor.AIMODE_SENTRY);
+		SpawnHuman("Green Dummy", TEAM_FOUR_X + 45, Activity.TEAM_4, Actor.AIMODE_SENTRY);
+	end
 
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if self:PlayerActive(player) and self:PlayerHuman(player) then

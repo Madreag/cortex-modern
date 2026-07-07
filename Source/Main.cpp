@@ -1782,10 +1782,13 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 		gameActivity->ClearPlayers(false);
 		gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-		gameActivity->ForceSetTeamAsActive(Activity::TeamOne);
-		gameActivity->ForceSetTeamAsActive(Activity::TeamTwo);
-		gameActivity->SetTeamFunds(0, Activity::TeamOne);
-		gameActivity->SetTeamFunds(0, Activity::TeamTwo);
+		// Activate every team in the synced roster so all peers run the identical team set.
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
+				gameActivity->ForceSetTeamAsActive(team);
+				gameActivity->SetTeamFunds(0, team);
+			}
+		}
 	}
 	ScenarioRunner::ApplyDeterministicConfig();
 	g_ActivityMan.SetStartActivity(activity);
