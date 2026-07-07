@@ -228,6 +228,11 @@ namespace RTE {
 			s_Args.selftestLeave = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-snapshot") {
+			// Arm the full-game save at tick 300 (both peers pass it: same synced frame). Boolean flag.
+			s_Args.selftestSnapshot = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-inventory-command") {
 			// Arm the host-issued inventory ops. Boolean flag.
 			s_Args.selftestInventoryCommand = true;

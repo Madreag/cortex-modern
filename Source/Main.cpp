@@ -1046,6 +1046,16 @@ void RunGameLoop() {
 					g_ActivityMan.EndActivity();
 					g_ActivityMan.SetInActivity(false);
 				}
+				// P5 control: save the full game at tick 300 on BOTH peers (the same synced frame); the
+				// harness byte-compares the sim payloads. Timed here — these numbers size the P7 technique.
+				if (ScenarioRunner::GetArgs().selftestSnapshot && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
+					const auto saveStart = std::chrono::steady_clock::now();
+					const std::string saveName = "p5snap_p" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId());
+					const bool saved = g_ActivityMan.SaveCurrentGame(saveName);
+					g_ActivityMan.WaitForSaveGameTask();
+					const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
+					std::cout << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick << std::endl;
+				}
 				// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
 				// through the original brain's death because the team still has the spawned one.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainSpawnCommand && simTick == 40) {
