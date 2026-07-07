@@ -821,7 +821,11 @@ static void TrackUidsIfArmed(uint64_t simTick) {
 		return;
 	}
 	// One FP-state row per tick: a driver flipping MXCSR (FTZ/DAZ) mid-run would fork denormal math.
+#ifdef _MSC_VER
 	SceneMan::TraceTerrainEvent("fpu", static_cast<int32_t>(_mm_getcsr()), static_cast<int32_t>(_control87(0, 0)), 0, 0, 0);
+#else
+	SceneMan::TraceTerrainEvent("fpu", static_cast<int32_t>(_mm_getcsr()), 0, 0, 0, 0);
+#endif
 	for (long uid: s_uids) {
 		const MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
 		if (!mo) {

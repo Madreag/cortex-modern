@@ -3,6 +3,8 @@
 #include "CameraMan.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "MovableMan.h"
+#include "MovableObject.h"
 #include "Scene.h"
 #include "ContentFile.h"
 #include "Matrix.h"
