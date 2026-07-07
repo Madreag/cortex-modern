@@ -63,6 +63,8 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostPortTextBox = nullptr;
 	m_MultiplayerHostPlayersTextBox = nullptr;
 	m_MultiplayerHostInputDelayTextBox = nullptr;
+	m_MultiplayerHostModeButton = nullptr;
+	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
 	m_MultiplayerLandingPanel = nullptr;
@@ -170,6 +172,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
 	m_MultiplayerHostPlayersTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPlayers"));
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
+	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
 
@@ -570,6 +573,12 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		StartMultiplayer(true);
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerConnectButton]) {
 		StartMultiplayer(false);
+	} else if (guiEventControl == m_MultiplayerHostModeButton) {
+		// Cycle PvP -> Co-op PvE -> PvPvE. PvE modes add a CPU team the host's AI drives.
+		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
+		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "Mode: PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Mode: Co-op PvE" : "Mode: PvPvE");
+		m_MultiplayerHostModeButton->SetText(modeText);
+		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
 		g_NetMatchService.SetReady();
 		g_GUISound.ButtonPressSound()->Play();
@@ -612,6 +621,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		const long parsedPlayers = std::strtol(m_MultiplayerHostPlayersTextBox->GetText().c_str(), nullptr, 10);
 		request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
 		m_MultiplayerHostPlayersTextBox->SetText(std::to_string(request.peerCount));
+		request.mode = m_MultiplayerHostMode;
 		const long parsedDelay = std::strtol(m_MultiplayerHostInputDelayTextBox->GetText().c_str(), nullptr, 10);
 		const int inputDelay = std::clamp<int>(static_cast<int>(parsedDelay), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
 		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
