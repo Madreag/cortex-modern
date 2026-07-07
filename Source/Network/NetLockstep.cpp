@@ -1454,8 +1454,13 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch");
 			return;
 		}
+		// Check staleness before touching the map, or a stale packet leaks an empty bucket forever.
+		if (frame.targetFrame < m_Stats.nextFrame) {
+			++m_Stats.duplicateFrames;
+			return;
+		}
 		auto& peerFrames = m_RemoteFrames[frame.targetFrame];
-		if (frame.targetFrame < m_Stats.nextFrame || peerFrames.find(frame.senderPeerId) != peerFrames.end()) {
+		if (peerFrames.find(frame.senderPeerId) != peerFrames.end()) {
 			++m_Stats.duplicateFrames;
 			return;
 		}
