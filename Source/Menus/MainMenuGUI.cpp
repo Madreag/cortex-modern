@@ -26,6 +26,7 @@
 
 #include "Resources/Credits.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -60,6 +61,8 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerLobbyMatchLabel = nullptr;
 	m_MultiplayerNameTextBox = nullptr;
 	m_MultiplayerHostPortTextBox = nullptr;
+	m_MultiplayerHostPlayersTextBox = nullptr;
+	m_MultiplayerHostInputDelayTextBox = nullptr;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
 	m_MultiplayerLandingPanel = nullptr;
@@ -165,6 +168,8 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 
 	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerName"));
 	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
+	m_MultiplayerHostPlayersTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPlayers"));
+	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
 
@@ -185,6 +190,14 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPortTextBox->SetNumericOnly(true);
 	m_MultiplayerHostPortTextBox->SetMaxNumericValue(65535);
 	m_MultiplayerHostPortTextBox->SetMaxTextLength(5);
+	m_MultiplayerHostPlayersTextBox->SetText("2");
+	m_MultiplayerHostPlayersTextBox->SetNumericOnly(true);
+	m_MultiplayerHostPlayersTextBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxPeerCount);
+	m_MultiplayerHostPlayersTextBox->SetMaxTextLength(1);
+	m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(std::clamp(g_SettingsMan.GetNetworkInputDelayFrames(), 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames))));
+	m_MultiplayerHostInputDelayTextBox->SetNumericOnly(true);
+	m_MultiplayerHostInputDelayTextBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
+	m_MultiplayerHostInputDelayTextBox->SetMaxTextLength(2);
 	m_MultiplayerJoinPortTextBox->SetText("41010");
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
 	m_MultiplayerJoinPortTextBox->SetMaxNumericValue(65535);
@@ -593,10 +606,16 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
-	// The host picks the lockstep input-delay buffer; the client adopts it via the lobby config sync.
+	// The host picks the roster size and the lockstep input-delay buffer; clients adopt both via
+	// the lobby config sync. The delay box writes back to the setting so the choice persists.
 	if (host) {
-		int inputDelay = g_SettingsMan.GetNetworkInputDelayFrames();
-		inputDelay = inputDelay < 0 ? 0 : (inputDelay > NetMatchConfigUtil::c_MaxInputDelayFrames ? NetMatchConfigUtil::c_MaxInputDelayFrames : inputDelay);
+		const long parsedPlayers = std::strtol(m_MultiplayerHostPlayersTextBox->GetText().c_str(), nullptr, 10);
+		request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
+		m_MultiplayerHostPlayersTextBox->SetText(std::to_string(request.peerCount));
+		const long parsedDelay = std::strtol(m_MultiplayerHostInputDelayTextBox->GetText().c_str(), nullptr, 10);
+		const int inputDelay = std::clamp<int>(static_cast<int>(parsedDelay), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
+		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
+		g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
 	}
 
@@ -678,7 +697,19 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		label->SetVisible(true);
 	}
 	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady) {
-		m_MultiplayerStatusLabel->SetText(snapshot.members.size() < 2 ? "Waiting for a player to join..." : "Waiting for the other player to ready up...");
+		size_t connectedCount = 0;
+		for (const NetLobbyMember& member: snapshot.members) {
+			if (member.connected) {
+				++connectedCount;
+			}
+		}
+		if (snapshot.members.size() < 2) {
+			m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+		} else if (connectedCount < snapshot.members.size()) {
+			m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
+		} else {
+			m_MultiplayerStatusLabel->SetText("Waiting for everyone to ready up...");
+		}
 	} else {
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}

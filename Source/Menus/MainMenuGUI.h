@@ -174,6 +174,8 @@ namespace RTE {
 		GUILabel* m_MultiplayerLobbyMatchLabel;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
+		GUITextBox* m_MultiplayerHostPlayersTextBox;
+		GUITextBox* m_MultiplayerHostInputDelayTextBox;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
 		GUICollectionBox* m_MultiplayerLandingPanel;
