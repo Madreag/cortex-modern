@@ -91,16 +91,19 @@ namespace RTE {
 			listenAddress.Clear();
 			listenAddress.m_port = port;
 
-			SteamNetworkingConfigValue_t connectionConfigs[4];
+			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
 			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
 			// move faster than the conservative default send rate (~256KB/s would take seconds).
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
 			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
+			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
+			// adjudication (and a rejoiner's freed slot) kick in.
+			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
 
 			m_Interface = SteamNetworkingSockets();
-			m_ListenSocket = m_Interface->CreateListenSocketIP(listenAddress, 4, connectionConfigs);
+			m_ListenSocket = m_Interface->CreateListenSocketIP(listenAddress, 5, connectionConfigs);
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) {
 				SetError(error, "CreateListenSocketIP failed");
 				return false;
@@ -148,16 +151,19 @@ namespace RTE {
 				remoteAddress.m_port = port;
 			}
 
-			SteamNetworkingConfigValue_t connectionConfigs[4];
+			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
 			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
 			// move faster than the conservative default send rate (~256KB/s would take seconds).
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
 			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
+			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
+			// adjudication (and a rejoiner's freed slot) kick in.
+			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
 
 			m_Interface = SteamNetworkingSockets();
-			m_ServerConnection = m_Interface->ConnectByIPAddress(remoteAddress, 4, connectionConfigs);
+			m_ServerConnection = m_Interface->ConnectByIPAddress(remoteAddress, 5, connectionConfigs);
 			if (m_ServerConnection == k_HSteamNetConnection_Invalid) {
 				SetError(error, "ConnectByIPAddress failed");
 				return false;

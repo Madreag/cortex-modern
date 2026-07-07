@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -32,6 +33,7 @@ namespace RTE {
 		PeerDisconnected = 5,
 		InternalError = 6,
 		PeerLeft = 7, // A clean leave: the frame field is the FIRST frame without the leaver's data; survivors continue.
+		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
 	};
 
 	enum class NetLockstepErrorCode {
@@ -183,7 +185,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_Version = 7;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -216,6 +218,12 @@ namespace RTE {
 		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
 		/// so a host leave completes the match for everyone instead.
 		void Leave(const std::string& message = "player left");
+		/// Ends the round on every peer so the match reconvenes and reloads the host's snapshot
+		/// (a rejoin or an operator-forced heal). Host-initiated.
+		void RequestResync(const std::string& message = "resync requested");
+		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
+		/// would otherwise discard while it owns the transport queue.
+		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { m_SessionEventSink = std::move(sink); }
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
 
 		NetLockstepState GetState() const { return m_State; }
@@ -226,6 +234,9 @@ namespace RTE {
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		uint8_t ResolveTeamCommandAuthority(int team) const;
+		/// Whether a transport peer carries one of this round's lockstep remotes (a NEW transport
+		/// peer reaching session-Ready mid-match is a reconnector).
+		bool UsesTransportPeer(NetPeerId transportPeerId) const;
 		/// Whether the actor's owner peer has left as of the given frame; the lockstep gate means every
 		/// survivor answers this identically when consuming that frame, so the stand-down is synced.
 		bool IsActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) const;
@@ -265,6 +276,7 @@ namespace RTE {
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
+		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;

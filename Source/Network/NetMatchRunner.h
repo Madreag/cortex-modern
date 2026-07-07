@@ -72,7 +72,7 @@ namespace RTE {
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
-		bool WaitForSessionReady(NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
+		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error);
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error);

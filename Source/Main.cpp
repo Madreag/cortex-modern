@@ -1118,6 +1118,9 @@ void RunGameLoop() {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), true}});
 				}
 
+				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
+				g_NetMatchService.PumpSessionEvents();
+
 				g_FrameMan.Update();
 
 				g_MovableMan.CompleteQueuedMOIDDrawings();
@@ -1168,13 +1171,14 @@ void RunGameLoop() {
 						g_ActivityMan.SetInActivity(false);
 						ScenarioRunner::ClearControllerReplayError();
 						returnToMenuAfterNetworkEnd = true;
-					} else if (error.find("Desync") != std::string::npos && g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
+					} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
+					           g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
 					           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
-						// A desync heals in place: the host snapshots its state, every peer reloads the
-						// identical file over the live session, and the match plays on.
+						// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
+						// snapshots its state, every peer reloads the identical file, the match plays on.
 						++s_netMatchResyncs;
-						g_ConsoleMan.PrintString("NETWORK: Desync detected - resyncing from the host (" + std::to_string(s_netMatchResyncs) + ")");
-						std::cout << "[net-match] resync: desync detected, reloading from the host snapshot" << std::endl;
+						g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
+						std::cout << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot" << std::endl;
 						ScenarioRunner::ClearControllerReplayError();
 						std::string resyncError;
 						bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
@@ -1869,29 +1873,8 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	return out.str();
 }
 
-// Stages the resync snapshot every peer now holds: the world state is the file's, but the player
-// seats are per-peer, and the funds/roster ride the snapshot untouched.
 bool StageResyncedMatchActivity(std::string* error) {
-	const std::string pendingLoad = g_NetMatchService.TakePendingResyncLoad();
-	if (pendingLoad.empty()) {
-		if (error) *error = "no resync snapshot to load";
-		return false;
-	}
-	if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
-		if (error) *error = "resync snapshot load failed: " + pendingLoad;
-		return false;
-	}
-	const int localTeam = g_NetMatchService.GetLocalTeam();
-	if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
-		if (error) *error = "invalid local team";
-		return false;
-	}
-	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetStartActivity())) {
-		gameActivity->ClearPlayers(false);
-		gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-	}
-	ScenarioRunner::ApplyDeterministicConfig();
-	return true;
+	return g_NetMatchService.StageResyncedMatchLaunch(error);
 }
 
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
@@ -1998,8 +1981,14 @@ int RunNetMatchServiceE2E() {
 		std::cout << std::endl;
 	}
 
-	if (setupError.empty() && !ConfigureNetMatchServiceE2EActivity(activityPreset, &setupError)) {
-		s_netMatchServiceE2EExitCode = 1;
+	if (setupError.empty()) {
+		// A reconnecting peer's first lobby round carried the live match's snapshot; launch from it.
+		const bool staged = g_NetMatchService.HasPendingResyncLoad()
+			? StageResyncedMatchActivity(&setupError)
+			: ConfigureNetMatchServiceE2EActivity(activityPreset, &setupError);
+		if (!staged) {
+			s_netMatchServiceE2EExitCode = 1;
+		}
 	}
 
 	if (setupError.empty()) {

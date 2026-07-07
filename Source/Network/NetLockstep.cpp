@@ -204,6 +204,7 @@ namespace RTE {
 				case NetLockstepStopReason::PeerDisconnected:
 				case NetLockstepStopReason::InternalError:
 				case NetLockstepStopReason::PeerLeft:
+				case NetLockstepStopReason::ResyncRequested:
 					out = static_cast<NetLockstepStopReason>(rawReason);
 					return true;
 			}
@@ -821,6 +822,7 @@ namespace RTE {
 			case NetLockstepStopReason::PeerDisconnected: return "PeerDisconnected";
 			case NetLockstepStopReason::InternalError: return "InternalError";
 			case NetLockstepStopReason::PeerLeft: return "PeerLeft";
+			case NetLockstepStopReason::ResyncRequested: return "ResyncRequested";
 		}
 		return "Unknown";
 	}
@@ -1077,7 +1079,9 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error) {
 		if (m_State != NetLockstepState::Running) {
-			if (error) *error = "lockstep coordinator is not running";
+			// Carry the stop reason so the caller can route it (a resync request must not read as a
+			// generic failure).
+			if (error) *error = m_Stats.timeoutReason.empty() ? "lockstep coordinator is not running" : m_Stats.timeoutReason;
 			return false;
 		}
 		const uint64_t targetFrame = producedFrame + m_Config.inputDelayFrames;
@@ -1211,6 +1215,23 @@ namespace RTE {
 		}
 		m_State = NetLockstepState::Stopped;
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + message;
+	}
+
+	void NetLockstepCoordinator::RequestResync(const std::string& message) {
+		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
+			return;
+		}
+		if (m_Transport) {
+			NetLockstepStop stop;
+			stop.senderPeerId = m_Config.localPeerId;
+			stop.reason = NetLockstepStopReason::ResyncRequested;
+			stop.frame = m_Stats.nextFrame;
+			stop.message = message;
+			std::string ignored;
+			(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
+		}
+		m_State = NetLockstepState::Failed;
+		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::ResyncRequested)) + ":" + message;
 	}
 
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
@@ -1380,6 +1401,15 @@ namespace RTE {
 		return std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peerId) != m_RemotePeerIds.end();
 	}
 
+	bool NetLockstepCoordinator::UsesTransportPeer(NetPeerId transportPeerId) const {
+		for (const auto& [peerId, transportId]: m_RemoteTransports) {
+			if (transportId == transportPeerId) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	// Host-star: forward a packet received from one remote to the OTHER remotes, preserving its
 	// sender id, so every peer sees every peer's frames without a client<->client mesh.
 	void NetLockstepCoordinator::RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId) {
@@ -1404,6 +1434,11 @@ namespace RTE {
 		}
 		switch (event.type) {
 			case NetTransportEventType::PeerConnected:
+				// A NEW transport connection mid-match is a reconnecting peer knocking; the session
+				// (via the sink) runs its handshake while the round keeps playing.
+				if (m_SessionEventSink) {
+					m_SessionEventSink(event);
+				}
 				break;
 			case NetTransportEventType::PeerDisconnected: {
 				uint8_t lockstepPeer = 0;
@@ -1412,6 +1447,10 @@ namespace RTE {
 						lockstepPeer = peerId;
 						break;
 					}
+				}
+				// The session tracks the same lifecycles for the eventual rematch/rejoin bookkeeping.
+				if (m_SessionEventSink) {
+					m_SessionEventSink(event);
 				}
 				// A cleanly-left peer's socket closing behind its notice is expected.
 				if (lockstepPeer != 0 && m_PeerLeaveFrames.find(lockstepPeer) != m_PeerLeaveFrames.end()) {
@@ -1446,7 +1485,16 @@ namespace RTE {
 			case NetTransportEventType::PacketReceived: {
 				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes);
 				if (!decoded.ok) {
-					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (NetProtocol::Decode(event.bytes).ok || NetLobbyProtocol::Decode(event.bytes).ok)) {
+					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetProtocol::Decode(event.bytes).ok) {
+						// Session-protocol traffic mid-match is a reconnect handshake; hand it over.
+						if (m_SessionEventSink) {
+							m_SessionEventSink(event);
+						} else {
+							++m_Stats.ignoredSessionPackets;
+						}
+						return;
+					}
+					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetLobbyProtocol::Decode(event.bytes).ok) {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}

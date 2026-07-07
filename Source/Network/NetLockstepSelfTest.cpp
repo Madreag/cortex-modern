@@ -106,6 +106,9 @@ namespace RTE {
 			if (!RoundTrip({NetLockstepStop{3, NetLockstepStopReason::PeerLeft, 240, "left"}}, error)) {
 				return false;
 			}
+			if (!RoundTrip({NetLockstepStop{1, NetLockstepStopReason::ResyncRequested, 300, "rejoin"}}, error)) {
+				return false;
+			}
 			std::array<uint8_t, 32> checksumHash{};
 			for (size_t i = 0; i < checksumHash.size(); ++i) {
 				checksumHash[i] = static_cast<uint8_t>(i * 7 + 3);
@@ -127,7 +130,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x06, 0x00,
+				0x07, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,

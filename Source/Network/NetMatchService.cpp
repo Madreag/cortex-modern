@@ -2,6 +2,7 @@
 
 #include "ActivityMan.h"
 #include "Constants.h"
+#include "GameActivity.h"
 #include "GnsTransport.h"
 #include "NetIdentity.h"
 #include "PresetMan.h"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <random>
 #include <string>
 #include <utility>
@@ -201,10 +203,14 @@ namespace RTE {
 		if (started) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
 			if (!receivedState.empty()) {
-				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/p5resync_recv.ccsave";
+				// Per-peer filename: same-machine instances share Userdata (the e2e), so concurrent
+				// receivers must never write or load the same file.
+				const std::string recvName = "p5resync_recv_p" + std::to_string(static_cast<int>(session->GetLocalPeerId()) + 1);
+				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + recvName + ".ccsave";
 				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
 				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));
-				pendingLoad = out.good() ? "p5resync_recv" : "";
+				out.close();
+				pendingLoad = out.good() ? recvName : "";
 				if (pendingLoad.empty()) {
 					error = "could not write the received resync snapshot";
 				}
@@ -238,6 +244,35 @@ namespace RTE {
 		std::string pending = std::move(m_PendingResyncLoad);
 		m_PendingResyncLoad.clear();
 		return pending;
+	}
+
+	bool NetMatchService::HasPendingResyncLoad() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return !m_PendingResyncLoad.empty();
+	}
+
+	bool NetMatchService::StageResyncedMatchLaunch(std::string* error) {
+		const std::string pendingLoad = TakePendingResyncLoad();
+		if (pendingLoad.empty()) {
+			if (error) *error = "no resync snapshot to load";
+			return false;
+		}
+		if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+			if (error) *error = "resync snapshot load failed: " + pendingLoad;
+			return false;
+		}
+		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
+		const int localTeam = GetLocalTeam();
+		if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
+			if (error) *error = "invalid local team";
+			return false;
+		}
+		if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetStartActivity())) {
+			gameActivity->ClearPlayers(false);
+			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
+		}
+		ScenarioRunner::ApplyDeterministicConfig();
+		return true;
 	}
 
 	// Same shape as WorkerMain: the objects live as worker locals while the lobby round runs, so
@@ -416,10 +451,43 @@ namespace RTE {
 			return false;
 		}
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get());
+		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
+		// here and drain through PumpSessionEvents on the same (game) thread.
+		m_PendingSessionEvents.clear();
+		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
+			m_PendingSessionEvents.push_back(event);
+		});
 		outActivityPreset = m_ActivityPreset;
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		return true;
+	}
+
+	void NetMatchService::PumpSessionEvents() {
+		if (m_PendingSessionEvents.empty()) {
+			return;
+		}
+		std::vector<NetTransportEvent> events;
+		events.swap(m_PendingSessionEvents);
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Session || m_State != NetMatchServiceState::Running) {
+			return;
+		}
+		m_SessionPumpNowMs += 15;
+		for (const NetTransportEvent& event: events) {
+			m_Session->InjectEvent(event, m_SessionPumpNowMs);
+		}
+		// A transport peer that reached session-Ready but carries no lockstep remote is a
+		// reconnector: the host ends the round so everyone reconvenes around its snapshot.
+		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning()) {
+			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+				if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+					std::cout << "[net-match] rejoin: " << (peer.displayName.empty() ? "a player" : peer.displayName) << " reconnected - resyncing the match" << std::endl;
+					m_Coordinator->RequestResync("player rejoined");
+					break;
+				}
+			}
+		}
 	}
 
 	NetMatchServiceState NetMatchService::GetState() const {
@@ -534,6 +602,25 @@ namespace RTE {
 
 		std::string error;
 		const bool started = runner->Start(*transport, *session, *coordinator, runnerConfig, &error);
+		// A joiner whose lobby round carried a match state is RECONNECTING into a live match; it
+		// launches from the received snapshot instead of a fresh activity.
+		std::string pendingLoad;
+		if (started) {
+			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
+			if (!receivedState.empty()) {
+				// Per-peer filename, matching the resync worker's convention.
+				const std::string recvName = "p5resync_recv_p" + std::to_string(static_cast<int>(session->GetLocalPeerId()) + 1);
+				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + recvName + ".ccsave";
+				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
+				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));
+				out.close();
+				if (out.good()) {
+					pendingLoad = recvName;
+				} else {
+					error = "could not write the received match snapshot";
+				}
+			}
+		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (started) {
@@ -552,6 +639,7 @@ namespace RTE {
 				m_Runner = std::move(runner);
 				m_LocalPeerId = localLockstepId;
 				m_LocalTeam = localTeam;
+				m_PendingResyncLoad = pendingLoad;
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();

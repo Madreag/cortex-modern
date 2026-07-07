@@ -66,7 +66,7 @@ namespace RTE {
 		}
 		// The host waits for every client (peerCount-1); a client waits for the host alone.
 		const uint32_t expectedReadyPeers = config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
-		if (!WaitForSessionReady(session, expectedReadyPeers, config.sessionWaitMs, error)) {
+		if (!WaitForSessionReady(transport, session, expectedReadyPeers, config.sessionWaitMs, error)) {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
@@ -153,8 +153,9 @@ namespace RTE {
 		return "Unknown";
 	}
 
-	bool NetMatchRunner::WaitForSessionReady(NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error) {
+	bool NetMatchRunner::WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error) {
 		const auto startTime = std::chrono::steady_clock::now();
+		uint64_t nextRetryMs = 0;
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -167,6 +168,18 @@ namespace RTE {
 			// N-peer: the host must have every client Ready, not just the first to connect.
 			if (session.IsReady() && session.GetReadyPeerCount() >= expectedReadyPeers) {
 				return true;
+			}
+			// A reconnect can knock before the host's transport notices the dead slot; retry until
+			// the timeout frees it (the budget above still bounds the whole wait).
+			if (!m_Config.host && session.IsRejected() && session.GetRejectReason() == NetRejectReason::SessionFull) {
+				if (nowMs >= nextRetryMs) {
+					nextRetryMs = nowMs + 2000;
+					std::string retryError;
+					NetSessionConfig retryConfig = m_Config.sessionConfig;
+					(void)session.StartClient(transport, m_Config.joinAddress, std::move(retryConfig), &retryError);
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				continue;
 			}
 			if (session.IsRejected() || session.IsFailed() || session.IsClosed()) {
 				// Surface the recorded mismatch (mod/config/version, timeout) instead of the bare state name.

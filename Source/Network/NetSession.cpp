@@ -140,6 +140,15 @@ namespace RTE {
 		MaybeSendHeartbeats();
 	}
 
+	void NetSession::InjectEvent(const NetTransportEvent& event, uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+			return;
+		}
+		ProcessEvent(event);
+	}
+
 	void NetSession::Close(const std::string& reason) {
 		if (!m_Transport) {
 			return;
