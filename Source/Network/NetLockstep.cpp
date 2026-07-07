@@ -318,6 +318,7 @@ namespace RTE {
 						AppendU32LE(out, FloatToBitsLE(spawn.posX));
 						AppendU32LE(out, FloatToBitsLE(spawn.posY));
 						AppendU32LE(out, static_cast<uint32_t>(spawn.team));
+						AppendU32LE(out, static_cast<uint32_t>(spawn.aiMode));
 						break;
 					}
 					case NetGameCommandType::DeliverCargo: {
@@ -515,17 +516,20 @@ namespace RTE {
 						uint32_t posXBits = 0;
 						uint32_t posYBits = 0;
 						uint32_t team = 0;
+						uint32_t aiMode = 0;
 						if (!reader.ReadString(spawn.className, NetLockstepCodec::c_MaxScenarioBytes, "spawn_class_name", error) ||
 						    !reader.ReadString(spawn.preset, NetLockstepCodec::c_MaxScenarioBytes, "spawn_preset", error) ||
 						    !reader.ReadString(spawn.module, NetLockstepCodec::c_MaxScenarioBytes, "spawn_module", error) ||
 						    !ReadOrTruncated(reader.ReadU32LE(posXBits), reader, error, "spawn_pos_x") ||
 						    !ReadOrTruncated(reader.ReadU32LE(posYBits), reader, error, "spawn_pos_y") ||
-						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "spawn_team")) {
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "spawn_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(aiMode), reader, error, "spawn_ai_mode")) {
 							return false;
 						}
 						spawn.posX = FloatFromBitsLE(posXBits);
 						spawn.posY = FloatFromBitsLE(posYBits);
 						spawn.team = static_cast<int32_t>(team);
+						spawn.aiMode = static_cast<int32_t>(aiMode);
 						command.payload = spawn;
 						break;
 					}

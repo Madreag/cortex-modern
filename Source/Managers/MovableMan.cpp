@@ -332,6 +332,9 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				if (Actor* actor = dynamic_cast<Actor*>(clone)) {
 					actor->SetTeam(spawn->team);
 					actor->SetPos(Vector(spawn->posX, spawn->posY));
+					if (spawn->aiMode >= 0 && spawn->aiMode < Actor::AIMODE_COUNT) {
+						actor->SetAIMode(static_cast<Actor::AIMode>(spawn->aiMode));
+					}
 					g_MovableMan.AddActor(actor);
 				} else {
 					delete clone;
