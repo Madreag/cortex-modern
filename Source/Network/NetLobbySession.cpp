@@ -7,6 +7,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <type_traits>
 #include <utility>
 
@@ -83,6 +84,7 @@ namespace RTE {
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
 		m_OutgoingChunks.clear();
+		m_ChunkSendStall = 0;
 		m_IncomingStateId = 0;
 		m_IncomingTotalBytes = 0;
 		m_IncomingReceivedBytes = 0;
@@ -159,14 +161,18 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendQueuedStateChunks() {
-		// A few chunks per tick keeps each remote's reliable send buffer under its cap.
-		int budget = 4;
+		// The transport's reliable send buffer backpressures a bulk stream: a refused chunk just
+		// waits for the next tick, and only a long stretch of zero progress is a real failure.
+		int budget = 2;
 		while (!m_OutgoingChunks.empty() && budget-- > 0) {
 			std::string error;
 			if (!Send(m_OutgoingChunks.front(), &error)) {
-				Fail(error);
+				if (++m_ChunkSendStall > 4000) {
+					Fail("state transfer stalled: " + error);
+				}
 				return;
 			}
+			m_ChunkSendStall = 0;
 			m_OutgoingChunks.pop_front();
 		}
 	}
@@ -203,6 +209,7 @@ namespace RTE {
 			return;
 		}
 		m_IncomingStateComplete = true;
+		std::cout << "[net-match] state transfer complete: " << m_ReceivedState.size() << " bytes" << std::endl;
 	}
 
 	bool NetLobbySession::IsRemoteReady(uint8_t peerId) const {

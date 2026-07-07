@@ -1,14 +1,17 @@
 #include "NetMatchService.h"
 
+#include "ActivityMan.h"
 #include "Constants.h"
 #include "GnsTransport.h"
 #include "NetIdentity.h"
+#include "PresetMan.h"
 #include "ScenarioRunner.h"
 #include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <random>
 #include <string>
 #include <utility>
@@ -77,6 +80,8 @@ namespace RTE {
 			m_IsHost = request.host;
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.host ? 0 : 1;
+			m_ResyncOnDesync = request.resyncOnDesync;
+			m_PendingResyncLoad.clear();
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		}
 		m_EverStarted.store(true);
@@ -119,6 +124,120 @@ namespace RTE {
 		m_StartRequested.store(false);
 		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, transport.release(), session.release(), coordinator.release(), runner.release());
 		return true;
+	}
+
+	bool NetMatchService::ResyncMatch(std::string* error) {
+		JoinWorkerIfDone();
+		// The host snapshots the live (diverged) match BEFORE the teardown; both sides then reload
+		// the identical file, so the divergence is healed by construction.
+		std::vector<uint8_t> stateBytes;
+		bool isHost = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			isHost = m_IsHost;
+		}
+		if (isHost) {
+			if (!g_ActivityMan.SaveCurrentGame("p5resync")) {
+				if (error) *error = "resync snapshot save failed";
+				return false;
+			}
+			g_ActivityMan.WaitForSaveGameTask();
+			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/p5resync.ccsave";
+			std::ifstream in(savePath, std::ios::binary);
+			if (!in) {
+				if (error) *error = "resync snapshot is unreadable: " + savePath;
+				return false;
+			}
+			stateBytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+			if (stateBytes.empty()) {
+				if (error) *error = "resync snapshot is empty";
+				return false;
+			}
+		}
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		std::unique_ptr<GnsTransport> transport;
+		std::unique_ptr<NetSession> session;
+		std::unique_ptr<NetLockstepCoordinator> coordinator;
+		std::unique_ptr<NetMatchRunner> runner;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_Transport || !m_Session || !m_Runner) {
+				if (error) *error = "no live match to resync";
+				return false;
+			}
+			if (!m_Session->IsReady()) {
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Resync unavailable";
+				m_ErrorText = m_Session->HasReject() ? m_Session->BuildRejectText() : "the session was lost";
+				if (error) *error = m_ErrorText;
+				return false;
+			}
+			transport = std::move(m_Transport);
+			session = std::move(m_Session);
+			runner = std::move(m_Runner);
+			m_Coordinator.reset();
+			coordinator = std::make_unique<NetLockstepCoordinator>();
+			m_WorkerDone = false;
+			m_State = NetMatchServiceState::Starting;
+			m_StatusText = "Resyncing the match";
+			m_ErrorText.clear();
+			m_PendingResyncLoad.clear();
+		}
+		m_CancelRequested.store(false);
+		m_ReadyRequested.store(true);
+		m_StartRequested.store(isHost);
+		m_Worker = std::thread(&NetMatchService::WorkerResyncMain, this, transport.release(), session.release(), coordinator.release(), runner.release(), std::move(stateBytes));
+		return true;
+	}
+
+	void NetMatchService::WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes) {
+		std::unique_ptr<GnsTransport> transport(transportRaw);
+		std::unique_ptr<NetSession> session(sessionRaw);
+		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
+		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
+		std::string error;
+		const bool started = runner->StartNextMatch(*transport, *session, *coordinator, &error, std::move(stateBytes));
+		std::string pendingLoad;
+		if (started) {
+			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
+			if (!receivedState.empty()) {
+				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/p5resync_recv.ccsave";
+				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
+				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));
+				pendingLoad = out.good() ? "p5resync_recv" : "";
+				if (pendingLoad.empty()) {
+					error = "could not write the received resync snapshot";
+				}
+			} else {
+				// The host reloads its own snapshot, so both sides launch the identical file.
+				pendingLoad = "p5resync";
+			}
+		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Transport = std::move(transport);
+			m_Session = std::move(session);
+			m_Coordinator = std::move(coordinator);
+			m_Runner = std::move(runner);
+			if (started && !pendingLoad.empty()) {
+				m_PendingResyncLoad = pendingLoad;
+				m_State = NetMatchServiceState::ReadyToLaunch;
+				m_StatusText = "Resynced; relaunching match";
+				m_ErrorText.clear();
+			} else {
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Resync failed";
+				m_ErrorText = error;
+			}
+			m_WorkerDone = true;
+		}
+	}
+
+	std::string NetMatchService::TakePendingResyncLoad() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		std::string pending = std::move(m_PendingResyncLoad);
+		m_PendingResyncLoad.clear();
+		return pending;
 	}
 
 	// Same shape as WorkerMain: the objects live as worker locals while the lobby round runs, so
@@ -169,6 +288,8 @@ namespace RTE {
 			m_IsHost = false;
 			m_LocalPeerId = 0;
 			m_LocalTeam = -1;
+			m_ResyncOnDesync = false;
+			m_PendingResyncLoad.clear();
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
 			m_State = NetMatchServiceState::Idle;
@@ -202,6 +323,8 @@ namespace RTE {
 			m_IsHost = false;
 			m_LocalPeerId = 0;
 			m_LocalTeam = -1;
+			m_ResyncOnDesync = false;
+			m_PendingResyncLoad.clear();
 			m_LocalName.clear();
 			m_State = NetMatchServiceState::Failed;
 			m_StatusText = "Match stopped";
