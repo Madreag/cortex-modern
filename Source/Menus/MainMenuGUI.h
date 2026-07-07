@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Controller.h"
+#include "NetMatchConfig.h"
 
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
@@ -176,6 +177,8 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
+		GUIButton* m_MultiplayerHostModeButton;
+		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
 		GUICollectionBox* m_MultiplayerLandingPanel;
