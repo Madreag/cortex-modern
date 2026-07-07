@@ -310,10 +310,10 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
-		// Only the peer that controls a team may issue economy commands for it; both peers resolve this identically.
+		// Only a peer that controls a team may issue economy commands for it — ANY of a shared
+		// co-op team's human peers counts; every peer resolves this identically.
 		const int32_t commandTeam = NetGameCommandTeam(command.payload);
-		const uint8_t teamAuthority = ScenarioRunner::ResolveTeamCommandAuthority(commandTeam);
-		if (teamAuthority != 0 && command.senderPeerId != teamAuthority) {
+		if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;
 		}
@@ -447,6 +447,21 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("NETWORK: AI mode command target not found: UID " + std::to_string(setMode->actorUID));
 				std::cout << "[net-match] AI mode command target not found: UID " << setMode->actorUID << std::endl;
 			}
+		} else if (const NetGameSwitchControl* switchControl = std::get_if<NetGameSwitchControl>(&command.payload)) {
+			// A peer may only take control for itself; the team gate above already vetted membership.
+			if (switchControl->newOwnerPeerId != command.senderPeerId) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
+				continue;
+			}
+			// The actor may legally be gone by apply time; the override applies either way so every
+			// peer's map stays identical, but a live actor must really be on the claimed team.
+			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(switchControl->actorUID)));
+			if (actor && actor->GetTeam() != switchControl->team) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command for an actor off its claimed team");
+				continue;
+			}
+			ScenarioRunner::SetLockstepControlOverride(switchControl->actorUID, switchControl->newOwnerPeerId);
+			std::cout << "[net-match] control of actor " << switchControl->actorUID << " -> peer " << static_cast<int>(switchControl->newOwnerPeerId) << std::endl;
 		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
 			AHuman* human = dynamic_cast<AHuman*>(actor);

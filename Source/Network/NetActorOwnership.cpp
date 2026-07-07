@@ -56,6 +56,22 @@ namespace RTE {
 		return config.hostPeerId;
 	}
 
+	bool NetActorOwnership::IsTeamCommandAuthority(const NetMatchConfig& config, uint8_t team, uint8_t senderPeerId) {
+		if (config.players.empty()) {
+			return true;
+		}
+		bool teamHasHuman = false;
+		for (const NetMatchPlayerSlot& player : config.players) {
+			if (!player.cpu && player.team == team && player.peerId != 0 && player.peerId <= config.peerCount) {
+				teamHasHuman = true;
+				if (player.peerId == senderPeerId) {
+					return true;
+				}
+			}
+		}
+		return !teamHasHuman && senderPeerId == config.hostPeerId;
+	}
+
 	NetActorOwnershipSummary NetActorOwnership::Summarize(const NetMatchConfig& config, const std::vector<NetActorOwnershipQuery>& actors) {
 		NetActorOwnershipSummary summary;
 		for (const NetActorOwnershipQuery& actor : actors) {

@@ -320,6 +320,12 @@ namespace RTE {
 		/// @return Whether the team is active in the current Activity.
 		bool TeamActive(int team) const { return (team >= Teams::TeamOne && team < Teams::MaxTeamCount) ? m_TeamActive[team] : false; }
 
+		/// Gets the local peer's index among the team's human slots in a lockstep match, so a shared
+		/// co-op team can seat each player at their own unit.
+		/// @param team Which team to look up.
+		/// @return The local player's slot index on that team, or -1 outside lockstep / off the team.
+		int GetLockstepHumanSlotIndex(int team) const;
+
 		/// Sets the given team as active, even if it shouldn't be considered as such normally. Useful for Activities that don't want to define/show all used teams.
 		/// @param team The team to force as active.
 		void ForceSetTeamAsActive(int team) {

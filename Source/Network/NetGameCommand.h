@@ -17,6 +17,7 @@ namespace RTE {
 		InventoryOp = 5,
 		PauseMatch = 6,
 		SetActorAIMode = 7,
+		SwitchControl = 8,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -126,7 +127,17 @@ namespace RTE {
 		bool operator==(const NetGamePauseMatch&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode>;
+	// Hand an actor's frame production to a teammate's peer: co-op players share a team, so which
+	// machine drives each actor must cross the wire. A peer may only take control for itself.
+	struct NetGameSwitchControl {
+		int64_t actorUID = 0;
+		int32_t team = 0;
+		uint8_t newOwnerPeerId = 0;
+
+		bool operator==(const NetGameSwitchControl&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

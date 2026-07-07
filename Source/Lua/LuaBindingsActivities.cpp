@@ -23,6 +23,7 @@ LuaBindingRegisterFunctionDefinitionForType(ActivityLuaBindings, Activity) {
 	    .def("PlayerActive", &Activity::PlayerActive)
 	    .def("PlayerHuman", &Activity::PlayerHuman)
 	    .def("TeamActive", &Activity::TeamActive)
+	    .def("GetLockstepHumanSlotIndex", &Activity::GetLockstepHumanSlotIndex)
 	    .def("GetTeamOfPlayer", &Activity::GetTeamOfPlayer)
 	    .def("SetTeamOfPlayer", &Activity::SetTeamOfPlayer)
 	    .def("PlayersInTeamCount", &Activity::PlayersInTeamCount)

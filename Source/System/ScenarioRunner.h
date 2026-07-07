@@ -119,6 +119,15 @@ namespace RTE {
 		/// leaver's actors down at the identical tick because the lockstep gate syncs the knowledge.
 		static bool IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 
+		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
+		/// share a team, so per-actor control must override the per-team ownership policy.
+		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
+		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
+		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
+		/// The local peer's index among the team's human slots in the synced roster, or -1 outside a
+		/// lockstep match / off the team. Per-peer view data — for per-peer picks only, never sim decisions.
+		static int GetLockstepHumanSlotIndex(int team);
+
 		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();

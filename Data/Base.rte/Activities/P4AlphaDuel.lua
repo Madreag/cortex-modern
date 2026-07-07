@@ -35,18 +35,19 @@ function P4AlphaDuel:StartActivity()
 	self:SetTeamFunds(0, Activity.TEAM_2);
 
 	local brains = {};
+	local dummies = {};
 	brains[Activity.TEAM_1] = SpawnHuman("Brain Robot", TEAM_ONE_X, Activity.TEAM_1, Actor.AIMODE_SENTRY);
 	brains[Activity.TEAM_2] = SpawnHuman("Brain Robot", TEAM_TWO_X, Activity.TEAM_2, Actor.AIMODE_SENTRY);
-	SpawnHuman("Green Dummy", TEAM_ONE_X - 45, Activity.TEAM_1, Actor.AIMODE_SENTRY);
-	SpawnHuman("Green Dummy", TEAM_TWO_X + 45, Activity.TEAM_2, Actor.AIMODE_SENTRY);
+	dummies[Activity.TEAM_1] = SpawnHuman("Green Dummy", TEAM_ONE_X - 45, Activity.TEAM_1, Actor.AIMODE_SENTRY);
+	dummies[Activity.TEAM_2] = SpawnHuman("Green Dummy", TEAM_TWO_X + 45, Activity.TEAM_2, Actor.AIMODE_SENTRY);
 	-- 3/4-player rosters bring extra teams; the added spawns keep the 2-team match untouched.
 	if self:TeamActive(Activity.TEAM_3) then
 		brains[Activity.TEAM_3] = SpawnHuman("Brain Robot", TEAM_THREE_X, Activity.TEAM_3, Actor.AIMODE_SENTRY);
-		SpawnHuman("Green Dummy", TEAM_THREE_X - 45, Activity.TEAM_3, Actor.AIMODE_SENTRY);
+		dummies[Activity.TEAM_3] = SpawnHuman("Green Dummy", TEAM_THREE_X - 45, Activity.TEAM_3, Actor.AIMODE_SENTRY);
 	end
 	if self:TeamActive(Activity.TEAM_4) then
 		brains[Activity.TEAM_4] = SpawnHuman("Brain Robot", TEAM_FOUR_X, Activity.TEAM_4, Actor.AIMODE_SENTRY);
-		SpawnHuman("Green Dummy", TEAM_FOUR_X + 45, Activity.TEAM_4, Actor.AIMODE_SENTRY);
+		dummies[Activity.TEAM_4] = SpawnHuman("Green Dummy", TEAM_FOUR_X + 45, Activity.TEAM_4, Actor.AIMODE_SENTRY);
 	end
 
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
@@ -54,10 +55,16 @@ function P4AlphaDuel:StartActivity()
 			local team = self:GetTeamOfPlayer(player);
 			local brain = brains[team];
 			if brain then
+				-- A shared co-op team seats its second player at the dummy; the brain is the team's
+				-- shared life. Solo teams (and SP) keep the brain, exactly as before.
+				local unit = brain;
+				if self:GetLockstepHumanSlotIndex(team) == 1 and dummies[team] then
+					unit = dummies[team];
+				end
 				self:SetPlayerBrain(brain, player);
-				self:SwitchToActor(brain, player, team);
-				self:SetLandingZone(brain.Pos, player);
-				self:SetObservationTarget(brain.Pos, player);
+				self:SwitchToActor(unit, player, team);
+				self:SetLandingZone(unit.Pos, player);
+				self:SetObservationTarget(unit.Pos, player);
 			end
 		end
 	end
