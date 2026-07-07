@@ -88,19 +88,15 @@ void OpenQueue::Push( PathNode* pNode )
 	printf( " total=%.1f\n", pNode->totalCost );		
 #endif
 	
-	// Add sorted. Lowest to highest cost path. Note that the sentinel has
-	// a value of std::numeric_limits<float>::max(), so it should always be sorted in.
-	MPASSERT( pNode->totalCost < std::numeric_limits<float>::max() );
+	// Add sorted, lowest to highest cost. Stop at the sentinel by identity, not by a cost compare:
+	// a cost that saturates to FLT_MAX (a walled-off node) is not < the FLT_MAX sentinel, so the
+	// original compare-only loop walked past it and spun the circular list forever.
 	PathNode* iter = sentinel->next;
-	while ( true )
-	{
-		if ( pNode->totalCost < iter->totalCost ) {
-			iter->AddBefore( pNode );
-			pNode->inOpen = 1;
-			break;
-		}
+	while ( iter != sentinel && !( pNode->totalCost < iter->totalCost ) ) {
 		iter = iter->next;
 	}
+	iter->AddBefore( pNode );
+	pNode->inOpen = 1;
 	MPASSERT( pNode->inOpen );	// make sure this was actually added.
 #ifdef DEBUG
 	sentinel->CheckList();
