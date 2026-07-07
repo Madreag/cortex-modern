@@ -8,6 +8,9 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
+#include <random>
+#include <string>
 #include <utility>
 
 namespace RTE {
@@ -19,6 +22,13 @@ namespace RTE {
 		constexpr uint64_t c_HostNonce = 0x503441484F53544ULL;
 		constexpr uint64_t c_ClientNonce = 0x503441434C49454ULL;
 		constexpr uint32_t c_MenuLobbyWaitMs = 10 * 60 * 1000;
+
+		// The host dedupes joiners by nonce, so two clients on one session must present distinct ones.
+		// Transport-level identity only — the sim never sees it, so real randomness is fine here.
+		uint64_t MakeClientNonce() {
+			std::random_device device;
+			return c_ClientNonce ^ (static_cast<uint64_t>(device()) << 32) ^ static_cast<uint64_t>(device());
+		}
 
 		std::string PlayerNameOrDefault(const NetMatchServiceRequest& request, bool hostSlot) {
 			const bool localSlot = request.host == hostSlot;
@@ -391,10 +401,21 @@ namespace RTE {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (started) {
+				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
+				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
+				int localTeam = m_LocalTeam;
+				for (const NetMatchPlayerSlot& slot : runner->GetMatchConfig().players) {
+					if (slot.peerId == localLockstepId) {
+						localTeam = slot.team;
+						break;
+					}
+				}
 				m_Transport = std::move(transport);
 				m_Session = std::move(session);
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
+				m_LocalPeerId = localLockstepId;
+				m_LocalTeam = localTeam;
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
@@ -418,8 +439,8 @@ namespace RTE {
 		config.displayName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		config.port = request.port;
 		config.sessionId = c_UiSessionId;
-		config.localNonce = request.host ? c_HostNonce : c_ClientNonce;
-		config.maxPeers = 1;
+		config.localNonce = request.host ? c_HostNonce : MakeClientNonce();
+		config.maxPeers = static_cast<uint8_t>(std::max(1, static_cast<int>(request.peerCount) - 1));
 		config.heartbeatIntervalMs = 50;
 		config.timeoutMs = 5000;
 		config.rejectUserdataModules = false;
@@ -427,14 +448,25 @@ namespace RTE {
 	}
 
 	NetMatchConfig NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const {
+		const uint8_t peerCount = std::clamp<uint8_t>(request.peerCount, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount);
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
 		config.sceneName = "Grasslands";
 		config.modePreset = "PvP";
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
-		config.players[0].displayName = PlayerNameOrDefault(request, true);
-		config.players[1].displayName = PlayerNameOrDefault(request, false);
+		config.peerCount = peerCount;
+		// The host authors the roster; clients adopt it via the lobby config sync. PvP: one team per peer.
+		config.players.clear();
+		for (uint8_t peerId = 1; peerId <= peerCount; ++peerId) {
+			NetMatchPlayerSlot slot;
+			slot.peerId = peerId;
+			slot.team = static_cast<uint8_t>(peerId - 1);
+			slot.cpu = false;
+			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
+			                                               : ("Client " + std::to_string(peerId));
+			config.players.push_back(slot);
+		}
 		return config;
 	}
 

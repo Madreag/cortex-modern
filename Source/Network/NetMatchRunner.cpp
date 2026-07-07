@@ -17,16 +17,26 @@ namespace RTE {
 			return NetIdentity::HashHex(hash);
 		}
 
-		uint8_t RemotePeerFor(bool host) {
-			return host ? 2 : 1;
-		}
-
-		uint8_t LocalPeerFor(bool host) {
-			return host ? 1 : 2;
+		// The session assigns the host id 0 and clients 1..; lockstep peer ids are 1-based and dense.
+		uint8_t LockstepPeerId(uint8_t sessionAssignedId) {
+			return static_cast<uint8_t>(sessionAssignedId + 1);
 		}
 	}
 
+	std::map<uint8_t, NetPeerId> NetMatchRunner::BuildRemoteTransportMap(const NetSession& session) const {
+		std::map<uint8_t, NetPeerId> transports;
+		for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
+			transports[LockstepPeerId(peer.assignedPeerId)] = peer.transportPeerId;
+		}
+		return transports;
+	}
+
+	uint8_t NetMatchRunner::LocalLockstepPeerId(const NetSession& session) const {
+		return LockstepPeerId(session.GetLocalPeerId());
+	}
+
 	bool NetMatchRunner::Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
+		m_RunStartTime = std::chrono::steady_clock::now();
 		m_Config = config;
 		m_UseLobbyProtocol = config.useLobbyProtocol;
 		m_MatchConfig = config.matchConfig;
@@ -54,7 +64,9 @@ namespace RTE {
 			SetFailed(error ? *error : "session start failed");
 			return false;
 		}
-		if (!WaitForSessionReady(session, config.sessionWaitMs, error)) {
+		// The host waits for every client (peerCount-1); a client waits for the host alone.
+		const uint32_t expectedReadyPeers = config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
+		if (!WaitForSessionReady(session, expectedReadyPeers, config.sessionWaitMs, error)) {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
@@ -83,7 +95,9 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error) {
-		if (!session.IsReady()) {
+		m_RunStartTime = std::chrono::steady_clock::now();
+		const uint32_t expectedReadyPeers = m_Config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
+		if (!session.IsReady() || session.GetReadyPeerCount() < expectedReadyPeers) {
 			SetFailed(std::string("session is no longer connected") + (session.HasReject() ? ": " + session.BuildRejectText() : ""));
 			if (error) *error = m_SetupError;
 			return false;
@@ -137,7 +151,7 @@ namespace RTE {
 		return "Unknown";
 	}
 
-	bool NetMatchRunner::WaitForSessionReady(NetSession& session, uint64_t maxWaitMs, std::string* error) {
+	bool NetMatchRunner::WaitForSessionReady(NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error) {
 		const auto startTime = std::chrono::steady_clock::now();
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
@@ -148,7 +162,8 @@ namespace RTE {
 			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now() - startTime).count());
 			session.Tick(nowMs);
-			if (session.IsReady()) {
+			// N-peer: the host must have every client Ready, not just the first to connect.
+			if (session.IsReady() && session.GetReadyPeerCount() >= expectedReadyPeers) {
 				return true;
 			}
 			if (session.IsRejected() || session.IsFailed() || session.IsClosed()) {
@@ -167,18 +182,30 @@ namespace RTE {
 		}
 	}
 
-	bool NetMatchRunner::RunLobby(INetTransport& transport, const NetSession& session, uint64_t maxWaitMs, std::string* error) {
+	bool NetMatchRunner::RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error) {
+		if (m_Config.host) {
+			// The roster carries each client's session-handshake name to every peer via the config sync.
+			for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
+				for (NetMatchPlayerSlot& slot : m_MatchConfig.players) {
+					if (slot.peerId == LockstepPeerId(peer.assignedPeerId) && !peer.displayName.empty()) {
+						slot.displayName = peer.displayName;
+					}
+				}
+			}
+		}
 		NetLobbySessionConfig lobbyConfig;
 		lobbyConfig.host = m_Config.host;
-		lobbyConfig.localPeerId = LocalPeerFor(m_Config.host);
-		lobbyConfig.remotePeerId = RemotePeerFor(m_Config.host);
-		lobbyConfig.remoteTransportPeerId = session.GetRemoteTransportPeerId();
+		lobbyConfig.localPeerId = LocalLockstepPeerId(session);
+		lobbyConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
 		lobbyConfig.matchConfig = m_MatchConfig;
 		lobbyConfig.startFrame = m_Config.startFrame;
 		lobbyConfig.displayName = m_Config.sessionConfig.displayName;
 		lobbyConfig.platform = m_Config.sessionConfig.localIdentity.platform;
 		lobbyConfig.autoReady = m_Config.autoReady;
 		lobbyConfig.autoStart = m_Config.autoStart;
+		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
+		// silence is not death here. Transport disconnects still abort it immediately.
+		lobbyConfig.timeoutMs = static_cast<uint32_t>(maxWaitMs);
 		if (!m_Lobby.Start(transport, lobbyConfig, error)) {
 			SetFailed(error ? *error : "lobby start failed");
 			return false;
@@ -197,9 +224,13 @@ namespace RTE {
 			if (m_Config.startRequested && m_Config.startRequested->load()) {
 				m_Lobby.RequestStart();
 			}
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now() - startTime).count());
+			const auto now = std::chrono::steady_clock::now();
+			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			m_Lobby.Tick(nowMs);
+			// Keep session heartbeats flowing while the lobby owns the event queue: an N-peer host is
+			// still session-waiting for the other clients and would otherwise declare us dead. The
+			// keepalive rides the continuous run clock so the session clock never rewinds.
+			session.TickKeepalive(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - m_RunStartTime).count()));
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
@@ -228,10 +259,11 @@ namespace RTE {
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.inputDelayFrames = m_MatchConfig.inputDelayFrames;
 		lockstepConfig.timeoutMs = config.missingFrameGraceMs;
-		lockstepConfig.localPeerId = LocalPeerFor(config.host);
-		lockstepConfig.remotePeerId = RemotePeerFor(config.host);
+		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
 		lockstepConfig.peerCount = m_MatchConfig.peerCount;
-		lockstepConfig.remoteTransportPeerId = session.GetRemoteTransportPeerId();
+		lockstepConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
+		// Host-star: the host relays each client's frames/checksums to the other clients.
+		lockstepConfig.relayToOtherPeers = config.host;
 		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
 		lockstepConfig.scenario = config.scenario;
 		lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(m_MatchConfig.ownershipPolicy);
@@ -278,8 +310,8 @@ namespace RTE {
 		snapshot.localReady = m_Lobby.IsLocalReady();
 		snapshot.remoteReady = m_Lobby.IsRemoteReady();
 
-		const uint8_t localId = LocalPeerFor(m_Config.host);
-		const uint32_t remotePing = transport.GetPeerPingMs(session.GetRemoteTransportPeerId());
+		const uint8_t localId = LocalLockstepPeerId(session);
+		const std::map<uint8_t, NetPeerId> remoteTransports = BuildRemoteTransportMap(session);
 		for (const NetMatchPlayerSlot& slot: m_MatchConfig.players) {
 			NetLobbyMember member;
 			member.peerId = slot.peerId;
@@ -287,10 +319,13 @@ namespace RTE {
 			member.cpu = slot.cpu;
 			member.isLocal = slot.peerId == localId;
 			// The remote peer's typed name arrives via its periodic peer-state; the slot only has the default.
-			member.displayName = (!member.isLocal && !m_Lobby.GetRemoteName().empty()) ? m_Lobby.GetRemoteName() : slot.displayName;
-			member.ready = member.isLocal ? snapshot.localReady : snapshot.remoteReady;
-			member.connected = true;
-			member.pingMs = member.isLocal ? 0 : remotePing;
+			const std::string& remoteName = m_Lobby.GetRemoteName(slot.peerId);
+			member.displayName = (!member.isLocal && !remoteName.empty()) ? remoteName : slot.displayName;
+			member.ready = member.isLocal ? snapshot.localReady : m_Lobby.IsRemoteReady(slot.peerId);
+			// Host-star: the host has a transport for every client; a client only knows the host directly.
+			const auto transportIt = remoteTransports.find(slot.peerId);
+			member.connected = member.isLocal || slot.cpu || transportIt != remoteTransports.end();
+			member.pingMs = (member.isLocal || transportIt == remoteTransports.end()) ? 0 : transport.GetPeerPingMs(transportIt->second);
 			snapshot.members.push_back(member);
 		}
 		return snapshot;

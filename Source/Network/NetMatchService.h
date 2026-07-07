@@ -33,6 +33,7 @@ namespace RTE {
 		std::string activityPreset = "Skirmish Defense";
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
+		uint8_t peerCount = 2; // Total players (2..4); the host listens for peerCount-1 clients.
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {

@@ -989,6 +989,15 @@ namespace RTE {
 			if (error) *error = "lockstep has no remote transport targets";
 			return false;
 		}
+		// A relay host forwards between clients, so it must reach every remote directly.
+		if (config.relayToOtherPeers) {
+			for (uint8_t peerId : remotePeerIds) {
+				if (remoteTransports.find(peerId) == remoteTransports.end()) {
+					if (error) *error = "lockstep relay host is missing a transport for peer " + std::to_string(peerId);
+					return false;
+				}
+			}
+		}
 		NetLockstepStart start;
 		start.sessionId = config.sessionId;
 		start.startFrame = config.startFrame;
