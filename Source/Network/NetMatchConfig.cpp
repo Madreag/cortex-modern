@@ -104,15 +104,23 @@ namespace RTE {
 		std::vector<bool> seen(config.peerCount + 1, false);
 		bool sawHost = false;
 		for (const NetMatchPlayerSlot& player : config.players) {
-			if (player.peerId == 0 || player.peerId > config.peerCount) {
+			// A CPU slot has no peer: it marks a machine-run team the host's AI drives over the wire.
+			if (player.cpu) {
+				if (player.peerId != 0) {
+					if (error) *error = "cpu slot must not claim a peer";
+					return false;
+				}
+			} else if (player.peerId == 0 || player.peerId > config.peerCount) {
 				if (error) *error = "player peer_id is out of range";
 				return false;
 			}
-			if (seen[player.peerId]) {
-				if (error) *error = "duplicate player peer_id";
-				return false;
+			if (player.peerId != 0) {
+				if (seen[player.peerId]) {
+					if (error) *error = "duplicate player peer_id";
+					return false;
+				}
+				seen[player.peerId] = true;
 			}
-			seen[player.peerId] = true;
 			sawHost = sawHost || player.peerId == config.hostPeerId;
 			if (player.team >= 4) {
 				// Engine teams are 0..3; MaxTeamCount (4) is the exclusive sentinel, so team 4 is invalid.
@@ -183,6 +191,22 @@ namespace RTE {
 			case NetMatchMode::PvPvE: return "pvpve";
 		}
 		return "unknown";
+	}
+
+	bool NetMatchConfigUtil::ParseMode(const std::string& text, NetMatchMode& outMode) {
+		if (text == "pvp" || text == "pvp-skirmish") {
+			outMode = NetMatchMode::PvPSkirmish;
+			return true;
+		}
+		if (text == "coop-pve" || text == "pve") {
+			outMode = NetMatchMode::CoopPvE;
+			return true;
+		}
+		if (text == "pvpve") {
+			outMode = NetMatchMode::PvPvE;
+			return true;
+		}
+		return false;
 	}
 
 	const char* NetMatchConfigUtil::OwnershipPolicyName(NetActorOwnershipPolicy policy) {

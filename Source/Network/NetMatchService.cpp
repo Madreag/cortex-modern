@@ -462,23 +462,36 @@ namespace RTE {
 
 	NetMatchConfig NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const {
 		const uint8_t peerCount = std::clamp<uint8_t>(request.peerCount, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount);
+		// PvPvE gives the CPU the team after the humans', so it fits three human teams at most.
+		const NetMatchMode mode = (request.mode == NetMatchMode::PvPvE && peerCount >= 4) ? NetMatchMode::PvPSkirmish : request.mode;
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
 		config.sceneName = "Grasslands";
-		config.modePreset = "PvP";
+		config.mode = mode;
+		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
 		config.peerCount = peerCount;
-		// The host authors the roster; clients adopt it via the lobby config sync. PvP: one team per peer.
+		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
+		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. The PvE modes
+		// add a peerless CPU slot whose team the host's AI drives over the wire.
 		config.players.clear();
 		for (uint8_t peerId = 1; peerId <= peerCount; ++peerId) {
 			NetMatchPlayerSlot slot;
 			slot.peerId = peerId;
-			slot.team = static_cast<uint8_t>(peerId - 1);
+			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - 1);
 			slot.cpu = false;
 			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
 			                                               : ("Client " + std::to_string(peerId));
 			config.players.push_back(slot);
+		}
+		if (mode == NetMatchMode::CoopPvE || mode == NetMatchMode::PvPvE) {
+			NetMatchPlayerSlot cpuSlot;
+			cpuSlot.peerId = 0;
+			cpuSlot.team = mode == NetMatchMode::CoopPvE ? 1 : peerCount;
+			cpuSlot.cpu = true;
+			cpuSlot.displayName = "CPU";
+			config.players.push_back(cpuSlot);
 		}
 		return config;
 	}
