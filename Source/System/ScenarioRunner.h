@@ -103,6 +103,11 @@ namespace RTE {
 		/// matches only — automated runs keep their output clean and have no visible window.
 		static void SetLockstepStallOverlayEnabled(bool enabled);
 		static bool IsLockstepControllerSyncActive();
+		/// Whether a lockstep coordinator is attached at all — a FAILED one still owns the sim (the
+		/// tick must surface its stop reason, never silently degrade to per-machine controllers).
+		static bool HasLockstepCoordinator();
+		/// The attached coordinator's stop reason ("" while running or when absent).
+		static std::string GetLockstepStopReason();
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		static uint8_t ResolveTeamCommandAuthority(int team);
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);

@@ -453,6 +453,14 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning();
 	}
 
+	bool ScenarioRunner::HasLockstepCoordinator() {
+		return s_LockstepCoordinator != nullptr;
+	}
+
+	std::string ScenarioRunner::GetLockstepStopReason() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetStats().timeoutReason : std::string();
+	}
+
 	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
 		if (!s_LockstepCoordinator) {
 			return true;
