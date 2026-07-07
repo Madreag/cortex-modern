@@ -542,6 +542,15 @@ namespace RTE {
 			return false;
 		}
 
+		// Input-delay priming: with D>0 the first D frames have no committed input yet (the pipeline
+		// is still filling), and the coordinator emits no ready frame before effectiveStartFrame. The
+		// sim free-runs those ticks with empty input so both peers advance identically. No-op at D=0.
+		if (tick < s_LockstepCoordinator->GetStats().effectiveStartFrame) {
+			outFrame = NetLockstepReadyFrame{};
+			outFrame.frame = tick;
+			return true;
+		}
+
 		const uint32_t timeoutMs = s_LockstepCoordinator->GetConfig().timeoutMs;
 		const uint32_t maxPolls = timeoutMs > 0 ? timeoutMs + 50 : 500;
 		const auto waitStart = std::chrono::steady_clock::now();

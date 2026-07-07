@@ -432,6 +432,7 @@ namespace RTE {
 		config.sceneName = "Grasslands";
 		config.modePreset = "PvP";
 		config.ownershipPolicy = request.ownershipPolicy;
+		config.inputDelayFrames = request.inputDelayFrames;
 		config.players[0].displayName = PlayerNameOrDefault(request, true);
 		config.players[1].displayName = PlayerNameOrDefault(request, false);
 		return config;

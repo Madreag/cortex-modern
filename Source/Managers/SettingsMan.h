@@ -97,6 +97,13 @@ namespace RTE {
 		/// @param newAIUpdateInterval How often Actor's AI will now be updated, in simulation updates.
 		void SetAIUpdateInterval(int newAIUpdateInterval) { m_AIUpdateInterval = newAIUpdateInterval; }
 
+		/// Gets the lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
+		/// @return Input-delay frames; 0 = current-frame stall lockstep (LAN), 2-4 hides internet latency.
+		int GetNetworkInputDelayFrames() const { return m_NetworkInputDelayFrames; }
+
+		/// Sets the lockstep input-delay buffer (frames) a hosted match will use.
+		void SetNetworkInputDelayFrames(int newInputDelayFrames) { m_NetworkInputDelayFrames = newInputDelayFrames; }
+
 		/// Gets how many threaded Lua states we'll use. -1 represents no override, which defaults to the maximum number of concurrent hardware threads.
 		/// @return How many threaded Lua states we'll use.
 		int GetNumberOfLuaStatesOverride() const { return m_NumberOfLuaStatesOverride; }
@@ -412,6 +419,7 @@ namespace RTE {
 		bool m_DisableFactionBuyMenuThemeCursors; //!< Whether custom cursor support in faction BuyMenu themes is disabled.
 		int m_PathFinderGridNodeSize; //!< The grid size used by the PathFinder, in pixels.
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
+		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
 		bool m_ForceImmediatePathingRequestCompletion; //!< Whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 

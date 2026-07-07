@@ -85,8 +85,8 @@ namespace RTE {
 			if (error) *error = "host_peer_id is out of range";
 			return false;
 		}
-		if (config.inputDelayFrames != 0) {
-			if (error) *error = "local alpha gameplay requires input_delay_frames 0";
+		if (config.inputDelayFrames > c_MaxInputDelayFrames) {
+			if (error) *error = "input_delay_frames is out of range";
 			return false;
 		}
 		if (!ValidateText(config.activityType, c_MaxPresetBytes, "activity_type", error) ||

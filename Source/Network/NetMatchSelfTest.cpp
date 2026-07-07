@@ -69,10 +69,16 @@ namespace RTE {
 				return false;
 			}
 			config.inputDelayFrames = 2;
-			if (NetMatchConfigUtil::ValidateLocalAlpha(config, nullptr)) {
-				*error = "local alpha validation accepted nonzero input delay";
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(config, nullptr)) {
+				*error = "validation rejected a valid nonzero input delay";
 				return false;
 			}
+			config.inputDelayFrames = NetMatchConfigUtil::c_MaxInputDelayFrames + 1;
+			if (NetMatchConfigUtil::ValidateLocalAlpha(config, nullptr)) {
+				*error = "validation accepted an out-of-range input delay";
+				return false;
+			}
+			config.inputDelayFrames = 0;
 			NetMatchConfig invalidTeam = MakeConfig();
 			invalidTeam.players[0].team = 4;
 			if (NetMatchConfigUtil::ValidateLocalAlpha(invalidTeam, nullptr)) {
