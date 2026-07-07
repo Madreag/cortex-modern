@@ -47,7 +47,16 @@ namespace RTE {
 		uint32_t sentMessages = 0;
 		uint32_t receivedMessages = 0;
 		uint32_t malformedMessages = 0;
+		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
+	};
+
+	// A connected peer as seen by the match runner: its transport id and session-assigned id.
+	struct NetSessionPeerInfo {
+		NetPeerId transportPeerId = c_InvalidNetPeerId;
+		uint8_t assignedPeerId = 0;
+		std::string displayName;
+		bool ready = false;
 	};
 
 	class NetSession {
@@ -55,6 +64,9 @@ namespace RTE {
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
 		void Tick(uint64_t nowMs);
+		/// Sends session heartbeats without polling the transport or checking timeouts, so another
+		/// phase (the lobby) can own the shared event queue while peers still see us alive.
+		void TickKeepalive(uint64_t nowMs);
 		void Close(const std::string& reason);
 
 		NetSessionRole GetRole() const { return m_Role; }
@@ -62,6 +74,12 @@ namespace RTE {
 		uint64_t GetSessionId() const { return m_SessionId; }
 		uint8_t GetLocalPeerId() const { return m_LocalPeerId; }
 		NetPeerId GetRemoteTransportPeerId() const;
+
+		/// Enumerates the peers on the far end of the wire for the match runner.
+		/// Host: every Ready client (its transport + session-assigned id). Client: the host as peer id 0.
+		std::vector<NetSessionPeerInfo> GetReadyPeers() const;
+		/// The number of Ready peers on the far end (host: connected clients; client: 0 or 1).
+		uint32_t GetReadyPeerCount() const;
 		NetRejectReason GetRejectReason() const { return m_RejectReason; }
 		const std::string& GetMismatchKey() const { return m_MismatchKey; }
 		bool HasReject() const { return m_HasReject; }
