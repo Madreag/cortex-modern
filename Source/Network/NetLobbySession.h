@@ -4,8 +4,10 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -78,6 +80,17 @@ namespace RTE {
 		void SetLocalReady(bool ready);
 		void RequestStart();
 
+		/// Queues a match-state file (a resync/rejoin snapshot) to stream to every remote before the
+		/// lobby starts: chunks pace out through Tick and the Start rides the same ordered lane, so a
+		/// started client always holds the complete state.
+		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
+		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
+		/// Takes the fully received state file (empties the buffer).
+		std::vector<uint8_t> TakeReceivedState();
+		/// Received/total byte progress of an incoming transfer (0/0 when none).
+		std::pair<uint32_t, uint32_t> GetStateTransferProgress() const { return {m_IncomingReceivedBytes, m_IncomingTotalBytes}; }
+		bool IsStateTransferOutgoing() const { return !m_OutgoingChunks.empty(); }
+
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLobbyState state);
@@ -97,6 +110,8 @@ namespace RTE {
 		void HandleReady(const NetLobbyReady& message);
 		void HandleStart(const NetLobbyStart& message);
 		void HandlePeerState(const NetLobbyPeerState& message);
+		void HandleStateChunk(const NetLobbyStateChunk& message);
+		void SendQueuedStateChunks();
 		void Reject(const std::string& reason);
 		void Fail(const std::string& reason);
 
@@ -122,6 +137,13 @@ namespace RTE {
 		std::map<uint8_t, bool> m_RemoteReadyByPeer; //!< Which peers are ready, from direct or relayed peer-state.
 		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
+		std::deque<NetLobbyStateChunk> m_OutgoingChunks; //!< Host: queued state-file chunks, paced out through Tick.
+		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
+		uint32_t m_IncomingTotalBytes = 0;
+		uint32_t m_IncomingReceivedBytes = 0;
+		std::map<uint16_t, std::vector<uint8_t>> m_IncomingChunks;
+		bool m_IncomingStateComplete = false;
+		std::vector<uint8_t> m_ReceivedState;
 		NetLobbyStats m_Stats;
 	};
 

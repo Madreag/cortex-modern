@@ -496,6 +496,66 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyStateTransfer(std::string* error) {
+			// Codec round-trip first.
+			NetLobbyStateChunk chunk;
+			chunk.transferId = 0xABCDEF0123456789ULL;
+			chunk.totalBytes = 100000;
+			chunk.chunkIndex = 1;
+			chunk.chunkCount = 3;
+			chunk.bytes.resize(1024);
+			for (size_t i = 0; i < chunk.bytes.size(); ++i) {
+				chunk.bytes[i] = static_cast<uint8_t>(i * 31 + 7);
+			}
+			if (!RoundTrip(chunk, error)) {
+				return false;
+			}
+
+			// A ~100KB state must stream host->client during the lobby round, complete BEFORE the
+			// Start lands (same ordered lane), and reassemble byte-identical.
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43008, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) {
+				return false;
+			}
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) {
+				return false;
+			}
+			std::vector<uint8_t> stateBytes(100000);
+			for (size_t i = 0; i < stateBytes.size(); ++i) {
+				stateBytes[i] = static_cast<uint8_t>((i * 131) ^ (i >> 8));
+			}
+			hostLobby.BeginStateTransfer(stateBytes);
+			if (!DriveLobbyPair(hostTransport, clientTransport, hostLobby, clientLobby, error)) {
+				return false;
+			}
+			// Started implies the ordered lane already delivered every chunk.
+			if (!clientLobby.HasCompleteStateTransfer()) {
+				*error = "client lobby Started without the complete state transfer";
+				return false;
+			}
+			if (clientLobby.TakeReceivedState() != stateBytes) {
+				*error = "received state differs from the sent state";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLobbyThreePeer(std::string* error) {
 			const uint16_t port = 43007;
 			LoopbackTransport hostT, clientAT, clientBT;
@@ -575,6 +635,7 @@ namespace RTE {
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
+		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 

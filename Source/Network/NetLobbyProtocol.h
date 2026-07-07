@@ -18,6 +18,7 @@ namespace RTE {
 		Ready = 5,
 		Start = 6,
 		Abort = 7,
+		StateChunk = 8,
 	};
 
 	enum class NetLobbyErrorCode {
@@ -105,6 +106,17 @@ namespace RTE {
 		bool operator==(const NetLobbyAbort&) const = default;
 	};
 
+	// One chunk of a match-state file (a resync/rejoin snapshot) streaming host -> peer.
+	struct NetLobbyStateChunk {
+		uint64_t transferId = 0;
+		uint32_t totalBytes = 0;
+		uint16_t chunkIndex = 0;
+		uint16_t chunkCount = 0;
+		std::vector<uint8_t> bytes;
+
+		bool operator==(const NetLobbyStateChunk&) const = default;
+	};
+
 	using NetLobbyPayload = std::variant<
 		NetLobbyHello,
 		NetLobbyPeerState,
@@ -112,7 +124,8 @@ namespace RTE {
 		NetLobbyConfigAck,
 		NetLobbyReady,
 		NetLobbyStart,
-		NetLobbyAbort>;
+		NetLobbyAbort,
+		NetLobbyStateChunk>;
 
 	struct NetLobbyMessage {
 		NetLobbyPayload payload;
@@ -129,11 +142,12 @@ namespace RTE {
 	class NetLobbyProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
+		static constexpr size_t c_MaxStateChunkBytes = 48U * 1024U;
 		static constexpr size_t c_MaxPlayers = NetMatchConfigUtil::c_MaxPlayers;
 
 		static NetLobbyMessageType MessageTypeOf(const NetLobbyPayload& payload);
