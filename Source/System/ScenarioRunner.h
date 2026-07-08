@@ -108,6 +108,8 @@ namespace RTE {
 		static bool HasLockstepCoordinator();
 		/// The attached coordinator's stop reason ("" while running or when absent).
 		static std::string GetLockstepStopReason();
+		/// Accumulated wall time spent inside the lockstep frame wait, for the pace report.
+		static long long GetLockstepWaitUs();
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		static uint8_t ResolveTeamCommandAuthority(int team);
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
