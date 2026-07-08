@@ -25,6 +25,7 @@ void TimerMan::Clear() {
 	m_TimeScale = 1.0F;
 	m_SimPaused = false;
 	m_SimTimeFrozen = false;
+	m_FreeRunSim = false;
 }
 
 void TimerMan::Initialize() {
@@ -67,8 +68,11 @@ void TimerMan::ResetTime() {
 
 void TimerMan::UpdateSim() {
 	if (TimeForSimUpdate()) {
-		// Transfer ticks from the accumulator to the sim time ticks.
-		m_SimAccumulator -= m_DeltaTime;
+		// Transfer ticks from the accumulator to the sim time ticks. A free-running sim outpaces
+		// the accumulator, so never draw it below zero.
+		if (m_SimAccumulator >= m_DeltaTime) {
+			m_SimAccumulator -= m_DeltaTime;
+		}
 		// A frozen tick advances the update count but not sim time, so sim timers hold still.
 		if (!m_SimTimeFrozen) {
 			m_SimTimeTicks += m_DeltaTime;
