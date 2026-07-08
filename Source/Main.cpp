@@ -1388,6 +1388,8 @@ void RunGameLoop() {
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 				if (nowTick - s_menuMpStartTick >= cap) {
 					g_NetMatchService.Complete("menu mp trace complete");
+					// Same capped-stop drain as the e2e path.
+					std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 					g_ActivityMan.EndActivity();
 					System::SetQuit(true);
 					break;
@@ -1520,6 +1522,9 @@ void RunGameLoop() {
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					if (s_netMatchServiceE2ERunningTicks > tickCap) {
 						g_NetMatchService.Complete("e2e complete");
+						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
+						// owes itself our in-flight tail, so hold the socket open before quitting drops it.
+						std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 						g_ActivityMan.EndActivity();
 						System::SetQuit(true);
 						break;
