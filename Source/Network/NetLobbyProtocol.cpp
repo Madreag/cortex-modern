@@ -258,6 +258,10 @@ namespace RTE {
 			for (const NetMatchPlayerSlot& player : config.players) {
 				if (!AppendPlayer(out, player, error)) return false;
 			}
+			AppendU8(out, static_cast<uint8_t>(config.peerInputDelayFrames.size()));
+			for (uint16_t delay : config.peerInputDelayFrames) {
+				AppendU16LE(out, delay);
+			}
 			return true;
 		}
 
@@ -297,6 +301,24 @@ namespace RTE {
 					return false;
 				}
 				out.players.push_back(std::move(player));
+			}
+			out.peerInputDelayFrames.clear();
+			// A v1 config (an old replay header) predates per-peer delays and means a uniform delay.
+			if (out.version == 1) {
+				out.version = 2;
+			} else {
+				uint8_t delayCount = 0;
+				if (!ReadOrTruncated(reader.ReadU8(delayCount), reader, error, "peer_input_delay_count")) {
+					return false;
+				}
+				out.peerInputDelayFrames.reserve(delayCount);
+				for (uint8_t i = 0; i < delayCount; ++i) {
+					uint16_t delay = 0;
+					if (!ReadOrTruncated(reader.ReadU16LE(delay), reader, error, "peer_input_delay")) {
+						return false;
+					}
+					out.peerInputDelayFrames.push_back(delay);
+				}
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
