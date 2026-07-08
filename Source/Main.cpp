@@ -2003,6 +2003,8 @@ int RunNetReplayPlayback() {
 		g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
 		g_MetricsCollector.SetRecordTickHashes(true);
 	}
+	// Playback is not real-time: run the sim as fast as it computes (the fixed dt is untouched).
+	g_TimerMan.SetTimeScale(1000.0F);
 	const auto playbackStart = std::chrono::steady_clock::now();
 	RunGameLoop();
 	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
