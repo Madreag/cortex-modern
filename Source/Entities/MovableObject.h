@@ -1015,6 +1015,10 @@ namespace RTE {
 		/// @param base The value the next created MO's ID will follow.
 		static void PinUniqueIDCounter(long base) { m_UniqueIDCounter = base; }
 
+		/// Gets the current unique ID counter value, for rollback snapshots.
+		/// @return The counter's current base.
+		static long GetUniqueIDCounter() { return m_UniqueIDCounter; }
+
 		/// Returns this MO's unique persistent ID
 		/// @return Returns this MO's unique persistent ID
 		long GetUniqueID() const { return m_UniqueID; }
