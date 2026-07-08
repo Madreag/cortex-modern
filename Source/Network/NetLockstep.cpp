@@ -1077,6 +1077,67 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
+		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
+		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
+			if (error) *error = "replay peer identity is invalid";
+			return false;
+		}
+		m_Transport = &transport;
+		m_Config = config;
+		m_Config.inputDelayFrames = 0;
+		m_RemotePeerIds.clear();
+		m_RemoteTransports.clear();
+		m_RelayHost = false;
+		m_State = NetLockstepState::Running;
+		m_RemoteStartsReceived.clear();
+		m_PeerLeaveFrames.clear();
+		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
+		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+		m_WaitStartMs = 0;
+		m_LastStallFrame = UINT64_MAX;
+		m_LocalFrames.clear();
+		m_RemoteFrames.clear();
+		m_LocalCommands.clear();
+		m_RemoteCommands.clear();
+		m_LocalChecksums.clear();
+		m_RemoteChecksums.clear();
+		m_ReadyFrames.clear();
+		m_Stats = {};
+		m_Stats.sessionId = config.sessionId;
+		m_Stats.configuredStartFrame = config.startFrame;
+		m_Stats.effectiveStartFrame = config.startFrame;
+		m_Stats.inputDelayFrames = 0;
+		m_Stats.localPeerId = config.localPeerId;
+		m_Stats.nextFrame = config.startFrame;
+		return true;
+	}
+
+	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error) {
+		if (m_State != NetLockstepState::Running) {
+			if (error) *error = m_Stats.timeoutReason.empty() ? "replay coordinator is not running" : m_Stats.timeoutReason;
+			return false;
+		}
+		if (frame < m_Stats.nextFrame || m_LocalFrames.find(frame) != m_LocalFrames.end()) {
+			if (error) *error = "replay frame is duplicate or already accepted";
+			return false;
+		}
+		NetLockstepError frameError;
+		if (!ValidateSortedFrames(frames, &frameError)) {
+			if (error) *error = frameError.message;
+			return false;
+		}
+		// Playback owns no actor: every recorded frame rides the REMOTE side so the apply drives
+		// every actor from the file; the empty local entry satisfies the advance.
+		m_LocalFrames[frame] = {};
+		const uint8_t bucketPeer = m_Config.localPeerId == 1 ? 2 : 1;
+		m_RemoteFrames[frame][bucketPeer] = std::move(frames);
+		if (!commands.empty()) {
+			m_RemoteCommands[frame][bucketPeer] = std::move(commands);
+		}
+		return true;
+	}
+
 	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error) {
 		if (m_State != NetLockstepState::Running) {
 			// Carry the stop reason so the caller can route it (a resync request must not read as a

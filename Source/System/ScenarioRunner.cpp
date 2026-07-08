@@ -8,6 +8,7 @@
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "NetActorOwnership.h"
+#include "NetMatchReplay.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
@@ -18,6 +19,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -47,6 +49,9 @@ namespace RTE {
 		bool s_LockstepStallOverlayEnabled = false;
 		bool s_LockstepPaused = false;
 		int s_LockstepResumeCountdown = -1;
+		NetMatchReplayWriter s_ReplayWriter;
+		NetMatchReplayReader s_ReplayReader;
+		std::string s_ReplayRecordArmedPath;
 		bool s_SimSettingsPinned = false;
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
@@ -447,6 +452,9 @@ namespace RTE {
 			g_SettingsMan.SetCrabBombsEnabled(s_SavedCrabBombsEnabled);
 			g_SettingsMan.SetCrabBombThreshold(s_SavedCrabBombThreshold);
 		}
+		if (!coordinator) {
+			CloseLockstepReplayRecord();
+		}
 	}
 
 	bool ScenarioRunner::IsLockstepControllerSyncActive() {
@@ -462,6 +470,10 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		// Playback owns no actor: the file drives everything through the remote apply.
+		if (s_ReplayReader.IsOpen()) {
+			return false;
+		}
 		if (!s_LockstepCoordinator) {
 			return true;
 		}
@@ -611,6 +623,33 @@ namespace RTE {
 			if (error) *error = "lockstep coordinator is not active";
 			return false;
 		}
+		// Playback: the sampled frames are discarded and the recording's committed tick applies
+		// instead — sender ids preserved so command authority resolves as it did live.
+		if (s_ReplayReader.IsOpen()) {
+			(void)DrainLocalGameCommands();
+			// A tick before the recording's first frame free-runs with empty input (the wait's
+			// priming path), mirroring how the live match ran it.
+			if (tick < s_ReplayReader.GetStartFrame()) {
+				return true;
+			}
+			NetLockstepFrame record;
+			bool eof = false;
+			std::string readError;
+			if (!s_ReplayReader.ReadFrame(record, eof, &readError)) {
+				if (eof) {
+					s_LockstepCoordinator->Complete("replay ended");
+					if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
+					return false;
+				}
+				if (error) *error = readError;
+				return false;
+			}
+			if (record.targetFrame != tick) {
+				if (error) *error = "replay record frame " + std::to_string(record.targetFrame) + " does not match tick " + std::to_string(tick);
+				return false;
+			}
+			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error);
+		}
 		return s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error);
 	}
 
@@ -626,6 +665,52 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepStallOverlayEnabled(bool enabled) {
 		s_LockstepStallOverlayEnabled = enabled;
+	}
+
+	void ScenarioRunner::ArmLockstepReplayRecord(const std::string& path) {
+		s_ReplayRecordArmedPath = path;
+	}
+
+	bool ScenarioRunner::BeginLockstepReplayRecord(const NetMatchConfig& config, std::string* error) {
+		if (s_ReplayRecordArmedPath.empty()) {
+			return false;
+		}
+		if (!s_ReplayWriter.Open(s_ReplayRecordArmedPath, config, error)) {
+			return false;
+		}
+		std::cout << "[net-match] recording the match to " << s_ReplayRecordArmedPath << std::endl;
+		return true;
+	}
+
+	bool ScenarioRunner::IsLockstepReplayRecording() {
+		return s_ReplayWriter.IsOpen();
+	}
+
+	uint64_t ScenarioRunner::GetLockstepReplayFramesWritten() {
+		return s_ReplayWriter.GetFramesWritten();
+	}
+
+	void ScenarioRunner::CloseLockstepReplayRecord() {
+		if (s_ReplayWriter.IsOpen()) {
+			std::cout << "[net-match] replay recorded: " << s_ReplayWriter.GetFramesWritten() << " frames" << std::endl;
+		}
+		s_ReplayWriter.Close();
+	}
+
+	bool ScenarioRunner::SetLockstepReplaySource(const std::string& path, std::string* error) {
+		return s_ReplayReader.Open(path, error);
+	}
+
+	bool ScenarioRunner::IsLockstepReplayPlayback() {
+		return s_ReplayReader.IsOpen();
+	}
+
+	const NetMatchConfig& ScenarioRunner::GetLockstepReplayConfig() {
+		return s_ReplayReader.GetConfig();
+	}
+
+	uint64_t ScenarioRunner::GetLockstepReplayStartFrame() {
+		return s_ReplayReader.GetStartFrame();
 	}
 
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
@@ -657,6 +742,22 @@ namespace RTE {
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
+					}
+					// The recorder captures every committed tick: all peers' frames and commands. The
+					// codec wants one UID-sorted set; command order re-sorts by sender at apply.
+					if (s_ReplayWriter.IsOpen()) {
+						std::vector<ControllerFrame> allFrames = ready.localFrames;
+						allFrames.insert(allFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+						std::sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
+							return lhs.actorUniqueID < rhs.actorUniqueID;
+						});
+						std::vector<NetGameCommand> allCommands = ready.localCommands;
+						allCommands.insert(allCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+						std::string writeError;
+						if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, &writeError)) {
+							std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
+							s_ReplayWriter.Close();
+						}
 					}
 					outFrame = std::move(ready);
 					return true;

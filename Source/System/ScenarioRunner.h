@@ -138,6 +138,18 @@ namespace RTE {
 		/// lockstep match / off the team. Per-peer view data — for per-peer picks only, never sim decisions.
 		static int GetLockstepHumanSlotIndex(int team);
 
+		/// Match replay: the recorder captures every committed tick (all peers' frames + commands)
+		/// behind the synced config header; playback feeds them through the identical apply path.
+		static void ArmLockstepReplayRecord(const std::string& path);
+		static bool BeginLockstepReplayRecord(const NetMatchConfig& config, std::string* error = nullptr);
+		static bool IsLockstepReplayRecording();
+		static uint64_t GetLockstepReplayFramesWritten();
+		static void CloseLockstepReplayRecord();
+		static bool SetLockstepReplaySource(const std::string& path, std::string* error = nullptr);
+		static bool IsLockstepReplayPlayback();
+		static const NetMatchConfig& GetLockstepReplayConfig();
+		static uint64_t GetLockstepReplayStartFrame();
+
 		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();

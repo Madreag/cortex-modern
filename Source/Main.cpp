@@ -139,8 +139,23 @@ static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
 static bool s_netMatchResyncOnDesync = false;
 static std::string s_netMatchServiceE2EError;
+static std::string s_netReplayInPath;
+static std::string s_netReplayOutPath;
+static int s_netReplayExitCode = 0;
+static uint64_t s_netReplayTicks = 0;
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
 bool StageResyncedMatchActivity(std::string* error);
+
+// A dead-end transport for replay playback: nothing to poll, nowhere to send.
+class NullNetTransport final : public INetTransport {
+public:
+	bool StartHost(uint16_t, std::string*) override { return true; }
+	bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+	bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*) override { return true; }
+	void Disconnect(NetPeerId, const std::string&) override {}
+	void Stop() override {}
+	std::vector<NetTransportEvent> PollEvents() override { return {}; }
+};
 static std::string s_menuScriptPath;
 static std::string s_menuScriptOutDir;
 
@@ -414,6 +429,17 @@ void HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-net-match-e2e-resync") {
 			s_netMatchResyncOnDesync = true;
 			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-replay-out") {
+			s_netReplayOutPath = argValue[++i];
+			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-replay") {
+			s_netReplayInPath = argValue[++i];
 			continue;
 		}
 
@@ -1148,6 +1174,16 @@ void RunGameLoop() {
 				if (ScenarioRunner::IsActive()) {
 					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
 					System::SetQuit(true);
+				} else if (!s_netReplayInPath.empty()) {
+					// Playback ends when the recording does; anything else is a reproduction failure.
+					s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					if (error.find("replay ended") == std::string::npos) {
+						std::cerr << "[net-replay] playback failed: " << error << std::endl;
+						s_netReplayExitCode = 1;
+					}
+					g_ActivityMan.EndActivity();
+					ScenarioRunner::ClearControllerReplayError();
+					System::SetQuit(true);
 				} else {
 					const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
@@ -1877,7 +1913,7 @@ bool StageResyncedMatchActivity(std::string* error) {
 	return g_NetMatchService.StageResyncedMatchLaunch(error);
 }
 
-bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
+bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam, std::string* error) {
 	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
 	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
 	if (!presetActivity) {
@@ -1892,7 +1928,6 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 		if (error) *error = "could not create multiplayer activity";
 		return false;
 	}
-	const int localTeam = g_NetMatchService.GetLocalTeam();
 	if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
 		delete activity;
 		if (error) *error = "invalid local team";
@@ -1913,6 +1948,78 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 	g_ActivityMan.SetStartActivity(activity);
 	g_ActivityMan.SetRestartActivity(true);
 	return true;
+}
+
+bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
+	return ConfigureNetMatchActivity(activityPreset, g_NetMatchService.GetLocalTeam(), error);
+}
+
+// Drives a recorded match through the standard lockstep apply path: a no-remote coordinator over
+// a dead-end transport, fed tick records by the replay reader. The deterministic sim reproduces
+// the match, so a -tick-hashes trace must equal the recording peer's.
+int RunNetReplayPlayback() {
+	std::string setupError;
+	if (!ScenarioRunner::SetLockstepReplaySource(s_netReplayInPath, &setupError)) {
+		std::cerr << "[net-replay] " << setupError << std::endl;
+		return 1;
+	}
+	const NetMatchConfig& replayConfig = ScenarioRunner::GetLockstepReplayConfig();
+	std::cout << "[net-replay] playing back " << s_netReplayInPath << ": " << replayConfig.activityPreset
+	          << ", " << static_cast<int>(replayConfig.peerCount) << " peers" << std::endl;
+
+	static NullNetTransport s_nullTransport;
+	static NetLockstepCoordinator s_replayCoordinator;
+	NetLockstepConfig lockstepConfig;
+	lockstepConfig.sessionId = replayConfig.sessionId;
+	// Align to the recording's first tick, whatever sim count its match began on.
+	lockstepConfig.startFrame = ScenarioRunner::GetLockstepReplayStartFrame();
+	lockstepConfig.localPeerId = 1;
+	lockstepConfig.peerCount = replayConfig.peerCount;
+	lockstepConfig.scenario = "replay";
+	lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(replayConfig.ownershipPolicy);
+	lockstepConfig.matchConfig = replayConfig;
+	if (!s_replayCoordinator.StartReplay(s_nullTransport, lockstepConfig, &setupError)) {
+		std::cerr << "[net-replay] " << setupError << std::endl;
+		return 1;
+	}
+	ScenarioRunner::SetLockstepCoordinator(&s_replayCoordinator);
+
+	// Watch through the first human seat; per-peer view bindings are off-sim.
+	int localTeam = Activity::TeamOne;
+	for (const NetMatchPlayerSlot& slot: replayConfig.players) {
+		if (!slot.cpu) {
+			localTeam = slot.team;
+			break;
+		}
+	}
+	if (!ConfigureNetMatchActivity(replayConfig.activityPreset, localTeam, &setupError)) {
+		std::cerr << "[net-replay] setup failed: " << setupError << std::endl;
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		return 1;
+	}
+
+	const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
+	if (traceRun) {
+		g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
+		g_MetricsCollector.SetRecordTickHashes(true);
+	}
+	const auto playbackStart = std::chrono::steady_clock::now();
+	RunGameLoop();
+	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
+	if (traceRun) {
+		g_MetricsCollector.EndRun();
+		const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
+		if (!g_MetricsCollector.WriteReport(tracePath)) {
+			std::cerr << "[net-replay] trace write failed: " << tracePath << std::endl;
+			s_netReplayExitCode = 1;
+		} else {
+			std::cout << "[net-replay] wrote trace: " << tracePath << std::endl;
+		}
+	}
+	std::cout << "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
+	          << "ms, ticks=" << s_netReplayTicks << std::endl;
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	return s_netReplayExitCode;
 }
 
 int RunNetMatchServiceE2E() {
@@ -2172,6 +2279,13 @@ int main(int argc, char** argv) {
 
 	if (s_netMatchServiceE2E) {
 		const int exitCode = RunNetMatchServiceE2E();
+		std::cout.flush();
+		std::cerr.flush();
+		std::_Exit(exitCode);
+	}
+
+	if (!s_netReplayInPath.empty()) {
+		const int exitCode = RunNetReplayPlayback();
 		std::cout.flush();
 		std::cerr.flush();
 		std::_Exit(exitCode);
