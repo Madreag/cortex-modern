@@ -220,6 +220,38 @@ namespace RTE {
 		}
 	}
 
+	std::string NetLanDiscovery::GetPrimaryLocalAddress() {
+#ifdef _WIN32
+		WSADATA wsaData;
+		(void)WSAStartup(MAKEWORD(2, 2), &wsaData);
+#endif
+		const SocketHandle socketHandle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (socketHandle == c_InvalidSocket) {
+			return "";
+		}
+		// A UDP connect sends nothing; it just routes, so getsockname yields the outbound interface.
+		sockaddr_in probeAddress{};
+		probeAddress.sin_family = AF_INET;
+		probeAddress.sin_port = htons(53);
+		inet_pton(AF_INET, "8.8.8.8", &probeAddress.sin_addr);
+		std::string result;
+		if (connect(socketHandle, reinterpret_cast<const sockaddr*>(&probeAddress), sizeof(probeAddress)) == 0) {
+			sockaddr_in localAddress{};
+#ifdef _WIN32
+			int addressLength = sizeof(localAddress);
+#else
+			socklen_t addressLength = sizeof(localAddress);
+#endif
+			if (getsockname(socketHandle, reinterpret_cast<sockaddr*>(&localAddress), &addressLength) == 0) {
+				char addressText[INET_ADDRSTRLEN] = {};
+				inet_ntop(AF_INET, &localAddress.sin_addr, addressText, sizeof(addressText));
+				result = addressText;
+			}
+		}
+		CloseSocket(socketHandle);
+		return result;
+	}
+
 	std::vector<NetLanHostInfo> NetLanDiscovery::GetHosts(uint64_t nowMs) {
 		m_Hosts.erase(std::remove_if(m_Hosts.begin(), m_Hosts.end(), [&](const NetLanHostInfo& host) {
 			return nowMs > host.lastSeenMs + c_EntryTtlMs;

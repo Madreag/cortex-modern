@@ -47,6 +47,9 @@ namespace RTE {
 		bool IsBeaconing() const { return m_Beaconing; }
 		bool IsBrowsing() const { return m_Browsing; }
 
+		/// The machine's primary outbound IPv4 (the address LAN peers can reach), "" when unknown.
+		static std::string GetPrimaryLocalAddress();
+
 	private:
 		bool EnsureSocket(bool bindListenPort, std::string* error);
 
