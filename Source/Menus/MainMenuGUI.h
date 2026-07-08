@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Controller.h"
+#include "NetLanDiscovery.h"
 #include "NetMatchConfig.h"
 
 #include "SaveLoadMenuGUI.h"
@@ -19,6 +20,7 @@ namespace RTE {
 	class GUILabel;
 	class GUIControl;
 	class GUITextBox;
+	class GUIListBox;
 	struct NetLobbySnapshot;
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
@@ -181,6 +183,10 @@ namespace RTE {
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
+		GUIListBox* m_MultiplayerLanGamesList;
+		NetLanDiscovery m_LanBrowser; //!< Collects LAN host beacons while the join screen is up.
+		std::vector<NetLanHostInfo> m_LanHosts; //!< The listed hosts, aligned with the list rows.
+		uint64_t m_LanBrowserNowMs;
 		GUICollectionBox* m_MultiplayerLandingPanel;
 		GUICollectionBox* m_MultiplayerHostPanel;
 		GUICollectionBox* m_MultiplayerJoinPanel;
@@ -200,6 +206,9 @@ namespace RTE {
 
 		/// Creates all the elements that compose the multiplayer menu screen.
 		void CreateMultiplayerScreen();
+
+		/// Runs the LAN browser while the join screen is up and mirrors fresh hosts into the list.
+		void RefreshLanGamesList();
 
 		/// Creates all the elements that compose the editor selection menu screen.
 		void CreateEditorsScreen();

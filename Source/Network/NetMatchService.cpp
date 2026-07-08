@@ -84,6 +84,8 @@ namespace RTE {
 			m_LocalTeam = request.host ? 0 : 1;
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
+			m_BeaconGamePort = request.port;
+			m_BeaconMaxPlayers = request.peerCount;
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		}
 		m_EverStarted.store(true);
@@ -308,6 +310,7 @@ namespace RTE {
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		m_LanDiscovery.Stop();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
@@ -412,6 +415,29 @@ namespace RTE {
 
 	void NetMatchService::Update() {
 		JoinWorkerIfDone();
+		// A hosting lobby advertises itself on the LAN until the match launches.
+		bool beaconWanted = false;
+		NetLobbySnapshot snapshot;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			beaconWanted = m_IsHost && m_State == NetMatchServiceState::Starting;
+			if (beaconWanted) {
+				snapshot = m_LobbySnapshot;
+			}
+		}
+		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		if (beaconWanted) {
+			std::string ignored;
+			(void)m_LanDiscovery.StartBeacon(m_BeaconGamePort,
+			                                 m_LocalName.empty() ? "Host" : m_LocalName,
+			                                 snapshot.activityPreset.empty() ? m_ActivityPreset : snapshot.activityPreset,
+			                                 snapshot.modeName,
+			                                 static_cast<uint8_t>(std::max<size_t>(snapshot.members.size(), 1)),
+			                                 m_BeaconMaxPlayers, &ignored);
+			m_LanDiscovery.Tick(nowMs);
+		} else if (m_LanDiscovery.IsBeaconing()) {
+			m_LanDiscovery.Stop();
+		}
 	}
 
 	void NetMatchService::SetReady() {

@@ -62,6 +62,7 @@
 #include "GnsTransport.h"
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
+#include "NetLanDiscovery.h"
 #include "NetLockstep.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchRunner.h"
@@ -2158,6 +2159,31 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			return NetMatchSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
+			// A beacon and a browser over the loopback broadcast: the browser must list the host.
+			NetLanDiscovery beacon;
+			NetLanDiscovery browser;
+			std::string error;
+			int exitCode = 1;
+			if (!browser.StartBrowser(&error) ||
+			    !beacon.StartBeacon(42120, "SelftestHost", "P4 Alpha Duel", "pvp-skirmish", 1, 4, &error)) {
+				std::cerr << "[net-discovery-selftest] FAIL: " << error << std::endl;
+				return 1;
+			}
+			for (uint64_t nowMs = 0; nowMs <= 3000 && exitCode != 0; nowMs += 50) {
+				beacon.Tick(nowMs);
+				browser.Tick(nowMs);
+				for (const NetLanHostInfo& host: browser.GetHosts(nowMs)) {
+					if (host.port == 42120 && host.hostName == "SelftestHost" && host.maxPlayers == 4 && host.mode == "pvp-skirmish") {
+						exitCode = 0;
+						break;
+					}
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}
+			std::cout << "[net-discovery-selftest] " << (exitCode == 0 ? "PASS" : "FAIL") << std::endl;
+			return exitCode;
 		}
 	}
 
