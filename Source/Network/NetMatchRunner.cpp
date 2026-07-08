@@ -73,9 +73,8 @@ namespace RTE {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
-		// High ping without a matching input delay stalls every tick; the host raises the buffer to
-		// cover the worst measured RTT (the manual setting stays the floor) and the config sync
-		// carries the pick to every client like any host decision.
+		// High ping without a matching input delay stalls every tick; the host covers the worst
+		// measured RTT (the manual setting stays the floor) and the config sync carries the pick.
 		if (config.host && config.autoInputDelay) {
 			uint32_t maxPingMs = 0;
 			for (const NetSessionPeerInfo& peer: session.GetReadyPeers()) {
