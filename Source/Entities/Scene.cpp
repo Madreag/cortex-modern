@@ -1223,6 +1223,9 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	}
 
 	if (const MovableObject* movableObjectToSave = dynamic_cast<const MovableObject*>(sceneObjectToSave); movableObjectToSave && saveFullData) {
+		// Identity survives the restore: UID-keyed RNG scopes and wire commands must address
+		// the same objects the first pass saw.
+		writer.NewPropertyWithValue("UniqueID", movableObjectToSave->GetUniqueID());
 		writer.NewPropertyWithValue("HUDVisible", movableObjectToSave->GetHUDVisible());
 		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());

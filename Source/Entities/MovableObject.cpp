@@ -281,6 +281,13 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	StartPropertyList(return SceneObject::ReadProperty(propName, reader));
 
 	MatchProperty("Mass", { reader >> m_Mass; });
+	MatchProperty("UniqueID", {
+		// A restored identity floats the counter past itself, or later spawns would collide.
+		reader >> m_UniqueID;
+		if (m_UniqueID > GetUniqueIDCounter()) {
+			PinUniqueIDCounter(m_UniqueID);
+		}
+	});
 	MatchProperty("Velocity", { reader >> m_Vel; });
 	MatchProperty("Scale", { reader >> m_Scale; });
 	MatchProperty("GlobalAccScalar", { reader >> m_GlobalAccScalar; });
