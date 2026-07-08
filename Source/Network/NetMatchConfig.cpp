@@ -89,6 +89,19 @@ namespace RTE {
 			if (error) *error = "input_delay_frames is out of range";
 			return false;
 		}
+		if (!config.peerInputDelayFrames.empty()) {
+			if (config.peerInputDelayFrames.size() != config.peerCount) {
+				if (error) *error = "peer_input_delays must cover every peer";
+				return false;
+			}
+			for (uint16_t delay : config.peerInputDelayFrames) {
+				// The uniform value is the manual floor; a per-peer pick may only raise it.
+				if (delay > c_MaxInputDelayFrames || delay < config.inputDelayFrames) {
+					if (error) *error = "peer_input_delay is out of range";
+					return false;
+				}
+			}
+		}
 		if (!ValidateText(config.activityType, c_MaxPresetBytes, "activity_type", error) ||
 		    !ValidateText(config.activityPreset, c_MaxPresetBytes, "activity_preset", error) ||
 		    !ValidateText(config.modePreset, c_MaxPresetBytes, "mode_preset", error)) {
@@ -145,6 +158,13 @@ namespace RTE {
 			{"host_peer_id", std::to_string(config.hostPeerId)},
 			{"peer_count", std::to_string(config.peerCount)},
 			{"input_delay_frames", std::to_string(config.inputDelayFrames)},
+			{"peer_input_delays", [&] {
+				std::string csv;
+				for (size_t i = 0; i < config.peerInputDelayFrames.size(); ++i) {
+					csv += (i == 0 ? "" : ",") + std::to_string(config.peerInputDelayFrames[i]);
+				}
+				return csv;
+			}()},
 			{"mode", ModeName(config.mode)},
 			{"ownership_policy", OwnershipPolicyName(config.ownershipPolicy)},
 			{"activity_type", config.activityType},
@@ -158,7 +178,7 @@ namespace RTE {
 			fields.emplace_back(prefix + "cpu", BoolText(player.cpu));
 			fields.emplace_back(prefix + "display_name", player.displayName);
 		}
-		return NetIdentity::HashCanonicalText("NetMatchConfig/v1", fields);
+		return NetIdentity::HashCanonicalText("NetMatchConfig/v2", fields);
 	}
 
 	std::string NetMatchConfigUtil::BuildReportJson(const NetMatchConfig& config) {
@@ -172,6 +192,7 @@ namespace RTE {
 			{"host_peer_id", static_cast<int>(config.hostPeerId)},
 			{"peer_count", static_cast<int>(config.peerCount)},
 			{"input_delay_frames", config.inputDelayFrames},
+			{"peer_input_delays", config.peerInputDelayFrames},
 			{"mode", ModeName(config.mode)},
 			{"ownership_policy", OwnershipPolicyName(config.ownershipPolicy)},
 			{"activity_type", config.activityType},
@@ -182,6 +203,13 @@ namespace RTE {
 			{"players", std::move(players)},
 		};
 		return report.dump();
+	}
+
+	uint16_t NetMatchConfigUtil::PeerInputDelay(const NetMatchConfig& config, uint8_t peerId) {
+		if (peerId == 0 || peerId > config.peerInputDelayFrames.size()) {
+			return config.inputDelayFrames;
+		}
+		return config.peerInputDelayFrames[peerId - 1];
 	}
 
 	const char* NetMatchConfigUtil::ModeName(NetMatchMode mode) {

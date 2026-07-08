@@ -195,6 +195,13 @@ namespace RTE {
 			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error)) {
 				return false;
 			}
+			// A config carrying per-sender delays must survive the wire unchanged.
+			NetMatchConfig perSender = MakeConfig();
+			perSender.inputDelayFrames = 1;
+			perSender.peerInputDelayFrames = {1, 7};
+			if (!RoundTrip(NetLobbyMatchConfig{perSender}, error)) {
+				return false;
+			}
 			NetLobbyMessage abortMessage;
 			abortMessage.payload = NetLobbyAbort{2, "peer cancelled"};
 			std::vector<uint8_t> bytes;

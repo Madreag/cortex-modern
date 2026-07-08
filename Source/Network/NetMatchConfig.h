@@ -31,11 +31,12 @@ namespace RTE {
 	};
 
 	struct NetMatchConfig {
-		uint16_t version = 1;
+		uint16_t version = 2;
 		uint64_t sessionId = 0;
 		uint8_t hostPeerId = 1;
 		uint8_t peerCount = 2;
 		uint16_t inputDelayFrames = 0;
+		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		std::string activityType = "GAScripted";
@@ -49,7 +50,7 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 		static constexpr uint8_t c_MinPeerCount = 2;
 		static constexpr uint8_t c_MaxPeerCount = 4;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60; // Mirrors NetLockstepCodec::c_MaxInputDelayFrames.
@@ -61,6 +62,8 @@ namespace RTE {
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
 		static NetHash32 HashConfig(const NetMatchConfig& config);
 		static std::string BuildReportJson(const NetMatchConfig& config);
+		/// The peer's input delay: its per-sender entry, or the uniform value when no set rides the config.
+		static uint16_t PeerInputDelay(const NetMatchConfig& config, uint8_t peerId);
 
 		static const char* ModeName(NetMatchMode mode);
 		static bool ParseMode(const std::string& text, NetMatchMode& outMode);
