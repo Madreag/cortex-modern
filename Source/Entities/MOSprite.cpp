@@ -130,6 +130,7 @@ int MOSprite::Create(const MOSprite& reference) {
 	m_SpriteDiameter = reference.m_SpriteDiameter;
 
 	m_Rotation = reference.m_Rotation;
+	m_PrevRotation = reference.m_PrevRotation;
 	m_AngularVel = reference.m_AngularVel;
 	m_SettleMaterialDisabled = reference.m_SettleMaterialDisabled;
 	m_pEntryWound = reference.m_pEntryWound;
@@ -177,6 +178,7 @@ int MOSprite::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("HFlipped", { reader >> m_HFlipped; });
 	MatchProperty("ForcedHFlip", { reader >> m_ForcedHFlip; });
 	MatchProperty("Rotation", { reader >> m_Rotation; });
+	MatchProperty("PrevRotation", { reader >> m_PrevRotation; });
 	MatchProperty("AngularVel", { reader >> m_AngularVel; });
 	MatchProperty("SettleMaterialDisabled", { reader >> m_SettleMaterialDisabled; });
 	MatchProperty("EntryWound", { m_pEntryWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <format>
 #include <string>
 #include <memory>
 #include <ostream>
@@ -171,12 +172,14 @@ namespace RTE {
 			*m_Stream << var;
 			return *this;
 		}
+		// Shortest round-trip form: the default 6-digit stream precision truncated saved floats,
+		// so a reloaded world was near-but-not-bit-equal to the one that saved it.
 		Writer& operator<<(const float& var) {
-			*m_Stream << var;
+			*m_Stream << std::format("{}", var);
 			return *this;
 		}
 		Writer& operator<<(const double& var) {
-			*m_Stream << var;
+			*m_Stream << std::format("{}", var);
 			return *this;
 		}
 		Writer& operator<<(const char* var) {

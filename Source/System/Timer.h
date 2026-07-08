@@ -181,6 +181,10 @@ namespace RTE {
 		/// @param newStartTime An int64 with the new time value (ms since windows was started).
 		void SetStartSimTimeMS(const int64_t newStartTime) { m_StartSimTime = newStartTime * m_TicksPerMS; }
 
+		/// Sets the start time in raw sim ticks, for state restores (the getter above returns raw ticks).
+		/// @param newStartTime The absolute sim tick count to anchor at.
+		void SetStartSimTimeTicks(const int64_t newStartTime) { m_StartSimTime = newStartTime; }
+
 		/// Sets the sim time limit value of this Timer, RELATVE to the start time.
 		/// This is when the timer is supposed to show that it has 'expired' or reached whatever time limit it is supposed to keep track of.
 		/// @return A positive double with the sim time limit relative to the start time.

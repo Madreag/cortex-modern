@@ -1228,6 +1228,8 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("UniqueID", movableObjectToSave->GetUniqueID());
 		writer.NewPropertyWithValue("HUDVisible", movableObjectToSave->GetHUDVisible());
 		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
+		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
+		writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());
 		writer.NewPropertyWithValue("Age", movableObjectToSave->GetAge());
 		writer.NewPropertyWithValue("PinStrength", movableObjectToSave->GetPinStrength());
@@ -1239,6 +1241,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("Rotation", moSpriteToSave->GetRotMatrix());
 		}
 		if (saveFullData) {
+			writer.NewPropertyWithValue("PrevRotation", moSpriteToSave->GetPrevRotMatrix());
 			writer.NewPropertyWithValue("AngularVel", moSpriteToSave->GetAngularVel());
 		}
 	}
@@ -1368,6 +1371,21 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (saveFullData) {
 			writer.NewPropertyWithValue("Status", actorToSave->GetStatus());
 			writer.NewPropertyWithValue("PlayerControllable", actorToSave->IsPlayerControllable());
+
+			// The tick's update reads the controller's residue before the wire re-applies, so a
+			// bit-faithful restore needs the instantaneous state. Input mode and player stay
+			// per-peer and are never serialized.
+			// Read-only; a const accessor would make the luabind GetController overload ambiguous.
+			const Controller* actorController = const_cast<Actor*>(actorToSave)->GetController();
+			long long controllerStateMask = 0;
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+				if (actorController->IsState(static_cast<ControlState>(state))) {
+					controllerStateMask |= (1LL << state);
+				}
+			}
+			writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
+			writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
+			writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
 
 			int aiModeToSave = actorToSave->GetAIMode() == Actor::AIMode::AIMODE_SQUAD ? Actor::AIMode::AIMODE_GOTO : actorToSave->GetAIMode();
 			if (aiModeToSave == Actor::AIMode::AIMODE_GOTO && (!actorToSave->GetMOMoveTarget() && g_SceneMan.ShortestDistance(actorToSave->GetMovePathEnd(), actorToSave->GetPos(), g_SceneMan.SceneWrapsX()).MagnitudeIsLessThan(1.0F))) {
