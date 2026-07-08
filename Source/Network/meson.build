@@ -12,6 +12,7 @@ sources += files(
 'NetLockstep.cpp',
 'NetLockstepSelfTest.cpp',
 'NetMatchConfig.cpp',
+'NetMatchReplay.cpp',
 'NetMatchRunner.cpp',
 'NetMatchService.cpp',
 'NetMatchSelfTest.cpp',

@@ -457,6 +457,10 @@ namespace RTE {
 		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
 			m_PendingSessionEvents.push_back(event);
 		});
+		if (m_Runner) {
+			std::string recordError;
+			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
+		}
 		outActivityPreset = m_ActivityPreset;
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";

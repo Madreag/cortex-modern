@@ -1,0 +1,54 @@
+#pragma once
+
+#include "NetLockstep.h"
+#include "NetMatchConfig.h"
+
+#include <cstdint>
+#include <fstream>
+#include <string>
+#include <vector>
+
+namespace RTE {
+
+	/// A recorded lockstep match: the synced config, then every committed frame (all peers' controller
+	/// frames + game commands per tick). Replaying feeds the records through the standard lockstep
+	/// apply path, so a deterministic sim reproduces the match bit-for-bit.
+	class NetMatchReplayWriter {
+	public:
+		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
+		static constexpr uint16_t c_Version = 1;
+
+		bool Open(const std::string& path, const NetMatchConfig& config, std::string* error = nullptr);
+		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
+		void Close();
+		bool IsOpen() const { return m_Out.is_open(); }
+		uint64_t GetFramesWritten() const { return m_FramesWritten; }
+
+	private:
+		std::ofstream m_Out;
+		uint64_t m_FramesWritten = 0;
+	};
+
+	class NetMatchReplayReader {
+	public:
+		bool Open(const std::string& path, std::string* error = nullptr);
+		const NetMatchConfig& GetConfig() const { return m_Config; }
+		/// The first record's frame number — the playback coordinator starts there, so recordings
+		/// replay regardless of which sim tick the recorder's match began on.
+		uint64_t GetStartFrame() const { return m_StartFrame; }
+		/// Reads the next record. Returns false with outEof=true at the clean end of the file.
+		bool ReadFrame(NetLockstepFrame& outFrame, bool& outEof, std::string* error = nullptr);
+		void Close();
+		bool IsOpen() const { return m_In.is_open(); }
+
+	private:
+		bool ReadFrameFromFile(NetLockstepFrame& outFrame, bool& outEof, std::string* error);
+
+		std::ifstream m_In;
+		NetMatchConfig m_Config;
+		NetLockstepFrame m_Lookahead;
+		bool m_HasLookahead = false;
+		uint64_t m_StartFrame = 0;
+	};
+
+} // namespace RTE

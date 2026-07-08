@@ -210,6 +210,12 @@ namespace RTE {
 	class NetLockstepCoordinator {
 	public:
 		bool Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
+		/// queue, which the replay reader feeds through QueueReplayFrame.
+		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
+		/// delay math, no wire — the replay's committed frame is exactly the recording's.
+		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr);
 		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
 		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr);
 		void Tick(uint64_t nowMs);
