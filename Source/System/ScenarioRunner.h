@@ -151,6 +151,10 @@ namespace RTE {
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
 		static uint64_t GetLockstepReplayStartFrame();
+		/// The rollback fidelity gate under playback: keep copies of the probe window's records
+		/// during the first pass, then rewind the coordinator and re-feed them for the re-run.
+		static void ArmReplayRewindBuffer(uint64_t fromFrame, uint64_t frameCount);
+		static bool RewindReplayForProbe(uint64_t firstFrame, std::string* error = nullptr);
 
 		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
