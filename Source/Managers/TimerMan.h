@@ -66,6 +66,7 @@ namespace RTE {
 		void RewindSimTo(long long simUpdateCount, long long simTimeTicks) {
 			m_SimUpdateCount = simUpdateCount;
 			m_SimTimeTicks = simTimeTicks;
+			m_SimAccumulator = 0;
 		}
 
 		/// Gets the sim time in timer ticks, for rollback snapshots.
@@ -109,6 +110,17 @@ namespace RTE {
 
 		/// Number of ResetTime calls (pace forensics).
 		long long GetPaceResetCalls() const { return m_PaceResetCalls; }
+
+		/// Zeroes the pace forensics counters, for per-round pace windows.
+		void ResetPaceCounters() {
+			m_PaceAccruedTicks = 0;
+			m_PaceTrimmedTicks = 0;
+			m_PaceWallSeenTicks = 0;
+			m_PaceCapLostTicks = 0;
+			m_PacePausedLostTicks = 0;
+			m_PaceUpdateCalls = 0;
+			m_PaceResetCalls = 0;
+		}
 
 		/// Gets a time scale factor which will be used to speed up or slow down the progress of the simulation time in relation to the real world time.
 		/// @return A factor between the real world time, and the simulation time.

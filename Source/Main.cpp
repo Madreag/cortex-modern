@@ -96,6 +96,7 @@
 #endif
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -147,7 +148,7 @@ static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
-// P8-4 rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
+// Rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
 // re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.
 static long long s_rbProbeAtTick = 0;
 static long long s_rbProbeWindow = 30;
@@ -155,9 +156,52 @@ static int s_rbProbePhase = 0; //!< 0 idle, 1 first pass, 2 restore staged, 3 re
 static std::vector<SimChecksum::Result> s_rbProbeFirst;
 static std::vector<SimChecksum::Result> s_rbProbeSecond;
 static std::mt19937 s_rbProbeRngState;
+static bool s_rbProbeCaptureRngNextTick = false;
 static long long s_rbProbeSimCount = 0;
 static long long s_rbProbeSimTimeTicks = 0;
 static long s_rbProbeUidCounter = 0;
+
+// Raw copies of the three 8-bit terrain layers; restoring them by memcpy sidesteps the save's
+// PNG round trip (the load-side clean and duplicate-palette collapse both corrupt pixels).
+struct TerrainLayerSnapshot {
+	std::vector<uint8_t> mat;
+	std::vector<uint8_t> fg;
+	std::vector<uint8_t> bg;
+
+	static void CopyFrom(BITMAP* bitmap, std::vector<uint8_t>& out) {
+		out.resize(static_cast<size_t>(bitmap->w) * bitmap->h);
+		for (int y = 0; y < bitmap->h; ++y) {
+			std::memcpy(out.data() + static_cast<size_t>(y) * bitmap->w, bitmap->line[y], bitmap->w);
+		}
+	}
+
+	static bool CopyTo(BITMAP* bitmap, const std::vector<uint8_t>& in) {
+		if (static_cast<size_t>(bitmap->w) * bitmap->h != in.size()) {
+			return false;
+		}
+		for (int y = 0; y < bitmap->h; ++y) {
+			std::memcpy(bitmap->line[y], in.data() + static_cast<size_t>(y) * bitmap->w, bitmap->w);
+		}
+		return true;
+	}
+
+	bool Capture() {
+		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
+		if (!terrain) {
+			return false;
+		}
+		CopyFrom(terrain->GetMaterialBitmap(), mat);
+		CopyFrom(terrain->GetFGColorBitmap(), fg);
+		CopyFrom(terrain->GetBGColorBitmap(), bg);
+		return true;
+	}
+
+	bool Restore() const {
+		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
+		return terrain && CopyTo(terrain->GetMaterialBitmap(), mat) && CopyTo(terrain->GetFGColorBitmap(), fg) && CopyTo(terrain->GetBGColorBitmap(), bg);
+	}
+};
+static TerrainLayerSnapshot s_rbProbeTerrain;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
@@ -966,10 +1010,17 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			System::SetQuit(true);
 			return;
 		}
-		s_rbProbeRngState = g_SimRNG.GetEngineState();
+		// The GC tail can consume sim RNG after this callback; the true re-run stream starts at
+		// the next tick's entry, so capture the engine there.
+		s_rbProbeCaptureRngNextTick = true;
 		s_rbProbeSimCount = g_TimerMan.GetSimUpdateCount();
 		s_rbProbeSimTimeTicks = g_TimerMan.GetSimTimeTicks();
 		s_rbProbeUidCounter = MovableObject::GetUniqueIDCounter();
+		if (!s_rbProbeTerrain.Capture()) {
+			std::cout << "[rbprobe] FAIL: terrain layer capture refused" << std::endl;
+			System::SetQuit(true);
+			return;
+		}
 		if (ScenarioRunner::IsLockstepReplayPlayback()) {
 			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
 		}
@@ -1022,6 +1073,9 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence
 				          << " subsystems=" << divergentSubsystems << std::endl;
 			}
+			s_rbProbePhase = 4;
+			// Both passes' tracked-UID rows are in the tracer buffer; flush them for the fidelity diff.
+			SceneMan::FlushTerrainEvents((!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".rbprobe.terrainevents.txt");
 			System::SetQuit(true);
 		}
 	}
@@ -1062,11 +1116,27 @@ void RunGameLoop() {
 		g_TimerMan.Update();
 
 		const bool paceActiveAtIterStart = ScenarioRunner::IsLockstepControllerSyncActive();
+		static bool s_pacePrevActive = false;
+		if (paceActiveAtIterStart && !s_pacePrevActive) {
+			// A fresh pace window per round, so multi-round runs don't blend their numbers.
+			s_paceIterations = 0;
+			s_paceSimTicks = 0;
+			s_paceSimUs = 0;
+			s_paceUpdateUs = 0;
+			s_paceDrawUs = 0;
+			ScenarioRunner::ResetLockstepWaitUs();
+			g_TimerMan.ResetPaceCounters();
+		}
+		s_pacePrevActive = paceActiveAtIterStart;
 
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
 
+			if (s_rbProbeCaptureRngNextTick) {
+				s_rbProbeRngState = g_SimRNG.GetEngineState();
+				s_rbProbeCaptureRngNextTick = false;
+			}
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
@@ -1675,9 +1745,14 @@ void RunGameLoop() {
 				g_WindowMan.UploadFrame();
 				// A fidelity restore places snapshot residents verbatim: no spawn normalization,
 				// no quarantine, saved identities adopted.
-				g_MovableMan.SetRestoringSnapshot(s_rbProbePhase == 2);
-				const bool restartOk = g_ActivityMan.RestartActivity();
-				g_MovableMan.SetRestoringSnapshot(false);
+				bool restartOk = false;
+				{
+					struct RestoreScope {
+						explicit RestoreScope(bool restoring) { g_MovableMan.SetRestoringSnapshot(restoring); }
+						~RestoreScope() { g_MovableMan.SetRestoringSnapshot(false); }
+					} restoreScope(s_rbProbePhase == 2);
+					restartOk = g_ActivityMan.RestartActivity();
+				}
 				if (!restartOk) {
 					break;
 				}
@@ -1687,16 +1762,25 @@ void RunGameLoop() {
 					g_SimRNG.SetEngineState(s_rbProbeRngState);
 					g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
 					MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
+					if (!s_rbProbeTerrain.Restore()) {
+						std::cout << "[rbprobe] FAIL: terrain layer restore refused" << std::endl;
+						System::SetQuit(true);
+					}
 					std::string rewindError;
 					if (ScenarioRunner::IsLockstepReplayPlayback() &&
 					    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
 						std::cout << "[rbprobe] FAIL: replay rewind refused: " << rewindError << std::endl;
 						System::SetQuit(true);
+						break;
 					}
 					// The reloaded world sits in the add queues; the first pass's residents were in
 					// the live lists, so absorb now and drop the joiner quarantine.
 					g_MovableMan.AbsorbAddedMOs();
 					g_MovableMan.ClearLockstepJoinQuarantine();
+					g_MovableMan.ReapplyPersistedControllerModes();
+					// The re-run's first travel tests the MO-hit layer; rebuild it over the restored world.
+					g_MovableMan.CompleteQueuedMOIDDrawings();
+					g_MovableMan.UpdateDrawMOIDs();
 					DumpSimStateNow("rb_restored");
 					DumpTerrainNow("rb_res");
 					s_rbProbePhase = 3;
