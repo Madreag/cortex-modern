@@ -1023,6 +1023,14 @@ namespace RTE {
 		/// @return Returns this MO's unique persistent ID
 		long GetUniqueID() const { return m_UniqueID; }
 
+		/// Takes on saved identity and state read from a full-game save: re-registers under the
+		/// saved unique ID (floating the counter past it) and re-anchors the rest timer. No-op
+		/// without saved values. Subclasses recurse their children.
+		virtual void AdoptPersistedUniqueID();
+
+		/// The rest timer's absolute start in sim ticks, for full-game saves.
+		int64_t GetRestTimerStart() const { return m_RestTimer.GetStartSimTimeMS(); }
+
 		/// Gets the preset name and unique ID of this MO, often useful for error messages.
 		/// @return A string containing the unique ID and preset name of this MO.
 		std::string GetPresetNameAndUniqueID() const { return m_PresetName + ", UID: " + std::to_string(m_UniqueID); }
@@ -1311,6 +1319,11 @@ namespace RTE {
 
 		// This object's unique persistent ID
 		long m_UniqueID;
+		// Saved state waiting to be adopted when the object enters the world; survives the
+		// clones a restored scene goes through, unlike the live fields every copy re-derives.
+		long m_PersistedUniqueID;
+		int64_t m_PersistedRestTimerStart;
+		bool m_HasPersistedRestTimerStart;
 		// In which radis should we look to remove orphaned terrain on terrain penetration,
 		// must not be greater than SceneMan::ORPHANSIZE, or will be truncated
 		int m_RemoveOrphanTerrainRadius;

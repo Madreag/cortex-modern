@@ -451,6 +451,22 @@ namespace RTE {
 		/// Updates the state of this MovableMan. Supposed to be done every frame.
 		void Update();
 
+		/// Moves the pending added MOs into the live lists immediately. The per-tick update does
+		/// this at its transfer point; a rollback restore does it before the first re-run tick so
+		/// the world enters it structurally identical to the first pass.
+		void AbsorbAddedMOs();
+
+		/// Empties the lockstep join quarantine — a restore's objects were residents at the
+		/// captured tick, not mid-tick joiners.
+		void ClearLockstepJoinQuarantine();
+
+		/// While set, the Add paths place snapshot residents verbatim: no spawn normalization
+		/// (age, rest, and position nudges), no join quarantine, and each object adopts its saved
+		/// identity. The resync heal keeps this OFF — its rounds renormalize identically on every
+		/// peer; only a rollback restore needs bit-faithful placement.
+		void SetRestoringSnapshot(bool restoring) { m_RestoringSnapshot = restoring; }
+		bool IsRestoringSnapshot() const { return m_RestoringSnapshot; }
+
 		/// Draws this MovableMan's all MO's current material representations to a BITMAP of choice.
 		/// @param pTargetBitmap A pointer to a BITMAP to draw on.
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene.
@@ -595,6 +611,7 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
+		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		std::deque<MovableObject*> m_AddedItems;
 		std::deque<MovableObject*> m_AddedParticles;
 
