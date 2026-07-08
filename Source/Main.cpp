@@ -91,7 +91,9 @@
 #include <algorithm>
 #include <bit>
 #include <cfloat>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
+#endif
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -900,8 +902,12 @@ static void TrackUidsIfArmed(uint64_t simTick) {
 	if (s_state != 1) {
 		return;
 	}
-	// One FP-state row per tick: a driver flipping MXCSR (FTZ/DAZ) mid-run would fork denormal math.
-#ifdef _MSC_VER
+	// One FP-state row per tick: a driver flipping the FP control state (FTZ/DAZ) mid-run would fork denormal math.
+#if defined(__aarch64__)
+	uint64_t fpcr = 0;
+	asm volatile("mrs %0, fpcr" : "=r"(fpcr));
+	SceneMan::TraceTerrainEvent("fpu", static_cast<int32_t>(fpcr), 0, 0, 0, 0);
+#elif defined(_MSC_VER)
 	SceneMan::TraceTerrainEvent("fpu", static_cast<int32_t>(_mm_getcsr()), static_cast<int32_t>(_control87(0, 0)), 0, 0, 0);
 #else
 	SceneMan::TraceTerrainEvent("fpu", static_cast<int32_t>(_mm_getcsr()), 0, 0, 0, 0);
