@@ -257,8 +257,15 @@ namespace RTE {
 			return nowMs > host.lastSeenMs + c_EntryTtlMs;
 		}), m_Hosts.end());
 		std::vector<NetLanHostInfo> hosts = m_Hosts;
+		// A stable order (not recency) keeps the list from reshuffling under the user's cursor.
 		std::sort(hosts.begin(), hosts.end(), [](const NetLanHostInfo& lhs, const NetLanHostInfo& rhs) {
-			return lhs.lastSeenMs > rhs.lastSeenMs;
+			if (lhs.hostName != rhs.hostName) {
+				return lhs.hostName < rhs.hostName;
+			}
+			if (lhs.address != rhs.address) {
+				return lhs.address < rhs.address;
+			}
+			return lhs.port < rhs.port;
 		});
 		return hosts;
 	}
