@@ -39,7 +39,9 @@
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
+#include <chrono>
 #include <execution>
+#include <iostream>
 
 using namespace RTE;
 
@@ -102,6 +104,8 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		g_ConsoleMan.PrintString("ERROR: Cannot save when there's no game running, or the game is finished!");
 		return false;
 	}
+
+	const auto saveStart = std::chrono::steady_clock::now();
 
 	// Get BITMAPS so save into our zip, do this async so we can copy the scene info at the same time
 	std::vector<SceneLayerInfo>* sceneLayerInfos = new std::vector<SceneLayerInfo>();
@@ -256,8 +260,15 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 	copyBitmaps.wait();
 
+	const long long saveMainMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
+
 	// For some reason I can't std::move a unique ptr in, so just releasing and deleting manually...
-	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit(saveWriterData, writer.release());
+	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit([saveWriterData, saveMainMs](Writer* mainWriter) {
+		const auto asyncStart = std::chrono::steady_clock::now();
+		saveWriterData(mainWriter);
+		const long long asyncMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asyncStart).count();
+		std::cout << "[snapbench] save main_ms=" << saveMainMs << " zip_io_ms=" << asyncMs << std::endl;
+	}, writer.release());
 
 	// We didn't transfer ownership, so we must be very careful that sceneAltered's deletion doesn't touch the stuff we got from MovableMan.
 	modifiableScene->ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, false);
@@ -417,9 +428,11 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	std::string originalScenePresetName;
 	bool placeObjectsIfSceneIsRestarted = true;
 	bool placeUnitsIfSceneIsRestarted = true;
+	const auto readStart = std::chrono::steady_clock::now();
 	if (!ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted)) {
 		return false;
 	}
+	std::cout << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count() << std::endl;
 
 	scene->SetPresetName(originalScenePresetName);
 	// The deferred restart clones the scene later, so it must outlive this call.
@@ -601,6 +614,7 @@ void ActivityMan::ResumeActivity() {
 
 bool ActivityMan::RestartActivity() {
 	m_ActivityNeedsRestart = false;
+	const auto restartStart = std::chrono::steady_clock::now();
 	g_ConsoleMan.PrintString("SYSTEM: Activity was reset!");
 
 	g_AudioMan.StopAll();
@@ -625,6 +639,7 @@ bool ActivityMan::RestartActivity() {
 		activityStarted = StartActivity(m_DefaultActivityType, m_DefaultActivityName);
 	}
 	g_TimerMan.PauseSim(false);
+	std::cout << "[snapbench] restart_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count() << std::endl;
 	if (activityStarted >= 0) {
 		m_InActivity = true;
 		return true;
