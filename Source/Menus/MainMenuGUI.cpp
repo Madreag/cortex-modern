@@ -644,6 +644,9 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
 		g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
+		// The typed delay is the floor; the host raises it to cover the measured ping so high-RTT
+		// matches run stall-free out of the box.
+		request.autoInputDelay = true;
 	}
 
 	std::string error;
@@ -732,7 +735,11 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 		if (snapshot.members.size() < 2) {
-			m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+			// Hand the host the address to share while the room is empty.
+			static const std::string s_localAddress = NetLanDiscovery::GetPrimaryLocalAddress();
+			m_MultiplayerStatusLabel->SetText(s_localAddress.empty()
+			                                      ? "Waiting for a player to join..."
+			                                      : "Waiting for a player to join... share " + s_localAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
 		} else if (connectedCount < snapshot.members.size()) {
 			m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
 		} else {
