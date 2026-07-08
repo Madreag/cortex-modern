@@ -1041,7 +1041,8 @@ namespace RTE {
 					return false;
 				}
 			}
-			if (config.peerInputDelayFrames.at(config.localPeerId) != config.inputDelayFrames) {
+			const auto localDelayIt = config.peerInputDelayFrames.find(config.localPeerId);
+			if (localDelayIt == config.peerInputDelayFrames.end() || localDelayIt->second != config.inputDelayFrames) {
 				if (error) *error = "lockstep local input delay disagrees with the per-peer set";
 				return false;
 			}
@@ -1178,7 +1179,10 @@ namespace RTE {
 			if (error) *error = "rewind is replay-only";
 			return false;
 		}
-		m_State = NetLockstepState::Running;
+		if (m_State != NetLockstepState::Running) {
+			if (error) *error = "rewind requires a running replay coordinator";
+			return false;
+		}
 		m_LocalFrames.clear();
 		m_RemoteFrames.clear();
 		m_LocalCommands.clear();

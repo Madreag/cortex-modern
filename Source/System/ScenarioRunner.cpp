@@ -741,6 +741,10 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SetLockstepReplaySource(const std::string& path, std::string* error) {
+		s_ReplayRewindFrom = 0;
+		s_ReplayRewindCount = 0;
+		s_ReplayRewindKeep.clear();
+		s_ReplayRewindBuffer.clear();
 		return s_ReplayReader.Open(path, error);
 	}
 
@@ -767,6 +771,10 @@ namespace RTE {
 
 	long long ScenarioRunner::GetLockstepWaitUs() {
 		return s_LockstepWaitUs;
+	}
+
+	void ScenarioRunner::ResetLockstepWaitUs() {
+		s_LockstepWaitUs = 0;
 	}
 
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {

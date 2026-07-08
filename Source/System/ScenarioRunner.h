@@ -110,6 +110,8 @@ namespace RTE {
 		static std::string GetLockstepStopReason();
 		/// Accumulated wall time spent inside the lockstep frame wait, for the pace report.
 		static long long GetLockstepWaitUs();
+		/// Zeroes the lockstep wait accumulator, for per-round pace windows.
+		static void ResetLockstepWaitUs();
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		static uint8_t ResolveTeamCommandAuthority(int team);
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
