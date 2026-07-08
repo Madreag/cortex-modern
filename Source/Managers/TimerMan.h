@@ -59,6 +59,19 @@ namespace RTE {
 		/// @param freeRun Free-running or not.
 		void SetFreeRunSim(bool freeRun) { m_FreeRunSim = freeRun; }
 
+		/// Rewinds the sim clock to a captured point, so a rollback re-runs the same tick numbers
+		/// and sim times the first pass saw.
+		/// @param simUpdateCount The captured update count.
+		/// @param simTimeTicks The captured sim time in ticks.
+		void RewindSimTo(long long simUpdateCount, long long simTimeTicks) {
+			m_SimUpdateCount = simUpdateCount;
+			m_SimTimeTicks = simTimeTicks;
+		}
+
+		/// Gets the sim time in timer ticks, for rollback snapshots.
+		/// @return The accumulated sim time in ticks.
+		long long GetSimTimeTicks() const { return m_SimTimeTicks; }
+
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
 		/// @return Whether there is enough sim time to do a physics update.
 		bool TimeForSimUpdate() const { return m_FreeRunSim || m_SimAccumulator >= m_DeltaTime; }

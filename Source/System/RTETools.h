@@ -51,6 +51,14 @@ namespace RTE {
 		/// @return The last seed.
 		uint64_t GetSeed() const { return m_Seed; }
 
+		/// Gets a copy of the engine state, for rollback snapshots.
+		/// @return The engine by value.
+		std::mt19937 GetEngineState() const { return m_RNG; }
+
+		/// Restores a previously captured engine state.
+		/// @param state The engine state to restore.
+		void SetEngineState(const std::mt19937& state) { m_RNG = state; }
+
 		/// Serialize the generator's full internal state to a string for hashing — byte-identical
 		/// across same-seed runs at the same tick once the determinism work has settled.
 		std::string SerializeStateForHashing() const {
