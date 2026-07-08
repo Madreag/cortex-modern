@@ -52,6 +52,7 @@ namespace RTE {
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
 		std::string s_ReplayRecordArmedPath;
+		int s_ReplayRecordRound = 0;
 		bool s_SimSettingsPinned = false;
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
@@ -669,16 +670,24 @@ namespace RTE {
 
 	void ScenarioRunner::ArmLockstepReplayRecord(const std::string& path) {
 		s_ReplayRecordArmedPath = path;
+		s_ReplayRecordRound = 0;
 	}
 
 	bool ScenarioRunner::BeginLockstepReplayRecord(const NetMatchConfig& config, std::string* error) {
 		if (s_ReplayRecordArmedPath.empty()) {
 			return false;
 		}
-		if (!s_ReplayWriter.Open(s_ReplayRecordArmedPath, config, error)) {
+		// Every launch gets its own file: a resync/rematch round must never truncate the previous
+		// round's recording (a desync's recording IS the forensic evidence).
+		std::string path = s_ReplayRecordArmedPath;
+		if (s_ReplayRecordRound > 0) {
+			path += ".r" + std::to_string(s_ReplayRecordRound);
+		}
+		++s_ReplayRecordRound;
+		if (!s_ReplayWriter.Open(path, config, error)) {
 			return false;
 		}
-		std::cout << "[net-match] recording the match to " << s_ReplayRecordArmedPath << std::endl;
+		std::cout << "[net-match] recording the match to " << path << std::endl;
 		return true;
 	}
 
