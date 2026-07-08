@@ -76,6 +76,30 @@ namespace RTE {
 		/// @return The value of the simulation speed over real time.
 		float GetSimSpeed() const { return m_SimSpeed; }
 
+		/// Total real time accrued into the sim accumulator, in timer ticks (pace forensics).
+		long long GetPaceAccruedTicks() const { return m_PaceAccruedTicks; }
+
+		/// Total accrued sim time discarded by the runaway trim, in timer ticks (pace forensics).
+		long long GetPaceTrimmedTicks() const { return m_PaceTrimmedTicks; }
+
+		/// Total raw wall time seen across Update calls, in timer ticks (pace forensics).
+		long long GetPaceWallSeenTicks() const { return m_PaceWallSeenTicks; }
+
+		/// Total wall time dropped by the real-to-sim cap, in timer ticks (pace forensics).
+		long long GetPaceCapLostTicks() const { return m_PaceCapLostTicks; }
+
+		/// Total wall time elapsed while the sim was paused, in timer ticks (pace forensics).
+		long long GetPacePausedLostTicks() const { return m_PacePausedLostTicks; }
+
+		/// Number of Update calls (pace forensics).
+		long long GetPaceUpdateCalls() const { return m_PaceUpdateCalls; }
+
+		/// Number of ResetTime calls (pace forensics).
+		long long GetPaceResetCalls() const { return m_PaceResetCalls; }
+
+		/// The last Update's raw wall delta, in timer ticks (pace forensics).
+		long long GetPaceLastDeltaTicks() const { return m_PaceLastDeltaTicks; }
+
 		/// Gets a time scale factor which will be used to speed up or slow down the progress of the simulation time in relation to the real world time.
 		/// @return A factor between the real world time, and the simulation time.
 		float GetTimeScale() const { return m_TimeScale; }
@@ -186,6 +210,14 @@ namespace RTE {
 		bool m_SimPaused; //!< Simulation paused; no real time ticks will go to the sim accumulator.
 		bool m_SimTimeFrozen; //!< Sim updates advance the update count but not sim time (the synced lockstep pause).
 		bool m_FreeRunSim; //!< Sim updates run unpaced by real time (replay playback and benches).
+		long long m_PaceAccruedTicks; //!< Total real time accrued into the accumulator (pace forensics).
+		long long m_PaceTrimmedTicks; //!< Total accrued time discarded by the runaway trim (pace forensics).
+		long long m_PaceWallSeenTicks; //!< Total raw wall time seen across Update calls (pace forensics).
+		long long m_PaceCapLostTicks; //!< Total wall time dropped by the real-to-sim cap (pace forensics).
+		long long m_PacePausedLostTicks; //!< Total wall time elapsed while paused (pace forensics).
+		long long m_PaceUpdateCalls; //!< Number of Update calls (pace forensics).
+		long long m_PaceResetCalls; //!< Number of ResetTime calls (pace forensics).
+		long long m_PaceLastDeltaTicks; //!< The last Update's raw wall delta (pace forensics).
 
 	private:
 		/// Clears all the member variables of this TimerMan, effectively resetting the members of this abstraction level only.

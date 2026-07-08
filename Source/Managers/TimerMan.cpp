@@ -26,6 +26,13 @@ void TimerMan::Clear() {
 	m_SimPaused = false;
 	m_SimTimeFrozen = false;
 	m_FreeRunSim = false;
+	m_PaceAccruedTicks = 0;
+	m_PaceTrimmedTicks = 0;
+	m_PaceWallSeenTicks = 0;
+	m_PaceCapLostTicks = 0;
+	m_PacePausedLostTicks = 0;
+	m_PaceUpdateCalls = 0;
+	m_PaceResetCalls = 0;
 }
 
 void TimerMan::Initialize() {
@@ -55,6 +62,7 @@ float TimerMan::GetAIDeltaTimeSecs() const {
 }
 
 void TimerMan::ResetTime() {
+	++m_PaceResetCalls;
 	m_StartTime = std::chrono::steady_clock::now();
 
 	m_RealTimeTicks = 0;
@@ -97,15 +105,27 @@ void TimerMan::Update() {
 
 	RTEAssert(timeIncrease > 0, "It seems your CPU is giving bad timing data to the game, this is known to happen on some multi-core processors. This may be fixed by downloading the latest CPU drivers from AMD or Intel.");
 
+	m_PaceWallSeenTicks += m_RealTimeTicks - prevTime;
+	m_PaceCapLostTicks += (m_RealTimeTicks - prevTime) - timeIncrease;
+	m_PaceLastDeltaTicks = m_RealTimeTicks - prevTime;
+	++m_PaceUpdateCalls;
+
 	// If not paused, add the new time difference to the sim accumulator
 	if (!m_SimPaused) {
 		m_SimAccumulator += static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
+		m_PaceAccruedTicks += static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
+	} else {
+		m_PacePausedLostTicks += timeIncrease;
 	}
 
 	float maxPossibleSimSpeed = GetDeltaTimeMS() / std::max(g_PerformanceMan.GetMSPSUAverage(), std::numeric_limits<float>::epsilon());
 
 	// Make sure we don't get runaway behind schedule
-	m_SimAccumulator = std::min(m_SimAccumulator, m_DeltaTime + static_cast<long long>(m_DeltaTime * maxPossibleSimSpeed));
+	const long long trimCap = m_DeltaTime + static_cast<long long>(m_DeltaTime * maxPossibleSimSpeed);
+	if (m_SimAccumulator > trimCap) {
+		m_PaceTrimmedTicks += m_SimAccumulator - trimCap;
+		m_SimAccumulator = trimCap;
+	}
 
 	RTEAssert(m_SimAccumulator >= 0, "Negative sim time accumulator?!");
 
