@@ -135,6 +135,7 @@ static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
 static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
 static uint64_t s_netMatchServiceE2ERunningTicks = 0;
+static long s_netMatchE2EActorCensus = -1;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
@@ -1514,6 +1515,8 @@ void RunGameLoop() {
 						s_netMatchServiceE2EStartTick = nowTick;
 					}
 					s_netMatchServiceE2ERunningTicks = nowTick - s_netMatchServiceE2EStartTick;
+					// In-match census; the report runs after EndActivity, which releases actors.
+					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					if (s_netMatchServiceE2ERunningTicks > tickCap) {
 						g_NetMatchService.Complete("e2e complete");
@@ -1913,6 +1916,9 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
 	out << "\"resyncs\":" << s_netMatchResyncs << ",";
+	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
+	// slips every divergence gate).
+	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
