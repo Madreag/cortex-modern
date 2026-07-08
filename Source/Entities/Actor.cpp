@@ -291,6 +291,16 @@ int Actor::Create(const Actor& reference) {
 	return 0;
 }
 
+// The wire codec's bulk setter needs the unpacked state array, which cannot live inside the
+// property macro (the template comma breaks its argument parsing).
+static void ApplyControllerStateMask(Controller& controller, long long stateMask) {
+	std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
+	for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+		controlStates[state] = (stateMask & (1LL << state)) != 0;
+	}
+	controller.ApplyWireState(controlStates, controller.GetAnalogMove(), controller.GetAnalogAim(), controller.GetAnalogCursor(), controller.GetMouseMovement(), controller.GetInputMode(), controller.GetPlayerRaw(), controller.IsQuickDisabled());
+}
+
 int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSRotating::ReadProperty(propName, reader));
 
@@ -316,6 +326,22 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_DeviceSwitchSound;
 	});
 	MatchProperty("Status", { reader >> m_Status; });
+	MatchProperty("ControllerStateMask", {
+		// The controller rides the actor copy, so reading into it here survives the scene clone.
+		long long controllerStateMask = 0;
+		reader >> controllerStateMask;
+		ApplyControllerStateMask(m_Controller, controllerStateMask);
+	});
+	MatchProperty("ControllerAnalogMove", {
+		Vector analogMove;
+		reader >> analogMove;
+		m_Controller.SetAnalogMove(analogMove);
+	});
+	MatchProperty("ControllerAnalogAim", {
+		Vector analogAim;
+		reader >> analogAim;
+		m_Controller.SetAnalogAim(analogAim);
+	});
 	MatchProperty("DeploymentID", { reader >> m_DeploymentID; });
 	MatchProperty("PassengerSlots", { reader >> m_PassengerSlots; });
 	MatchProperty("Health",
@@ -1162,6 +1188,13 @@ void Actor::PreControllerUpdate() {
 	// In future maybe we can move this back, but it doesn't make much difference
 	if (m_UpdateMovePath) {
 		UpdateMovePath();
+	}
+}
+
+void Actor::AdoptPersistedUniqueID() {
+	MOSRotating::AdoptPersistedUniqueID();
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->AdoptPersistedUniqueID();
 	}
 }
 
