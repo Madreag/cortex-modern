@@ -30,6 +30,7 @@ namespace RTE {
 		std::string joinAddress;
 		NetSessionConfig sessionConfig;
 		NetMatchConfig matchConfig;
+		bool autoInputDelay = false; // Host: raise matchConfig.inputDelayFrames to cover the measured RTT.
 		bool useLobbyProtocol = false;
 		uint64_t startFrame = 0;
 		uint32_t sessionWaitMs = 15000;

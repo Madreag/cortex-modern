@@ -139,6 +139,7 @@ static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
 static bool s_netMatchResyncOnDesync = false;
+static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
 static std::string s_netReplayInPath;
 static std::string s_netReplayOutPath;
@@ -436,6 +437,17 @@ void HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-replay-out") {
 			s_netReplayOutPath = argValue[++i];
 			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-fake-lag") {
+			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+
+		if (currentArg == "-net-match-auto-delay") {
+			s_netMatchAutoDelay = true;
+			++i;
 			continue;
 		}
 
@@ -2047,6 +2059,7 @@ int RunNetMatchServiceE2E() {
 			request.mode = parsedMode;
 		}
 		request.resyncOnDesync = s_netMatchResyncOnDesync;
+		request.autoInputDelay = s_netMatchAutoDelay;
 		if (!g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}

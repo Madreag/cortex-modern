@@ -4,7 +4,10 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <iostream>
 #include <thread>
 #include <utility>
 
@@ -70,6 +73,23 @@ namespace RTE {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
+		// High ping without a matching input delay stalls every tick; the host raises the buffer to
+		// cover the worst measured RTT (the manual setting stays the floor) and the config sync
+		// carries the pick to every client like any host decision.
+		if (config.host && config.autoInputDelay) {
+			uint32_t maxPingMs = 0;
+			for (const NetSessionPeerInfo& peer: session.GetReadyPeers()) {
+				maxPingMs = std::max(maxPingMs, transport.GetPeerPingMs(peer.transportPeerId));
+			}
+			const double tickMs = 1000.0 / 30.0;
+			const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
+			    static_cast<uint32_t>(std::ceil((maxPingMs / 2.0) / tickMs)) + 1U, NetMatchConfigUtil::c_MaxInputDelayFrames));
+			if (neededDelay > m_MatchConfig.inputDelayFrames) {
+				std::cout << "[net-match] auto input delay: worst rtt " << maxPingMs << "ms -> " << neededDelay
+				          << " frames (manual floor " << m_MatchConfig.inputDelayFrames << ")" << std::endl;
+				m_MatchConfig.inputDelayFrames = neededDelay;
+			}
+		}
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 
 		if (config.postSessionSettleMs > 0) {
