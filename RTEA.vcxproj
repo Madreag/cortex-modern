@@ -845,6 +845,7 @@
     <ClInclude Include="Source\Network\NetMatchConfig.h" />
     <ClInclude Include="Source\Network\NetMatchRunner.h" />
     <ClInclude Include="Source\Network\NetMatchService.h" />
+    <ClInclude Include="Source\Network\NetLanDiscovery.h" />
     <ClInclude Include="Source\Network\NetMatchReplay.h" />
     <ClInclude Include="Source\Network\NetMatchSelfTest.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
@@ -1398,6 +1399,7 @@
     <ClCompile Include="Source\Network\NetMatchConfig.cpp" />
     <ClCompile Include="Source\Network\NetMatchRunner.cpp" />
     <ClCompile Include="Source\Network\NetMatchService.cpp" />
+    <ClCompile Include="Source\Network\NetLanDiscovery.cpp" />
     <ClCompile Include="Source\Network\NetMatchReplay.cpp" />
     <ClCompile Include="Source\Network\NetMatchSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />

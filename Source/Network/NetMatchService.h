@@ -1,5 +1,6 @@
 #pragma once
 
+#include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
 #include "Singleton.h"
@@ -116,6 +117,9 @@ namespace RTE {
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
 		uint64_t m_SessionPumpNowMs = 0;
+		NetLanDiscovery m_LanDiscovery; //!< Game-thread only: the hosting lobby's LAN beacon.
+		uint16_t m_BeaconGamePort = 0;
+		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelRequested{false};

@@ -7,6 +7,7 @@ sources += files(
 'NetGameCommand.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',
+'NetLanDiscovery.cpp',
 'NetLobbyProtocol.cpp',
 'NetLobbySession.cpp',
 'NetLockstep.cpp',

@@ -22,6 +22,7 @@
 #include "GUICollectionBox.h"
 #include "GUIButton.h"
 #include "GUILabel.h"
+#include "GUIListBox.h"
 #include "GUITextBox.h"
 
 #include "Resources/Credits.h"
@@ -67,6 +68,9 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
+	m_MultiplayerLanGamesList = nullptr;
+	m_LanHosts.clear();
+	m_LanBrowserNowMs = 0;
 	m_MultiplayerLandingPanel = nullptr;
 	m_MultiplayerHostPanel = nullptr;
 	m_MultiplayerJoinPanel = nullptr;
@@ -175,6 +179,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
+	m_MultiplayerLanGamesList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListLanGames"));
 
 	m_MultiplayerStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerStatus"));
 	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerError"));
@@ -521,6 +526,8 @@ bool MainMenuGUI::HandleInputEvents() {
 			}
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetMsg() == GUIButton::Focused && dynamic_cast<GUIButton*>(guiEvent.GetControl()))) {
 			g_GUISound.SelectionChangeSound()->Play();
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_MultiplayerLanGamesList) {
+			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
 	return false;
@@ -589,6 +596,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_NetMatchService.Destroy();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
+	} else if (guiEventControl == m_MultiplayerLanGamesList) {
+		// Clicking a discovered host fills the join fields; Connect stays the explicit action.
+		const int selected = m_MultiplayerLanGamesList->GetSelectedIndex();
+		if (selected >= 0 && static_cast<size_t>(selected) < m_LanHosts.size()) {
+			m_MultiplayerJoinAddressTextBox->SetText(m_LanHosts[static_cast<size_t>(selected)].address);
+			m_MultiplayerJoinPortTextBox->SetText(std::to_string(m_LanHosts[static_cast<size_t>(selected)].port));
+			g_GUISound.ItemChangeSound()->Play();
+		}
 	}
 }
 
@@ -675,6 +690,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
 	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
+	RefreshLanGamesList();
 	if (!lobby) {
 		return;
 	}
@@ -872,6 +888,43 @@ void MainMenuGUI::UpdateMainScreenHoveredButton(const GUIButton* hoveredButton) 
 		m_MainScreenPrevHoveredButtonIndex = hoveredButtonIndex;
 	} else {
 		m_MainScreenHoveredButton = nullptr;
+	}
+}
+
+void MainMenuGUI::RefreshLanGamesList() {
+	if (!m_MultiplayerLanGamesList) {
+		return;
+	}
+	// The browser only runs while the join screen is up; the beacon side lives in the service.
+	if (m_MultiplayerSubScreen != MultiplayerSubScreen::JoinSetup) {
+		if (m_LanBrowser.IsBrowsing()) {
+			m_LanBrowser.Stop();
+			m_LanHosts.clear();
+			m_MultiplayerLanGamesList->ClearList();
+		}
+		return;
+	}
+	std::string ignored;
+	if (!m_LanBrowser.IsBrowsing() && !m_LanBrowser.StartBrowser(&ignored)) {
+		return;
+	}
+	m_LanBrowserNowMs += 16;
+	m_LanBrowser.Tick(m_LanBrowserNowMs);
+	std::vector<NetLanHostInfo> hosts = m_LanBrowser.GetHosts(m_LanBrowserNowMs);
+	const auto describe = [](const NetLanHostInfo& host) {
+		return host.hostName + " - " + host.activity + " (" + std::to_string(host.playerCount) + "/" + std::to_string(host.maxPlayers) + ") " + host.address;
+	};
+	bool changed = hosts.size() != m_LanHosts.size();
+	for (size_t i = 0; !changed && i < hosts.size(); ++i) {
+		changed = describe(hosts[i]) != describe(m_LanHosts[i]);
+	}
+	if (!changed) {
+		return;
+	}
+	m_LanHosts = std::move(hosts);
+	m_MultiplayerLanGamesList->ClearList();
+	for (const NetLanHostInfo& host: m_LanHosts) {
+		m_MultiplayerLanGamesList->AddItem(describe(host));
 	}
 }
 
