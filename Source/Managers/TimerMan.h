@@ -97,9 +97,6 @@ namespace RTE {
 		/// Number of ResetTime calls (pace forensics).
 		long long GetPaceResetCalls() const { return m_PaceResetCalls; }
 
-		/// The last Update's raw wall delta, in timer ticks (pace forensics).
-		long long GetPaceLastDeltaTicks() const { return m_PaceLastDeltaTicks; }
-
 		/// Gets a time scale factor which will be used to speed up or slow down the progress of the simulation time in relation to the real world time.
 		/// @return A factor between the real world time, and the simulation time.
 		float GetTimeScale() const { return m_TimeScale; }
@@ -217,7 +214,6 @@ namespace RTE {
 		long long m_PacePausedLostTicks; //!< Total wall time elapsed while paused (pace forensics).
 		long long m_PaceUpdateCalls; //!< Number of Update calls (pace forensics).
 		long long m_PaceResetCalls; //!< Number of ResetTime calls (pace forensics).
-		long long m_PaceLastDeltaTicks; //!< The last Update's raw wall delta (pace forensics).
 
 	private:
 		/// Clears all the member variables of this TimerMan, effectively resetting the members of this abstraction level only.

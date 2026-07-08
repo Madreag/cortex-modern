@@ -107,7 +107,6 @@ void TimerMan::Update() {
 
 	m_PaceWallSeenTicks += m_RealTimeTicks - prevTime;
 	m_PaceCapLostTicks += (m_RealTimeTicks - prevTime) - timeIncrease;
-	m_PaceLastDeltaTicks = m_RealTimeTicks - prevTime;
 	++m_PaceUpdateCalls;
 
 	// If not paused, add the new time difference to the sim accumulator
