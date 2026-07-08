@@ -23,6 +23,7 @@ void Controller::Clear() {
 	m_Team = 0;
 	m_Player = 0;
 	m_Disabled = false;
+	m_WireApplyTick = -1;
 	m_NextIgnore = false;
 	m_PrevIgnore = false;
 	m_WeaponChangeNextIgnore = false;
@@ -60,6 +61,7 @@ int Controller::Create(const Controller& reference) {
 	m_Team = reference.m_Team;
 	m_Player = reference.m_Player;
 	m_Disabled = reference.m_Disabled;
+	m_WireApplyTick = reference.m_WireApplyTick;
 
 	m_WeaponChangeNextIgnore = reference.m_WeaponChangeNextIgnore;
 	m_WeaponChangePrevIgnore = reference.m_WeaponChangePrevIgnore;

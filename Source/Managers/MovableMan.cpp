@@ -289,6 +289,7 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 			error = "lockstep controller apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
 			return false;
 		}
+		actorIt->second->GetController()->SetWireApplyTick(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
 	return true;
 }
@@ -583,6 +584,7 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(const_cast<AHuman*>(human)->GetEquippedItem())) {
 					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading();
 				}
+				out << " limbs=" << human->GetLimbGroupPositions();
 			}
 		}
 		out << std::defaultfloat << "\n";
@@ -1264,6 +1266,12 @@ bool MovableMan::AddMO(MovableObject* movableObjectToAdd) {
 	AddParticle(movableObjectToAdd);
 
 	return true;
+}
+
+void MovableMan::ReapplyPersistedControllerModes() {
+	for (Actor* actor: m_Actors) {
+		actor->ApplyPersistedControllerMode();
+	}
 }
 
 void MovableMan::AddActor(Actor* actorToAdd) {

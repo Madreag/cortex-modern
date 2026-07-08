@@ -53,6 +53,8 @@ Actor::~Actor() {
 
 void Actor::Clear() {
 	m_Controller.Reset();
+	m_PersistedControllerInputMode = -1;
+	m_PersistedControllerPlayer = 0;
 	m_PlayerControllable = true;
 	m_BodyHitSound = nullptr;
 	m_AlarmSound = nullptr;
@@ -175,6 +177,8 @@ int Actor::Create(const Actor& reference) {
 	m_Controller = reference.m_Controller;
 	m_Controller.SetInputMode(Controller::CIM_AI);
 	m_Controller.SetControlledActor(this);
+	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
+	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
 	m_PlayerControllable = reference.m_PlayerControllable;
 
 	if (reference.m_BodyHitSound) {
@@ -342,6 +346,8 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> analogAim;
 		m_Controller.SetAnalogAim(analogAim);
 	});
+	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
+	MatchProperty("ControllerPlayer", { reader >> m_PersistedControllerPlayer; });
 	MatchProperty("DeploymentID", { reader >> m_DeploymentID; });
 	MatchProperty("PassengerSlots", { reader >> m_PassengerSlots; });
 	MatchProperty("Health",
@@ -1195,6 +1201,14 @@ void Actor::AdoptPersistedUniqueID() {
 	MOSRotating::AdoptPersistedUniqueID();
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
+	}
+}
+
+void Actor::ApplyPersistedControllerMode() {
+	if (m_PersistedControllerInputMode >= 0) {
+		m_Controller.SetInputMode(static_cast<Controller::InputMode>(m_PersistedControllerInputMode));
+		m_Controller.SetPlayerRaw(static_cast<int>(m_PersistedControllerPlayer));
+		m_PersistedControllerInputMode = -1;
 	}
 }
 

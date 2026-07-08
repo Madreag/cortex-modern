@@ -1,5 +1,7 @@
 #include "ACrab.h"
 
+#include <charconv>
+
 #include "AtomGroup.h"
 #include "Attachable.h"
 #include "ThrownDevice.h"
@@ -45,6 +47,13 @@ void ACrab::Clear() {
 	m_BackupLBGFootGroup = nullptr;
 	m_pRFGFootGroup = 0;
 	m_BackupRFGFootGroup = nullptr;
+	m_PersistedLFGFootResidue.clear();
+	m_PersistedLBGFootResidue.clear();
+	m_PersistedRFGFootResidue.clear();
+	m_PersistedRBGFootResidue.clear();
+	m_PersistedLimbPathStates.clear();
+	m_PersistedLimbPathStatesFromFile = false;
+	m_PersistedLimbGroupPositions.clear();
 	m_pRBGFootGroup = 0;
 	m_BackupRBGFootGroup = nullptr;
 	m_StrideSound = nullptr;
@@ -201,6 +210,21 @@ int ACrab::Create(const ACrab& reference) {
 	m_BackupRBGFootGroup->SetOwner(this);
 	m_BackupRBGFootGroup->SetLimbPos(atomGroupToUseAsFootGroupLFG->GetLimbPos());
 
+	m_PersistedLFGFootResidue = reference.m_PersistedLFGFootResidue;
+	m_PersistedLBGFootResidue = reference.m_PersistedLBGFootResidue;
+	m_PersistedRFGFootResidue = reference.m_PersistedRFGFootResidue;
+	m_PersistedRBGFootResidue = reference.m_PersistedRBGFootResidue;
+	// The LimbPath copy terminates traversal, so a save clone of a WORLD actor carries the live
+	// state in the stash; preset copies just pass any stash along.
+	if (reference.HasEverBeenAddedToMovableMan()) {
+		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
+	} else {
+		m_PersistedLimbPathStates = reference.m_PersistedLimbPathStates;
+		m_PersistedLimbGroupPositions = reference.m_PersistedLimbGroupPositions;
+	}
+	m_PersistedLimbPathStatesFromFile = false;
+
 	if (reference.m_StrideSound) {
 		m_StrideSound = dynamic_cast<SoundContainer*>(reference.m_StrideSound->Clone());
 	}
@@ -221,8 +245,131 @@ int ACrab::Create(const ACrab& reference) {
 	return 0;
 }
 
+std::string ACrab::GetLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) {
+		return m_PersistedLimbGroupPositions;
+	}
+	char buffer[256];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	for (const AtomGroup* group: {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		appendValue(limbPos.m_X);
+		appendValue(limbPos.m_Y);
+	}
+	return std::string(buffer, cursor);
+}
+
+static void ApplyPackedLimbPositions(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
+	if (packed.empty()) {
+		return;
+	}
+	const char* cursor = packed.data();
+	const char* end = packed.data() + packed.size();
+	const auto readValue = [&cursor, end](float& value) {
+		while (cursor != end && *cursor == ' ') {
+			++cursor;
+		}
+		cursor = std::from_chars(cursor, end, value).ptr;
+	};
+	for (AtomGroup* group: groups) {
+		Vector limbPos;
+		readValue(limbPos.m_X);
+		readValue(limbPos.m_Y);
+		if (group) {
+			group->SetRawLimbPos(limbPos);
+		}
+	}
+}
+
+std::vector<std::string> ACrab::GetLimbPathStates() const {
+	if (!m_PersistedLimbPathStates.empty()) {
+		return m_PersistedLimbPathStates;
+	}
+	std::vector<std::string> states;
+	states.reserve(SIDECOUNT * LAYERCOUNT * MOVEMENTSTATECOUNT);
+	for (int side = 0; side < SIDECOUNT; ++side) {
+		for (int layer = 0; layer < LAYERCOUNT; ++layer) {
+			for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
+				states.push_back(m_Paths[side][layer][movementState].PackTraversalState());
+			}
+		}
+	}
+	return states;
+}
+
+std::vector<long long> ACrab::GetLFGFootResidue() const { return m_pLFGFootGroup ? m_pLFGFootGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> ACrab::GetLBGFootResidue() const { return m_pLBGFootGroup ? m_pLBGFootGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> ACrab::GetRFGFootResidue() const { return m_pRFGFootGroup ? m_pRFGFootGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> ACrab::GetRBGFootResidue() const { return m_pRBGFootGroup ? m_pRBGFootGroup->GetTravelResidue() : std::vector<long long>(); }
+
+void ACrab::AdoptPersistedUniqueID() {
+	Actor::AdoptPersistedUniqueID();
+	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+		if (!residue.empty()) {
+			if (group) {
+				group->SetTravelResidue(residue);
+			}
+			residue.clear();
+		}
+	};
+	applyResidue(m_pLFGFootGroup, m_PersistedLFGFootResidue);
+	applyResidue(m_pLBGFootGroup, m_PersistedLBGFootResidue);
+	applyResidue(m_pRFGFootGroup, m_PersistedRFGFootResidue);
+	applyResidue(m_pRBGFootGroup, m_PersistedRBGFootResidue);
+	if (!m_PersistedLimbPathStates.empty()) {
+		size_t index = 0;
+		for (int side = 0; side < SIDECOUNT && index < m_PersistedLimbPathStates.size(); ++side) {
+			for (int layer = 0; layer < LAYERCOUNT && index < m_PersistedLimbPathStates.size(); ++layer) {
+				for (int movementState = 0; movementState < MOVEMENTSTATECOUNT && index < m_PersistedLimbPathStates.size(); ++movementState) {
+					m_Paths[side][layer][movementState].ApplyTraversalState(m_PersistedLimbPathStates[index++]);
+				}
+			}
+		}
+		m_PersistedLimbPathStates.clear();
+	}
+	ApplyPackedLimbPositions(m_PersistedLimbGroupPositions, {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup});
+	m_PersistedLimbGroupPositions.clear();
+}
+
 int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
+
+	MatchProperty("LFGFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedLFGFootResidue.push_back(residueValue);
+	});
+	MatchProperty("LBGFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedLBGFootResidue.push_back(residueValue);
+	});
+	MatchProperty("RFGFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedRFGFootResidue.push_back(residueValue);
+	});
+	MatchProperty("RBGFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedRBGFootResidue.push_back(residueValue);
+	});
+	MatchProperty("LimbPathState", {
+		if (!m_PersistedLimbPathStatesFromFile) {
+			m_PersistedLimbPathStates.clear();
+			m_PersistedLimbPathStatesFromFile = true;
+		}
+		std::string pathState;
+		reader >> pathState;
+		m_PersistedLimbPathStates.push_back(pathState);
+	});
+	MatchProperty("LimbGroupPositions", { reader >> m_PersistedLimbGroupPositions; });
 
 	MatchProperty("Turret", { SetTurret(dynamic_cast<Turret*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchProperty("Jetpack", { SetJetpack(dynamic_cast<AEJetpack*>(g_PresetMan.ReadReflectedPreset(reader))); });

@@ -708,6 +708,9 @@ namespace RTE {
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
 
+		/// Applies the saved wire-applied controller mode; runs after the activity's AI setup so it can't be overwritten.
+		void ApplyPersistedControllerMode();
+
 		/// Cast see rays for this actor.
 		void CastSeeRays();
 
@@ -908,6 +911,8 @@ namespace RTE {
 
 		AtomGroup* m_pHitBody;
 		Controller m_Controller;
+		long long m_PersistedControllerInputMode; //!< Saved wire-applied input mode, -1 when absent.
+		long long m_PersistedControllerPlayer; //!< Saved wire-applied player binding.
 		bool m_PlayerControllable; //!< Whether or not this Actor can be controlled by human players.
 
 		// Sounds

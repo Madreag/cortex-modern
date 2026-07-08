@@ -215,6 +215,25 @@ void AtomGroup::SetAtomList(const std::vector<Atom*>& newAtoms) {
 	m_Atoms = newAtoms;
 }
 
+std::vector<long long> AtomGroup::GetTravelResidue() const {
+	std::vector<long long> residue;
+	residue.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		residue.push_back(atom->PackTravelResidue());
+	}
+	return residue;
+}
+
+void AtomGroup::SetTravelResidue(const std::vector<long long>& residue) {
+	size_t index = 0;
+	for (Atom* atom: m_Atoms) {
+		if (index >= residue.size()) {
+			break;
+		}
+		atom->ApplyTravelResidue(residue[index++]);
+	}
+}
+
 float AtomGroup::CalculateMaxRadius() const {
 	float sqrMagnitude = 0.0F;
 	float sqrLongest = 0.0F;

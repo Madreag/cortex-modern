@@ -18,6 +18,10 @@ MOPixel::~MOPixel() {
 
 void MOPixel::Clear() {
 	m_Atom = 0;
+	m_PersistedAtomResidue = 0;
+	m_HasPersistedAtomResidue = false;
+	m_PersistedLethalRange = 0.0F;
+	m_HasPersistedLethalRange = false;
 	m_Color.Reset();
 	m_LethalRange = std::max(g_FrameMan.GetPlayerScreenWidth(), g_FrameMan.GetPlayerScreenHeight());
 	m_MinLethalRange = 1;
@@ -61,6 +65,10 @@ int MOPixel::Create(const MOPixel& reference) {
 
 	m_Atom = new Atom(*(reference.m_Atom));
 	m_Atom->SetOwner(this);
+	m_PersistedAtomResidue = reference.m_PersistedAtomResidue;
+	m_HasPersistedAtomResidue = reference.m_HasPersistedAtomResidue;
+	m_PersistedLethalRange = reference.m_PersistedLethalRange;
+	m_HasPersistedLethalRange = reference.m_HasPersistedLethalRange;
 	m_Color = reference.m_Color;
 	m_LethalRange = reference.m_LethalRange;
 	m_MinLethalRange = reference.m_MinLethalRange;
@@ -85,8 +93,34 @@ int MOPixel::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("MinLethalRange", { reader >> m_MinLethalRange; });
 	MatchProperty("MaxLethalRange", { reader >> m_MaxLethalRange; });
 	MatchProperty("Staininess", { reader >> m_Staininess; });
+	MatchProperty("AtomResidue", {
+		reader >> m_PersistedAtomResidue;
+		m_HasPersistedAtomResidue = true;
+	});
+	MatchProperty("SpecialBehaviour_LethalRange", {
+		reader >> m_PersistedLethalRange;
+		m_HasPersistedLethalRange = true;
+	});
 
 	EndPropertyList;
+}
+
+long long MOPixel::GetAtomResidue() const {
+	return m_Atom ? m_Atom->PackTravelResidue() : 0;
+}
+
+void MOPixel::AdoptPersistedUniqueID() {
+	MovableObject::AdoptPersistedUniqueID();
+	if (m_HasPersistedAtomResidue) {
+		if (m_Atom) {
+			m_Atom->ApplyTravelResidue(m_PersistedAtomResidue);
+		}
+		m_HasPersistedAtomResidue = false;
+	}
+	if (m_HasPersistedLethalRange) {
+		m_LethalRange = m_PersistedLethalRange;
+		m_HasPersistedLethalRange = false;
+	}
 }
 
 int MOPixel::Save(Writer& writer) const {

@@ -1031,6 +1031,9 @@ namespace RTE {
 		/// The rest timer's absolute start in sim ticks, for full-game saves.
 		int64_t GetRestTimerStart() const { return m_RestTimer.GetStartSimTimeMS(); }
 
+		/// The age timer's absolute start in sim ticks, for full-game saves.
+		int64_t GetAgeTimerStart() const { return m_AgeTimer.GetStartSimTimeMS(); }
+
 		/// Gets the preset name and unique ID of this MO, often useful for error messages.
 		/// @return A string containing the unique ID and preset name of this MO.
 		std::string GetPresetNameAndUniqueID() const { return m_PresetName + ", UID: " + std::to_string(m_UniqueID); }
@@ -1324,6 +1327,7 @@ namespace RTE {
 		long m_PersistedUniqueID;
 		int64_t m_PersistedRestTimerStart;
 		bool m_HasPersistedRestTimerStart;
+		PersistedTimerAnchor m_PersistedAgeTimerAnchor;
 		// In which radis should we look to remove orphaned terrain on terrain penetration,
 		// must not be greater than SceneMan::ORPHANSIZE, or will be truncated
 		int m_RemoveOrphanTerrainRadius;

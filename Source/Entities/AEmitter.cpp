@@ -38,11 +38,14 @@ void AEmitter::Clear() {
 	// Set this to really long so an initial burst will be possible
 	m_BurstTimer.SetElapsedSimTimeS(50000);
 	m_BurstTimer.SetElapsedRealTimeS(50000);
+	m_PersistedBurstTimerAnchor = {};
+	m_PersistedEmissionAccumulators.clear();
 	m_PlayBurstSound = true;
 	m_EmitAngle.Reset();
 	m_EmissionOffset.Reset();
 	m_EmitDamage = 0;
 	m_LastEmitTmr.Reset();
+	m_PersistedLastEmitTimerAnchor = {};
 	m_pFlash = 0;
 	m_FlashScale = 1.0F;
 	m_AvgBurstImpulse = -1.0F;
@@ -88,6 +91,11 @@ int AEmitter::Create(const AEmitter& reference) {
 	m_EmitterDamageMultiplier = reference.m_EmitterDamageMultiplier;
 	m_BurstSpacing = reference.m_BurstSpacing;
 	m_BurstTriggered = reference.m_BurstTriggered;
+	m_BurstTimer = reference.m_BurstTimer;
+	m_LastEmitTmr = reference.m_LastEmitTmr;
+	m_PersistedBurstTimerAnchor = reference.m_PersistedBurstTimerAnchor;
+	m_PersistedLastEmitTimerAnchor = reference.m_PersistedLastEmitTimerAnchor;
+	m_PersistedEmissionAccumulators = reference.m_PersistedEmissionAccumulators;
 	m_PlayBurstSound = reference.m_PlayBurstSound;
 	m_EmitAngle = reference.m_EmitAngle;
 	m_EmissionOffset = reference.m_EmissionOffset;
@@ -159,8 +167,46 @@ int AEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SustainBurstSound", { reader >> m_SustainBurstSound; });
 	MatchProperty("BurstSoundFollowsEmitter", { reader >> m_BurstSoundFollowsEmitter; });
 	MatchProperty("LoudnessOnEmit", { reader >> m_LoudnessOnEmit; });
+	MatchProperty("BurstTimerStart", {
+		reader >> m_PersistedBurstTimerAnchor.startTicks;
+		m_PersistedBurstTimerAnchor.pending = true;
+	});
+	MatchProperty("LastEmitTimerStart", {
+		reader >> m_PersistedLastEmitTimerAnchor.startTicks;
+		m_PersistedLastEmitTimerAnchor.pending = true;
+	});
+	MatchProperty("EmissionAccumulator", {
+		double accumulator = 0;
+		reader >> accumulator;
+		m_PersistedEmissionAccumulators.push_back(accumulator);
+	});
 
 	EndPropertyList;
+}
+
+std::vector<double> AEmitter::GetEmissionAccumulators() const {
+	std::vector<double> accumulators;
+	accumulators.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		accumulators.push_back(emission->m_Accumulator);
+	}
+	return accumulators;
+}
+
+void AEmitter::AdoptPersistedUniqueID() {
+	Attachable::AdoptPersistedUniqueID();
+	m_PersistedBurstTimerAnchor.Apply(m_BurstTimer);
+	m_PersistedLastEmitTimerAnchor.Apply(m_LastEmitTmr);
+	if (!m_PersistedEmissionAccumulators.empty()) {
+		size_t index = 0;
+		for (Emission* emission: m_EmissionList) {
+			if (index >= m_PersistedEmissionAccumulators.size()) {
+				break;
+			}
+			emission->m_Accumulator = m_PersistedEmissionAccumulators[index++];
+		}
+		m_PersistedEmissionAccumulators.clear();
+	}
 }
 
 int AEmitter::Save(Writer& writer) const {

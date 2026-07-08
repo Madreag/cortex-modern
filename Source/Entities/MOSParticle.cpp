@@ -20,6 +20,8 @@ MOSParticle::~MOSParticle() {
 
 void MOSParticle::Clear() {
 	m_Atom = nullptr;
+	m_PersistedAtomResidue = 0;
+	m_HasPersistedAtomResidue = false;
 	m_SpriteAnimMode = OVERLIFETIME;
 	m_PostEffectEnabled = true; // Default to true for backwards compatibility reasons
 }
@@ -39,6 +41,8 @@ int MOSParticle::Create(const MOSParticle& reference) {
 
 	m_Atom = new Atom(*(reference.m_Atom));
 	m_Atom->SetOwner(this);
+	m_PersistedAtomResidue = reference.m_PersistedAtomResidue;
+	m_HasPersistedAtomResidue = reference.m_HasPersistedAtomResidue;
 
 	return 0;
 }
@@ -53,8 +57,26 @@ int MOSParticle::ReadProperty(const std::string_view& propName, Reader& reader) 
 		reader >> *m_Atom;
 		m_Atom->SetOwner(this);
 	});
+	MatchProperty("AtomResidue", {
+		reader >> m_PersistedAtomResidue;
+		m_HasPersistedAtomResidue = true;
+	});
 
 	EndPropertyList;
+}
+
+long long MOSParticle::GetAtomResidue() const {
+	return m_Atom ? m_Atom->PackTravelResidue() : 0;
+}
+
+void MOSParticle::AdoptPersistedUniqueID() {
+	MOSprite::AdoptPersistedUniqueID();
+	if (m_HasPersistedAtomResidue) {
+		if (m_Atom) {
+			m_Atom->ApplyTravelResidue(m_PersistedAtomResidue);
+		}
+		m_HasPersistedAtomResidue = false;
+	}
 }
 
 int MOSParticle::Save(Writer& writer) const {

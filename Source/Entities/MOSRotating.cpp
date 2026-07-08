@@ -214,6 +214,8 @@ int MOSRotating::Create(const MOSRotating& reference) {
 			m_pDeepGroup->SetOwner(this);
 		}
 	}
+	m_PersistedAtomGroupResidue = reference.m_PersistedAtomGroupResidue;
+	m_TravelImpulse = reference.m_TravelImpulse;
 
 	m_DeepCheck = reference.m_DeepCheck;
 	m_SpriteCenter = reference.m_SpriteCenter;
@@ -277,6 +279,16 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		              m_pAtomGroup = new AtomGroup();
 		              reader >> *m_pAtomGroup;
 	              });
+	MatchProperty("AtomGroupResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedAtomGroupResidue.push_back(residueValue);
+	});
+	MatchProperty("SpecialBehaviour_TravelImpulse", {
+		Vector travelImpulse;
+		reader >> travelImpulse;
+		m_TravelImpulse = travelImpulse;
+	});
 	MatchProperty("DeepGroup",
 	              {
 		              delete m_pDeepGroup;
@@ -1435,6 +1447,12 @@ void MOSRotating::PostTravel() {
 
 void MOSRotating::AdoptPersistedUniqueID() {
 	MovableObject::AdoptPersistedUniqueID();
+	if (!m_PersistedAtomGroupResidue.empty()) {
+		if (m_pAtomGroup) {
+			m_pAtomGroup->SetTravelResidue(m_PersistedAtomGroupResidue);
+		}
+		m_PersistedAtomGroupResidue.clear();
+	}
 	for (Attachable* attachable: m_Attachables) {
 		attachable->AdoptPersistedUniqueID();
 	}

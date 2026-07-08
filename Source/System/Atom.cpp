@@ -138,6 +138,8 @@ int Atom::Create(const Atom& reference) {
 	m_TrailColor = reference.m_TrailColor;
 	m_TrailLength = reference.m_TrailLength;
 	m_TrailLengthVariation = reference.m_TrailLengthVariation;
+	m_ChangedDir = reference.m_ChangedDir;
+	m_PrevError = reference.m_PrevError;
 
 	// These need to be set manually by the new owner.
 	m_OwnerMO = nullptr;

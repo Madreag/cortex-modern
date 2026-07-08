@@ -82,6 +82,14 @@ namespace RTE {
 		/// @return The number of Atoms that make up the group.
 		int GetAtomCount() const { return m_Atoms.size(); }
 
+		/// The per-atom travel residue (carried error + direction flag), in atom order, for full-game saves.
+		std::vector<long long> GetTravelResidue() const;
+		void SetTravelResidue(const std::vector<long long>& residue);
+
+		/// The raw last limb position, for full-game saves.
+		const Vector& GetRawLimbPos() const { return m_LimbPos; }
+		void SetRawLimbPos(const Vector& newPos) { m_LimbPos = newPos; }
+
 		/// Gets max radius of the AtomGroup through the longest magnitude of all the Atom's offsets.
 		/// @return The largest magnitude of Atom's offsets, in pixels.
 		float CalculateMaxRadius() const;

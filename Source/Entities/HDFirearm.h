@@ -81,6 +81,14 @@ namespace RTE {
 		/// @return A pointer to Magazine of this HDFirearm. Ownership is NOT transferred!
 		Magazine* GetMagazine() const { return m_pMagazine; }
 
+		/// Gets the fire cycle timer start in raw sim ticks, for full-game saves.
+		int64_t GetLastFireTimerStart() const { return m_LastFireTmr.GetStartSimTimeMS(); }
+
+		/// Gets the reload timer start in raw sim ticks, for full-game saves.
+		int64_t GetReloadTimerStart() const { return m_ReloadTmr.GetStartSimTimeMS(); }
+
+		void AdoptPersistedUniqueID() override;
+
 		/// Sets the Magazine for this HDFirearm. Ownership IS transferred!
 		/// @param newMagazine The new Magazine to use.
 		void SetMagazine(Magazine* newMagazine);
@@ -546,6 +554,8 @@ namespace RTE {
 		Timer m_LastFireTmr;
 		// Timer for timing reload times.
 		Timer m_ReloadTmr;
+		PersistedTimerAnchor m_PersistedLastFireTimerAnchor;
+		PersistedTimerAnchor m_PersistedReloadTimerAnchor;
 
 		// The point from where the projectiles appear.
 		Vector m_MuzzleOff;

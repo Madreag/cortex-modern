@@ -323,6 +323,22 @@ namespace RTE {
 		/// Tells this Atom that the previous travel move's fractional error isn't valid for consecutive travel moves.
 		void ChangedDir() { m_ChangedDir = true; }
 
+		/// The carried travel residue (previous move's fractional error + direction validity), for full-game saves.
+		int GetPrevError() const { return m_PrevError; }
+		void SetPrevError(int prevError) { m_PrevError = prevError; }
+		bool GetChangedDir() const { return m_ChangedDir; }
+		void SetChangedDir(bool changedDir) { m_ChangedDir = changedDir; }
+
+		/// Packs the carried travel residue into one saveable value.
+		long long PackTravelResidue() const { return static_cast<long long>(m_PrevError) * 2 + (m_ChangedDir ? 1 : 0); }
+
+		/// Applies a packed travel-residue value.
+		void ApplyTravelResidue(long long value) {
+			const long long dirBit = value & 1LL;
+			m_ChangedDir = dirBit != 0;
+			m_PrevError = static_cast<int>((value - dirBit) / 2);
+		}
+
 		/// Uses the current state of the owning MovableObject to determine if there are any collisions in the path of its travel during this frame, and if so, apply all collision responses to the MO.
 		/// @param travelTime The amount of time in s that this Atom is allowed to travel.
 		/// @param autoTravel A bool specifying if the end position result should be moved along the trajectory if no terrain is hit.

@@ -69,6 +69,11 @@ namespace RTE {
 		/// @return A const reference to the current Atom.
 		const Atom* GetAtom() const { return m_Atom; }
 
+		/// The atom's carried travel residue, for full-game saves.
+		long long GetAtomResidue() const;
+
+		void AdoptPersistedUniqueID() override;
+
 		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
 		void SnapRenderPoseToSim() override;
 
@@ -115,6 +120,8 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		Atom* m_Atom; //!< The Atom that will be the physical representation of this MOSParticle.
+		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
+		bool m_HasPersistedAtomResidue = false;
 		float m_TimeRest; //!< Accumulated time in seconds that did not cause a frame change.
 
 	private:
