@@ -613,6 +613,7 @@ namespace RTE {
 		runnerConfig.joinAddress = request.host ? "" : request.address;
 		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request);
 		runnerConfig.matchConfig = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId);
+		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
 		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
 		runnerConfig.sessionWaitMs = c_MenuLobbyWaitMs;
