@@ -54,7 +54,9 @@ float TimerMan::GetRealToSimCap() const {
 }
 
 float TimerMan::GetSimUpdateProportion() const {
-	return m_SimAccumulator / static_cast<float>(m_DeltaTime);
+	// An interpolation alpha: banked catch-up time past one dt must not extrapolate render
+	// poses (or index past the trail buffers).
+	return std::min(1.0F, m_SimAccumulator / static_cast<float>(m_DeltaTime));
 }
 
 float TimerMan::GetAIDeltaTimeSecs() const {
