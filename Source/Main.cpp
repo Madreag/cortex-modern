@@ -960,7 +960,7 @@ void RunGameLoop() {
 
 		g_TimerMan.Update();
 
-		const bool paceActiveAtIterStart = ScenarioRunner::HasLockstepCoordinator();
+		const bool paceActiveAtIterStart = ScenarioRunner::IsLockstepControllerSyncActive();
 
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
@@ -1365,7 +1365,7 @@ void RunGameLoop() {
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 
-			if (ScenarioRunner::HasLockstepCoordinator()) {
+			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
 				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
 			}
@@ -1613,8 +1613,9 @@ void RunGameLoop() {
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
 
-		// Both ends of the iteration must be in-match, or a teardown-to-menu iteration poisons the averages.
-		if (paceActiveAtIterStart && ScenarioRunner::HasLockstepCoordinator()) {
+		// Both ends of the iteration must be in a RUNNING match, or the teardown drain and
+		// menu-transition iterations poison the averages.
+		if (paceActiveAtIterStart && ScenarioRunner::IsLockstepControllerSyncActive()) {
 			++s_paceIterations;
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
@@ -1943,7 +1944,16 @@ std::string BuildLoopPaceJson() {
 	out << "\"wall_tps\":" << (wallUs > 0 ? static_cast<double>(s_paceSimTicks) * 1000000.0 / static_cast<double>(wallUs) : 0.0) << ",";
 	out << "\"sim_ms_per_tick\":" << (s_paceSimTicks > 0 ? static_cast<double>(s_paceSimUs) / 1000.0 / static_cast<double>(s_paceSimTicks) : 0.0) << ",";
 	out << "\"draw_ms_per_iter\":" << (s_paceIterations > 0 ? static_cast<double>(s_paceDrawUs) / 1000.0 / static_cast<double>(s_paceIterations) : 0.0) << ",";
-	out << "\"net_wait_ms\":" << ScenarioRunner::GetLockstepWaitUs() / 1000;
+	out << "\"net_wait_ms\":" << ScenarioRunner::GetLockstepWaitUs() / 1000 << ",";
+	const double ticksPerMs = static_cast<double>(g_TimerMan.GetTicksPerSecond()) / 1000.0;
+	out << "\"accrued_ms\":" << static_cast<long long>(static_cast<double>(g_TimerMan.GetPaceAccruedTicks()) / ticksPerMs) << ",";
+	out << "\"trimmed_ms\":" << static_cast<long long>(static_cast<double>(g_TimerMan.GetPaceTrimmedTicks()) / ticksPerMs) << ",";
+	out << "\"wall_seen_ms\":" << static_cast<long long>(static_cast<double>(g_TimerMan.GetPaceWallSeenTicks()) / ticksPerMs) << ",";
+	out << "\"cap_lost_ms\":" << static_cast<long long>(static_cast<double>(g_TimerMan.GetPaceCapLostTicks()) / ticksPerMs) << ",";
+	out << "\"paused_lost_ms\":" << static_cast<long long>(static_cast<double>(g_TimerMan.GetPacePausedLostTicks()) / ticksPerMs) << ",";
+	out << "\"update_calls\":" << g_TimerMan.GetPaceUpdateCalls() << ",";
+	out << "\"reset_calls\":" << g_TimerMan.GetPaceResetCalls() << ",";
+	out << "\"time_scale\":" << g_TimerMan.GetTimeScale();
 	out << "}";
 	return out.str();
 }
