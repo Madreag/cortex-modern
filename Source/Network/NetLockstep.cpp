@@ -1173,6 +1173,25 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::RewindReplay(uint64_t firstFrame, std::string* error) {
+		if (!m_RemotePeerIds.empty() || !m_RemoteTransports.empty()) {
+			if (error) *error = "rewind is replay-only";
+			return false;
+		}
+		m_State = NetLockstepState::Running;
+		m_LocalFrames.clear();
+		m_RemoteFrames.clear();
+		m_LocalCommands.clear();
+		m_RemoteCommands.clear();
+		m_LocalChecksums.clear();
+		m_RemoteChecksums.clear();
+		m_ReadyFrames.clear();
+		m_Stats.nextFrame = firstFrame;
+		m_Stats.effectiveStartFrame = firstFrame;
+		m_Stats.timeoutReason.clear();
+		return true;
+	}
+
 	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error) {
 		if (m_State != NetLockstepState::Running) {
 			// Carry the stop reason so the caller can route it (a resync request must not read as a

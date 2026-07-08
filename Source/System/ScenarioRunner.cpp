@@ -53,6 +53,10 @@ namespace RTE {
 		NetMatchReplayReader s_ReplayReader;
 		std::string s_ReplayRecordArmedPath;
 		int s_ReplayRecordRound = 0;
+		uint64_t s_ReplayRewindFrom = 0; //!< Fidelity gate: keep copies of records in [from, from+count).
+		uint64_t s_ReplayRewindCount = 0;
+		std::deque<NetLockstepFrame> s_ReplayRewindKeep; //!< Records kept during the first pass.
+		std::deque<NetLockstepFrame> s_ReplayRewindBuffer; //!< The kept window, re-fed on the re-run.
 		bool s_SimSettingsPinned = false;
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
@@ -633,6 +637,12 @@ namespace RTE {
 			if (tick < s_ReplayReader.GetStartFrame()) {
 				return true;
 			}
+			// The fidelity gate's re-run consumes the buffered window before the reader resumes.
+			if (!s_ReplayRewindBuffer.empty() && s_ReplayRewindBuffer.front().targetFrame == tick) {
+				NetLockstepFrame buffered = s_ReplayRewindBuffer.front();
+				s_ReplayRewindBuffer.pop_front();
+				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error);
+			}
 			NetLockstepFrame record;
 			bool eof = false;
 			std::string readError;
@@ -648,6 +658,9 @@ namespace RTE {
 			if (record.targetFrame != tick) {
 				if (error) *error = "replay record frame " + std::to_string(record.targetFrame) + " does not match tick " + std::to_string(tick);
 				return false;
+			}
+			if (record.targetFrame >= s_ReplayRewindFrom && record.targetFrame < s_ReplayRewindFrom + s_ReplayRewindCount) {
+				s_ReplayRewindKeep.push_back(record);
 			}
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error);
 		}
@@ -666,6 +679,27 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepStallOverlayEnabled(bool enabled) {
 		s_LockstepStallOverlayEnabled = enabled;
+	}
+
+	void ScenarioRunner::ArmReplayRewindBuffer(uint64_t fromFrame, uint64_t frameCount) {
+		s_ReplayRewindFrom = fromFrame;
+		s_ReplayRewindCount = frameCount;
+		s_ReplayRewindKeep.clear();
+		s_ReplayRewindBuffer.clear();
+	}
+
+	bool ScenarioRunner::RewindReplayForProbe(uint64_t firstFrame, std::string* error) {
+		if (!s_LockstepCoordinator || !s_ReplayReader.IsOpen()) {
+			if (error) *error = "no replay playback to rewind";
+			return false;
+		}
+		if (s_ReplayRewindKeep.size() < s_ReplayRewindCount) {
+			if (error) *error = "the rewind buffer is incomplete";
+			return false;
+		}
+		s_ReplayRewindBuffer = std::move(s_ReplayRewindKeep);
+		s_ReplayRewindKeep.clear();
+		return s_LockstepCoordinator->RewindReplay(firstFrame, error);
 	}
 
 	void ScenarioRunner::ArmLockstepReplayRecord(const std::string& path) {
