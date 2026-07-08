@@ -4,7 +4,9 @@
 #include "NetLockstep.h"
 #include "NetProtocol.h"
 
+#include <algorithm>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -130,7 +132,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x07, 0x00,
+				0x08, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -408,6 +410,121 @@ namespace RTE {
 			    report.find("\"frames_accepted\":5") == std::string::npos ||
 			    report.find("\"timeouts\":0") == std::string::npos) {
 				*error = "happy-path report is missing deterministic stats";
+				return false;
+			}
+			return true;
+		}
+
+		// P8-1: each sender runs its OWN input delay. The commit stream starts at the earliest
+		// sender's first delayed frame; slower senders ramp in, and every peer must build the
+		// byte-identical per-frame apply set (local + remote union) through the ramp-in window.
+		bool TestCoordinatorPerSenderDelay(std::string* error) {
+			const uint16_t port = 43005;
+			const uint64_t sessionId = 0x7000000000000005ULL;
+			const std::map<uint8_t, uint16_t> delays = {{1, 1}, {2, 3}};
+
+			// A local delay that disagrees with the per-peer set must be rejected up front.
+			{
+				LoopbackTransport rejectTransport;
+				if (!rejectTransport.StartHost(43006, error)) {
+					return false;
+				}
+				NetLockstepConfig bad = MakeCoordinatorConfig(1, 2, sessionId, 2, NetTransportLane::ControlReliable);
+				bad.peerInputDelayFrames = delays;
+				bad.remoteTransportPeerId = 1;
+				NetLockstepCoordinator reject;
+				std::string rejectError;
+				if (reject.Start(rejectTransport, bad, &rejectError) || rejectError.find("disagrees") == std::string::npos) {
+					*error = "mismatched local delay was not rejected at start";
+					return false;
+				}
+			}
+
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 1, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 3, NetTransportLane::ControlReliable);
+			hostConfig.peerInputDelayFrames = delays;
+			clientConfig.peerInputDelayFrames = delays;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			if (host.GetStats().effectiveStartFrame != 1 || client.GetStats().effectiveStartFrame != 1) {
+				*error = "per-sender commit stream did not start at the earliest sender's delay";
+				return false;
+			}
+
+			for (uint64_t producedFrame = 0; producedFrame < 5; ++producedFrame) {
+				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
+				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, {}, error)) {
+					return false;
+				}
+			}
+
+			std::map<uint64_t, std::vector<int64_t>> hostUnions;
+			std::map<uint64_t, std::vector<int64_t>> clientUnions;
+			auto collectUnions = [](NetLockstepCoordinator& coordinator, std::map<uint64_t, std::vector<int64_t>>& out) {
+				NetLockstepReadyFrame ready;
+				while (coordinator.PopReadyFrame(ready)) {
+					std::vector<int64_t> ids;
+					for (const ControllerFrame& controllerFrame: ready.localFrames) {
+						ids.push_back(controllerFrame.actorUniqueID);
+					}
+					for (const ControllerFrame& controllerFrame: ready.remoteFrames) {
+						ids.push_back(controllerFrame.actorUniqueID);
+					}
+					std::sort(ids.begin(), ids.end());
+					out[ready.frame] = std::move(ids);
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collectUnions(host, hostUnions);
+					collectUnions(client, clientUnions);
+					return hostUnions.size() >= 5 && clientUnions.size() >= 5;
+				}, error)) {
+				return false;
+			}
+			// Frames 1-2 carry the host alone (the client is still inside its delay); 3-5 carry both.
+			if (hostUnions.begin()->first != 1 || clientUnions.begin()->first != 1 || hostUnions != clientUnions) {
+				*error = "per-sender ramp-in did not produce identical apply sets on both peers";
+				return false;
+			}
+			if (hostUnions[1] != std::vector<int64_t>{100} || hostUnions[3] != std::vector<int64_t>{102, 200}) {
+				*error = "per-sender ramp-in merged the wrong sender sets";
+				return false;
+			}
+			if (host.BuildReportJson().find("\"peer_input_delays\":{\"1\":1,\"2\":3}") == std::string::npos) {
+				*error = "per-peer input delays are missing from the report";
+				return false;
+			}
+			return true;
+		}
+
+		// A peer whose announced delay disagrees with the shared per-peer set must fail the start.
+		bool TestCoordinatorPerSenderDelayMismatch(std::string* error) {
+			const uint16_t port = 43007;
+			const uint64_t sessionId = 0x7000000000000007ULL;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 1, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 2, NetTransportLane::ControlReliable);
+			hostConfig.peerInputDelayFrames = {{1, 1}, {2, 3}};
+			clientConfig.peerInputDelayFrames = {{1, 1}, {2, 2}};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsFailed(); }, error)) {
+				return false;
+			}
+			if (host.GetStats().timeoutReason.find("start mismatch") == std::string::npos) {
+				*error = "per-sender delay mismatch did not fail the start";
 				return false;
 			}
 			return true;
@@ -751,6 +868,8 @@ namespace RTE {
 		    !TestDecodeFailures(&error) ||
 		    !TestSemanticFailures(&error) ||
 		    !TestCoordinatorDelayedHappyPath(&error) ||
+		    !TestCoordinatorPerSenderDelay(&error) ||
+		    !TestCoordinatorPerSenderDelayMismatch(&error) ||
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||

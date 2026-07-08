@@ -1024,6 +1024,28 @@ namespace RTE {
 				}
 			}
 		}
+		// Per-sender delay: the set must cover every peer and agree with the local production delay.
+		if (!config.peerInputDelayFrames.empty()) {
+			if (config.peerInputDelayFrames.size() != config.peerCount) {
+				if (error) *error = "lockstep per-peer input delays must cover every peer";
+				return false;
+			}
+			for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
+				const auto delayIt = config.peerInputDelayFrames.find(peerId);
+				if (delayIt == config.peerInputDelayFrames.end()) {
+					if (error) *error = "lockstep per-peer input delays must cover every peer";
+					return false;
+				}
+				if (delayIt->second > NetLockstepCodec::c_MaxInputDelayFrames) {
+					if (error) *error = "lockstep per-peer input delay is out of range";
+					return false;
+				}
+			}
+			if (config.peerInputDelayFrames.at(config.localPeerId) != config.inputDelayFrames) {
+				if (error) *error = "lockstep local input delay disagrees with the per-peer set";
+				return false;
+			}
+		}
 		NetLockstepStart start;
 		start.sessionId = config.sessionId;
 		start.startFrame = config.startFrame;
@@ -1064,7 +1086,18 @@ namespace RTE {
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
 		m_Stats.configuredStartFrame = config.startFrame;
-		m_Stats.effectiveStartFrame = config.startFrame + config.inputDelayFrames;
+		// The commit stream starts at the EARLIEST sender's first delayed frame; later senders ramp in.
+		m_PeerEffectiveStart.clear();
+		uint64_t firstCommitFrame = config.startFrame + config.inputDelayFrames;
+		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
+			const auto delayIt = config.peerInputDelayFrames.find(peerId);
+			const uint16_t delay = delayIt != config.peerInputDelayFrames.end() ? delayIt->second : config.inputDelayFrames;
+			m_PeerEffectiveStart[peerId] = config.startFrame + delay;
+			if (m_PeerEffectiveStart[peerId] < firstCommitFrame) {
+				firstCommitFrame = m_PeerEffectiveStart[peerId];
+			}
+		}
+		m_Stats.effectiveStartFrame = firstCommitFrame;
 		m_Stats.inputDelayFrames = config.inputDelayFrames;
 		m_Stats.localPeerId = config.localPeerId;
 		m_Stats.remotePeerId = config.remotePeerId;
@@ -1086,12 +1119,14 @@ namespace RTE {
 		m_Transport = &transport;
 		m_Config = config;
 		m_Config.inputDelayFrames = 0;
+		m_Config.peerInputDelayFrames.clear();
 		m_RemotePeerIds.clear();
 		m_RemoteTransports.clear();
 		m_RelayHost = false;
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_PeerEffectiveStart.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
@@ -1219,7 +1254,8 @@ namespace RTE {
 			}
 		}
 		for (uint8_t peerId: m_RemotePeerIds) {
-			if (IsRemoteRequiredForFrame(peerId, frame) && remoteIt->second.find(peerId) == remoteIt->second.end()) {
+			// Every live peer hashes every simulated tick — input ramp-in does not exempt it here.
+			if (!IsPeerGoneAtFrame(peerId, frame) && remoteIt->second.find(peerId) == remoteIt->second.end()) {
 				return;
 			}
 		}
@@ -1397,8 +1433,22 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const {
+		// Ramp-in: a sender contributes nothing before its own first delayed frame.
+		if (frame < EffectiveStartOf(peerId)) {
+			return false;
+		}
 		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
 		return leaveIt == m_PeerLeaveFrames.end() || frame < leaveIt->second;
+	}
+
+	uint16_t NetLockstepCoordinator::PeerInputDelay(uint8_t peerId) const {
+		const auto delayIt = m_Config.peerInputDelayFrames.find(peerId);
+		return delayIt != m_Config.peerInputDelayFrames.end() ? delayIt->second : m_Config.inputDelayFrames;
+	}
+
+	uint64_t NetLockstepCoordinator::EffectiveStartOf(uint8_t peerId) const {
+		const auto startIt = m_PeerEffectiveStart.find(peerId);
+		return startIt != m_PeerEffectiveStart.end() ? startIt->second : m_Config.startFrame + m_Config.inputDelayFrames;
 	}
 
 	std::string NetLockstepCoordinator::BuildReportJson() const {
@@ -1411,6 +1461,11 @@ namespace RTE {
 		out << "\"configured_start_frame\":" << m_Stats.configuredStartFrame << ",";
 		out << "\"effective_start_frame\":" << m_Stats.effectiveStartFrame << ",";
 		out << "\"input_delay_frames\":" << m_Stats.inputDelayFrames << ",";
+		out << "\"peer_input_delays\":{";
+		for (uint8_t peerId = 1; peerId <= m_Config.peerCount; ++peerId) {
+			out << (peerId == 1 ? "" : ",") << "\"" << static_cast<int>(peerId) << "\":" << PeerInputDelay(peerId);
+		}
+		out << "},";
 		out << "\"next_frame\":" << m_Stats.nextFrame << ",";
 		out << "\"start_packets_sent\":" << m_Stats.startPacketsSent << ",";
 		out << "\"start_packets_received\":" << m_Stats.startPacketsReceived << ",";
@@ -1587,7 +1642,7 @@ namespace RTE {
 		++m_Stats.startPacketsReceived;
 		if (start.sessionId != m_Config.sessionId ||
 		    start.startFrame != m_Config.startFrame ||
-		    start.inputDelayFrames != m_Config.inputDelayFrames ||
+		    start.inputDelayFrames != PeerInputDelay(start.localPeerId) ||
 		    start.controllerFrameVersion != ControllerFrame::c_Version ||
 		    start.controllerFrameEncodedSize != ControllerFrame::c_EncodedSize ||
 		    !IsKnownRemotePeer(start.localPeerId) ||
@@ -1611,6 +1666,11 @@ namespace RTE {
 		++m_Stats.framePacketsReceived;
 		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end() || !IsKnownRemotePeer(frame.senderPeerId)) {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch");
+			return;
+		}
+		// A sender's frames never target its own delay window; one that does is a broken build.
+		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
+			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window");
 			return;
 		}
 		// Check staleness before touching the map, or a stale packet leaks an empty bucket forever.
@@ -1674,8 +1734,10 @@ namespace RTE {
 			return;
 		}
 		while (true) {
+			// The LOCAL peer ramps in like any sender: its first queued input targets its own delay,
+			// so earlier committed frames legitimately carry no local entry.
 			const auto localIt = m_LocalFrames.find(m_Stats.nextFrame);
-			if (localIt == m_LocalFrames.end()) {
+			if (localIt == m_LocalFrames.end() && m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId)) {
 				break;
 			}
 			// Advance only when every REQUIRED remote's frame is in — a cleanly-left peer stops being
@@ -1696,7 +1758,9 @@ namespace RTE {
 			}
 			NetLockstepReadyFrame ready;
 			ready.frame = m_Stats.nextFrame;
-			ready.localFrames = std::move(localIt->second);
+			if (localIt != m_LocalFrames.end()) {
+				ready.localFrames = std::move(localIt->second);
+			}
 			// Merge every remote peer's frames in ascending peerId order (std::map iteration) so every
 			// peer builds the byte-identical apply set. This is the one N-peer determinism-sensitive spot.
 			if (remoteIt != m_RemoteFrames.end()) {
@@ -1715,7 +1779,9 @@ namespace RTE {
 				m_RemoteCommands.erase(remoteCmdIt);
 			}
 			m_Stats.remoteControllerFramesAccepted += ready.remoteFrames.size();
-			m_LocalFrames.erase(localIt);
+			if (localIt != m_LocalFrames.end()) {
+				m_LocalFrames.erase(localIt);
+			}
 			if (remoteIt != m_RemoteFrames.end()) {
 				m_RemoteFrames.erase(remoteIt);
 			}

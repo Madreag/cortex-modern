@@ -137,6 +137,7 @@ namespace RTE {
 		uint64_t sessionId = 0;
 		uint64_t startFrame = 0;
 		uint16_t inputDelayFrames = 0;
+		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -185,7 +186,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 7;
+		static constexpr uint16_t c_Version = 8;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -270,6 +271,8 @@ namespace RTE {
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs);
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
+		uint16_t PeerInputDelay(uint8_t peerId) const;
+		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 
@@ -281,6 +284,7 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
