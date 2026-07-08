@@ -150,8 +150,8 @@ static long long s_paceDrawUs = 0;
 static long long s_rbProbeAtTick = 0;
 static long long s_rbProbeWindow = 30;
 static int s_rbProbePhase = 0; //!< 0 idle, 1 first pass, 2 restore staged, 3 re-run pass.
-static std::vector<SimChecksum::Hash> s_rbProbeFirst;
-static std::vector<SimChecksum::Hash> s_rbProbeSecond;
+static std::vector<SimChecksum::Result> s_rbProbeFirst;
+static std::vector<SimChecksum::Result> s_rbProbeSecond;
 static std::mt19937 s_rbProbeRngState;
 static long long s_rbProbeSimCount = 0;
 static long long s_rbProbeSimTimeTicks = 0;
@@ -964,10 +964,18 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		s_rbProbeSimCount = g_TimerMan.GetSimUpdateCount();
 		s_rbProbeSimTimeTicks = g_TimerMan.GetSimTimeTicks();
 		s_rbProbeUidCounter = MovableObject::GetUniqueIDCounter();
+		if (ScenarioRunner::IsLockstepReplayPlayback()) {
+			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
+		}
+		DumpSimStateNow("rb_captured");
+		DumpTerrainNow("rb_cap");
 		s_rbProbePhase = 1;
 		std::cout << "[rbprobe] captured at tick " << simTick << std::endl;
 	} else if (s_rbProbePhase == 1 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
-		s_rbProbeFirst.push_back(SimChecksum::SimGatedHash(tickResult));
+		s_rbProbeFirst.push_back(tickResult);
+		if (s_rbProbeFirst.size() == 1) {
+			DumpSimStateNow("rb_t1_pass1");
+		}
 		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
 			if (!g_ActivityMan.LoadGameToRestart("rbprobe")) {
 				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
@@ -978,19 +986,35 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			std::cout << "[rbprobe] window recorded; restore staged" << std::endl;
 		}
 	} else if (s_rbProbePhase == 3 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
-		s_rbProbeSecond.push_back(SimChecksum::SimGatedHash(tickResult));
+		s_rbProbeSecond.push_back(tickResult);
+		if (s_rbProbeSecond.size() == 1) {
+			DumpSimStateNow("rb_t1_pass2");
+		}
 		if (static_cast<long long>(s_rbProbeSecond.size()) >= s_rbProbeWindow) {
 			long long firstDivergence = -1;
+			size_t divergentIndex = 0;
 			for (size_t i = 0; i < s_rbProbeFirst.size(); ++i) {
-				if (s_rbProbeFirst[i] != s_rbProbeSecond[i]) {
+				if (SimChecksum::SimGatedHash(s_rbProbeFirst[i]) != SimChecksum::SimGatedHash(s_rbProbeSecond[i])) {
 					firstDivergence = s_rbProbeAtTick + 1 + static_cast<long long>(i);
+					divergentIndex = i;
 					break;
 				}
 			}
 			if (firstDivergence < 0) {
 				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore" << std::endl;
 			} else {
-				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence << std::endl;
+				std::string divergentSubsystems;
+				for (const auto& [name, hash]: s_rbProbeFirst[divergentIndex].per_subsystem) {
+					if (name == "controller") {
+						continue;
+					}
+					const auto secondIt = s_rbProbeSecond[divergentIndex].per_subsystem.find(name);
+					if (secondIt == s_rbProbeSecond[divergentIndex].per_subsystem.end() || secondIt->second != hash) {
+						divergentSubsystems += (divergentSubsystems.empty() ? "" : ",") + name;
+					}
+				}
+				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence
+				          << " subsystems=" << divergentSubsystems << std::endl;
 			}
 			System::SetQuit(true);
 		}
@@ -1413,7 +1437,7 @@ void RunGameLoop() {
 				if (desyncSampleTick) {
 					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
 				}
-				if (s_rbProbeAtTick > 0 && ScenarioRunner::IsActive()) {
+				if (s_rbProbeAtTick > 0 && (ScenarioRunner::IsActive() || ScenarioRunner::IsLockstepReplayPlayback())) {
 					RollbackProbeOnHashedTick(simTick, tickResult);
 				}
 			}
@@ -1643,7 +1667,12 @@ void RunGameLoop() {
 			if (g_ActivityMan.ActivitySetToRestart()) {
 				g_LoadingScreen.DrawLoadingSplash();
 				g_WindowMan.UploadFrame();
-				if (!g_ActivityMan.RestartActivity()) {
+				// A fidelity restore places snapshot residents verbatim: no spawn normalization,
+				// no quarantine, saved identities adopted.
+				g_MovableMan.SetRestoringSnapshot(s_rbProbePhase == 2);
+				const bool restartOk = g_ActivityMan.RestartActivity();
+				g_MovableMan.SetRestoringSnapshot(false);
+				if (!restartOk) {
 					break;
 				}
 				if (s_rbProbePhase == 2) {
@@ -1652,6 +1681,18 @@ void RunGameLoop() {
 					g_SimRNG.SetEngineState(s_rbProbeRngState);
 					g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
 					MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
+					std::string rewindError;
+					if (ScenarioRunner::IsLockstepReplayPlayback() &&
+					    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
+						std::cout << "[rbprobe] FAIL: replay rewind refused: " << rewindError << std::endl;
+						System::SetQuit(true);
+					}
+					// The reloaded world sits in the add queues; the first pass's residents were in
+					// the live lists, so absorb now and drop the joiner quarantine.
+					g_MovableMan.AbsorbAddedMOs();
+					g_MovableMan.ClearLockstepJoinQuarantine();
+					DumpSimStateNow("rb_restored");
+					DumpTerrainNow("rb_res");
 					s_rbProbePhase = 3;
 					std::cout << "[rbprobe] restored and rewound to tick " << s_rbProbeSimCount << std::endl;
 				}
