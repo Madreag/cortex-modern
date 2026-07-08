@@ -30,7 +30,7 @@ namespace RTE {
 
 #pragma region Time Constants
 	static constexpr float c_DefaultDeltaTimeS = 0.0166666F; //!< The default simulation update step size, in seconds.
-	static constexpr float c_RealToSimCap = 0.25F; //!< Cap on real time added to the tick accumulator in one update, for huge wall gaps (focus loss). One dt here made every over-budget frame permanently slow the game; the MSPSU trim is the adaptive runaway bound.
+	static constexpr float c_RealToSimCap = 0.25F; //!< Cap on real time added to the tick accumulator in one update, big enough to catch up after an over-budget frame; the MSPSU trim is the adaptive runaway bound.
 #pragma endregion
 
 #pragma region AI Constants

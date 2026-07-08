@@ -1,6 +1,6 @@
 #pragma once
 
-#include <format>
+#include <charconv>
 #include <string>
 #include <memory>
 #include <ostream>
@@ -172,14 +172,13 @@ namespace RTE {
 			*m_Stream << var;
 			return *this;
 		}
-		// Shortest round-trip form: the default 6-digit stream precision truncated saved floats,
-		// so a reloaded world was near-but-not-bit-equal to the one that saved it.
+		// Floats save in shortest round-trip form; a reloaded world must be bit-equal to the saved one.
 		Writer& operator<<(const float& var) {
-			*m_Stream << std::format("{}", var);
+			WriteShortestRoundTrip(var);
 			return *this;
 		}
 		Writer& operator<<(const double& var) {
-			*m_Stream << std::format("{}", var);
+			WriteShortestRoundTrip(var);
 			return *this;
 		}
 		Writer& operator<<(const char* var) {
@@ -200,6 +199,13 @@ namespace RTE {
 		int m_IndentCount; //!< Indentation counter.
 
 	private:
+		/// Writes a float in shortest round-trip form, locale-independent and allocation-free.
+		template <typename FloatType> void WriteShortestRoundTrip(FloatType var) {
+			char buffer[64];
+			const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), var);
+			m_Stream->write(buffer, result.ptr - buffer);
+		}
+
 		/// Clears all the member variables of this Writer, effectively resetting the members of this abstraction level only.
 		void Clear();
 
