@@ -1534,9 +1534,14 @@ namespace RTE {
 					ApplyPeerLeave(lockstepPeer, firstMissingFrame, "connection lost", nowMs);
 					break;
 				}
+				// A transport peer outside the round — a leaver's stale socket finally timing out, a
+				// rejected joiner's half-open connection — cannot invalidate the match.
+				if (lockstepPeer == 0) {
+					break;
+				}
 				Fail(NetLockstepStopReason::PeerDisconnected,
 				     m_Stats.nextFrame,
-				     (lockstepPeer != 0 ? DescribePeer(lockstepPeer) : std::string("peer")) + " disconnected" + (event.reason.empty() ? "" : ": " + event.reason));
+				     DescribePeer(lockstepPeer) + " disconnected" + (event.reason.empty() ? "" : ": " + event.reason));
 				break;
 			}
 			case NetTransportEventType::ConnectionFailed:
