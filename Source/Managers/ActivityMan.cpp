@@ -427,6 +427,9 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	g_SceneMan.SetSceneToLoad(m_PendingLoadedScene.get(), true, true);
 	// The caller adjusts the staged activity (per-peer players, deterministic config) before restarting.
 	SetStartActivity(dynamic_cast<GAScripted*>(activity->Clone()));
+	// A loaded save resumes mid-state: the restart must keep it, or the scripts re-run their
+	// spawn-time setup on top of the loaded world.
+	m_StartActivityResumed = true;
 	SetRestartActivity(true);
 
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" staged for restart!");
@@ -437,6 +440,7 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 void ActivityMan::SetStartActivity(Activity* newActivity) {
 	RTEAssert(newActivity, "Trying to replace an activity with a null one!");
 	m_StartActivity.reset(newActivity);
+	m_StartActivityResumed = false;
 }
 
 void ActivityMan::SetStartTutorialActivity() {
@@ -609,7 +613,12 @@ bool ActivityMan::RestartActivity() {
 	if (m_StartActivity) {
 		// Need to pass in a clone of the activity because the original will be deleted and re-set during StartActivity.
 		Activity* startActivityToUse = dynamic_cast<Activity*>(m_StartActivity->Clone());
-		startActivityToUse->SetActivityState(Activity::ActivityState::NotStarted);
+		// A loaded save resumes mid-state; a fresh restart re-runs the scripts' spawn-time setup.
+		if (m_StartActivityResumed) {
+			m_StartActivityResumed = false;
+		} else {
+			startActivityToUse->SetActivityState(Activity::ActivityState::NotStarted);
+		}
 		activityStarted = StartActivity(startActivityToUse);
 	} else {
 		activityStarted = StartActivity(m_DefaultActivityType, m_DefaultActivityName);

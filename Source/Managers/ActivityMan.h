@@ -221,6 +221,7 @@ namespace RTE {
 
 		std::unique_ptr<Activity> m_Activity; //!< The currently active Activity.
 		std::unique_ptr<Activity> m_StartActivity; //!< The starting condition of the next Activity to be (re)started.
+		bool m_StartActivityResumed = false; //!< The staged Activity is a loaded save resuming mid-state, not a fresh start.
 		std::unique_ptr<Scene> m_PendingLoadedScene; //!< A loaded save's Scene, kept alive until its deferred restart clones it.
 
 		std::future<void> m_SaveGameTask; //!< The current save game task.
