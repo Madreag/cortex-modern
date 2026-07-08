@@ -503,6 +503,7 @@ int ActivityMan::StartActivity(Activity* activity) {
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 
 	m_StartActivity.reset(activity);
+	m_StartActivityResumed = false;
 	m_Activity.reset(dynamic_cast<Activity*>(m_StartActivity->Clone()));
 
 	g_MusicMan.ResetMusicState();
