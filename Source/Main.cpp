@@ -136,6 +136,13 @@ static bool s_netMatchServiceE2EEnteredEditor = false;
 static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
 static uint64_t s_netMatchServiceE2ERunningTicks = 0;
 static long s_netMatchE2EActorCensus = -1;
+// Loop-pace accounting, accumulated only while a lockstep match or playback runs: the honest
+// wall-tps and per-tick sim cost that steer the pace and rollback work.
+static uint64_t s_paceIterations = 0;
+static uint64_t s_paceSimTicks = 0;
+static long long s_paceSimUs = 0;
+static long long s_paceUpdateUs = 0;
+static long long s_paceDrawUs = 0;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
@@ -953,10 +960,13 @@ void RunGameLoop() {
 
 		g_TimerMan.Update();
 
+		const bool paceActiveAtIterStart = ScenarioRunner::HasLockstepCoordinator();
+
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
 
+			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
@@ -1355,6 +1365,11 @@ void RunGameLoop() {
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 
+			if (ScenarioRunner::HasLockstepCoordinator()) {
+				++s_paceSimTicks;
+				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+			}
+
 			// Scenario direct-launch: quit when the activity reaches OVER or the -max-ticks cap hits,
 			// instead of bouncing to the menu. The cap counts global sim ticks, so the trace length
 			// is fixed even if the activity never sets OVER.
@@ -1597,6 +1612,13 @@ void RunGameLoop() {
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
+
+		// Both ends of the iteration must be in-match, or a teardown-to-menu iteration poisons the averages.
+		if (paceActiveAtIterStart && ScenarioRunner::HasLockstepCoordinator()) {
+			++s_paceIterations;
+			s_paceUpdateUs += updateTotalTime;
+			s_paceDrawUs += drawTotalTime;
+		}
 	}
 }
 
@@ -1906,6 +1928,26 @@ const char* ActivityStateName(Activity::ActivityState state) {
 	return "Unknown";
 }
 
+// The in-match loop pace: wall_tps is the number that answers "does the match run at the pinned
+// dt's intended rate", sim_ms_per_tick is the full-tick compute cost (and, in playback, the
+// rollback re-sim cost — playback runs no AI).
+std::string BuildLoopPaceJson() {
+	const long long wallUs = s_paceUpdateUs + s_paceDrawUs;
+	std::ostringstream out;
+	out << "{";
+	out << "\"iterations\":" << s_paceIterations << ",";
+	out << "\"sim_ticks\":" << s_paceSimTicks << ",";
+	out << "\"wall_ms\":" << wallUs / 1000 << ",";
+	out << "\"sim_ms\":" << s_paceSimUs / 1000 << ",";
+	out << "\"draw_ms\":" << s_paceDrawUs / 1000 << ",";
+	out << "\"wall_tps\":" << (wallUs > 0 ? static_cast<double>(s_paceSimTicks) * 1000000.0 / static_cast<double>(wallUs) : 0.0) << ",";
+	out << "\"sim_ms_per_tick\":" << (s_paceSimTicks > 0 ? static_cast<double>(s_paceSimUs) / 1000.0 / static_cast<double>(s_paceSimTicks) : 0.0) << ",";
+	out << "\"draw_ms_per_iter\":" << (s_paceIterations > 0 ? static_cast<double>(s_paceDrawUs) / 1000.0 / static_cast<double>(s_paceIterations) : 0.0) << ",";
+	out << "\"net_wait_ms\":" << ScenarioRunner::GetLockstepWaitUs() / 1000;
+	out << "}";
+	return out.str();
+}
+
 std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& setupError) {
 	const Activity* activity = g_ActivityMan.GetActivity();
 	const Activity::ActivityState activityState = activity ? activity->GetActivityState() : Activity::NoActivity;
@@ -1924,6 +1966,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
 	// slips every divergence gate).
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
+	out << "\"pace\":" << BuildLoopPaceJson() << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
@@ -2027,8 +2070,9 @@ int RunNetReplayPlayback() {
 		g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
 		g_MetricsCollector.SetRecordTickHashes(true);
 	}
-	// Playback is not real-time: run the sim as fast as it computes (the fixed dt is untouched).
-	g_TimerMan.SetTimeScale(1000.0F);
+	// Playback is not real-time: free-run the sim as fast as it computes (the fixed dt is
+	// untouched). The wall/tick numbers this yields ARE the rollback re-sim budget.
+	g_TimerMan.SetFreeRunSim(true);
 	const auto playbackStart = std::chrono::steady_clock::now();
 	RunGameLoop();
 	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
@@ -2044,6 +2088,7 @@ int RunNetReplayPlayback() {
 	}
 	std::cout << "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
 	          << "ms, ticks=" << s_netReplayTicks << std::endl;
+	std::cout << "[pace] " << BuildLoopPaceJson() << std::endl;
 	ScenarioRunner::SetLockstepCoordinator(nullptr);
 	return s_netReplayExitCode;
 }

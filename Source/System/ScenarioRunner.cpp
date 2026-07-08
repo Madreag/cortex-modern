@@ -722,11 +722,25 @@ namespace RTE {
 		return s_ReplayReader.GetStartFrame();
 	}
 
+	namespace {
+		long long s_LockstepWaitUs = 0;
+
+		struct LockstepWaitTimer {
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
+		};
+	}
+
+	long long ScenarioRunner::GetLockstepWaitUs() {
+		return s_LockstepWaitUs;
+	}
+
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";
 			return false;
 		}
+		LockstepWaitTimer waitTimer;
 
 		// Input-delay priming: with D>0 the first D frames have no committed input yet (the pipeline
 		// is still filling), and the coordinator emits no ready frame before effectiveStartFrame. The
