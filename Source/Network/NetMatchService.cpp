@@ -632,9 +632,10 @@ namespace RTE {
 		};
 
 		std::string error;
-		const bool started = runner->Start(*transport, *session, *coordinator, runnerConfig, &error);
+		bool started = runner->Start(*transport, *session, *coordinator, runnerConfig, &error);
 		// A joiner whose lobby round carried a match state is RECONNECTING into a live match; it
-		// launches from the received snapshot instead of a fresh activity.
+		// launches from the received snapshot instead of a fresh activity. Launching a FRESH match
+		// while the others play the snapshot would desync instantly, so a failed write fails the join.
 		std::string pendingLoad;
 		if (started) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
@@ -649,6 +650,7 @@ namespace RTE {
 					pendingLoad = recvName;
 				} else {
 					error = "could not write the received match snapshot";
+					started = false;
 				}
 			}
 		}
