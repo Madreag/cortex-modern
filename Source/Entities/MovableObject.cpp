@@ -104,6 +104,9 @@ void MovableObject::Clear() {
 	m_PostEffectEnabled = false;
 
 	m_UniqueID = 0;
+	m_PersistedUniqueID = 0;
+	m_PersistedRestTimerStart = 0;
+	m_HasPersistedRestTimerStart = false;
 
 	m_RemoveOrphanTerrainRadius = 0;
 	m_RemoveOrphanTerrainMaxArea = 0;
@@ -198,7 +201,8 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_MOType = reference.m_MOType;
 	m_Mass = reference.m_Mass;
 	m_Pos = reference.m_Pos;
-	m_PrevPos = reference.m_Pos;
+	// A pristine preset's prev equals its pos, so this only differs for restored residents.
+	m_PrevPos = reference.m_PrevPos;
 	m_Vel = reference.m_Vel;
 	m_Scale = reference.m_Scale;
 	m_GlobalAccScalar = reference.m_GlobalAccScalar;
@@ -271,22 +275,44 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_NumberValueMap = reference.m_NumberValueMap;
 	m_ObjectValueMap = reference.m_ObjectValueMap;
 
+	// Saved state rides every copy a restored scene makes; the fresh ID below is provisional
+	// until the object enters the world and adopts it.
+	m_PersistedUniqueID = reference.m_PersistedUniqueID;
+	m_PersistedRestTimerStart = reference.m_PersistedRestTimerStart;
+	m_HasPersistedRestTimerStart = reference.m_HasPersistedRestTimerStart;
 	m_UniqueID = MovableObject::GetNextUniqueID();
 	g_MovableMan.RegisterObject(this);
 
 	return 0;
 }
 
+void MovableObject::AdoptPersistedUniqueID() {
+	if (m_HasPersistedRestTimerStart) {
+		// Absolute sim ticks, so the value holds across the rollback clock rewind.
+		m_RestTimer.SetStartSimTimeTicks(m_PersistedRestTimerStart);
+		m_HasPersistedRestTimerStart = false;
+	}
+	if (m_PersistedUniqueID <= 0) {
+		return;
+	}
+	g_MovableMan.UnregisterObject(this);
+	m_UniqueID = m_PersistedUniqueID;
+	m_PersistedUniqueID = 0;
+	if (m_UniqueID > GetUniqueIDCounter()) {
+		PinUniqueIDCounter(m_UniqueID);
+	}
+	g_MovableMan.RegisterObject(this);
+}
+
 int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return SceneObject::ReadProperty(propName, reader));
 
 	MatchProperty("Mass", { reader >> m_Mass; });
-	MatchProperty("UniqueID", {
-		// A restored identity floats the counter past itself, or later spawns would collide.
-		reader >> m_UniqueID;
-		if (m_UniqueID > GetUniqueIDCounter()) {
-			PinUniqueIDCounter(m_UniqueID);
-		}
+	MatchProperty("UniqueID", { reader >> m_PersistedUniqueID; });
+	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
+	MatchProperty("RestTimerStart", {
+		reader >> m_PersistedRestTimerStart;
+		m_HasPersistedRestTimerStart = true;
 	});
 	MatchProperty("Velocity", { reader >> m_Vel; });
 	MatchProperty("Scale", { reader >> m_Scale; });

@@ -705,6 +705,9 @@ namespace RTE {
 		/// Updates this MovableObject. Supposed to be done every frame.
 		void Update() override;
 
+		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
+		void AdoptPersistedUniqueID() override;
+
 		/// Cast see rays for this actor.
 		void CastSeeRays();
 

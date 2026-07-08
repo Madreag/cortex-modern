@@ -1271,7 +1271,10 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 		actorToAdd->SetAsAddedToMovableMan();
 		actorToAdd->CorrectAttachableAndWoundPositionsAndRotations();
 
-		if (actorToAdd->IsTooFast()) {
+		if (m_RestoringSnapshot) {
+			// A snapshot resident enters exactly as captured.
+			actorToAdd->AdoptPersistedUniqueID();
+		} else if (actorToAdd->IsTooFast()) {
 			actorToAdd->SetToDelete(true);
 		} else {
 			if (!dynamic_cast<ADoor*>(actorToAdd)) {
@@ -1292,7 +1295,7 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 
 			// A joiner's per-machine controller must not drive sim effects on its join tick; the
 			// wire takes over from the next tick's controller update.
-			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+			if (!m_RestoringSnapshot && ScenarioRunner::IsLockstepControllerSyncActive()) {
 				actorToAdd->GetController()->SetDisabled(true);
 				m_LockstepJoinQuarantine.emplace_back(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), actorToAdd->GetUniqueID());
 			}
@@ -1310,7 +1313,9 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 		itemToAdd->SetAsAddedToMovableMan();
 		itemToAdd->CorrectAttachableAndWoundPositionsAndRotations();
 
-		if (itemToAdd->IsTooFast()) {
+		if (m_RestoringSnapshot) {
+			itemToAdd->AdoptPersistedUniqueID();
+		} else if (itemToAdd->IsTooFast()) {
 			itemToAdd->SetToDelete(true);
 		} else {
 			if (!itemToAdd->IsSetToDelete()) {
@@ -1337,7 +1342,9 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 			particleToAddAsMOSRotating->CorrectAttachableAndWoundPositionsAndRotations();
 		}
 
-		if (particleToAdd->IsTooFast()) {
+		if (m_RestoringSnapshot) {
+			particleToAdd->AdoptPersistedUniqueID();
+		} else if (particleToAdd->IsTooFast()) {
 			particleToAdd->SetToDelete(true);
 		} else {
 			// TODO consider moving particles out of grass. It's old code that was removed because it's slow to do this for every particle.
@@ -1881,6 +1888,54 @@ static void TraceTrackedPhase(const char* tag) {
 	}
 }
 
+void MovableMan::AbsorbAddedMOs() {
+	// Sort the added queues before the drain so the transfer order is stable across runs.
+	std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
+	std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
+	std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
+
+	for (Actor* addedActor: m_AddedActors) {
+		// Delete instead if it's marked for it
+		if (!addedActor->IsSetToDelete()) {
+			m_Actors.push_back(addedActor);
+		} else {
+			if (addedActor->GetTeam() >= 0) {
+				RemoveActorFromTeamRoster(addedActor);
+			}
+			addedActor->DestroyScriptState();
+			delete addedActor;
+			m_ValidActors.erase(addedActor);
+		}
+	}
+	m_AddedActors.clear();
+
+	for (MovableObject* addedItem: m_AddedItems) {
+		if (!addedItem->IsSetToDelete()) {
+			m_Items.push_back(addedItem);
+		} else {
+			addedItem->DestroyScriptState();
+			delete addedItem;
+			m_ValidItems.erase(addedItem);
+		}
+	}
+	m_AddedItems.clear();
+
+	for (MovableObject* addedParticle: m_AddedParticles) {
+		if (!addedParticle->IsSetToDelete()) {
+			m_Particles.push_back(addedParticle);
+		} else {
+			addedParticle->DestroyScriptState();
+			delete addedParticle;
+			m_ValidParticles.erase(addedParticle);
+		}
+	}
+	m_AddedParticles.clear();
+}
+
+void MovableMan::ClearLockstepJoinQuarantine() {
+	m_LockstepJoinQuarantine.clear();
+}
+
 void MovableMan::Update() {
 	ZoneScoped;
 
@@ -2103,58 +2158,7 @@ void MovableMan::Update() {
 	{
 		ZoneScopedN("MO Transfer and Deletion");
 
-		// Sort the added queues before the drain so the transfer order is stable across runs.
-		std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
-		std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
-		std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
-
-		{
-			// Actors
-			for (aIt = m_AddedActors.begin(); aIt != m_AddedActors.end(); ++aIt) {
-				// Delete instead if it's marked for it
-				if (!(*aIt)->IsSetToDelete())
-					m_Actors.push_back(*aIt);
-				else {
-					// Also remove actor from the roster
-					if ((*aIt)->GetTeam() >= 0) {
-						// m_ActorRoster[(*aIt)->GetTeam()].remove(*aIt);
-						RemoveActorFromTeamRoster(*aIt);
-					}
-
-					(*aIt)->DestroyScriptState();
-					delete (*aIt);
-
-					m_ValidActors.erase(*aIt);
-				}
-			}
-			m_AddedActors.clear();
-
-			// Items
-			for (iIt = m_AddedItems.begin(); iIt != m_AddedItems.end(); ++iIt) {
-				// Delete instead if it's marked for it
-				if (!(*iIt)->IsSetToDelete()) {
-					m_Items.push_back(*iIt);
-				} else {
-					(*iIt)->DestroyScriptState();
-					delete (*iIt);
-					m_ValidItems.erase(*iIt);
-				}
-			}
-			m_AddedItems.clear();
-
-			// Particles
-			for (parIt = m_AddedParticles.begin(); parIt != m_AddedParticles.end(); ++parIt) {
-				// Delete instead if it's marked for it
-				if (!(*parIt)->IsSetToDelete()) {
-					m_Particles.push_back(*parIt);
-				} else {
-					(*parIt)->DestroyScriptState();
-					delete (*parIt);
-					m_ValidParticles.erase(*parIt);
-				}
-			}
-			m_AddedParticles.clear();
-		}
+		AbsorbAddedMOs();
 
 		////////////////////////////////////////////////////////////////////////////
 		// Copy (Settle) Pass

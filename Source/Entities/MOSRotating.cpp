@@ -1433,6 +1433,16 @@ void MOSRotating::PostTravel() {
 	}
 }
 
+void MOSRotating::AdoptPersistedUniqueID() {
+	MovableObject::AdoptPersistedUniqueID();
+	for (Attachable* attachable: m_Attachables) {
+		attachable->AdoptPersistedUniqueID();
+	}
+	for (AEmitter* wound: m_Wounds) {
+		wound->AdoptPersistedUniqueID();
+	}
+}
+
 void MOSRotating::Update() {
 	MOSprite::Update();
 

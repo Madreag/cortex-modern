@@ -343,6 +343,9 @@ namespace RTE {
 		// Stuff that needs to be updated post-Update.
 		void PostUpdate() override;
 
+		/// Adopts saved identity for this object and its whole attachable and wound tree.
+		void AdoptPersistedUniqueID() override;
+
 		/// Draws this MOSRotating's current graphical representation to a
 		/// BITMAP of choice.
 		/// @param pTargetBitmap A pointer to a BITMAP to draw on.
