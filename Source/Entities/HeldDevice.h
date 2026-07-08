@@ -307,6 +307,8 @@ namespace RTE {
 		/// @return The activation Timer for this HeldDevice.
 		const Timer& GetActivationTimer() const { return m_ActivationTimer; }
 
+		void AdoptPersistedUniqueID() override;
+
 		/// Tells whether the device is curtrently being reloaded.
 		/// @return Whetehr being reloaded.
 		virtual bool IsReloading() const { return false; }
@@ -378,6 +380,7 @@ namespace RTE {
 		std::array<bool, HELDDEVICEHOTKEYTYPECOUNT> m_HotkeyActivated;
 		// Timer for timing how long a feature has been activated.
 		Timer m_ActivationTimer;
+		PersistedTimerAnchor m_PersistedActivationTimerAnchor;
 		// An array that holds activation timers for the various hotkey actions of this HeldDevice.
 		std::array<Timer, HELDDEVICEHOTKEYTYPECOUNT> m_HotkeyActivationTimer;
 		// Can be weilded well with one hand or not

@@ -66,6 +66,8 @@ void HDFirearm::Clear() {
 	m_AIBulletAccScalar = -1;
 	m_LastFireTmr.Reset();
 	m_ReloadTmr.Reset();
+	m_PersistedLastFireTimerAnchor = {};
+	m_PersistedReloadTimerAnchor = {};
 	m_MuzzleOff.Reset();
 	m_EjectOff.Reset();
 	m_MagOff.Reset();
@@ -140,6 +142,8 @@ int HDFirearm::Create(const HDFirearm& reference) {
 	m_BaseReloadTime = reference.m_BaseReloadTime;
 	m_LastFireTmr = reference.m_LastFireTmr;
 	m_ReloadTmr = reference.m_ReloadTmr;
+	m_PersistedLastFireTimerAnchor = reference.m_PersistedLastFireTimerAnchor;
+	m_PersistedReloadTimerAnchor = reference.m_PersistedReloadTimerAnchor;
 	m_FullAuto = reference.m_FullAuto;
 	m_FireIgnoresThis = reference.m_FireIgnoresThis;
 	m_Reloadable = reference.m_Reloadable;
@@ -246,8 +250,22 @@ int HDFirearm::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("MuzzleOffset", { reader >> m_MuzzleOff; });
 	MatchProperty("EjectionOffset", { reader >> m_EjectOff; });
 	MatchProperty("LegacyCompatibilityRoundsAlwaysFireUnflipped", { reader >> m_LegacyCompatibilityRoundsAlwaysFireUnflipped; });
+	MatchProperty("LastFireTimerStart", {
+		reader >> m_PersistedLastFireTimerAnchor.startTicks;
+		m_PersistedLastFireTimerAnchor.pending = true;
+	});
+	MatchProperty("ReloadTimerStart", {
+		reader >> m_PersistedReloadTimerAnchor.startTicks;
+		m_PersistedReloadTimerAnchor.pending = true;
+	});
 
 	EndPropertyList;
+}
+
+void HDFirearm::AdoptPersistedUniqueID() {
+	HeldDevice::AdoptPersistedUniqueID();
+	m_PersistedLastFireTimerAnchor.Apply(m_LastFireTmr);
+	m_PersistedReloadTimerAnchor.Apply(m_ReloadTmr);
 }
 
 int HDFirearm::Save(Writer& writer) const {

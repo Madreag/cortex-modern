@@ -89,6 +89,20 @@ namespace RTE {
 		/// @return A pointer to the jetpack of this ACrab. Ownership is NOT transferred!
 		AEJetpack* GetJetpack() const { return m_pJetpack; }
 
+		/// The per-atom travel residue of the limb-path groups, for full-game saves.
+		std::vector<long long> GetLFGFootResidue() const;
+		std::vector<long long> GetLBGFootResidue() const;
+		std::vector<long long> GetRFGFootResidue() const;
+		std::vector<long long> GetRBGFootResidue() const;
+
+		/// Packed traversal state of every limb path, side-major, for full-game saves.
+		std::vector<std::string> GetLimbPathStates() const;
+
+		/// Packed raw limb positions of the four foot groups, for full-game saves.
+		std::string GetLimbGroupPositions() const;
+
+		void AdoptPersistedUniqueID() override;
+
 		/// Sets the jetpack for this ACrab. Ownership IS Transferred!
 		/// @param newJetpack The new jetpack to use.
 		void SetJetpack(AEJetpack* newJetpack);
@@ -300,6 +314,13 @@ namespace RTE {
 		AtomGroup* m_BackupRFGFootGroup;
 		AtomGroup* m_pRBGFootGroup;
 		AtomGroup* m_BackupRBGFootGroup;
+		std::vector<long long> m_PersistedLFGFootResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
+		std::vector<long long> m_PersistedLBGFootResidue;
+		std::vector<long long> m_PersistedRFGFootResidue;
+		std::vector<long long> m_PersistedRBGFootResidue;
+		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
+		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
+		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.

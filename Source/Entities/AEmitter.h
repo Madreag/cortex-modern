@@ -8,6 +8,8 @@
 #include "Attachable.h"
 #include "Emission.h"
 
+#include <vector>
+
 namespace RTE {
 
 	/// An attachable MO that creates and emits particle MO's.
@@ -109,6 +111,17 @@ namespace RTE {
 		/// Gets the BurstSpacing for this emitter.
 		/// @return The BurstSpacing in ms.
 		float GetBurstSpacing() const { return m_BurstSpacing; }
+
+		/// Gets the burst spacing timer start in raw sim ticks, for full-game saves.
+		int64_t GetBurstTimerStart() const { return m_BurstTimer.GetStartSimTimeMS(); }
+
+		/// Gets the emission timer start in raw sim ticks, for full-game saves.
+		int64_t GetLastEmitTimerStart() const { return m_LastEmitTmr.GetStartSimTimeMS(); }
+
+		/// Gets each emission's fractional-rate accumulator in list order, for full-game saves.
+		std::vector<double> GetEmissionAccumulators() const;
+
+		void AdoptPersistedUniqueID() override;
 
 		/*
 		/// Gets the angle spread of velocity of the emitted MO's to each side of
@@ -398,6 +411,8 @@ namespace RTE {
 		float m_BurstSpacing;
 		// Measures the shortest possible time between bursts
 		Timer m_BurstTimer;
+		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
+		std::vector<double> m_PersistedEmissionAccumulators;
 		// Whether to play the BurstSound when a burst is triggered or not.
 		bool m_PlayBurstSound;
 		// The angle of the direction the emitted particles will head in.
@@ -409,6 +424,7 @@ namespace RTE {
 		float m_EmitDamage;
 		// Timer for timing how long ago the last particle was emitted. 0 means no limit.
 		Timer m_LastEmitTmr;
+		PersistedTimerAnchor m_PersistedLastEmitTimerAnchor;
 		// Emission flash Attachable
 		Attachable* m_pFlash;
 		// Flash display scale

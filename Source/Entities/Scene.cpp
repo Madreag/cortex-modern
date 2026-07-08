@@ -2,6 +2,7 @@
 
 #include "PresetMan.h"
 #include "MovableMan.h"
+#include "TimerMan.h"
 #include "FrameMan.h"
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
@@ -11,6 +12,9 @@
 #include "SLTerrain.h"
 #include "PathFinder.h"
 #include "MovableObject.h"
+#include "MOPixel.h"
+#include "MOSParticle.h"
+#include "AtomGroup.h"
 #include "TerrainObject.h"
 #include "Deployment.h"
 #include "Loadout.h"
@@ -1230,9 +1234,19 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
 		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
 		writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
+		writer.NewPropertyWithValue("AgeTimerStart", movableObjectToSave->GetAgeTimerStart());
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());
 		writer.NewPropertyWithValue("Age", movableObjectToSave->GetAge());
 		writer.NewPropertyWithValue("PinStrength", movableObjectToSave->GetPinStrength());
+	}
+
+	if (const MOPixel* moPixelToSave = dynamic_cast<const MOPixel*>(sceneObjectToSave); moPixelToSave && saveFullData) {
+		writer.NewPropertyWithValue("AtomResidue", moPixelToSave->GetAtomResidue());
+		writer.NewPropertyWithValue("SpecialBehaviour_LethalRange", moPixelToSave->GetLethalRange());
+	}
+
+	if (const MOSParticle* moSParticleToSave = dynamic_cast<const MOSParticle*>(sceneObjectToSave); moSParticleToSave && saveFullData) {
+		writer.NewPropertyWithValue("AtomResidue", moSParticleToSave->GetAtomResidue());
 	}
 
 	if (const MOSprite* moSpriteToSave = dynamic_cast<const MOSprite*>(sceneObjectToSave)) {
@@ -1248,6 +1262,13 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 	if (const MOSRotating* mosRotatingToSave = dynamic_cast<const MOSRotating*>(sceneObjectToSave)) {
 		if (saveFullData) {
+			if (const AtomGroup* atomGroupToSave = const_cast<MOSRotating*>(mosRotatingToSave)->GetAtomGroup()) {
+				for (long long residueValue: atomGroupToSave->GetTravelResidue()) {
+					writer.NewPropertyWithValue("AtomGroupResidue", residueValue);
+				}
+			}
+			writer.NewPropertyWithValue("SpecialBehaviour_TravelImpulse", mosRotatingToSave->GetTravelImpulse());
+
 			const std::list<Attachable*>& attachablesToSave = mosRotatingToSave->GetAttachableList();
 
 			// If this MOSRotating has any Attachables, we have to add a special behaviour property that'll delete them all so they can be re-read. This will allow us to handle Attachables with our limited serialization.
@@ -1300,6 +1321,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("CollidesWithTerrainWhileAttached", attachableToSave->GetCollidesWithTerrainWhileAttached());
 
 		if (const AEmitter* aemitterToSave = dynamic_cast<const AEmitter*>(sceneObjectToSave)) {
+			writer.NewPropertyWithValue("BurstTimerStart", aemitterToSave->GetBurstTimerStart());
+			writer.NewPropertyWithValue("LastEmitTimerStart", aemitterToSave->GetLastEmitTimerStart());
+			for (double accumulator: aemitterToSave->GetEmissionAccumulators()) {
+				writer.NewPropertyWithValue("EmissionAccumulator", accumulator);
+			}
 			writer.NewPropertyWithValue("EmissionEnabled", aemitterToSave->IsEmitting());
 			writer.NewPropertyWithValue("EmissionCount", aemitterToSave->GetEmitCount());
 			writer.NewPropertyWithValue("EmissionCountLimit", aemitterToSave->GetEmitCountLimit());
@@ -1353,11 +1379,14 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const HeldDevice* heldDeviceToSave = dynamic_cast<const HeldDevice*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("SpecialBehaviour_Activated", heldDeviceToSave->IsActivated());
 			writer.NewPropertyWithValue("SpecialBehaviour_ActivationTimerElapsedSimTimeMS", heldDeviceToSave->GetActivationTimer().GetElapsedSimTimeMS());
+			writer.NewPropertyWithValue("ActivationTimerStart", heldDeviceToSave->GetActivationTimer().GetStartSimTimeMS());
 		}
 
 		if (const HDFirearm* hdFirearmToSave = dynamic_cast<const HDFirearm*>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("Magazine", hdFirearmToSave->GetMagazine());
 			WriteHardcodedAttachableOrNone("Flash", hdFirearmToSave->GetFlash());
+			writer.NewPropertyWithValue("LastFireTimerStart", hdFirearmToSave->GetLastFireTimerStart());
+			writer.NewPropertyWithValue("ReloadTimerStart", hdFirearmToSave->GetReloadTimerStart());
 		}
 
 		if (const Magazine* magazineToSave = dynamic_cast<const Magazine*>(sceneObjectToSave)) {
@@ -1372,20 +1401,23 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("Status", actorToSave->GetStatus());
 			writer.NewPropertyWithValue("PlayerControllable", actorToSave->IsPlayerControllable());
 
-			// The tick's update reads the controller's residue before the wire re-applies, so a
-			// bit-faithful restore needs the instantaneous state. Input mode and player stay
-			// per-peer and are never serialized.
+			// Only wire-applied controller state is cross-peer canonical; an actor still inside its
+			// input-delay window holds per-machine AI residue that must not ride the save.
 			// Read-only; a const accessor would make the luabind GetController overload ambiguous.
 			const Controller* actorController = const_cast<Actor*>(actorToSave)->GetController();
-			long long controllerStateMask = 0;
-			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
-				if (actorController->IsState(static_cast<ControlState>(state))) {
-					controllerStateMask |= (1LL << state);
+			if (actorController->GetWireApplyTick() == static_cast<int64_t>(g_TimerMan.GetSimUpdateCount())) {
+				long long controllerStateMask = 0;
+				for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+					if (actorController->IsState(static_cast<ControlState>(state))) {
+						controllerStateMask |= (1LL << state);
+					}
 				}
+				writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
+				writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
+				writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
+				writer.NewPropertyWithValue("ControllerInputMode", static_cast<int>(actorController->GetInputMode()));
+				writer.NewPropertyWithValue("ControllerPlayer", actorController->GetPlayerRaw());
 			}
-			writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
-			writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
-			writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
 
 			int aiModeToSave = actorToSave->GetAIMode() == Actor::AIMode::AIMODE_SQUAD ? Actor::AIMode::AIMODE_GOTO : actorToSave->GetAIMode();
 			if (aiModeToSave == Actor::AIMode::AIMODE_GOTO && (!actorToSave->GetMOMoveTarget() && g_SceneMan.ShortestDistance(actorToSave->GetMovePathEnd(), actorToSave->GetPos(), g_SceneMan.SceneWrapsX()).MagnitudeIsLessThan(1.0F))) {
@@ -1424,6 +1456,22 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				WriteHardcodedAttachableOrNone("BGArm", aHumanToSave->GetBGArm());
 				WriteHardcodedAttachableOrNone("FGLeg", aHumanToSave->GetFGLeg());
 				WriteHardcodedAttachableOrNone("BGLeg", aHumanToSave->GetBGLeg());
+				for (long long residueValue: aHumanToSave->GetFGHandResidue()) {
+					writer.NewPropertyWithValue("FGHandResidue", residueValue);
+				}
+				for (long long residueValue: aHumanToSave->GetBGHandResidue()) {
+					writer.NewPropertyWithValue("BGHandResidue", residueValue);
+				}
+				for (long long residueValue: aHumanToSave->GetFGFootResidue()) {
+					writer.NewPropertyWithValue("FGFootResidue", residueValue);
+				}
+				for (long long residueValue: aHumanToSave->GetBGFootResidue()) {
+					writer.NewPropertyWithValue("BGFootResidue", residueValue);
+				}
+				for (const std::string& pathState: aHumanToSave->GetLimbPathStates()) {
+					writer.NewPropertyWithValue("LimbPathState", pathState);
+				}
+				writer.NewPropertyWithValue("LimbGroupPositions", aHumanToSave->GetLimbGroupPositions());
 			} else if (const ACrab* aCrabToSave = dynamic_cast<const ACrab*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Turret", aCrabToSave->GetTurret());
 				WriteHardcodedAttachableOrNone("Jetpack", aCrabToSave->GetJetpack());
@@ -1431,6 +1479,22 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				WriteHardcodedAttachableOrNone("LeftBGLeg", aCrabToSave->GetLeftBGLeg());
 				WriteHardcodedAttachableOrNone("RightFGLeg", aCrabToSave->GetRightFGLeg());
 				WriteHardcodedAttachableOrNone("RightBGLeg", aCrabToSave->GetRightBGLeg());
+				for (long long residueValue: aCrabToSave->GetLFGFootResidue()) {
+					writer.NewPropertyWithValue("LFGFootResidue", residueValue);
+				}
+				for (long long residueValue: aCrabToSave->GetLBGFootResidue()) {
+					writer.NewPropertyWithValue("LBGFootResidue", residueValue);
+				}
+				for (long long residueValue: aCrabToSave->GetRFGFootResidue()) {
+					writer.NewPropertyWithValue("RFGFootResidue", residueValue);
+				}
+				for (long long residueValue: aCrabToSave->GetRBGFootResidue()) {
+					writer.NewPropertyWithValue("RBGFootResidue", residueValue);
+				}
+				for (const std::string& pathState: aCrabToSave->GetLimbPathStates()) {
+					writer.NewPropertyWithValue("LimbPathState", pathState);
+				}
+				writer.NewPropertyWithValue("LimbGroupPositions", aCrabToSave->GetLimbGroupPositions());
 			} else if (const ACRocket* acRocketToSave = dynamic_cast<const ACRocket*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("RightLeg", acRocketToSave->GetRightLeg());
 				WriteHardcodedAttachableOrNone("LeftLeg", acRocketToSave->GetLeftLeg());

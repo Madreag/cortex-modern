@@ -107,6 +107,12 @@ namespace RTE {
 		/// segment away from it.
 		float GetSegProgress() const { return m_SegProgress; }
 
+		/// Packs the runtime traversal state into one saveable token string, for full-game saves.
+		std::string PackTraversalState() const;
+
+		/// Applies a packed traversal-state string.
+		void ApplyTraversalState(const std::string& state);
+
 		/// Gets the APPROXIMATE scene position that the limb was reported to be
 		/// last frame. This really shouldn't be used by external clients.
 		/// @return A Vector with the APPROXIMATE scene/world coordinates of the limb as

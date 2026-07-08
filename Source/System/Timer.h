@@ -273,4 +273,17 @@ namespace RTE {
 		/// Clears all the member variables of this Timer, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};
+
+	/// A saved Timer start anchor in absolute sim ticks, applied when a snapshot resident adopts its saved state.
+	struct PersistedTimerAnchor {
+		int64_t startTicks = 0;
+		bool pending = false;
+
+		void Apply(Timer& timer) {
+			if (pending) {
+				timer.SetStartSimTimeTicks(startTicks);
+				pending = false;
+			}
+		}
+	};
 } // namespace RTE

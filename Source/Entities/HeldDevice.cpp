@@ -32,6 +32,7 @@ void HeldDevice::Clear() {
 	m_Activated = false;
 	m_HotkeyActivated.fill(false);
 	m_ActivationTimer.Reset();
+	m_PersistedActivationTimerAnchor = {};
 	for (Timer timer : m_HotkeyActivationTimer) {
 		timer.Reset();
 	}
@@ -123,6 +124,7 @@ int HeldDevice::Create(const HeldDevice& reference) {
 	m_Activated = reference.m_Activated;
 	m_HotkeyActivated = reference.m_HotkeyActivated;
 	m_ActivationTimer = reference.m_ActivationTimer;
+	m_PersistedActivationTimerAnchor = reference.m_PersistedActivationTimerAnchor;
 	m_HotkeyActivationTimer = reference.m_HotkeyActivationTimer;
 
 	m_OneHanded = reference.m_OneHanded;
@@ -194,8 +196,17 @@ int HeldDevice::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> elapsedSimTimeMS;
 		m_ActivationTimer.SetElapsedSimTimeMS(elapsedSimTimeMS);
 	});
+	MatchProperty("ActivationTimerStart", {
+		reader >> m_PersistedActivationTimerAnchor.startTicks;
+		m_PersistedActivationTimerAnchor.pending = true;
+	});
 
 	EndPropertyList;
+}
+
+void HeldDevice::AdoptPersistedUniqueID() {
+	Attachable::AdoptPersistedUniqueID();
+	m_PersistedActivationTimerAnchor.Apply(m_ActivationTimer);
 }
 
 int HeldDevice::Save(Writer& writer) const {

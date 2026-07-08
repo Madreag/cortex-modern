@@ -539,6 +539,7 @@ namespace RTE {
 		//    float m_ImpulseTorque; // In kg * r/s.
 		// The group of Atom:s that will be the physical reperesentation of this MOSRotating.
 		AtomGroup* m_pAtomGroup;
+		std::vector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
 		// The group of Atom:s that will serve as a means to detect deep terrain penetration.
 		AtomGroup* m_pDeepGroup;
 		// Whether or not to check for deep penetrations.

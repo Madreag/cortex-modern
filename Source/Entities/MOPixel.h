@@ -78,6 +78,14 @@ namespace RTE {
 		/// @return A const reference to the current Atom.
 		const Atom* GetAtom() const { return m_Atom; }
 
+		/// The atom's carried travel residue, for full-game saves.
+		long long GetAtomResidue() const;
+
+		/// The live, spawn-randomized lethal range, for full-game saves.
+		float GetLethalRange() const { return m_LethalRange; }
+
+		void AdoptPersistedUniqueID() override;
+
 		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
 		void SnapRenderPoseToSim() override;
 
@@ -174,6 +182,10 @@ namespace RTE {
 		Color m_Color; //!< Color representation of this MOPixel.
 
 		float m_LethalRange; //!< After this distance in meters, the MO has a chance to no longer hit MOs, and its Lifetime decreases. Defaults to the length of a player's screen.
+		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
+		bool m_HasPersistedAtomResidue = false;
+		float m_PersistedLethalRange = 0.0F; //!< Saved live lethal range, applied on snapshot adopt.
+		bool m_HasPersistedLethalRange = false;
 		float m_MinLethalRange; //!< Lower bound multiplier for setting LethalRange at random. By default, 1.0 equals one screen.
 		float m_MaxLethalRange; //!< Upper bound multiplier for setting LethalRange at random. By default, 1.0 equals one screen.
 		float m_LethalSharpness; //!< When Sharpness has decreased below this threshold the MO becomes m_HitsMOs = false. Default is Sharpness * 0.5.

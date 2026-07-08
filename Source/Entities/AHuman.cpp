@@ -1,5 +1,7 @@
 #include "AHuman.h"
 
+#include <charconv>
+
 #include "AtomGroup.h"
 #include "RTETools.h"
 #include "ThrownDevice.h"
@@ -51,6 +53,13 @@ void AHuman::Clear() {
 	m_BackupFGFootGroup = nullptr;
 	m_pBGFootGroup = 0;
 	m_BackupBGFootGroup = nullptr;
+	m_PersistedFGHandResidue.clear();
+	m_PersistedBGHandResidue.clear();
+	m_PersistedFGFootResidue.clear();
+	m_PersistedBGFootResidue.clear();
+	m_PersistedLimbPathStates.clear();
+	m_PersistedLimbPathStatesFromFile = false;
+	m_PersistedLimbGroupPositions.clear();
 	m_StrideSound = nullptr;
 	m_ArmsState = WEAPON_READY;
 	m_MovementState = STAND;
@@ -200,6 +209,21 @@ int AHuman::Create(const AHuman& reference) {
 	m_BackupBGFootGroup->SetOwner(this);
 	m_BackupBGFootGroup->SetLimbPos(atomGroupToUseAsFootGroupBG->GetLimbPos());
 
+	m_PersistedFGHandResidue = reference.m_PersistedFGHandResidue;
+	m_PersistedBGHandResidue = reference.m_PersistedBGHandResidue;
+	m_PersistedFGFootResidue = reference.m_PersistedFGFootResidue;
+	m_PersistedBGFootResidue = reference.m_PersistedBGFootResidue;
+	// The LimbPath copy terminates traversal, so a save clone of a WORLD actor carries the live
+	// state in the stash; preset copies just pass any stash along.
+	if (reference.HasEverBeenAddedToMovableMan()) {
+		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
+	} else {
+		m_PersistedLimbPathStates = reference.m_PersistedLimbPathStates;
+		m_PersistedLimbGroupPositions = reference.m_PersistedLimbGroupPositions;
+	}
+	m_PersistedLimbPathStatesFromFile = false;
+
 	m_MaxWalkPathCrouchShift = reference.m_MaxWalkPathCrouchShift;
 
 	if (reference.m_StrideSound) {
@@ -230,8 +254,127 @@ int AHuman::Create(const AHuman& reference) {
 	return 0;
 }
 
+std::vector<std::string> AHuman::GetLimbPathStates() const {
+	if (!m_PersistedLimbPathStates.empty()) {
+		return m_PersistedLimbPathStates;
+	}
+	std::vector<std::string> states;
+	states.reserve(2 * MOVEMENTSTATECOUNT);
+	for (int layer = 0; layer < 2; ++layer) {
+		for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
+			states.push_back(m_Paths[layer][movementState].PackTraversalState());
+		}
+	}
+	return states;
+}
+
+std::string AHuman::GetLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) {
+		return m_PersistedLimbGroupPositions;
+	}
+	char buffer[256];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	for (const AtomGroup* group: {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		appendValue(limbPos.m_X);
+		appendValue(limbPos.m_Y);
+	}
+	return std::string(buffer, cursor);
+}
+
+static void ApplyPackedLimbPositions(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
+	if (packed.empty()) {
+		return;
+	}
+	const char* cursor = packed.data();
+	const char* end = packed.data() + packed.size();
+	const auto readValue = [&cursor, end](float& value) {
+		while (cursor != end && *cursor == ' ') {
+			++cursor;
+		}
+		cursor = std::from_chars(cursor, end, value).ptr;
+	};
+	for (AtomGroup* group: groups) {
+		Vector limbPos;
+		readValue(limbPos.m_X);
+		readValue(limbPos.m_Y);
+		if (group) {
+			group->SetRawLimbPos(limbPos);
+		}
+	}
+}
+
+std::vector<long long> AHuman::GetFGHandResidue() const { return m_pFGHandGroup ? m_pFGHandGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> AHuman::GetBGHandResidue() const { return m_pBGHandGroup ? m_pBGHandGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> AHuman::GetFGFootResidue() const { return m_pFGFootGroup ? m_pFGFootGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> AHuman::GetBGFootResidue() const { return m_pBGFootGroup ? m_pBGFootGroup->GetTravelResidue() : std::vector<long long>(); }
+
+void AHuman::AdoptPersistedUniqueID() {
+	Actor::AdoptPersistedUniqueID();
+	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+		if (!residue.empty()) {
+			if (group) {
+				group->SetTravelResidue(residue);
+			}
+			residue.clear();
+		}
+	};
+	applyResidue(m_pFGHandGroup, m_PersistedFGHandResidue);
+	applyResidue(m_pBGHandGroup, m_PersistedBGHandResidue);
+	applyResidue(m_pFGFootGroup, m_PersistedFGFootResidue);
+	applyResidue(m_pBGFootGroup, m_PersistedBGFootResidue);
+	if (!m_PersistedLimbPathStates.empty()) {
+		size_t index = 0;
+		for (int layer = 0; layer < 2 && index < m_PersistedLimbPathStates.size(); ++layer) {
+			for (int movementState = 0; movementState < MOVEMENTSTATECOUNT && index < m_PersistedLimbPathStates.size(); ++movementState) {
+				m_Paths[layer][movementState].ApplyTraversalState(m_PersistedLimbPathStates[index++]);
+			}
+		}
+		m_PersistedLimbPathStates.clear();
+	}
+	ApplyPackedLimbPositions(m_PersistedLimbGroupPositions, {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup});
+	m_PersistedLimbGroupPositions.clear();
+}
+
 int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
+
+	MatchProperty("FGHandResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedFGHandResidue.push_back(residueValue);
+	});
+	MatchProperty("BGHandResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedBGHandResidue.push_back(residueValue);
+	});
+	MatchProperty("FGFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedFGFootResidue.push_back(residueValue);
+	});
+	MatchProperty("BGFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedBGFootResidue.push_back(residueValue);
+	});
+	MatchProperty("LimbPathState", {
+		if (!m_PersistedLimbPathStatesFromFile) {
+			m_PersistedLimbPathStates.clear();
+			m_PersistedLimbPathStatesFromFile = true;
+		}
+		std::string pathState;
+		reader >> pathState;
+		m_PersistedLimbPathStates.push_back(pathState);
+	});
+	MatchProperty("LimbGroupPositions", { reader >> m_PersistedLimbGroupPositions; });
 
 	MatchProperty("ThrowPrepTime", { reader >> m_ThrowPrepTime; });
 	MatchProperty("Head", { SetHead(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });

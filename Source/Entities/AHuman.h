@@ -128,6 +128,20 @@ namespace RTE {
 		/// @return A pointer to the head of this AHuman. Ownership is NOT transferred.
 		Attachable* GetHead() const { return m_pHead; }
 
+		/// The per-atom travel residue of the limb-path groups, for full-game saves.
+		std::vector<long long> GetFGHandResidue() const;
+		std::vector<long long> GetBGHandResidue() const;
+		std::vector<long long> GetFGFootResidue() const;
+		std::vector<long long> GetBGFootResidue() const;
+
+		/// Packed traversal state of every limb path, layer-major, for full-game saves.
+		std::vector<std::string> GetLimbPathStates() const;
+
+		/// Packed raw limb positions of the four limb groups, for full-game saves.
+		std::string GetLimbGroupPositions() const;
+
+		void AdoptPersistedUniqueID() override;
+
 		/// Sets the head for this AHuman.
 		/// @param newHead The new head to use.
 		void SetHead(Attachable* newHead);
@@ -627,6 +641,13 @@ namespace RTE {
 		AtomGroup* m_BackupFGFootGroup;
 		AtomGroup* m_pBGFootGroup;
 		AtomGroup* m_BackupBGFootGroup;
+		std::vector<long long> m_PersistedFGHandResidue; //!< Saved limb-group travel residue, applied on snapshot adopt.
+		std::vector<long long> m_PersistedBGHandResidue;
+		std::vector<long long> m_PersistedFGFootResidue;
+		std::vector<long long> m_PersistedBGFootResidue;
+		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
+		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
+		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.

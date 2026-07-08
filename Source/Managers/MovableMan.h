@@ -460,11 +460,13 @@ namespace RTE {
 		/// captured tick, not mid-tick joiners.
 		void ClearLockstepJoinQuarantine();
 
-		/// While set, the Add paths place snapshot residents verbatim: no spawn normalization
-		/// (age, rest, and position nudges), no join quarantine, and each object adopts its saved
-		/// identity. The resync heal keeps this OFF — its rounds renormalize identically on every
-		/// peer; only a rollback restore needs bit-faithful placement.
+		/// While set, the Add paths place snapshot residents verbatim (no spawn normalization, no
+		/// join quarantine) and each object adopts its saved identity. Only a rollback restore
+		/// sets this; the resync heal stays off it and renormalizes identically on every peer.
 		void SetRestoringSnapshot(bool restoring) { m_RestoringSnapshot = restoring; }
+
+		/// Applies each restored actor's saved controller mode, after the activity's AI setup.
+		void ReapplyPersistedControllerModes();
 		bool IsRestoringSnapshot() const { return m_RestoringSnapshot; }
 
 		/// Draws this MovableMan's all MO's current material representations to a BITMAP of choice.

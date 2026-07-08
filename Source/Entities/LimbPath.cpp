@@ -5,6 +5,9 @@
 
 #include "PrimitiveMan.h"
 
+#include <algorithm>
+#include <charconv>
+
 using namespace RTE;
 
 ConcreteClassInfo(LimbPath, Entity, 20);
@@ -121,6 +124,58 @@ int LimbPath::Create(const LimbPath& reference) {
 	Terminate();
 
 	return 0;
+}
+
+std::string LimbPath::PackTraversalState() const {
+	char buffer[192];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](auto value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	appendValue(static_cast<long long>(std::distance(m_Segments.begin(), static_cast<std::deque<Vector>::const_iterator>(m_CurrentSegment))));
+	appendValue(m_SegProgress);
+	appendValue(m_TimeLeft);
+	appendValue(static_cast<long long>(m_PathTimer.GetStartSimTimeMS()));
+	appendValue(static_cast<long long>(m_SegTimer.GetStartSimTimeMS()));
+	appendValue(m_Ended ? 1 : 0);
+	appendValue(m_HFlipped ? 1 : 0);
+	appendValue(m_SegmentDone ? 1 : 0);
+	return std::string(buffer, cursor);
+}
+
+void LimbPath::ApplyTraversalState(const std::string& state) {
+	const char* cursor = state.data();
+	const char* end = state.data() + state.size();
+	const auto readValue = [&cursor, end](auto& value) {
+		while (cursor != end && *cursor == ' ') {
+			++cursor;
+		}
+		cursor = std::from_chars(cursor, end, value).ptr;
+	};
+	long long segmentIndex = 0;
+	long long pathTimerStart = 0;
+	long long segTimerStart = 0;
+	int ended = 0;
+	int hFlipped = 0;
+	int segmentDone = 0;
+	readValue(segmentIndex);
+	readValue(m_SegProgress);
+	readValue(m_TimeLeft);
+	readValue(pathTimerStart);
+	readValue(segTimerStart);
+	readValue(ended);
+	readValue(hFlipped);
+	readValue(segmentDone);
+	segmentIndex = std::clamp<long long>(segmentIndex, 0, static_cast<long long>(m_Segments.size()));
+	m_CurrentSegment = m_Segments.begin() + segmentIndex;
+	m_PathTimer.SetStartSimTimeTicks(pathTimerStart);
+	m_SegTimer.SetStartSimTimeTicks(segTimerStart);
+	m_Ended = ended != 0;
+	m_HFlipped = hFlipped != 0;
+	m_SegmentDone = segmentDone != 0;
 }
 
 int LimbPath::ReadProperty(const std::string_view& propName, Reader& reader) {

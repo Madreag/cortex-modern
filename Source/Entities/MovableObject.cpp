@@ -107,6 +107,7 @@ void MovableObject::Clear() {
 	m_PersistedUniqueID = 0;
 	m_PersistedRestTimerStart = 0;
 	m_HasPersistedRestTimerStart = false;
+	m_PersistedAgeTimerAnchor = {};
 
 	m_RemoveOrphanTerrainRadius = 0;
 	m_RemoveOrphanTerrainMaxArea = 0;
@@ -280,6 +281,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_PersistedUniqueID = reference.m_PersistedUniqueID;
 	m_PersistedRestTimerStart = reference.m_PersistedRestTimerStart;
 	m_HasPersistedRestTimerStart = reference.m_HasPersistedRestTimerStart;
+	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
 	m_UniqueID = MovableObject::GetNextUniqueID();
 	g_MovableMan.RegisterObject(this);
 
@@ -292,10 +294,15 @@ void MovableObject::AdoptPersistedUniqueID() {
 		m_RestTimer.SetStartSimTimeTicks(m_PersistedRestTimerStart);
 		m_HasPersistedRestTimerStart = false;
 	}
+	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
 	if (m_PersistedUniqueID <= 0) {
 		return;
 	}
 	g_MovableMan.UnregisterObject(this);
+	if (const MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
+		g_ConsoleMan.PrintString("ERROR: restore adopted duplicate UniqueID " + std::to_string(m_PersistedUniqueID) + " (" + GetPresetName() + ")");
+		std::cout << "[restore] duplicate UniqueID " << m_PersistedUniqueID << " adopted by " << GetPresetName() << std::endl;
+	}
 	m_UniqueID = m_PersistedUniqueID;
 	m_PersistedUniqueID = 0;
 	if (m_UniqueID > GetUniqueIDCounter()) {
@@ -313,6 +320,10 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	MatchProperty("RestTimerStart", {
 		reader >> m_PersistedRestTimerStart;
 		m_HasPersistedRestTimerStart = true;
+	});
+	MatchProperty("AgeTimerStart", {
+		reader >> m_PersistedAgeTimerAnchor.startTicks;
+		m_PersistedAgeTimerAnchor.pending = true;
 	});
 	MatchProperty("Velocity", { reader >> m_Vel; });
 	MatchProperty("Scale", { reader >> m_Scale; });

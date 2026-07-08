@@ -304,6 +304,10 @@ namespace RTE {
 
 		/// Replaces the sim-facing controller state from a decoded wire frame.
 		void ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled);
+
+		/// Marks the sim tick a lockstep wire frame was applied, so saves can tell wire-backed state from local AI residue.
+		void SetWireApplyTick(int64_t simTick) { m_WireApplyTick = simTick; }
+		int64_t GetWireApplyTick() const { return m_WireApplyTick; }
 #pragma endregion
 
 #pragma region Virtual Override Methods
@@ -333,6 +337,7 @@ namespace RTE {
 
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_ControlStates; //!< Control states.
 		bool m_Disabled; //!< Quick and easy disable to prevent updates from being made.
+		int64_t m_WireApplyTick = -1; //!< The sim tick a lockstep wire frame last replaced this state, -1 if never.
 
 		InputMode m_InputMode; //!< The current controller input mode, like AI, player etc.
 
