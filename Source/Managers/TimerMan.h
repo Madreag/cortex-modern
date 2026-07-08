@@ -54,9 +54,14 @@ namespace RTE {
 		/// @param frozen Frozen or not.
 		void SetSimTimeFrozen(bool frozen) { m_SimTimeFrozen = frozen; }
 
+		/// Sets whether the sim free-runs: updates stop gating on accumulated real time, so replay
+		/// playback and benches run ticks as fast as they compute. The fixed dt is untouched.
+		/// @param freeRun Free-running or not.
+		void SetFreeRunSim(bool freeRun) { m_FreeRunSim = freeRun; }
+
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
 		/// @return Whether there is enough sim time to do a physics update.
-		bool TimeForSimUpdate() const { return m_SimAccumulator >= m_DeltaTime; }
+		bool TimeForSimUpdate() const { return m_FreeRunSim || m_SimAccumulator >= m_DeltaTime; }
 
 		/// Tells whether the current simulation update will be drawn in a frame. Use this to check if it is necessary to draw purely graphical things during the sim update.
 		/// @return Whether this is the last sim update before a frame with its results will appear.
@@ -180,6 +185,7 @@ namespace RTE {
 
 		bool m_SimPaused; //!< Simulation paused; no real time ticks will go to the sim accumulator.
 		bool m_SimTimeFrozen; //!< Sim updates advance the update count but not sim time (the synced lockstep pause).
+		bool m_FreeRunSim; //!< Sim updates run unpaced by real time (replay playback and benches).
 
 	private:
 		/// Clears all the member variables of this TimerMan, effectively resetting the members of this abstraction level only.
