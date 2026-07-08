@@ -69,6 +69,17 @@ namespace RTE {
 		std::string EndDebugText(const SteamNetConnectionStatusChangedCallback_t& info) {
 			return info.m_info.m_szEndDebug[0] != '\0' ? info.m_info.m_szEndDebug : "GNS connection closed";
 		}
+
+		int s_SimulatedLagMs = 0;
+
+		// Test harness: splits the requested RTT across the send/recv legs of every connection.
+		void ApplySimulatedLag() {
+			if (s_SimulatedLagMs <= 0) {
+				return;
+			}
+			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
+			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
+		}
 	}
 
 	struct GnsTransport::Impl {
@@ -91,6 +102,7 @@ namespace RTE {
 			listenAddress.Clear();
 			listenAddress.m_port = port;
 
+			ApplySimulatedLag();
 			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
 			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
@@ -151,6 +163,7 @@ namespace RTE {
 				remoteAddress.m_port = port;
 			}
 
+			ApplySimulatedLag();
 			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
 			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
@@ -530,6 +543,14 @@ namespace RTE {
 		return true;
 #else
 		return false;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedLagMs(int lagMs) {
+#ifdef CCCP_WITH_GNS
+		s_SimulatedLagMs = lagMs;
+#else
+		(void)lagMs;
 #endif
 	}
 

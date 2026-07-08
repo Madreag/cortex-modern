@@ -26,6 +26,9 @@ namespace RTE {
 
 		static bool IsCompiledIn();
 
+		/// Test harness: adds a simulated round-trip lag (ms) to every connection made after the call.
+		static void SetSimulatedLagMs(int lagMs);
+
 	private:
 		struct Impl;
 		Impl* m_Impl = nullptr;
