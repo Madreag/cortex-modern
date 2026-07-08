@@ -40,6 +40,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <execution>
 #include <iostream>
 
