@@ -52,6 +52,8 @@
 #include "CameraMan.h"
 #include "ActivityMan.h"
 #include "GameActivity.h"
+#include "MovableObject.h"
+#include "RTETools.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -143,6 +145,17 @@ static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
+// P8-4 rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
+// re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.
+static long long s_rbProbeAtTick = 0;
+static long long s_rbProbeWindow = 30;
+static int s_rbProbePhase = 0; //!< 0 idle, 1 first pass, 2 restore staged, 3 re-run pass.
+static std::vector<SimChecksum::Hash> s_rbProbeFirst;
+static std::vector<SimChecksum::Hash> s_rbProbeSecond;
+static std::mt19937 s_rbProbeRngState;
+static long long s_rbProbeSimCount = 0;
+static long long s_rbProbeSimTimeTicks = 0;
+static long s_rbProbeUidCounter = 0;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
@@ -450,6 +463,17 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-fake-lag") {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-rollback-fidelity-probe") {
+			// T:K — capture after tick T, gate K re-run ticks against the first pass.
+			const std::string probeSpec = argValue[++i];
+			const size_t colon = probeSpec.find(':');
+			s_rbProbeAtTick = std::strtoll(probeSpec.c_str(), nullptr, 10);
+			if (colon != std::string::npos) {
+				s_rbProbeWindow = std::strtoll(probeSpec.c_str() + colon + 1, nullptr, 10);
+			}
 			continue;
 		}
 
@@ -926,6 +950,53 @@ static void DumpTerrainIfArmed(uint64_t simTick) {
 	DumpTerrainNow("t" + std::to_string(simTick));
 }
 
+// Runs the rollback fidelity probe's phase machine on each hashed tick (needs -tick-hashes so
+// every tick hashes). The restore itself completes in the deferred-restart block, which flips
+// phase 2 to 3 after rewinding the clock, the RNG, and the unique ID counter.
+void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tickResult) {
+	if (s_rbProbePhase == 0 && simTick == static_cast<uint64_t>(s_rbProbeAtTick)) {
+		if (!g_ActivityMan.SaveCurrentGame("rbprobe")) {
+			std::cout << "[rbprobe] FAIL: the capture save was refused" << std::endl;
+			System::SetQuit(true);
+			return;
+		}
+		s_rbProbeRngState = g_SimRNG.GetEngineState();
+		s_rbProbeSimCount = g_TimerMan.GetSimUpdateCount();
+		s_rbProbeSimTimeTicks = g_TimerMan.GetSimTimeTicks();
+		s_rbProbeUidCounter = MovableObject::GetUniqueIDCounter();
+		s_rbProbePhase = 1;
+		std::cout << "[rbprobe] captured at tick " << simTick << std::endl;
+	} else if (s_rbProbePhase == 1 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
+		s_rbProbeFirst.push_back(SimChecksum::SimGatedHash(tickResult));
+		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
+			if (!g_ActivityMan.LoadGameToRestart("rbprobe")) {
+				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
+				System::SetQuit(true);
+				return;
+			}
+			s_rbProbePhase = 2;
+			std::cout << "[rbprobe] window recorded; restore staged" << std::endl;
+		}
+	} else if (s_rbProbePhase == 3 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
+		s_rbProbeSecond.push_back(SimChecksum::SimGatedHash(tickResult));
+		if (static_cast<long long>(s_rbProbeSecond.size()) >= s_rbProbeWindow) {
+			long long firstDivergence = -1;
+			for (size_t i = 0; i < s_rbProbeFirst.size(); ++i) {
+				if (s_rbProbeFirst[i] != s_rbProbeSecond[i]) {
+					firstDivergence = s_rbProbeAtTick + 1 + static_cast<long long>(i);
+					break;
+				}
+			}
+			if (firstDivergence < 0) {
+				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore" << std::endl;
+			} else {
+				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence << std::endl;
+			}
+			System::SetQuit(true);
+		}
+	}
+}
+
 /// </summary>
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
@@ -1342,6 +1413,9 @@ void RunGameLoop() {
 				if (desyncSampleTick) {
 					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
 				}
+				if (s_rbProbeAtTick > 0 && ScenarioRunner::IsActive()) {
+					RollbackProbeOnHashedTick(simTick, tickResult);
+				}
 			}
 
 			// Start async GC after all main-thread Lua work for this tick is done. Earlier (inside MovableMan::Update)
@@ -1571,6 +1645,15 @@ void RunGameLoop() {
 				g_WindowMan.UploadFrame();
 				if (!g_ActivityMan.RestartActivity()) {
 					break;
+				}
+				if (s_rbProbePhase == 2) {
+					// The world is reloaded; rewind the clock, the RNG stream, and the identity
+					// counter so the re-run replays the exact ticks the first pass saw.
+					g_SimRNG.SetEngineState(s_rbProbeRngState);
+					g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
+					MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
+					s_rbProbePhase = 3;
+					std::cout << "[rbprobe] restored and rewound to tick " << s_rbProbeSimCount << std::endl;
 				}
 			}
 			if (g_ActivityMan.ActivitySetToResume()) {
