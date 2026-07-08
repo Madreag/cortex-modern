@@ -73,21 +73,22 @@ namespace RTE {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
-		// High ping without a matching input delay stalls every tick; the host covers the worst
-		// measured RTT (the manual setting stays the floor) and the config sync carries the pick.
+		// High ping self-pays: each sender's delay covers its OWN round trip to the host (the
+		// receive side settles by running that leg behind), so one slow link no longer delays
+		// every player's input. The manual setting stays the floor for every peer.
 		if (config.host && config.autoInputDelay) {
-			uint32_t maxPingMs = 0;
-			for (const NetSessionPeerInfo& peer: session.GetReadyPeers()) {
-				maxPingMs = std::max(maxPingMs, transport.GetPeerPingMs(peer.transportPeerId));
-			}
 			const double tickMs = 1000.0 / 30.0;
-			const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
-			    static_cast<uint32_t>(std::ceil((maxPingMs / 2.0) / tickMs)) + 1U, NetMatchConfigUtil::c_MaxInputDelayFrames));
-			if (neededDelay > m_MatchConfig.inputDelayFrames) {
-				std::cout << "[net-match] auto input delay: worst rtt " << maxPingMs << "ms -> " << neededDelay
-				          << " frames (manual floor " << m_MatchConfig.inputDelayFrames << ")" << std::endl;
-				m_MatchConfig.inputDelayFrames = neededDelay;
+			const uint16_t floorDelay = m_MatchConfig.inputDelayFrames;
+			std::vector<uint16_t> delays(m_MatchConfig.peerCount, std::max<uint16_t>(floorDelay, 1));
+			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
+				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
+				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
+				    static_cast<uint32_t>(std::ceil(rttMs / tickMs)) + 1U, NetMatchConfigUtil::c_MaxInputDelayFrames));
+				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
+				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
+				          << "ms -> " << delays[peerId - 1] << " frames (manual floor " << floorDelay << ")" << std::endl;
 			}
+			m_MatchConfig.peerInputDelayFrames = std::move(delays);
 		}
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 
@@ -299,9 +300,14 @@ namespace RTE {
 		NetLockstepConfig lockstepConfig;
 		lockstepConfig.sessionId = session.GetSessionId();
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
-		lockstepConfig.inputDelayFrames = m_MatchConfig.inputDelayFrames;
-		lockstepConfig.timeoutMs = config.missingFrameGraceMs;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
+		lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, lockstepConfig.localPeerId);
+		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
+			for (uint8_t peerId = 1; peerId <= m_MatchConfig.peerCount; ++peerId) {
+				lockstepConfig.peerInputDelayFrames[peerId] = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, peerId);
+			}
+		}
+		lockstepConfig.timeoutMs = config.missingFrameGraceMs;
 		lockstepConfig.peerCount = m_MatchConfig.peerCount;
 		lockstepConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
 		// Host-star: the host relays each client's frames/checksums to the other clients.
