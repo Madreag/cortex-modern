@@ -262,6 +262,20 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 	const long long saveMainMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
 
+	// Parse-cost probe: bounds the re-read side of a fast in-place restore (parse only, no apply).
+	if (const char* parseProbe = std::getenv("CC_SNAP_PARSE_PROBE"); parseProbe && parseProbe[0] == '1') {
+		const std::string snapshotText = static_cast<std::stringstream*>(writer->GetStream())->str();
+		const auto parseStart = std::chrono::steady_clock::now();
+		Reader probeReader(std::make_unique<std::istringstream>(snapshotText), "SnapParseProbe", true, nullptr, true);
+		long long parsedProps = 0;
+		while (!probeReader.ReadPropName().empty()) {
+			probeReader.ReadPropValue();
+			++parsedProps;
+		}
+		const long long parseMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - parseStart).count();
+		std::cout << "[snapbench] parse_ms=" << parseMs << " props=" << parsedProps << " bytes=" << snapshotText.size() << std::endl;
+	}
+
 	// For some reason I can't std::move a unique ptr in, so just releasing and deleting manually...
 	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit([saveWriterData, saveMainMs](Writer* mainWriter) {
 		const auto asyncStart = std::chrono::steady_clock::now();
