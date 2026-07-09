@@ -1327,6 +1327,8 @@ namespace RTE {
 		long m_PersistedUniqueID;
 		int64_t m_PersistedRestTimerStart;
 		bool m_HasPersistedRestTimerStart;
+		int m_PersistedVelOscillations;
+		bool m_HasPersistedVelOscillations;
 		PersistedTimerAnchor m_PersistedAgeTimerAnchor;
 		// In which radis should we look to remove orphaned terrain on terrain penetration,
 		// must not be greater than SceneMan::ORPHANSIZE, or will be truncated

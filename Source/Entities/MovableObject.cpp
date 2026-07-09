@@ -107,6 +107,8 @@ void MovableObject::Clear() {
 	m_PersistedUniqueID = 0;
 	m_PersistedRestTimerStart = 0;
 	m_HasPersistedRestTimerStart = false;
+	m_PersistedVelOscillations = 0;
+	m_HasPersistedVelOscillations = false;
 	m_PersistedAgeTimerAnchor = {};
 
 	m_RemoveOrphanTerrainRadius = 0;
@@ -281,6 +283,8 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_PersistedUniqueID = reference.m_PersistedUniqueID;
 	m_PersistedRestTimerStart = reference.m_PersistedRestTimerStart;
 	m_HasPersistedRestTimerStart = reference.m_HasPersistedRestTimerStart;
+	m_PersistedVelOscillations = reference.m_PersistedVelOscillations;
+	m_HasPersistedVelOscillations = reference.m_HasPersistedVelOscillations;
 	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
 	m_UniqueID = MovableObject::GetNextUniqueID();
 	g_MovableMan.RegisterObject(this);
@@ -293,6 +297,11 @@ void MovableObject::AdoptPersistedUniqueID() {
 		// Absolute sim ticks, so the value holds across the rollback clock rewind.
 		m_RestTimer.SetStartSimTimeTicks(m_PersistedRestTimerStart);
 		m_HasPersistedRestTimerStart = false;
+	}
+	if (m_HasPersistedVelOscillations) {
+		// Applied here because the add path's NotResting() zeroes the live counter.
+		m_VelOscillations = m_PersistedVelOscillations;
+		m_HasPersistedVelOscillations = false;
 	}
 	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
 	if (m_PersistedUniqueID <= 0) {
@@ -318,6 +327,10 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	MatchProperty("UniqueID", { reader >> m_PersistedUniqueID; });
 	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
 	MatchProperty("SpecialBehaviour_CheckTerrainIntersection", { reader >> m_CheckTerrIntersection; });
+	MatchProperty("SpecialBehaviour_VelOscillations", {
+		reader >> m_PersistedVelOscillations;
+		m_HasPersistedVelOscillations = true;
+	});
 	MatchProperty("RestTimerStart", {
 		reader >> m_PersistedRestTimerStart;
 		m_HasPersistedRestTimerStart = true;

@@ -56,6 +56,8 @@ void MOSRotating::Clear() {
 	m_PersistedGroupMomentOfInertia = 0.0F;
 	m_PersistedGroupStoredMass = 0.0F;
 	m_HasPersistedGroupInertia = false;
+	m_PersistedAttachableAndWoundMass = 0.0F;
+	m_HasPersistedAttachableAndWoundMass = false;
 	m_TravelImpulse.Reset();
 	m_SpriteCenter.Reset();
 	m_OrientToVel = 0;
@@ -222,6 +224,14 @@ int MOSRotating::Create(const MOSRotating& reference) {
 	m_PersistedGroupMomentOfInertia = reference.m_PersistedGroupMomentOfInertia;
 	m_PersistedGroupStoredMass = reference.m_PersistedGroupStoredMass;
 	m_HasPersistedGroupInertia = reference.m_HasPersistedGroupInertia;
+	// The accumulated mass is captured from the live reference; every copy path re-derives its own.
+	if (reference.HasEverBeenAddedToMovableMan()) {
+		m_PersistedAttachableAndWoundMass = reference.m_AttachableAndWoundMass;
+		m_HasPersistedAttachableAndWoundMass = true;
+	} else {
+		m_PersistedAttachableAndWoundMass = reference.m_PersistedAttachableAndWoundMass;
+		m_HasPersistedAttachableAndWoundMass = reference.m_HasPersistedAttachableAndWoundMass;
+	}
 	m_TravelImpulse = reference.m_TravelImpulse;
 
 	m_DeepCheck = reference.m_DeepCheck;
@@ -301,6 +311,10 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		m_HasPersistedGroupInertia = true;
 	});
 	MatchProperty("AtomGroupStoredOwnerMass", { reader >> m_PersistedGroupStoredMass; });
+	MatchProperty("SpecialBehaviour_AttachableAndWoundMass", {
+		reader >> m_PersistedAttachableAndWoundMass;
+		m_HasPersistedAttachableAndWoundMass = true;
+	});
 	MatchProperty("SpecialBehaviour_TravelImpulse", {
 		Vector travelImpulse;
 		reader >> travelImpulse;
@@ -1485,6 +1499,10 @@ void MOSRotating::AdoptPersistedUniqueID() {
 			m_pAtomGroup->SetStoredMomentOfInertia(m_PersistedGroupMomentOfInertia, m_PersistedGroupStoredMass);
 		}
 		m_HasPersistedGroupInertia = false;
+	}
+	if (m_HasPersistedAttachableAndWoundMass) {
+		m_AttachableAndWoundMass = m_PersistedAttachableAndWoundMass;
+		m_HasPersistedAttachableAndWoundMass = false;
 	}
 	for (Attachable* attachable: m_Attachables) {
 		attachable->AdoptPersistedUniqueID();
