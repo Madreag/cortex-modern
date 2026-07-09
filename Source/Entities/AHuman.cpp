@@ -61,6 +61,7 @@ void AHuman::Clear() {
 	m_PersistedLimbPathStatesFromFile = false;
 	m_PersistedLimbGroupPositions.clear();
 	m_PersistedLimbGroupInertia.clear();
+	m_PersistedWalkState.clear();
 	m_StrideSound = nullptr;
 	m_ArmsState = WEAPON_READY;
 	m_MovementState = STAND;
@@ -220,10 +221,12 @@ int AHuman::Create(const AHuman& reference) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
+		m_PersistedWalkState = reference.GetWalkState();
 	} else {
 		m_PersistedLimbPathStates = reference.m_PersistedLimbPathStates;
 		m_PersistedLimbGroupPositions = reference.m_PersistedLimbGroupPositions;
 		m_PersistedLimbGroupInertia = reference.m_PersistedLimbGroupInertia;
+		m_PersistedWalkState = reference.m_PersistedWalkState;
 	}
 	m_PersistedLimbPathStatesFromFile = false;
 
@@ -332,6 +335,25 @@ std::string AHuman::GetLimbGroupInertia() const {
 	return std::string(buffer, cursor);
 }
 
+std::string AHuman::GetWalkState() const {
+	if (!m_PersistedWalkState.empty()) {
+		return m_PersistedWalkState;
+	}
+	char buffer[128];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	appendValue(m_WalkAngle[FGROUND].GetRadAngle());
+	appendValue(m_WalkAngle[BGROUND].GetRadAngle());
+	appendValue(m_WalkPathOffset.m_X);
+	appendValue(m_WalkPathOffset.m_Y);
+	return std::string(buffer, cursor);
+}
+
 static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
 	if (packed.empty()) {
 		return;
@@ -388,6 +410,27 @@ void AHuman::AdoptPersistedUniqueID() {
 	m_PersistedLimbGroupPositions.clear();
 	ApplyPackedLimbInertia(m_PersistedLimbGroupInertia, {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup});
 	m_PersistedLimbGroupInertia.clear();
+	if (!m_PersistedWalkState.empty()) {
+		const char* cursor = m_PersistedWalkState.data();
+		const char* end = m_PersistedWalkState.data() + m_PersistedWalkState.size();
+		const auto readValue = [&cursor, end](float& value) {
+			while (cursor != end && *cursor == ' ') {
+				++cursor;
+			}
+			cursor = std::from_chars(cursor, end, value).ptr;
+		};
+		float walkAngleFG = 0.0F;
+		float walkAngleBG = 0.0F;
+		Vector pathOffset;
+		readValue(walkAngleFG);
+		readValue(walkAngleBG);
+		readValue(pathOffset.m_X);
+		readValue(pathOffset.m_Y);
+		m_WalkAngle[FGROUND] = Matrix(walkAngleFG);
+		m_WalkAngle[BGROUND] = Matrix(walkAngleBG);
+		m_WalkPathOffset = pathOffset;
+		m_PersistedWalkState.clear();
+	}
 }
 
 int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
@@ -424,6 +467,7 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("LimbGroupPositions", { reader >> m_PersistedLimbGroupPositions; });
 	MatchProperty("LimbGroupInertia", { reader >> m_PersistedLimbGroupInertia; });
+	MatchProperty("SpecialBehaviour_WalkState", { reader >> m_PersistedWalkState; });
 	MatchProperty("SharpAimRevertTimerStart", {
 		reader >> m_PersistedSharpAimRevertTimerAnchor.startTicks;
 		m_PersistedSharpAimRevertTimerAnchor.pending = true;

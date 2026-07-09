@@ -143,6 +143,9 @@ namespace RTE {
 		/// Packed moment-of-inertia pairs of the four limb groups, for full-game saves.
 		std::string GetLimbGroupInertia() const;
 
+		/// Packed walk state (per-layer walk angles + walk path offset), for full-game saves.
+		std::string GetWalkState() const;
+
 		/// The sharp-aim revert timer anchor, for full-game saves.
 		int64_t GetSharpAimRevertTimerStart() const { return m_SharpAimRevertTimer.GetStartSimTimeMS(); }
 
@@ -655,6 +658,7 @@ namespace RTE {
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
 		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
 		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
+		std::string m_PersistedWalkState; //!< Saved walk angles + path offset, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.

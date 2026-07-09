@@ -1237,6 +1237,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
 		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
 		writer.NewPropertyWithValue("SpecialBehaviour_CheckTerrainIntersection", movableObjectToSave->IntersectionWarning());
+		writer.NewPropertyWithValue("SpecialBehaviour_VelOscillations", movableObjectToSave->GetVelOscillations());
 		writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
 		writer.NewPropertyWithValue("AgeTimerStart", movableObjectToSave->GetAgeTimerStart());
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());
@@ -1292,6 +1293,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("AtomGroupMomentOfInertia", atomGroupToSave->GetStoredMomentOfInertia());
 				writer.NewPropertyWithValue("AtomGroupStoredOwnerMass", atomGroupToSave->GetStoredOwnerMass());
 			}
+			writer.NewPropertyWithValue("SpecialBehaviour_AttachableAndWoundMass", mosRotatingToSave->GetAttachableAndWoundMassForSave());
 			writer.NewPropertyWithValue("SpecialBehaviour_TravelImpulse", mosRotatingToSave->GetTravelImpulse());
 			// Attached Attachables clear the preset's DeepCheck every Update; a reload must not re-arm it.
 			writer.NewPropertyWithValue("DeepCheck", mosRotatingToSave->GetDeepCheck());
@@ -1507,6 +1509,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				}
 				writer.NewPropertyWithValue("LimbGroupPositions", aHumanToSave->GetLimbGroupPositions());
 				writer.NewPropertyWithValue("LimbGroupInertia", aHumanToSave->GetLimbGroupInertia());
+				writer.NewPropertyWithValue("SpecialBehaviour_WalkState", aHumanToSave->GetWalkState());
 				writer.NewPropertyWithValue("SharpAimRevertTimerStart", aHumanToSave->GetSharpAimRevertTimerStart());
 			} else if (const ACrab* aCrabToSave = dynamic_cast<const ACrab*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Turret", aCrabToSave->GetTurret());

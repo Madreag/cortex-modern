@@ -184,6 +184,9 @@ namespace RTE {
 		/// @return Whether a deep check is forced.
 		bool GetForceDeepCheck() const { return m_ForceDeepCheck; }
 
+		/// The accumulated attachable+wound mass (its float add/remove history drifts on rebuild), for full-game saves.
+		float GetAttachableAndWoundMassForSave() const { return m_HasPersistedAttachableAndWoundMass ? m_PersistedAttachableAndWoundMass : m_AttachableAndWoundMass; }
+
 		/// Calculates the collision response when another MO's Atom collides with
 		/// this MO's physical representation. The effects will be applied
 		/// directly to this MO, and also represented in the passed in HitData.
@@ -552,6 +555,8 @@ namespace RTE {
 		float m_PersistedGroupMomentOfInertia; //!< Saved group moment of inertia, applied on snapshot adopt.
 		float m_PersistedGroupStoredMass; //!< Saved owner-mass anchor for the inertia recompute gate.
 		bool m_HasPersistedGroupInertia; //!< Whether a saved moment of inertia is pending application.
+		float m_PersistedAttachableAndWoundMass; //!< Saved accumulated attachable+wound mass, applied on snapshot adopt.
+		bool m_HasPersistedAttachableAndWoundMass; //!< Whether a saved accumulated mass is pending application.
 		// The group of Atom:s that will serve as a means to detect deep terrain penetration.
 		AtomGroup* m_pDeepGroup;
 		// Whether or not to check for deep penetrations.
