@@ -18,13 +18,22 @@ namespace RTE {
 	class Matrix;
 
 #pragma region Random Numbers
+	// Observational per-draw hook for forensic tooling; fires only on instances with draw tracing enabled.
+	extern void (*g_RNGDrawHook)(uint64_t drawCount);
+
 	class RandomGenerator {
 		std::mt19937 m_RNG; //!< The random number generator used for all random functions.
 		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
+		uint64_t m_DrawCount = 0; //!< Raw 32-bit draws consumed since construction; observational only.
+		bool m_TraceDraws = false; //!< Routes each draw through g_RNGDrawHook when set.
 
 		// One raw 32-bit draw. The mt19937 stream is portable; the std:: distributions are not,
 		// so the mappings below are explicit.
 		uint32_t DrawBits() {
+			++m_DrawCount;
+			if (m_TraceDraws && g_RNGDrawHook) {
+				g_RNGDrawHook(m_DrawCount);
+			}
 			return static_cast<uint32_t>(m_RNG());
 		}
 
@@ -58,6 +67,14 @@ namespace RTE {
 		/// Restores a previously captured engine state.
 		/// @param state The engine state to restore.
 		void SetEngineState(const std::mt19937& state) { m_RNG = state; }
+
+		/// Gets the number of raw 32-bit draws consumed since construction.
+		/// @return The draw count.
+		uint64_t GetDrawCount() const { return m_DrawCount; }
+
+		/// Sets whether each draw fires g_RNGDrawHook.
+		/// @param enabled Whether to trace draws.
+		void SetDrawTraceEnabled(bool enabled) { m_TraceDraws = enabled; }
 
 		/// Serialize the generator's full internal state to a string for hashing — byte-identical
 		/// across same-seed runs at the same tick once the determinism work has settled.
