@@ -17,6 +17,8 @@ namespace RTE {
 	// Null normally; a scope can redirect this thread's sim free functions (see GetSimRNG).
 	thread_local RandomGenerator* t_simRNGOverride = nullptr;
 
+	void (*g_RNGDrawHook)(uint64_t drawCount) = nullptr;
+
 	void SeedRNG() {
 		// Use a constant seed for determinism.
 		static constexpr uint32_t constSeed = []() {

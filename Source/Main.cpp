@@ -157,6 +157,7 @@ static std::vector<SimChecksum::Result> s_rbProbeFirst;
 static std::vector<SimChecksum::Result> s_rbProbeSecond;
 static std::mt19937 s_rbProbeRngState;
 static bool s_rbProbeCaptureRngNextTick = false;
+static uint64_t s_rbProbeRngDrawsAtCapture = 0;
 static long long s_rbProbeSimCount = 0;
 static long long s_rbProbeSimTimeTicks = 0;
 static long s_rbProbeUidCounter = 0;
@@ -868,6 +869,18 @@ static bool TerrainDumpArmed() {
 	return s_armed;
 }
 
+// CC_RNG_DRAW_TRACE=1 emits one "rng" tracer event per g_SimRNG draw inside the CC_TERRAIN_EVENTS
+// window: the running draw index plus the travel context that consumed it.
+static void InstallRNGDrawTraceIfArmed() {
+	if (!std::getenv("CC_RNG_DRAW_TRACE")) {
+		return;
+	}
+	g_RNGDrawHook = [](uint64_t drawCount) {
+		SceneMan::TraceTerrainEvent("rng", static_cast<int>(drawCount & 0xFFFFFFFFu), static_cast<int>(drawCount >> 32), 0, 0, static_cast<int>(SceneMan::GetTerrainEventContext()));
+	};
+	g_SimRNG.SetDrawTraceEnabled(true);
+}
+
 // CC_TICK_PROBE=1 appends one counts+RNG line per tick beside the -out trace; light enough not to
 // disturb the pacing the desync hunt depends on.
 // CC_TICK_PROBE_BOX=<x1>:<y1>:<x2>:<y2> adds per-tick FNV hashes of the boxed terrain mat+fg bytes.
@@ -907,7 +920,7 @@ static void TickProbeIfArmed(uint64_t simTick) {
 		return;
 	}
 	const std::string rngState = g_SimRNG.SerializeStateForHashing();
-	s_out << simTick << " a=" << g_MovableMan.GetActorCount() << " p=" << g_MovableMan.GetParticleCount() << " rng=" << std::hash<std::string>{}(rngState);
+	s_out << simTick << " a=" << g_MovableMan.GetActorCount() << " p=" << g_MovableMan.GetParticleCount() << " rng=" << std::hash<std::string>{}(rngState) << " draws=" << g_SimRNG.GetDrawCount();
 	if (s_boxArmed && g_SceneMan.GetScene() && g_SceneMan.GetScene()->GetTerrain()) {
 		s_out << " tm=" << std::hex
 		      << BoxedTerrainHash(g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap(), s_box[0], s_box[1], s_box[2], s_box[3])
@@ -1135,7 +1148,9 @@ void RunGameLoop() {
 
 			if (s_rbProbeCaptureRngNextTick) {
 				s_rbProbeRngState = g_SimRNG.GetEngineState();
+				s_rbProbeRngDrawsAtCapture = g_SimRNG.GetDrawCount();
 				s_rbProbeCaptureRngNextTick = false;
+				std::cout << "[rbprobe] rng captured at tick entry; draws=" << s_rbProbeRngDrawsAtCapture << std::endl;
 			}
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			g_PerformanceMan.NewPerformanceSample();
@@ -1760,6 +1775,8 @@ void RunGameLoop() {
 					// The world is reloaded; rewind the clock, the RNG stream, and the identity
 					// counter so the re-run replays the exact ticks the first pass saw.
 					g_SimRNG.SetEngineState(s_rbProbeRngState);
+					std::cout << "[rbprobe] rng rewound; draws=" << g_SimRNG.GetDrawCount()
+					          << " (capture baseline " << s_rbProbeRngDrawsAtCapture << ")" << std::endl;
 					g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
 					MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
 					if (!s_rbProbeTerrain.Restore()) {
@@ -2568,6 +2585,7 @@ int main(int argc, char** argv) {
 	// Just use it anyway until some dumb edge case pops up and it becomes a problem.
 	System::Initialize(argv[0]);
 	SeedRNG();
+	InstallRNGDrawTraceIfArmed();
 
 	InitializeManagers();
 
