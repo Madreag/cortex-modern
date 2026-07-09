@@ -60,6 +60,7 @@ void AHuman::Clear() {
 	m_PersistedLimbPathStates.clear();
 	m_PersistedLimbPathStatesFromFile = false;
 	m_PersistedLimbGroupPositions.clear();
+	m_PersistedLimbGroupInertia.clear();
 	m_StrideSound = nullptr;
 	m_ArmsState = WEAPON_READY;
 	m_MovementState = STAND;
@@ -218,9 +219,11 @@ int AHuman::Create(const AHuman& reference) {
 	if (reference.HasEverBeenAddedToMovableMan()) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
+		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
 	} else {
 		m_PersistedLimbPathStates = reference.m_PersistedLimbPathStates;
 		m_PersistedLimbGroupPositions = reference.m_PersistedLimbGroupPositions;
+		m_PersistedLimbGroupInertia = reference.m_PersistedLimbGroupInertia;
 	}
 	m_PersistedLimbPathStatesFromFile = false;
 
@@ -310,6 +313,48 @@ static void ApplyPackedLimbPositions(const std::string& packed, std::initializer
 	}
 }
 
+std::string AHuman::GetLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) {
+		return m_PersistedLimbGroupInertia;
+	}
+	char buffer[256];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	for (const AtomGroup* group: {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup}) {
+		appendValue(group ? group->GetStoredMomentOfInertia() : 0.0F);
+		appendValue(group ? group->GetStoredOwnerMass() : 0.0F);
+	}
+	return std::string(buffer, cursor);
+}
+
+static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
+	if (packed.empty()) {
+		return;
+	}
+	const char* cursor = packed.data();
+	const char* end = packed.data() + packed.size();
+	const auto readValue = [&cursor, end](float& value) {
+		while (cursor != end && *cursor == ' ') {
+			++cursor;
+		}
+		cursor = std::from_chars(cursor, end, value).ptr;
+	};
+	for (AtomGroup* group: groups) {
+		float momentOfInertia = 0.0F;
+		float storedMass = 0.0F;
+		readValue(momentOfInertia);
+		readValue(storedMass);
+		if (group) {
+			group->SetStoredMomentOfInertia(momentOfInertia, storedMass);
+		}
+	}
+}
+
 std::vector<long long> AHuman::GetFGHandResidue() const { return m_pFGHandGroup ? m_pFGHandGroup->GetTravelResidue() : std::vector<long long>(); }
 std::vector<long long> AHuman::GetBGHandResidue() const { return m_pBGHandGroup ? m_pBGHandGroup->GetTravelResidue() : std::vector<long long>(); }
 std::vector<long long> AHuman::GetFGFootResidue() const { return m_pFGFootGroup ? m_pFGFootGroup->GetTravelResidue() : std::vector<long long>(); }
@@ -317,6 +362,7 @@ std::vector<long long> AHuman::GetBGFootResidue() const { return m_pBGFootGroup 
 
 void AHuman::AdoptPersistedUniqueID() {
 	Actor::AdoptPersistedUniqueID();
+	m_PersistedSharpAimRevertTimerAnchor.Apply(m_SharpAimRevertTimer);
 	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
 		if (!residue.empty()) {
 			if (group) {
@@ -340,6 +386,8 @@ void AHuman::AdoptPersistedUniqueID() {
 	}
 	ApplyPackedLimbPositions(m_PersistedLimbGroupPositions, {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup});
 	m_PersistedLimbGroupPositions.clear();
+	ApplyPackedLimbInertia(m_PersistedLimbGroupInertia, {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup});
+	m_PersistedLimbGroupInertia.clear();
 }
 
 int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
@@ -375,6 +423,11 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_PersistedLimbPathStates.push_back(pathState);
 	});
 	MatchProperty("LimbGroupPositions", { reader >> m_PersistedLimbGroupPositions; });
+	MatchProperty("LimbGroupInertia", { reader >> m_PersistedLimbGroupInertia; });
+	MatchProperty("SharpAimRevertTimerStart", {
+		reader >> m_PersistedSharpAimRevertTimerAnchor.startTicks;
+		m_PersistedSharpAimRevertTimerAnchor.pending = true;
+	});
 
 	MatchProperty("ThrowPrepTime", { reader >> m_ThrowPrepTime; });
 	MatchProperty("Head", { SetHead(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });

@@ -86,6 +86,18 @@ namespace RTE {
 		std::vector<long long> GetTravelResidue() const;
 		void SetTravelResidue(const std::vector<long long>& residue);
 
+		/// The per-atom offsets (attachable subgroup folds drift from the preset), in atom order, for full-game saves.
+		std::vector<Vector> GetAtomOffsets() const;
+		void SetAtomOffsets(const std::vector<Vector>& offsets);
+
+		/// The accumulated moment of inertia and its owner-mass anchor (history-dependent), for full-game saves.
+		float GetStoredMomentOfInertia() const { return m_MomentOfInertia; }
+		float GetStoredOwnerMass() const { return m_StoredOwnerMass; }
+		void SetStoredMomentOfInertia(float momentOfInertia, float storedOwnerMass) {
+			m_MomentOfInertia = momentOfInertia;
+			m_StoredOwnerMass = storedOwnerMass;
+		}
+
 		/// The raw last limb position, for full-game saves.
 		const Vector& GetRawLimbPos() const { return m_LimbPos; }
 		void SetRawLimbPos(const Vector& newPos) { m_LimbPos = newPos; }

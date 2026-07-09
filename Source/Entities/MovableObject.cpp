@@ -317,6 +317,7 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	MatchProperty("Mass", { reader >> m_Mass; });
 	MatchProperty("UniqueID", { reader >> m_PersistedUniqueID; });
 	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
+	MatchProperty("SpecialBehaviour_CheckTerrainIntersection", { reader >> m_CheckTerrIntersection; });
 	MatchProperty("RestTimerStart", {
 		reader >> m_PersistedRestTimerStart;
 		m_HasPersistedRestTimerStart = true;

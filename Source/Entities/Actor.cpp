@@ -375,6 +375,12 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("AimRange", { reader >> m_AimRange; });
 	MatchProperty("AimDistance", { reader >> m_AimDistance; });
 	MatchProperty("SharpAimDelay", { reader >> m_SharpAimDelay; });
+	MatchProperty("SpecialBehaviour_SharpAimProgress", { reader >> m_SharpAimProgress; });
+	MatchProperty("SpecialBehaviour_SharpAimMaxedOut", { reader >> m_SharpAimMaxedOut; });
+	MatchProperty("SharpAimTimerStart", {
+		reader >> m_PersistedSharpAimTimerAnchor.startTicks;
+		m_PersistedSharpAimTimerAnchor.pending = true;
+	});
 	MatchProperty("SightDistance", { reader >> m_SightDistance; });
 	MatchProperty("Perceptiveness", { reader >> m_Perceptiveness; });
 	MatchProperty("PainThreshold", { reader >> m_PainThreshold; });
@@ -1199,6 +1205,7 @@ void Actor::PreControllerUpdate() {
 
 void Actor::AdoptPersistedUniqueID() {
 	MOSRotating::AdoptPersistedUniqueID();
+	m_PersistedSharpAimTimerAnchor.Apply(m_SharpAimTimer);
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
 	}

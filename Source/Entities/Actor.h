@@ -270,6 +270,10 @@ namespace RTE {
 		/// @return Sharp aim progress between 0 - 1.0. 1.0 is fully aimed.
 		float GetSharpAimProgress() const { return m_SharpAimProgress; }
 
+		/// The sharp-aim cross-tick state (timer anchor + maxed-out latch), for full-game saves.
+		int64_t GetSharpAimTimerStart() const { return m_SharpAimTimer.GetStartSimTimeMS(); }
+		bool GetSharpAimMaxedOut() const { return m_SharpAimMaxedOut; }
+
 		/// Gets the approximate height of this Actor, standing up.
 		/// @return A float with the approximate height, in pixels.
 		float GetHeight() const { return m_CharHeight; }
@@ -971,6 +975,7 @@ namespace RTE {
 		Timer m_AimTmr;
 		// For timing the transition from regular aim to sharp aim
 		Timer m_SharpAimTimer;
+		PersistedTimerAnchor m_PersistedSharpAimTimerAnchor; //!< Saved sharp-aim timer anchor, applied on snapshot adopt.
 		// The time it takes to achieve complete full sharp aiming
 		int m_SharpAimDelay;
 		// The velocity
