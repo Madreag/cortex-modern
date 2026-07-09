@@ -234,6 +234,25 @@ void AtomGroup::SetTravelResidue(const std::vector<long long>& residue) {
 	}
 }
 
+std::vector<Vector> AtomGroup::GetAtomOffsets() const {
+	std::vector<Vector> offsets;
+	offsets.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		offsets.push_back(atom->GetOffset());
+	}
+	return offsets;
+}
+
+void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets) {
+	size_t index = 0;
+	for (Atom* atom: m_Atoms) {
+		if (index >= offsets.size()) {
+			break;
+		}
+		atom->SetOffset(offsets[index++]);
+	}
+}
+
 float AtomGroup::CalculateMaxRadius() const {
 	float sqrMagnitude = 0.0F;
 	float sqrLongest = 0.0F;
@@ -761,6 +780,9 @@ float AtomGroup::Travel(Vector& position, Vector& velocity, Matrix& rotation, fl
 			++ignoreCount;
 
 			if (ignoreCount >= maxIgnore) {
+				if (SceneMan::IsTrackedUID(m_OwnerMOSR->GetUniqueID())) {
+					SceneMan::TraceTerrainEvent("fdc", ignoreCount, maxIgnore, 0, 0, static_cast<int>(m_OwnerMOSR->GetUniqueID()));
+				}
 				m_OwnerMOSR->ForceDeepCheck();
 				break;
 			}

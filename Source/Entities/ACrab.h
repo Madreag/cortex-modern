@@ -101,6 +101,9 @@ namespace RTE {
 		/// Packed raw limb positions of the four foot groups, for full-game saves.
 		std::string GetLimbGroupPositions() const;
 
+		/// Packed moment-of-inertia pairs of the four foot groups, for full-game saves.
+		std::string GetLimbGroupInertia() const;
+
 		void AdoptPersistedUniqueID() override;
 
 		/// Sets the jetpack for this ACrab. Ownership IS Transferred!
@@ -321,6 +324,7 @@ namespace RTE {
 		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
 		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
+		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.

@@ -176,6 +176,14 @@ namespace RTE {
 		/// @param enable Whether to force a deep penetration check for this sim frame or not.. (default: true)
 		void ForceDeepCheck(const bool enable = true) { m_ForceDeepCheck = enable; }
 
+		/// Gets whether this MOSRotating checks for deep penetrations of the terrain.
+		/// @return Whether deep checking is enabled.
+		bool GetDeepCheck() const { return m_DeepCheck; }
+
+		/// Gets whether a deep check is forced for the next travel.
+		/// @return Whether a deep check is forced.
+		bool GetForceDeepCheck() const { return m_ForceDeepCheck; }
+
 		/// Calculates the collision response when another MO's Atom collides with
 		/// this MO's physical representation. The effects will be applied
 		/// directly to this MO, and also represented in the passed in HitData.
@@ -540,6 +548,10 @@ namespace RTE {
 		// The group of Atom:s that will be the physical reperesentation of this MOSRotating.
 		AtomGroup* m_pAtomGroup;
 		std::vector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
+		std::vector<Vector> m_PersistedAtomGroupOffsets; //!< Saved per-atom offsets, applied on snapshot adopt.
+		float m_PersistedGroupMomentOfInertia; //!< Saved group moment of inertia, applied on snapshot adopt.
+		float m_PersistedGroupStoredMass; //!< Saved owner-mass anchor for the inertia recompute gate.
+		bool m_HasPersistedGroupInertia; //!< Whether a saved moment of inertia is pending application.
 		// The group of Atom:s that will serve as a means to detect deep terrain penetration.
 		AtomGroup* m_pDeepGroup;
 		// Whether or not to check for deep penetrations.

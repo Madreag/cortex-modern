@@ -53,6 +53,9 @@ void MOSRotating::Clear() {
 	m_DeepCheck = false;
 	m_ForceDeepCheck = false;
 	m_DeepHardness = 0;
+	m_PersistedGroupMomentOfInertia = 0.0F;
+	m_PersistedGroupStoredMass = 0.0F;
+	m_HasPersistedGroupInertia = false;
 	m_TravelImpulse.Reset();
 	m_SpriteCenter.Reset();
 	m_OrientToVel = 0;
@@ -215,6 +218,10 @@ int MOSRotating::Create(const MOSRotating& reference) {
 		}
 	}
 	m_PersistedAtomGroupResidue = reference.m_PersistedAtomGroupResidue;
+	m_PersistedAtomGroupOffsets = reference.m_PersistedAtomGroupOffsets;
+	m_PersistedGroupMomentOfInertia = reference.m_PersistedGroupMomentOfInertia;
+	m_PersistedGroupStoredMass = reference.m_PersistedGroupStoredMass;
+	m_HasPersistedGroupInertia = reference.m_HasPersistedGroupInertia;
 	m_TravelImpulse = reference.m_TravelImpulse;
 
 	m_DeepCheck = reference.m_DeepCheck;
@@ -284,6 +291,16 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		reader >> residueValue;
 		m_PersistedAtomGroupResidue.push_back(residueValue);
 	});
+	MatchProperty("AtomGroupOffset", {
+		Vector offsetValue;
+		reader >> offsetValue;
+		m_PersistedAtomGroupOffsets.push_back(offsetValue);
+	});
+	MatchProperty("AtomGroupMomentOfInertia", {
+		reader >> m_PersistedGroupMomentOfInertia;
+		m_HasPersistedGroupInertia = true;
+	});
+	MatchProperty("AtomGroupStoredOwnerMass", { reader >> m_PersistedGroupStoredMass; });
 	MatchProperty("SpecialBehaviour_TravelImpulse", {
 		Vector travelImpulse;
 		reader >> travelImpulse;
@@ -296,6 +313,7 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		              reader >> *m_pDeepGroup;
 	              });
 	MatchProperty("DeepCheck", { reader >> m_DeepCheck; });
+	MatchProperty("SpecialBehaviour_ForceDeepCheck", { reader >> m_ForceDeepCheck; });
 	MatchProperty("OrientToVel", { reader >> m_OrientToVel; });
 	MatchProperty("SpecialBehaviour_ClearAllAttachables", {
 		// This special property is used to make Attachables work with our limited serialization system, when saving the game. Note that we discard the property value here, because all that matters is whether or not we have the property.
@@ -1433,6 +1451,9 @@ void MOSRotating::PostTravel() {
 	// Check for deep penetration of the terrain and
 	// generate splash of MOPixels accordingly.
 	// TODO: don't hardcode the MOPixel limits!
+	if (SceneMan::IsTrackedUID(GetUniqueID())) {
+		SceneMan::TraceTerrainEvent("dpc", m_ForceDeepCheck ? 1 : 0, m_DeepCheck ? 1 : 0, (m_pDeepGroup && m_pDeepGroup->InTerrain()) ? 1 : 0, m_CheckTerrIntersection ? 1 : 0, static_cast<int>(GetUniqueID()));
+	}
 	if (g_MovableMan.IsMOSubtractionEnabled() && (m_ForceDeepCheck || m_DeepCheck))
 		DeepCheck(true, 8, 50);
 
@@ -1452,6 +1473,18 @@ void MOSRotating::AdoptPersistedUniqueID() {
 			m_pAtomGroup->SetTravelResidue(m_PersistedAtomGroupResidue);
 		}
 		m_PersistedAtomGroupResidue.clear();
+	}
+	if (!m_PersistedAtomGroupOffsets.empty()) {
+		if (m_pAtomGroup) {
+			m_pAtomGroup->SetAtomOffsets(m_PersistedAtomGroupOffsets);
+		}
+		m_PersistedAtomGroupOffsets.clear();
+	}
+	if (m_HasPersistedGroupInertia) {
+		if (m_pAtomGroup) {
+			m_pAtomGroup->SetStoredMomentOfInertia(m_PersistedGroupMomentOfInertia, m_PersistedGroupStoredMass);
+		}
+		m_HasPersistedGroupInertia = false;
 	}
 	for (Attachable* attachable: m_Attachables) {
 		attachable->AdoptPersistedUniqueID();

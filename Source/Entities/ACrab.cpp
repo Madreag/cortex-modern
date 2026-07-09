@@ -54,6 +54,7 @@ void ACrab::Clear() {
 	m_PersistedLimbPathStates.clear();
 	m_PersistedLimbPathStatesFromFile = false;
 	m_PersistedLimbGroupPositions.clear();
+	m_PersistedLimbGroupInertia.clear();
 	m_pRBGFootGroup = 0;
 	m_BackupRBGFootGroup = nullptr;
 	m_StrideSound = nullptr;
@@ -219,9 +220,11 @@ int ACrab::Create(const ACrab& reference) {
 	if (reference.HasEverBeenAddedToMovableMan()) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
+		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
 	} else {
 		m_PersistedLimbPathStates = reference.m_PersistedLimbPathStates;
 		m_PersistedLimbGroupPositions = reference.m_PersistedLimbGroupPositions;
+		m_PersistedLimbGroupInertia = reference.m_PersistedLimbGroupInertia;
 	}
 	m_PersistedLimbPathStatesFromFile = false;
 
@@ -287,6 +290,48 @@ static void ApplyPackedLimbPositions(const std::string& packed, std::initializer
 	}
 }
 
+std::string ACrab::GetLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) {
+		return m_PersistedLimbGroupInertia;
+	}
+	char buffer[256];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	for (const AtomGroup* group: {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup}) {
+		appendValue(group ? group->GetStoredMomentOfInertia() : 0.0F);
+		appendValue(group ? group->GetStoredOwnerMass() : 0.0F);
+	}
+	return std::string(buffer, cursor);
+}
+
+static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
+	if (packed.empty()) {
+		return;
+	}
+	const char* cursor = packed.data();
+	const char* end = packed.data() + packed.size();
+	const auto readValue = [&cursor, end](float& value) {
+		while (cursor != end && *cursor == ' ') {
+			++cursor;
+		}
+		cursor = std::from_chars(cursor, end, value).ptr;
+	};
+	for (AtomGroup* group: groups) {
+		float momentOfInertia = 0.0F;
+		float storedMass = 0.0F;
+		readValue(momentOfInertia);
+		readValue(storedMass);
+		if (group) {
+			group->SetStoredMomentOfInertia(momentOfInertia, storedMass);
+		}
+	}
+}
+
 std::vector<std::string> ACrab::GetLimbPathStates() const {
 	if (!m_PersistedLimbPathStates.empty()) {
 		return m_PersistedLimbPathStates;
@@ -335,6 +380,8 @@ void ACrab::AdoptPersistedUniqueID() {
 	}
 	ApplyPackedLimbPositions(m_PersistedLimbGroupPositions, {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup});
 	m_PersistedLimbGroupPositions.clear();
+	ApplyPackedLimbInertia(m_PersistedLimbGroupInertia, {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup});
+	m_PersistedLimbGroupInertia.clear();
 }
 
 int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
@@ -370,6 +417,7 @@ int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_PersistedLimbPathStates.push_back(pathState);
 	});
 	MatchProperty("LimbGroupPositions", { reader >> m_PersistedLimbGroupPositions; });
+	MatchProperty("LimbGroupInertia", { reader >> m_PersistedLimbGroupInertia; });
 
 	MatchProperty("Turret", { SetTurret(dynamic_cast<Turret*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchProperty("Jetpack", { SetJetpack(dynamic_cast<AEJetpack*>(g_PresetMan.ReadReflectedPreset(reader))); });

@@ -90,6 +90,23 @@ int MOPixel::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_Atom->SetOwner(this);
 	});
 	MatchProperty("Color", { reader >> m_Color; });
+	MatchProperty("SpecialBehaviour_AtomMaterialIndex", {
+		int materialIndex = 0;
+		reader >> materialIndex;
+		if (!m_Atom) {
+			m_Atom = new Atom;
+			m_Atom->SetOwner(this);
+		}
+		m_Atom->SetMaterial(g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex)));
+		m_Atom->SetTrailColor(m_Color);
+	});
+	MatchProperty("SpecialBehaviour_AtomTrailLength", {
+		int trailLength = 0;
+		reader >> trailLength;
+		if (m_Atom) {
+			m_Atom->SetTrailLength(trailLength);
+		}
+	});
 	MatchProperty("MinLethalRange", { reader >> m_MinLethalRange; });
 	MatchProperty("MaxLethalRange", { reader >> m_MaxLethalRange; });
 	MatchProperty("Staininess", { reader >> m_Staininess; });

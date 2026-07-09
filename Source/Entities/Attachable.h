@@ -313,6 +313,10 @@ namespace RTE {
 		/// @param collidesWithTerrainWhileAttached Whether this attachable currently has terrain collisions enabled and it's atoms are present in the parent AtomGroup.
 		void SetCollidesWithTerrainWhileAttached(bool collidesWithTerrainWhileAttached);
 
+		/// Gets the previous frame's rot angle offset against the root parent, for full-game saves.
+		/// @return The previous rot angle offset.
+		float GetPrevRotAngleOffset() const { return m_PrevRotAngleOffset; }
+
 		/// Gets whether this Attachable is currently able to collide with terrain, taking into account its terrain collision settings and those of its parent and so on.
 		/// @return Whether this Attachable is currently able to collide with terrain, taking into account its terrain collision settings and those of its parent and so on.
 		bool CanCollideWithTerrain() const;

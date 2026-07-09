@@ -140,6 +140,12 @@ namespace RTE {
 		/// Packed raw limb positions of the four limb groups, for full-game saves.
 		std::string GetLimbGroupPositions() const;
 
+		/// Packed moment-of-inertia pairs of the four limb groups, for full-game saves.
+		std::string GetLimbGroupInertia() const;
+
+		/// The sharp-aim revert timer anchor, for full-game saves.
+		int64_t GetSharpAimRevertTimerStart() const { return m_SharpAimRevertTimer.GetStartSimTimeMS(); }
+
 		void AdoptPersistedUniqueID() override;
 
 		/// Sets the head for this AHuman.
@@ -648,6 +654,7 @@ namespace RTE {
 		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved limb-path traversal state, applied on snapshot adopt.
 		bool m_PersistedLimbPathStatesFromFile = false; //!< Whether the stash holds file values rather than a copy capture.
 		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
+		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
 		// The sound of the actor taking a step (think robot servo)
 		SoundContainer* m_StrideSound;
 		// Jetpack booster.
@@ -690,6 +697,7 @@ namespace RTE {
 		// The duration it takes this AHuman to fully charge a throw.
 		long m_ThrowPrepTime;
 		Timer m_SharpAimRevertTimer; //!< For timing the transition from sharp aim back to regular aim.
+		PersistedTimerAnchor m_PersistedSharpAimRevertTimerAnchor; //!< Saved revert-timer anchor, applied on snapshot adopt.
 		float m_FGArmFlailScalar; //!< The rate at which this AHuman's FG Arm follows the the bodily rotation. Best to keep this at 0 so it doesn't complicate aiming.
 		float m_BGArmFlailScalar; //!< The rate at which this AHuman's BG Arm follows the the bodily rotation. Set to a negative value for a "counterweight" effect.
 		Timer m_EquipHUDTimer; //!< Timer for showing the name of any newly equipped Device.
