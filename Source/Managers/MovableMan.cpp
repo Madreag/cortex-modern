@@ -1892,6 +1892,23 @@ static void TraceTrackedPhase(const char* tag) {
 		const MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
 		if (mo) {
 			SceneMan::TraceTerrainEvent(tag, std::bit_cast<int32_t>(mo->GetPos().m_X), std::bit_cast<int32_t>(mo->GetPos().m_Y), std::bit_cast<int32_t>(mo->GetVel().m_X), std::bit_cast<int32_t>(mo->GetVel().m_Y), static_cast<int>(uid));
+			if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
+				char rotTag[6];
+				std::snprintf(rotTag, sizeof(rotTag), "%sr", tag);
+				SceneMan::TraceTerrainEvent(rotTag, std::bit_cast<int32_t>(sprite->GetRotAngle()), std::bit_cast<int32_t>(sprite->GetAngularVel()), 0, 0, static_cast<int>(uid));
+			}
+			if (const MOSRotating* mosr = dynamic_cast<const MOSRotating*>(mo)) {
+				if (const AtomGroup* group = const_cast<MOSRotating*>(mosr)->GetAtomGroup()) {
+					uint64_t offsetHash = 1469598103934665603ULL;
+					for (const Atom* atom: group->GetAtomList()) {
+						offsetHash = (offsetHash ^ static_cast<uint32_t>(std::bit_cast<int32_t>(atom->GetOffset().m_X))) * 1099511628211ULL;
+						offsetHash = (offsetHash ^ static_cast<uint32_t>(std::bit_cast<int32_t>(atom->GetOffset().m_Y))) * 1099511628211ULL;
+					}
+					char groupTag[6];
+					std::snprintf(groupTag, sizeof(groupTag), "%sg", tag);
+					SceneMan::TraceTerrainEvent(groupTag, static_cast<int32_t>(offsetHash & 0xFFFFFFFFu), static_cast<int32_t>(offsetHash >> 32), group->GetAtomCount(), 0, static_cast<int>(uid));
+				}
+			}
 		}
 	}
 }

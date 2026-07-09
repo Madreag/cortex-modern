@@ -510,6 +510,9 @@ bool Atom::SetupPos(Vector startPos) {
 		m_OwnerMO->SetHitWhatTerrMaterial(m_TerrainMatHit);
 		if (m_OwnerMO->IntersectionWarning()) {
 			m_TerrainHitsDisabled = true;
+			if (SceneMan::IsTrackedUID(m_OwnerMO->GetUniqueID())) {
+				SceneMan::TraceTerrainEvent("aign", m_IntPos[X], m_IntPos[Y], m_TerrainMatHit, 0, static_cast<int>(m_OwnerMO->GetUniqueID()));
+			}
 		}
 	} else {
 		m_TerrainHitsDisabled = false;

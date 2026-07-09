@@ -908,6 +908,7 @@ MOPixel* SceneMan::DislodgePixel(int posX, int posY) {
 	Atom* pixelAtom = new Atom(Vector(), spawnMat->GetIndex(), nullptr, spawnColor, 2);
 	MOPixel* pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(static_cast<float>(posX), static_cast<float>(posY)), Vector(), pixelAtom, 0);
 	pixelMO->SetToHitMOs(spawnMat->GetIndex() == c_GoldMaterialID);
+	TraceTerrainEvent("disp", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 	g_MovableMan.AddParticle(pixelMO);
 
 	m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, ColorKeys::g_MaskColor);
