@@ -109,15 +109,21 @@ namespace RTE {
 		if (!EnsureSocket(false, error)) {
 			return false;
 		}
-		m_BeaconPayload.clear();
-		AppendU32(m_BeaconPayload, c_Magic);
-		AppendU16(m_BeaconPayload, c_Version);
-		AppendU16(m_BeaconPayload, gamePort);
-		m_BeaconPayload.push_back(playerCount);
-		m_BeaconPayload.push_back(maxPlayers);
-		AppendString(m_BeaconPayload, hostName);
-		AppendString(m_BeaconPayload, activity);
-		AppendString(m_BeaconPayload, mode);
+		std::vector<uint8_t> payload;
+		AppendU32(payload, c_Magic);
+		AppendU16(payload, c_Version);
+		AppendU16(payload, gamePort);
+		payload.push_back(playerCount);
+		payload.push_back(maxPlayers);
+		AppendString(payload, hostName);
+		AppendString(payload, activity);
+		AppendString(payload, mode);
+		// A hosting lobby calls this every menu frame; keep the send schedule unless the payload
+		// actually changed, or the beacon would broadcast every frame instead of once per interval.
+		if (m_Beaconing && payload == m_BeaconPayload) {
+			return true;
+		}
+		m_BeaconPayload = std::move(payload);
 		m_Beaconing = true;
 		m_NextBeaconMs = 0;
 		return true;

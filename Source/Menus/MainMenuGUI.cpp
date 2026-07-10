@@ -915,7 +915,8 @@ void MainMenuGUI::RefreshLanGamesList() {
 	if (!m_LanBrowser.IsBrowsing() && !m_LanBrowser.StartBrowser(&ignored)) {
 		return;
 	}
-	m_LanBrowserNowMs += 16;
+	// A real monotonic clock, so host expiry holds at any frame rate and while minimized.
+	m_LanBrowserNowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 	m_LanBrowser.Tick(m_LanBrowserNowMs);
 	std::vector<NetLanHostInfo> hosts = m_LanBrowser.GetHosts(m_LanBrowserNowMs);
 	const auto describe = [](const NetLanHostInfo& host) {
