@@ -958,6 +958,16 @@ namespace RTE {
 		/// Gets the current terrain event context UID.
 		static long GetTerrainEventContext();
 
+		/// Sets the terrain event context for a scope and restores the prior value on exit, so a
+		/// nested update (an emitter inside a firearm's update) doesn't leak its UID onto later events.
+		struct TerrainEventContextScope {
+			long m_Prior;
+			explicit TerrainEventContextScope(long uid) : m_Prior(GetTerrainEventContext()) { SetTerrainEventContext(uid); }
+			~TerrainEventContextScope() { SetTerrainEventContext(m_Prior); }
+			TerrainEventContextScope(const TerrainEventContextScope&) = delete;
+			TerrainEventContextScope& operator=(const TerrainEventContextScope&) = delete;
+		};
+
 		/// Whether the UID is in the CC_TRACK_UID list (empty list tracks nothing).
 		static bool IsTrackedUID(long uid);
 
