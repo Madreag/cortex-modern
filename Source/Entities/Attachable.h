@@ -321,6 +321,9 @@ namespace RTE {
 		/// @return Whether this Attachable is currently able to collide with terrain, taking into account its terrain collision settings and those of its parent and so on.
 		bool CanCollideWithTerrain() const;
 
+		/// Adopts saved identity, then re-keys the atom subgroup to the restored UniqueID so the next save stays consistent.
+		void AdoptPersistedUniqueID() override;
+
 		/// Gets whether this Attachable currently ignores collisions with single-atom particles.
 		/// @return >Whether this attachable ignores collisions with single-atom particles.
 		bool GetIgnoresParticlesWhileAttached() const { return m_IgnoresParticlesWhileAttached; }

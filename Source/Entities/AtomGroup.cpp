@@ -9,6 +9,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <bit>
+#include <iostream>
 #include <unordered_map>
 
 using namespace RTE;
@@ -373,6 +374,24 @@ bool AtomGroup::RemoveAtoms(long removeID) {
 	}
 
 	return removedAny;
+}
+
+bool AtomGroup::RenameSubgroup(long oldID, long newID) {
+	auto subGroup = m_SubGroups.find(oldID);
+	if (oldID == newID || subGroup == m_SubGroups.end()) {
+		return false;
+	}
+	if (m_SubGroups.count(newID) != 0) {
+		std::cout << "[restore] subgroup rename collision " << oldID << " -> " << newID << std::endl;
+		return false;
+	}
+	std::vector<Atom*> atoms = std::move(subGroup->second);
+	for (Atom* atom: atoms) {
+		atom->SetSubID(newID);
+	}
+	m_SubGroups.erase(oldID);
+	m_SubGroups.emplace(newID, std::move(atoms));
+	return true;
 }
 
 bool AtomGroup::UpdateSubAtoms(long subgroupID, const Vector& newOffset, const Matrix& newOffsetRotation) {

@@ -513,7 +513,10 @@ void MOSRotating::AddWoundExt(AEmitter* woundToAdd, const Vector& parentOffsetTo
 				return;
 			}
 		}
-		woundToAdd->SetCollidesWithTerrainWhileAttached(false);
+		// Wounds normalize to no terrain collision; an exact restore keeps the saved flag.
+		if (!g_MovableMan.IsRestoringSnapshot()) {
+			woundToAdd->SetCollidesWithTerrainWhileAttached(false);
+		}
 		woundToAdd->SetParentOffset(parentOffsetToSet);
 		woundToAdd->SetParent(this);
 		woundToAdd->SetIsWound(true);
@@ -1537,6 +1540,12 @@ void MOSRotating::CollectSubgroupIDTranslation(std::unordered_map<long, long>& s
 			savedToLiveSubID[pendingID] = attachable->GetAtomSubgroupID();
 		}
 		attachable->CollectSubgroupIDTranslation(savedToLiveSubID);
+	}
+	for (const AEmitter* wound: m_Wounds) {
+		if (const long pendingID = wound->GetPendingPersistedUniqueID(); pendingID > 0) {
+			savedToLiveSubID[pendingID] = wound->GetAtomSubgroupID();
+		}
+		wound->CollectSubgroupIDTranslation(savedToLiveSubID);
 	}
 }
 
