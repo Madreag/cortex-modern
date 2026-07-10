@@ -463,6 +463,9 @@
     <ClInclude Include="Source\Network\NetActorOwnership.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetAdmissionSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetAuthCrypto.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -782,6 +785,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetAdmissionSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetAuthCrypto.cpp">
