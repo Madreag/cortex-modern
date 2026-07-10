@@ -209,6 +209,11 @@ void HeldDevice::AdoptPersistedUniqueID() {
 	m_PersistedActivationTimerAnchor.Apply(m_ActivationTimer);
 }
 
+void HeldDevice::DiscardPersistedSnapshotState() {
+	Attachable::DiscardPersistedSnapshotState();
+	m_PersistedActivationTimerAnchor.pending = false;
+}
+
 int HeldDevice::Save(Writer& writer) const {
 	Attachable::Save(writer);
 	/*

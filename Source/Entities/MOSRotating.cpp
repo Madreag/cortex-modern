@@ -221,6 +221,7 @@ int MOSRotating::Create(const MOSRotating& reference) {
 	}
 	m_PersistedAtomGroupResidue = reference.m_PersistedAtomGroupResidue;
 	m_PersistedAtomGroupOffsets = reference.m_PersistedAtomGroupOffsets;
+	m_PersistedAtomGroupSubIDs = reference.m_PersistedAtomGroupSubIDs;
 	m_PersistedGroupMomentOfInertia = reference.m_PersistedGroupMomentOfInertia;
 	m_PersistedGroupStoredMass = reference.m_PersistedGroupStoredMass;
 	m_HasPersistedGroupInertia = reference.m_HasPersistedGroupInertia;
@@ -235,6 +236,7 @@ int MOSRotating::Create(const MOSRotating& reference) {
 	m_TravelImpulse = reference.m_TravelImpulse;
 
 	m_DeepCheck = reference.m_DeepCheck;
+	m_ForceDeepCheck = reference.m_ForceDeepCheck;
 	m_SpriteCenter = reference.m_SpriteCenter;
 	m_OrientToVel = reference.m_OrientToVel;
 
@@ -305,6 +307,11 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		Vector offsetValue;
 		reader >> offsetValue;
 		m_PersistedAtomGroupOffsets.push_back(offsetValue);
+	});
+	MatchProperty("AtomGroupSubID", {
+		long long subIDValue = 0;
+		reader >> subIDValue;
+		m_PersistedAtomGroupSubIDs.push_back(subIDValue);
 	});
 	MatchProperty("AtomGroupMomentOfInertia", {
 		reader >> m_PersistedGroupMomentOfInertia;
@@ -1481,19 +1488,31 @@ void MOSRotating::PostTravel() {
 }
 
 void MOSRotating::AdoptPersistedUniqueID() {
-	MovableObject::AdoptPersistedUniqueID();
+	MOSprite::AdoptPersistedUniqueID();
+	if (!m_PersistedAtomGroupSubIDs.empty()) {
+		// Saved subgroup IDs are the ORIGINAL attachable UniqueIDs; the reloaded group is keyed
+		// by provisional ones. Bridge through each attachable's still-pending persisted UID.
+		std::unordered_map<long, long> savedToLiveSubID;
+		savedToLiveSubID[0] = 0;
+		CollectSubgroupIDTranslation(savedToLiveSubID);
+		for (long long& subID: m_PersistedAtomGroupSubIDs) {
+			auto translation = savedToLiveSubID.find(static_cast<long>(subID));
+			subID = translation != savedToLiveSubID.end() ? translation->second : -1;
+		}
+	}
 	if (!m_PersistedAtomGroupResidue.empty()) {
 		if (m_pAtomGroup) {
-			m_pAtomGroup->SetTravelResidue(m_PersistedAtomGroupResidue);
+			m_pAtomGroup->SetTravelResidue(m_PersistedAtomGroupResidue, m_PersistedAtomGroupSubIDs);
 		}
 		m_PersistedAtomGroupResidue.clear();
 	}
 	if (!m_PersistedAtomGroupOffsets.empty()) {
 		if (m_pAtomGroup) {
-			m_pAtomGroup->SetAtomOffsets(m_PersistedAtomGroupOffsets);
+			m_pAtomGroup->SetAtomOffsets(m_PersistedAtomGroupOffsets, m_PersistedAtomGroupSubIDs);
 		}
 		m_PersistedAtomGroupOffsets.clear();
 	}
+	m_PersistedAtomGroupSubIDs.clear();
 	if (m_HasPersistedGroupInertia) {
 		if (m_pAtomGroup) {
 			m_pAtomGroup->SetStoredMomentOfInertia(m_PersistedGroupMomentOfInertia, m_PersistedGroupStoredMass);
@@ -1509,6 +1528,30 @@ void MOSRotating::AdoptPersistedUniqueID() {
 	}
 	for (AEmitter* wound: m_Wounds) {
 		wound->AdoptPersistedUniqueID();
+	}
+}
+
+void MOSRotating::CollectSubgroupIDTranslation(std::unordered_map<long, long>& savedToLiveSubID) const {
+	for (const Attachable* attachable: m_Attachables) {
+		if (const long pendingID = attachable->GetPendingPersistedUniqueID(); pendingID > 0) {
+			savedToLiveSubID[pendingID] = attachable->GetAtomSubgroupID();
+		}
+		attachable->CollectSubgroupIDTranslation(savedToLiveSubID);
+	}
+}
+
+void MOSRotating::DiscardPersistedSnapshotState() {
+	MOSprite::DiscardPersistedSnapshotState();
+	m_PersistedAtomGroupResidue.clear();
+	m_PersistedAtomGroupOffsets.clear();
+	m_PersistedAtomGroupSubIDs.clear();
+	m_HasPersistedGroupInertia = false;
+	m_HasPersistedAttachableAndWoundMass = false;
+	for (Attachable* attachable: m_Attachables) {
+		attachable->DiscardPersistedSnapshotState();
+	}
+	for (AEmitter* wound: m_Wounds) {
+		wound->DiscardPersistedSnapshotState();
 	}
 }
 

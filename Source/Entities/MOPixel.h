@@ -84,7 +84,11 @@ namespace RTE {
 		/// The live, spawn-randomized lethal range, for full-game saves.
 		float GetLethalRange() const { return m_LethalRange; }
 
+		/// The lethal-sharpness threshold (fixed at creation; Create() recomputes it from current sharpness), for full-game saves.
+		float GetLethalSharpness() const { return m_LethalSharpness; }
+
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
 		void SnapRenderPoseToSim() override;
@@ -186,6 +190,8 @@ namespace RTE {
 		bool m_HasPersistedAtomResidue = false;
 		float m_PersistedLethalRange = 0.0F; //!< Saved live lethal range, applied on snapshot adopt.
 		bool m_HasPersistedLethalRange = false;
+		float m_PersistedLethalSharpness = 0.0F; //!< Saved lethal-sharpness threshold, applied on snapshot adopt.
+		bool m_HasPersistedLethalSharpness = false;
 		float m_MinLethalRange; //!< Lower bound multiplier for setting LethalRange at random. By default, 1.0 equals one screen.
 		float m_MaxLethalRange; //!< Upper bound multiplier for setting LethalRange at random. By default, 1.0 equals one screen.
 		float m_LethalSharpness; //!< When Sharpness has decreased below this threshold the MO becomes m_HitsMOs = false. Default is Sharpness * 0.5.

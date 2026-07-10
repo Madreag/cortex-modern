@@ -329,8 +329,11 @@ namespace RTE {
 		bool GetChangedDir() const { return m_ChangedDir; }
 		void SetChangedDir(bool changedDir) { m_ChangedDir = changedDir; }
 
-		/// Packs the carried travel residue (fractional error, direction validity, terrain phase-out) into one saveable value.
-		long long PackTravelResidue() const { return static_cast<long long>(m_PrevError) * 4 + (m_TerrainHitsDisabled ? 2 : 0) + (m_ChangedDir ? 1 : 0); }
+		/// Packs the carried travel residue (fractional error, direction validity, terrain phase-out, penetration streak) into one saveable value.
+		long long PackTravelResidue() const {
+			long long value = static_cast<long long>(m_PrevError) * 256 + (m_NumPenetrations < 255 ? m_NumPenetrations : 255);
+			return value * 4 + (m_TerrainHitsDisabled ? 2 : 0) + (m_ChangedDir ? 1 : 0);
+		}
 
 		/// Applies a packed travel-residue value.
 		void ApplyTravelResidue(long long value) {
@@ -338,7 +341,10 @@ namespace RTE {
 			const long long terrainBit = value & 2LL;
 			m_ChangedDir = dirBit != 0;
 			m_TerrainHitsDisabled = terrainBit != 0;
-			m_PrevError = static_cast<int>((value - terrainBit - dirBit) / 4);
+			value = (value - terrainBit - dirBit) / 4;
+			const long long penetrations = value & 255LL;
+			m_NumPenetrations = static_cast<int>(penetrations);
+			m_PrevError = static_cast<int>((value - penetrations) / 256);
 		}
 
 		/// Uses the current state of the owning MovableObject to determine if there are any collisions in the path of its travel during this frame, and if so, apply all collision responses to the MO.

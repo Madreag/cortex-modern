@@ -140,6 +140,8 @@ int Atom::Create(const Atom& reference) {
 	m_TrailLengthVariation = reference.m_TrailLengthVariation;
 	m_ChangedDir = reference.m_ChangedDir;
 	m_PrevError = reference.m_PrevError;
+	m_TerrainHitsDisabled = reference.m_TerrainHitsDisabled;
+	m_NumPenetrations = reference.m_NumPenetrations;
 
 	// These need to be set manually by the new owner.
 	m_OwnerMO = nullptr;

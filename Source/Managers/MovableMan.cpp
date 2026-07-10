@@ -1282,18 +1282,22 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 		if (m_RestoringSnapshot) {
 			// A snapshot resident enters exactly as captured.
 			actorToAdd->AdoptPersistedUniqueID();
-		} else if (actorToAdd->IsTooFast()) {
-			actorToAdd->SetToDelete(true);
 		} else {
-			if (!dynamic_cast<ADoor*>(actorToAdd)) {
-				actorToAdd->MoveOutOfTerrain(g_MaterialGrass);
+			// A normal add spawn-normalizes; drop pending snapshot stashes so later saves read live state.
+			actorToAdd->DiscardPersistedSnapshotState();
+			if (actorToAdd->IsTooFast()) {
+				actorToAdd->SetToDelete(true);
+			} else {
+				if (!dynamic_cast<ADoor*>(actorToAdd)) {
+					actorToAdd->MoveOutOfTerrain(g_MaterialGrass);
+				}
+				if (actorToAdd->IsStatus(Actor::INACTIVE)) {
+					actorToAdd->SetStatus(Actor::STABLE);
+				}
+				actorToAdd->NotResting();
+				actorToAdd->NewFrame();
+				actorToAdd->SetAge(0);
 			}
-			if (actorToAdd->IsStatus(Actor::INACTIVE)) {
-				actorToAdd->SetStatus(Actor::STABLE);
-			}
-			actorToAdd->NotResting();
-			actorToAdd->NewFrame();
-			actorToAdd->SetAge(0);
 		}
 
 		{
@@ -1323,15 +1327,18 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 
 		if (m_RestoringSnapshot) {
 			itemToAdd->AdoptPersistedUniqueID();
-		} else if (itemToAdd->IsTooFast()) {
-			itemToAdd->SetToDelete(true);
 		} else {
-			if (!itemToAdd->IsSetToDelete()) {
-				itemToAdd->MoveOutOfTerrain(g_MaterialGrass);
+			itemToAdd->DiscardPersistedSnapshotState();
+			if (itemToAdd->IsTooFast()) {
+				itemToAdd->SetToDelete(true);
+			} else {
+				if (!itemToAdd->IsSetToDelete()) {
+					itemToAdd->MoveOutOfTerrain(g_MaterialGrass);
+				}
+				itemToAdd->NotResting();
+				itemToAdd->NewFrame();
+				itemToAdd->SetAge(0);
 			}
-			itemToAdd->NotResting();
-			itemToAdd->NewFrame();
-			itemToAdd->SetAge(0);
 		}
 
 		std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
@@ -1352,13 +1359,16 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 
 		if (m_RestoringSnapshot) {
 			particleToAdd->AdoptPersistedUniqueID();
-		} else if (particleToAdd->IsTooFast()) {
-			particleToAdd->SetToDelete(true);
 		} else {
-			// TODO consider moving particles out of grass. It's old code that was removed because it's slow to do this for every particle.
-			particleToAdd->NotResting();
-			particleToAdd->NewFrame();
-			particleToAdd->SetAge(0);
+			particleToAdd->DiscardPersistedSnapshotState();
+			if (particleToAdd->IsTooFast()) {
+				particleToAdd->SetToDelete(true);
+			} else {
+				// TODO consider moving particles out of grass. It's old code that was removed because it's slow to do this for every particle.
+				particleToAdd->NotResting();
+				particleToAdd->NewFrame();
+				particleToAdd->SetAge(0);
+			}
 		}
 		if (particleToAdd->IsDevice()) {
 			std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
@@ -1996,10 +2006,15 @@ void MovableMan::Update() {
 	std::sort(m_Items.begin(), m_Items.end(), MOUniqueIDLess());
 	std::sort(m_Particles.begin(), m_Particles.end(), MOUniqueIDLess());
 
+	// A stale travel context would mislabel this tick's pre-travel trace rows.
+	SceneMan::SetTerrainEventContext(0);
+
 	TraceTrackedPhase("phA");
 
 	// Travel MOs
 	Travel();
+
+	SceneMan::SetTerrainEventContext(0);
 
 	TraceTrackedPhase("phB");
 

@@ -79,6 +79,11 @@ void MOSParticle::AdoptPersistedUniqueID() {
 	}
 }
 
+void MOSParticle::DiscardPersistedSnapshotState() {
+	MOSprite::DiscardPersistedSnapshotState();
+	m_HasPersistedAtomResidue = false;
+}
+
 int MOSParticle::Save(Writer& writer) const {
 	MOSprite::Save(writer);
 

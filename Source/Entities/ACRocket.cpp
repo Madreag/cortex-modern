@@ -12,6 +12,8 @@
 #include "GUI.h"
 #include "AllegroBitmap.h"
 
+#include <charconv>
+
 using namespace RTE;
 
 ConcreteClassInfo(ACRocket, ACraft, 10);
@@ -43,6 +45,11 @@ void ACRocket::Clear() {
 		m_Paths[RIGHT][i].Terminate();
 		m_Paths[LEFT][i].Terminate();
 	}
+	m_PersistedRFootResidue.clear();
+	m_PersistedLFootResidue.clear();
+	m_PersistedLimbPathStates.clear();
+	m_PersistedLimbGroupPositions.clear();
+	m_PersistedLimbGroupInertia.clear();
 	m_MaxGimbalAngle = 0;
 }
 
@@ -141,9 +148,142 @@ int ACRocket::Create(const ACRocket& reference) {
 		m_Paths[LEFT][i].Create(reference.m_Paths[LEFT][i]);
 	}
 
+	m_PersistedRFootResidue = reference.m_PersistedRFootResidue;
+	m_PersistedLFootResidue = reference.m_PersistedLFootResidue;
+	// The LimbPath copy terminates traversal, so a save clone of a WORLD craft carries the live
+	// state in the stash; preset copies just pass any stash along.
+	if (reference.HasEverBeenAddedToMovableMan()) {
+		m_PersistedLimbPathStates = reference.GetLimbPathStates();
+		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
+		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
+	} else {
+		m_PersistedLimbPathStates = reference.m_PersistedLimbPathStates;
+		m_PersistedLimbGroupPositions = reference.m_PersistedLimbGroupPositions;
+		m_PersistedLimbGroupInertia = reference.m_PersistedLimbGroupInertia;
+	}
+
 	m_MaxGimbalAngle = reference.m_MaxGimbalAngle;
 
 	return 0;
+}
+
+std::vector<long long> ACRocket::GetRFootResidue() const { return m_pRFootGroup ? m_pRFootGroup->GetTravelResidue() : std::vector<long long>(); }
+std::vector<long long> ACRocket::GetLFootResidue() const { return m_pLFootGroup ? m_pLFootGroup->GetTravelResidue() : std::vector<long long>(); }
+
+std::string ACRocket::GetLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) {
+		return m_PersistedLimbGroupPositions;
+	}
+	char buffer[128];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	for (const AtomGroup* group: {m_pRFootGroup, m_pLFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		appendValue(limbPos.m_X);
+		appendValue(limbPos.m_Y);
+	}
+	return std::string(buffer, cursor);
+}
+
+std::string ACRocket::GetLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) {
+		return m_PersistedLimbGroupInertia;
+	}
+	char buffer[128];
+	char* cursor = buffer;
+	const auto appendValue = [&cursor, &buffer](float value) {
+		if (cursor != buffer) {
+			*cursor++ = ' ';
+		}
+		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+	};
+	for (const AtomGroup* group: {m_pRFootGroup, m_pLFootGroup}) {
+		appendValue(group ? group->GetStoredMomentOfInertia() : 0.0F);
+		appendValue(group ? group->GetStoredOwnerMass() : 0.0F);
+	}
+	return std::string(buffer, cursor);
+}
+
+std::vector<std::string> ACRocket::GetLimbPathStates() const {
+	if (!m_PersistedLimbPathStates.empty()) {
+		return m_PersistedLimbPathStates;
+	}
+	std::vector<std::string> states;
+	states.reserve(2 * GearStateCount);
+	for (int side = 0; side < 2; ++side) {
+		for (int gearState = 0; gearState < GearStateCount; ++gearState) {
+			states.push_back(m_Paths[side][gearState].PackTraversalState());
+		}
+	}
+	return states;
+}
+
+static void ApplyPackedLimbState(const std::string& packed, std::initializer_list<AtomGroup*> groups, bool inertia) {
+	if (packed.empty()) {
+		return;
+	}
+	const char* cursor = packed.data();
+	const char* end = packed.data() + packed.size();
+	const auto readValue = [&cursor, end](float& value) {
+		while (cursor != end && *cursor == ' ') {
+			++cursor;
+		}
+		cursor = std::from_chars(cursor, end, value).ptr;
+	};
+	for (AtomGroup* group: groups) {
+		float first = 0.0F;
+		float second = 0.0F;
+		readValue(first);
+		readValue(second);
+		if (group) {
+			if (inertia) {
+				group->SetStoredMomentOfInertia(first, second);
+			} else {
+				group->SetRawLimbPos(Vector(first, second));
+			}
+		}
+	}
+}
+
+void ACRocket::AdoptPersistedUniqueID() {
+	ACraft::AdoptPersistedUniqueID();
+	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
+		if (!residue.empty()) {
+			if (group) {
+				group->SetTravelResidue(residue);
+			}
+			residue.clear();
+		}
+	};
+	applyResidue(m_pRFootGroup, m_PersistedRFootResidue);
+	applyResidue(m_pLFootGroup, m_PersistedLFootResidue);
+	if (!m_PersistedLimbPathStates.empty()) {
+		size_t index = 0;
+		for (int side = 0; side < 2 && index < m_PersistedLimbPathStates.size(); ++side) {
+			for (int gearState = 0; gearState < GearStateCount && index < m_PersistedLimbPathStates.size(); ++gearState) {
+				m_Paths[side][gearState].ApplyTraversalState(m_PersistedLimbPathStates[index++]);
+			}
+		}
+		m_PersistedLimbPathStates.clear();
+	}
+	ApplyPackedLimbState(m_PersistedLimbGroupPositions, {m_pRFootGroup, m_pLFootGroup}, false);
+	m_PersistedLimbGroupPositions.clear();
+	ApplyPackedLimbState(m_PersistedLimbGroupInertia, {m_pRFootGroup, m_pLFootGroup}, true);
+	m_PersistedLimbGroupInertia.clear();
+}
+
+void ACRocket::DiscardPersistedSnapshotState() {
+	ACraft::DiscardPersistedSnapshotState();
+	m_PersistedRFootResidue.clear();
+	m_PersistedLFootResidue.clear();
+	m_PersistedLimbPathStates.clear();
+	m_PersistedLimbGroupPositions.clear();
+	m_PersistedLimbGroupInertia.clear();
 }
 
 int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
@@ -157,6 +297,30 @@ int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_pRFootGroup;
 		m_pRFootGroup->SetOwner(this);
 	});
+	MatchProperty("SpecialBehaviour_GearState", {
+		int gearState = RAISED;
+		reader >> gearState;
+		if (gearState >= RAISED && gearState < GearStateCount) {
+			m_GearState = static_cast<unsigned int>(gearState);
+		}
+	});
+	MatchProperty("RFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedRFootResidue.push_back(residueValue);
+	});
+	MatchProperty("LFootResidue", {
+		long long residueValue = 0;
+		reader >> residueValue;
+		m_PersistedLFootResidue.push_back(residueValue);
+	});
+	MatchProperty("LimbPathState", {
+		std::string pathState;
+		reader >> pathState;
+		m_PersistedLimbPathStates.push_back(pathState);
+	});
+	MatchProperty("LimbGroupPositions", { reader >> m_PersistedLimbGroupPositions; });
+	MatchProperty("LimbGroupInertia", { reader >> m_PersistedLimbGroupInertia; });
 	MatchForwards("LFootGroup") MatchProperty("LeftFootGroup", {
 		delete m_pLFootGroup;
 		m_pLFootGroup = new AtomGroup();

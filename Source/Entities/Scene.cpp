@@ -1238,6 +1238,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
 		writer.NewPropertyWithValue("SpecialBehaviour_CheckTerrainIntersection", movableObjectToSave->IntersectionWarning());
 		writer.NewPropertyWithValue("SpecialBehaviour_VelOscillations", movableObjectToSave->GetVelOscillations());
+		writer.NewPropertyWithValue("SpecialBehaviour_DistanceTravelled", movableObjectToSave->GetDistanceTravelled());
 		writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
 		writer.NewPropertyWithValue("AgeTimerStart", movableObjectToSave->GetAgeTimerStart());
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());
@@ -1250,18 +1251,22 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			// Terrain-debris pixels have no preset to copy from; carry their defining properties whole.
 			// The atom rides as a material INDEX — embedding the Material would add a registry copy per pixel on load.
 			writer.NewPropertyWithValue("Mass", moPixelToSave->GetMass());
-			writer.NewPropertyWithValue("Sharpness", moPixelToSave->GetSharpness());
-			writer.NewPropertyWithValue("HitsMOs", moPixelToSave->HitsMOs());
-			writer.NewPropertyWithValue("GetsHitByMOs", moPixelToSave->GetsHitByMOs());
 			writer.NewPropertyWithValue("Color", moPixelToSave->GetColor());
 			writer.NewPropertyWithValue("Staininess", moPixelToSave->GetStaininess());
 			if (const Atom* pixelAtom = moPixelToSave->GetAtom()) {
 				writer.NewPropertyWithValue("SpecialBehaviour_AtomMaterialIndex", static_cast<int>(pixelAtom->GetMaterial()->GetIndex()));
-				writer.NewPropertyWithValue("SpecialBehaviour_AtomTrailLength", pixelAtom->GetTrailLength());
 			}
+		}
+		// The lethal-decay branch mutates these at runtime, so every pixel carries the live values.
+		writer.NewPropertyWithValue("Sharpness", moPixelToSave->GetSharpness());
+		writer.NewPropertyWithValue("HitsMOs", moPixelToSave->HitsMOs());
+		writer.NewPropertyWithValue("GetsHitByMOs", moPixelToSave->GetsHitByMOs());
+		if (const Atom* pixelAtom = moPixelToSave->GetAtom()) {
+			writer.NewPropertyWithValue("SpecialBehaviour_AtomTrailLength", pixelAtom->GetTrailLength());
 		}
 		writer.NewPropertyWithValue("AtomResidue", moPixelToSave->GetAtomResidue());
 		writer.NewPropertyWithValue("SpecialBehaviour_LethalRange", moPixelToSave->GetLethalRange());
+		writer.NewPropertyWithValue("SpecialBehaviour_LethalSharpness", moPixelToSave->GetLethalSharpness());
 	}
 
 	if (const MOSParticle* moSParticleToSave = dynamic_cast<const MOSParticle*>(sceneObjectToSave); moSParticleToSave && saveFullData) {
@@ -1276,6 +1281,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (saveFullData) {
 			writer.NewPropertyWithValue("PrevRotation", moSpriteToSave->GetPrevRotMatrix());
 			writer.NewPropertyWithValue("AngularVel", moSpriteToSave->GetAngularVel());
+			writer.NewPropertyWithValue("SpecialBehaviour_AngOscillations", moSpriteToSave->GetAngOscillations());
 		}
 	}
 
@@ -1288,6 +1294,10 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				// Attachable subgroup folds move atom offsets off the preset; carry them verbatim.
 				for (const Vector& offsetValue: atomGroupToSave->GetAtomOffsets()) {
 					writer.NewPropertyWithValue("AtomGroupOffset", offsetValue);
+				}
+				// Subgroup identities bind the two arrays above; live order records attach history.
+				for (long long subIDValue: atomGroupToSave->GetAtomSubIDs()) {
+					writer.NewPropertyWithValue("AtomGroupSubID", subIDValue);
 				}
 				// The moment of inertia accumulates over attach history; carry the value, not the recompute.
 				writer.NewPropertyWithValue("AtomGroupMomentOfInertia", atomGroupToSave->GetStoredMomentOfInertia());
@@ -1418,6 +1428,8 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			WriteHardcodedAttachableOrNone("Flash", hdFirearmToSave->GetFlash());
 			writer.NewPropertyWithValue("LastFireTimerStart", hdFirearmToSave->GetLastFireTimerStart());
 			writer.NewPropertyWithValue("ReloadTimerStart", hdFirearmToSave->GetReloadTimerStart());
+			writer.NewPropertyWithValue("SpecialBehaviour_FiredOnce", hdFirearmToSave->FiredOnce());
+			writer.NewPropertyWithValue("SpecialBehaviour_AlreadyClicked", hdFirearmToSave->GetAlreadyClicked());
 		}
 
 		if (const Magazine* magazineToSave = dynamic_cast<const Magazine*>(sceneObjectToSave)) {
@@ -1451,6 +1463,8 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 
 			writer.NewPropertyWithValue("AimAngle", actorToSave->GetAimAngle(false));
+			writer.NewPropertyWithValue("SpecialBehaviour_AimState", actorToSave->GetAimState());
+			writer.NewPropertyWithValue("AimTimerStart", actorToSave->GetAimTimerStart());
 			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimProgress", actorToSave->GetSharpAimProgress());
 			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimMaxedOut", actorToSave->GetSharpAimMaxedOut());
 			writer.NewPropertyWithValue("SharpAimTimerStart", actorToSave->GetSharpAimTimerStart());
@@ -1511,6 +1525,8 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("LimbGroupInertia", aHumanToSave->GetLimbGroupInertia());
 				writer.NewPropertyWithValue("SpecialBehaviour_WalkState", aHumanToSave->GetWalkState());
 				writer.NewPropertyWithValue("SharpAimRevertTimerStart", aHumanToSave->GetSharpAimRevertTimerStart());
+				writer.NewPropertyWithValue("SpecialBehaviour_CanActivateBGItem", aHumanToSave->GetCanActivateBGItem());
+				writer.NewPropertyWithValue("SpecialBehaviour_TriggerPulled", aHumanToSave->GetTriggerPulled());
 			} else if (const ACrab* aCrabToSave = dynamic_cast<const ACrab*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Turret", aCrabToSave->GetTurret());
 				WriteHardcodedAttachableOrNone("Jetpack", aCrabToSave->GetJetpack());
@@ -1542,7 +1558,19 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				WriteHardcodedAttachableOrNone("RightThruster", acRocketToSave->GetRightThruster());
 				WriteHardcodedAttachableOrNone("LeftThruster", acRocketToSave->GetLeftThruster());
 				WriteHardcodedAttachableOrNone("UpRightThruster", acRocketToSave->GetURightThruster());
-				WriteHardcodedAttachableOrNone("UpRightThruster", acRocketToSave->GetULeftThruster());
+				WriteHardcodedAttachableOrNone("UpLeftThruster", acRocketToSave->GetULeftThruster());
+				writer.NewPropertyWithValue("SpecialBehaviour_GearState", static_cast<int>(acRocketToSave->GetGearState()));
+				for (long long residueValue: acRocketToSave->GetRFootResidue()) {
+					writer.NewPropertyWithValue("RFootResidue", residueValue);
+				}
+				for (long long residueValue: acRocketToSave->GetLFootResidue()) {
+					writer.NewPropertyWithValue("LFootResidue", residueValue);
+				}
+				for (const std::string& pathState: acRocketToSave->GetLimbPathStates()) {
+					writer.NewPropertyWithValue("LimbPathState", pathState);
+				}
+				writer.NewPropertyWithValue("LimbGroupPositions", acRocketToSave->GetLimbGroupPositions());
+				writer.NewPropertyWithValue("LimbGroupInertia", acRocketToSave->GetLimbGroupInertia());
 			} else if (const ACDropShip* acDropShipToSave = dynamic_cast<const ACDropShip*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("RightThruster", acDropShipToSave->GetRightThruster());
 				WriteHardcodedAttachableOrNone("LeftThruster", acDropShipToSave->GetLeftThruster());

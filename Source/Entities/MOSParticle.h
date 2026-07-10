@@ -73,6 +73,7 @@ namespace RTE {
 		long long GetAtomResidue() const;
 
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
 		void SnapRenderPoseToSim() override;

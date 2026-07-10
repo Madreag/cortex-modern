@@ -84,11 +84,17 @@ namespace RTE {
 
 		/// The per-atom travel residue (carried error + direction flag), in atom order, for full-game saves.
 		std::vector<long long> GetTravelResidue() const;
-		void SetTravelResidue(const std::vector<long long>& residue);
+		void SetTravelResidue(const std::vector<long long>& residue) { SetTravelResidue(residue, std::vector<long long>()); }
+		void SetTravelResidue(const std::vector<long long>& residue, const std::vector<long long>& subIDs);
 
 		/// The per-atom offsets (attachable subgroup folds drift from the preset), in atom order, for full-game saves.
 		std::vector<Vector> GetAtomOffsets() const;
-		void SetAtomOffsets(const std::vector<Vector>& offsets);
+		void SetAtomOffsets(const std::vector<Vector>& offsets) { SetAtomOffsets(offsets, std::vector<long long>()); }
+		void SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs);
+
+		/// The per-atom subgroup IDs, order-parallel to the residue/offset arrays; live subgroup order
+		/// records attach history, so restores bind the arrays by subgroup identity rather than index.
+		std::vector<long long> GetAtomSubIDs() const;
 
 		/// The accumulated moment of inertia and its owner-mass anchor (history-dependent), for full-game saves.
 		float GetStoredMomentOfInertia() const { return m_MomentOfInertia; }

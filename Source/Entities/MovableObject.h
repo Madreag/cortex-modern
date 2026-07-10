@@ -1028,6 +1028,14 @@ namespace RTE {
 		/// without saved values. Subclasses recurse their children.
 		virtual void AdoptPersistedUniqueID();
 
+		/// Drops every pending snapshot stash on a normal (spawn-normalized) world add, so
+		/// later saves read live state instead of the stale load-time capture.
+		virtual void DiscardPersistedSnapshotState();
+
+		/// Gets the not-yet-adopted saved UniqueID, 0 when absent.
+		/// @return The pending persisted UniqueID.
+		long GetPendingPersistedUniqueID() const { return m_PersistedUniqueID; }
+
 		/// The rest timer's absolute start in sim ticks, for full-game saves.
 		int64_t GetRestTimerStart() const { return m_RestTimer.GetStartSimTimeMS(); }
 

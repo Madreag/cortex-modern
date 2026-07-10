@@ -277,6 +277,12 @@ namespace RTE {
 			m_AngOscillations = 0;
 		}
 
+		/// The angular rest-detection counter, for full-game saves.
+		int GetAngOscillations() const { return m_AngOscillations; }
+
+		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
+
 		/// Indicates whether this MO is moving or rotating stupidly fast in a way
 		/// that will screw up the simulation.
 		/// @return Whether this is either moving or rotating too fast.
@@ -391,6 +397,8 @@ namespace RTE {
 		float m_SpriteRadius;
 		float m_SpriteDiameter;
 		int m_AngOscillations; //!< A counter for oscillations in rotation, in order to detect settling.
+		int m_PersistedAngOscillations; //!< Saved angular rest-detection counter, applied on snapshot adopt.
+		bool m_HasPersistedAngOscillations; //!< Whether a saved angular counter is pending application.
 		// Whether to disable the settle material ID when this gets drawn as material
 		bool m_SettleMaterialDisabled;
 		// Entry wound template

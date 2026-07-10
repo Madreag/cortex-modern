@@ -217,6 +217,11 @@ int Actor::Create(const Actor& reference) {
 	m_AimDistance = reference.m_AimDistance;
 	m_SharpAimDelay = reference.m_SharpAimDelay;
 	m_SharpAimProgress = reference.m_SharpAimProgress;
+	m_SharpAimMaxedOut = reference.m_SharpAimMaxedOut;
+	m_AimTmr = reference.m_AimTmr;
+	m_SharpAimTimer = reference.m_SharpAimTimer;
+	m_PersistedAimTimerAnchor = reference.m_PersistedAimTimerAnchor;
+	m_PersistedSharpAimTimerAnchor = reference.m_PersistedSharpAimTimerAnchor;
 	m_PointingTarget = reference.m_PointingTarget;
 	m_SeenTargetPos = reference.m_SeenTargetPos;
 	m_SightDistance = reference.m_SightDistance;
@@ -380,6 +385,17 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SharpAimTimerStart", {
 		reader >> m_PersistedSharpAimTimerAnchor.startTicks;
 		m_PersistedSharpAimTimerAnchor.pending = true;
+	});
+	MatchProperty("SpecialBehaviour_AimState", {
+		int aimState = AIMSTILL;
+		reader >> aimState;
+		if (aimState >= AIMSTILL && aimState < AimStateCount) {
+			m_AimState = static_cast<AimState>(aimState);
+		}
+	});
+	MatchProperty("AimTimerStart", {
+		reader >> m_PersistedAimTimerAnchor.startTicks;
+		m_PersistedAimTimerAnchor.pending = true;
 	});
 	MatchProperty("SightDistance", { reader >> m_SightDistance; });
 	MatchProperty("Perceptiveness", { reader >> m_Perceptiveness; });
@@ -1206,8 +1222,19 @@ void Actor::PreControllerUpdate() {
 void Actor::AdoptPersistedUniqueID() {
 	MOSRotating::AdoptPersistedUniqueID();
 	m_PersistedSharpAimTimerAnchor.Apply(m_SharpAimTimer);
+	m_PersistedAimTimerAnchor.Apply(m_AimTmr);
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
+	}
+}
+
+void Actor::DiscardPersistedSnapshotState() {
+	MOSRotating::DiscardPersistedSnapshotState();
+	m_PersistedSharpAimTimerAnchor.pending = false;
+	m_PersistedAimTimerAnchor.pending = false;
+	m_PersistedControllerInputMode = -1;
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->DiscardPersistedSnapshotState();
 	}
 }
 

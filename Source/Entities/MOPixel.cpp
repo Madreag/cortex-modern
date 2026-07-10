@@ -1,6 +1,7 @@
 #include "MOPixel.h"
 
 #include "Atom.h"
+#include "ConsoleMan.h"
 #include "PostProcessMan.h"
 #include "FrameMan.h"
 
@@ -69,6 +70,8 @@ int MOPixel::Create(const MOPixel& reference) {
 	m_HasPersistedAtomResidue = reference.m_HasPersistedAtomResidue;
 	m_PersistedLethalRange = reference.m_PersistedLethalRange;
 	m_HasPersistedLethalRange = reference.m_HasPersistedLethalRange;
+	m_PersistedLethalSharpness = reference.m_PersistedLethalSharpness;
+	m_HasPersistedLethalSharpness = reference.m_HasPersistedLethalSharpness;
 	m_Color = reference.m_Color;
 	m_LethalRange = reference.m_LethalRange;
 	m_MinLethalRange = reference.m_MinLethalRange;
@@ -93,12 +96,16 @@ int MOPixel::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SpecialBehaviour_AtomMaterialIndex", {
 		int materialIndex = 0;
 		reader >> materialIndex;
-		if (!m_Atom) {
-			m_Atom = new Atom;
-			m_Atom->SetOwner(this);
+		if (materialIndex < 0 || materialIndex > 255) {
+			g_ConsoleMan.PrintString("ERROR: MOPixel atom material index " + std::to_string(materialIndex) + " out of range, ignored");
+		} else {
+			if (!m_Atom) {
+				m_Atom = new Atom;
+				m_Atom->SetOwner(this);
+			}
+			m_Atom->SetMaterial(g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex)));
+			m_Atom->SetTrailColor(m_Color);
 		}
-		m_Atom->SetMaterial(g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex)));
-		m_Atom->SetTrailColor(m_Color);
 	});
 	MatchProperty("SpecialBehaviour_AtomTrailLength", {
 		int trailLength = 0;
@@ -117,6 +124,10 @@ int MOPixel::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SpecialBehaviour_LethalRange", {
 		reader >> m_PersistedLethalRange;
 		m_HasPersistedLethalRange = true;
+	});
+	MatchProperty("SpecialBehaviour_LethalSharpness", {
+		reader >> m_PersistedLethalSharpness;
+		m_HasPersistedLethalSharpness = true;
 	});
 
 	EndPropertyList;
@@ -138,6 +149,17 @@ void MOPixel::AdoptPersistedUniqueID() {
 		m_LethalRange = m_PersistedLethalRange;
 		m_HasPersistedLethalRange = false;
 	}
+	if (m_HasPersistedLethalSharpness) {
+		m_LethalSharpness = m_PersistedLethalSharpness;
+		m_HasPersistedLethalSharpness = false;
+	}
+}
+
+void MOPixel::DiscardPersistedSnapshotState() {
+	MovableObject::DiscardPersistedSnapshotState();
+	m_HasPersistedAtomResidue = false;
+	m_HasPersistedLethalRange = false;
+	m_HasPersistedLethalSharpness = false;
 }
 
 int MOPixel::Save(Writer& writer) const {
