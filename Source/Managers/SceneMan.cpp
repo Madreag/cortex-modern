@@ -28,6 +28,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <atomic>
 #include <mutex>
 
 using namespace RTE;
@@ -103,8 +104,10 @@ bool SceneMan::IsTrackedUID(long uid) {
 }
 
 void SceneMan::TraceTerrainEvent(const char* tag, int x, int y, int a, int b, int c) {
-	static int s_state = 0;
-	if (s_state == 0) {
+	// First use can come from concurrent worker spawns; initialize exactly once.
+	static std::once_flag s_initFlag;
+	static std::atomic<int> s_state{0};
+	std::call_once(s_initFlag, [] {
 		const char* env = std::getenv("CC_TERRAIN_EVENTS");
 		unsigned long long from = 0;
 		unsigned long long to = 0;
@@ -116,7 +119,7 @@ void SceneMan::TraceTerrainEvent(const char* tag, int x, int y, int a, int b, in
 		} else {
 			s_state = -1;
 		}
-	}
+	});
 	if (s_state != 1) {
 		return;
 	}
@@ -414,6 +417,11 @@ int SceneMan::Save(Writer& writer) const {
 void SceneMan::Destroy() {
 	for (int i = 0; i < c_PaletteEntriesNumber; ++i)
 		delete m_apMatPalette[i];
+
+	for (Material* materialCopy: m_MaterialCopiesVector) {
+		delete materialCopy;
+	}
+	m_MaterialCopiesVector.clear();
 
 	delete m_pCurrentScene;
 	delete m_pDebugLayer;
