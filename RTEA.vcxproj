@@ -851,6 +851,7 @@
     <ClInclude Include="Source\Network\NetMatchSelfTest.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
     <ClInclude Include="Source\Network\NetProtocolSelfTest.h" />
+    <ClInclude Include="Source\Network\NetSeatAuth.h" />
     <ClInclude Include="Source\Network\NetSession.h" />
     <ClInclude Include="Source\Network\NetSessionSelfTest.h" />
     <ClInclude Include="Source\Network\NetTransport.h" />
@@ -1406,6 +1407,7 @@
     <ClCompile Include="Source\Network\NetMatchSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp" />
+    <ClCompile Include="Source\Network\NetSeatAuth.cpp" />
     <ClCompile Include="Source\Network\NetSession.cpp" />
     <ClCompile Include="Source\Network\NetSessionSelfTest.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
