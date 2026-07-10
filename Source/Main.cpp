@@ -141,6 +141,7 @@ static bool s_netMatchServiceE2EEnteredEditor = false;
 static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
 static uint64_t s_netMatchServiceE2ERunningTicks = 0;
 static long s_netMatchE2EActorCensus = -1;
+static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
 // Loop-pace accounting, accumulated only while a lockstep match or playback runs: the honest
 // wall-tps and per-tick sim cost that steer the pace and rollback work.
 static uint64_t s_paceIterations = 0;
@@ -1723,6 +1724,7 @@ void RunGameLoop() {
 					s_netMatchServiceE2ERunningTicks = nowTick - s_netMatchServiceE2EStartTick;
 					// In-match census; the report runs after EndActivity, which releases actors.
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
+					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					if (s_netMatchServiceE2ERunningTicks > tickCap) {
 						g_NetMatchService.Complete("e2e complete");
@@ -2205,8 +2207,9 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
 	out << "\"resyncs\":" << s_netMatchResyncs << ",";
 	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
-	// slips every divergence gate).
+	// slips every divergence gate); the peak catches a double-spawn that later sheds back to normal.
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
+	out << "\"actors_peak\":" << s_netMatchE2EActorCensusPeak << ",";
 	out << "\"pace\":" << BuildLoopPaceJson() << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
