@@ -216,9 +216,14 @@ namespace RTE {
 				if (pendingLoad.empty()) {
 					error = "could not write the received resync snapshot";
 				}
-			} else {
+			} else if (m_IsHost) {
 				// The host reloads its own snapshot, so both sides launch the identical file.
 				pendingLoad = "p5resync";
+			} else {
+				// A non-host with no received bytes means the transfer never completed; loading the
+				// host's filename off this peer's disk would restore a stale or absent snapshot.
+				pendingLoad = "";
+				error = "resync snapshot transfer did not complete";
 			}
 		}
 		{
