@@ -294,6 +294,21 @@ bool Attachable::CanCollideWithTerrain() const {
 	return m_CollidesWithTerrainWhileAttached;
 }
 
+void Attachable::AdoptPersistedUniqueID() {
+	const long provisionalID = GetUniqueID();
+	MOSRotating::AdoptPersistedUniqueID();
+	// The subgroup follows the clone-time UniqueID; re-key any folded atoms to the restored
+	// identity so a later save writes a consistent pair.
+	if (GetUniqueID() != provisionalID && m_AtomSubgroupID == provisionalID) {
+		m_AtomSubgroupID = GetUniqueID();
+		if (IsAttached()) {
+			if (MOSRotating* rootParent = dynamic_cast<MOSRotating*>(GetRootParent()); rootParent && rootParent->GetAtomGroup()) {
+				rootParent->GetAtomGroup()->RenameSubgroup(provisionalID, m_AtomSubgroupID);
+			}
+		}
+	}
+}
+
 bool Attachable::CollideAtPoint(HitData& hd) {
 	if (m_IgnoresParticlesWhileAttached && m_Parent && !m_Parent->ToDelete() && !dynamic_cast<MOSRotating*>(hd.Body[HITOR])) {
 		return false;

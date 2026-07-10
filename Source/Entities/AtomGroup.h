@@ -183,6 +183,12 @@ namespace RTE {
 		/// @return Whether any Atoms of that subgroup ID were found and removed.
 		bool RemoveAtoms(long removeID);
 
+		/// Re-keys a subgroup to a new ID, so a restore can bind the subgroup back to its saved identity.
+		/// @param oldID The current subgroup ID.
+		/// @param newID The subgroup ID to re-key to.
+		/// @return Whether the subgroup existed and was re-keyed.
+		bool RenameSubgroup(long oldID, long newID);
+
 		/// Removes all atoms in this AtomGroup, leaving it empty of Atoms.
 		void RemoveAllAtoms() {
 			m_Atoms.clear();
