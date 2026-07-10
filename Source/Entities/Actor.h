@@ -274,6 +274,10 @@ namespace RTE {
 		int64_t GetSharpAimTimerStart() const { return m_SharpAimTimer.GetStartSimTimeMS(); }
 		bool GetSharpAimMaxedOut() const { return m_SharpAimMaxedOut; }
 
+		/// The digital-aim state machine (state enum + timer anchor), for full-game saves.
+		int GetAimState() const { return m_AimState; }
+		int64_t GetAimTimerStart() const { return m_AimTmr.GetStartSimTimeMS(); }
+
 		/// Gets the approximate height of this Actor, standing up.
 		/// @return A float with the approximate height, in pixels.
 		float GetHeight() const { return m_CharHeight; }
@@ -711,6 +715,7 @@ namespace RTE {
 
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Applies the saved wire-applied controller mode; runs after the activity's AI setup so it can't be overwritten.
 		void ApplyPersistedControllerMode();
@@ -976,6 +981,7 @@ namespace RTE {
 		// For timing the transition from regular aim to sharp aim
 		Timer m_SharpAimTimer;
 		PersistedTimerAnchor m_PersistedSharpAimTimerAnchor; //!< Saved sharp-aim timer anchor, applied on snapshot adopt.
+		PersistedTimerAnchor m_PersistedAimTimerAnchor; //!< Saved digital-aim timer anchor, applied on snapshot adopt.
 		// The time it takes to achieve complete full sharp aiming
 		int m_SharpAimDelay;
 		// The velocity

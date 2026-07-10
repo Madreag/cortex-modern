@@ -122,6 +122,7 @@ namespace RTE {
 		std::vector<double> GetEmissionAccumulators() const;
 
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/*
 		/// Gets the angle spread of velocity of the emitted MO's to each side of

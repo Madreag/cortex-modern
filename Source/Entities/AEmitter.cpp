@@ -209,6 +209,13 @@ void AEmitter::AdoptPersistedUniqueID() {
 	}
 }
 
+void AEmitter::DiscardPersistedSnapshotState() {
+	Attachable::DiscardPersistedSnapshotState();
+	m_PersistedBurstTimerAnchor.pending = false;
+	m_PersistedLastEmitTimerAnchor.pending = false;
+	m_PersistedEmissionAccumulators.clear();
+}
+
 int AEmitter::Save(Writer& writer) const {
 	Attachable::Save(writer);
 

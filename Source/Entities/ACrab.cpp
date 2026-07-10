@@ -384,6 +384,17 @@ void ACrab::AdoptPersistedUniqueID() {
 	m_PersistedLimbGroupInertia.clear();
 }
 
+void ACrab::DiscardPersistedSnapshotState() {
+	Actor::DiscardPersistedSnapshotState();
+	m_PersistedLFGFootResidue.clear();
+	m_PersistedLBGFootResidue.clear();
+	m_PersistedRFGFootResidue.clear();
+	m_PersistedRBGFootResidue.clear();
+	m_PersistedLimbPathStates.clear();
+	m_PersistedLimbGroupPositions.clear();
+	m_PersistedLimbGroupInertia.clear();
+}
+
 int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
 

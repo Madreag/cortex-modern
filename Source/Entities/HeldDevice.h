@@ -308,6 +308,7 @@ namespace RTE {
 		const Timer& GetActivationTimer() const { return m_ActivationTimer; }
 
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Tells whether the device is curtrently being reloaded.
 		/// @return Whetehr being reloaded.

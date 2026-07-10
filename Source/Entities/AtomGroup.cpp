@@ -9,6 +9,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <bit>
+#include <unordered_map>
 
 using namespace RTE;
 
@@ -224,14 +225,41 @@ std::vector<long long> AtomGroup::GetTravelResidue() const {
 	return residue;
 }
 
-void AtomGroup::SetTravelResidue(const std::vector<long long>& residue) {
-	size_t index = 0;
-	for (Atom* atom: m_Atoms) {
-		if (index >= residue.size()) {
-			break;
+// Pairs each saved entry with a live atom: by subgroup identity (in-bucket order) when the
+// saved subIDs ride, by plain vector index otherwise. Live subgroup order records attach
+// history, so a reconstructed group cannot rely on matching indices.
+template <typename ValueType, typename ApplyFunc>
+static void ApplyPerAtomState(std::vector<Atom*>& atoms, const std::vector<ValueType>& values, const std::vector<long long>& subIDs, ApplyFunc&& apply) {
+	if (subIDs.size() != values.size()) {
+		size_t index = 0;
+		for (Atom* atom: atoms) {
+			if (index >= values.size()) {
+				break;
+			}
+			apply(atom, values[index++]);
 		}
-		atom->ApplyTravelResidue(residue[index++]);
+		return;
 	}
+	std::unordered_map<long, std::vector<Atom*>> buckets;
+	for (Atom* atom: atoms) {
+		buckets[atom->GetSubID()].push_back(atom);
+	}
+	std::unordered_map<long, size_t> cursors;
+	for (size_t index = 0; index < values.size(); ++index) {
+		const long subID = static_cast<long>(subIDs[index]);
+		auto bucketIterator = buckets.find(subID);
+		if (bucketIterator == buckets.end()) {
+			continue;
+		}
+		size_t& cursor = cursors[subID];
+		if (cursor < bucketIterator->second.size()) {
+			apply(bucketIterator->second[cursor++], values[index]);
+		}
+	}
+}
+
+void AtomGroup::SetTravelResidue(const std::vector<long long>& residue, const std::vector<long long>& subIDs) {
+	ApplyPerAtomState(m_Atoms, residue, subIDs, [](Atom* atom, long long value) { atom->ApplyTravelResidue(value); });
 }
 
 std::vector<Vector> AtomGroup::GetAtomOffsets() const {
@@ -243,14 +271,17 @@ std::vector<Vector> AtomGroup::GetAtomOffsets() const {
 	return offsets;
 }
 
-void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets) {
-	size_t index = 0;
-	for (Atom* atom: m_Atoms) {
-		if (index >= offsets.size()) {
-			break;
-		}
-		atom->SetOffset(offsets[index++]);
+void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs) {
+	ApplyPerAtomState(m_Atoms, offsets, subIDs, [](Atom* atom, const Vector& offset) { atom->SetOffset(offset); });
+}
+
+std::vector<long long> AtomGroup::GetAtomSubIDs() const {
+	std::vector<long long> subIDs;
+	subIDs.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		subIDs.push_back(atom->GetSubID());
 	}
+	return subIDs;
 }
 
 float AtomGroup::CalculateMaxRadius() const {

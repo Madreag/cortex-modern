@@ -105,6 +105,7 @@ namespace RTE {
 		std::string GetLimbGroupInertia() const;
 
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Sets the jetpack for this ACrab. Ownership IS Transferred!
 		/// @param newJetpack The new jetpack to use.

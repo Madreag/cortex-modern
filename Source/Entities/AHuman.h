@@ -146,10 +146,15 @@ namespace RTE {
 		/// Packed walk state (per-layer walk angles + walk path offset), for full-game saves.
 		std::string GetWalkState() const;
 
+		/// The dual-wield trigger latches, for full-game saves.
+		bool GetCanActivateBGItem() const { return m_CanActivateBGItem; }
+		bool GetTriggerPulled() const { return m_TriggerPulled; }
+
 		/// The sharp-aim revert timer anchor, for full-game saves.
 		int64_t GetSharpAimRevertTimerStart() const { return m_SharpAimRevertTimer.GetStartSimTimeMS(); }
 
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Sets the head for this AHuman.
 		/// @param newHead The new head to use.

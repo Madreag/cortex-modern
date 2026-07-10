@@ -217,6 +217,10 @@ int AHuman::Create(const AHuman& reference) {
 	m_PersistedBGFootResidue = reference.m_PersistedBGFootResidue;
 	// The LimbPath copy terminates traversal, so a save clone of a WORLD actor carries the live
 	// state in the stash; preset copies just pass any stash along.
+	m_SharpAimRevertTimer = reference.m_SharpAimRevertTimer;
+	m_PersistedSharpAimRevertTimerAnchor = reference.m_PersistedSharpAimRevertTimerAnchor;
+	m_CanActivateBGItem = reference.m_CanActivateBGItem;
+	m_TriggerPulled = reference.m_TriggerPulled;
 	if (reference.HasEverBeenAddedToMovableMan()) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
@@ -433,6 +437,19 @@ void AHuman::AdoptPersistedUniqueID() {
 	}
 }
 
+void AHuman::DiscardPersistedSnapshotState() {
+	Actor::DiscardPersistedSnapshotState();
+	m_PersistedSharpAimRevertTimerAnchor.pending = false;
+	m_PersistedFGHandResidue.clear();
+	m_PersistedBGHandResidue.clear();
+	m_PersistedFGFootResidue.clear();
+	m_PersistedBGFootResidue.clear();
+	m_PersistedLimbPathStates.clear();
+	m_PersistedLimbGroupPositions.clear();
+	m_PersistedLimbGroupInertia.clear();
+	m_PersistedWalkState.clear();
+}
+
 int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
 
@@ -472,6 +489,8 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_PersistedSharpAimRevertTimerAnchor.startTicks;
 		m_PersistedSharpAimRevertTimerAnchor.pending = true;
 	});
+	MatchProperty("SpecialBehaviour_CanActivateBGItem", { reader >> m_CanActivateBGItem; });
+	MatchProperty("SpecialBehaviour_TriggerPulled", { reader >> m_TriggerPulled; });
 
 	MatchProperty("ThrowPrepTime", { reader >> m_ThrowPrepTime; });
 	MatchProperty("Head", { SetHead(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });

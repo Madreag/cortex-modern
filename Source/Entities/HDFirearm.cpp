@@ -133,6 +133,8 @@ int HDFirearm::Create(const HDFirearm& reference) {
 	if (reference.m_ReloadEndSound) {
 		m_ReloadEndSound = dynamic_cast<SoundContainer*>(reference.m_ReloadEndSound->Clone());
 	}
+	m_FiredOnce = reference.m_FiredOnce;
+	m_AlreadyClicked = reference.m_AlreadyClicked;
 	m_ReloadEndOffset = reference.m_ReloadEndOffset;
 	m_RateOfFire = reference.m_RateOfFire;
 	m_ActivationDelay = reference.m_ActivationDelay;
@@ -258,6 +260,8 @@ int HDFirearm::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_PersistedReloadTimerAnchor.startTicks;
 		m_PersistedReloadTimerAnchor.pending = true;
 	});
+	MatchProperty("SpecialBehaviour_FiredOnce", { reader >> m_FiredOnce; });
+	MatchProperty("SpecialBehaviour_AlreadyClicked", { reader >> m_AlreadyClicked; });
 
 	EndPropertyList;
 }
@@ -266,6 +270,12 @@ void HDFirearm::AdoptPersistedUniqueID() {
 	HeldDevice::AdoptPersistedUniqueID();
 	m_PersistedLastFireTimerAnchor.Apply(m_LastFireTmr);
 	m_PersistedReloadTimerAnchor.Apply(m_ReloadTmr);
+}
+
+void HDFirearm::DiscardPersistedSnapshotState() {
+	HeldDevice::DiscardPersistedSnapshotState();
+	m_PersistedLastFireTimerAnchor.pending = false;
+	m_PersistedReloadTimerAnchor.pending = false;
 }
 
 int HDFirearm::Save(Writer& writer) const {

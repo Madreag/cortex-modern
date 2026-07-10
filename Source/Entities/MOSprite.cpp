@@ -44,6 +44,8 @@ void MOSprite::Clear() {
 	m_AngularVel = 0;
 	m_PrevAngVel = 0;
 	m_AngOscillations = 0;
+	m_PersistedAngOscillations = 0;
+	m_HasPersistedAngOscillations = false;
 	m_SettleMaterialDisabled = false;
 	m_pEntryWound = 0;
 	m_pExitWound = 0;
@@ -132,6 +134,9 @@ int MOSprite::Create(const MOSprite& reference) {
 	m_Rotation = reference.m_Rotation;
 	m_PrevRotation = reference.m_PrevRotation;
 	m_AngularVel = reference.m_AngularVel;
+	m_AngOscillations = reference.m_AngOscillations;
+	m_PersistedAngOscillations = reference.m_PersistedAngOscillations;
+	m_HasPersistedAngOscillations = reference.m_HasPersistedAngOscillations;
 	m_SettleMaterialDisabled = reference.m_SettleMaterialDisabled;
 	m_pEntryWound = reference.m_pEntryWound;
 	m_pExitWound = reference.m_pExitWound;
@@ -180,11 +185,29 @@ int MOSprite::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("Rotation", { reader >> m_Rotation; });
 	MatchProperty("PrevRotation", { reader >> m_PrevRotation; });
 	MatchProperty("AngularVel", { reader >> m_AngularVel; });
+	MatchProperty("SpecialBehaviour_AngOscillations", {
+		reader >> m_PersistedAngOscillations;
+		m_HasPersistedAngOscillations = true;
+	});
 	MatchProperty("SettleMaterialDisabled", { reader >> m_SettleMaterialDisabled; });
 	MatchProperty("EntryWound", { m_pEntryWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });
 	MatchProperty("ExitWound", { m_pExitWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });
 
 	EndPropertyList;
+}
+
+void MOSprite::AdoptPersistedUniqueID() {
+	MovableObject::AdoptPersistedUniqueID();
+	if (m_HasPersistedAngOscillations) {
+		// Applied here because the add path's NotResting() zeroes the live counter.
+		m_AngOscillations = m_PersistedAngOscillations;
+		m_HasPersistedAngOscillations = false;
+	}
+}
+
+void MOSprite::DiscardPersistedSnapshotState() {
+	MovableObject::DiscardPersistedSnapshotState();
+	m_HasPersistedAngOscillations = false;
 }
 
 void MOSprite::SetEntryWound(const std::string& presetName, std::string moduleName) {

@@ -156,6 +156,22 @@ namespace RTE {
 		/// @return Current landing gear state.
 		unsigned int GetGearState() const { return m_GearState; }
 
+		/// The per-atom travel residue of the two foot groups, for full-game saves.
+		std::vector<long long> GetRFootResidue() const;
+		std::vector<long long> GetLFootResidue() const;
+
+		/// Packed raw limb positions of the two foot groups, for full-game saves.
+		std::string GetLimbGroupPositions() const;
+
+		/// Packed moment-of-inertia pairs of the two foot groups, for full-game saves.
+		std::string GetLimbGroupInertia() const;
+
+		/// Packed traversal state of every gear path, side-major, for full-game saves.
+		std::vector<std::string> GetLimbPathStates() const;
+
+		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
+
 		/// Protected member variable and method declarations
 	protected:
 		// Member variables
@@ -179,6 +195,11 @@ namespace RTE {
 		AEmitter* m_pULThruster;
 		// Current landing gear action state.
 		unsigned int m_GearState;
+		std::vector<long long> m_PersistedRFootResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
+		std::vector<long long> m_PersistedLFootResidue;
+		std::vector<std::string> m_PersistedLimbPathStates; //!< Saved gear-path traversal state, applied on snapshot adopt.
+		std::string m_PersistedLimbGroupPositions; //!< Saved raw limb-group positions, applied on snapshot adopt.
+		std::string m_PersistedLimbGroupInertia; //!< Saved limb-group inertia pairs, applied on snapshot adopt.
 		// Limb paths for different movement states.
 		// [0] is for the right limbs, and [1] is for left.
 		LimbPath m_Paths[2][GearStateCount];

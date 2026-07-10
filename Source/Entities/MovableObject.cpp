@@ -207,6 +207,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	// A pristine preset's prev equals its pos, so this only differs for restored residents.
 	m_PrevPos = reference.m_PrevPos;
 	m_Vel = reference.m_Vel;
+	m_DistanceTravelled = reference.m_DistanceTravelled;
 	m_Scale = reference.m_Scale;
 	m_GlobalAccScalar = reference.m_GlobalAccScalar;
 	m_AirResistance = reference.m_AirResistance;
@@ -320,6 +321,13 @@ void MovableObject::AdoptPersistedUniqueID() {
 	g_MovableMan.RegisterObject(this);
 }
 
+void MovableObject::DiscardPersistedSnapshotState() {
+	m_PersistedUniqueID = 0;
+	m_HasPersistedRestTimerStart = false;
+	m_HasPersistedVelOscillations = false;
+	m_PersistedAgeTimerAnchor.pending = false;
+}
+
 int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return SceneObject::ReadProperty(propName, reader));
 
@@ -331,6 +339,7 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 		reader >> m_PersistedVelOscillations;
 		m_HasPersistedVelOscillations = true;
 	});
+	MatchProperty("SpecialBehaviour_DistanceTravelled", { reader >> m_DistanceTravelled; });
 	MatchProperty("RestTimerStart", {
 		reader >> m_PersistedRestTimerStart;
 		m_HasPersistedRestTimerStart = true;

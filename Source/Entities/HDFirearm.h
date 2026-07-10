@@ -88,6 +88,7 @@ namespace RTE {
 		int64_t GetReloadTimerStart() const { return m_ReloadTmr.GetStartSimTimeMS(); }
 
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Sets the Magazine for this HDFirearm. Ownership IS transferred!
 		/// @param newMagazine The new Magazine to use.
@@ -465,6 +466,9 @@ namespace RTE {
 		/// Whether at least one round has already been fired during the current frame.
 		/// @return Returns true at least one round has already been fired during the current frame.
 		bool FiredFrame() const { return m_FireFrame; }
+
+		/// The empty-click latch for the current activation, for full-game saves.
+		bool GetAlreadyClicked() const { return m_AlreadyClicked; }
 
 		/// Gets whether this HDFirearm is ready to be fired.
 		/// @return Whether this HDFirearm is ready to pop another Round.
