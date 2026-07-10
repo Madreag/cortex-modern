@@ -400,6 +400,15 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				order.multiOrderYOffset = delivery->multiOrderYOffset;
 				craft->SetNetworkDelivery(true);
 				const float fundsBefore = activity->GetTeamFunds(delivery->team);
+				// Co-op teammates each vet cost against their own view of the funds at issue time; two
+				// same-frame orders can both pass a stale check. The apply frame sees identical funds on
+				// every peer, so reject here deterministically rather than let the team go negative.
+				if (delivery->cost > fundsBefore) {
+					delete craft;
+					g_ConsoleMan.PrintString("NETWORK: buy order rejected - insufficient team funds");
+					std::cout << "[net-match] buy order rejected: team " << delivery->team << " cost " << delivery->cost << " > funds " << fundsBefore << std::endl;
+					continue;
+				}
 				if (!gameActivity->QueuePurchaseDelivery(craft, order)) {
 					delete craft;
 					g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery->team));
@@ -432,8 +441,12 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		} else if (const NetGameScuttleCraft* scuttle = std::get_if<NetGameScuttleCraft>(&command.payload)) {
 			// Set the scuttle AI mode on every peer so the gib (which runs in both peers' ungated physics) matches.
 			if (MovableObject* mo = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(scuttle->actorUID))) {
-				if (ACraft* craft = dynamic_cast<ACraft*>(mo)) {
+				// The authority gate checks the CLAIMED team; the craft must really be on it, or a peer
+				// could scuttle an enemy craft by UID.
+				if (ACraft* craft = dynamic_cast<ACraft*>(mo); craft && craft->GetTeam() == scuttle->team) {
 					craft->SetAIMode(Actor::AIMODE_SCUTTLE);
+				} else if (craft) {
+					g_ConsoleMan.PrintString("ERROR: Rejected a scuttle command for a craft off its claimed team");
 				}
 			} else {
 				// A synced command that silently no-ops on one peer is a desync in the making; say so.
