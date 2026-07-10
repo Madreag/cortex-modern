@@ -835,6 +835,7 @@
     <ClInclude Include="Source\Network\GnsTransport.h" />
     <ClInclude Include="Source\Network\LoopbackTransport.h" />
     <ClInclude Include="Source\Network\NetActorOwnership.h" />
+    <ClInclude Include="Source\Network\NetAuthCrypto.h" />
     <ClInclude Include="Source\Network\NetIdentity.h" />
     <ClInclude Include="Source\Network\NetIdentitySelfTest.h" />
     <ClInclude Include="Source\Network\NetLobbyProtocol.h" />
@@ -1389,6 +1390,7 @@
     <ClCompile Include="Source\Network\GnsTransport.cpp" />
     <ClCompile Include="Source\Network\LoopbackTransport.cpp" />
     <ClCompile Include="Source\Network\NetActorOwnership.cpp" />
+    <ClCompile Include="Source\Network\NetAuthCrypto.cpp" />
     <ClCompile Include="Source\Network\NetIdentity.cpp" />
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp" />
     <ClCompile Include="Source\Network\NetLobbyProtocol.cpp" />
