@@ -5,6 +5,7 @@ sources += files(
 'LoopbackTransport.cpp',
 'NetActorOwnership.cpp',
 'NetAuthCrypto.cpp',
+'NetAuthSelfTest.cpp',
 'NetGameCommand.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',

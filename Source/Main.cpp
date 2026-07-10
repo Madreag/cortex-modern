@@ -62,6 +62,7 @@
 
 #include "ControllerFrame.h"
 #include "GnsTransport.h"
+#include "NetAuthSelfTest.h"
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
@@ -2472,6 +2473,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			return NetMatchSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-auth-selftest") {
+			return NetAuthSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
