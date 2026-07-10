@@ -197,6 +197,10 @@ namespace RTE {
 		static constexpr size_t c_MaxCargoPerDelivery = 64;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
 		static constexpr uint8_t c_MaxPeerCount = 16;
+		// How far ahead of the committed frame a received frame/checksum may legitimately target
+		// (input-delay lead plus jitter); anything beyond is dropped so one peer cannot grow the
+		// per-frame maps without bound.
+		static constexpr uint64_t c_MaxFutureFrameSkew = 4ULL * c_MaxInputDelayFrames;
 
 		static NetLockstepPacketType PacketTypeOf(const NetLockstepPayload& payload);
 		static const char* PacketTypeName(NetLockstepPacketType type);
