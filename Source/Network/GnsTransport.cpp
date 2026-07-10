@@ -338,7 +338,9 @@ namespace RTE {
 					break;
 				}
 				if (count < 0) {
-					m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS ReceiveMessages failed"});
+					// Our own receive pump is broken - the match genuinely cannot continue. Distinct
+					// from a joiner's connection faulting, which must never stop a running match.
+					m_PendingEvents.push_back({NetTransportEventType::LocalTransportFault, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS ReceiveMessages failed"});
 					break;
 				}
 				if (!message) {

@@ -20,8 +20,9 @@ namespace RTE {
 		PeerConnected,
 		PeerDisconnected,
 		PacketReceived,
-		ConnectionFailed,
-		TransportError,
+		ConnectionFailed, //!< A specific (often unbound) connection failed; a per-connection fault, not a local one.
+		TransportError, //!< A specific connection could not be accepted or set up; a per-connection fault.
+		LocalTransportFault, //!< This transport's own receive/interface pump failed - genuinely fatal, never a remote's doing.
 	};
 
 	struct NetTransportEvent {
