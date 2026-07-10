@@ -1253,7 +1253,11 @@ namespace RTE {
 		return true;
 	}
 
-	void NetLockstepCoordinator::HandleChecksum(const NetLockstepChecksum& checksum) {
+	void NetLockstepCoordinator::HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport) {
+		if (!SenderOwnsTransport(checksum.senderPeerId, fromTransport)) {
+			std::cout << "[lockstep] dropped a checksum claiming peer " << static_cast<int>(checksum.senderPeerId) << " from the wrong transport" << std::endl;
+			return;
+		}
 		if (!IsKnownRemotePeer(checksum.senderPeerId)) {
 			return;
 		}
@@ -1650,24 +1654,40 @@ namespace RTE {
 					Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, decoded.error.message);
 					return;
 				}
-				HandlePacket(decoded.packet, nowMs);
+				HandlePacket(decoded.packet, nowMs, event.peerId);
 				break;
 			}
 		}
 	}
 
-	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs) {
+	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
 		std::visit(Overloaded{
-			[&](const NetLockstepStart& start) { HandleStart(start); },
-			[&](const NetLockstepFrame& frame) { HandleFrame(frame, nowMs); },
+			[&](const NetLockstepStart& start) { HandleStart(start, fromTransport); },
+			[&](const NetLockstepFrame& frame) { HandleFrame(frame, nowMs, fromTransport); },
 			[&](const NetLockstepAck&) {},
-			[&](const NetLockstepStop& stop) { HandleStop(stop, nowMs); },
-			[&](const NetLockstepChecksum& checksum) { HandleChecksum(checksum); },
+			[&](const NetLockstepStop& stop) { HandleStop(stop, nowMs, fromTransport); },
+			[&](const NetLockstepChecksum& checksum) { HandleChecksum(checksum, fromTransport); },
 		}, packet.payload);
 	}
 
-	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start) {
+	bool NetLockstepCoordinator::SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const {
+		// Clients receive every remote's traffic through the host relay, so the transport is always the
+		// host's; only the relay host, which receives each remote directly, can bind claim to connection.
+		if (!m_RelayHost) {
+			return true;
+		}
+		const auto it = m_RemoteTransports.find(claimedPeerId);
+		// Reject only a KNOWN mapping that is violated; an absent mapping stays gated by IsKnownRemotePeer
+		// as before, so this never drops on a path that doesn't track transports.
+		return it == m_RemoteTransports.end() || it->second == fromTransport;
+	}
+
+	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, NetPeerId fromTransport) {
 		++m_Stats.startPacketsReceived;
+		if (!SenderOwnsTransport(start.localPeerId, fromTransport)) {
+			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport" << std::endl;
+			return;
+		}
 		if (start.sessionId != m_Config.sessionId ||
 		    start.startFrame != m_Config.startFrame ||
 		    start.inputDelayFrames != PeerInputDelay(start.localPeerId) ||
@@ -1690,8 +1710,12 @@ namespace RTE {
 		}
 	}
 
-	void NetLockstepCoordinator::HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs) {
+	void NetLockstepCoordinator::HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport) {
 		++m_Stats.framePacketsReceived;
+		if (!SenderOwnsTransport(frame.senderPeerId, fromTransport)) {
+			std::cout << "[lockstep] dropped a frame claiming peer " << static_cast<int>(frame.senderPeerId) << " from the wrong transport" << std::endl;
+			return;
+		}
 		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end() || !IsKnownRemotePeer(frame.senderPeerId)) {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch");
 			return;
@@ -1729,7 +1753,11 @@ namespace RTE {
 		AdvanceReadyFrames(nowMs);
 	}
 
-	void NetLockstepCoordinator::HandleStop(const NetLockstepStop& stop, uint64_t nowMs) {
+	void NetLockstepCoordinator::HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport) {
+		if (!SenderOwnsTransport(stop.senderPeerId, fromTransport)) {
+			std::cout << "[lockstep] dropped a stop claiming peer " << static_cast<int>(stop.senderPeerId) << " from the wrong transport" << std::endl;
+			return;
+		}
 		if (stop.reason == NetLockstepStopReason::PeerLeft) {
 			if (IsKnownRemotePeer(stop.senderPeerId)) {
 				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs);

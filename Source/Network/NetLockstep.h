@@ -269,11 +269,14 @@ namespace RTE {
 	private:
 		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
-		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs);
-		void HandleStart(const NetLockstepStart& start);
-		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs);
-		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs);
-		void HandleChecksum(const NetLockstepChecksum& checksum);
+		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
+		void HandleStart(const NetLockstepStart& start, NetPeerId fromTransport);
+		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport);
+		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
+		void HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport);
+		/// Whether a packet's claimed sender owns the transport it arrived on. Only the relay host
+		/// receives each remote directly; clients get everything via the relay and trust the host.
+		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs);
