@@ -1257,6 +1257,11 @@ namespace RTE {
 		if (!IsKnownRemotePeer(checksum.senderPeerId)) {
 			return;
 		}
+		// Drop absurd future checksums; CompareChecksums only prunes matched frames, so an unmatched
+		// far-future frame would otherwise linger in the map.
+		if (checksum.frame > m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew) {
+			return;
+		}
 		m_RemoteChecksums[checksum.frame][checksum.senderPeerId] = checksum.hash;
 		RelayToOtherRemotes({checksum}, checksum.senderPeerId);
 		CompareChecksums(checksum.frame);
@@ -1699,6 +1704,12 @@ namespace RTE {
 		// Check staleness before touching the map, or a stale packet leaks an empty bucket forever.
 		if (frame.targetFrame < m_Stats.nextFrame) {
 			++m_Stats.duplicateFrames;
+			return;
+		}
+		// Drop absurd future frames so a misbehaving peer cannot grow the per-frame maps without bound.
+		if (frame.targetFrame > m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew) {
+			++m_Stats.duplicateFrames;
+			std::cout << "[lockstep] dropped a frame targeting " << frame.targetFrame << " far past the committed frame " << m_Stats.nextFrame << std::endl;
 			return;
 		}
 		auto& peerFrames = m_RemoteFrames[frame.targetFrame];
