@@ -419,7 +419,9 @@ void AEmitter::SetFlash(Attachable* newFlash) {
 void AEmitter::Update() {
 	Attachable::PreUpdate();
 
-	SceneMan::SetTerrainEventContext(static_cast<long>(GetUniqueID()));
+	// Restore the caller's context on exit, so a firearm updating its flash emitter doesn't inherit
+	// the emitter's UID on the bullets it spawns next.
+	SceneMan::TerrainEventContextScope terrainEventContext(static_cast<long>(GetUniqueID()));
 
 	if (m_FrameCount > 1) {
 		if (m_EmitEnabled && m_SpriteAnimMode == NOANIM) {
