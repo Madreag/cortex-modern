@@ -506,7 +506,8 @@ namespace RTE {
 					    !ReadOrTruncated(reader.ReadU16LE(payload.chunkIndex), reader, error, "chunk_index") ||
 					    !ReadOrTruncated(reader.ReadU16LE(payload.chunkCount), reader, error, "chunk_count") ||
 					    !ReadOrTruncated(reader.ReadU32LE(byteCount), reader, error, "byte_count")) return false;
-					if (byteCount > NetLobbyProtocol::c_MaxStateChunkBytes || payload.chunkIndex >= payload.chunkCount || payload.chunkCount == 0) {
+					if (byteCount > NetLobbyProtocol::c_MaxStateChunkBytes || payload.chunkIndex >= payload.chunkCount || payload.chunkCount == 0 ||
+					    payload.totalBytes > NetLobbyProtocol::c_MaxTotalStateBytes || payload.chunkCount > NetLobbyProtocol::c_MaxStateChunkCount) {
 						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), "state chunk header is invalid");
 						return false;
 					}

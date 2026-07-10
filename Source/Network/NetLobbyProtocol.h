@@ -148,6 +148,10 @@ namespace RTE {
 		static constexpr size_t c_MaxShortTextBytes = 128;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
 		static constexpr size_t c_MaxStateChunkBytes = 48U * 1024U;
+		// A snapshot is ~1-2 MB; cap the advertised total so a hostile header cannot force a huge reserve
+		// or an unbounded chunk map before the size check.
+		static constexpr uint32_t c_MaxTotalStateBytes = 64U * 1024U * 1024U;
+		static constexpr uint32_t c_MaxStateChunkCount = (c_MaxTotalStateBytes / c_MaxStateChunkBytes) + 1U;
 		static constexpr size_t c_MaxPlayers = NetMatchConfigUtil::c_MaxPlayers;
 
 		static NetLobbyMessageType MessageTypeOf(const NetLobbyPayload& payload);
