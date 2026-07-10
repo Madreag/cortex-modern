@@ -164,6 +164,21 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 
+	// A durable minimal record FIRST: everything below (symbols, stack walk, abort save,
+	// screenshot) can nest-fault and kill the process before any output lands.
+	{
+		char minimalRecord[128];
+		const int recordLength = std::snprintf(minimalRecord, sizeof(minimalRecord), "FATAL: unhandled exception 0x%08lX at 0x%zX\n", static_cast<unsigned long>(exceptionCode), exceptionAddress);
+		if (recordLength > 0) {
+			std::fwrite(minimalRecord, 1, static_cast<size_t>(recordLength), stderr);
+			std::fflush(stderr);
+			if (std::FILE* recordFile = std::fopen("AbortCode.txt", "w")) {
+				std::fwrite(minimalRecord, 1, static_cast<size_t>(recordLength), recordFile);
+				std::fclose(recordFile);
+			}
+		}
+	}
+
 	std::string symbolNameAtAddress = getSymbolNameFromAddress(processHandle, exceptionAddress);
 	RTEError::FormatFunctionSignature(symbolNameAtAddress);
 
@@ -353,7 +368,10 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 		SDL_SetWindowFullscreen(g_WindowMan.GetWindow(), 0);
 	}
 
-	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "RTE CATASTROPHIC ERROR!!! (X_X)", exceptionMessage.c_str(), nullptr);
+	// Headless / automated runs can't dismiss a modal dialog — the CLI print above suffices.
+	if (SDL_getenv("CCCP_HEADLESS") == nullptr) {
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "RTE CATASTROPHIC ERROR!!! (X_X)", exceptionMessage.c_str(), nullptr);
+	}
 	AbortAction;
 }
 
