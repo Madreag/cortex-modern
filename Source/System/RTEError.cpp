@@ -13,6 +13,7 @@
 #endif
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <exception>
 #include <regex>
@@ -165,8 +166,10 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 	}
 
 	// A durable minimal record FIRST: everything below (symbols, stack walk, abort save,
-	// screenshot) can nest-fault and kill the process before any output lands.
-	{
+	// screenshot) can nest-fault and kill the process before any output lands. The once-guard
+	// keeps a second thread faulting at the same moment from racing the same file open.
+	static std::atomic_flag s_minimalRecordWritten = ATOMIC_FLAG_INIT;
+	if (!s_minimalRecordWritten.test_and_set()) {
 		char minimalRecord[128];
 		const int recordLength = std::snprintf(minimalRecord, sizeof(minimalRecord), "FATAL: unhandled exception 0x%08lX at 0x%zX\n", static_cast<unsigned long>(exceptionCode), exceptionAddress);
 		if (recordLength > 0) {
@@ -217,6 +220,10 @@ void RTEError::SetExceptionHandlers() {
 
 #ifdef _WIN32
 #ifndef TARGET_MACHINE_X86
+	// Reserve emergency stack so the handler can still write its minimal record after a
+	// stack-overflow fault leaves almost no stack.
+	ULONG stackGuaranteeBytes = 32U * 1024U;
+	SetThreadStackGuarantee(&stackGuaranteeBytes);
 	SetUnhandledExceptionFilter(RTEWindowsExceptionHandler);
 #else
 	// This only works for C++ exceptions and doesn't catch and access violations and such, or provide much meaningful info.
