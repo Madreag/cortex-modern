@@ -89,6 +89,13 @@ namespace RTE {
 
 	void NetMatchReplayWriter::Close() {
 		if (m_Out.is_open()) {
+			// A recording with frames gets an end marker so playback tells a clean finish from a
+			// truncation; a header-only or already-failed stream is left as is.
+			if (m_FramesWritten > 0 && m_Out.good()) {
+				std::vector<uint8_t> endMarker;
+				AppendU32(endMarker, c_EndMarker);
+				m_Out.write(reinterpret_cast<const char*>(endMarker.data()), static_cast<std::streamsize>(endMarker.size()));
+			}
 			m_Out.close();
 		}
 		m_FramesWritten = 0;
@@ -114,11 +121,13 @@ namespace RTE {
 			return false;
 		}
 		const uint16_t version = static_cast<uint16_t>(versionBytes[0]) | (static_cast<uint16_t>(versionBytes[1]) << 8);
-		if (version != NetMatchReplayWriter::c_Version) {
+		// Version 1 (no end marker) still reads; version 2 adds the truncation-detecting marker.
+		if (version != 1 && version != NetMatchReplayWriter::c_Version) {
 			if (error) *error = "unsupported replay version " + std::to_string(version);
 			Close();
 			return false;
 		}
+		m_Version = version;
 		uint32_t configLength = 0;
 		if (!ReadU32(m_In, configLength) || configLength == 0 || configLength > (1U << 20)) {
 			if (error) *error = "invalid replay config length";
@@ -169,6 +178,16 @@ namespace RTE {
 		}
 		uint32_t recordLength = 0;
 		if (!ReadU32(m_In, recordLength)) {
+			// A version-2 file ends with the marker below, so raw EOF here means the record stream was
+			// cut off mid-write. Version-1 files have no marker, so raw EOF is their clean end.
+			if (m_Version >= 2) {
+				if (error) *error = "replay ended without its end marker (truncated)";
+				return false;
+			}
+			outEof = true;
+			return false;
+		}
+		if (recordLength == NetMatchReplayWriter::c_EndMarker) {
 			outEof = true;
 			return false;
 		}
@@ -203,6 +222,7 @@ namespace RTE {
 		m_Lookahead = {};
 		m_HasLookahead = false;
 		m_StartFrame = 0;
+		m_Version = 0;
 	}
 
 } // namespace RTE

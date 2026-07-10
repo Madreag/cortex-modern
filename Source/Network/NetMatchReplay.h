@@ -16,7 +16,10 @@ namespace RTE {
 	class NetMatchReplayWriter {
 	public:
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
+		// A length prefix above the record cap; the writer appends it as the last record so playback
+		// tells a clean end from a mid-write crash. Version-1 files have no marker.
+		static constexpr uint32_t c_EndMarker = 0xFFFFFFFFU;
 
 		bool Open(const std::string& path, const NetMatchConfig& config, std::string* error = nullptr);
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
@@ -49,6 +52,7 @@ namespace RTE {
 		NetLockstepFrame m_Lookahead;
 		bool m_HasLookahead = false;
 		uint64_t m_StartFrame = 0;
+		uint16_t m_Version = 0; //!< Version-2 files carry an end marker, so raw EOF without it is a truncation.
 	};
 
 } // namespace RTE
