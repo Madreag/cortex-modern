@@ -49,6 +49,7 @@ namespace RTE {
 		uint32_t malformedMessages = 0;
 		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
+		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.

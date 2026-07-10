@@ -171,6 +171,7 @@ namespace RTE {
 		uint32_t framePacketsSent = 0;
 		uint32_t framePacketsReceived = 0;
 		uint32_t ignoredSessionPackets = 0;
+		uint32_t ignoredAdmissionFaults = 0; //!< Unbound-transport faults/garbage dropped without touching the running match.
 		uint64_t localControllerFramesSent = 0;
 		uint64_t remoteControllerFramesReceived = 0;
 		uint64_t remoteControllerFramesAccepted = 0;
