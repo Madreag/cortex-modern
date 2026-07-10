@@ -339,6 +339,7 @@ namespace RTE {
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
+			m_SeatAuth.EndSession();
 		}
 		runner.reset();
 		coordinator.reset();
@@ -373,6 +374,7 @@ namespace RTE {
 			m_StatusText = "Match stopped";
 			m_ErrorText = error;
 			m_LobbySnapshot = {};
+			m_SeatAuth.EndSession();
 		}
 		runner.reset();
 		coordinator.reset();
@@ -608,6 +610,15 @@ namespace RTE {
 	}
 
 	void NetMatchService::WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest) {
+		if (request.host) {
+			// Arm the off-sim reconnect-auth epoch; without real crypto nothing is issued (fail closed).
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_SeatAuth.BeginHostedSession()) {
+				std::cout << "[net-auth] reconnect-auth epoch armed" << std::endl;
+			} else {
+				std::cout << "[net-auth] crypto unavailable - reconnect auth disabled" << std::endl;
+			}
+		}
 		auto transport = std::make_unique<GnsTransport>();
 		auto session = std::make_unique<NetSession>();
 		auto coordinator = std::make_unique<NetLockstepCoordinator>();

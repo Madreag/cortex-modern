@@ -20,6 +20,7 @@ sources += files(
 'NetMatchSelfTest.cpp',
 'NetProtocol.cpp',
 'NetProtocolSelfTest.cpp',
+'NetSeatAuth.cpp',
 'NetSession.cpp',
 'NetSessionSelfTest.cpp',
 'SimChecksum.cpp',

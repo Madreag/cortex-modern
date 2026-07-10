@@ -3,6 +3,7 @@
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
+#include "NetSeatAuth.h"
 #include "Singleton.h"
 
 #include <atomic>
@@ -111,6 +112,7 @@ namespace RTE {
 		std::string m_PendingResyncLoad;
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
+		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
 
 		std::unique_ptr<GnsTransport> m_Transport;
 		std::unique_ptr<NetSession> m_Session;
