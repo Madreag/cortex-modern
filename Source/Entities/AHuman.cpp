@@ -215,10 +215,10 @@ int AHuman::Create(const AHuman& reference) {
 	m_PersistedBGHandResidue = reference.m_PersistedBGHandResidue;
 	m_PersistedFGFootResidue = reference.m_PersistedFGFootResidue;
 	m_PersistedBGFootResidue = reference.m_PersistedBGFootResidue;
+	// The revert timer stays at its spawn-time reset; a save restores it through the anchor at adopt.
+	m_PersistedSharpAimRevertTimerAnchor = reference.m_PersistedSharpAimRevertTimerAnchor;
 	// The LimbPath copy terminates traversal, so a save clone of a WORLD actor carries the live
 	// state in the stash; preset copies just pass any stash along.
-	m_SharpAimRevertTimer = reference.m_SharpAimRevertTimer;
-	m_PersistedSharpAimRevertTimerAnchor = reference.m_PersistedSharpAimRevertTimerAnchor;
 	m_CanActivateBGItem = reference.m_CanActivateBGItem;
 	m_TriggerPulled = reference.m_TriggerPulled;
 	if (reference.HasEverBeenAddedToMovableMan()) {

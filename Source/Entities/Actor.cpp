@@ -218,8 +218,7 @@ int Actor::Create(const Actor& reference) {
 	m_SharpAimDelay = reference.m_SharpAimDelay;
 	m_SharpAimProgress = reference.m_SharpAimProgress;
 	m_SharpAimMaxedOut = reference.m_SharpAimMaxedOut;
-	m_AimTmr = reference.m_AimTmr;
-	m_SharpAimTimer = reference.m_SharpAimTimer;
+	// The aim timers stay at their spawn-time reset; a save restores them through the anchors at adopt.
 	m_PersistedAimTimerAnchor = reference.m_PersistedAimTimerAnchor;
 	m_PersistedSharpAimTimerAnchor = reference.m_PersistedSharpAimTimerAnchor;
 	m_PointingTarget = reference.m_PointingTarget;
