@@ -1631,9 +1631,20 @@ namespace RTE {
 				     DescribePeer(lockstepPeer) + " disconnected" + (event.reason.empty() ? "" : ": " + event.reason));
 				break;
 			}
+			case NetTransportEventType::LocalTransportFault:
+				// Our own transport pump broke - genuinely fatal, both host and client.
+				Fail(NetLockstepStopReason::InternalError, m_Stats.nextFrame, event.reason.empty() ? "local transport fault" : event.reason);
+				break;
 			case NetTransportEventType::ConnectionFailed:
 			case NetTransportEventType::TransportError:
-				Fail(NetLockstepStopReason::InternalError, m_Stats.nextFrame, event.reason.empty() ? "transport error" : event.reason);
+				// A per-connection fault. On the relay host it is admission traffic (an unauthenticated
+				// joiner's half-open connection failing) and must never stop the running match; a
+				// committed peer dropping arrives as PeerDisconnected. A client's lone link is still fatal.
+				if (m_RelayHost) {
+					++m_Stats.ignoredAdmissionFaults;
+				} else {
+					Fail(NetLockstepStopReason::InternalError, m_Stats.nextFrame, event.reason.empty() ? "transport error" : event.reason);
+				}
 				break;
 			case NetTransportEventType::PacketReceived: {
 				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes);
@@ -1651,7 +1662,15 @@ namespace RTE {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}
-					Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, decoded.error.message);
+					// A committed peer's stream that will not decode is a genuine protocol error worth
+					// failing on. An UNBOUND transport (an unauthenticated joiner) must never stop the
+					// match with garbage; only the relay host tells bound from unbound (clients receive
+					// every remote through the host, so they trust their single source - as SenderOwnsTransport).
+					if (!m_RelayHost || UsesTransportPeer(event.peerId)) {
+						Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, decoded.error.message);
+					} else {
+						++m_Stats.ignoredAdmissionFaults;
+					}
 					return;
 				}
 				HandlePacket(decoded.packet, nowMs, event.peerId);

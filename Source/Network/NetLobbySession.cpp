@@ -448,6 +448,7 @@ namespace RTE {
 				break;
 			case NetTransportEventType::ConnectionFailed:
 			case NetTransportEventType::TransportError:
+			case NetTransportEventType::LocalTransportFault:
 				Fail(event.reason.empty() ? "transport error" : event.reason);
 				break;
 			case NetTransportEventType::PacketReceived: {

@@ -296,9 +296,20 @@ namespace RTE {
 			case NetTransportEventType::PacketReceived:
 				ProcessPacket(event.peerId, event.bytes);
 				break;
+			case NetTransportEventType::LocalTransportFault:
+				// Our own transport pump broke - genuinely fatal for either role.
+				SetFailed(NetRejectReason::InternalError, "transport", "", event.reason, event.reason.empty() ? "local transport fault" : event.reason);
+				break;
 			case NetTransportEventType::ConnectionFailed:
 			case NetTransportEventType::TransportError:
-				SetFailed(NetRejectReason::InternalError, "transport", "", event.reason, event.reason.empty() ? "transport error" : event.reason);
+				if (m_Role == NetSessionRole::Host) {
+					// Admission isolation: an unauthenticated joiner's half-open connection faulting must
+					// not fail the host session for everyone else. A committed peer drops via PeerDisconnected.
+					++m_Stats.unboundConnectionFaults;
+				} else {
+					// The client's lone link to the host faulted - it genuinely cannot proceed.
+					SetFailed(NetRejectReason::InternalError, "transport", "", event.reason, event.reason.empty() ? "transport error" : event.reason);
+				}
 				break;
 		}
 	}
