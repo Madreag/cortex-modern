@@ -62,6 +62,12 @@ namespace RTE {
 		/// @return This LuaStateWrapper's internal lua state.
 		lua_State* GetLuaState() { return m_State; };
 
+		/// Seeds this state's RNG. Called per activity start so Lua math.random is reproducible.
+		void SeedRandomGenerator(uint64_t seed);
+
+		/// Serializes this state's RNG into a string for the per-tick lua_state checksum.
+		std::string GetRandomGeneratorStateForHashing() const;
+
 		/// Gets m_ScriptTimings.
 		/// @return m_ScriptTimings.
 		const std::unordered_map<std::string, PerformanceMan::ScriptTiming>& GetScriptTimings() const;
@@ -432,6 +438,12 @@ namespace RTE {
 
 		/// Asynchronously enforces a GC run to occur.
 		void StartAsyncGarbageCollection();
+
+		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
+		void SeedAllLuaRNGs(uint64_t baseSeed);
+
+		/// Folds the master Lua state's RNG into the lua_state SimChecksum subsystem.
+		void HashAllLuaStatesIntoSimChecksum();
 #pragma endregion
 
 		/// Clears Script Timings.
@@ -459,5 +471,25 @@ namespace RTE {
 		// Disallow the use of some implicit methods.
 		LuaMan(const LuaMan& reference) = delete;
 		LuaMan& operator=(const LuaMan& rhs) = delete;
+	};
+
+	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one
+	/// per-MO generator seeded from (uniqueID, sim tick, phase), so threaded per-MO
+	/// work draws a stream that depends only on the MO and the tick.
+	class DeterministicMORNGScope {
+	public:
+		/// @param uniqueID The MovableObject's GetUniqueID().
+		/// @param phase Per-hook salt so an MO's different hooks don't correlate.
+		/// @param enabled When false the scope is a no-op (leaves collision callbacks on the per-state RNG).
+		DeterministicMORNGScope(long uniqueID, uint64_t phase, bool enabled = true);
+		~DeterministicMORNGScope();
+
+		DeterministicMORNGScope(const DeterministicMORNGScope&) = delete;
+		DeterministicMORNGScope& operator=(const DeterministicMORNGScope&) = delete;
+
+	private:
+		bool m_Installed;
+		RandomGenerator* m_PrevSimOverride;
+		RandomGenerator* m_PrevLuaOverride;
 	};
 } // namespace RTE

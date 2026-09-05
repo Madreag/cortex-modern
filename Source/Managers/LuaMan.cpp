@@ -4,6 +4,8 @@
 #include "LuaBindingRegisterDefinitions.h"
 #include "ThreadMan.h"
 #include "System.h"
+#include "MetricsCollector.h"
+#include "SimChecksum.h"
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
@@ -11,6 +13,61 @@
 using namespace RTE;
 
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
+
+namespace {
+	// os.time / os.clock replacements returning sim-tick seconds instead of the wall clock.
+	int det_os_time(lua_State* L) {
+		lua_pushnumber(L, static_cast<lua_Number>(g_TimerMan.GetSimUpdateCount()) / 60.0);
+		return 1;
+	}
+
+	int det_os_clock(lua_State* L) {
+		lua_pushnumber(L, static_cast<lua_Number>(g_TimerMan.GetSimUpdateCount()) / 60.0);
+		return 1;
+	}
+
+	void RegisterDeterministicOsStubs(lua_State* L) {
+		lua_getglobal(L, "os");
+		lua_pushcfunction(L, det_os_time);
+		lua_setfield(L, -2, "time");
+		lua_pushcfunction(L, det_os_clock);
+		lua_setfield(L, -2, "clock");
+		lua_pop(L, 1);
+	}
+} // namespace
+
+// Per-MO RNG generator and its Lua-side override pointer; a threaded per-MO hook
+// points both sim-RNG overrides here so its draws depend only on the MO and tick.
+thread_local RandomGenerator s_workerMORNG;
+thread_local RandomGenerator* s_luaRNGOverride = nullptr;
+
+// splitmix64-style mix so an MO's successive hooks and ticks don't correlate.
+static uint64_t DeriveMORNGSeed(long uniqueID, uint64_t tick, uint64_t phase) {
+	uint64_t h = static_cast<uint64_t>(uniqueID) * 0x9E3779B97F4A7C15ULL;
+	h = (h ^ tick) * 0xBF58476D1CE4E5B9ULL;
+	h = (h ^ phase) * 0x94D049BB133111EBULL;
+	h ^= h >> 31;
+	return h;
+}
+
+DeterministicMORNGScope::DeterministicMORNGScope(long uniqueID, uint64_t phase, bool enabled) :
+    m_Installed(enabled), m_PrevSimOverride(nullptr), m_PrevLuaOverride(nullptr) {
+	if (!enabled) {
+		return;
+	}
+	s_workerMORNG.Seed(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	m_PrevSimOverride = t_simRNGOverride;
+	m_PrevLuaOverride = s_luaRNGOverride;
+	t_simRNGOverride = &s_workerMORNG;
+	s_luaRNGOverride = &s_workerMORNG;
+}
+
+DeterministicMORNGScope::~DeterministicMORNGScope() {
+	if (m_Installed) {
+		t_simRNGOverride = m_PrevSimOverride;
+		s_luaRNGOverride = m_PrevLuaOverride;
+	}
+}
 
 LuaStateWrapper::LuaStateWrapper() {
 	Clear();
@@ -70,6 +127,9 @@ void LuaStateWrapper::Initialize() {
 	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON)) {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
+
+	// Replace os.time / os.clock with sim-tick stubs so sim Lua can't read the wall clock.
+	RegisterDeterministicOsStubs(m_State);
 
 	// From LuaBind documentation:
 	// As mentioned in the Lua documentation, it is possible to pass an error handler function to lua_pcall(). LuaBind makes use of lua_pcall() internally when calling member functions and free functions.
@@ -191,6 +251,7 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, PrimitiveMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SceneMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, SettingsMan),
+	                         RegisterLuaBindingsOfType(ManagerLuaBindings, MetricsCollector),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, TimerMan),
 	                         RegisterLuaBindingsOfType(ManagerLuaBindings, UInputMan),
 	                         RegisterLuaBindingsOfType(PrimitiveLuaBindings, GraphicalPrimitive),
@@ -241,6 +302,7 @@ void LuaStateWrapper::Initialize() {
 	luabind::globals(m_State)["ConsoleMan"] = &g_ConsoleMan;
 	luabind::globals(m_State)["LuaMan"] = this;
 	luabind::globals(m_State)["SettingsMan"] = &g_SettingsMan;
+	luabind::globals(m_State)["MetricsCollector"] = &g_MetricsCollector;
 
 	const uint64_t seed = RandomNum<uint64_t>(0, std::numeric_limits<uint64_t>::max());
 	m_RandomGenerator.Seed(seed);
@@ -281,20 +343,33 @@ void LuaStateWrapper::Destroy() {
 	lua_close(m_State);
 }
 
+// During a threaded per-MO hook these draw from the per-MO generator; else this state's RNG.
 int LuaStateWrapper::SelectRand(int minInclusive, int maxInclusive) {
-	return m_RandomGenerator.RandomNum<int>(minInclusive, maxInclusive);
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNum<int>(minInclusive, maxInclusive);
 }
 
 double LuaStateWrapper::RangeRand(double minInclusive, double maxInclusive) {
-	return m_RandomGenerator.RandomNum<double>(minInclusive, maxInclusive);
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNum<double>(minInclusive, maxInclusive);
 }
 
 double LuaStateWrapper::NormalRand() {
-	return m_RandomGenerator.RandomNormalNum<double>();
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNormalNum<double>();
 }
 
 double LuaStateWrapper::PosRand() {
-	return m_RandomGenerator.RandomNum<double>();
+	RandomGenerator& rng = s_luaRNGOverride ? *s_luaRNGOverride : m_RandomGenerator;
+	return rng.RandomNum<double>();
+}
+
+void LuaStateWrapper::SeedRandomGenerator(uint64_t seed) {
+	m_RandomGenerator.Seed(seed);
+}
+
+std::string LuaStateWrapper::GetRandomGeneratorStateForHashing() const {
+	return m_RandomGenerator.SerializeStateForHashing();
 }
 
 // Passthrough LuaMan Functions
@@ -466,7 +541,9 @@ void LuaStateWrapper::SetTempEntityVector(const std::vector<const Entity*>& enti
 
 void LuaStateWrapper::SetLuaPath(const std::string& filePath) {
 	const std::string moduleName = g_PresetMan.GetModuleNameFromPath(filePath);
-	const std::string moduleFolder = g_PresetMan.IsModuleOfficial(moduleName) ? System::GetDataDirectory() : System::GetModDirectory();
+	// A bundled non-official module (the determinism Tests.rte) ships in Data/, not Mods/, so its
+	// require() path must resolve there too — mirror PresetMan::GetFullModulePath.
+	const std::string moduleFolder = (g_PresetMan.IsModuleOfficial(moduleName) || std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + moduleName)) ? System::GetDataDirectory() : System::GetModDirectory();
 	const std::string scriptPath = moduleFolder + moduleName + "/?.lua";
 
 	lua_getglobal(m_State, "package");
@@ -1304,6 +1381,26 @@ void LuaMan::StartAsyncGarbageCollection() {
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTOP, 0);
 		    }));
 	}
+}
+
+void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
+	// Derive an independent per-state seed so states don't share a math.random sequence.
+	std::mt19937_64 derive(baseSeed);
+	m_MasterScriptState.SeedRandomGenerator(derive());
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		luaState.SeedRandomGenerator(derive());
+	}
+}
+
+void LuaMan::HashAllLuaStatesIntoSimChecksum() {
+	if (!g_SimChecksum.IsActive()) {
+		return;
+	}
+	// Hash the master state only — threaded per-MO Lua work is redirected to per-MO RNGs, so the
+	// threaded states carry no sim-observable RNG state. Master is the thread-count-invariant,
+	// sim-authoritative Lua RNG.
+	const std::string masterState = m_MasterScriptState.GetRandomGeneratorStateForHashing();
+	g_SimChecksum.Update("lua_state", masterState.data(), masterState.size());
 }
 
 void LuaMan::ClearScriptTimings() {

@@ -7,6 +7,7 @@
 
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <array>
 #include <execution>
 
@@ -233,6 +234,10 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	const_cast<Vector&>(pathRequest->startPos) = start;
 	const_cast<Vector&>(pathRequest->targetPos) = end;
 
+	// Count the request from enqueue, not dispatch: a request still queued in the pool must
+	// already hold the node-grid gate or its solve races the node-cost write. Released by the task.
+	++m_CurrentPathingRequests;
+
 	g_ThreadMan.GetBackgroundThreadPool().push_task(
 	    [this, start, end, jumpHeight, digStrength, callback](std::shared_ptr<volatile PathRequest> volRequest) {
 		    // Cast away the volatile-ness - only matters outside (and complicates the API otherwise)
@@ -250,6 +255,9 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		    // Have to set to complete after the callback, so anything that blocks on it knows that the callback will have been called by now
 		    // This has the awkward side-effect that the complete flag is actually false during the callback - but that's fine, if it's called we know it's complete anyways
 		    request.complete = true;
+
+		    // Release the enqueue-time count last, so a waiter sees 0 only once the request is done.
+		    --m_CurrentPathingRequests;
 	    },
 	    pathRequest);
 
@@ -293,6 +301,7 @@ std::vector<int> PathFinder::RecalculateAreaCosts(std::deque<Box>& boxList, size
 	// Using it will cause nodes to randomly fail to update. This should be rechecked when the codebase upgrades to C++20,
 	// and then UpdateNodeList can be refactored to take a pair of iterators instead of a vector.
 	std::vector<int> nodeVec(nodeIDsToUpdate.begin(), nodeIDsToUpdate.end());
+	std::sort(nodeVec.begin(), nodeVec.end()); // canonical order — unordered_set iteration is hash-bucket dependent.
 
 	// If no PathNode costs were changed, clear the set of IDs to update, so it's empty when it's returned.
 	if (!UpdateNodeList(nodeVec)) {

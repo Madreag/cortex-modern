@@ -42,7 +42,10 @@ lj_defines = [
     '-D_LARGEFILE_SOURCE',
     '-U_FORTIFY_SOURCE',
     '-DLUA_MULTILIB="lib"',
-    '-DLUA_ROOT="' + get_option('prefix') + '"'
+    '-DLUA_ROOT="' + get_option('prefix') + '"',
+    # Deterministic string-key table iteration: allocation-order string ids + fixed PRNG seed.
+    '-DLUAJIT_SECURITY_STRID=0',
+    '-DLUAJIT_SECURITY_PRNG=0'
 ]
 
 if host_machine.system() == 'darwin'
