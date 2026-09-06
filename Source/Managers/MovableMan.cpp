@@ -1035,22 +1035,24 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 
 bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	CompleteQueuedMOIDDrawings();
-	for (Actor* actor: m_AddedActors) {
-		actor->DestroyScriptState();
-		delete actor;
+	if (!m_Actors.empty() || !m_Items.empty() || !m_Particles.empty() || !m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
+		for (Actor* actor: m_AddedActors) {
+			actor->DestroyScriptState();
+			delete actor;
+		}
+		for (MovableObject* item: m_AddedItems) {
+			item->DestroyScriptState();
+			delete item;
+		}
+		for (MovableObject* particle: m_AddedParticles) {
+			particle->DestroyScriptState();
+			delete particle;
+		}
+		m_AddedActors.clear();
+		m_AddedItems.clear();
+		m_AddedParticles.clear();
+		PurgeAllMOs();
 	}
-	for (MovableObject* item: m_AddedItems) {
-		item->DestroyScriptState();
-		delete item;
-	}
-	for (MovableObject* particle: m_AddedParticles) {
-		particle->DestroyScriptState();
-		delete particle;
-	}
-	m_AddedActors.clear();
-	m_AddedItems.clear();
-	m_AddedParticles.clear();
-	PurgeAllMOs();
 	{
 		MovableObject::FaithfulCloneScope scope(true);
 		for (const Actor* actor: in.actors) {
@@ -1085,6 +1087,106 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 		particle->ResolveFaithfulLinks();
 	}
 	return true;
+}
+
+void MovableMan::SetAsideWorld(WorldSetAside& out) {
+	CompleteQueuedMOIDDrawings();
+	WaitForActorsSeeTask();
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
+	out.actors.swap(m_Actors);
+	out.items.swap(m_Items);
+	out.particles.swap(m_Particles);
+	out.addedActors.swap(m_AddedActors);
+	out.addedItems.swap(m_AddedItems);
+	out.addedParticles.swap(m_AddedParticles);
+	out.alarmEvents.swap(m_AlarmEvents);
+	out.addedAlarmEvents.swap(m_AddedAlarmEvents);
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		out.rosters[team].swap(m_ActorRoster[team]);
+		out.sortRoster[team] = m_SortTeamRoster[team];
+		m_SortTeamRoster[team] = false;
+	}
+	out.joinQuarantine.swap(m_LockstepJoinQuarantine);
+	m_ValidActors.clear();
+	m_ValidItems.clear();
+	m_ValidParticles.clear();
+	m_MOIDIndex.clear();
+	out.held = true;
+}
+
+void MovableMan::ReinstateWorld(WorldSetAside& in) {
+	if (!in.held) {
+		return;
+	}
+	CompleteQueuedMOIDDrawings();
+	WaitForActorsSeeTask();
+	// The re-run's residents never initialized their scripts (frozen), so purging them leaves the originals' Lua objects alone.
+	for (Actor* actor: m_AddedActors) {
+		actor->DestroyScriptState();
+		delete actor;
+	}
+	for (MovableObject* item: m_AddedItems) {
+		item->DestroyScriptState();
+		delete item;
+	}
+	for (MovableObject* particle: m_AddedParticles) {
+		particle->DestroyScriptState();
+		delete particle;
+	}
+	m_AddedActors.clear();
+	m_AddedItems.clear();
+	m_AddedParticles.clear();
+	PurgeAllMOs();
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
+	m_Actors.swap(in.actors);
+	m_Items.swap(in.items);
+	m_Particles.swap(in.particles);
+	m_AddedActors.swap(in.addedActors);
+	m_AddedItems.swap(in.addedItems);
+	m_AddedParticles.swap(in.addedParticles);
+	m_AlarmEvents.swap(in.alarmEvents);
+	m_AddedAlarmEvents.swap(in.addedAlarmEvents);
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		m_ActorRoster[team].swap(in.rosters[team]);
+		m_SortTeamRoster[team] = in.sortRoster[team];
+	}
+	m_LockstepJoinQuarantine.swap(in.joinQuarantine);
+	for (Actor* actor: m_Actors) {
+		m_ValidActors.insert(actor);
+	}
+	for (MovableObject* item: m_Items) {
+		m_ValidItems.insert(item);
+	}
+	for (MovableObject* particle: m_Particles) {
+		m_ValidParticles.insert(particle);
+	}
+	for (Actor* actor: m_AddedActors) {
+		m_ValidActors.insert(actor);
+	}
+	for (MovableObject* item: m_AddedItems) {
+		m_ValidItems.insert(item);
+	}
+	for (MovableObject* particle: m_AddedParticles) {
+		m_ValidParticles.insert(particle);
+	}
+	in.held = false;
+}
+
+std::string MovableMan::DescribeLuaIdentity() const {
+	std::string out;
+	const auto describe = [&out](const std::string& name, LuaStateWrapper& state) {
+		out += name;
+		for (const MovableObject* mo: SortedRegisteredMOs(state)) {
+			out += " " + std::to_string(mo->GetUniqueID()) + "@" + state.DescribeScriptObjectIdentity(mo->GetUniqueID());
+		}
+		out += "\n";
+	};
+	describe("master", g_LuaMan.GetMasterScriptState());
+	int index = 0;
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		describe("thread" + std::to_string(index++), state);
+	}
+	return out;
 }
 
 MovableMan::AddQueueMark MovableMan::MarkAddQueues() {

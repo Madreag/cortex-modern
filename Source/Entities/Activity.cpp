@@ -942,8 +942,8 @@ void Activity::CaptureRollbackState(RollbackState& out) const {
 		out.teamActive[team] = m_TeamActive[team];
 	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		out.controlledActor[player] = m_ControlledActor[player];
-		out.brain[player] = m_Brain[player];
+		out.controlledActorUID[player] = m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0;
+		out.brainUID[player] = m_Brain[player] ? m_Brain[player]->GetUniqueID() : 0;
 		out.brainEvacuated[player] = m_BrainEvacuated[player];
 	}
 }
@@ -955,9 +955,10 @@ void Activity::RestoreRollbackState(const RollbackState& in) {
 		m_TeamDeaths[team] = in.teamDeaths[team];
 		m_TeamActive[team] = in.teamActive[team];
 	}
+	// The slots name their actors by unique id, so they land on whichever copy of the actor the world holds now.
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		m_ControlledActor[player] = in.controlledActor[player];
-		m_Brain[player] = in.brain[player];
+		m_ControlledActor[player] = in.controlledActorUID[player] ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(in.controlledActorUID[player])) : nullptr;
+		m_Brain[player] = in.brainUID[player] ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(in.brainUID[player])) : nullptr;
 		m_BrainEvacuated[player] = in.brainEvacuated[player];
 	}
 }

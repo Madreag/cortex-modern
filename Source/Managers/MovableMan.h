@@ -128,7 +128,30 @@ namespace RTE {
 		bool CaptureWorld(WorldSnapshot& out) const;
 
 		/// Replaces the resident MOs with registered faithful clones of a snapshot. Only valid between ticks.
+		/// A world that was not set aside first is purged.
 		bool RestoreWorld(const WorldSnapshot& in);
+
+		/// The live residents moved out of the world untouched, so a probe can run on a restored copy and hand the originals back.
+		struct WorldSetAside {
+			std::deque<Actor*> actors;
+			std::deque<MovableObject*> items;
+			std::deque<MovableObject*> particles;
+			std::deque<Actor*> addedActors;
+			std::deque<MovableObject*> addedItems;
+			std::deque<MovableObject*> addedParticles;
+			std::vector<AlarmEvent*> alarmEvents;
+			std::vector<AlarmEvent*> addedAlarmEvents;
+			std::list<Actor*> rosters[Activity::MaxTeamCount];
+			bool sortRoster[Activity::MaxTeamCount] = {};
+			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
+			bool held = false;
+		};
+		/// Moves every resident and queued add out of the world without touching them; the world is empty afterwards.
+		void SetAsideWorld(WorldSetAside& out);
+		/// Destroys the current residents (a probe's re-run) and puts the set-aside originals back, identities and script state intact.
+		void ReinstateWorld(WorldSetAside& in);
+		/// One line per Lua state listing every registered object's unique id and the identity of its Lua object; identity oracles compare it.
+		std::string DescribeLuaIdentity() const;
 
 		struct AddQueueMark {
 			size_t actors = 0;

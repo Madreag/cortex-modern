@@ -110,6 +110,7 @@
 #include <random>
 #include <deque>
 #include <array>
+#include <map>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -176,7 +177,10 @@ static long s_rbProbeUidCounter = 0;
 static bool s_rbProbeInMemory = true;
 static bool s_rbProbeMemoryRestorePending = false;
 static MovableMan::WorldSnapshot s_rbProbeWorld;
+static MovableMan::WorldSetAside s_rbProbeOriginals;
 static Activity::RollbackState s_rbProbeActivity;
+static Activity::RollbackState s_rbProbeActivityAtWindowEnd;
+static std::string s_rbProbeLuaIdentityAtCapture;
 static std::deque<long long> s_rbProbeSchedule;
 static int s_rbProbeFuzzCount = 0;
 static uint64_t s_rbProbeFuzzSeed = 1;
@@ -1212,10 +1216,9 @@ static std::string DescribeCanonicalExtras() {
 			out << " t" << team << "=" << std::hexfloat << state.teamFunds[team] << std::defaultfloat << "/" << state.teamDeaths[team] << (state.teamActive[team] ? "a" : "");
 		}
 		out << "\n";
-		const auto uidOf = [](const Actor* actor) { return actor ? (g_MovableMan.IsActor(actor) ? actor->GetUniqueID() : -1L) : 0L; };
 		out << "players";
 		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-			out << " p" << player << "=" << uidOf(state.controlledActor[player]) << "/" << uidOf(state.brain[player]) << (state.brainEvacuated[player] ? "e" : "");
+			out << " p" << player << "=" << state.controlledActorUID[player] << "/" << state.brainUID[player] << (state.brainEvacuated[player] ? "e" : "");
 		}
 		out << "\n";
 	}
@@ -1394,6 +1397,36 @@ static void DumpTerrainIfArmed(uint64_t simTick) {
 	DumpTerrainNow("t" + std::to_string(simTick));
 }
 
+// Every object registered at the capture that is still registered afterwards must hold the same Lua object.
+static bool LuaIdentityPreserved(const std::string& atCapture, const std::string& now) {
+	std::map<std::string, std::string> before;
+	std::istringstream in(atCapture);
+	std::string line;
+	while (std::getline(in, line)) {
+		std::istringstream words(line);
+		std::string state;
+		words >> state;
+		std::string entry;
+		while (words >> entry) {
+			before[state + ":" + entry.substr(0, entry.find('@'))] = entry;
+		}
+	}
+	std::istringstream after(now);
+	while (std::getline(after, line)) {
+		std::istringstream words(line);
+		std::string state;
+		words >> state;
+		std::string entry;
+		while (words >> entry) {
+			const auto it = before.find(state + ":" + entry.substr(0, entry.find('@')));
+			if (it != before.end() && it->second != entry) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 // Runs the rollback fidelity probe's phase machine on each hashed tick (needs -tick-hashes so
 // every tick hashes). The restore itself completes in the deferred-restart block, which flips
 // phase 2 to 3 after rewinding the clock, the RNG, and the unique ID counter.
@@ -1479,6 +1512,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			std::cout << "[rbprobe] fault injected: snapshot_skew on uid " << skewed->GetUniqueID() << std::endl;
 		}
 		s_rbProbeCapturedDeep = DumpSimStateToString();
+		s_rbProbeLuaIdentityAtCapture = g_MovableMan.DescribeLuaIdentity();
 		WriteProbeText("rb_captured", s_rbProbeCapturedDeep);
 		WriteProbeText("rb_captured_" + std::to_string(simTick), s_rbProbeCapturedDeep);
 		s_rbProbeFirstDeep.clear();
@@ -1492,6 +1526,9 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		s_rbProbeFirstDeep.push_back(DumpSimStateToString());
 		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
 			if (s_rbProbeInMemory) {
+				if (Activity* activity = g_ActivityMan.GetActivity()) {
+					activity->CaptureRollbackState(s_rbProbeActivityAtWindowEnd);
+				}
 				s_rbProbeMemoryRestorePending = true;
 			} else if (!g_ActivityMan.LoadGameToRestart("rbprobe")) {
 				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
@@ -1522,6 +1559,21 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					firstDivergence = s_rbProbeAtTick + 1 + static_cast<long long>(i);
 					divergentIndex = i;
 					break;
+				}
+			}
+			if (s_rbProbeInMemory) {
+				// The re-run is discarded; the run continues on the originals, whose Lua objects never left.
+				g_MovableMan.ReinstateWorld(s_rbProbeOriginals);
+				if (Activity* activity = g_ActivityMan.GetActivity()) {
+					activity->RestoreRollbackState(s_rbProbeActivityAtWindowEnd);
+				}
+				g_MovableMan.UpdateDrawMOIDs();
+				const std::string identityNow = g_MovableMan.DescribeLuaIdentity();
+				if (!LuaIdentityPreserved(s_rbProbeLuaIdentityAtCapture, identityNow)) {
+					s_rbProbeRestoreMismatch = true;
+					WriteProbeText("rb_lua_identity_capture", s_rbProbeLuaIdentityAtCapture);
+					WriteProbeText("rb_lua_identity_after", identityNow);
+					std::cout << "[rbprobe] FIDELITY FAIL: a Lua object identity changed across the probe (capture " << s_rbProbeAtTick << ")" << std::endl;
 				}
 			}
 			if (firstDivergence < 0 && s_rbProbeDeepDivergence < 0 && !s_rbProbeRestoreMismatch) {
@@ -2278,15 +2330,17 @@ void RunGameLoop() {
 				}
 				const double terrainRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - terrainRestoreStart).count();
 				const auto worldRestoreStart = std::chrono::steady_clock::now();
+				// The originals step aside untouched; the re-run happens on the snapshot's clones.
+				g_MovableMan.SetAsideWorld(s_rbProbeOriginals);
+				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
+					std::cout << "[rbprobe] FAIL: world restore refused" << std::endl;
+					System::SetQuit(true);
+				}
 				if (Activity* activity = g_ActivityMan.GetActivity()) {
 					activity->RestoreRollbackState(s_rbProbeActivity);
 					if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 						gameActivity->RestoreDeliveriesFromRollback();
 					}
-				}
-				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
-					std::cout << "[rbprobe] FAIL: world restore refused" << std::endl;
-					System::SetQuit(true);
 				}
 				MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
 				const double worldRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldRestoreStart).count();
