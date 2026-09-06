@@ -159,24 +159,19 @@ namespace RTE {
 			ScenarioRunner::PeekLockstepLocalControllerFrames(tick, frames);
 			for (Preview& preview: targets) {
 				Actor* clone = preview.clone;
-				for (const ControllerFrame& frame: frames) {
-					if (frame.actorUniqueID != static_cast<int64_t>(clone->GetUniqueID())) {
-						continue;
-					}
-					ControllerFrameCodec::ApplyActorState(frame, *clone, &error);
-					ControllerFrameCodec::Apply(frame, *clone->GetController(), &error);
-					clone->GetController()->SetWireApplyTick(static_cast<int64_t>(tick));
-				}
-				Trace("applied");
-				clone->NewFrame();
-				clone->PreTravel();
-				clone->Travel();
-				clone->PostTravel();
+				// The same stages in the same order as the world update: travel, pre-controller, wire, update, post.
+				MovableMan::TravelStage(clone);
 				Trace("traveled");
 				clone->PreControllerUpdate();
-				clone->Update();
+				for (const ControllerFrame& frame: frames) {
+					if (frame.actorUniqueID == static_cast<int64_t>(clone->GetUniqueID())) {
+						MovableMan::ApplyLockstepFrameToActor(*clone, frame, tick, &error);
+					}
+				}
+				Trace("applied");
+				MovableMan::UpdateStage(clone);
 				Trace("updated");
-				clone->PostUpdate();
+				MovableMan::PostUpdateStage(clone);
 			}
 		}
 

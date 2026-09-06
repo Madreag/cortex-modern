@@ -284,17 +284,28 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 			continue;
 		}
 
-		std::string applyError;
-		if (!ControllerFrameCodec::ApplyActorState(frame, *actorIt->second, &applyError)) {
-			error = "lockstep actor-state apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
+		if (!MovableMan::ApplyLockstepFrameToActor(*actorIt->second, frame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), &error)) {
 			return false;
 		}
-		if (!ControllerFrameCodec::Apply(frame, *actorIt->second->GetController(), &applyError)) {
-			error = "lockstep controller apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
-			return false;
-		}
-		actorIt->second->GetController()->SetWireApplyTick(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
+	return true;
+}
+
+bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error) {
+	std::string applyError;
+	if (!ControllerFrameCodec::ApplyActorState(frame, actor, &applyError)) {
+		if (error) {
+			*error = "lockstep actor-state apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
+		}
+		return false;
+	}
+	if (!ControllerFrameCodec::Apply(frame, *actor.GetController(), &applyError)) {
+		if (error) {
+			*error = "lockstep controller apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
+		}
+		return false;
+	}
+	actor.GetController()->SetWireApplyTick(static_cast<int64_t>(simTick));
 	return true;
 }
 
@@ -2454,13 +2465,7 @@ void MovableMan::Update() {
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsUpdate);
 			for (Actor* actor: m_Actors) {
-				actor->Update();
-
-				g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-				actor->UpdateScripts();
-				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-
-				actor->ApplyImpulses();
+				UpdateStage(actor);
 			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsUpdate);
 		}
@@ -2471,13 +2476,7 @@ void MovableMan::Update() {
 			int count = 0;
 			int itemLimit = m_Items.size() - m_MaxDroppedItems;
 			for (iIt = m_Items.begin(); iIt != m_Items.end(); ++iIt, ++count) {
-				(*iIt)->Update();
-
-				g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-				(*iIt)->UpdateScripts();
-				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-
-				(*iIt)->ApplyImpulses();
+				UpdateStage(*iIt);
 				if (count <= itemLimit) {
 					(*iIt)->SetToSettle(true);
 				}
@@ -2489,13 +2488,7 @@ void MovableMan::Update() {
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ParticlesUpdate);
 			for (MovableObject* particle: m_Particles) {
-				particle->Update();
-
-				g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-				particle->UpdateScripts();
-				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-
-				particle->ApplyImpulses();
+				UpdateStage(particle);
 				particle->RestDetection();
 				// Copy particles that are at rest to the terrain and mark them for deletion.
 				if (particle->IsAtRest()) {
@@ -2509,15 +2502,15 @@ void MovableMan::Update() {
 			ZoneScopedN("Post Update");
 
 			for (Actor* actor: m_Actors) {
-				actor->PostUpdate();
+				PostUpdateStage(actor);
 			}
 
 			for (MovableObject* item: m_Items) {
-				item->PostUpdate();
+				PostUpdateStage(item);
 			}
 
 			for (MovableObject* particle: m_Particles) {
-				particle->PostUpdate();
+				PostUpdateStage(particle);
 			}
 		}
 
@@ -2819,14 +2812,8 @@ void MovableMan::Travel() {
 		ZoneScopedN("Actors Travel");
 
 		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsTravel);
-		for (auto aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {
-			if (!((*aIt)->IsUpdated())) {
-				(*aIt)->ApplyForces();
-				(*aIt)->PreTravel();
-				(*aIt)->Travel();
-				(*aIt)->PostTravel();
-			}
-			(*aIt)->NewFrame();
+		for (Actor* actor: m_Actors) {
+			TravelStage(actor);
 		}
 		g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsTravel);
 	}
@@ -2835,14 +2822,8 @@ void MovableMan::Travel() {
 	{
 		ZoneScopedN("Items Travel");
 
-		for (auto iIt = m_Items.begin(); iIt != m_Items.end(); ++iIt) {
-			if (!((*iIt)->IsUpdated())) {
-				(*iIt)->ApplyForces();
-				(*iIt)->PreTravel();
-				(*iIt)->Travel();
-				(*iIt)->PostTravel();
-			}
-			(*iIt)->NewFrame();
+		for (MovableObject* item: m_Items) {
+			TravelStage(item);
 		}
 	}
 
@@ -2851,17 +2832,35 @@ void MovableMan::Travel() {
 		ZoneScopedN("Particles Travel");
 
 		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ParticlesTravel);
-		for (auto parIt = m_Particles.begin(); parIt != m_Particles.end(); ++parIt) {
-			if (!((*parIt)->IsUpdated())) {
-				(*parIt)->ApplyForces();
-				(*parIt)->PreTravel();
-				(*parIt)->Travel();
-				(*parIt)->PostTravel();
-			}
-			(*parIt)->NewFrame();
+		for (MovableObject* particle: m_Particles) {
+			TravelStage(particle);
 		}
 		g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ParticlesTravel);
 	}
+}
+
+void MovableMan::TravelStage(MovableObject* mo) {
+	if (!mo->IsUpdated()) {
+		mo->ApplyForces();
+		mo->PreTravel();
+		mo->Travel();
+		mo->PostTravel();
+	}
+	mo->NewFrame();
+}
+
+void MovableMan::UpdateStage(MovableObject* mo) {
+	mo->Update();
+
+	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+	mo->UpdateScripts();
+	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+
+	mo->ApplyImpulses();
+}
+
+void MovableMan::PostUpdateStage(MovableObject* mo) {
+	mo->PostUpdate();
 }
 
 void MovableMan::UpdateControllers() {
