@@ -71,6 +71,7 @@ namespace RTE {
 
 		/// Gets the current offset from the joint to the ankle.
 		Vector GetAnkleOffset() const { return m_AnkleOffset; }
+		float GetNormalizedExtension() const { return m_NormalizedExtension; }
 
 		/// Gets the absolute position this Leg's foot is moving towards.
 		Vector GetTargetPosition() const { return m_TargetPosition; }

@@ -267,6 +267,16 @@ int HDFirearm::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_PersistedReloadTimerAnchor.startTicks;
 		m_PersistedReloadTimerAnchor.pending = true;
 	});
+	MatchProperty("ReloadTimerLimitTicks", {
+		int64_t limit = 0;
+		reader >> limit;
+		m_ReloadTmr.SetSimTimeLimitTicks(limit);
+	});
+	MatchProperty("SpecialBehaviour_Reloading", { reader >> m_Reloading; });
+	MatchProperty("SpecialBehaviour_DoneReloading", { reader >> m_DoneReloading; });
+	MatchProperty("SpecialBehaviour_HasPlayedEndReloadSound", { reader >> m_HasPlayedEndReloadSound; });
+	MatchProperty("SpecialBehaviour_FireFrame", { reader >> m_FireFrame; });
+	MatchProperty("SpecialBehaviour_FiredLastFrame", { reader >> m_FiredLastFrame; });
 	MatchProperty("SpecialBehaviour_FiredOnce", { reader >> m_FiredOnce; });
 	MatchProperty("SpecialBehaviour_AlreadyClicked", { reader >> m_AlreadyClicked; });
 

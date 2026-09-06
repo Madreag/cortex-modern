@@ -342,6 +342,7 @@ void MovableObject::AdoptPersistedUniqueID() {
 		m_HasPersistedVelOscillations = false;
 	}
 	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
+	m_PersistedMOIgnoreTimerAnchor.Apply(m_MOIgnoreTimer);
 	if (m_PersistedUniqueID <= 0) {
 		return;
 	}

@@ -1304,6 +1304,10 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("PrevRotation", moSpriteToSave->GetPrevRotMatrix());
 			writer.NewPropertyWithValue("AngularVel", moSpriteToSave->GetAngularVel());
 			writer.NewPropertyWithValue("SpecialBehaviour_AngOscillations", moSpriteToSave->GetAngOscillations());
+			writer.NewPropertyWithValue("Frame", static_cast<int>(moSpriteToSave->GetFrame()));
+			writer.NewPropertyWithValue("SpecialBehaviour_PrevAngVel", moSpriteToSave->GetPrevAngularVel());
+			writer.NewPropertyWithValue("SpriteAnimTimerStart", moSpriteToSave->GetSpriteAnimTimerStart());
+			writer.NewPropertyWithValue("SpecialBehaviour_SpriteAnimIsReversingFrames", moSpriteToSave->GetSpriteAnimIsReversingFrames());
 		}
 	}
 
@@ -1384,6 +1388,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 	if (const Attachable* attachableToSave = dynamic_cast<const Attachable*>(sceneObjectToSave); attachableToSave && saveFullData) {
 		writer.NewPropertyWithValue("ParentOffset", attachableToSave->GetParentOffset());
+		writer.NewPropertyWithValue("SpecialBehaviour_JointPosition", attachableToSave->GetJointPos());
+		writer.NewPropertyWithValue("SpecialBehaviour_PrevParentOffset", attachableToSave->GetPrevParentOffset());
+		writer.NewPropertyWithValue("SpecialBehaviour_PrevJointOffset", attachableToSave->GetPrevJointOffset());
+		writer.NewPropertyWithValue("SpecialBehaviour_MountedRotAngleOffset", attachableToSave->GetMountedRotAngleOffset());
+		writer.NewPropertyWithValue("SpecialBehaviour_DamageCount", attachableToSave->GetDamageCount());
 		writer.NewPropertyWithValue("DrawAfterParent", attachableToSave->IsDrawnAfterParent());
 		writer.NewPropertyWithValue("DeleteWhenRemovedFromParent", attachableToSave->GetDeleteWhenRemovedFromParent());
 		writer.NewPropertyWithValue("GibWhenRemovedFromParent", attachableToSave->GetGibWhenRemovedFromParent());
@@ -1464,6 +1473,12 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			WriteHardcodedAttachableOrNone("Flash", hdFirearmToSave->GetFlash());
 			writer.NewPropertyWithValue("LastFireTimerStart", hdFirearmToSave->GetLastFireTimerStart());
 			writer.NewPropertyWithValue("ReloadTimerStart", hdFirearmToSave->GetReloadTimerStart());
+			writer.NewPropertyWithValue("ReloadTimerLimitTicks", hdFirearmToSave->GetReloadTimerLimitTicks());
+			writer.NewPropertyWithValue("SpecialBehaviour_Reloading", hdFirearmToSave->IsReloading());
+			writer.NewPropertyWithValue("SpecialBehaviour_DoneReloading", hdFirearmToSave->DoneReloading());
+			writer.NewPropertyWithValue("SpecialBehaviour_HasPlayedEndReloadSound", hdFirearmToSave->HasPlayedEndReloadSound());
+			writer.NewPropertyWithValue("SpecialBehaviour_FireFrame", hdFirearmToSave->FiredFrame());
+			writer.NewPropertyWithValue("SpecialBehaviour_FiredLastFrame", hdFirearmToSave->FiredLastFrame());
 			writer.NewPropertyWithValue("SpecialBehaviour_FiredOnce", hdFirearmToSave->FiredOnce());
 			writer.NewPropertyWithValue("SpecialBehaviour_AlreadyClicked", hdFirearmToSave->GetAlreadyClicked());
 		}

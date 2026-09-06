@@ -64,6 +64,7 @@ int MOSParticle::ReadProperty(const std::string_view& propName, Reader& reader) 
 		reader >> m_PersistedAtomResidue;
 		m_HasPersistedAtomResidue = true;
 	});
+	MatchProperty("SpecialBehaviour_TimeRest", { reader >> m_TimeRest; });
 
 	EndPropertyList;
 }

@@ -1,5 +1,8 @@
 #include "Attachable.h"
 
+#include <bit>
+#include "SceneMan.h"
+
 #include "AtomGroup.h"
 #include "PresetMan.h"
 #include "MovableMan.h"
@@ -160,6 +163,11 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("InheritsAngularVelWhenDetached", { reader >> m_InheritsAngularVelWhenDetached; });
 	MatchProperty("CollidesWithTerrainWhileAttached", { reader >> m_CollidesWithTerrainWhileAttached; });
 	MatchProperty("SpecialBehaviour_PrevRotAngleOffset", { reader >> m_PrevRotAngleOffset; });
+	MatchProperty("SpecialBehaviour_JointPosition", { reader >> m_JointPos; });
+	MatchProperty("SpecialBehaviour_PrevParentOffset", { reader >> m_PrevParentOffset; });
+	MatchProperty("SpecialBehaviour_PrevJointOffset", { reader >> m_PrevJointOffset; });
+	MatchProperty("SpecialBehaviour_MountedRotAngleOffset", { reader >> m_MountedRotAngleOffset; });
+	MatchProperty("SpecialBehaviour_DamageCount", { reader >> m_DamageCount; });
 	MatchProperty("IgnoresParticlesWhileAttached", { reader >> m_IgnoresParticlesWhileAttached; });
 	MatchProperty("AddPieSlice", { m_PieSlices.emplace_back(std::unique_ptr<PieSlice>(dynamic_cast<PieSlice*>(g_PresetMan.ReadReflectedPreset(reader)))); });
 

@@ -1374,6 +1374,7 @@ namespace RTE {
 		int m_PersistedVelOscillations;
 		bool m_HasPersistedVelOscillations;
 		PersistedTimerAnchor m_PersistedAgeTimerAnchor;
+		PersistedTimerAnchor m_PersistedMOIgnoreTimerAnchor;
 		// In which radis should we look to remove orphaned terrain on terrain penetration,
 		// must not be greater than SceneMan::ORPHANSIZE, or will be truncated
 		int m_RemoveOrphanTerrainRadius;

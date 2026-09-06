@@ -86,6 +86,10 @@ namespace RTE {
 
 		/// Gets the reload timer start in raw sim ticks, for full-game saves.
 		int64_t GetReloadTimerStart() const { return m_ReloadTmr.GetStartSimTimeMS(); }
+		double GetReloadTimerLimitMS() const { return m_ReloadTmr.GetSimTimeLimitMS(); }
+		int64_t GetReloadTimerLimitTicks() const { return m_ReloadTmr.GetSimTimeLimitTicks(); }
+		double GetReloadTimerElapsedSimMS() const { return m_ReloadTmr.GetElapsedSimTimeMS(); }
+		bool HasPlayedEndReloadSound() const { return m_HasPlayedEndReloadSound; }
 
 		void AdoptPersistedUniqueID() override;
 
@@ -469,6 +473,7 @@ namespace RTE {
 		/// Whether at least one round has already been fired during the current frame.
 		/// @return Returns true at least one round has already been fired during the current frame.
 		bool FiredFrame() const { return m_FireFrame; }
+		bool FiredLastFrame() const { return m_FiredLastFrame; }
 
 		/// The empty-click latch for the current activation, for full-game saves.
 		bool GetAlreadyClicked() const { return m_AlreadyClicked; }

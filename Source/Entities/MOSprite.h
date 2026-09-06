@@ -215,6 +215,9 @@ namespace RTE {
 		/// Tells which frame is currently set to show.
 		/// @return An unsigned int describing the current frame.
 		unsigned int GetFrame() const { return m_Frame; }
+		float GetPrevAngularVel() const { return m_PrevAngVel; }
+		int64_t GetSpriteAnimTimerStart() const { return m_SpriteAnimTimer.GetStartSimTimeMS(); }
+		bool GetSpriteAnimIsReversingFrames() const { return m_SpriteAnimIsReversingFrames; }
 
 		/// Sets the animation mode.
 		/// @param animMode The animation mode we want to set. (default: NOANIM)
@@ -398,6 +401,10 @@ namespace RTE {
 		float m_SpriteDiameter;
 		int m_AngOscillations; //!< A counter for oscillations in rotation, in order to detect settling.
 		int m_PersistedAngOscillations; //!< Saved angular rest-detection counter, applied on snapshot adopt.
+		PersistedTimerAnchor m_PersistedSpriteAnimTimerAnchor;
+		float m_PersistedPrevAngVel; //!< Saved previous angular velocity, applied on snapshot adopt.
+		bool m_PersistedSpriteAnimIsReversingFrames; //!< Saved animation direction, applied on snapshot adopt.
+		bool m_HasPersistedSpriteAnimState;
 		bool m_HasPersistedAngOscillations; //!< Whether a saved angular counter is pending application.
 		// Whether to disable the settle material ID when this gets drawn as material
 		bool m_SettleMaterialDisabled;

@@ -125,6 +125,11 @@ namespace RTE {
 		bool m_HasPersistedAtomResidue = false;
 		float m_TimeRest; //!< Accumulated time in seconds that did not cause a frame change.
 
+	public:
+		float GetTimeRest() const { return m_TimeRest; }
+
+	protected:
+
 	private:
 		/// Clears all the member variables of this MOSParticle, effectively resetting the members of this abstraction level only.
 		void Clear();
