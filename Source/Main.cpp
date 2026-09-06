@@ -78,6 +78,7 @@
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
+#include "InputScript.h"
 #include "LocalPrediction.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
@@ -548,6 +549,15 @@ void HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (!lastArg && currentArg == "-net-replay-verify") {
 			s_netReplayVerifyPath = argValue[++i];
+			continue;
+		}
+		if (!lastArg && currentArg == "-input-script") {
+			// A fixture's inputs stand in for the player's devices at the UInputMan boundary.
+			std::string scriptError;
+			if (!InputScript::Load(argValue[++i], &scriptError)) {
+				std::cerr << "[input-script] " << scriptError << std::endl;
+				std::exit(1);
+			}
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-depth") {
