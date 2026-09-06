@@ -249,6 +249,10 @@ namespace RTE {
 			s_Args.selftestDeliverCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-ai-order-command") {
+			s_Args.selftestAIOrderCommand = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-scuttle-command") {
 			// Arm the host-issued scuttle command. Boolean flag.
 			s_Args.selftestScuttleCommand = true;

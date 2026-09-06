@@ -39,6 +39,18 @@
 
 using namespace RTE;
 
+// A player's AI order for one of their units crosses the wire under lockstep, so every peer applies it at the committed tick.
+static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector& point, const MovableObject* target) {
+	NetGameAIOrder order;
+	order.actorUID = static_cast<int64_t>(actor->GetUniqueID());
+	order.team = actor->GetTeam();
+	order.op = op;
+	order.x = point.m_X;
+	order.y = point.m_Y;
+	order.targetUID = target ? static_cast<int64_t>(target->GetUniqueID()) : 0;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, order});
+}
+
 AbstractClassInfo(GameActivity, Activity);
 
 GameActivity::GameActivity() {
@@ -1375,11 +1387,14 @@ void GameActivity::Update() {
 			else if (m_ControlledActor[player] && m_PlayerController[player].IsState(PRESS_FACEBUTTON) || m_PlayerController[player].IsState(PRESS_PRIMARY)) {
 				// TODO: Sound?
 				// If we are pointing to an actor to follow, tehn give that kind of waypoint command
-				if (pTargetActor)
+				if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+					IssueAIOrder(m_ControlledActor[player], pTargetActor ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::SceneWaypoint, m_ActorCursor[player], pTargetActor);
+				} else if (pTargetActor) {
 					m_ControlledActor[player]->AddAIMOWaypoint(pTargetActor);
-				// Just pointing into somewhere in the scene, so give that command
-				else
+				} else {
+					// Just pointing into somewhere in the scene, so give that command
 					m_ControlledActor[player]->AddAISceneWaypoint(m_ActorCursor[player]);
+				}
 
 				if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
 					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
@@ -1445,35 +1460,12 @@ void GameActivity::Update() {
 				// Stop displaying the message
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 
-				// Switch commander to sentry mode
-				m_ControlledActor[player]->SetAIMode(Actor::AIMODE_SENTRY);
-
-				// Detect nearby actors and attach them to commander
-				float sqrRadius = g_SceneMan.ShortestDistance(m_ActorCursor[player], m_ControlledActor[player]->GetPos(), true).GetSqrMagnitude();
-
-				Actor* pActor = 0;
-				Actor* pFirstActor = 0;
-
-				// Get the first one
-				pFirstActor = pActor = g_MovableMan.GetNextTeamActor(m_ControlledActor[player]->GetTeam());
-
-				do {
-					// Set up commander if actor is not player controlled and not brain
-					if (pActor && !pActor->GetController()->IsPlayerControlled() && !pActor->IsInGroup("Brains")) {
-						// If human, set appropriate AI mode
-						if (dynamic_cast<AHuman*>(pActor) || dynamic_cast<ACrab*>(pActor))
-							if (g_SceneMan.ShortestDistance(m_ControlledActor[player]->GetPos(), pActor->GetPos(), true).GetSqrMagnitude() < sqrRadius) {
-								pActor->FlashWhite();
-								pActor->ClearAIWaypoints();
-								pActor->SetAIMode(Actor::AIMODE_SQUAD);
-								pActor->AddAIMOWaypoint(m_ControlledActor[player]);
-								pActor->SetMovePathToUpdate();
-							}
-					}
-
-					// Next!
-					pActor = g_MovableMan.GetNextTeamActor(team, pActor);
-				} while (pActor && pActor != pFirstActor);
+				// The commander goes sentry and the nearby units attach to it
+				if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+					IssueAIOrder(m_ControlledActor[player], NetGameAIOrder::FormSquad, m_ActorCursor[player], nullptr);
+				} else {
+					m_ControlledActor[player]->FormSquad(m_ActorCursor[player]);
+				}
 			}
 		}
 		///////////////////////////////////////////////////
@@ -1664,28 +1656,15 @@ void GameActivity::Update() {
 					m_ActorCursor[player] = m_ControlledActor[player]->GetPos();
 					m_ControlledActor[player]->GetController()->SetDisabled(true);
 				} else if (command == PieSliceType::FormSquad) {
-					// Find out if we have any connected units, and disconnect them
-					bool isCommander = false;
-
-					Actor* pActor = 0;
-					Actor* pFirstActor = 0;
-
-					pFirstActor = pActor = g_MovableMan.GetNextTeamActor(m_ControlledActor[player]->GetTeam());
-
-					// Reset commander if we have any subordinates
-					do {
-						if (pActor) {
-							// Set appropriate AI mode
-							if (dynamic_cast<AHuman*>(pActor) || dynamic_cast<ACrab*>(pActor))
-								if (pActor->GetAIMOWaypointID() == m_ControlledActor[player]->GetID()) {
-									pActor->FlashWhite();
-									pActor->ClearAIWaypoints();
-									pActor->SetAIMode((Actor::AIMode)m_ControlledActor[player]->GetAIMode()); // Inherit the leader's AI mode
-									isCommander = true;
-								}
+					// Disconnect any connected units; otherwise start selecting some
+					const bool isCommander = m_ControlledActor[player]->HasSquad();
+					if (isCommander) {
+						if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+							IssueAIOrder(m_ControlledActor[player], NetGameAIOrder::DisbandSquad, m_ControlledActor[player]->GetPos(), nullptr);
+						} else {
+							m_ControlledActor[player]->DisbandSquad();
 						}
-						pActor = g_MovableMan.GetNextTeamActor(team, pActor);
-					} while (pActor && pActor != pFirstActor);
+					}
 
 					// Now turn on selection UI, if we didn't disconnect anyone
 					if (!isCommander) {

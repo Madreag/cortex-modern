@@ -405,6 +405,17 @@ namespace RTE {
 		/// Handles the PieSlice this' PieMenu activated last tick, if any. Runs in the update stage, so every peer applies it at the same tick.
 		void HandlePendingPieCommand();
 
+		/// Makes this the squad leader: it goes sentry, and every non-player AHuman/ACrab of its team closer than the selection edge clears its waypoints, enters squad mode and follows this.
+		/// @param selectionEdge The scene point marking the selection radius around this.
+		void FormSquad(const Vector& selectionEdge);
+
+		/// Gets whether any AHuman/ACrab of this' team is following this as its squad leader.
+		bool HasSquad() const;
+
+		/// Releases every unit following this as its squad leader: it clears its waypoints and inherits this' AI mode.
+		/// @return Whether any unit was following.
+		bool DisbandSquad();
+
 		/// Gets this' AI mode.
 		/// @return The current AI mode.
 		int GetAIMode() const { return m_AIMode; }
