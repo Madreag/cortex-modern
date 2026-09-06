@@ -161,6 +161,7 @@ static long long s_paceDrawUs = 0;
 // re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.
 static long long s_rbProbeAtTick = 0;
 static long long s_rbProbeWindow = 30;
+static bool s_rbProbeRequested = false;
 static int s_rbProbePhase = 0; //!< 0 idle, 1 first pass, 2 restore staged, 3 re-run pass.
 static std::vector<SimChecksum::Result> s_rbProbeFirst;
 static std::vector<SimChecksum::Result> s_rbProbeSecond;
@@ -511,6 +512,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			const std::string probeSpec = argValue[++i];
 			const size_t colon = probeSpec.find(':');
 			s_rbProbeAtTick = std::strtoll(probeSpec.c_str(), nullptr, 10);
+			s_rbProbeRequested = true;
 			if (colon != std::string::npos) {
 				s_rbProbeWindow = std::strtoll(probeSpec.c_str() + colon + 1, nullptr, 10);
 			}
@@ -528,6 +530,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			const size_t first = spec.find(':');
 			const size_t second = first == std::string::npos ? std::string::npos : spec.find(':', first + 1);
 			s_rbProbeFuzzSeed = std::strtoull(spec.c_str(), nullptr, 10);
+			s_rbProbeRequested = true;
 			if (first != std::string::npos) {
 				s_rbProbeFuzzCount = static_cast<int>(std::strtol(spec.c_str() + first + 1, nullptr, 10));
 			}
@@ -561,35 +564,56 @@ void HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-depth") {
-			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[localpred] bad depth '" << text << "': expected a whole number" << std::endl;
+				std::exit(1);
+			}
+			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(text.c_str(), nullptr, 10)));
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
 			// T:d1,d2,...:r1,r2,... — at tick T run previews of each depth, each repeat count, and prove the canonical world untouched.
 			const std::string spec = argValue[++i];
-			const size_t first = spec.find(':');
-			const size_t second = first == std::string::npos ? std::string::npos : spec.find(':', first + 1);
-			s_lpInvarianceTick = std::strtoll(spec.c_str(), nullptr, 10);
-			const auto parseList = [](const std::string& text, std::vector<int>& out) {
+			const auto parsePositive = [](const std::string& text, long long& out) {
+				if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+					return false;
+				}
+				out = std::strtoll(text.c_str(), nullptr, 10);
+				return out > 0;
+			};
+			const auto parseList = [&parsePositive](const std::string& text, std::vector<int>& out) {
 				size_t start = 0;
-				while (start < text.size()) {
+				while (true) {
 					const size_t comma = text.find(',', start);
-					const std::string item = text.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-					if (!item.empty()) {
-						out.push_back(static_cast<int>(std::strtol(item.c_str(), nullptr, 10)));
+					long long value = 0;
+					if (!parsePositive(text.substr(start, comma == std::string::npos ? std::string::npos : comma - start), value)) {
+						return false;
 					}
+					out.push_back(static_cast<int>(value));
 					if (comma == std::string::npos) {
-						break;
+						return true;
 					}
 					start = comma + 1;
 				}
 			};
-			if (first != std::string::npos) {
-				parseList(spec.substr(first + 1, second == std::string::npos ? std::string::npos : second - first - 1), s_lpInvarianceDepths);
+			const size_t first = spec.find(':');
+			const size_t second = first == std::string::npos ? std::string::npos : spec.find(':', first + 1);
+			long long tick = 0;
+			bool ok = parsePositive(spec.substr(0, first), tick);
+			if (ok && first != std::string::npos) {
+				const std::string depths = spec.substr(first + 1, second == std::string::npos ? std::string::npos : second - first - 1);
+				ok = depths.empty() || parseList(depths, s_lpInvarianceDepths);
 			}
-			if (second != std::string::npos) {
-				parseList(spec.substr(second + 1), s_lpInvarianceRepeats);
+			if (ok && second != std::string::npos) {
+				const std::string repeats = spec.substr(second + 1);
+				ok = repeats.empty() || parseList(repeats, s_lpInvarianceRepeats);
 			}
+			if (!ok) {
+				std::cerr << "[lpinv] bad spec '" << spec << "': expected T:d1,d2,...:r1,r2,... with positive whole numbers" << std::endl;
+				std::exit(1);
+			}
+			s_lpInvarianceTick = tick;
 			if (s_lpInvarianceDepths.empty()) {
 				s_lpInvarianceDepths = {1, 3, 8, 14};
 			}
@@ -1202,6 +1226,23 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	}
 }
 
+// A requested test that never reached its tick is a failed test; stopping early cannot pass it.
+static void CheckRequiredProbesCompleted() {
+	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
+	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
+		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
+		g_MetricsCollector.RecordString("lpinv_result", "not_run");
+		s_netReplayExitCode = 5;
+	}
+	if (s_rbProbeRequested && s_rbProbePhase != 4) {
+		std::cout << "[rbprobe] FIDELITY FAIL: the probe at tick " << s_rbProbeAtTick << " did not complete (phase " << s_rbProbePhase << " when the run stopped at tick " << stoppedAt << ")" << std::endl;
+		g_MetricsCollector.RecordString("rbprobe_result", "incomplete");
+		if (s_netReplayExitCode == 0) {
+			s_netReplayExitCode = 1;
+		}
+	}
+}
+
 static void DumpTerrainIfArmed(uint64_t simTick) {
 	static uint64_t s_tick = 0;
 	static bool s_checked = false;
@@ -1388,6 +1429,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				return;
 			}
 			s_rbProbePhase = 4;
+			g_MetricsCollector.RecordString("rbprobe_result", s_rbProbeFailCount == 0 ? "pass" : "fail");
 			if (s_rbProbeFuzzCount > 0) {
 				std::cout << "[rbfuzz] " << (s_rbProbeFailCount == 0 ? "PASS" : "FAIL") << " " << s_rbProbePassCount << "/" << (s_rbProbePassCount + s_rbProbeFailCount) << " probes byte-identical";
 				if (s_rbProbeFailCount > 0) {
@@ -2701,6 +2743,7 @@ int RunNetReplayPlayback() {
 	g_TimerMan.SetFreeRunSim(true);
 	const auto playbackStart = std::chrono::steady_clock::now();
 	RunGameLoop();
+	CheckRequiredProbesCompleted();
 	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
 	using ReplayOutcome = ScenarioRunner::LockstepReplayOutcome;
 	const ReplayOutcome finalOutcome = ScenarioRunner::GetLockstepReplayOutcome();
@@ -2821,6 +2864,10 @@ int RunNetMatchServiceE2E() {
 			g_MetricsCollector.SetRecordTickHashes(true);
 		}
 		RunGameLoop();
+		CheckRequiredProbesCompleted();
+		if (s_netReplayExitCode != 0 && s_netMatchServiceE2EExitCode == 0) {
+			s_netMatchServiceE2EExitCode = s_netReplayExitCode;
+		}
 		if (traceRun) {
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
@@ -3111,7 +3158,11 @@ int main(int argc, char** argv) {
 				scenarioExitCode = 1;
 			} else {
 				RunGameLoop();
+				CheckRequiredProbesCompleted();
 				scenarioExitCode = ScenarioRunner::FinalizeAndGetExitCode();
+				if (s_netReplayExitCode != 0 && scenarioExitCode == 0) {
+					scenarioExitCode = s_netReplayExitCode;
+				}
 				if (NetGameplayRequested()) {
 					netLockstepCoordinator.Complete(scenarioExitCode == 0 ? "scenario complete" : "scenario failed");
 				}
