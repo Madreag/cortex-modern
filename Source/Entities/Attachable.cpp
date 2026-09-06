@@ -543,7 +543,7 @@ void Attachable::SetParent(MOSRotating* newParent) {
 			// Snap prev to current on reparent so the render lerp doesn't fling from the old standalone position
 			m_PrevPos = m_Pos;
 		}
-		if (CanCollideWithTerrain()) {
+		if (CanCollideWithTerrain() && !faithful) {
 			AddOrRemoveAtomsFromRootParentAtomGroup(true, true);
 		}
 

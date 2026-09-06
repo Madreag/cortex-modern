@@ -208,7 +208,8 @@ int MOSRotating::Create(const MOSRotating& reference) {
 
 	// THESE ATOMGROUP COPYING ARE A TIME SINK!
 	m_pAtomGroup = new AtomGroup();
-	m_pAtomGroup->Create(*reference.m_pAtomGroup, true);
+	// A faithful clone takes the whole live group, subgroup atoms included; its attachables skip the re-add.
+	m_pAtomGroup->Create(*reference.m_pAtomGroup, !IsFaithfulClone());
 	if (m_pAtomGroup) {
 		m_pAtomGroup->SetOwner(this);
 	}
@@ -300,15 +301,6 @@ int MOSRotating::Create(const MOSRotating& reference) {
 			for (const Attachable* attachable: reference.m_Attachables) {
 				m_FaithfulAttachableOrder.push_back(attachable->GetUniqueID());
 			}
-		}
-		// Subgroup atoms are re-derived as the attachables re-attach; stash the live group so the adopt lays them back.
-		if (m_pAtomGroup && reference.m_pAtomGroup && m_PersistedAtomGroupOffsets.empty()) {
-			m_PersistedAtomGroupSubIDs = reference.m_pAtomGroup->GetAtomSubIDs();
-			m_PersistedAtomGroupOffsets = reference.m_pAtomGroup->GetAtomOffsets();
-			m_PersistedAtomGroupResidue = reference.m_pAtomGroup->GetTravelResidue();
-			m_PersistedGroupMomentOfInertia = reference.m_pAtomGroup->GetStoredMomentOfInertia();
-			m_PersistedGroupStoredMass = reference.m_pAtomGroup->GetStoredOwnerMass();
-			m_HasPersistedGroupInertia = true;
 		}
 	}
 	return 0;
