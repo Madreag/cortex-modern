@@ -274,6 +274,9 @@ bool Attachable::TransferJointImpulses(Vector& jointImpulses, float jointStiffne
 float Attachable::CollectDamage() {
 	if (m_DamageMultiplier != 0) {
 		float totalDamage = m_DamageCount;
+		if (const MovableObject* rootParent = SceneMan::GetTrackedUIDs().empty() ? nullptr : GetRootParent(); rootParent && SceneMan::IsTrackedUID(rootParent->GetUniqueID()) && (totalDamage != 0.0F || !m_Wounds.empty())) {
+			SceneMan::TraceTerrainEvent("cdmg", std::bit_cast<int32_t>(totalDamage), std::bit_cast<int32_t>(m_DamageMultiplier), static_cast<int>(m_Wounds.size()), 0, static_cast<int>(GetUniqueID()));
+		}
 		m_DamageCount = 0;
 
 		for (AEmitter* wound: m_Wounds) {

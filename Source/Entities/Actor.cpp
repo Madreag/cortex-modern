@@ -1251,6 +1251,9 @@ bool Actor::ParticlePenetration(HitData& hd) {
 	}
 
 	if (damageToAdd != 0) {
+		if (SceneMan::IsTrackedUID(GetUniqueID())) {
+			SceneMan::TraceTerrainEvent("hdmh", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damageToAdd), static_cast<int>(hitor->GetUniqueID()), penetrated ? 1 : 0, static_cast<int>(GetUniqueID()));
+		}
 		m_Health = std::min(m_Health - (damageToAdd * m_DamageMultiplier), m_MaxHealth);
 	}
 	if ((penetrated || damageToAdd != 0) && m_Perceptiveness > 0 && m_Health > 0) {
@@ -1539,11 +1542,20 @@ void Actor::Update() {
 	m_PrevHealth = m_Health;
 	/////////////////////////////////////
 	// Take damage/heal from wounds and wounds on Attachables
+	const bool traced = SceneMan::IsTrackedUID(GetUniqueID());
 	for (AEmitter* wound: m_Wounds) {
-		m_Health -= wound->CollectDamage() * m_DamageMultiplier;
+		const float damage = wound->CollectDamage() * m_DamageMultiplier;
+		if (traced && damage != 0.0F) {
+			SceneMan::TraceTerrainEvent("hdmw", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(wound->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
+		}
+		m_Health -= damage;
 	}
 	for (Attachable* attachable: m_Attachables) {
-		m_Health -= attachable->CollectDamage();
+		const float damage = attachable->CollectDamage();
+		if (traced && damage != 0.0F) {
+			SceneMan::TraceTerrainEvent("hdma", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(attachable->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
+		}
+		m_Health -= damage;
 	}
 	m_Health = std::min(m_Health, m_MaxHealth);
 

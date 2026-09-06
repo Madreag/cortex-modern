@@ -366,6 +366,10 @@ void PEmitter::Update() {
 		double currentPPM, SPE;
 		MovableObject* pParticle = 0;
 		Vector parentVel, emitVel, pushImpulses;
+		if (!SceneMan::GetTrackedUIDs().empty()) {
+			Emission* first = m_EmissionList.empty() ? nullptr : m_EmissionList.front();
+			SceneMan::TraceTerrainEvent("pemu", (m_WasEmitting ? 1 : 0) | (m_BurstTriggered ? 2 : 0) | (m_PlayBurstSound ? 4 : 0) | (first && first->IsEmissionTime() ? 8 : 0), std::bit_cast<int32_t>(static_cast<float>(m_LastEmitTmr.GetElapsedSimTimeS())), std::bit_cast<int32_t>(static_cast<float>(m_BurstTimer.GetElapsedSimTimeMS())), first ? std::bit_cast<int32_t>(static_cast<float>(first->m_Accumulator)) : 0, static_cast<int>(GetUniqueID()));
+		}
 		// Go through all emissions and emit them according to their respective rates
 		for (Emission* emission: m_EmissionList) {
 			// Make sure the emissions only happen between the start time and end time

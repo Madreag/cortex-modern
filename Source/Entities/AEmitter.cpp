@@ -643,6 +643,9 @@ void AEmitter::Update() {
 			AddImpulseForce(pushImpulses);
 		}
 
+		if (const MovableObject* rootParent = SceneMan::GetTrackedUIDs().empty() ? nullptr : GetRootParent(); rootParent && SceneMan::IsTrackedUID(rootParent->GetUniqueID())) {
+			SceneMan::TraceTerrainEvent("wemt", emissionCountTotal, m_BurstTriggered ? 1 : 0, std::bit_cast<int32_t>(m_EmitDamage), std::bit_cast<int32_t>(m_EmitterDamageMultiplier), static_cast<int>(GetUniqueID()));
+		}
 		// Count the the damage caused by the emissions, and only if we're not bursting
 		if (!m_BurstTriggered) {
 			m_DamageCount += static_cast<float>(emissionCountTotal) * m_EmitDamage * m_EmitterDamageMultiplier;
