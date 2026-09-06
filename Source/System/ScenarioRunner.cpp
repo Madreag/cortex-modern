@@ -176,6 +176,10 @@ namespace RTE {
 			s_Active = true;
 			return 2;
 		}
+		if (a == "-test-script" && hasValue) {
+			s_Args.testScript = argValue[startIndex + 1];
+			return 2;
+		}
 		if (a == "-out" && hasValue) {
 			s_Args.outPath = argValue[startIndex + 1];
 			return 2;

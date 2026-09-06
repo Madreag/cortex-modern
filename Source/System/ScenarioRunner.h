@@ -24,6 +24,7 @@ namespace RTE {
 	class ScenarioRunner {
 	public:
 		struct Args {
+			std::string testScript; // -test-script <lua>: attached to every actor entering the world (a mod-style script for the restore gates).
 			std::string scenario;     // single PresetName-suffix, e.g. "SimBaseline". One scenario per
 			                          // invocation — batching is a shell-script concern
 			                          // (FMOD/module-reload across activities in one process is messy).
