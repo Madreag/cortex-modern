@@ -551,6 +551,7 @@ namespace RTE {
 
 		/// The per-object stages of a sim tick, shared by the world update and speculative previews.
 		static void TravelStage(MovableObject* mo, bool actor = false);
+		static void PreControllerStage(Actor* actor);
 		static void UpdateStage(MovableObject* mo, bool actor = false);
 		static void PostUpdateStage(MovableObject* mo);
 		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
