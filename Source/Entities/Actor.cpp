@@ -755,6 +755,14 @@ void Actor::RestDetection() {
 	}
 }
 
+void Actor::HandlePendingPieCommand() {
+	if (m_PieMenu) {
+		if (const PieSliceType command = m_PieMenu->GetPieCommand(); command != PieSliceType::NoType) {
+			HandlePieCommand(command);
+		}
+	}
+}
+
 void Actor::RequestAIMode(AIMode newMode) {
 	if (m_AIMode == newMode) {
 		return;

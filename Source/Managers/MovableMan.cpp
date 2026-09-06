@@ -3271,6 +3271,9 @@ void MovableMan::TravelStage(MovableObject* mo, bool actor) {
 
 void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorUpdate"), actor);
+	if (actor) {
+		static_cast<Actor*>(mo)->HandlePendingPieCommand();
+	}
 	mo->Update();
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
