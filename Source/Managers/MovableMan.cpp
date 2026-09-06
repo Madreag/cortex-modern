@@ -783,9 +783,11 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 			}
 			out << "]";
 			out << " mstate=" << static_cast<int>(actor->GetMovementState()) << " goldpicked=" << actor->GetGoldPicked() << std::hexfloat
-			    << " atmr=" << actor->GetLastSecondTimerElapsedSimMS() << "/" << actor->GetStableRecoverTimerElapsedSimMS() << "/" << actor->GetHeartBeatTimerElapsedSimMS() << "/" << actor->GetNewControlTimerElapsedSimMS() << "/" << actor->GetDeathTimerElapsedSimMS() << "/" << actor->GetAlarmTimerElapsedSimMS()
-			    << " recent=" << actor->GetRecentMovement().m_X << "," << actor->GetRecentMovement().m_Y << " lastalarm=" << actor->GetLastAlarmPosRaw().m_X << "," << actor->GetLastAlarmPosRaw().m_Y << " view=" << actor->GetViewPointRaw().m_X << "," << actor->GetViewPointRaw().m_Y
-			    << " prevhealth=" << actor->GetPrevHealth() << " aimspeed=" << actor->GetSharpAimSpeed() << std::defaultfloat;
+			    << " atmr=" << actor->GetLastSecondTimerElapsedSimMS() << "/" << actor->GetStableRecoverTimerElapsedSimMS() << "/" << actor->GetHeartBeatTimerElapsedSimMS() << "/" << actor->GetNewControlTimerElapsedSimMS() << "/" << actor->GetDeathTimerElapsedSimMS()
+			    << " recent=" << actor->GetRecentMovement().m_X << "," << actor->GetRecentMovement().m_Y << " view=" << actor->GetViewPointRaw().m_X << "," << actor->GetViewPointRaw().m_Y
+			    << " prevhealth=" << actor->GetPrevHealth() << " aimspeed=" << actor->GetSharpAimSpeed();
+			// The alarm point is the owner's AI perception, per machine like the walk paths; peer compares skip it.
+			out << " alarm=" << actor->GetAlarmTimerElapsedSimMS() << "@" << actor->GetLastAlarmPosRaw().m_X << "," << actor->GetLastAlarmPosRaw().m_Y << std::defaultfloat;
 			if (!ScenarioRunner::GetArgs().testScript.empty()) {
 				LuaStateWrapper* state = actor->GetLuaState();
 				const long create = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCreate", -1.0)) : -1;
