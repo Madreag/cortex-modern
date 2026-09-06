@@ -33,6 +33,7 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
+	uint64_t LocalPrediction::s_Refusals = 0;
 
 	static void SetHitsMOsRecursive(MovableObject* mo, bool hitsMOs) {
 		mo->SetToHitMOs(hitsMOs);
@@ -133,6 +134,8 @@ namespace RTE {
 		LuaMan::SetScriptsFrozen(true);
 		AudioMan::SetPlaybackSuppressed(true);
 		PostProcessMan::SetRegistrationSuppressed(true);
+		const uint64_t refusalsBefore = g_MovableMan.GetSpeculativeRefusals();
+		g_MovableMan.SetSpeculative(true);
 		{
 			MovableObject::FaithfulCloneScope scope(false);
 			for (Preview& preview: targets) {
@@ -178,6 +181,8 @@ namespace RTE {
 		}
 
 		Trace("stepped");
+		g_MovableMan.SetSpeculative(false);
+		s_Refusals += g_MovableMan.GetSpeculativeRefusals() - refusalsBefore;
 		g_MovableMan.DiscardAddedSince(mark);
 		Trace("discarded");
 		terrain.Restore();
@@ -212,19 +217,24 @@ namespace RTE {
 		Trace("render begin");
 		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
+		Activity* activity = g_ActivityMan.GetActivity();
 		for (const Preview& preview: s_Previews) {
 			g_MovableMan.SwapActorForRender(preview.original, preview.clone);
+			if (activity) {
+				activity->SubstituteActorForRender(preview.original, preview.clone);
+			}
 		}
 		s_Rendering = true;
 	}
 
 	void LocalPrediction::EndRender() {
 		if (s_Rendering) {
-			if (activity) {
-				activity->SubstituteActorForRender(preview.original, preview.clone);
-			}
+			Activity* activity = g_ActivityMan.GetActivity();
 			for (const Preview& preview: s_Previews) {
 				g_MovableMan.SwapActorForRender(preview.clone, preview.original);
+				if (activity) {
+					activity->SubstituteActorForRender(preview.clone, preview.original);
+				}
 			}
 			s_Rendering = false;
 		}
@@ -232,9 +242,6 @@ namespace RTE {
 
 	void LocalPrediction::Clear() {
 		EndRender();
-				if (activity) {
-					activity->SubstituteActorForRender(preview.clone, preview.original);
-				}
 		for (Preview& preview: s_Previews) {
 			delete preview.clone;
 		}
@@ -249,6 +256,6 @@ namespace RTE {
 		if (s_PreviewCount == 0) {
 			return "";
 		}
-		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount));
+		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) + " refusals=" + std::to_string(s_Refusals);
 	}
 } // namespace RTE

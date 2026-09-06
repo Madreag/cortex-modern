@@ -743,6 +743,10 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 }
 
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
+	// A preview clone may not move the player's control; the canonical tick does that.
+	if (g_MovableMan.IsSpeculative()) {
+		return false;
+	}
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsHuman[player]) {
 		return false;
 	}
@@ -805,6 +809,9 @@ void Activity::LoseControlOfActor(int player) {
 }
 
 void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
+	if (g_MovableMan.IsSpeculative()) {
+		return;
+	}
 	if (!orbitedCraft) {
 		return;
 	}

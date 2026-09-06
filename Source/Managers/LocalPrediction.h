@@ -33,6 +33,7 @@ namespace RTE {
 		static uint64_t GetPreviewCount() { return s_PreviewCount; }
 		static uint64_t GetPreviewTicks() { return s_PreviewTicks; }
 		static double GetPreviewMs() { return s_PreviewMs; }
+		static uint64_t GetRefusals() { return s_Refusals; }
 
 	private:
 		struct Preview {
@@ -49,5 +50,6 @@ namespace RTE {
 		static uint64_t s_PreviewCount;
 		static uint64_t s_PreviewTicks;
 		static double s_PreviewMs;
+		static uint64_t s_Refusals;
 	};
 } // namespace RTE

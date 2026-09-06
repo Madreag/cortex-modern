@@ -1103,7 +1103,23 @@ std::string MovableMan::DescribeScriptBindings() const {
 	return out;
 }
 
+bool MovableMan::RefuseSpeculativeRemoval(const MovableObject* mo, const char* kind) {
+	if (!m_Speculative || !ValidMO(mo)) {
+		return false;
+	}
+	++m_SpeculativeRefusals;
+	if (m_SpeculativeRefusals <= 3) {
+		std::cout << "[speculation] refused removal of canonical " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName() << " during a preview" << std::endl;
+	}
+	return true;
+}
+
 void MovableMan::PurgeAllMOs() {
+	if (m_Speculative) {
+		++m_SpeculativeRefusals;
+		std::cout << "[speculation] refused PurgeAllMOs during a preview" << std::endl;
+		return;
+	}
 	for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
 		(*itr)->DestroyScriptState();
 	}
@@ -1693,6 +1709,9 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 	Actor* removed = nullptr;
 
+	if (pActorToRem && RefuseSpeculativeRemoval(pActorToRem, "actor")) {
+		return nullptr;
+	}
 	if (pActorToRem) {
 		for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
 			if (*itr == pActorToRem) {
@@ -1724,6 +1743,9 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 MovableObject* MovableMan::RemoveItem(MovableObject* pItemToRem) {
 	MovableObject* removed = nullptr;
 
+	if (pItemToRem && RefuseSpeculativeRemoval(pItemToRem, "item")) {
+		return nullptr;
+	}
 	if (pItemToRem) {
 		for (std::deque<MovableObject*>::iterator itr = m_Items.begin(); itr != m_Items.end(); ++itr) {
 			if (*itr == pItemToRem) {
@@ -1754,6 +1776,9 @@ MovableObject* MovableMan::RemoveItem(MovableObject* pItemToRem) {
 MovableObject* MovableMan::RemoveParticle(MovableObject* pMOToRem) {
 	MovableObject* removed = nullptr;
 
+	if (pMOToRem && RefuseSpeculativeRemoval(pMOToRem, "particle")) {
+		return nullptr;
+	}
 	if (pMOToRem) {
 		for (std::deque<MovableObject*>::iterator itr = m_Particles.begin(); itr != m_Particles.end(); ++itr) {
 			if (*itr == pMOToRem) {
