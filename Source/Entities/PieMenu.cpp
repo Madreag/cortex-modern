@@ -148,11 +148,29 @@ int PieMenu::Create(const PieMenu& reference) {
 	m_BackgroundBorderColor = reference.m_BackgroundBorderColor;
 	m_SelectedItemBackgroundColor = reference.m_SelectedItemBackgroundColor;
 
+	// A faithful clone keeps every slice, whoever added it; a preset copy keeps only the menu's own.
+	const bool faithful = MovableObject::IsFaithfulClone();
 	for (int i = 0; i < m_PieQuadrants.size(); i++) {
 		m_PieQuadrants[i].Create(reference.m_PieQuadrants[i], &reference, this);
+		if (faithful) {
+			continue;
+		}
 		for (const PieSlice* pieSlice: m_PieQuadrants[i].GetFlattenedPieSlices()) {
 			if (pieSlice->GetOriginalSource() != this) {
 				m_PieQuadrants[i].RemovePieSlice(pieSlice);
+			}
+		}
+	}
+	if (faithful) {
+		m_HoveredPieSlice = MatchingPieSlice(reference, reference.m_HoveredPieSlice);
+		m_ActivatedPieSlice = MatchingPieSlice(reference, reference.m_ActivatedPieSlice);
+		m_AlreadyActivatedPieSlice = MatchingPieSlice(reference, reference.m_AlreadyActivatedPieSlice);
+		for (int i = 0; reference.m_ActiveSubPieMenu && i < m_PieQuadrants.size(); i++) {
+			const std::vector<PieSlice*> referenceSlices = reference.m_PieQuadrants[i].GetFlattenedPieSlices();
+			for (size_t j = 0; j < referenceSlices.size(); j++) {
+				if (referenceSlices[j]->GetSubPieMenu() == reference.m_ActiveSubPieMenu) {
+					m_ActiveSubPieMenu = m_PieQuadrants[i].GetFlattenedPieSlices()[j]->GetSubPieMenu();
+				}
 			}
 		}
 	}
@@ -167,6 +185,31 @@ int PieMenu::Create(const PieMenu& reference) {
 	RepopulateAndRealignCurrentPieSlices();
 
 	return 0;
+}
+
+std::string PieMenu::DescribeInteractionState() const {
+	const auto name = [](const PieSlice* slice) { return slice ? slice->GetPresetName() : std::string("-"); };
+	std::string out = std::to_string(static_cast<int>(m_EnabledState)) + ":" + std::to_string(m_CurrentPieSlices.size()) + ":" + name(m_HoveredPieSlice) + ":" + name(m_ActivatedPieSlice) + ":" + name(m_AlreadyActivatedPieSlice);
+	if (m_ActiveSubPieMenu) {
+		out += ":sub[" + m_ActiveSubPieMenu->DescribeInteractionState() + "]";
+	}
+	return out;
+}
+
+PieSlice* PieMenu::MatchingPieSlice(const PieMenu& reference, const PieSlice* referenceSlice) const {
+	if (!referenceSlice) {
+		return nullptr;
+	}
+	for (int i = 0; i < m_PieQuadrants.size(); i++) {
+		const std::vector<PieSlice*> referenceSlices = reference.m_PieQuadrants[i].GetFlattenedPieSlices();
+		const std::vector<PieSlice*> ownSlices = m_PieQuadrants[i].GetFlattenedPieSlices();
+		for (size_t j = 0; j < referenceSlices.size() && j < ownSlices.size(); j++) {
+			if (referenceSlices[j] == referenceSlice) {
+				return ownSlices[j];
+			}
+		}
+	}
+	return nullptr;
 }
 
 void PieMenu::Destroy(bool notInherited) {
