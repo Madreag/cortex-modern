@@ -209,6 +209,12 @@ namespace RTE {
 		/// @return A const reference to the vector containing pointers to all the PieSlices in this PieMenu.
 		const std::vector<PieSlice*>& GetPieSlices() const { return m_CurrentPieSlices; }
 
+		/// Packs the enabled state, mode, timers, cursor and slice pointers (by slice index) as one save line, the active sub-menu nested.
+		std::string PackInteractionState() const;
+
+		/// Restores the state packed by PackInteractionState onto this menu's current slices.
+		void UnpackInteractionState(const std::string& packed);
+
 		/// Gets the first found PieSlice with the passed in preset name, if there is one. Ownership is NOT transferred!
 		/// @param presetName The preset name to look for.
 		/// @return The first found PieSlice with the passed in preset name, or nullptr if there are no PieSlices with that preset name in this PieMenu.

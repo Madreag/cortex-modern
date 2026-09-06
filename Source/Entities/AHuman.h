@@ -700,6 +700,20 @@ namespace RTE {
 		bool m_CanActivateBGItem; //!< A flag for whether or not the BG item is waiting to be activated separately. Used for dual-wielding. TODO: Should this be able to be toggled off per actor, device, or controller?
 		bool m_TriggerPulled; //!< Internal flag for whether this AHuman is currently holding down the trigger of a HDFirearm. Used for dual-wielding.
 		bool m_WaitingToReloadOffhand; //!< A flag for whether or not the offhand HeldDevice is waiting to be reloaded.
+
+	public:
+		bool IsWaitingToReloadOffhand() const { return m_WaitingToReloadOffhand; }
+		bool IsArmClimbing(int layer) const { return m_ArmClimbing[layer]; }
+		bool IsAiming() const { return m_Aiming; }
+		bool GetStrideStart() const { return m_StrideStart; }
+		int64_t GetProneTimerStart() const { return m_ProneTimer.GetStartSimTimeMS(); }
+		int64_t GetStrideTimerStart() const { return m_StrideTimer.GetStartSimTimeMS(); }
+		int64_t GetThrowTimerStart() const { return m_ThrowTmr.GetStartSimTimeMS(); }
+		double GetProneTimerElapsedSimMS() const { return m_ProneTimer.GetElapsedSimTimeMS(); }
+		double GetStrideTimerElapsedSimMS() const { return m_StrideTimer.GetElapsedSimTimeMS(); }
+		double GetThrowTimerElapsedSimMS() const { return m_ThrowTmr.GetElapsedSimTimeMS(); }
+
+	protected:
 		// Blink timer
 		Timer m_IconBlinkTimer;
 		// Current upper body state.

@@ -84,6 +84,7 @@ int AEJetpack::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchForwards("JumpAngleRange") MatchProperty("JetAngleRange", { reader >> m_JetAngleRange; });
 	MatchProperty("CanAdjustAngleWhileFiring", { reader >> m_CanAdjustAngleWhileFiring; });
 	MatchProperty("AdjustsThrottleForWeight", { reader >> m_AdjustsThrottleForWeight; });
+	MatchProperty("SpecialBehaviour_JetThrustBonusMultiplier", { reader >> m_JetThrustBonusMultiplier; });
 
 	EndPropertyList;
 }

@@ -198,6 +198,27 @@ namespace RTE {
 		/// Gets the current state of the hatch.
 		/// @return An int encoding the hatch state. See the HatchState enum.
 		unsigned int GetHatchState() const { return m_HatchState; }
+		int64_t GetHatchTimerStart() const { return m_HatchTimer.GetStartSimTimeMS(); }
+		double GetHatchTimerElapsedSimMS() const { return m_HatchTimer.GetElapsedSimTimeMS(); }
+		int64_t GetExitTimerStart() const { return m_ExitTimer.GetStartSimTimeMS(); }
+		double GetExitTimerElapsedSimMS() const { return m_ExitTimer.GetElapsedSimTimeMS(); }
+
+		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
+
+		int64_t GetFlippedTimerStart() const { return m_FlippedTimer.GetStartSimTimeMS(); }
+		int64_t GetCrashTimerStart() const { return m_CrashTimer.GetStartSimTimeMS(); }
+		int64_t GetNetworkDeliveryTimerStart() const { return m_NetworkDeliveryTimer.GetStartSimTimeMS(); }
+		double GetFlippedTimerElapsedSimMS() const { return m_FlippedTimer.GetElapsedSimTimeMS(); }
+		double GetCrashTimerElapsedSimMS() const { return m_CrashTimer.GetElapsedSimTimeMS(); }
+		double GetNetworkDeliveryTimerElapsedSimMS() const { return m_NetworkDeliveryTimer.GetElapsedSimTimeMS(); }
+		int GetExitLinePhase() const { return m_ExitLinePhase; }
+
+		/// Gets the index of the exit that ejects next.
+		int GetCurrentExitIndex() const;
+
+		/// Gets each exit's incoming MO by UniqueID, 0 for none, in exit order.
+		std::vector<long> GetExitIncomingMOUniqueIDs() const;
 
 		/// Sets which team this belongs to, and all its inventory too.
 		/// @param team The assigned team number.
@@ -365,6 +386,9 @@ namespace RTE {
 		long m_ExitInterval;
 		// Times the exit interval
 		Timer m_ExitTimer;
+		PersistedTimerAnchor m_PersistedHatchTimerAnchor;
+		PersistedTimerAnchor m_PersistedExitTimerAnchor;
+		size_t m_ReadExitIncomingCursor = 0; //!< Which exit the next saved incoming MO link belongs to.
 		// The phase of the exit lines animation
 		int m_ExitLinePhase;
 		// Whether this has landed and delivered yet on its current run

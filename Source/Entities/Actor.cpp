@@ -1,5 +1,7 @@
 #include "Actor.h"
 
+#include <bit>
+
 #include "UInputMan.h"
 #include "ActivityMan.h"
 #include "CameraMan.h"
@@ -59,6 +61,8 @@ void Actor::Clear() {
 	m_Controller.Reset();
 	m_PersistedControllerInputMode = -1;
 	m_PersistedControllerPlayer = 0;
+	m_PersistedPieMenuState.clear();
+	m_HasPersistedViewPoint = false;
 	m_PlayerControllable = true;
 	m_BodyHitSound = nullptr;
 	m_AlarmSound = nullptr;
@@ -186,6 +190,9 @@ int Actor::Create(const Actor& reference) {
 	m_Controller.SetControlledActor(this);
 	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
 	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
+	m_PersistedPieMenuState = reference.m_PersistedPieMenuState;
+	m_PersistedViewPoint = reference.m_PersistedViewPoint;
+	m_HasPersistedViewPoint = reference.m_HasPersistedViewPoint;
 	m_PlayerControllable = reference.m_PlayerControllable;
 
 	if (reference.m_BodyHitSound) {
@@ -392,6 +399,54 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_Controller.SetAnalogAim(analogAim);
 	});
 	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
+	MatchProperty("PieMenuState", { reader >> m_PersistedPieMenuState; });
+	MatchProperty("SpecialBehaviour_MovementState", {
+		int state = 0;
+		reader >> state;
+		m_MovementState = static_cast<MovementState>(state);
+	});
+	MatchProperty("LastSecondTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_LastSecondTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("StableRecoverTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_StableRecoverTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("HeartBeatTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_HeartBeat.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("NewControlTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_NewControlTmr.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("DeathTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_DeathTmr.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("AlarmTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_AlarmTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("SpecialBehaviour_RecentMovement", { reader >> m_RecentMovement; });
+	MatchProperty("SpecialBehaviour_LastSecondPos", { reader >> m_LastSecondPos; });
+	MatchProperty("ItemInReachUniqueID", { reader >> m_FaithfulItemInReachUID; });
+	MatchProperty("MOMoveTargetUniqueID", { reader >> m_FaithfulMOMoveTargetUID; });
+	MatchProperty("SpecialBehaviour_LastAlarmPos", { reader >> m_LastAlarmPos; });
+	MatchProperty("SpecialBehaviour_ViewPoint", {
+		reader >> m_PersistedViewPoint;
+		m_HasPersistedViewPoint = true;
+	});
+	MatchProperty("SpecialBehaviour_GoldPicked", { reader >> m_GoldPicked; });
+	MatchProperty("SpecialBehaviour_PrevHealth", { reader >> m_PrevHealth; });
+	MatchProperty("SpecialBehaviour_SharpAimSpeed", { reader >> m_SharpAimSpeed; });
 	MatchProperty("ControllerPlayer", { reader >> m_PersistedControllerPlayer; });
 	MatchProperty("DeploymentID", { reader >> m_DeploymentID; });
 	MatchProperty("PassengerSlots", { reader >> m_PassengerSlots; });
@@ -1342,6 +1397,14 @@ void Actor::AdoptPersistedUniqueID() {
 	MOSRotating::AdoptPersistedUniqueID();
 	m_PersistedSharpAimTimerAnchor.Apply(m_SharpAimTimer);
 	m_PersistedAimTimerAnchor.Apply(m_AimTmr);
+	if (m_PieMenu && !m_PersistedPieMenuState.empty()) {
+		m_PieMenu->UnpackInteractionState(m_PersistedPieMenuState);
+	}
+	m_PersistedPieMenuState.clear();
+	if (m_HasPersistedViewPoint) {
+		m_ViewPoint = m_PersistedViewPoint;
+		m_HasPersistedViewPoint = false;
+	}
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
 	}
@@ -1357,6 +1420,10 @@ MovableObject* Actor::FindPartByUniqueID(long uid) {
 		}
 	}
 	return nullptr;
+}
+
+long Actor::GetItemInReachUniqueID() const {
+	return m_pItemInReach ? m_pItemInReach->GetUniqueID() : m_FaithfulItemInReachUID;
 }
 
 void Actor::ResolveFaithfulLinks() {
@@ -1390,6 +1457,8 @@ void Actor::DiscardPersistedSnapshotState() {
 	m_PersistedSharpAimTimerAnchor.pending = false;
 	m_PersistedAimTimerAnchor.pending = false;
 	m_PersistedControllerInputMode = -1;
+	m_PersistedPieMenuState.clear();
+	m_HasPersistedViewPoint = false;
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->DiscardPersistedSnapshotState();
 	}
@@ -1397,8 +1466,13 @@ void Actor::DiscardPersistedSnapshotState() {
 
 void Actor::ApplyPersistedControllerMode() {
 	if (m_PersistedControllerInputMode >= 0) {
-		m_Controller.SetInputMode(static_cast<Controller::InputMode>(m_PersistedControllerInputMode));
-		m_Controller.SetPlayerRaw(static_cast<int>(m_PersistedControllerPlayer));
+		// The saved mode is the sim's; a wire-owned controller keeps this machine's seat.
+		if (m_Controller.IsWireOwned()) {
+			m_Controller.ApplyWireMode(static_cast<Controller::InputMode>(m_PersistedControllerInputMode), static_cast<int>(m_PersistedControllerPlayer));
+		} else {
+			m_Controller.SetInputMode(static_cast<Controller::InputMode>(m_PersistedControllerInputMode));
+			m_Controller.SetPlayerRaw(static_cast<int>(m_PersistedControllerPlayer));
+		}
 		m_PersistedControllerInputMode = -1;
 	}
 }
@@ -1843,7 +1917,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 		if (pRoster->size() > 1) {
 			// Find this in the list, both ways
 			std::list<Actor*>::reverse_iterator selfRItr = find(pRoster->rbegin(), pRoster->rend(), this);
-			RTEAssert(selfRItr != pRoster->rend(), "Actor couldn't find self in Team roster!");
+			RTEAssert(selfRItr != pRoster->rend(), "Actor couldn't find self in Team roster! " + GetPresetName() + " uid " + std::to_string(GetUniqueID()) + " team " + std::to_string(m_Team));
 			std::list<Actor*>::iterator selfItr = find(pRoster->begin(), pRoster->end(), this);
 			RTEAssert(selfItr != pRoster->end(), "Actor couldn't find self in Team roster!");
 
