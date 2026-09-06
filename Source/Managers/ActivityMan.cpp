@@ -1,4 +1,6 @@
 #include "ActivityMan.h"
+
+#include <filesystem>
 #include "Activity.h"
 
 #include "CameraMan.h"
@@ -441,6 +443,11 @@ bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" loaded!");
 
 	return true;
+}
+
+void ActivityMan::RemoveSavedGame(const std::string& fileName) const {
+	std::error_code ignored;
+	std::filesystem::remove(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave", ignored);
 }
 
 bool ActivityMan::LoadGameToRestart(const std::string& fileName) {

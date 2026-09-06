@@ -35,6 +35,14 @@
 
 using namespace RTE;
 
+unsigned long System::GetProcessID() {
+#ifdef _WIN32
+	return static_cast<unsigned long>(GetCurrentProcessId());
+#else
+	return static_cast<unsigned long>(getpid());
+#endif
+}
+
 bool System::s_Quit = false;
 bool System::s_LogToCLI = false;
 bool System::s_ExternalModuleValidation = false;

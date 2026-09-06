@@ -7,6 +7,7 @@
 #include "NetIdentity.h"
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
+#include "System.h"
 #include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
@@ -19,6 +20,11 @@
 #include <utility>
 
 namespace RTE {
+
+// Per-process file names: same-machine instances share Userdata, so concurrent matches must never share a snapshot file.
+static std::string ResyncSaveName() {
+	return "p5resync_" + std::to_string(System::GetProcessID());
+}
 
 	namespace {
 		using json = nlohmann::json;
@@ -145,7 +151,7 @@ namespace RTE {
 			isHost = m_IsHost;
 		}
 		if (isHost) {
-			if (!g_ActivityMan.SaveCurrentGame("p5resync")) {
+			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName())) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
@@ -215,7 +221,7 @@ namespace RTE {
 			if (!receivedState.empty()) {
 				// Per-peer filename: same-machine instances share Userdata (the e2e), so concurrent
 				// receivers must never write or load the same file.
-				const std::string recvName = "p5resync_recv_p" + std::to_string(static_cast<int>(session->GetLocalPeerId()) + 1);
+				const std::string recvName = ResyncSaveName() + "_recv";
 				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + recvName + ".ccsave";
 				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
 				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));
@@ -226,7 +232,7 @@ namespace RTE {
 				}
 			} else if (m_IsHost) {
 				// The host reloads its own snapshot, so both sides launch the identical file.
-				pendingLoad = "p5resync";
+				pendingLoad = ResyncSaveName();
 			} else {
 				// A non-host with no received bytes means the transfer never completed; loading the
 				// host's filename off this peer's disk would restore a stale or absent snapshot.
@@ -276,6 +282,7 @@ namespace RTE {
 			if (error) *error = "resync snapshot load failed: " + pendingLoad;
 			return false;
 		}
+		g_ActivityMan.RemoveSavedGame(pendingLoad);
 		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
 		const int localTeam = GetLocalTeam();
 		if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
@@ -667,7 +674,7 @@ namespace RTE {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
 			if (!receivedState.empty()) {
 				// Per-peer filename, matching the resync worker's convention.
-				const std::string recvName = "p5resync_recv_p" + std::to_string(static_cast<int>(session->GetLocalPeerId()) + 1);
+				const std::string recvName = ResyncSaveName() + "_recv";
 				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + recvName + ".ccsave";
 				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
 				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));

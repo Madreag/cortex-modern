@@ -139,6 +139,9 @@ namespace RTE {
 		/// @return Whether or not the saved game was successfully staged.
 		bool LoadGameToRestart(const std::string& fileName);
 
+		/// Deletes a saved game file this process wrote for itself.
+		void RemoveSavedGame(const std::string& fileName) const;
+
 		/// Waits for the task that saves the game to complete.
 		void WaitForSaveGameTask() const {
 			if (m_SaveGameTask.valid()) {
