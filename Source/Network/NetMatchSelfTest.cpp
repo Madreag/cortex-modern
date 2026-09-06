@@ -7,9 +7,13 @@
 #include "NetLobbyProtocol.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "NetMatchReplay.h"
 #include "NetMatchService.h"
 
+#include <chrono>
+#include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <variant>
@@ -51,6 +55,118 @@ namespace RTE {
 		}
 
 		bool StartLoopbackTransports(uint16_t port, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetPeerId& hostRemotePeer, NetPeerId& clientRemotePeer, std::string* error);
+
+		bool TestReplayCommandSenders(std::string* error) {
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-replay-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			if (!std::filesystem::create_directory(directory)) {
+				*error = "could not create replay test directory";
+				return false;
+			}
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			ControllerFrame controller;
+			controller.actorUniqueID = 123;
+			NetLockstepFrame first{1, 43, {controller}, {{1, NetGameSetTeamFunds{0, 1234}}, {2, NetGameSpawnActor{"AHuman", "Brain Robot", "Base.rte", 500, 600, 1}}}};
+			NetLockstepFrame second{1, 44, {}, {}};
+			NetMatchReplayWriter writer;
+			if (!writer.Open(path.string(), MakeConfig(), error)) return false;
+			std::string refusal;
+			if (writer.WriteFrame(42, {}, {{0, NetGameSetTeamFunds{0, 1}}}, &refusal) || refusal.empty()) {
+				*error = "replay writer accepted an invalid command sender";
+				return false;
+			}
+			if (!writer.WriteFrame(first.targetFrame, first.frames, first.commands, error) ||
+			    !writer.WriteFrame(second.targetFrame, second.frames, second.commands, error)) return false;
+			writer.Close();
+			NetMatchReplayReader reader;
+			if (!reader.Open(path.string(), error)) return false;
+			NetLockstepFrame decoded;
+			bool eof = false;
+			if (reader.GetVersion() != 5 || reader.GetStartFrame() != 43 ||
+			    !reader.ReadFrame(decoded, eof, error) || decoded != first ||
+			    !reader.ReadFrame(decoded, eof, error) || decoded != second ||
+			    reader.ReadFrame(decoded, eof, error) || !eof) {
+				*error = "replay round-trip changed the commands, controllers or tick range";
+				return false;
+			}
+			reader.Close();
+			NetReplayVerifyReport report;
+			if (!NetMatchReplayReader::Verify(path.string(), report) || report.frames != 2 || report.firstFrame != 43 || report.lastFrame != 44) {
+				*error = "replay integrity scan failed the round-trip";
+				return false;
+			}
+			std::ifstream input(path, std::ios::binary);
+			const std::vector<uint8_t> original{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+			input.close();
+			auto read32 = [](const std::vector<uint8_t>& bytes, size_t offset) {
+				return uint32_t(bytes.at(offset)) | (uint32_t(bytes.at(offset + 1)) << 8) | (uint32_t(bytes.at(offset + 2)) << 16) | (uint32_t(bytes.at(offset + 3)) << 24);
+			};
+			auto write32 = [](std::vector<uint8_t>& bytes, size_t offset, uint32_t value) {
+				for (size_t i = 0; i < 4; ++i) bytes.at(offset + i) = static_cast<uint8_t>(value >> (8 * i));
+			};
+			const size_t recordOffset = 12 + read32(original, 8);
+			const size_t payloadOffset = recordOffset + 8;
+			const size_t payloadLength = read32(original, recordOffset);
+			const size_t wireLength = read32(original, payloadOffset);
+			const size_t senderOffset = payloadOffset + 4 + wireLength;
+			auto writeFile = [&](const std::vector<uint8_t>& bytes) {
+				std::ofstream output(path, std::ios::binary | std::ios::trunc);
+				output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+				return output.good();
+			};
+			auto checksum = [&](std::vector<uint8_t>& bytes) {
+				const size_t length = read32(bytes, recordOffset);
+				const std::vector<uint8_t> payload(bytes.begin() + payloadOffset, bytes.begin() + payloadOffset + length);
+				write32(bytes, recordOffset + 4, ControllerFrameCodec::PayloadChecksum(payload));
+			};
+			auto rejects = [&](const std::vector<uint8_t>& bytes, const char* expectedError) {
+				if (!writeFile(bytes) || NetMatchReplayReader::Verify(path.string(), report) || report.error.find(expectedError) == std::string::npos) {
+					*error = "replay corruption check missed " + std::string(expectedError) + ": " + report.error;
+					return false;
+				}
+				return true;
+			};
+			auto bytes = original;
+			bytes[senderOffset + 1] = 1;
+			if (!rejects(bytes, "checksum")) return false;
+			for (const uint8_t sender : {uint8_t(0), uint8_t(NetLockstepCodec::c_MaxPeerCount + 1)}) {
+				bytes = original;
+				bytes[senderOffset + 1] = sender;
+				checksum(bytes);
+				if (!rejects(bytes, "command sender")) return false;
+			}
+			bytes = original;
+			bytes.erase(bytes.begin() + senderOffset);
+			write32(bytes, recordOffset, static_cast<uint32_t>(payloadLength - 1));
+			checksum(bytes);
+			if (!rejects(bytes, "sender count")) return false;
+			bytes = original;
+			write32(bytes, payloadOffset, 0xFFFFFFFFU);
+			checksum(bytes);
+			if (!rejects(bytes, "wire frame length")) return false;
+
+			// Version 4 has one authenticated sender for the entire record.
+			bytes.assign(original.begin(), original.begin() + payloadOffset);
+			bytes[4] = 4;
+			bytes.insert(bytes.end(), original.begin() + payloadOffset + 4, original.begin() + senderOffset);
+			bytes.insert(bytes.end(), 4, 0xFF);
+			write32(bytes, recordOffset, static_cast<uint32_t>(wireLength));
+			checksum(bytes);
+			if (!writeFile(bytes) || !reader.Open(path.string(), error) || !reader.ReadFrame(decoded, eof, error)) return false;
+			first.commands[1].senderPeerId = 1;
+			if (reader.GetVersion() != 4 || decoded != first || reader.ReadFrame(decoded, eof, error) || !eof) {
+				*error = "legacy replay decoding semantics changed";
+				return false;
+			}
+			return true;
+		}
 
 		bool TestMatchConfigHashAndValidation(std::string* error) {
 			NetMatchConfig config = MakeConfig();
@@ -634,6 +750,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
+		if (!TestReplayCommandSenders(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
 		if (!TestLobbyCodecRoundTrips(&error)) return fail(error);
