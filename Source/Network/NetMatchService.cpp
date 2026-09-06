@@ -383,6 +383,8 @@ namespace RTE {
 	}
 
 	void NetMatchService::Complete(const std::string& reason) {
+		// The recording gets its end marker at the match's end, not at process exit.
+		ScenarioRunner::CloseLockstepReplayRecord();
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(reason);
