@@ -360,6 +360,9 @@ void GAScripted::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 }
 
 int GAScripted::RunLuaFunction(const std::string& functionName, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
+	if (LuaMan::AreScriptsFrozen()) {
+		return 0;
+	}
 	// Call the defined function, but only after first checking if it exists
 	auto funcItr = m_ScriptFunctions.find(functionName);
 	if (funcItr == m_ScriptFunctions.end()) {

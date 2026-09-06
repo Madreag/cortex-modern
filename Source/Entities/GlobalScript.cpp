@@ -148,7 +148,7 @@ void GlobalScript::HandleCraftEnteringOrbit(const ACraft* orbitedCraft) {
 }
 
 void GlobalScript::Update() {
-	if (!m_IsActive) {
+	if (!m_IsActive || LuaMan::AreScriptsFrozen()) {
 		return;
 	}
 

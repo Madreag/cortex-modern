@@ -291,6 +291,11 @@ namespace RTE {
 
 		/// Makes the LuaMan object ready for use.
 		void Initialize();
+
+		/// Scripts are frozen inside a rollback re-sim window; every Lua entry point returns without running.
+		static bool AreScriptsFrozen() { return s_ScriptsFrozen; }
+		static void SetScriptsFrozen(bool frozen) { s_ScriptsFrozen = frozen; }
+		static inline bool s_ScriptsFrozen = false;
 #pragma endregion
 
 #pragma region Destruction
