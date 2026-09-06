@@ -27,6 +27,7 @@ namespace RTE {
 		bool ok = false;
 		std::string error;
 		uint16_t version = 0;
+		uint16_t controllerFrameVersion = 0;
 		uint64_t frames = 0;
 		uint64_t firstFrame = 0;
 		uint64_t lastFrame = 0;
@@ -40,7 +41,9 @@ namespace RTE {
 	class NetMatchReplayWriter {
 	public:
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
-		static constexpr uint16_t c_Version = 2;
+		// Version 3 records the ControllerFrame version its records were encoded with, so playback
+		// applies old recordings with the semantics they were recorded under.
+		static constexpr uint16_t c_Version = 3;
 		// A length prefix above the record cap; the writer appends it as the last record so playback
 		// tells a clean end from a mid-write crash. Version-1 files have no marker.
 		static constexpr uint32_t c_EndMarker = 0xFFFFFFFFU;
@@ -67,6 +70,8 @@ namespace RTE {
 		bool ReadFrame(NetLockstepFrame& outFrame, bool& outEof, std::string* error = nullptr);
 		NetReplayReadStatus GetLastReadStatus() const { return m_LastStatus; }
 		uint16_t GetVersion() const { return m_Version; }
+		/// The ControllerFrame version the records decode with; pre-version-3 files carry the legacy frame.
+		uint16_t GetControllerFrameVersion() const { return m_ControllerFrameVersion; }
 		static bool Verify(const std::string& path, NetReplayVerifyReport& outReport);
 		void Close();
 		bool IsOpen() const { return m_In.is_open(); }
@@ -80,6 +85,7 @@ namespace RTE {
 		bool m_HasLookahead = false;
 		uint64_t m_StartFrame = 0;
 		uint16_t m_Version = 0; //!< Version-2 files carry an end marker, so raw EOF without it is a truncation.
+		uint16_t m_ControllerFrameVersion = 0;
 		NetReplayReadStatus m_LastStatus = NetReplayReadStatus::None;
 	};
 

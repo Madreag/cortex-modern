@@ -24,6 +24,9 @@ void Controller::Clear() {
 	m_Player = 0;
 	m_Disabled = false;
 	m_WireApplyTick = -1;
+	m_WireSchemeValid = false;
+	m_WireDeviceClass = WireDeviceClass::None;
+	m_WireDigitalAimSpeed = 1.0F;
 	m_NextIgnore = false;
 	m_PrevIgnore = false;
 	m_WeaponChangeNextIgnore = false;
@@ -62,6 +65,9 @@ int Controller::Create(const Controller& reference) {
 	m_Player = reference.m_Player;
 	m_Disabled = reference.m_Disabled;
 	m_WireApplyTick = reference.m_WireApplyTick;
+	m_WireSchemeValid = reference.m_WireSchemeValid;
+	m_WireDeviceClass = reference.m_WireDeviceClass;
+	m_WireDigitalAimSpeed = reference.m_WireDigitalAimSpeed;
 
 	m_WeaponChangeNextIgnore = reference.m_WeaponChangeNextIgnore;
 	m_WeaponChangePrevIgnore = reference.m_WeaponChangePrevIgnore;
@@ -83,7 +89,7 @@ bool Controller::RelativeCursorMovement(Vector& cursorPos, float moveScale) cons
 		altered = true;
 
 		// See if there's other analog input, only if the mouse isn't active (or the cursor will float if mouse is used!)
-	} else if (GetAnalogCursor().GetLargest() > 0.1F && !IsMouseControlled()) {
+	} else if (GetAnalogCursor().GetLargest() > 0.1F && !LocalIsMouseControlled()) {
 		// See how much to accelerate the joystick input based on how long the stick has been pushed around
 		float acceleration = static_cast<float>(0.5 + std::min(m_JoyAccelTimer.GetElapsedRealTimeS(), 0.5) * 6);
 		cursorPos += GetAnalogCursor() * 10 * moveScale * acceleration;
@@ -114,27 +120,55 @@ bool Controller::RelativeCursorMovement(Vector& cursorPos, float moveScale) cons
 	return altered;
 }
 
+Controller::WireDeviceClass Controller::ClassifyDevice(int inputDevice) {
+	if (inputDevice == InputDevice::DEVICE_MOUSE_KEYB) {
+		return WireDeviceClass::MouseKeyboard;
+	}
+	if (inputDevice == InputDevice::DEVICE_KEYB_ONLY) {
+		return WireDeviceClass::KeyboardOnly;
+	}
+	if (inputDevice >= InputDevice::DEVICE_GAMEPAD_1 && inputDevice <= InputDevice::DEVICE_GAMEPAD_4) {
+		return WireDeviceClass::Gamepad;
+	}
+	return WireDeviceClass::None;
+}
+
+Controller::WireDeviceClass Controller::GetLocalDeviceClass() const {
+	if (m_Player < Players::PlayerOne || m_Player >= Players::MaxPlayerCount || !UInputMan::IsConstructed()) {
+		return WireDeviceClass::None;
+	}
+	return ClassifyDevice(g_UInputMan.GetControlScheme(m_Player)->GetDevice());
+}
+
+float Controller::GetLocalDigitalAimSpeed() const {
+	if (m_Player < Players::PlayerOne || m_Player >= Players::MaxPlayerCount || !UInputMan::IsConstructed()) {
+		return 1.0F;
+	}
+	return g_UInputMan.GetControlScheme(m_Player)->GetDigitalAimSpeed();
+}
+
+void Controller::ApplyWireScheme(WireDeviceClass deviceClass, float digitalAimSpeed) {
+	m_WireSchemeValid = true;
+	m_WireDeviceClass = deviceClass;
+	m_WireDigitalAimSpeed = digitalAimSpeed;
+}
+
+// The sim reads the owner's scheme facts off the wire once a frame carried them; this machine's own
+// scheme would fork the sim for a remote actor.
 float Controller::GetDigitalAimSpeed() const {
-	return m_Player != Players::NoPlayer ? g_UInputMan.GetControlScheme(m_Player)->GetDigitalAimSpeed() : 1.0F;
+	return m_WireSchemeValid ? m_WireDigitalAimSpeed : GetLocalDigitalAimSpeed();
 }
 
 bool Controller::IsMouseControlled() const {
-	return m_Player != Players::NoPlayer && g_UInputMan.GetControlScheme(m_Player)->GetDevice() == InputDevice::DEVICE_MOUSE_KEYB;
+	return (m_WireSchemeValid ? m_WireDeviceClass : GetLocalDeviceClass()) == WireDeviceClass::MouseKeyboard;
 }
 
 bool Controller::IsKeyboardOnlyControlled() const {
-	return m_Player != Players::NoPlayer && g_UInputMan.GetControlScheme(m_Player)->GetDevice() == InputDevice::DEVICE_KEYB_ONLY;
+	return (m_WireSchemeValid ? m_WireDeviceClass : GetLocalDeviceClass()) == WireDeviceClass::KeyboardOnly;
 }
 
 bool Controller::IsGamepadControlled() const {
-	bool isGamepadControlled = false;
-	if (m_Player != Players::NoPlayer) {
-		InputDevice inputDevice = g_UInputMan.GetControlScheme(m_Player)->GetDevice();
-		if (inputDevice >= InputDevice::DEVICE_GAMEPAD_1 && inputDevice <= InputDevice::DEVICE_GAMEPAD_4) {
-			isGamepadControlled = true;
-		}
-	}
-	return isGamepadControlled;
+	return (m_WireSchemeValid ? m_WireDeviceClass : GetLocalDeviceClass()) == WireDeviceClass::Gamepad;
 }
 
 int Controller::GetTeam() const {
@@ -203,7 +237,7 @@ void Controller::RenderUpdate() {
 		}
 	}
 
-	if (IsMouseControlled()) {
+	if (LocalIsMouseControlled()) {
 		m_MouseMovement = g_UInputMan.GetMouseMovement(m_Player);
 	}
 }
@@ -484,14 +518,14 @@ void Controller::UpdatePlayerAnalogInput() {
 
 	// Disable sharp aim while moving - this also helps with keyboard vs mouse fighting when moving and aiming in opposite directions
 	if (m_ControlStates[ControlState::BODY_JUMP] && !pieMenuActive) {
-		if (IsMouseControlled()) {
+		if (LocalIsMouseControlled()) {
 			g_UInputMan.SetMouseValueMagnitude(0.3F, m_Player);
 		}
 		m_ControlStates[ControlState::AIM_SHARP] = false;
 	}
 
 	// Special handing of the mouse input, if applicable
-	if (IsMouseControlled()) {
+	if (LocalIsMouseControlled()) {
 		m_MouseMovement = g_UInputMan.GetMouseMovement(m_Player);
 
 		if (g_UInputMan.MouseWheelMovedByPlayer(m_Player) < 0) {

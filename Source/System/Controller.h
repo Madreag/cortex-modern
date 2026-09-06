@@ -98,6 +98,15 @@ namespace RTE {
 			CIM_INPUTMODECOUNT
 		};
 
+		/// The owner's input device, carried on the lockstep wire so every peer's sim reads the same scheme facts.
+		enum class WireDeviceClass : uint8_t {
+			None = 0,
+			MouseKeyboard = 1,
+			KeyboardOnly = 2,
+			Gamepad = 3,
+			Count
+		};
+
 #pragma region Creation
 		/// Constructor method used to instantiate a Controller object in system memory. Create() should be called before using the object.
 		Controller() { Clear(); }
@@ -305,6 +314,16 @@ namespace RTE {
 		/// Replaces the sim-facing controller state from a decoded wire frame.
 		void ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled);
 
+		/// Replaces the scheme facts the sim reads (device class, digital aim speed) with the owner's, from a wire frame.
+		void ApplyWireScheme(WireDeviceClass deviceClass, float digitalAimSpeed);
+		bool HasWireScheme() const { return m_WireSchemeValid; }
+		WireDeviceClass GetWireDeviceClass() const { return m_WireDeviceClass; }
+		float GetWireDigitalAimSpeed() const { return m_WireDigitalAimSpeed; }
+		/// The scheme facts of this machine's player for the controller's player slot; what a frame snapshot carries.
+		WireDeviceClass GetLocalDeviceClass() const;
+		float GetLocalDigitalAimSpeed() const;
+		static WireDeviceClass ClassifyDevice(int inputDevice);
+
 		/// Marks the sim tick a lockstep wire frame was applied, so saves can tell wire-backed state from local AI residue.
 		void SetWireApplyTick(int64_t simTick) { m_WireApplyTick = simTick; }
 		int64_t GetWireApplyTick() const { return m_WireApplyTick; }
@@ -338,6 +357,9 @@ namespace RTE {
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_ControlStates; //!< Control states.
 		bool m_Disabled; //!< Quick and easy disable to prevent updates from being made.
 		int64_t m_WireApplyTick = -1; //!< The sim tick a lockstep wire frame last replaced this state, -1 if never.
+		bool m_WireSchemeValid = false; //!< Whether the sim reads the owner's wire-carried scheme facts instead of this machine's scheme.
+		WireDeviceClass m_WireDeviceClass = WireDeviceClass::None;
+		float m_WireDigitalAimSpeed = 1.0F;
 
 		InputMode m_InputMode; //!< The current controller input mode, like AI, player etc.
 
@@ -387,6 +409,9 @@ namespace RTE {
 
 		/// Requests and applies input from the player.
 		void GetInputFromPlayer();
+
+		/// Sampling this machine's input reads this machine's scheme, whatever the wire says the sim should see.
+		bool LocalIsMouseControlled() const { return GetLocalDeviceClass() == WireDeviceClass::MouseKeyboard; }
 #pragma endregion
 
 		/// Clears all the member variables of this Controller, effectively resetting the members of this abstraction level only.

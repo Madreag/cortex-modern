@@ -12,8 +12,12 @@ namespace RTE {
 	class Actor;
 
 	struct ControllerFrame {
-		static constexpr uint16_t c_Version = 5;
-		static constexpr size_t c_EncodedSize = 80;
+		/// Version 6 carries one-shot actor intents and the owner's control scheme; version 5 frames
+		/// (older recordings) apply the actor state absolutely every tick.
+		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_LegacyVersion = 5;
+		static constexpr size_t c_EncodedSize = 84;
+		static constexpr size_t c_LegacyEncodedSize = 80;
 		static constexpr int c_AnalogScale = 32767;
 
 		int64_t actorUniqueID = 0;
@@ -29,6 +33,7 @@ namespace RTE {
 		uint8_t inputMode = static_cast<uint8_t>(Controller::CIM_DISABLED);
 		int8_t playerRaw = Players::NoPlayer;
 		uint8_t flags = 0;
+		uint8_t deviceClass = static_cast<uint8_t>(Controller::WireDeviceClass::None);
 		float aimAngle = 0.0F;
 		float viewPointX = 0.0F;
 		float viewPointY = 0.0F;
@@ -38,6 +43,9 @@ namespace RTE {
 		float fgHandPosY = 0.0F;
 		float bgHandPosX = 0.0F;
 		float bgHandPosY = 0.0F;
+		float digitalAimSpeed = 1.0F;
+		/// The semantics this frame was decoded with; the apply path dispatches on it.
+		uint16_t version = c_Version;
 
 		bool IsQuickDisabled() const { return (flags & 0x1U) != 0; }
 		void SetQuickDisabled(bool disabled);
@@ -50,6 +58,7 @@ namespace RTE {
 		void SetAimIntent(bool intent);
 		bool HasFlipIntent() const { return (flags & 0x10U) != 0; }
 		void SetFlipIntent(bool intent);
+		bool IsLegacy() const { return version < c_Version; }
 	};
 
 	class ControllerFrameCodec {
@@ -60,8 +69,11 @@ namespace RTE {
 		/// Applies only the frame's off-wire intents; the sim derives everything else from the controller.
 		static bool ApplyActorStateIntents(const ControllerFrame& frame, Actor& actor, std::string* error = nullptr);
 
+		static bool IsSupportedVersion(uint16_t version) { return version == ControllerFrame::c_Version || version == ControllerFrame::c_LegacyVersion; }
+		static size_t EncodedSizeFor(uint16_t version) { return version < ControllerFrame::c_Version ? ControllerFrame::c_LegacyEncodedSize : ControllerFrame::c_EncodedSize; }
+
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
-		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr);
+		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);
 
 		static int16_t QuantizeAnalog(float value);
 		static float DequantizeAnalog(int16_t value);

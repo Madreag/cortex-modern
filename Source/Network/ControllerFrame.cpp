@@ -186,6 +186,8 @@ namespace RTE {
 		frame.inputMode = static_cast<uint8_t>(controller.GetInputMode());
 		frame.playerRaw = static_cast<int8_t>(std::clamp(controller.GetPlayerRaw(), -128, 127));
 		frame.SetQuickDisabled(controller.IsQuickDisabled());
+		frame.deviceClass = static_cast<uint8_t>(controller.GetLocalDeviceClass());
+		frame.digitalAimSpeed = controller.GetLocalDigitalAimSpeed();
 		if (actor) {
 			frame.SetActorHFlipped(actor->IsHFlipped());
 			frame.aimAngle = actor->GetAimAngle(false);
@@ -244,6 +246,9 @@ namespace RTE {
 		                          static_cast<Controller::InputMode>(frame.inputMode),
 		                          static_cast<int>(frame.playerRaw),
 		                          frame.IsQuickDisabled());
+		if (!frame.IsLegacy()) {
+			controller.ApplyWireScheme(static_cast<Controller::WireDeviceClass>(frame.deviceClass), frame.digitalAimSpeed);
+		}
 		return true;
 	}
 
@@ -313,7 +318,7 @@ namespace RTE {
 		AppendU8(out, frame.inputMode);
 		AppendI8(out, frame.playerRaw);
 		AppendU8(out, frame.flags);
-		AppendU8(out, 0); // reserved
+		AppendU8(out, frame.deviceClass);
 		AppendF32LE(out, frame.aimAngle);
 		AppendF32LE(out, frame.viewPointX);
 		AppendF32LE(out, frame.viewPointY);
@@ -323,16 +328,22 @@ namespace RTE {
 		AppendF32LE(out, frame.fgHandPosY);
 		AppendF32LE(out, frame.bgHandPosX);
 		AppendF32LE(out, frame.bgHandPosY);
+		AppendF32LE(out, frame.digitalAimSpeed);
 		return out;
 	}
 
-	bool ControllerFrameCodec::Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error) {
-		if (!data || size != ControllerFrame::c_EncodedSize) {
+	bool ControllerFrameCodec::Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error, uint16_t version) {
+		if (!IsSupportedVersion(version)) {
+			SetError(error, "ControllerFrame version " + std::to_string(version) + " is not supported.");
+			return false;
+		}
+		if (!data || size != EncodedSizeFor(version)) {
 			SetError(error, "ControllerFrame encoded size mismatch.");
 			return false;
 		}
 		const uint8_t* p = data;
 		ControllerFrame frame;
+		frame.version = version;
 		frame.actorUniqueID = ReadI64LE(p);
 		frame.stateMask = ReadU64LE(p);
 		frame.analogMoveX = ReadI16LE(p);
@@ -346,7 +357,7 @@ namespace RTE {
 		frame.inputMode = ReadU8(p);
 		frame.playerRaw = ReadI8(p);
 		frame.flags = ReadU8(p);
-		const uint8_t reserved = ReadU8(p);
+		frame.deviceClass = ReadU8(p);
 		frame.aimAngle = ReadF32LE(p);
 		frame.viewPointX = ReadF32LE(p);
 		frame.viewPointY = ReadF32LE(p);
@@ -356,10 +367,26 @@ namespace RTE {
 		frame.fgHandPosY = ReadF32LE(p);
 		frame.bgHandPosX = ReadF32LE(p);
 		frame.bgHandPosY = ReadF32LE(p);
-
-		if (reserved != 0) {
-			SetError(error, "ControllerFrame reserved byte must be zero.");
-			return false;
+		if (frame.IsLegacy()) {
+			// The legacy layout kept this byte reserved and carried no scheme facts.
+			if (frame.deviceClass != 0) {
+				SetError(error, "ControllerFrame reserved byte must be zero.");
+				return false;
+			}
+			if ((frame.flags & static_cast<uint8_t>(~0x3U)) != 0) {
+				SetError(error, "ControllerFrame reserved flags must be zero.");
+				return false;
+			}
+		} else {
+			frame.digitalAimSpeed = ReadF32LE(p);
+			if (frame.deviceClass >= static_cast<uint8_t>(Controller::WireDeviceClass::Count)) {
+				SetError(error, "ControllerFrame device class is out of range.");
+				return false;
+			}
+			if (!std::isfinite(frame.digitalAimSpeed) || frame.digitalAimSpeed < 0.0F) {
+				SetError(error, "ControllerFrame digital aim speed must be finite and non-negative.");
+				return false;
+			}
 		}
 		if (frame.inputMode >= static_cast<uint8_t>(Controller::CIM_INPUTMODECOUNT)) {
 			SetError(error, "ControllerFrame input_mode is out of range.");
@@ -446,6 +473,8 @@ namespace RTE {
 		frame.fgHandPosY = 20.5F;
 		frame.bgHandPosX = -30.5F;
 		frame.bgHandPosY = -40.5F;
+		frame.deviceClass = static_cast<uint8_t>(Controller::WireDeviceClass::Gamepad);
+		frame.digitalAimSpeed = 1.75F;
 
 		const std::vector<uint8_t> encoded = ControllerFrameCodec::Encode(frame);
 		if (encoded.size() != ControllerFrame::c_EncodedSize) {
@@ -469,13 +498,48 @@ namespace RTE {
 		    decoded.fgHandPosX != frame.fgHandPosX ||
 		    decoded.fgHandPosY != frame.fgHandPosY ||
 		    decoded.bgHandPosX != frame.bgHandPosX ||
-		    decoded.bgHandPosY != frame.bgHandPosY) {
+		    decoded.bgHandPosY != frame.bgHandPosY ||
+		    decoded.deviceClass != frame.deviceClass ||
+		    decoded.digitalAimSpeed != frame.digitalAimSpeed ||
+		    decoded.version != ControllerFrame::c_Version) {
 			return fail("decoded scalar fields differ");
 		}
 
 		Controller applied(Controller::CIM_DISABLED, Players::NoPlayer);
 		if (!ControllerFrameCodec::Apply(decoded, applied, &error)) {
 			return fail(error);
+		}
+		if (!applied.HasWireScheme() || !applied.IsGamepadControlled() || applied.IsMouseControlled() || applied.GetDigitalAimSpeed() != 1.75F) {
+			return fail("wire scheme facts failed to apply");
+		}
+
+		// A legacy frame is the first 80 bytes with the scheme byte reserved; it decodes only as version 5 and applies no scheme.
+		std::vector<uint8_t> legacyBytes(encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(ControllerFrame::c_LegacyEncodedSize));
+		legacyBytes[35] = 0;
+		legacyBytes[34] &= 0x3U;
+		ControllerFrame legacy;
+		if (ControllerFrameCodec::Decode(legacyBytes.data(), legacyBytes.size(), legacy, nullptr)) {
+			return fail("a legacy-sized frame decoded as the current version");
+		}
+		if (!ControllerFrameCodec::Decode(legacyBytes.data(), legacyBytes.size(), legacy, &error, ControllerFrame::c_LegacyVersion)) {
+			return fail("legacy frame decode failed: " + error);
+		}
+		if (legacy.version != ControllerFrame::c_LegacyVersion || !legacy.IsLegacy() || legacy.actorUniqueID != frame.actorUniqueID || legacy.aimAngle != frame.aimAngle || legacy.equippedBGUniqueID != frame.equippedBGUniqueID) {
+			return fail("legacy frame fields differ");
+		}
+		Controller legacyApplied(Controller::CIM_DISABLED, Players::NoPlayer);
+		if (!ControllerFrameCodec::Apply(legacy, legacyApplied, &error) || legacyApplied.HasWireScheme()) {
+			return fail("a legacy frame must apply without scheme facts");
+		}
+		legacyBytes[35] = 1;
+		if (ControllerFrameCodec::Decode(legacyBytes.data(), legacyBytes.size(), legacy, nullptr, ControllerFrame::c_LegacyVersion)) {
+			return fail("a legacy frame with a reserved byte set was accepted");
+		}
+		ControllerFrame badDevice = frame;
+		badDevice.deviceClass = static_cast<uint8_t>(Controller::WireDeviceClass::Count);
+		const std::vector<uint8_t> badDeviceBytes = ControllerFrameCodec::Encode(badDevice);
+		if (ControllerFrameCodec::Decode(badDeviceBytes.data(), badDeviceBytes.size(), decoded, nullptr)) {
+			return fail("an out-of-range device class was accepted");
 		}
 		if (!applied.IsState(ControlState::PRIMARY_ACTION) ||
 		    !applied.IsState(ControlState::WEAPON_FIRE) ||
