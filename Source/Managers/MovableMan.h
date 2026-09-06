@@ -21,6 +21,7 @@
 
 namespace RTE {
 
+	struct ControllerFrame;
 	class MovableObject;
 	class Actor;
 	class HeldDevice;
@@ -494,6 +495,13 @@ namespace RTE {
 
 		/// Updates the state of this MovableMan. Supposed to be done every frame.
 		void Update();
+
+		/// The per-object stages of a sim tick, shared by the world update and speculative previews.
+		static void TravelStage(MovableObject* mo);
+		static void UpdateStage(MovableObject* mo);
+		static void PostUpdateStage(MovableObject* mo);
+		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
+		static bool ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error);
 
 		/// Moves the pending added MOs into the live lists immediately. The per-tick update does
 		/// this at its transfer point; a rollback restore does it before the first re-run tick so
