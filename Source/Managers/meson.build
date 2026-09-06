@@ -10,6 +10,7 @@ sources += files(
 'MenuMan.cpp',
 'MetaMan.cpp',
 'MovableMan.cpp',
+'TerrainLayerSnapshot.cpp',
 'MusicMan.cpp',
 #'NetworkClient.cpp',
 #'NetworkServer.cpp',

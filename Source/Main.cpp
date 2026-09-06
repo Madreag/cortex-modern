@@ -77,6 +77,7 @@
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
+#include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
 
@@ -181,46 +182,6 @@ static std::vector<std::string> s_rbProbeFirstDeep;
 static long long s_rbProbeDeepDivergence = -1;
 static bool s_rbProbeRestoreMismatch = false;
 
-// Raw copies of the three 8-bit terrain layers; restoring them by memcpy sidesteps the save's
-// PNG round trip (the load-side clean and duplicate-palette collapse both corrupt pixels).
-struct TerrainLayerSnapshot {
-	std::vector<uint8_t> mat;
-	std::vector<uint8_t> fg;
-	std::vector<uint8_t> bg;
-
-	static void CopyFrom(BITMAP* bitmap, std::vector<uint8_t>& out) {
-		out.resize(static_cast<size_t>(bitmap->w) * bitmap->h);
-		for (int y = 0; y < bitmap->h; ++y) {
-			std::memcpy(out.data() + static_cast<size_t>(y) * bitmap->w, bitmap->line[y], bitmap->w);
-		}
-	}
-
-	static bool CopyTo(BITMAP* bitmap, const std::vector<uint8_t>& in) {
-		if (static_cast<size_t>(bitmap->w) * bitmap->h != in.size()) {
-			return false;
-		}
-		for (int y = 0; y < bitmap->h; ++y) {
-			std::memcpy(bitmap->line[y], in.data() + static_cast<size_t>(y) * bitmap->w, bitmap->w);
-		}
-		return true;
-	}
-
-	bool Capture() {
-		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
-		if (!terrain) {
-			return false;
-		}
-		CopyFrom(terrain->GetMaterialBitmap(), mat);
-		CopyFrom(terrain->GetFGColorBitmap(), fg);
-		CopyFrom(terrain->GetBGColorBitmap(), bg);
-		return true;
-	}
-
-	bool Restore() const {
-		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
-		return terrain && CopyTo(terrain->GetMaterialBitmap(), mat) && CopyTo(terrain->GetFGColorBitmap(), fg) && CopyTo(terrain->GetBGColorBitmap(), bg);
-	}
-};
 static TerrainLayerSnapshot s_rbProbeTerrain;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
