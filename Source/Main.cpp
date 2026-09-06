@@ -1476,7 +1476,6 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					gameActivity->CaptureDeliveriesForRollback();
 				}
 			}
-			LuaMan::SetScriptsFrozen(true);
 			worldCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldStart).count();
 		} else if (!g_ActivityMan.SaveCurrentGame("rbprobe")) {
 			std::cout << "[rbprobe] FAIL: the capture save was refused" << std::endl;
@@ -1604,7 +1603,6 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					s_rbProbeFirstFailure = "capture " + std::to_string(s_rbProbeAtTick) + " diverged at " + std::to_string(firstDivergence) + " [" + divergentSubsystems + "]";
 				}
 			}
-			LuaMan::SetScriptsFrozen(false);
 			// Both passes' tracked-UID rows are in the tracer buffer; flush them for the fidelity diff.
 			SceneMan::FlushTerrainEvents((!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".rbprobe.terrainevents.txt");
 			s_rbProbeFirst.clear();

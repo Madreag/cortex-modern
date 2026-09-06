@@ -8,6 +8,8 @@
 #include "SimChecksum.h"
 #include "RTETools.h"
 
+#include "luabind/detail/object_rep.hpp"
+
 #include <cmath>
 
 #include "tracy/Tracy.hpp"
@@ -191,6 +193,161 @@ std::string LuaStateWrapper::DescribeScriptObjectIdentity(long uniqueID) {
 	}
 	lua_pop(m_State, 1);
 	return identity;
+}
+
+namespace {
+	// Pushes the table luabind keeps for the fields set on _ScriptedObjects[uid], or nil when the object never set one.
+	void PushScriptObjectInstanceTable(lua_State* L, long uniqueID) {
+		lua_getglobal(L, "_ScriptedObjects");
+		if (!lua_istable(L, -1)) {
+			lua_pop(L, 1);
+			lua_pushnil(L);
+			return;
+		}
+		lua_pushstring(L, std::to_string(uniqueID).c_str());
+		lua_gettable(L, -2);
+		lua_remove(L, -2);
+		if (!lua_isuserdata(L, -1)) {
+			lua_pop(L, 1);
+			lua_pushnil(L);
+			return;
+		}
+		luabind::detail::object_rep* rep = static_cast<luabind::detail::object_rep*>(lua_touserdata(L, -1));
+		lua_pop(L, 1);
+		if (rep && rep->get_lua_table().is_valid()) {
+			rep->get_lua_table().get(L);
+		} else {
+			lua_pushnil(L);
+		}
+	}
+
+	// Tables copy by structure (cycles kept), entities by unique id (looked up in the live world at restore), the rest by value or reference.
+	constexpr const char* c_ScriptFieldsHelper = R"lua(
+_ScriptFields = _ScriptFields or {}
+function _ScriptFields.capture(value, seen)
+	seen = seen or {}
+	local kind = type(value)
+	if kind == "table" then
+		if seen[value] then return seen[value] end
+		local copy = {}
+		seen[value] = copy
+		for k, v in pairs(value) do
+			copy[_ScriptFields.capture(k, seen)] = _ScriptFields.capture(v, seen)
+		end
+		return setmetatable(copy, getmetatable(value))
+	elseif kind == "userdata" then
+		local ok, uid = pcall(function() return value.UniqueID end)
+		if ok and type(uid) == "number" and uid > 0 then
+			local okClass, class = pcall(function() return value.ClassName end)
+			return { __scriptFieldsEntity = uid, __scriptFieldsClass = okClass and class or "MovableObject" }
+		end
+	end
+	return value
+end
+function _ScriptFields.restore(value, seen)
+	seen = seen or {}
+	if type(value) ~= "table" then return value end
+	if value.__scriptFieldsEntity then
+		local mo = MovableMan:FindObjectByUniqueID(value.__scriptFieldsEntity)
+		if mo == nil then return nil end
+		local cast = _G["To" .. value.__scriptFieldsClass]
+		return cast and cast(mo) or mo
+	end
+	if seen[value] then return seen[value] end
+	local copy = {}
+	seen[value] = copy
+	for k, v in pairs(value) do
+		copy[_ScriptFields.restore(k, seen)] = _ScriptFields.restore(v, seen)
+	end
+	return setmetatable(copy, getmetatable(value))
+end
+)lua";
+} // namespace
+
+int LuaStateWrapper::CaptureScriptObjectFields(long uniqueID) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (!m_ScriptFieldsHelperLoaded) {
+		RunScriptString(c_ScriptFieldsHelper);
+		m_ScriptFieldsHelperLoaded = true;
+	}
+	PushScriptObjectInstanceTable(m_State, uniqueID);
+	if (lua_isnil(m_State, -1)) {
+		lua_pop(m_State, 1);
+		return LUA_NOREF;
+	}
+	lua_getglobal(m_State, "_ScriptFields");
+	lua_getfield(m_State, -1, "capture");
+	lua_pushvalue(m_State, -3);
+	if (lua_pcall(m_State, 1, 1, 0) != 0) {
+		g_ConsoleMan.PrintString(std::string("ERROR: script field capture failed: ") + lua_tostring(m_State, -1));
+		lua_pop(m_State, 3);
+		return LUA_NOREF;
+	}
+	const int ref = luaL_ref(m_State, LUA_REGISTRYINDEX);
+	lua_pop(m_State, 2);
+	return ref;
+}
+
+void LuaStateWrapper::RestoreScriptObjectFields(long uniqueID, int captureRef) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (captureRef == LUA_NOREF) {
+		return;
+	}
+	lua_getglobal(m_State, "_ScriptedObjects");
+	if (!lua_istable(m_State, -1)) {
+		lua_pop(m_State, 1);
+		return;
+	}
+	lua_pushstring(m_State, std::to_string(uniqueID).c_str());
+	lua_gettable(m_State, -2);
+	lua_remove(m_State, -2);
+	luabind::detail::object_rep* rep = lua_isuserdata(m_State, -1) ? static_cast<luabind::detail::object_rep*>(lua_touserdata(m_State, -1)) : nullptr;
+	lua_pop(m_State, 1);
+	if (!rep) {
+		return;
+	}
+	lua_getglobal(m_State, "_ScriptFields");
+	lua_getfield(m_State, -1, "restore");
+	lua_rawgeti(m_State, LUA_REGISTRYINDEX, captureRef);
+	if (lua_pcall(m_State, 1, 1, 0) != 0) {
+		g_ConsoleMan.PrintString(std::string("ERROR: script field restore failed: ") + lua_tostring(m_State, -1));
+		lua_pop(m_State, 2);
+		return;
+	}
+	rep->get_lua_table().set(m_State);
+	lua_pop(m_State, 1);
+}
+
+void LuaStateWrapper::ReleaseCapture(int captureRef) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (captureRef != LUA_NOREF) {
+		luaL_unref(m_State, LUA_REGISTRYINDEX, captureRef);
+	}
+}
+
+void LuaStateWrapper::StashScriptObject(long uniqueID) {
+	const std::string key = std::to_string(uniqueID);
+	RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; _ScriptedObjects = _ScriptedObjects or {}; _ScriptFieldsStash[\"" + key + "\"] = _ScriptedObjects[\"" + key + "\"];");
+}
+
+void LuaStateWrapper::UnstashScriptObject(long uniqueID) {
+	const std::string key = std::to_string(uniqueID);
+	RunScriptString("if _ScriptFieldsStash then _ScriptedObjects[\"" + key + "\"] = _ScriptFieldsStash[\"" + key + "\"]; _ScriptFieldsStash[\"" + key + "\"] = nil; end");
+}
+
+double LuaStateWrapper::GetScriptObjectNumberField(long uniqueID, const std::string& field, double fallback) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	PushScriptObjectInstanceTable(m_State, uniqueID);
+	double value = fallback;
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, field.c_str());
+		if (lua_isnumber(m_State, -1)) {
+			value = lua_tonumber(m_State, -1);
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 1);
+	return value;
 }
 
 LuaStateWrapper::LuaStateWrapper() {

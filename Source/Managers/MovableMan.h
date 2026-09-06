@@ -25,6 +25,7 @@ namespace RTE {
 	struct ControllerFrame;
 	class MovableObject;
 	class Actor;
+	class LuaStateWrapper;
 	class HeldDevice;
 	class MOPixel;
 	class MOSprite;
@@ -116,6 +117,13 @@ namespace RTE {
 			std::vector<MovableObject*> items;
 			std::vector<MovableObject*> particles;
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
+			/// The Lua fields each scripted resident held at the capture, in its state.
+			struct LuaFields {
+				LuaStateWrapper* state = nullptr;
+				long uid = 0;
+				int ref = -1;
+			};
+			std::vector<LuaFields> luaFields;
 			long uniqueIDCounter = 0;
 			WorldSnapshot() = default;
 			WorldSnapshot(const WorldSnapshot&) = delete;
@@ -144,6 +152,7 @@ namespace RTE {
 			std::list<Actor*> rosters[Activity::MaxTeamCount];
 			bool sortRoster[Activity::MaxTeamCount] = {};
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
+			std::map<long int, MovableObject*> knownObjects;
 			bool held = false;
 		};
 		/// Moves every resident and queued add out of the world without touching them; the world is empty afterwards.
@@ -714,6 +723,7 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
+		std::vector<std::pair<LuaStateWrapper*, long>> m_RestoredScriptObjects; //!< The restored clones standing in for set-aside originals' script objects.
 		struct Speculation {
 			struct Shadow {
 				MovableObject* object = nullptr;
