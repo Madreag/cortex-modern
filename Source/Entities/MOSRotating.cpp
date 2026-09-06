@@ -1554,6 +1554,23 @@ void MOSRotating::AdoptPersistedUniqueID() {
 	}
 }
 
+MovableObject* MOSRotating::FindPartByUniqueID(long uid) {
+	if (uid == GetUniqueID()) {
+		return this;
+	}
+	for (Attachable* attachable: m_Attachables) {
+		if (MovableObject* found = attachable->FindPartByUniqueID(uid)) {
+			return found;
+		}
+	}
+	for (AEmitter* wound: m_Wounds) {
+		if (MovableObject* found = wound->FindPartByUniqueID(uid)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
 void MOSRotating::ResolveFaithfulLinks() {
 	MOSprite::ResolveFaithfulLinks();
 	if (!m_FaithfulAttachableOrder.empty()) {

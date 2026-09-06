@@ -20,6 +20,7 @@ sources += files(
 'RTETools.cpp',
 'ScenarioRunner.cpp',
 'InputScript.cpp',
+'FaultInjection.cpp',
 'System.cpp',
 'InputMapping.cpp',
 'PathFinder.cpp',

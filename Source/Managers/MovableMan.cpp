@@ -767,6 +767,9 @@ MovableMan::~MovableMan() {
 }
 
 void MovableMan::Clear() {
+	m_Speculation = Speculation();
+	m_RenderHidden.clear();
+	m_LinkRoot = nullptr;
 	m_Actors.clear();
 	m_ContiguousActorIDs.clear();
 	m_Items.clear();
@@ -844,7 +847,7 @@ void MovableMan::Destroy() {
 	Clear();
 }
 
-MovableObject* MovableMan::GetMOFromID(MOID whichID) {
+MovableObject* MovableMan::LookupMOID(MOID whichID) const {
 	if (whichID != g_NoMOID && whichID != 0 && whichID < m_MOIDIndex.size()) {
 		// This is really, really awful
 		// But, Lua scripts can take ownership of an MO which exists in this list
@@ -864,11 +867,19 @@ MovableObject* MovableMan::GetMOFromID(MOID whichID) {
 	return nullptr;
 }
 
+MovableObject* MovableMan::GetMOFromID(MOID whichID) {
+	MovableObject* found = LookupMOID(whichID);
+	if (found && m_Speculation.active) {
+		return SpeculativeView(found);
+	}
+	return found;
+}
+
 MOID MovableMan::GetMOIDPixel(int pixelX, int pixelY, const std::vector<int>& moidList) {
 	// Note - We loop through the MOs in reverse to make sure that the topmost (last drawn) MO that overlaps the specified coordinates is the one returned.
 	for (auto itr = moidList.rbegin(), itrEnd = moidList.rend(); itr < itrEnd; ++itr) {
 		MOID moid = *itr;
-		const MovableObject* mo = GetMOFromID(moid);
+		const MovableObject* mo = LookupMOID(moid);
 
 		// Commented... see MovableMan::GetMOFromID
 		// RTEAssert(mo, "Null MO found in MOID list!");
@@ -1077,6 +1088,21 @@ void MovableMan::DiscardAddedSince(const AddQueueMark& mark) {
 	}
 }
 
+std::string MovableMan::DescribeAddedSince(const AddQueueMark& mark) const {
+	std::string out;
+	const auto append = [&out](const MovableObject* mo) { out += (out.empty() ? "" : ",") + mo->GetPresetName(); };
+	for (size_t i = mark.actors; i < m_AddedActors.size(); ++i) {
+		append(m_AddedActors[i]);
+	}
+	for (size_t i = mark.items; i < m_AddedItems.size(); ++i) {
+		append(m_AddedItems[i]);
+	}
+	for (size_t i = mark.particles; i < m_AddedParticles.size(); ++i) {
+		append(m_AddedParticles[i]);
+	}
+	return out;
+}
+
 bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 	const auto found = std::find(m_Actors.begin(), m_Actors.end(), original);
 	if (found == m_Actors.end()) {
@@ -1114,21 +1140,175 @@ std::string MovableMan::DescribeScriptBindings() const {
 	return out;
 }
 
-bool MovableMan::RefuseSpeculativeRemoval(const MovableObject* mo, const char* kind) {
-	if (!m_Speculative || !ValidMO(mo)) {
-		return false;
+void MovableMan::BeginSpeculation() {
+	RTEAssert(!m_Speculation.active, "Speculation began while another speculation was active.");
+	m_Speculation.active = true;
+	g_SimChecksum.SetSuppressed(true);
+	m_Speculation.mark = MarkAddQueues();
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		m_Speculation.rosters[team] = m_ActorRoster[team];
+		m_Speculation.sortRoster[team] = m_SortTeamRoster[team];
 	}
-	++m_SpeculativeRefusals;
-	if (m_SpeculativeRefusals <= 3) {
-		std::cout << "[speculation] refused removal of canonical " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName() << " during a preview" << std::endl;
+}
+
+void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
+	if (!m_Speculation.active) {
+		return;
 	}
-	return true;
+	m_Speculation.active = false;
+	g_SimChecksum.SetSuppressed(false);
+	m_LinkRoot = nullptr;
+	DiscardAddedSince(m_Speculation.mark);
+	for (auto& [resident, shadow]: m_Speculation.shadows) {
+		if (shadow.inWorld) {
+			delete shadow.object;
+		}
+	}
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		m_ActorRoster[team] = m_Speculation.rosters[team];
+		m_SortTeamRoster[team] = m_Speculation.sortRoster[team];
+		m_Speculation.rosters[team].clear();
+	}
+	if (takenResidents) {
+		*takenResidents = m_Speculation.taken;
+	}
+	m_Speculation.shadows.clear();
+	m_Speculation.residents.clear();
+	m_Speculation.taken.clear();
+}
+
+int MovableMan::ResidentKind(const MovableObject* mo) const {
+	if (!mo) {
+		return 0;
+	}
+	// Whatever entered the add queues during the speculation is speculative itself, not a resident.
+	if (m_Speculation.active) {
+		for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
+			if (m_AddedActors[i] == mo) {
+				return 0;
+			}
+		}
+		for (size_t i = m_Speculation.mark.items; i < m_AddedItems.size(); ++i) {
+			if (m_AddedItems[i] == mo) {
+				return 0;
+			}
+		}
+		for (size_t i = m_Speculation.mark.particles; i < m_AddedParticles.size(); ++i) {
+			if (m_AddedParticles[i] == mo) {
+				return 0;
+			}
+		}
+	}
+	if (m_ValidActors.count(mo) > 0) {
+		return 1;
+	}
+	if (m_ValidItems.count(mo) > 0) {
+		return 2;
+	}
+	if (m_ValidParticles.count(mo) > 0) {
+		return 3;
+	}
+	return 0;
+}
+
+MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
+	if (const auto existing = m_Speculation.shadows.find(resident); existing != m_Speculation.shadows.end()) {
+		return existing->second.object;
+	}
+	const int kind = ResidentKind(resident);
+	MovableObject* shadow = nullptr;
+	{
+		MovableObject::FaithfulCloneScope scope(false);
+		const long counter = MovableObject::GetUniqueIDCounter();
+		shadow = dynamic_cast<MovableObject*>(resident->Clone());
+		MovableObject::PinUniqueIDCounter(counter);
+	}
+	if (!shadow) {
+		ReportSpeculationViolation("shadowing", resident);
+		return nullptr;
+	}
+	static const bool traceShadows = std::getenv("CC_LOCALPRED_TRACE") != nullptr;
+	if (traceShadows) {
+		std::cout << "[speculation] shadow of " << resident->GetPresetName() << " uid=" << resident->GetUniqueID() << " kind=" << kind << std::endl;
+	}
+	Speculation::Shadow& entry = m_Speculation.shadows[resident];
+	entry.object = shadow;
+	entry.kind = kind;
+	entry.inWorld = true;
+	m_Speculation.residents[shadow] = resident;
+	++m_SpeculationStats.shadows;
+	MovableObject* previousRoot = m_LinkRoot;
+	m_LinkRoot = shadow;
+	shadow->ResolveFaithfulLinks();
+	m_LinkRoot = previousRoot;
+	return shadow;
+}
+
+MovableObject* MovableMan::SpeculativeView(MovableObject* found) {
+	MovableObject* root = found->GetRootParent();
+	if (!IsResident(root)) {
+		return found;
+	}
+	MovableObject* shadowRoot = ShadowOf(root);
+	if (!shadowRoot || root == found) {
+		return shadowRoot;
+	}
+	if (MovableObject* part = shadowRoot->FindPartByUniqueID(found->GetUniqueID())) {
+		return part;
+	}
+	return shadowRoot;
+}
+
+MovableObject* MovableMan::TakeShadow(MovableObject* mo, int kind) {
+	const auto resident = m_Speculation.residents.find(mo);
+	if (resident == m_Speculation.residents.end()) {
+		return nullptr;
+	}
+	Speculation::Shadow& shadow = m_Speculation.shadows.at(resident->second);
+	if (!shadow.inWorld || shadow.kind != kind) {
+		return nullptr;
+	}
+	shadow.inWorld = false;
+	m_Speculation.taken.push_back(resident->second);
+	++m_SpeculationStats.taken;
+	mo->SetAsAddedToMovableMan(false);
+	return mo;
+}
+
+void MovableMan::ReportSpeculationViolation(const char* what, const MovableObject* mo) {
+	++m_SpeculationStats.violations;
+	const std::string subject = mo ? mo->GetPresetName() + " uid=" + std::to_string(mo->GetUniqueID()) : std::string("the world");
+	if (m_SpeculationStats.violations <= 3) {
+		std::cout << "[speculation] VIOLATION: " << what << " " << subject << " from speculative execution" << std::endl;
+	}
+#ifdef DEBUG_BUILD
+	RTEAssert(false, "Speculative execution wrote to the world: " + std::string(what) + " " + subject);
+#endif
+}
+
+void MovableMan::HideForRender(const MovableObject* mo, bool hidden) {
+	if (hidden) {
+		m_RenderHidden.insert(mo);
+	} else {
+		m_RenderHidden.erase(mo);
+	}
+}
+
+std::string MovableMan::DescribeTeamRosters() const {
+	std::string out;
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		out += "team" + std::to_string(team) + (m_SortTeamRoster[team] ? " sort" : "") + ":";
+		for (const Actor* actor: m_ActorRoster[team]) {
+			out += " " + std::to_string(actor->GetUniqueID());
+		}
+		out += "\n";
+	}
+	return out;
 }
 
 void MovableMan::PurgeAllMOs() {
-	if (m_Speculative) {
-		++m_SpeculativeRefusals;
-		std::cout << "[speculation] refused PurgeAllMOs during a preview" << std::endl;
+	if (m_Speculation.active) {
+		ReportSpeculationViolation("purging", nullptr);
 		return;
 	}
 	for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
@@ -1720,8 +1900,14 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 	Actor* removed = nullptr;
 
-	if (pActorToRem && RefuseSpeculativeRemoval(pActorToRem, "actor")) {
-		return nullptr;
+	if (pActorToRem && m_Speculation.active) {
+		if (MovableObject* shadow = TakeShadow(pActorToRem, 1)) {
+			return dynamic_cast<Actor*>(shadow);
+		}
+		if (ResidentKind(pActorToRem) == 1) {
+			ReportSpeculationViolation("removing", pActorToRem);
+			return nullptr;
+		}
 	}
 	if (pActorToRem) {
 		for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
@@ -1754,8 +1940,14 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 MovableObject* MovableMan::RemoveItem(MovableObject* pItemToRem) {
 	MovableObject* removed = nullptr;
 
-	if (pItemToRem && RefuseSpeculativeRemoval(pItemToRem, "item")) {
-		return nullptr;
+	if (pItemToRem && m_Speculation.active) {
+		if (MovableObject* shadow = TakeShadow(pItemToRem, 2)) {
+			return shadow;
+		}
+		if (ResidentKind(pItemToRem) == 2) {
+			ReportSpeculationViolation("removing", pItemToRem);
+			return nullptr;
+		}
 	}
 	if (pItemToRem) {
 		for (std::deque<MovableObject*>::iterator itr = m_Items.begin(); itr != m_Items.end(); ++itr) {
@@ -1787,8 +1979,14 @@ MovableObject* MovableMan::RemoveItem(MovableObject* pItemToRem) {
 MovableObject* MovableMan::RemoveParticle(MovableObject* pMOToRem) {
 	MovableObject* removed = nullptr;
 
-	if (pMOToRem && RefuseSpeculativeRemoval(pMOToRem, "particle")) {
-		return nullptr;
+	if (pMOToRem && m_Speculation.active) {
+		if (MovableObject* shadow = TakeShadow(pMOToRem, 3)) {
+			return shadow;
+		}
+		if (ResidentKind(pMOToRem) == 3) {
+			ReportSpeculationViolation("removing", pMOToRem);
+			return nullptr;
+		}
 	}
 	if (pMOToRem) {
 		for (std::deque<MovableObject*>::iterator itr = m_Particles.begin(); itr != m_Particles.end(); ++itr) {
@@ -1883,23 +2081,82 @@ bool MovableMan::ValidateMOIDs() {
 }
 
 bool MovableMan::ValidMO(const MovableObject* pMOToCheck) {
-	bool exists = m_ValidActors.find(pMOToCheck) != m_ValidActors.end() ||
-	              m_ValidItems.find(pMOToCheck) != m_ValidItems.end() ||
-	              m_ValidParticles.find(pMOToCheck) != m_ValidParticles.end();
-
-	return pMOToCheck && exists;
+	if (!pMOToCheck) {
+		return false;
+	}
+	if (m_Speculation.active) {
+		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
+			return m_Speculation.shadows.at(shadow->second).inWorld;
+		}
+		if (m_Speculation.shadows.count(pMOToCheck) > 0) {
+			return false;
+		}
+	}
+	return m_ValidActors.find(pMOToCheck) != m_ValidActors.end() ||
+	       m_ValidItems.find(pMOToCheck) != m_ValidItems.end() ||
+	       m_ValidParticles.find(pMOToCheck) != m_ValidParticles.end();
 }
 
 bool MovableMan::IsActor(const MovableObject* pMOToCheck) {
-	return pMOToCheck && m_ValidActors.find(pMOToCheck) != m_ValidActors.end();
+	if (!pMOToCheck) {
+		return false;
+	}
+	if (m_Speculation.active) {
+		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
+			const Speculation::Shadow& entry = m_Speculation.shadows.at(shadow->second);
+			return entry.inWorld && entry.kind == 1;
+		}
+		if (m_Speculation.shadows.count(pMOToCheck) > 0) {
+			return false;
+		}
+	}
+	return m_ValidActors.find(pMOToCheck) != m_ValidActors.end();
 }
 
 bool MovableMan::IsDevice(const MovableObject* pMOToCheck) {
-	return pMOToCheck && m_ValidItems.find(pMOToCheck) != m_ValidItems.end();
+	if (!pMOToCheck) {
+		return false;
+	}
+	if (m_Speculation.active) {
+		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
+			const Speculation::Shadow& entry = m_Speculation.shadows.at(shadow->second);
+			return entry.inWorld && entry.kind == 2;
+		}
+		if (m_Speculation.shadows.count(pMOToCheck) > 0) {
+			return false;
+		}
+	}
+	return m_ValidItems.find(pMOToCheck) != m_ValidItems.end();
 }
 
 bool MovableMan::IsParticle(const MovableObject* pMOToCheck) {
-	return pMOToCheck && m_ValidParticles.find(pMOToCheck) != m_ValidParticles.end();
+	if (!pMOToCheck) {
+		return false;
+	}
+	if (m_Speculation.active) {
+		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
+			const Speculation::Shadow& entry = m_Speculation.shadows.at(shadow->second);
+			return entry.inWorld && entry.kind == 3;
+		}
+		if (m_Speculation.shadows.count(pMOToCheck) > 0) {
+			return false;
+		}
+	}
+	return m_ValidParticles.find(pMOToCheck) != m_ValidParticles.end();
+}
+
+MovableObject* MovableMan::FindObjectByUniqueID(long int id) {
+	if (m_LinkRoot) {
+		if (MovableObject* part = m_LinkRoot->FindPartByUniqueID(id)) {
+			return part;
+		}
+	}
+	const auto known = m_KnownObjects.find(id);
+	MovableObject* found = known == m_KnownObjects.end() ? nullptr : known->second;
+	if (found && m_Speculation.active) {
+		return SpeculativeView(found);
+	}
+	return found;
 }
 
 bool MovableMan::IsOfActor(MOID checkMOID) {
@@ -1907,7 +2164,7 @@ bool MovableMan::IsOfActor(MOID checkMOID) {
 		return false;
 
 	bool found = false;
-	MovableObject* pMO = GetMOFromID(checkMOID);
+	MovableObject* pMO = LookupMOID(checkMOID);
 
 	if (pMO) {
 		MOID rootMOID = pMO->GetRootID();
@@ -1942,7 +2199,7 @@ int MovableMan::GetContiguousActorID(const Actor* actor) const {
 }
 
 MOID MovableMan::GetRootMOID(MOID checkMOID) {
-	MovableObject* pMO = GetMOFromID(checkMOID);
+	MovableObject* pMO = LookupMOID(checkMOID);
 	if (pMO)
 		return pMO->GetRootID();
 
@@ -3216,7 +3473,9 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Particles Draw");
 
 		for (std::deque<MovableObject*>::iterator parIt = m_Particles.begin(); parIt != m_Particles.end(); ++parIt) {
-			(*parIt)->Draw(pTargetBitmap, targetPos);
+			if (m_RenderHidden.empty() || m_RenderHidden.count(*parIt) == 0) {
+				(*parIt)->Draw(pTargetBitmap, targetPos);
+			}
 		}
 	}
 
@@ -3224,7 +3483,9 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Items Draw");
 
 		for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt) {
-			(*itmIt)->Draw(pTargetBitmap, targetPos);
+			if (m_RenderHidden.empty() || m_RenderHidden.count(*itmIt) == 0) {
+				(*itmIt)->Draw(pTargetBitmap, targetPos);
+			}
 		}
 	}
 
@@ -3232,7 +3493,9 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Actors Draw");
 
 		for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
-			(*aIt)->Draw(pTargetBitmap, targetPos);
+			if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
+				(*aIt)->Draw(pTargetBitmap, targetPos);
+			}
 		}
 	}
 }
@@ -3242,9 +3505,15 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 	ZoneScoped;
 
 	// Draw HUD elements
-	for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt)
-		(*itmIt)->DrawHUD(pTargetBitmap, targetPos, which);
+	for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt) {
+		if (m_RenderHidden.empty() || m_RenderHidden.count(*itmIt) == 0) {
+			(*itmIt)->DrawHUD(pTargetBitmap, targetPos, which);
+		}
+	}
 
-	for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt)
-		(*aIt)->DrawHUD(pTargetBitmap, targetPos, which);
+	for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
+		if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
+			(*aIt)->DrawHUD(pTargetBitmap, targetPos, which);
+		}
+	}
 }

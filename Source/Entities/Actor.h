@@ -716,6 +716,7 @@ namespace RTE {
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
 		void ResolveFaithfulLinks() override;
+		MovableObject* FindPartByUniqueID(long uid) override;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Applies the saved wire-applied controller mode; runs after the activity's AI setup so it can't be overwritten.

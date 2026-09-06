@@ -358,6 +358,7 @@ namespace RTE {
 		/// Adopts saved identity for this object and its whole attachable and wound tree.
 		void AdoptPersistedUniqueID() override;
 		void ResolveFaithfulLinks() override;
+		MovableObject* FindPartByUniqueID(long uid) override;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Maps still-pending saved attachable UniqueIDs to their live atom-subgroup IDs, recursively.

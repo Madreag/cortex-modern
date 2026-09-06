@@ -59,6 +59,14 @@ namespace RTE {
 		m_Impl->tick = 0;
 	}
 
+	void SimChecksum::SetSuppressed(bool suppressed) {
+		m_Suppressed.store(suppressed, std::memory_order_relaxed);
+	}
+
+	bool SimChecksum::IsSuppressed() const {
+		return m_Suppressed.load(std::memory_order_relaxed);
+	}
+
 	void SimChecksum::BeginTick(uint64_t simFrame) {
 		ZoneScopedN("SimChecksum::BeginTick");
 		std::lock_guard<std::mutex> lock(m_Impl->mutex);
@@ -73,7 +81,7 @@ namespace RTE {
 	}
 
 	void SimChecksum::Update(std::string_view subsystem, const void* data, size_t bytes) {
-		if (!m_Impl->active) {
+		if (!m_Impl->active || m_Suppressed.load(std::memory_order_relaxed)) {
 			return;
 		}
 		std::lock_guard<std::mutex> lock(m_Impl->mutex);

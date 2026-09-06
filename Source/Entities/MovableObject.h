@@ -1034,6 +1034,9 @@ namespace RTE {
 		/// Re-points non-owned MO references by UniqueID once a restored world is registered.
 		virtual void ResolveFaithfulLinks();
 
+		/// Finds this object or one of its parts (attachables, wounds, inventory) by unique ID.
+		virtual MovableObject* FindPartByUniqueID(long uid) { return uid == m_UniqueID ? this : nullptr; }
+
 		/// A faithful clone copies live sim state and keeps identity; rollback snapshots use it, gameplay spawns never do.
 		static bool IsFaithfulClone() { return s_FaithfulCloneDepth > 0; }
 		static bool FaithfulCloneRegisters() { return s_FaithfulCloneRegisters; }

@@ -862,6 +862,7 @@
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
     <ClInclude Include="Source\System\ScenarioRunner.h" />
     <ClInclude Include="Source\System\InputScript.h" />
+    <ClInclude Include="Source\System\FaultInjection.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\DataModule.h" />
     <ClInclude Include="Source\System\RTEError.h" />
@@ -1422,6 +1423,7 @@
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />
     <ClCompile Include="Source\System\ScenarioRunner.cpp" />
     <ClCompile Include="Source\System\InputScript.cpp" />
+    <ClCompile Include="Source\System\FaultInjection.cpp" />
     <ClCompile Include="Source\System\ContentFile.cpp" />
     <ClCompile Include="Source\System\DataModule.cpp" />
     <ClCompile Include="Source\System\RTEError.cpp" />
