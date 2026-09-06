@@ -102,6 +102,8 @@
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <deque>
+#include <array>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -164,6 +166,16 @@ static uint64_t s_rbProbeRngDrawsAtCapture = 0;
 static long long s_rbProbeSimCount = 0;
 static long long s_rbProbeSimTimeTicks = 0;
 static long s_rbProbeUidCounter = 0;
+static bool s_rbProbeInMemory = true;
+static bool s_rbProbeMemoryRestorePending = false;
+static MovableMan::WorldSnapshot s_rbProbeWorld;
+static Activity::RollbackState s_rbProbeActivity;
+static std::deque<long long> s_rbProbeSchedule;
+static int s_rbProbeFuzzCount = 0;
+static uint64_t s_rbProbeFuzzSeed = 1;
+static int s_rbProbePassCount = 0;
+static int s_rbProbeFailCount = 0;
+static std::string s_rbProbeFirstFailure;
 
 // Raw copies of the three 8-bit terrain layers; restoring them by memcpy sidesteps the save's
 // PNG round trip (the load-side clean and duplicate-palette collapse both corrupt pixels).
@@ -523,6 +535,26 @@ void HandleMainArgs(int argCount, char** argValue) {
 			s_rbProbeAtTick = std::strtoll(probeSpec.c_str(), nullptr, 10);
 			if (colon != std::string::npos) {
 				s_rbProbeWindow = std::strtoll(probeSpec.c_str() + colon + 1, nullptr, 10);
+			}
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-rollback-fidelity-probe-mode") {
+			s_rbProbeInMemory = std::string(argValue[++i]) != "file";
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-rollback-fidelity-fuzz") {
+			// seed:count:K — count random capture ticks in one process, each gated over K re-run ticks.
+			const std::string spec = argValue[++i];
+			const size_t first = spec.find(':');
+			const size_t second = first == std::string::npos ? std::string::npos : spec.find(':', first + 1);
+			s_rbProbeFuzzSeed = std::strtoull(spec.c_str(), nullptr, 10);
+			if (first != std::string::npos) {
+				s_rbProbeFuzzCount = static_cast<int>(std::strtol(spec.c_str() + first + 1, nullptr, 10));
+			}
+			if (second != std::string::npos) {
+				s_rbProbeWindow = std::strtoll(spec.c_str() + second + 1, nullptr, 10);
 			}
 			continue;
 		}
@@ -1020,8 +1052,50 @@ static void DumpTerrainIfArmed(uint64_t simTick) {
 // every tick hashes). The restore itself completes in the deferred-restart block, which flips
 // phase 2 to 3 after rewinding the clock, the RNG, and the unique ID counter.
 void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tickResult) {
+	if (s_rbProbeFuzzCount > 0 && s_rbProbeSchedule.empty() && s_rbProbeAtTick <= 0 && s_rbProbePhase == 0) {
+		// Lay out the random capture ticks once the run's cap is known; cycles never overlap.
+		const long long maxTick = static_cast<long long>(ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800);
+		const long long first = std::max<long long>(40, static_cast<long long>(simTick) + 2);
+		const long long last = maxTick - s_rbProbeWindow - 4;
+		std::mt19937_64 rng(s_rbProbeFuzzSeed);
+		std::vector<long long> picks;
+		for (int n = 0; n < s_rbProbeFuzzCount && last > first; ++n) {
+			picks.push_back(first + static_cast<long long>(rng() % static_cast<uint64_t>(last - first + 1)));
+		}
+		std::sort(picks.begin(), picks.end());
+		long long floor = first;
+		for (long long pick: picks) {
+			const long long tick = std::max(pick, floor);
+			if (tick > last) {
+				break;
+			}
+			s_rbProbeSchedule.push_back(tick);
+			floor = tick + s_rbProbeWindow + 3;
+		}
+		if (s_rbProbeSchedule.empty()) {
+			std::cout << "[rbfuzz] no room for probes under the tick cap" << std::endl;
+			s_rbProbeFuzzCount = 0;
+			return;
+		}
+		s_rbProbeAtTick = s_rbProbeSchedule.front();
+		s_rbProbeSchedule.pop_front();
+		std::cout << "[rbfuzz] " << (s_rbProbeSchedule.size() + 1) << " probes scheduled, window " << s_rbProbeWindow << ", first at " << s_rbProbeAtTick << std::endl;
+	}
 	if (s_rbProbePhase == 0 && simTick == static_cast<uint64_t>(s_rbProbeAtTick)) {
-		if (!g_ActivityMan.SaveCurrentGame("rbprobe")) {
+		if (s_rbProbeInMemory) {
+			if (!g_MovableMan.CaptureWorld(s_rbProbeWorld)) {
+				std::cout << "[rbprobe] FAIL: world capture refused (add queues not drained)" << std::endl;
+				System::SetQuit(true);
+				return;
+			}
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				activity->CaptureRollbackState(s_rbProbeActivity);
+				if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
+					gameActivity->CaptureDeliveriesForRollback();
+				}
+			}
+			LuaMan::SetScriptsFrozen(true);
+		} else if (!g_ActivityMan.SaveCurrentGame("rbprobe")) {
 			std::cout << "[rbprobe] FAIL: the capture save was refused" << std::endl;
 			System::SetQuit(true);
 			return;
@@ -1050,7 +1124,9 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			DumpSimStateNow("rb_t1_pass1");
 		}
 		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
-			if (!g_ActivityMan.LoadGameToRestart("rbprobe")) {
+			if (s_rbProbeInMemory) {
+				s_rbProbeMemoryRestorePending = true;
+			} else if (!g_ActivityMan.LoadGameToRestart("rbprobe")) {
 				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
 				System::SetQuit(true);
 				return;
@@ -1074,8 +1150,10 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				}
 			}
 			if (firstDivergence < 0) {
-				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore" << std::endl;
+				++s_rbProbePassCount;
+				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore (capture " << s_rbProbeAtTick << ")" << std::endl;
 			} else {
+				++s_rbProbeFailCount;
 				std::string divergentSubsystems;
 				for (const auto& [name, hash]: s_rbProbeFirst[divergentIndex].per_subsystem) {
 					if (name == "controller") {
@@ -1087,11 +1165,33 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					}
 				}
 				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence
-				          << " subsystems=" << divergentSubsystems << std::endl;
+				          << " subsystems=" << divergentSubsystems << " (capture " << s_rbProbeAtTick << ")" << std::endl;
+				if (s_rbProbeFirstFailure.empty()) {
+					s_rbProbeFirstFailure = "capture " + std::to_string(s_rbProbeAtTick) + " diverged at " + std::to_string(firstDivergence) + " [" + divergentSubsystems + "]";
+				}
 			}
-			s_rbProbePhase = 4;
+			LuaMan::SetScriptsFrozen(false);
 			// Both passes' tracked-UID rows are in the tracer buffer; flush them for the fidelity diff.
 			SceneMan::FlushTerrainEvents((!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".rbprobe.terrainevents.txt");
+			s_rbProbeFirst.clear();
+			s_rbProbeSecond.clear();
+			if (!s_rbProbeSchedule.empty()) {
+				s_rbProbeAtTick = s_rbProbeSchedule.front();
+				s_rbProbeSchedule.pop_front();
+				s_rbProbePhase = 0;
+				return;
+			}
+			s_rbProbePhase = 4;
+			if (s_rbProbeFuzzCount > 0) {
+				std::cout << "[rbfuzz] " << (s_rbProbeFailCount == 0 ? "PASS" : "FAIL") << " " << s_rbProbePassCount << "/" << (s_rbProbePassCount + s_rbProbeFailCount) << " probes byte-identical";
+				if (s_rbProbeFailCount > 0) {
+					std::cout << "; first failure: " << s_rbProbeFirstFailure;
+				}
+				std::cout << std::endl;
+			}
+			if (s_rbProbeFailCount > 0) {
+				s_netReplayExitCode = 1;
+			}
 			System::SetQuit(true);
 		}
 	}
@@ -1531,7 +1631,7 @@ void RunGameLoop() {
 				if (desyncSampleTick) {
 					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
 				}
-				if (s_rbProbeAtTick > 0 && (ScenarioRunner::IsActive() || ScenarioRunner::IsLockstepReplayPlayback())) {
+				if ((s_rbProbeAtTick > 0 || s_rbProbeFuzzCount > 0) && (ScenarioRunner::IsActive() || ScenarioRunner::IsLockstepReplayPlayback())) {
 					RollbackProbeOnHashedTick(simTick, tickResult);
 				}
 			}
@@ -1758,6 +1858,42 @@ void RunGameLoop() {
 					g_MenuMan.HandleTransitionIntoMenuLoop();
 					RunMenuLoop();
 				}
+			}
+			if (s_rbProbeMemoryRestorePending) {
+				s_rbProbeMemoryRestorePending = false;
+				// The world swaps between ticks: clock, RNG, identity counter, terrain, activity, then the residents.
+				g_SimRNG.SetEngineState(s_rbProbeRngState);
+				std::cout << "[rbprobe] rng rewound; draws=" << g_SimRNG.GetDrawCount()
+				          << " (capture baseline " << s_rbProbeRngDrawsAtCapture << ")" << std::endl;
+				g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
+				if (!s_rbProbeTerrain.Restore()) {
+					std::cout << "[rbprobe] FAIL: terrain layer restore refused" << std::endl;
+					System::SetQuit(true);
+				}
+				if (Activity* activity = g_ActivityMan.GetActivity()) {
+					activity->RestoreRollbackState(s_rbProbeActivity);
+					if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
+						gameActivity->RestoreDeliveriesFromRollback();
+					}
+				}
+				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
+					std::cout << "[rbprobe] FAIL: world restore refused" << std::endl;
+					System::SetQuit(true);
+				}
+				MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
+				std::string rewindError;
+				if (ScenarioRunner::IsLockstepReplayPlayback() &&
+				    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
+					std::cout << "[rbprobe] FAIL: replay rewind refused: " << rewindError << std::endl;
+					System::SetQuit(true);
+					break;
+				}
+				// The re-run's first travel tests the MO-hit layer; rebuild it over the restored world.
+				g_MovableMan.UpdateDrawMOIDs();
+				DumpSimStateNow("rb_restored");
+				DumpTerrainNow("rb_res");
+				s_rbProbePhase = 3;
+				std::cout << "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount << std::endl;
 			}
 			if (g_ActivityMan.ActivitySetToRestart()) {
 				g_LoadingScreen.DrawLoadingSplash();
