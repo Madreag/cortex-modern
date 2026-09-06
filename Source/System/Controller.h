@@ -340,6 +340,9 @@ namespace RTE {
 		/// Replaces the sim-facing controller state from a decoded wire frame.
 		void ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled);
 
+		/// Clears the sim-facing input for a tick no frame was committed for; the mode, player and disabled flag stay.
+		void ApplyWireNeutral() { ResetCommandState(); }
+
 		/// Replaces the scheme facts the sim reads (device class, digital aim speed) with the owner's, from a wire frame.
 		void ApplyWireScheme(WireDeviceClass deviceClass, float digitalAimSpeed);
 		bool HasWireScheme() const { return m_WireSchemeValid; }

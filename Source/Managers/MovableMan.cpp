@@ -269,7 +269,7 @@ static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::
 	return frames;
 }
 
-static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& actors, const std::vector<ControllerFrame>& frames, bool localOwned, std::string& error) {
+static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& actors, const std::vector<ControllerFrame>& frames, bool localOwned, std::unordered_set<int64_t>& applied, std::string& error) {
 	std::map<int64_t, Actor*> actorsByID;
 	for (Actor* actor: actors) {
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
@@ -289,8 +289,19 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 		if (!MovableMan::ApplyLockstepFrameToActor(*actorIt->second, frame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), &error)) {
 			return false;
 		}
+		applied.insert(frame.actorUniqueID);
 	}
 	return true;
+}
+
+// An actor no frame was committed for this tick (its first D ticks in the world, the ticks after a
+// pause or an ownership change) runs on neutral input on every peer, not on its owner's fresh sample.
+static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, const std::unordered_set<int64_t>& applied) {
+	for (Actor* actor: actors) {
+		if (applied.find(static_cast<int64_t>(actor->GetUniqueID())) == applied.end()) {
+			actor->GetController()->ApplyWireNeutral();
+		}
+	}
 }
 
 bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error) {
@@ -3510,16 +3521,18 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep wait: " + error);
 			return;
 		}
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, error)) {
+		std::unordered_set<int64_t> applied;
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, applied, error)) {
 			DumpControllerDebugSnapshot("lockstep_local_apply_error", simTick, m_Actors, &readyFrame.localFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep local apply: " + error);
 			return;
 		}
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, error)) {
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, applied, error)) {
 			DumpControllerDebugSnapshot("lockstep_remote_apply_error", simTick, m_Actors, &readyFrame.remoteFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
+		NeutralizeUnframedLockstepActors(m_Actors, applied);
 		// A leaver's actors dropped off the wire: their control handoffs revert to the policy owner
 		// (a surviving teammate's AI picks them up), and actors with no surviving owner stand down —
 		// on every survivor at the same tick.
