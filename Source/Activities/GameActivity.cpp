@@ -1771,7 +1771,7 @@ void GameActivity::Update() {
 		///////////////////////////////////
 		// Enable/disable controlled actors' AI as appropriate when in menus
 
-		if (m_ControlledActor[player] && m_ControlledActor[player]->GetController()->GetPlayerRaw() == player) {
+		if (m_ControlledActor[player] && m_ControlledActor[player]->GetController()->GetSeatPlayerRaw() == player) {
 			// Don't disable when pie menu is active; it is done inside the Controller Update
 			if (m_pBuyGUI[player]->IsVisible() || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_AI);

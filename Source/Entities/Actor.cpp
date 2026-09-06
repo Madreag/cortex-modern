@@ -657,15 +657,20 @@ void Actor::SetTeam(int team) {
 }
 
 void Actor::SetControllerMode(Controller::InputMode newMode, int newPlayer) {
-
 	Controller::InputMode previousControllerMode = m_Controller.GetInputMode();
 	int previousControllingPlayer = m_Controller.GetPlayer();
 
 	m_Controller.SetInputMode(newMode);
 	m_Controller.SetPlayer(newPlayer);
 
-	RunScriptedFunctionInAppropriateScripts("OnControllerInputModeChange", false, false, {}, {std::to_string(previousControllerMode), std::to_string(previousControllingPlayer)});
+	// Under lockstep the sim-facing change lands with the committed frame, which notifies every peer then.
+	if (!m_Controller.IsWireOwned()) {
+		OnControllerInputModeChanged(previousControllerMode, previousControllingPlayer);
+	}
+}
 
+void Actor::OnControllerInputModeChanged(Controller::InputMode previousMode, int previousPlayer) {
+	RunScriptedFunctionInAppropriateScripts("OnControllerInputModeChange", false, false, {}, {std::to_string(previousMode), std::to_string(previousPlayer)});
 	m_NewControlTmr.Reset();
 }
 
@@ -1592,7 +1597,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 		}
 	}
 
-	int actorScreen = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetPlayer()) : -1;
+	int actorScreen = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetSeatPlayer()) : -1;
 	bool screenTeamIsSameAsActorTeam = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen)) == m_Team : true;
 	if (m_PieMenu->IsVisible() && screenTeamIsSameAsActorTeam && (!m_PieMenu->IsInNormalAnimationMode() || (actorScreen == whichScreen))) {
 		m_PieMenu->RenderUpdate();
@@ -1604,7 +1609,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 	}
 
 	// Draw the selection arrow, if controlled and under the arrow's time limit
-	if (m_Controller.IsPlayerControlled() && m_NewControlTmr.GetElapsedSimTimeMS() < ARROWTIME) {
+	if (m_Controller.IsSeatedByPlayer() && m_NewControlTmr.GetElapsedSimTimeMS() < ARROWTIME) {
 		draw_sprite(pTargetBitmap, m_apSelectArrow[m_Team], cpuPos.m_X, EaseOut(drawPos.m_Y + m_HUDStack - 60, drawPos.m_Y + m_HUDStack - 20, m_NewControlTmr.GetElapsedSimTimeMS() / (float)ARROWTIME));
 	}
 
@@ -1650,7 +1655,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 
 			m_HUDStack += -12;
 
-			if (IsPlayerControlled()) {
+			if (m_Controller.IsSeatedByPlayer()) {
 				if (GetGoldCarried() > 0) {
 					str[0] = m_GoldPicked ? -57 : -58;
 					str[1] = 0;
@@ -1772,8 +1777,8 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 						prevItr = pRoster->rbegin();
 					if ((*prevItr) == (*selfItr))
 						break;
-				} while (!(*prevItr)->IsPlayerControllable() || (*prevItr)->GetController()->IsPlayerControlled() ||
-				         g_ActivityMan.GetActivity()->IsOtherPlayerBrain((*prevItr), m_Controller.GetPlayer()));
+				} while (!(*prevItr)->IsPlayerControllable() || (*prevItr)->GetController()->IsSeatedByPlayer() ||
+				         g_ActivityMan.GetActivity()->IsOtherPlayerBrain((*prevItr), m_Controller.GetSeatPlayer()));
 
 				// Get the next actor in the list (not controlled by another player)
 				std::list<Actor*>::iterator nextItr = selfItr;
@@ -1785,7 +1790,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 					if ((*nextItr) == (*selfItr)) {
 						break;
 					}
-				} while (!(*nextItr)->IsPlayerControllable() || (*nextItr)->GetController()->IsPlayerControlled() || g_ActivityMan.GetActivity()->IsOtherPlayerBrain((*prevItr), m_Controller.GetPlayer()));
+				} while (!(*nextItr)->IsPlayerControllable() || (*nextItr)->GetController()->IsSeatedByPlayer() || g_ActivityMan.GetActivity()->IsOtherPlayerBrain((*prevItr), m_Controller.GetSeatPlayer()));
 
 				Vector iconPos = cpuPos;
 

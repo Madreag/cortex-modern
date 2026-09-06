@@ -1303,15 +1303,21 @@ bool PieMenu::PreparePieSliceSubPieMenuForUse(const PieSlice* pieSliceWithSubPie
 
 void PieMenu::PrepareAnalogCursorForEnableOrDisable(bool enable) const {
 	if (Controller* controller = GetController(); controller && (controller->IsMouseControlled() || controller->IsGamepadControlled())) {
+		// The local mouse values belong to the seat sampling them; a remote actor's menu leaves them alone.
+		const bool seated = controller->IsSeatedByPlayer();
 		if (!IsSubPieMenu()) {
-			g_UInputMan.SetMouseValueMagnitude(0, controller->GetPlayer());
+			if (seated) {
+				g_UInputMan.SetMouseValueMagnitude(0, controller->GetSeatPlayer());
+			}
 			controller->m_AnalogCursor.Reset();
 		} else if (enable) {
 			controller->SetAnalogCursorAngleLimits(GetRotAngle() + c_DirectionsToRadiansMap.at(m_DirectionIfSubPieMenu) - c_QuarterPI + (PieQuadrant::c_PieSliceSlotSize / 2.0F), GetRotAngle() + c_DirectionsToRadiansMap.at(m_DirectionIfSubPieMenu) + c_QuarterPI - (PieQuadrant::c_PieSliceSlotSize / 2.0F));
 			if (!controller->m_AnalogCursor.IsZero()) {
 				float mouseAngleToSet = GetRotAngle() + (m_HoveredPieSlice ? m_HoveredPieSlice->GetMidAngle() : c_DirectionsToRadiansMap.at(m_DirectionIfSubPieMenu));
-				g_UInputMan.SetMouseValueAngle(mouseAngleToSet, controller->GetPlayer());
-				g_UInputMan.SetMouseValueMagnitude(0.75F, controller->GetPlayer());
+				if (seated) {
+					g_UInputMan.SetMouseValueAngle(mouseAngleToSet, controller->GetSeatPlayer());
+					g_UInputMan.SetMouseValueMagnitude(0.75F, controller->GetSeatPlayer());
+				}
 				controller->m_AnalogCursor.SetAbsRadAngle(mouseAngleToSet);
 				controller->m_AnalogCursor.SetMagnitude(0.75F);
 			}

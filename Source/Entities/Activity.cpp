@@ -749,13 +749,13 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	if (!actor || !g_MovableMan.IsActor(actor) || !actor->IsPlayerControllable()) {
 		return false;
 	}
-	if ((actor != m_Brain[player] && actor->IsPlayerControlled()) || IsOtherPlayerBrain(actor, player)) {
+	if ((actor != m_Brain[player] && actor->GetController()->IsSeatedByPlayer()) || IsOtherPlayerBrain(actor, player)) {
 		g_GUISound.UserErrorSound()->Play(player);
 		return false;
 	}
 
 	Actor* preSwitchActor = (m_ControlledActor[player] && g_MovableMan.IsActor(m_ControlledActor[player])) ? m_ControlledActor[player] : nullptr;
-	if (preSwitchActor && preSwitchActor->GetController()->GetPlayer() == player) {
+	if (preSwitchActor && preSwitchActor->GetController()->IsSeatedByPlayer(player)) {
 		preSwitchActor->SetControllerMode(Controller::CIM_AI);
 		preSwitchActor->GetController()->SetDisabled(false);
 	}

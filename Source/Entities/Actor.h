@@ -287,6 +287,9 @@ namespace RTE {
 		/// @param newPlayer The player which will control this if the input mode was set to player. (default: -1)
 		void SetControllerMode(Controller::InputMode newMode, int newPlayer = -1);
 
+		/// Runs the mode-change script callback; a lockstep frame calls this on every peer when the sim-facing mode changes.
+		void OnControllerInputModeChanged(Controller::InputMode previousMode, int previousPlayer);
+
 		/// Sets this Actor's Controller mode and gives back what it used to be.
 		/// @param newMode The new mode to set to.
 		/// @param newPlayer The player which will control this if the input mode was set to player. (default: -1)

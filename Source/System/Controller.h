@@ -147,7 +147,9 @@ namespace RTE {
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create(InputMode mode, int player) {
 			m_InputMode = mode;
+			m_SeatMode = mode;
 			m_Player = player;
+			m_SeatPlayer = player;
 			return 0;
 		}
 
@@ -199,14 +201,27 @@ namespace RTE {
 		/// @return The InputMode that this controller is currently using.
 		InputMode GetInputMode() const { return m_InputMode; }
 
-		/// Sets the mode of input for this Controller.
+		/// Sets the mode of input for this Controller. Under lockstep the seat changes at once and the
+		/// sim-facing mode follows the wire at the committed tick, on every peer alike.
 		/// @param newMode The new InputMode for this controller to use.
 		void SetInputMode(InputMode newMode) {
-			if (m_InputMode != newMode) {
+			if (m_SeatMode != newMode) {
 				m_ReleaseTimer.Reset();
 			}
-			m_InputMode = newMode;
+			m_SeatMode = newMode;
+			if (!IsWireOwned()) {
+				m_InputMode = newMode;
+			}
 		}
+
+		/// Whether the lockstep wire owns the sim-facing mode and player of this controller.
+		bool IsWireOwned() const;
+
+		/// This machine's seat: which local human (if any) samples input into this controller, and how.
+		InputMode GetSeatMode() const { return m_SeatMode; }
+		int GetSeatPlayer() const { return m_SeatMode == InputMode::CIM_PLAYER ? m_SeatPlayer : Players::NoPlayer; }
+		int GetSeatPlayerRaw() const { return m_SeatPlayer; }
+		bool IsSeatedByPlayer(int player = Players::NoPlayer) const { return m_SeatMode == InputMode::CIM_PLAYER && m_SeatPlayer >= Players::PlayerOne && (player < Players::PlayerOne || m_SeatPlayer == player); }
 
 		/// Gets the analog movement input data.
 		/// @return A vector with the analog movement data, both axes ranging form -1.0 to 1.0.
@@ -272,7 +287,12 @@ namespace RTE {
 
 		/// Sets the raw player index without changing the input mode.
 		/// @param player The player index to store.
-		void SetPlayerRaw(int player) { m_Player = player; }
+		void SetPlayerRaw(int player) {
+			m_SeatPlayer = player;
+			if (!IsWireOwned()) {
+				m_Player = player;
+			}
+		}
 
 		/// Gets which player's input this is listening to, if in player input mode.
 		/// @return The player number, or -1 if not in player input mode.
@@ -281,9 +301,15 @@ namespace RTE {
 		/// Sets which player's input this is listening to, and will enable player input mode.
 		/// @param player The player number.
 		void SetPlayer(int player) {
-			m_Player = player;
-			if (m_Player >= Players::PlayerOne) {
-				m_InputMode = InputMode::CIM_PLAYER;
+			m_SeatPlayer = player;
+			if (m_SeatPlayer >= Players::PlayerOne) {
+				m_SeatMode = InputMode::CIM_PLAYER;
+			}
+			if (!IsWireOwned()) {
+				m_Player = player;
+				if (m_Player >= Players::PlayerOne) {
+					m_InputMode = InputMode::CIM_PLAYER;
+				}
 			}
 		}
 
@@ -362,12 +388,14 @@ namespace RTE {
 		float m_WireDigitalAimSpeed = 1.0F;
 
 		InputMode m_InputMode; //!< The current controller input mode, like AI, player etc.
+		InputMode m_SeatMode; //!< How this machine samples into the controller; equals m_InputMode outside lockstep.
 
 		Actor* m_ControlledActor; //!< The actor controlled by this.
 
 		/// The last player this controlled. This is necessary so we still have some control after controlled's death.
 		/// If this is -1, no player is controlling/ed, even if in player control input mode.
 		int m_Player;
+		int m_SeatPlayer; //!< The local player the seat samples from; equals m_Player outside lockstep.
 
 		int m_Team; //!< The last team this controlled. This is necessary so we still have some control after controlled's death.
 

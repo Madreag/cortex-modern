@@ -183,8 +183,9 @@ namespace RTE {
 		frame.analogCursorY = QuantizeAnalog(cursor.m_Y);
 		frame.mouseDeltaX = QuantizeMouseDelta(mouse.m_X);
 		frame.mouseDeltaY = QuantizeMouseDelta(mouse.m_Y);
-		frame.inputMode = static_cast<uint8_t>(controller.GetInputMode());
-		frame.playerRaw = static_cast<int8_t>(std::clamp(controller.GetPlayerRaw(), -128, 127));
+		// The producer's seat is what every peer's sim adopts at this frame's tick.
+		frame.inputMode = static_cast<uint8_t>(controller.GetSeatMode());
+		frame.playerRaw = static_cast<int8_t>(std::clamp(controller.GetSeatPlayerRaw(), -128, 127));
 		frame.SetQuickDisabled(controller.IsQuickDisabled());
 		frame.deviceClass = static_cast<uint8_t>(controller.GetLocalDeviceClass());
 		frame.digitalAimSpeed = controller.GetLocalDigitalAimSpeed();

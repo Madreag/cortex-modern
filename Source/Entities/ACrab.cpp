@@ -1145,10 +1145,11 @@ void ACrab::PreControllerUpdate() {
 		m_AimAngle = FacingAngle(m_AimAngle);
 
 		// Clamp the analog aim too, so it doesn't feel "sticky" at the edges of the aim limit
-		if (m_Controller.IsPlayerControlled() && m_LockMouseAimInput) {
-			float mouseAngle = g_UInputMan.AnalogAimValues(m_Controller.GetPlayer()).GetAbsRadAngle();
+		// Only the seat that samples this machine's mouse may steer it; a remote actor's aim stays off the local input.
+		if (m_Controller.IsSeatedByPlayer() && m_LockMouseAimInput) {
+			float mouseAngle = g_UInputMan.AnalogAimValues(m_Controller.GetSeatPlayer()).GetAbsRadAngle();
 			Clamp(mouseAngle, FacingAngle(adjustedAimRangeUpperLimit), FacingAngle(adjustedAimRangeLowerLimit));
-			g_UInputMan.SetMouseValueAngle(mouseAngle, m_Controller.GetPlayer());
+			g_UInputMan.SetMouseValueAngle(mouseAngle, m_Controller.GetSeatPlayer());
 		}
 	} else
 		m_AimState = AIMSTILL;
@@ -1567,8 +1568,8 @@ void ACrab::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 
 	// Player AI drawing
 
-	if ((m_Controller.IsState(AIM_SHARP) || (m_Controller.IsPlayerControlled() && !m_Controller.IsState(PIE_MENU_ACTIVE))) && m_pTurret && m_pTurret->IsAttached() && m_pTurret->HasMountedDevice()) {
-		m_pTurret->GetFirstMountedDevice()->DrawHUD(pTargetBitmap, targetPos, whichScreen, m_Controller.IsState(AIM_SHARP) && m_Controller.IsPlayerControlled());
+	if ((m_Controller.IsState(AIM_SHARP) || (m_Controller.IsSeatedByPlayer() && !m_Controller.IsState(PIE_MENU_ACTIVE))) && m_pTurret && m_pTurret->IsAttached() && m_pTurret->HasMountedDevice()) {
+		m_pTurret->GetFirstMountedDevice()->DrawHUD(pTargetBitmap, targetPos, whichScreen, m_Controller.IsState(AIM_SHARP) && m_Controller.IsSeatedByPlayer());
 	}
 	//////////////////////////////////////
 	// Draw stat info HUD
@@ -1578,7 +1579,7 @@ void ACrab::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 	GUIFont* pSmallFont = g_FrameMan.GetSmallFont();
 
 	// Only show extra HUD if this guy is controlled by the same player that this screen belongs to
-	if (m_Controller.IsPlayerControlled() && g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetPlayer()) == whichScreen && pSmallFont && pSymbolFont) {
+	if (m_Controller.IsSeatedByPlayer() && g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetSeatPlayer()) == whichScreen && pSmallFont && pSymbolFont) {
 		AllegroBitmap allegroBitmap(pTargetBitmap);
 
 		Vector currentPos = GetRenderPos();
