@@ -2592,7 +2592,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
-	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << "},";
+	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"refusals\":" << LocalPrediction::GetRefusals() << "},";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";

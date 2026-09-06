@@ -140,6 +140,13 @@ namespace RTE {
 		void DiscardAddedSince(const AddQueueMark& mark);
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
+
+		/// Speculative execution (a presentation preview): canonical residents are read-only. A removal of a
+		/// resident while speculative is refused and counted instead of tearing the canonical world.
+		void SetSpeculative(bool speculative) { m_Speculative = speculative; }
+		bool IsSpeculative() const { return m_Speculative; }
+		uint64_t GetSpeculativeRefusals() const { return m_SpeculativeRefusals; }
+		bool RefuseSpeculativeRemoval(const MovableObject* mo, const char* kind);
 		/// Blocks until the async seeing pass that reads the actor list has finished.
 		void WaitForActorsSeeTask();
 		/// One line per Lua state listing its registered MOs (UID and whether their scripts are live); the invariance tests compare it.
@@ -650,6 +657,8 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
+		bool m_Speculative = false;
+		uint64_t m_SpeculativeRefusals = 0;
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		std::deque<MovableObject*> m_AddedItems;
 		std::deque<MovableObject*> m_AddedParticles;
