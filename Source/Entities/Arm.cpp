@@ -186,6 +186,9 @@ void Arm::AddHandTarget(const std::string& description, const Vector& handTarget
 }
 
 void Arm::SetHeldDevice(HeldDevice* newHeldDevice) {
+	if (const MovableObject* rootParent = SceneMan::GetTrackedUIDs().empty() ? nullptr : GetRootParent(); rootParent && SceneMan::IsTrackedUID(rootParent->GetUniqueID())) {
+		SceneMan::TraceTerrainEvent("shld", newHeldDevice ? static_cast<int>(newHeldDevice->GetUniqueID()) : 0, m_HeldDevice ? static_cast<int>(m_HeldDevice->GetUniqueID()) : 0, static_cast<int>(GetUniqueID()), 0, static_cast<int>(rootParent->GetUniqueID()));
+	}
 	if (m_HeldDevice && m_HeldDevice->IsAttached()) {
 		RemoveAndDeleteAttachable(m_HeldDevice);
 	}

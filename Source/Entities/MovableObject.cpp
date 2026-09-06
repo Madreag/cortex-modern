@@ -818,6 +818,14 @@ void MovableObject::EnableOrDisableAllScripts(bool enableScripts) {
 }
 
 int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts, bool stopOnError, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
+	if (!SceneMan::GetTrackedUIDs().empty() && (SceneMan::IsTrackedUID(GetUniqueID()) || (GetRootParent() && SceneMan::IsTrackedUID(GetRootParent()->GetUniqueID())))) {
+		int packed = 0;
+		for (size_t i = 0; i < 4 && i < functionName.size(); ++i) {
+			packed |= static_cast<int>(static_cast<unsigned char>(functionName[i])) << (8 * i);
+		}
+		SceneMan::TraceTerrainEvent("lua", packed, static_cast<int>(functionName.size()), 0, 0, static_cast<int>(GetUniqueID()));
+	}
+
 	if (LuaMan::AreScriptsFrozen()) {
 		return 0;
 	}
