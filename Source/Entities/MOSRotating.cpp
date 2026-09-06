@@ -289,7 +289,18 @@ int MOSRotating::Create(const MOSRotating& reference) {
 	if (IsFaithfulClone()) {
 		m_DeepHardness = reference.m_DeepHardness;
 		m_FarthestAttachableDistanceAndRadius = reference.m_FarthestAttachableDistanceAndRadius;
+		m_FaithfulFarthestAttachableDistanceAndRadius = reference.m_FarthestAttachableDistanceAndRadius;
+		m_FaithfulRadiusAffectingAttachableUID = reference.m_RadiusAffectingAttachable ? reference.m_RadiusAffectingAttachable->GetUniqueID() : reference.m_FaithfulRadiusAffectingAttachableUID;
 		m_AttachableAndWoundMass = reference.m_AttachableAndWoundMass;
+		// Hardcoded attachables re-attach in declaration order; remember the live order so the update order survives.
+		if (!reference.m_FaithfulAttachableOrder.empty()) {
+			m_FaithfulAttachableOrder = reference.m_FaithfulAttachableOrder;
+		} else {
+			m_FaithfulAttachableOrder.clear();
+			for (const Attachable* attachable: reference.m_Attachables) {
+				m_FaithfulAttachableOrder.push_back(attachable->GetUniqueID());
+			}
+		}
 		// Subgroup atoms are re-derived as the attachables re-attach; stash the live group so the adopt lays them back.
 		if (m_pAtomGroup && reference.m_pAtomGroup && m_PersistedAtomGroupOffsets.empty()) {
 			m_PersistedAtomGroupSubIDs = reference.m_pAtomGroup->GetAtomSubIDs();
@@ -1553,6 +1564,29 @@ void MOSRotating::AdoptPersistedUniqueID() {
 
 void MOSRotating::ResolveFaithfulLinks() {
 	MOSprite::ResolveFaithfulLinks();
+	if (!m_FaithfulAttachableOrder.empty()) {
+		std::unordered_map<long, size_t> rank;
+		for (size_t i = 0; i < m_FaithfulAttachableOrder.size(); ++i) {
+			rank[m_FaithfulAttachableOrder[i]] = i;
+		}
+		const auto rankOf = [&rank](const Attachable* attachable) {
+			const auto found = rank.find(attachable->GetUniqueID());
+			return found == rank.end() ? rank.size() : found->second;
+		};
+		m_Attachables.sort([&rankOf](const Attachable* a, const Attachable* b) { return rankOf(a) < rankOf(b); });
+		m_FaithfulAttachableOrder.clear();
+	}
+	if (m_FaithfulRadiusAffectingAttachableUID != 0) {
+		const long uid = m_FaithfulRadiusAffectingAttachableUID;
+		const auto byUID = [uid](const Attachable* attachable) { return attachable->GetUniqueID() == uid; };
+		if (const auto found = std::find_if(m_Attachables.begin(), m_Attachables.end(), byUID); found != m_Attachables.end()) {
+			m_RadiusAffectingAttachable = *found;
+		} else if (const auto foundWound = std::find_if(m_Wounds.begin(), m_Wounds.end(), byUID); foundWound != m_Wounds.end()) {
+			m_RadiusAffectingAttachable = *foundWound;
+		}
+		m_FarthestAttachableDistanceAndRadius = m_FaithfulFarthestAttachableDistanceAndRadius;
+		m_FaithfulRadiusAffectingAttachableUID = 0;
+	}
 	for (Attachable* attachable: m_Attachables) {
 		attachable->ResolveFaithfulLinks();
 	}

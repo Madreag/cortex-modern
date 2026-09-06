@@ -562,6 +562,9 @@ namespace RTE {
 		float m_PersistedGroupMomentOfInertia; //!< Saved group moment of inertia, applied on snapshot adopt.
 		float m_PersistedGroupStoredMass; //!< Saved owner-mass anchor for the inertia recompute gate.
 		bool m_HasPersistedGroupInertia; //!< Whether a saved moment of inertia is pending application.
+		std::vector<long> m_FaithfulAttachableOrder; //!< The live attachable order a faithful clone lays back in ResolveFaithfulLinks.
+		long m_FaithfulRadiusAffectingAttachableUID = 0; //!< The radius-affecting attachable a faithful clone relinks in ResolveFaithfulLinks.
+		float m_FaithfulFarthestAttachableDistanceAndRadius = 0.0F; //!< The live farthest distance a faithful clone lays back with the link above.
 		float m_PersistedAttachableAndWoundMass; //!< Saved accumulated attachable+wound mass, applied on snapshot adopt.
 		bool m_HasPersistedAttachableAndWoundMass; //!< Whether a saved accumulated mass is pending application.
 		// The group of Atom:s that will serve as a means to detect deep terrain penetration.
