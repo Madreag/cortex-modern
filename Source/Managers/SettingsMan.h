@@ -104,6 +104,13 @@ namespace RTE {
 		/// Sets the lockstep input-delay buffer (frames) a hosted match will use.
 		void SetNetworkInputDelayFrames(int newInputDelayFrames) { m_NetworkInputDelayFrames = newInputDelayFrames; }
 
+		/// Whether the local player's actors are drawn ahead through the input-delay pipeline.
+		bool LocalPredictionEnabled() const { return m_LocalPrediction; }
+		void SetLocalPredictionEnabled(bool enabled) { m_LocalPrediction = enabled; }
+
+		/// The most ticks the local preview runs ahead per frame.
+		int GetLocalPredictionMaxTicks() const { return m_LocalPredictionMaxTicks; }
+
 		/// Gets how many threaded Lua states we'll use. -1 represents no override, which defaults to the maximum number of concurrent hardware threads.
 		/// @return How many threaded Lua states we'll use.
 		int GetNumberOfLuaStatesOverride() const { return m_NumberOfLuaStatesOverride; }
@@ -420,6 +427,8 @@ namespace RTE {
 		int m_PathFinderGridNodeSize; //!< The grid size used by the PathFinder, in pixels.
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
 		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
+		bool m_LocalPrediction; //!< Whether the local player's actors are previewed through the input delay.
+		int m_LocalPredictionMaxTicks; //!< Cap on how many ticks ahead the preview runs.
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
 		bool m_ForceImmediatePathingRequestCompletion; //!< Whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 

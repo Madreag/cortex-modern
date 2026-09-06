@@ -357,7 +357,7 @@ void AudioMan::ClearSoundEvents(int player) {
 }
 
 bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
-	if (!m_AudioEnabled || !soundContainer || soundContainer->GetPlayingChannels()->size() >= c_MaxPlayingSoundsPerContainer) {
+	if (s_PlaybackSuppressed || !m_AudioEnabled || !soundContainer || soundContainer->GetPlayingChannels()->size() >= c_MaxPlayingSoundsPerContainer) {
 		return false;
 	}
 	FMOD_RESULT result = FMOD_OK;

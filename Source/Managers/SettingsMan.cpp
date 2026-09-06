@@ -52,6 +52,8 @@ void SettingsMan::Clear() {
 	m_PathFinderGridNodeSize = SCENEGRIDSIZE;
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
+	m_LocalPrediction = true;
+	m_LocalPredictionMaxTicks = 20;
 	m_NumberOfLuaStatesOverride = -1;
 	m_ForceImmediatePathingRequestCompletion = false;
 
@@ -181,6 +183,8 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("PathFinderGridNodeSize", { reader >> m_PathFinderGridNodeSize; });
 	MatchProperty("AIUpdateInterval", { reader >> m_AIUpdateInterval; });
 	MatchProperty("NetworkInputDelayFrames", { reader >> m_NetworkInputDelayFrames; });
+	MatchProperty("LocalPrediction", { reader >> m_LocalPrediction; });
+	MatchProperty("LocalPredictionMaxTicks", { reader >> m_LocalPredictionMaxTicks; });
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
 	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.m_SettlingEnabled; });
@@ -309,6 +313,8 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("PathFinderGridNodeSize", m_PathFinderGridNodeSize);
 	writer.NewPropertyWithValue("AIUpdateInterval", m_AIUpdateInterval);
 	writer.NewPropertyWithValue("NetworkInputDelayFrames", m_NetworkInputDelayFrames);
+	writer.NewPropertyWithValue("LocalPrediction", m_LocalPrediction);
+	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	writer.NewPropertyWithValue("NumberOfLuaStatesOverride", m_NumberOfLuaStatesOverride);
 	writer.NewPropertyWithValue("ForceImmediatePathingRequestCompletion", m_ForceImmediatePathingRequestCompletion);
 	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.m_SettlingEnabled);

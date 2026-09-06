@@ -115,10 +115,15 @@ namespace RTE {
 
 #pragma region Post Pixel Glow Handling
 
+		/// Drops effect registrations while a presentation preview runs the sim ahead.
+		static void SetRegistrationSuppressed(bool suppressed) { s_RegistrationSuppressed = suppressed; }
+		static bool IsRegistrationSuppressed() { return s_RegistrationSuppressed; }
+		static inline bool s_RegistrationSuppressed = false;
+
 		/// Registers a specific IntRect to be post-processed and have special pixel colors lit up by glow effects in it.
 		/// @param glowArea The IntRect to have special color pixels glow in, in scene coordinates.
 		void RegisterGlowArea(const IntRect& glowArea) {
-			if (g_TimerMan.DrawnSimUpdate() && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
+			if (!s_RegistrationSuppressed && g_TimerMan.DrawnSimUpdate() && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
 				m_GlowAreas.push_back(glowArea);
 			}
 		}

@@ -667,6 +667,14 @@ namespace RTE {
 		return s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error);
 	}
 
+	bool ScenarioRunner::PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->PeekLocalFrames(tick, outFrames);
+	}
+
+	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
+	}
+
 	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
 		s_PendingLocalGameCommands.push_back(command);
 	}

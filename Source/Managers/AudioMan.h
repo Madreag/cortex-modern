@@ -127,6 +127,11 @@ namespace RTE {
 
 		/// Gets whether all audio is muted or not.
 		/// @return Whether all the audio is muted or not.
+		/// Silences PlaySoundContainer while a presentation preview runs the sim ahead.
+		static void SetPlaybackSuppressed(bool suppressed) { s_PlaybackSuppressed = suppressed; }
+		static bool IsPlaybackSuppressed() { return s_PlaybackSuppressed; }
+		static inline bool s_PlaybackSuppressed = false;
+
 		bool GetMasterMuted() const { return m_MuteMaster; }
 
 		/// Mutes or unmutes all audio.

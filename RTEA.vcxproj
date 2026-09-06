@@ -887,6 +887,7 @@
     <ClInclude Include="Source\Managers\LuaMan.h" />
     <ClInclude Include="Source\Managers\MetaMan.h" />
     <ClInclude Include="Source\Managers\MovableMan.h" />
+    <ClInclude Include="Source\Managers\LocalPrediction.h" />
     <ClInclude Include="Source\Managers\TerrainLayerSnapshot.h" />
     <ClInclude Include="Source\Managers\PresetMan.h" />
     <ClInclude Include="Source\Managers\SceneMan.h" />
@@ -1449,6 +1450,7 @@
     <ClCompile Include="Source\Managers\FrameMan.cpp" />
     <ClCompile Include="Source\Managers\MetaMan.cpp" />
     <ClCompile Include="Source\Managers\MovableMan.cpp" />
+    <ClCompile Include="Source\Managers\LocalPrediction.cpp" />
     <ClCompile Include="Source\Managers\TerrainLayerSnapshot.cpp" />
     <ClCompile Include="Source\Managers\PresetMan.cpp" />
     <ClCompile Include="Source\Managers\SceneMan.cpp" />

@@ -166,6 +166,10 @@ namespace RTE {
 		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
+		/// The local frames already queued for a future lockstep tick (the input-delay pipeline).
+		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
+		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
+		static uint16_t GetLockstepLocalInputDelay();
 
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.
