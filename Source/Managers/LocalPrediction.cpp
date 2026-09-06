@@ -40,15 +40,6 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
 
-	static void SetHitsMOsRecursive(MovableObject* mo, bool hitsMOs) {
-		mo->SetToHitMOs(hitsMOs);
-		if (MOSRotating* rotating = dynamic_cast<MOSRotating*>(mo)) {
-			for (Attachable* attachable: rotating->GetAttachables()) {
-				SetHitsMOsRecursive(attachable, hitsMOs);
-			}
-		}
-	}
-
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
 	static void AdoptMOIDs(Actor* clone, const Actor* original) {
 		const MOID rootMOID = original->GetID();
@@ -164,7 +155,6 @@ namespace RTE {
 			preview.clone->ResolveFaithfulLinks();
 			g_MovableMan.SetFaithfulLinkRoot(nullptr);
 			AdoptMOIDs(preview.clone, preview.original);
-			SetHitsMOsRecursive(preview.clone, false);
 		}
 		Trace("resolved");
 
