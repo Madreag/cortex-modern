@@ -9,6 +9,8 @@
 #include "AEmitter.h"
 #include "AEJetpack.h"
 #include "AHuman.h"
+#include "Arm.h"
+#include "Leg.h"
 #include "ACraft.h"
 #include "MOPixel.h"
 #include "HeldDevice.h"
@@ -566,14 +568,37 @@ bool MovableMan::RunLockstepPausedTick() {
 // Snapshot forensics: one line per attachable and wound, recursively, so limb-level state is diffable.
 static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::ostream& out) {
 	auto dumpNode = [&](const char* kind, const Attachable* node) {
+		const HDFirearm* parentFirearm = dynamic_cast<const HDFirearm*>(parent);
+		const AEmitter* parentEmitter = dynamic_cast<const AEmitter*>(parent);
+		const bool isFlash = (parentFirearm && parentFirearm->GetFlash() == node) || (parentEmitter && parentEmitter->GetFlash() == node);
 		out << tick << " " << kind << " uid=" << node->GetUniqueID() << " " << node->GetPresetName()
-		    << std::defaultfloat << " par=" << parent->GetUniqueID() << " moid=" << node->GetID() << "/" << node->GetRootID() << " frame=" << node->GetFrame()
+		    << std::defaultfloat << " par=" << parent->GetUniqueID() << " moid=" << node->GetID() << "/" << node->GetRootID() << " frame=";
+		if (isFlash) {
+			out << "-";
+		} else {
+			out << node->GetFrame();
+		}
+		out
 		    << std::hexfloat << " pos=" << node->GetPos().m_X << "," << node->GetPos().m_Y
 		    << " vel=" << node->GetVel().m_X << "," << node->GetVel().m_Y
 		    << " angvel=" << node->GetAngularVel() << " rot=" << node->GetRotAngle()
-		    << " mass=" << node->GetMass() << " awm=" << node->GetAttachableAndWoundMassForSave();
+		    << " mass=" << node->GetMass() << " awm=" << node->GetAttachableAndWoundMassForSave()
+		    << " jp=" << node->GetJointPos().m_X << "," << node->GetJointPos().m_Y
+		    << " po=" << node->GetParentOffset().m_X << "," << node->GetParentOffset().m_Y
+		    << " jo=" << node->GetJointOffset().m_X << "," << node->GetJointOffset().m_Y
+		    << std::defaultfloat << " hf=" << (node->IsHFlipped() ? 1 : 0) << std::hexfloat;
 		if (const AtomGroup* group = const_cast<Attachable*>(node)->GetAtomGroup()) {
 			out << " moi=" << group->GetStoredMomentOfInertia() << "/" << group->GetStoredOwnerMass() << std::defaultfloat << " atoms=" << group->GetAtomCount() << std::hexfloat;
+		}
+		if (const Leg* leg = dynamic_cast<const Leg*>(node)) {
+			out << " ankle=" << leg->GetAnkleOffset().m_X << "," << leg->GetAnkleOffset().m_Y << " tgt=" << leg->GetTargetPosition().m_X << "," << leg->GetTargetPosition().m_Y;
+		}
+		if (const Arm* arm = dynamic_cast<const Arm*>(node)) {
+			out << " hand=" << arm->GetHandPos().m_X << "," << arm->GetHandPos().m_Y << " hoff=" << arm->GetHandCurrentOffset().m_X << "," << arm->GetHandCurrentOffset().m_Y
+			    << std::defaultfloat << " htgts=" << arm->GetNumberOfHandTargets() << " reached=" << (arm->GetHandHasReachedCurrentTarget() ? 1 : 0) << std::hexfloat;
+		}
+		if (const HeldDevice* device = dynamic_cast<const HeldDevice*>(node)) {
+			out << std::defaultfloat << " act=" << (device->IsActivated() ? 1 : 0) << std::hexfloat;
 		}
 		out << std::defaultfloat << "\n" << std::hexfloat;
 		DumpAttachableTree(tick, node, out);

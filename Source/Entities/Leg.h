@@ -69,6 +69,12 @@ namespace RTE {
 		/// @return The move speed of this Leg.
 		float GetMoveSpeed() const { return m_MoveSpeed; }
 
+		/// Gets the current offset from the joint to the ankle.
+		Vector GetAnkleOffset() const { return m_AnkleOffset; }
+
+		/// Gets the absolute position this Leg's foot is moving towards.
+		Vector GetTargetPosition() const { return m_TargetPosition; }
+
 		/// Sets the move speed of this Leg, where 1.0 is instant and 0.0 is no movement.
 		/// @return The new move speed of this Leg.
 		void SetMoveSpeed(float newMoveSpeed) { m_MoveSpeed = newMoveSpeed; }
