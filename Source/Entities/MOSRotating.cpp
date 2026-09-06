@@ -20,6 +20,8 @@
 #include "Draw.h"
 
 #include "RTEError.h"
+#include "SceneMan.h"
+#include <bit>
 
 using namespace RTE;
 
@@ -2076,6 +2078,9 @@ bool MOSRotating::HandlePotentialRadiusAffectingAttachable(const Attachable* att
 		return false;
 	}
 	float distanceAndRadiusFromParent = g_SceneMan.ShortestDistance(m_Pos, attachable->m_Pos, g_SceneMan.SceneWrapsX()).GetMagnitude() + attachable->GetRadius();
+	if (SceneMan::IsTrackedUID(GetUniqueID())) {
+		SceneMan::TraceTerrainEvent("radA", static_cast<int>(attachable->GetUniqueID()), m_RadiusAffectingAttachable ? static_cast<int>(m_RadiusAffectingAttachable->GetUniqueID()) : 0, std::bit_cast<int32_t>(distanceAndRadiusFromParent), std::bit_cast<int32_t>(m_FarthestAttachableDistanceAndRadius), static_cast<int>(GetUniqueID()));
+	}
 	if (attachable == m_RadiusAffectingAttachable && distanceAndRadiusFromParent < m_FarthestAttachableDistanceAndRadius) {
 		m_FarthestAttachableDistanceAndRadius = distanceAndRadiusFromParent;
 		if (m_Attachables.size() > 1) {
