@@ -2557,3 +2557,44 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
 		m_NetworkPlayerNames[player] = std::move(name);
 }
+
+void GameActivity::ClearRollbackDeliveries() {
+	for (auto& queue: m_RollbackDeliveries) {
+		for (Delivery& delivery: queue) {
+			delete delivery.pCraft;
+			delivery.pCraft = nullptr;
+		}
+		queue.clear();
+	}
+}
+
+void GameActivity::CaptureDeliveriesForRollback() {
+	ClearRollbackDeliveries();
+	MovableObject::FaithfulCloneScope scope(false);
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		for (const Delivery& delivery: m_Deliveries[team]) {
+			Delivery copy = delivery;
+			copy.pCraft = delivery.pCraft ? dynamic_cast<ACraft*>(delivery.pCraft->Clone()) : nullptr;
+			m_RollbackDeliveries[team].push_back(copy);
+		}
+	}
+}
+
+void GameActivity::RestoreDeliveriesFromRollback() {
+	MovableObject::FaithfulCloneScope scope(true);
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		for (Delivery& delivery: m_Deliveries[team]) {
+			delete delivery.pCraft;
+			delivery.pCraft = nullptr;
+		}
+		m_Deliveries[team].clear();
+		for (const Delivery& delivery: m_RollbackDeliveries[team]) {
+			Delivery copy = delivery;
+			copy.pCraft = delivery.pCraft ? dynamic_cast<ACraft*>(delivery.pCraft->Clone()) : nullptr;
+			if (copy.pCraft) {
+				copy.pCraft->AdoptPersistedUniqueID();
+			}
+			m_Deliveries[team].push_back(copy);
+		}
+	}
+}

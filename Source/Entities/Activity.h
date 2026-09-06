@@ -107,6 +107,15 @@ namespace RTE {
 		/// @return The current state of this Activity. See ActivityState enumeration.
 		ActivityState GetActivityState() const { return m_ActivityState; }
 
+		/// The per-team sim scalars a rollback snapshot carries beside the world; the MOs ride the world snapshot.
+		struct RollbackState {
+			ActivityState state = ActivityState::NotStarted;
+			float teamFunds[Teams::MaxTeamCount] = {};
+			int teamDeaths[Teams::MaxTeamCount] = {};
+		};
+		void CaptureRollbackState(RollbackState& out) const;
+		void RestoreRollbackState(const RollbackState& in);
+
 		/// Overrides the current Activity state. Should not be used much, use dedicated state setting functions instead.
 		/// @param newState The new state to set.
 		void SetActivityState(ActivityState newState) { m_ActivityState = newState; }

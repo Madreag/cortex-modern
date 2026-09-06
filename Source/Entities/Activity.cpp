@@ -933,3 +933,19 @@ bool Activity::CanBeUserSaved() const {
 
 	return m_AllowsUserSaving;
 }
+
+void Activity::CaptureRollbackState(RollbackState& out) const {
+	out.state = m_ActivityState;
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		out.teamFunds[team] = m_TeamFunds[team];
+		out.teamDeaths[team] = m_TeamDeaths[team];
+	}
+}
+
+void Activity::RestoreRollbackState(const RollbackState& in) {
+	m_ActivityState = in.state;
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		m_TeamFunds[team] = in.teamFunds[team];
+		m_TeamDeaths[team] = in.teamDeaths[team];
+	}
+}
