@@ -617,7 +617,7 @@ int AHuman::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("StandRotAngleTarget", m_RotAngleTargets[STAND]);
 	writer.NewPropertyWithValue("WalkRotAngleTarget", m_RotAngleTargets[WALK]);
 	writer.NewPropertyWithValue("RunRotAngleTarget", m_RotAngleTargets[RUN]);
-	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[PRONE]);
+	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
 	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
 
 	return 0;
