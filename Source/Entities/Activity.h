@@ -516,6 +516,18 @@ namespace RTE {
 		/// @return A pointer to the controlled Actor. Ownership is NOT transferred! 0 If no actor is currently controlled by this player.
 		Actor* GetControlledActor(int player = 0) { return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ControlledActor[player] : nullptr; }
 
+		/// Points the per-player controlled-actor and brain slots at a render substitute (and back); presentation only.
+		void SubstituteActorForRender(Actor* original, Actor* substitute) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				if (m_ControlledActor[player] == original) {
+					m_ControlledActor[player] = substitute;
+				}
+				if (m_Brain[player] == original) {
+					m_Brain[player] = substitute;
+				}
+			}
+		}
+
 		/// Makes the player's ControlledActor the leader of any squad it is a member of.
 		/// @param player Player to reassign for.
 		/// @param team Team of the player.
