@@ -176,6 +176,10 @@ static uint64_t s_rbProbeFuzzSeed = 1;
 static int s_rbProbePassCount = 0;
 static int s_rbProbeFailCount = 0;
 static std::string s_rbProbeFirstFailure;
+static std::string s_rbProbeCapturedDeep;
+static std::vector<std::string> s_rbProbeFirstDeep;
+static long long s_rbProbeDeepDivergence = -1;
+static bool s_rbProbeRestoreMismatch = false;
 
 // Raw copies of the three 8-bit terrain layers; restoring them by memcpy sidesteps the save's
 // PNG round trip (the load-side clean and duplicate-palette collapse both corrupt pixels).
@@ -1033,6 +1037,30 @@ static void DumpSimStateNow(const std::string& suffix) {
 	}
 }
 
+// The full per-MO dump as text; the fidelity probe compares this, not just the checksum.
+static std::string DumpSimStateToString() {
+	std::ostringstream out;
+	g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), out);
+	return out.str();
+}
+
+static void WriteProbeText(const std::string& suffix, const std::string& text) {
+	const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::trunc);
+	out << text;
+}
+
+// Compares the restored world's dump against the captured one; a mismatch is a fidelity hole the hash may miss.
+static void CheckRestoredDeepState() {
+	const std::string restored = DumpSimStateToString();
+	WriteProbeText("rb_restored", restored);
+	s_rbProbeRestoreMismatch = restored != s_rbProbeCapturedDeep;
+	if (s_rbProbeRestoreMismatch) {
+		WriteProbeText("rb_restored_" + std::to_string(s_rbProbeAtTick), restored);
+		std::cout << "[rbprobe] RESTORE MISMATCH: the restored world's dump differs from the captured one (rb_captured vs rb_restored)" << std::endl;
+	}
+}
+
 static void DumpTerrainIfArmed(uint64_t simTick) {
 	static uint64_t s_tick = 0;
 	static bool s_checked = false;
@@ -1114,15 +1142,18 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		if (ScenarioRunner::IsLockstepReplayPlayback()) {
 			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
 		}
-		DumpSimStateNow("rb_captured");
+		s_rbProbeCapturedDeep = DumpSimStateToString();
+		WriteProbeText("rb_captured", s_rbProbeCapturedDeep);
+		WriteProbeText("rb_captured_" + std::to_string(simTick), s_rbProbeCapturedDeep);
+		s_rbProbeFirstDeep.clear();
+		s_rbProbeDeepDivergence = -1;
+		s_rbProbeRestoreMismatch = false;
 		DumpTerrainNow("rb_cap");
 		s_rbProbePhase = 1;
 		std::cout << "[rbprobe] captured at tick " << simTick << std::endl;
 	} else if (s_rbProbePhase == 1 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
 		s_rbProbeFirst.push_back(tickResult);
-		if (s_rbProbeFirst.size() == 1) {
-			DumpSimStateNow("rb_t1_pass1");
-		}
+		s_rbProbeFirstDeep.push_back(DumpSimStateToString());
 		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
 			if (s_rbProbeInMemory) {
 				s_rbProbeMemoryRestorePending = true;
@@ -1136,8 +1167,16 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		}
 	} else if (s_rbProbePhase == 3 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
 		s_rbProbeSecond.push_back(tickResult);
-		if (s_rbProbeSecond.size() == 1) {
-			DumpSimStateNow("rb_t1_pass2");
+		if (s_rbProbeDeepDivergence < 0 && s_rbProbeSecond.size() <= s_rbProbeFirstDeep.size()) {
+			const std::string secondDeep = DumpSimStateToString();
+			const std::string& firstDeep = s_rbProbeFirstDeep[s_rbProbeSecond.size() - 1];
+			if (secondDeep != firstDeep) {
+				s_rbProbeDeepDivergence = s_rbProbeAtTick + static_cast<long long>(s_rbProbeSecond.size());
+				WriteProbeText("rb_deep_pass1", firstDeep);
+				WriteProbeText("rb_deep_pass2", secondDeep);
+				WriteProbeText("rb_deep_" + std::to_string(s_rbProbeAtTick) + "_pass1", firstDeep);
+				WriteProbeText("rb_deep_" + std::to_string(s_rbProbeAtTick) + "_pass2", secondDeep);
+			}
 		}
 		if (static_cast<long long>(s_rbProbeSecond.size()) >= s_rbProbeWindow) {
 			long long firstDivergence = -1;
@@ -1149,9 +1188,16 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					break;
 				}
 			}
-			if (firstDivergence < 0) {
+			if (firstDivergence < 0 && s_rbProbeDeepDivergence < 0 && !s_rbProbeRestoreMismatch) {
 				++s_rbProbePassCount;
-				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore (capture " << s_rbProbeAtTick << ")" << std::endl;
+				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore, hash and full dump (capture " << s_rbProbeAtTick << ")" << std::endl;
+			} else if (firstDivergence < 0) {
+				++s_rbProbeFailCount;
+				const std::string where = s_rbProbeRestoreMismatch ? "restore mismatch at capture " + std::to_string(s_rbProbeAtTick) : "dump divergence at tick " + std::to_string(s_rbProbeDeepDivergence);
+				std::cout << "[rbprobe] FIDELITY FAIL: hashes identical but " << where << " (capture " << s_rbProbeAtTick << ")" << std::endl;
+				if (s_rbProbeFirstFailure.empty()) {
+					s_rbProbeFirstFailure = "capture " + std::to_string(s_rbProbeAtTick) + ": " + where;
+				}
 			} else {
 				++s_rbProbeFailCount;
 				std::string divergentSubsystems;
@@ -1165,7 +1211,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					}
 				}
 				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence
-				          << " subsystems=" << divergentSubsystems << " (capture " << s_rbProbeAtTick << ")" << std::endl;
+				          << " subsystems=" << divergentSubsystems << " dump=" << (s_rbProbeRestoreMismatch ? std::string("restore mismatch") : std::to_string(s_rbProbeDeepDivergence)) << " (capture " << s_rbProbeAtTick << ")" << std::endl;
 				if (s_rbProbeFirstFailure.empty()) {
 					s_rbProbeFirstFailure = "capture " + std::to_string(s_rbProbeAtTick) + " diverged at " + std::to_string(firstDivergence) + " [" + divergentSubsystems + "]";
 				}
@@ -1175,6 +1221,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			SceneMan::FlushTerrainEvents((!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim")) + ".rbprobe.terrainevents.txt");
 			s_rbProbeFirst.clear();
 			s_rbProbeSecond.clear();
+			s_rbProbeFirstDeep.clear();
 			if (!s_rbProbeSchedule.empty()) {
 				s_rbProbeAtTick = s_rbProbeSchedule.front();
 				s_rbProbeSchedule.pop_front();
@@ -1890,7 +1937,7 @@ void RunGameLoop() {
 				}
 				// The re-run's first travel tests the MO-hit layer; rebuild it over the restored world.
 				g_MovableMan.UpdateDrawMOIDs();
-				DumpSimStateNow("rb_restored");
+				CheckRestoredDeepState();
 				DumpTerrainNow("rb_res");
 				s_rbProbePhase = 3;
 				std::cout << "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount << std::endl;
@@ -1938,7 +1985,7 @@ void RunGameLoop() {
 					// The re-run's first travel tests the MO-hit layer; rebuild it over the restored world.
 					g_MovableMan.CompleteQueuedMOIDDrawings();
 					g_MovableMan.UpdateDrawMOIDs();
-					DumpSimStateNow("rb_restored");
+					CheckRestoredDeepState();
 					DumpTerrainNow("rb_res");
 					s_rbProbePhase = 3;
 					std::cout << "[rbprobe] restored and rewound to tick " << s_rbProbeSimCount << std::endl;

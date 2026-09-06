@@ -1,5 +1,7 @@
 #include "Leg.h"
 #include "PresetMan.h"
+#include "SceneMan.h"
+#include <bit>
 #include "AtomGroup.h"
 
 using namespace RTE;
@@ -219,6 +221,10 @@ void Leg::Update() {
 
 void Leg::UpdateCurrentAnkleOffset() {
 	if (IsAttached()) {
+		if (SceneMan::IsTrackedUID(GetUniqueID())) {
+			SceneMan::TraceTerrainEvent("ankl", std::bit_cast<int32_t>(m_JointPos.m_X), std::bit_cast<int32_t>(m_JointPos.m_Y), std::bit_cast<int32_t>(m_TargetPosition.m_X), std::bit_cast<int32_t>(m_TargetPosition.m_Y), static_cast<int>(GetUniqueID()));
+			SceneMan::TraceTerrainEvent("ank2", std::bit_cast<int32_t>(m_AnkleOffset.m_X), std::bit_cast<int32_t>(m_AnkleOffset.m_Y), std::bit_cast<int32_t>(m_MoveSpeed), std::bit_cast<int32_t>(m_Parent->GetRotAngle()), static_cast<int>(GetUniqueID()));
+		}
 		Vector targetOffset = g_SceneMan.ShortestDistance(m_JointPos, m_TargetPosition, g_SceneMan.SceneWrapsX());
 		Vector rotatedTargetOffset = targetOffset.GetRadRotatedCopy(m_Parent->GetRotAngle());
 		if (m_WillIdle && rotatedTargetOffset.m_Y < -std::abs(rotatedTargetOffset.m_X)) {
