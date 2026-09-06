@@ -73,7 +73,7 @@ namespace RTE {
 		m_Strings[name] = value;
 	}
 
-	void MetricsCollector::RecordTickHash(const SimChecksum::Result& result) {
+	void MetricsCollector::RecordTickHash(const SimChecksum::Result& result, bool paused) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// Silently no-op when recording is disabled or no run is active. This makes the
 		// call site in Main.cpp unconditional — same shape as g_SimChecksum.EndTick.
@@ -88,6 +88,7 @@ namespace RTE {
 		}
 		TickHashRecord rec;
 		rec.tick = result.tick;
+		rec.paused = paused;
 		rec.totalHex = SimChecksum::HashHex(result.total);
 		for (const auto& [name, hash]: result.per_subsystem) {
 			rec.subsystemHex.emplace(name, SimChecksum::HashHex(hash));
@@ -176,6 +177,7 @@ namespace RTE {
 				for (const auto& t: r.tickHashes) {
 					json th;
 					th["tick"] = t.tick;
+					th["paused"] = t.paused;
 					th["total"] = t.totalHex;
 					json subs = json::object();
 					for (const auto& [name, hex]: t.subsystemHex) {

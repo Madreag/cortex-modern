@@ -54,6 +54,7 @@ luac.out
 # Precompiled Headers
 *.gch
 *.pch
+__pycache__/
 
 # Libraries
 *.lib

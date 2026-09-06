@@ -2116,7 +2116,7 @@ void RunGameLoop() {
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
 				if (s_recordTickHashes) {
-					g_MetricsCollector.RecordTickHash(tickResult);
+					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 				}
 				if (desyncSampleTick) {
 					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
