@@ -740,6 +740,12 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 			if (const PieMenu* pieMenu = actor->GetPieMenu()) {
 				out << " pie=" << pieMenu->DescribeInteractionState();
 			}
+			if (!ScenarioRunner::GetArgs().testScript.empty()) {
+				LuaStateWrapper* state = actor->GetLuaState();
+				const long create = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCreate", -1.0)) : -1;
+				const long update = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testUpdate", -1.0)) : -1;
+				out << " script=" << create << "/" << update << "/" << static_cast<long>(actor->GetNumberValue("TestUpdates"));
+			}
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
 				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS();
 			}
@@ -1982,6 +1988,11 @@ void MovableMan::ReapplyPersistedControllerModes() {
 
 void MovableMan::AddActor(Actor* actorToAdd) {
 	if (actorToAdd && g_ActivityMan.GetActivity()) {
+		if (!ScenarioRunner::GetArgs().testScript.empty() && !m_RestoringSnapshot) {
+			if (const int status = actorToAdd->LoadScript(g_PresetMan.GetFullModulePath(ScenarioRunner::GetArgs().testScript), true); status < 0 && status != -3) {
+				std::cout << "[test-script] ERROR: could not attach " << ScenarioRunner::GetArgs().testScript << " to " << actorToAdd->GetPresetName() << " (" << status << ")" << std::endl;
+			}
+		}
 		actorToAdd->SetAsAddedToMovableMan();
 		actorToAdd->CorrectAttachableAndWoundPositionsAndRotations();
 
