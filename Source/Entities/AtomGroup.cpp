@@ -1,4 +1,6 @@
 #include "AtomGroup.h"
+
+#include <algorithm>
 #include "MovableObject.h"
 
 #include "Actor.h"
@@ -282,6 +284,87 @@ std::vector<Vector> AtomGroup::GetAtomOffsets() const {
 
 void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs) {
 	ApplyPerAtomState(m_Atoms, offsets, subIDs, [](Atom* atom, const Vector& offset) { atom->SetOffset(offset); });
+	// The saved sequence is the live attach history; the reload attached in declaration order, and collision walks the list.
+	if (subIDs.size() == m_Atoms.size()) {
+		std::unordered_map<long, std::vector<Atom*>> buckets;
+		for (Atom* atom: m_Atoms) {
+			buckets[atom->GetSubID()].push_back(atom);
+		}
+		std::unordered_map<long, size_t> cursors;
+		std::vector<Atom*> ordered;
+		ordered.reserve(m_Atoms.size());
+		for (const long long subID: subIDs) {
+			auto bucket = buckets.find(static_cast<long>(subID));
+			if (bucket == buckets.end()) {
+				continue;
+			}
+			size_t& cursor = cursors[static_cast<long>(subID)];
+			if (cursor < bucket->second.size()) {
+				ordered.push_back(bucket->second[cursor++]);
+			}
+		}
+		for (Atom* atom: m_Atoms) {
+			if (std::find(ordered.begin(), ordered.end(), atom) == ordered.end()) {
+				ordered.push_back(atom);
+			}
+		}
+		m_Atoms.swap(ordered);
+	}
+}
+
+void AtomGroup::RebuildFromPersisted(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs, const std::vector<int>& materials) {
+	if (m_Atoms.empty() || offsets.empty() || subIDs.size() != offsets.size()) {
+		SetAtomOffsets(offsets, subIDs);
+		return;
+	}
+	std::unordered_map<long, std::vector<Atom*>> buckets;
+	for (Atom* atom: m_Atoms) {
+		buckets[atom->GetSubID()].push_back(atom);
+	}
+	std::unordered_map<long, size_t> cursors;
+	std::vector<Atom*> rebuilt;
+	rebuilt.reserve(offsets.size());
+	for (size_t index = 0; index < offsets.size(); ++index) {
+		const long subID = static_cast<long>(subIDs[index]);
+		Atom* atom = nullptr;
+		if (auto bucket = buckets.find(subID); bucket != buckets.end()) {
+			size_t& cursor = cursors[subID];
+			if (cursor < bucket->second.size()) {
+				atom = bucket->second[cursor++];
+			}
+		}
+		if (!atom) {
+			atom = new Atom(*m_Atoms.front());
+			atom->SetIgnoreMOIDsByGroup(&m_IgnoreMOIDs);
+			atom->SetSubID(subID);
+		}
+		atom->SetOffset(offsets[index]);
+		if (index < materials.size()) {
+			atom->SetMaterial(g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materials[index])));
+		}
+		rebuilt.push_back(atom);
+	}
+	for (Atom* atom: m_Atoms) {
+		if (std::find(rebuilt.begin(), rebuilt.end(), atom) == rebuilt.end()) {
+			delete atom;
+		}
+	}
+	m_Atoms.swap(rebuilt);
+	m_SubGroups.clear();
+	for (Atom* atom: m_Atoms) {
+		if (atom->GetSubID() != 0) {
+			m_SubGroups[atom->GetSubID()].push_back(atom);
+		}
+	}
+}
+
+std::vector<int> AtomGroup::GetAtomMaterialIndices() const {
+	std::vector<int> materials;
+	materials.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		materials.push_back(atom->GetMaterial()->GetIndex());
+	}
+	return materials;
 }
 
 std::vector<long long> AtomGroup::GetAtomSubIDs() const {

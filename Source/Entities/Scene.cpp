@@ -1321,11 +1321,25 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				for (long long subIDValue: atomGroupToSave->GetAtomSubIDs()) {
 					writer.NewPropertyWithValue("AtomGroupSubID", subIDValue);
 				}
+				for (int materialIndex: atomGroupToSave->GetAtomMaterialIndices()) {
+					writer.NewPropertyWithValue("AtomGroupMaterial", materialIndex);
+				}
 				// The moment of inertia accumulates over attach history; carry the value, not the recompute.
 				writer.NewPropertyWithValue("AtomGroupMomentOfInertia", atomGroupToSave->GetStoredMomentOfInertia());
 				writer.NewPropertyWithValue("AtomGroupStoredOwnerMass", atomGroupToSave->GetStoredOwnerMass());
 			}
 			writer.NewPropertyWithValue("SpecialBehaviour_AttachableAndWoundMass", mosRotatingToSave->GetAttachableAndWoundMassForSave());
+			writer.NewPropertyWithValue("SpecialBehaviour_FarthestAttachableDistanceAndRadius", mosRotatingToSave->GetFarthestAttachableDistanceAndRadius());
+			writer.NewPropertyWithValue("SpecialBehaviour_DeepHardness", mosRotatingToSave->GetDeepHardness());
+			if (!mosRotatingToSave->HasNoSetDamageMultiplier()) {
+				writer.NewPropertyWithValue("DamageMultiplier", mosRotatingToSave->GetDamageMultiplier());
+			}
+			if (const Attachable* radiusAttachable = mosRotatingToSave->GetRadiusAffectingAttachable()) {
+				writer.NewPropertyWithValue("RadiusAffectingAttachableUniqueID", radiusAttachable->GetUniqueID());
+			}
+			for (const Attachable* attachable: mosRotatingToSave->GetAttachables()) {
+				writer.NewPropertyWithValue("AttachableOrderUniqueID", attachable->GetUniqueID());
+			}
 			writer.NewPropertyWithValue("SpecialBehaviour_TravelImpulse", mosRotatingToSave->GetTravelImpulse());
 			// Attached Attachables clear the preset's DeepCheck every Update; a reload must not re-arm it.
 			writer.NewPropertyWithValue("DeepCheck", mosRotatingToSave->GetDeepCheck());

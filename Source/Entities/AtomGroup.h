@@ -92,6 +92,11 @@ namespace RTE {
 		void SetAtomOffsets(const std::vector<Vector>& offsets) { SetAtomOffsets(offsets, std::vector<long long>()); }
 		void SetAtomOffsets(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs);
 
+		/// Rebuilds the atom list to exactly the saved atoms, in saved order: existing atoms of a subgroup are reused, missing ones cloned from a template, extras dropped.
+		void RebuildFromPersisted(const std::vector<Vector>& offsets, const std::vector<long long>& subIDs, const std::vector<int>& materials);
+
+		std::vector<int> GetAtomMaterialIndices() const;
+
 		/// The per-atom subgroup IDs, order-parallel to the residue/offset arrays; live subgroup order
 		/// records attach history, so restores bind the arrays by subgroup identity rather than index.
 		std::vector<long long> GetAtomSubIDs() const;
