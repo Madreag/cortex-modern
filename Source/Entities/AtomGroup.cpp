@@ -39,6 +39,7 @@ void AtomGroup::Clear() {
 	m_Atoms.clear();
 	m_SubGroups.clear();
 	m_OwnerMOSR = nullptr;
+	m_StoredOwnerMass = 0.0F;
 	m_Material = g_SceneMan.GetMaterialFromID(g_MaterialAir);
 	m_AutoGenerate = false;
 	m_Resolution = 1;
