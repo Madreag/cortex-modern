@@ -143,6 +143,12 @@ int MOSprite::Create(const MOSprite& reference) {
 	//    if (reference.m_pExitWound)  Not doing anymore since we're not owning
 	//        m_pExitWound = dynamic_cast<AEmitter *>(reference.m_pExitWound->Clone());
 
+	if (IsFaithfulClone()) {
+		m_PrevAngVel = reference.m_PrevAngVel;
+		m_SpriteAnimTimer = reference.m_SpriteAnimTimer;
+		m_SpriteAnimIsReversingFrames = reference.m_SpriteAnimIsReversingFrames;
+		m_SpriteModified = reference.m_SpriteModified;
+	}
 	return 0;
 }
 

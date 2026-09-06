@@ -285,6 +285,9 @@ namespace RTE {
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
 		void ClearMOIDIgnoreList() { m_IgnoreMOIDs.clear(); }
 
+		/// The MOIDs this group ignores, for snapshot forensics.
+		const std::vector<MOID>& GetIgnoreMOIDs() const { return m_IgnoreMOIDs; }
+
 		/// Gets whether any of the Atoms in this AtomGroup are on top of terrain pixels.
 		/// @return Whether any Atom of this AtomGroup is on top of a terrain pixel.
 		bool InTerrain() const;

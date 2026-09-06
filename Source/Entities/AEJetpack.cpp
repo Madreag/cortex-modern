@@ -51,6 +51,9 @@ int AEJetpack::Create(const AEJetpack& reference) {
 	m_CanAdjustAngleWhileFiring = reference.m_CanAdjustAngleWhileFiring;
 	m_AdjustsThrottleForWeight = reference.m_AdjustsThrottleForWeight;
 
+	if (IsFaithfulClone()) {
+		m_JetThrustBonusMultiplier = reference.m_JetThrustBonusMultiplier;
+	}
 	return 0;
 }
 

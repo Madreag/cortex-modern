@@ -175,7 +175,9 @@ int Actor::Create(const Actor& reference) {
 	m_MOType = MovableObject::TypeActor;
 
 	m_Controller = reference.m_Controller;
-	m_Controller.SetInputMode(Controller::CIM_AI);
+	if (!IsFaithfulClone()) {
+		m_Controller.SetInputMode(Controller::CIM_AI);
+	}
 	m_Controller.SetControlledActor(this);
 	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
 	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
@@ -296,6 +298,40 @@ int Actor::Create(const Actor& reference) {
 	SetPieMenu(static_cast<PieMenu*>(reference.m_PieMenu->Clone()));
 	m_PieMenu->AddWhilePieMenuOpenListener(this, std::bind(&Actor::WhilePieMenuOpenListener, this, m_PieMenu.get()));
 
+	if (IsFaithfulClone()) {
+		m_LastAlarmPos = reference.m_LastAlarmPos;
+		m_PrevHealth = reference.m_PrevHealth;
+		m_LastSecondTimer = reference.m_LastSecondTimer;
+		m_RecentMovement = reference.m_RecentMovement;
+		m_StableRecoverTimer = reference.m_StableRecoverTimer;
+		m_HeartBeat = reference.m_HeartBeat;
+		m_NewControlTmr = reference.m_NewControlTmr;
+		m_DeathTmr = reference.m_DeathTmr;
+		m_GoldPicked = reference.m_GoldPicked;
+		m_AimTmr = reference.m_AimTmr;
+		m_SharpAimTimer = reference.m_SharpAimTimer;
+		m_SharpAimSpeed = reference.m_SharpAimSpeed;
+		m_AlarmTimer = reference.m_AlarmTimer;
+		m_ViewPoint = reference.m_ViewPoint;
+		m_MovePath = reference.m_MovePath;
+		m_MovementState = reference.m_MovementState;
+		m_FaithfulItemInReachUID = reference.m_pItemInReach ? reference.m_pItemInReach->GetUniqueID() : reference.m_FaithfulItemInReachUID;
+		m_pItemInReach = nullptr;
+		m_FaithfulMOMoveTargetUID = reference.m_pMOMoveTarget ? reference.m_pMOMoveTarget->GetUniqueID() : reference.m_FaithfulMOMoveTargetUID;
+		m_pMOMoveTarget = nullptr;
+		m_FaithfulWaypointUIDs.clear();
+		for (auto& [waypointPosition, waypointObject]: m_Waypoints) {
+			m_FaithfulWaypointUIDs.push_back(waypointObject ? waypointObject->GetUniqueID() : 0);
+			waypointObject = nullptr;
+		}
+		if (!reference.m_FaithfulWaypointUIDs.empty()) {
+			m_FaithfulWaypointUIDs = reference.m_FaithfulWaypointUIDs;
+		}
+	} else {
+		m_FaithfulItemInReachUID = 0;
+		m_FaithfulMOMoveTargetUID = 0;
+		m_FaithfulWaypointUIDs.clear();
+	}
 	return 0;
 }
 
@@ -1224,6 +1260,32 @@ void Actor::AdoptPersistedUniqueID() {
 	m_PersistedAimTimerAnchor.Apply(m_AimTmr);
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
+	}
+}
+
+void Actor::ResolveFaithfulLinks() {
+	MOSRotating::ResolveFaithfulLinks();
+	if (m_FaithfulItemInReachUID > 0) {
+		m_pItemInReach = dynamic_cast<HeldDevice*>(g_MovableMan.FindObjectByUniqueID(m_FaithfulItemInReachUID));
+		m_FaithfulItemInReachUID = 0;
+	}
+	if (m_FaithfulMOMoveTargetUID > 0) {
+		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOMoveTargetUID);
+		m_FaithfulMOMoveTargetUID = 0;
+	}
+	if (!m_FaithfulWaypointUIDs.empty()) {
+		auto uid = m_FaithfulWaypointUIDs.begin();
+		for (auto& [waypointPosition, waypointObject]: m_Waypoints) {
+			if (uid == m_FaithfulWaypointUIDs.end()) {
+				break;
+			}
+			waypointObject = *uid > 0 ? g_MovableMan.FindObjectByUniqueID(*uid) : nullptr;
+			++uid;
+		}
+		m_FaithfulWaypointUIDs.clear();
+	}
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->ResolveFaithfulLinks();
 	}
 }
 

@@ -147,6 +147,35 @@ int Atom::Create(const Atom& reference) {
 	m_OwnerMO = nullptr;
 	m_IgnoreMOIDsByGroup = 0;
 
+	if (MovableObject::IsFaithfulClone()) {
+		m_StepWasTaken = reference.m_StepWasTaken;
+		m_StepRatio = reference.m_StepRatio;
+		m_SegTraj = reference.m_SegTraj;
+		m_SegProgress = reference.m_SegProgress;
+		m_ResultWrapped = reference.m_ResultWrapped;
+		m_MOHitsDisabled = reference.m_MOHitsDisabled;
+		m_IgnoreMOID = reference.m_IgnoreMOID;
+		m_IgnoreMOIDs = reference.m_IgnoreMOIDs;
+		m_LastTrailPoints = reference.m_LastTrailPoints;
+		m_TrailPoints = reference.m_TrailPoints;
+		m_MOIDHit = reference.m_MOIDHit;
+		m_TerrainMatHit = reference.m_TerrainMatHit;
+		for (int i = 0; i < 2; ++i) {
+			m_IntPos[i] = reference.m_IntPos[i];
+			m_PrevIntPos[i] = reference.m_PrevIntPos[i];
+			m_TrailPos[i] = reference.m_TrailPos[i];
+			m_HitPos[i] = reference.m_HitPos[i];
+			m_Delta[i] = reference.m_Delta[i];
+			m_Delta2[i] = reference.m_Delta2[i];
+			m_Increment[i] = reference.m_Increment[i];
+		}
+		m_Error = reference.m_Error;
+		m_Dom = reference.m_Dom;
+		m_Sub = reference.m_Sub;
+		m_DomSteps = reference.m_DomSteps;
+		m_SubSteps = reference.m_SubSteps;
+		m_SubStepped = reference.m_SubStepped;
+	}
 	return 0;
 }
 

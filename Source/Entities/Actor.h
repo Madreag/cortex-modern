@@ -715,6 +715,7 @@ namespace RTE {
 
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
+		void ResolveFaithfulLinks() override;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Applies the saved wire-applied controller mode; runs after the activity's AI setup so it can't be overwritten.
@@ -1022,6 +1023,9 @@ namespace RTE {
 		float m_MaxInventoryMass; //!< The mass limit for this Actor's inventory. -1 means there's no limit.
 		// The device that can/will be picked up
 		HeldDevice* m_pItemInReach;
+		long m_FaithfulItemInReachUID = 0; //!< Snapshot link for m_pItemInReach, resolved after a restore.
+		long m_FaithfulMOMoveTargetUID = 0; //!< Snapshot link for m_pMOMoveTarget, resolved after a restore.
+		std::vector<long> m_FaithfulWaypointUIDs; //!< Snapshot links for the waypoint objects, resolved after a restore.
 		// An array that holds activation states for the various hotkey actions of this Actor.
 		std::array<bool, ACTORHOTKEYTYPECOUNT> m_HotkeyActivated;
 		// HUD positioning aid

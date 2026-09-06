@@ -1,4 +1,5 @@
 #include "LimbPath.h"
+#include "MovableObject.h"
 
 #include "PresetMan.h"
 #include "SLTerrain.h"
@@ -123,6 +124,14 @@ int LimbPath::Create(const LimbPath& reference) {
 
 	Terminate();
 
+	if (MovableObject::IsFaithfulClone()) {
+		ApplyTraversalState(reference.PackTraversalState());
+		m_JointPos = reference.m_JointPos;
+		m_JointVel = reference.m_JointVel;
+		m_Rotation = reference.m_Rotation;
+		m_RotationOffset = reference.m_RotationOffset;
+		m_PositionOffset = reference.m_PositionOffset;
+	}
 	return 0;
 }
 

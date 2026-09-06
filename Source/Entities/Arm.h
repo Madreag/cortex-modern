@@ -184,6 +184,8 @@ namespace RTE {
 		/// @return The HeldDevice this Arm is trying to support. Ownership is NOT transferred.
 		HeldDevice* GetHeldDeviceThisArmIsTryingToSupport() const { return m_HeldDeviceThisArmIsTryingToSupport; }
 
+		void ResolveFaithfulLinks() override;
+
 		/// Sets the HeldDevice being this Arm is trying to support.
 		/// @param newHeldDeviceForThisArmToTryToSupport The new HeldDevice this Arm should try to support. Ownership is NOT transferred.
 		void SetHeldDeviceThisArmIsTryingToSupport(HeldDevice* newHeldDeviceThisArmShouldTryToSupport) { m_HeldDeviceThisArmIsTryingToSupport = newHeldDeviceThisArmShouldTryToSupport; }
@@ -258,7 +260,8 @@ namespace RTE {
 		float m_ThrowStrength; //!< The strength with which this Arm will throw a ThrownDevice. Effectively supersedes the ThrownDevice's ThrowVelocity values.
 
 		HeldDevice* m_HeldDevice; //!< A pointer to the HeldDevice this Arm is currently holding. Owned in the MOSRotating Attachables list, kept here for convenience.
-		HeldDevice* m_HeldDeviceThisArmIsTryingToSupport; //!< A pointer to the HeldDevice being supported by this Arm (i.e. this is the background Arm for another HeldDevice).
+		HeldDevice* m_HeldDeviceThisArmIsTryingToSupport;
+		long m_FaithfulSupportedDeviceUID = 0; //!< Snapshot link for the supported device, resolved after a restore. //!< A pointer to the HeldDevice being supported by this Arm (i.e. this is the background Arm for another HeldDevice).
 
 		/// Gets whether or not the hand is close to the given offset.
 		/// @param targetOffset The offset to check for closeness to the hand.

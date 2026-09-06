@@ -123,6 +123,8 @@ namespace RTE {
 			bool m_Clear;
 			// Movable Object that is being drawn into this exit
 			MOSRotating* m_pIncomingMO;
+			long m_FaithfulIncomingMOUID = 0; //!< Snapshot link for m_pIncomingMO, resolved after a restore.
+			friend class ACraft;
 
 			/// Private member variable and method declarations
 		private:
@@ -225,6 +227,8 @@ namespace RTE {
 		/// Gets whether this delivers as a network-synced delivery.
 		/// @return Whether this is a network-synced delivery.
 		bool IsNetworkDelivery() const { return m_NetworkDelivery; }
+
+		void ResolveFaithfulLinks() override;
 
 		/// Adds an inventory item to this Actor.
 		/// @param pItemToAdd An pointer to the new item to add. Ownership IS TRANSFERRED!

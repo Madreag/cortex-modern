@@ -106,6 +106,20 @@ int ADoor::Create(const ADoor& reference) {
 		m_DoorMoveEndSound.reset(dynamic_cast<SoundContainer*>(reference.m_DoorMoveEndSound->Clone()));
 	}
 
+	if (IsFaithfulClone()) {
+		m_InitialSpriteAnimDuration = reference.m_InitialSpriteAnimDuration;
+		m_SensorTimer = reference.m_SensorTimer;
+		m_DoorStateOnStop = reference.m_DoorStateOnStop;
+		m_DoorMoveTimer = reference.m_DoorMoveTimer;
+		m_ResumeAfterStop = reference.m_ResumeAfterStop;
+		m_ChangedDirectionAfterStop = reference.m_ChangedDirectionAfterStop;
+		m_DoorMoveStopTime = reference.m_DoorMoveStopTime;
+		m_ResetToDefaultStateTimer = reference.m_ResetToDefaultStateTimer;
+		m_DoorMaterialDrawn = reference.m_DoorMaterialDrawn;
+		m_DoorMaterialTempErased = reference.m_DoorMaterialTempErased;
+		m_DoorMaterialRedrawTimer = reference.m_DoorMaterialRedrawTimer;
+		m_LastDoorMaterialPos = reference.m_LastDoorMaterialPos;
+	}
 	return 0;
 }
 

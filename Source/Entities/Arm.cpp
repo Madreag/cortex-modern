@@ -1,4 +1,5 @@
 #include "Arm.h"
+#include "MovableMan.h"
 #include "RTETools.h"
 #include "HDFirearm.h"
 #include "ThrownDevice.h"
@@ -88,6 +89,14 @@ int Arm::Create(const Arm& reference) {
 		SetHeldDevice(dynamic_cast<HeldDevice*>(reference.m_HeldDevice->Clone()));
 	}
 
+	if (IsFaithfulClone()) {
+		m_HandPrevPos = reference.m_HandPrevPos;
+		m_HandPos = reference.m_HandPos;
+		m_FaithfulSupportedDeviceUID = reference.m_HeldDeviceThisArmIsTryingToSupport ? reference.m_HeldDeviceThisArmIsTryingToSupport->GetUniqueID() : reference.m_FaithfulSupportedDeviceUID;
+		m_HeldDeviceThisArmIsTryingToSupport = nullptr;
+	} else {
+		m_FaithfulSupportedDeviceUID = 0;
+	}
 	return 0;
 }
 
@@ -384,5 +393,13 @@ void Arm::DrawHand(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode)
 		} else {
 			draw_sprite_h_flip(targetBitmap, m_HandSpriteBitmap, handPos.GetFloorIntX(), handPos.GetFloorIntY());
 		}
+	}
+}
+
+void Arm::ResolveFaithfulLinks() {
+	Attachable::ResolveFaithfulLinks();
+	if (m_FaithfulSupportedDeviceUID > 0) {
+		m_HeldDeviceThisArmIsTryingToSupport = dynamic_cast<HeldDevice*>(g_MovableMan.FindObjectByUniqueID(m_FaithfulSupportedDeviceUID));
+		m_FaithfulSupportedDeviceUID = 0;
 	}
 }

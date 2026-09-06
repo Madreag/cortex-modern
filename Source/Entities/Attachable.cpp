@@ -113,6 +113,11 @@ int Attachable::Create(const Attachable& reference) {
 
 	m_PrevRotAngleOffset = reference.m_PrevRotAngleOffset;
 
+	if (IsFaithfulClone()) {
+		m_PrevParentOffset = reference.m_PrevParentOffset;
+		m_PrevJointOffset = reference.m_PrevJointOffset;
+		m_PreUpdateHasRunThisFrame = reference.m_PreUpdateHasRunThisFrame;
+	}
 	return 0;
 }
 
@@ -510,11 +515,15 @@ void Attachable::SetParent(MOSRotating* newParent) {
 	RTEAssert(!(m_Parent && newParent), "Tried to set an Attachable's " + GetModuleAndPresetName() + " parent without first unsetting its old parent, " + (IsAttached() ? GetParent()->GetModuleAndPresetName() : "ERROR") + ".");
 	MOSRotating* parentToUseForScriptCall = newParent ? newParent : m_Parent;
 
-	m_MountedRotAngleOffset = 0.0F;
+	// A faithful snapshot clone re-attaches with its live state intact; only a real (re)parent normalizes.
+	const bool faithful = IsFaithfulClone();
+	if (!faithful) {
+		m_MountedRotAngleOffset = 0.0F;
 
-	// TODO Get rid of the need for calling ResetAllTimers, if something like inventory swapping needs timers reset it should do it itself! This blanket handling probably has side-effects.
-	//  Timers are reset here as a precaution, so that if something was sitting in an inventory, it doesn't cause backed up emissions.
-	ResetAllTimers();
+		// TODO Get rid of the need for calling ResetAllTimers, if something like inventory swapping needs timers reset it should do it itself! This blanket handling probably has side-effects.
+		//  Timers are reset here as a precaution, so that if something was sitting in an inventory, it doesn't cause backed up emissions.
+		ResetAllTimers();
+	}
 
 	if (newParent) {
 		m_Parent = newParent;
@@ -522,13 +531,16 @@ void Attachable::SetParent(MOSRotating* newParent) {
 		if (InheritsHFlipped() != 0) {
 			m_HFlipped = m_InheritsHFlipped == 1 ? m_Parent->IsHFlipped() : !m_Parent->IsHFlipped();
 		}
-		if (InheritsRotAngle()) {
+		if (InheritsRotAngle() && !faithful) {
 			SetRotAngle(m_Parent->GetRotAngle() + m_InheritedRotAngleOffset * m_Parent->GetFlipFactor());
 			m_AngularVel = 0.0F;
 		}
-		UpdatePositionAndJointPositionBasedOnOffsets();
-		// Snap prev to current on reparent so the render lerp doesn't fling from the old standalone position
-		m_PrevPos = m_Pos;
+		if (!faithful) {
+			// The copied pose is the live one; a normal attach derives it from the parent.
+			UpdatePositionAndJointPositionBasedOnOffsets();
+			// Snap prev to current on reparent so the render lerp doesn't fling from the old standalone position
+			m_PrevPos = m_Pos;
+		}
 		if (CanCollideWithTerrain()) {
 			AddOrRemoveAtomsFromRootParentAtomGroup(true, true);
 		}
@@ -573,7 +585,7 @@ void Attachable::SetParent(MOSRotating* newParent) {
 		}
 	}
 
-	if (parentToUseForScriptCall && parentToUseForScriptCall->GetRootParent()->HasEverBeenAddedToMovableMan()) {
+	if (!faithful && parentToUseForScriptCall && parentToUseForScriptCall->GetRootParent()->HasEverBeenAddedToMovableMan()) {
 		RunScriptedFunctionInAppropriateScripts(newParent ? "OnAttach" : "OnDetach", false, false, {parentToUseForScriptCall});
 	}
 }

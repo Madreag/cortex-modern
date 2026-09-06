@@ -26,6 +26,8 @@ using namespace RTE;
 AbstractClassInfo(MovableObject, SceneObject);
 
 std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
+int MovableObject::s_FaithfulCloneDepth = 0;
+bool MovableObject::s_FaithfulCloneRegisters = false;
 std::string MovableObject::ms_EmptyString = "";
 
 MovableObject::MovableObject() {
@@ -287,8 +289,37 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_PersistedVelOscillations = reference.m_PersistedVelOscillations;
 	m_HasPersistedVelOscillations = reference.m_HasPersistedVelOscillations;
 	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
-	m_UniqueID = MovableObject::GetNextUniqueID();
-	g_MovableMan.RegisterObject(this);
+	if (IsFaithfulClone()) {
+		// A snapshot clone carries the live sim state a spawn copy deliberately resets.
+		m_UniqueID = reference.m_UniqueID;
+		m_AgeTimer = reference.m_AgeTimer;
+		m_RestTimer = reference.m_RestTimer;
+		m_PrevVel = reference.m_PrevVel;
+		m_Forces = reference.m_Forces;
+		m_ImpulseForces = reference.m_ImpulseForces;
+		m_AlreadyHitBy = reference.m_AlreadyHitBy;
+		m_VelOscillations = reference.m_VelOscillations;
+		m_ToSettle = reference.m_ToSettle;
+		m_ToDelete = reference.m_ToDelete;
+		m_IsUpdated = reference.m_IsUpdated;
+		m_DidWrap = reference.m_DidWrap;
+		m_IsTraveling = reference.m_IsTraveling;
+		m_WrapDoubleDraw = reference.m_WrapDoubleDraw;
+		m_LastCollisionSimFrameNumber = reference.m_LastCollisionSimFrameNumber;
+		m_ApplyWoundDamageOnCollision = reference.m_ApplyWoundDamageOnCollision;
+		m_ApplyWoundBurstDamageOnCollision = reference.m_ApplyWoundBurstDamageOnCollision;
+		m_HasEverBeenAddedToMovableMan = reference.m_HasEverBeenAddedToMovableMan;
+		m_RequestedSyncedUpdate = reference.m_RequestedSyncedUpdate;
+		m_FaithfulMOToNotHitUID = reference.m_pMOToNotHit ? reference.m_pMOToNotHit->GetUniqueID() : reference.m_FaithfulMOToNotHitUID;
+		m_pMOToNotHit = nullptr;
+		if (FaithfulCloneRegisters()) {
+			g_MovableMan.RegisterObject(this);
+		}
+	} else {
+		m_FaithfulMOToNotHitUID = 0;
+		m_UniqueID = MovableObject::GetNextUniqueID();
+		g_MovableMan.RegisterObject(this);
+	}
 
 	return 0;
 }
@@ -319,6 +350,13 @@ void MovableObject::AdoptPersistedUniqueID() {
 		PinUniqueIDCounter(m_UniqueID);
 	}
 	g_MovableMan.RegisterObject(this);
+}
+
+void MovableObject::ResolveFaithfulLinks() {
+	if (m_FaithfulMOToNotHitUID > 0) {
+		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOToNotHitUID);
+		m_FaithfulMOToNotHitUID = 0;
+	}
 }
 
 void MovableObject::DiscardPersistedSnapshotState() {
@@ -727,6 +765,9 @@ void MovableObject::EnableOrDisableAllScripts(bool enableScripts) {
 }
 
 int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts, bool stopOnError, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
+	if (LuaMan::AreScriptsFrozen()) {
+		return 0;
+	}
 	int status = 0;
 
 	auto itr = m_FunctionsAndScripts.find(functionName);
@@ -999,6 +1040,9 @@ void MovableObject::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode
 
 int MovableObject::UpdateScripts() {
 	m_SimUpdatesSinceLastScriptedUpdate++;
+	if (LuaMan::AreScriptsFrozen()) {
+		return 1;
+	}
 
 	if (m_AllLoadedScripts.empty()) {
 		return -1;

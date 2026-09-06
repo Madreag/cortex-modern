@@ -834,6 +834,9 @@ namespace RTE {
 		/// @return A constant reference to the deque of impulses for this MovableObject.
 		const std::deque<std::pair<Vector, Vector>>& GetImpulses() { return m_ImpulseForces; }
 
+		/// The forces queued for the next travel, for snapshot forensics.
+		const std::deque<std::pair<Vector, Vector>>& GetForces() const { return m_Forces; }
+
 		/// Returns the number of ImpulseForces vectors to apply.
 		/// @return Number of entries in ImpulseForces list.
 		int GetImpulsesCount() { return m_ImpulseForces.size(); }
@@ -1027,6 +1030,20 @@ namespace RTE {
 		/// saved unique ID (floating the counter past it) and re-anchors the rest timer. No-op
 		/// without saved values. Subclasses recurse their children.
 		virtual void AdoptPersistedUniqueID();
+
+		/// Re-points non-owned MO references by UniqueID once a restored world is registered.
+		virtual void ResolveFaithfulLinks();
+
+		/// A faithful clone copies live sim state and keeps identity; rollback snapshots use it, gameplay spawns never do.
+		static bool IsFaithfulClone() { return s_FaithfulCloneDepth > 0; }
+		static bool FaithfulCloneRegisters() { return s_FaithfulCloneRegisters; }
+		struct FaithfulCloneScope {
+			explicit FaithfulCloneScope(bool registerWithMovableMan) {
+				++s_FaithfulCloneDepth;
+				s_FaithfulCloneRegisters = registerWithMovableMan;
+			}
+			~FaithfulCloneScope() { --s_FaithfulCloneDepth; }
+		};
 
 		/// Drops every pending snapshot stash on a normal (spawn-normalized) world add, so
 		/// later saves read live state instead of the stale load-time capture.
@@ -1333,6 +1350,9 @@ namespace RTE {
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
 		long m_PersistedUniqueID;
+		long m_FaithfulMOToNotHitUID = 0; //!< Snapshot link for m_pMOToNotHit, resolved after a restore.
+		static int s_FaithfulCloneDepth;
+		static bool s_FaithfulCloneRegisters;
 		int64_t m_PersistedRestTimerStart;
 		bool m_HasPersistedRestTimerStart;
 		int m_PersistedVelOscillations;
