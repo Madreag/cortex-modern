@@ -89,7 +89,7 @@ int ConsoleMan::Initialize() {
 
 void ConsoleMan::Destroy() {
 	if (!g_WindowMan.ResolutionChanged()) {
-		SaveAllText("LogConsole.txt");
+		SaveAllText(!ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath + ".console.txt" : std::string("LogConsole.txt"));
 	}
 
 	delete m_GUIControlManager;
