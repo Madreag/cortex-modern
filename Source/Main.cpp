@@ -68,6 +68,7 @@
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
 #include "NetLockstep.h"
+#include "NetMatchReplay.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
@@ -191,6 +192,7 @@ static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
 static std::string s_netReplayInPath;
+static std::string s_netReplayVerifyPath;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -538,6 +540,10 @@ void HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-replay") {
 			s_netReplayInPath = argValue[++i];
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-replay-verify") {
+			s_netReplayVerifyPath = argValue[++i];
 			continue;
 		}
 
@@ -1518,11 +1524,17 @@ void RunGameLoop() {
 					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
 					System::SetQuit(true);
 				} else if (!s_netReplayInPath.empty()) {
-					// Playback ends when the recording does; anything else is a reproduction failure.
+					// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
 					s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-					if (error.find("replay ended") == std::string::npos) {
-						std::cerr << "[net-replay] playback failed: " << error << std::endl;
-						s_netReplayExitCode = 1;
+					using Outcome = ScenarioRunner::LockstepReplayOutcome;
+					Outcome outcome = ScenarioRunner::GetLockstepReplayOutcome();
+					if (outcome == Outcome::Playing || outcome == Outcome::None) {
+						outcome = Outcome::SimFailure;
+						ScenarioRunner::SetLockstepReplayOutcome(outcome);
+					}
+					if (outcome != Outcome::Completed) {
+						std::cerr << "[net-replay] playback stopped: " << ScenarioRunner::ReplayOutcomeName(outcome) << ": " << error << std::endl;
+						s_netReplayExitCode = outcome == Outcome::Truncated ? 2 : (outcome == Outcome::Corrupt ? 3 : 4);
 					}
 					g_ActivityMan.EndActivity();
 					ScenarioRunner::ClearControllerReplayError();
@@ -1714,6 +1726,15 @@ void RunGameLoop() {
 				}
 			}
 
+			// Playback honours -max-ticks as a bounded run: distinct from the recording's own end.
+			if (!s_netReplayInPath.empty() && ScenarioRunner::GetArgs().maxTicks > 0 && !ScenarioRunner::HasControllerReplayError() &&
+			    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+				s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::TickCap);
+				g_ActivityMan.EndActivity();
+				System::SetQuit(true);
+				break;
+			}
 			// Menu-launched MP match with tracing armed: cap at -max-ticks so the trace is bounded for the
 			// host-vs-client sim-gated compare (the menu has no scenario/e2e cap of its own).
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
@@ -2501,7 +2522,18 @@ int RunNetReplayPlayback() {
 	const auto playbackStart = std::chrono::steady_clock::now();
 	RunGameLoop();
 	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
+	using ReplayOutcome = ScenarioRunner::LockstepReplayOutcome;
+	const ReplayOutcome finalOutcome = ScenarioRunner::GetLockstepReplayOutcome();
 	if (traceRun) {
+		g_MetricsCollector.RecordString("replay_outcome", ScenarioRunner::ReplayOutcomeName(finalOutcome));
+		g_MetricsCollector.Record("replay_frames_consumed", static_cast<double>(ScenarioRunner::GetLockstepReplayFramesConsumed()));
+		g_MetricsCollector.Record("replay_last_tick", static_cast<double>(ScenarioRunner::GetLockstepReplayLastTick()));
+		g_MetricsCollector.Record("replay_end_marker", ScenarioRunner::LockstepReplaySawEndMarker() ? 1.0 : 0.0);
+		g_MetricsCollector.Record("replay_exit_code", static_cast<double>(s_netReplayExitCode));
+		if (finalOutcome == ReplayOutcome::Completed || finalOutcome == ReplayOutcome::TickCap) {
+			g_MetricsCollector.RecordString("controller_replay_error", "");
+		}
+		g_MetricsCollector.SetResult(s_netReplayExitCode == 0);
 		g_MetricsCollector.EndRun();
 		const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 		if (!g_MetricsCollector.WriteReport(tracePath)) {
@@ -2512,7 +2544,9 @@ int RunNetReplayPlayback() {
 		}
 	}
 	std::cout << "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
-	          << "ms, ticks=" << s_netReplayTicks << std::endl;
+	          << "ms, ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(finalOutcome)
+	          << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed() << " last_tick=" << ScenarioRunner::GetLockstepReplayLastTick()
+	          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << " exit=" << s_netReplayExitCode << std::endl;
 	std::cout << "[pace] " << BuildLoopPaceJson() << std::endl;
 	if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
 		std::cout << "[localpred] " << stats << std::endl;
@@ -2819,6 +2853,19 @@ int main(int argc, char** argv) {
 		std::_Exit(exitCode);
 	}
 
+	if (!s_netReplayVerifyPath.empty()) {
+		NetReplayVerifyReport report;
+		NetMatchReplayReader::Verify(s_netReplayVerifyPath, report);
+		const std::string json = report.ToJson();
+		std::cout << "[net-replay-verify] " << json << std::endl;
+		if (!ScenarioRunner::GetArgs().outPath.empty()) {
+			std::string writeError;
+			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {
+				std::cerr << "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError << std::endl;
+			}
+		}
+		return report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1));
+	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();
 		std::cout.flush();
