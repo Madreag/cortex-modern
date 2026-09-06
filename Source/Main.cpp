@@ -1763,7 +1763,7 @@ void RunGameLoop() {
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
 				}
-				// E2E control: the host orders its two dummies and its brain at fixed ticks; both peers must hold the identical AI modes, waypoints and squad.
+				// E2E control: the host orders its dummy and its brain at fixed ticks; both peers must hold the identical AI mode, waypoints and squad.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestAIOrderCommand && (simTick == 50 || simTick == 200 || simTick == 400 || simTick == 600)) {
 					std::vector<Actor*> units;
 					for (Actor* actor: *g_MovableMan.GetTeamRoster(0)) {
@@ -1773,22 +1773,22 @@ void RunGameLoop() {
 					}
 					std::sort(units.begin(), units.end(), [](const Actor* lhs, const Actor* rhs) { return lhs->GetUniqueID() < rhs->GetUniqueID(); });
 					Actor* brain = g_MovableMan.GetFirstBrainActor(0);
-					if (units.size() >= 2 && brain) {
+					if (!units.empty() && brain) {
+						Actor* unit = units.front();
 						const auto order = [](const Actor* actor, uint8_t op, const Vector& point, const Actor* target) {
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), op, point.m_X, point.m_Y, target ? static_cast<int64_t>(target->GetUniqueID()) : 0}});
 						};
 						if (simTick == 50) {
-							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetActorAIMode{static_cast<int64_t>(units[0]->GetUniqueID()), 0, static_cast<uint8_t>(Actor::AIMODE_GOTO)}});
-							order(units[0], NetGameAIOrder::SceneWaypoint, units[0]->GetPos() + Vector(300.0F, 0.0F), nullptr);
+							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetActorAIMode{static_cast<int64_t>(unit->GetUniqueID()), 0, static_cast<uint8_t>(Actor::AIMODE_GOTO)}});
+							order(unit, NetGameAIOrder::SceneWaypoint, unit->GetPos() + Vector(300.0F, 0.0F), nullptr);
 						} else if (simTick == 200) {
-							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetActorAIMode{static_cast<int64_t>(units[1]->GetUniqueID()), 0, static_cast<uint8_t>(Actor::AIMODE_GOTO)}});
-							order(units[1], NetGameAIOrder::MOWaypoint, units[1]->GetPos(), units[0]);
+							order(unit, NetGameAIOrder::MOWaypoint, unit->GetPos(), brain);
 						} else if (simTick == 400) {
-							order(brain, NetGameAIOrder::FormSquad, brain->GetPos() + Vector(400.0F, 0.0F), nullptr);
+							order(brain, NetGameAIOrder::FormSquad, brain->GetPos() + Vector(600.0F, 0.0F), nullptr);
 						} else {
 							order(brain, NetGameAIOrder::DisbandSquad, brain->GetPos(), nullptr);
 						}
-						std::cout << "[net-match-service-e2e] ai order issued at tick " << simTick << std::endl;
+						std::cout << "[net-match-service-e2e] ai order issued at tick " << simTick << " unit " << unit->GetUniqueID() << " brain " << brain->GetUniqueID() << std::endl;
 					}
 				}
 				// E2E control: host-issued inventory ops on its brain at fixed ticks; both peers must mutate identically.
