@@ -108,6 +108,7 @@ void MovableObject::Clear() {
 
 	m_UniqueID = 0;
 	m_PersistedUniqueID = 0;
+	m_PersistedScriptState.clear();
 	m_PersistedRestTimerStart = 0;
 	m_HasPersistedRestTimerStart = false;
 	m_PersistedVelOscillations = 0;
@@ -290,11 +291,13 @@ int MovableObject::Create(const MovableObject& reference) {
 	// Saved state rides every copy a restored scene makes; the fresh ID below is provisional
 	// until the object enters the world and adopts it.
 	m_PersistedUniqueID = reference.m_PersistedUniqueID;
+	m_PersistedScriptState = reference.m_PersistedScriptState;
 	m_PersistedRestTimerStart = reference.m_PersistedRestTimerStart;
 	m_HasPersistedRestTimerStart = reference.m_HasPersistedRestTimerStart;
 	m_PersistedVelOscillations = reference.m_PersistedVelOscillations;
 	m_HasPersistedVelOscillations = reference.m_HasPersistedVelOscillations;
 	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
+	m_PersistedMOIgnoreTimerAnchor = reference.m_PersistedMOIgnoreTimerAnchor;
 	if (IsFaithfulClone()) {
 		// A snapshot clone carries the live sim state a spawn copy deliberately resets.
 		m_UniqueID = reference.m_UniqueID;
@@ -368,9 +371,12 @@ void MovableObject::ResolveFaithfulLinks() {
 
 void MovableObject::DiscardPersistedSnapshotState() {
 	m_PersistedUniqueID = 0;
+	m_PersistedScriptState.clear();
 	m_HasPersistedRestTimerStart = false;
 	m_HasPersistedVelOscillations = false;
 	m_PersistedAgeTimerAnchor.pending = false;
+	m_PersistedMOIgnoreTimerAnchor.pending = false;
+	m_FaithfulMOToNotHitUID = 0;
 }
 
 int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader) {
@@ -378,6 +384,7 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 
 	MatchProperty("Mass", { reader >> m_Mass; });
 	MatchProperty("UniqueID", { reader >> m_PersistedUniqueID; });
+	MatchProperty("ScriptState", { reader >> m_PersistedScriptState; });
 	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
 	MatchProperty("SpecialBehaviour_CheckTerrainIntersection", { reader >> m_CheckTerrIntersection; });
 	MatchProperty("SpecialBehaviour_VelOscillations", {
@@ -755,12 +762,25 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 		RTEAbort("Failed to initialize object scripts for " + GetModuleAndPresetName() + ". Please report this to a developer.");
 	}
 
+	if (!m_PersistedScriptState.empty()) {
+		m_ThreadedLuaState->RestoreScriptObjectFieldsFromString(m_UniqueID, m_PersistedScriptState);
+		m_PersistedScriptState.clear();
+		return 0;
+	}
+
 	if (runCreate && !m_FunctionsAndScripts.at("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
 		m_ScriptObjectName = "ERROR";
 		return -1;
 	}
 
 	return 0;
+}
+
+std::string MovableObject::SerializeScriptState() const {
+	if (!ObjectScriptsInitialized() || !m_ThreadedLuaState) {
+		return "";
+	}
+	return m_ThreadedLuaState->SerializeScriptObjectFields(m_UniqueID);
 }
 
 bool MovableObject::EnableOrDisableScript(const std::string& scriptPath, bool enableScript) {

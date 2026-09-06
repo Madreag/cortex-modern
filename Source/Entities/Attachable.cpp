@@ -387,7 +387,7 @@ bool Attachable::HandlePotentialRadiusAffectingAttachable(const Attachable* atta
 }
 
 int Attachable::UpdateScripts() {
-	if (m_Parent && !m_AllLoadedScripts.empty() && !ObjectScriptsInitialized()) {
+	if (m_Parent && !m_AllLoadedScripts.empty() && !ObjectScriptsInitialized() && !HasPersistedScriptState()) {
 		RunScriptedFunctionInAppropriateScripts("OnAttach", false, false, {m_Parent}, {}, {});
 	}
 
@@ -442,7 +442,7 @@ void Attachable::Update() {
 	// If we're attached to something, MovableMan doesn't own us, and therefore isn't calling our UpdateScripts method (and neither is our parent), so we should here.
 	if (m_Parent && GetRootParent()->HasEverBeenAddedToMovableMan()) {
 		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-		if (!m_AllLoadedScripts.empty() && !ObjectScriptsInitialized()) {
+		if (!m_AllLoadedScripts.empty() && !ObjectScriptsInitialized() && !HasPersistedScriptState()) {
 			RunScriptedFunctionInAppropriateScripts("OnAttach", false, false, {m_Parent}, {}, {});
 		}
 		UpdateScripts();

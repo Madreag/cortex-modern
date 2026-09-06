@@ -1241,6 +1241,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		// Identity survives the restore: UID-keyed RNG scopes and wire commands must address
 		// the same objects the first pass saw.
 		writer.NewPropertyWithValue("UniqueID", movableObjectToSave->GetUniqueID());
+		if (movableObjectToSave->ObjectScriptsInitialized()) {
+			if (const std::string scriptState = movableObjectToSave->SerializeScriptState(); !scriptState.empty()) {
+				writer.NewPropertyWithValue("ScriptState", scriptState);
+			}
+		}
 		writer.NewPropertyWithValue("HUDVisible", movableObjectToSave->GetHUDVisible());
 		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
 		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
