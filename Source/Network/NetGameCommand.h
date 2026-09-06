@@ -19,6 +19,7 @@ namespace RTE {
 		SetActorAIMode = 7,
 		SwitchControl = 8,
 		AIEquip = 9,
+		AIOrder = 10,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -166,7 +167,28 @@ namespace RTE {
 		bool operator==(const NetGameAIEquip&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip>;
+	// An order a player gives a unit of their team through the AI view modes: waypoints and squads. The
+	// decision is the player's (off-wire); the writes land on every peer at the committed tick.
+	struct NetGameAIOrder {
+		enum Op : uint8_t {
+			SceneWaypoint = 0,
+			MOWaypoint = 1,
+			ClearWaypoints = 2,
+			FormSquad = 3,
+			DisbandSquad = 4,
+		};
+
+		int64_t actorUID = 0;
+		int32_t team = 0;
+		uint8_t op = SceneWaypoint;
+		float x = 0.0F;
+		float y = 0.0F;
+		int64_t targetUID = 0;
+
+		bool operator==(const NetGameAIOrder&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

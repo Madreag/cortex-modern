@@ -497,6 +497,34 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("NETWORK: AI mode command target not found: UID " + std::to_string(setMode->actorUID));
 				std::cout << "[net-match] AI mode command target not found: UID " << setMode->actorUID << std::endl;
 			}
+		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
+			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->actorUID)));
+			if (actor && actor->GetTeam() == order->team && std::isfinite(order->x) && std::isfinite(order->y)) {
+				switch (order->op) {
+					case NetGameAIOrder::SceneWaypoint:
+						actor->AddAISceneWaypoint(Vector(order->x, order->y));
+						break;
+					case NetGameAIOrder::MOWaypoint:
+						if (const MovableObject* target = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->targetUID))) {
+							actor->AddAIMOWaypoint(target);
+						}
+						break;
+					case NetGameAIOrder::ClearWaypoints:
+						actor->ClearAIWaypoints();
+						break;
+					case NetGameAIOrder::FormSquad:
+						actor->FormSquad(Vector(order->x, order->y));
+						break;
+					case NetGameAIOrder::DisbandSquad:
+						actor->DisbandSquad();
+						break;
+					default:
+						break;
+				}
+			} else {
+				g_ConsoleMan.PrintString("NETWORK: AI order target not found: UID " + std::to_string(order->actorUID));
+				std::cout << "[net-match] AI order target not found: UID " << order->actorUID << std::endl;
+			}
 		} else if (const NetGameSwitchControl* switchControl = std::get_if<NetGameSwitchControl>(&command.payload)) {
 			// A peer may only take control for itself; the team gate above already vetted membership.
 			if (switchControl->newOwnerPeerId != command.senderPeerId) {

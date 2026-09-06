@@ -7,6 +7,7 @@
 #include "GameActivity.h"
 #include "ACrab.h"
 #include "ACraft.h"
+#include "AHuman.h"
 #include "AtomGroup.h"
 #include "Controller.h"
 #include "RTETools.h"
@@ -761,6 +762,51 @@ void Actor::HandlePendingPieCommand() {
 			HandlePieCommand(command);
 		}
 	}
+}
+
+void Actor::FormSquad(const Vector& selectionEdge) {
+	SetAIMode(AIMODE_SENTRY);
+	const float sqrRadius = g_SceneMan.ShortestDistance(selectionEdge, m_Pos, true).GetSqrMagnitude();
+	Actor* first = g_MovableMan.GetNextTeamActor(m_Team);
+	Actor* actor = first;
+	do {
+		if (actor && !actor->GetController()->IsPlayerControlled() && !actor->IsInGroup("Brains") && (dynamic_cast<AHuman*>(actor) || dynamic_cast<ACrab*>(actor)) && g_SceneMan.ShortestDistance(m_Pos, actor->GetPos(), true).GetSqrMagnitude() < sqrRadius) {
+			actor->FlashWhite();
+			actor->ClearAIWaypoints();
+			actor->SetAIMode(AIMODE_SQUAD);
+			actor->AddAIMOWaypoint(this);
+			actor->SetMovePathToUpdate();
+		}
+		actor = g_MovableMan.GetNextTeamActor(m_Team, actor);
+	} while (actor && actor != first);
+}
+
+bool Actor::HasSquad() const {
+	Actor* first = g_MovableMan.GetNextTeamActor(m_Team);
+	Actor* actor = first;
+	do {
+		if (actor && (dynamic_cast<AHuman*>(actor) || dynamic_cast<ACrab*>(actor)) && actor->GetAIMOWaypointID() == GetID()) {
+			return true;
+		}
+		actor = g_MovableMan.GetNextTeamActor(m_Team, actor);
+	} while (actor && actor != first);
+	return false;
+}
+
+bool Actor::DisbandSquad() {
+	bool hadSquad = false;
+	Actor* first = g_MovableMan.GetNextTeamActor(m_Team);
+	Actor* actor = first;
+	do {
+		if (actor && (dynamic_cast<AHuman*>(actor) || dynamic_cast<ACrab*>(actor)) && actor->GetAIMOWaypointID() == GetID()) {
+			actor->FlashWhite();
+			actor->ClearAIWaypoints();
+			actor->SetAIMode(static_cast<AIMode>(m_AIMode));
+			hadSquad = true;
+		}
+		actor = g_MovableMan.GetNextTeamActor(m_Team, actor);
+	} while (actor && actor != first);
+	return hadSquad;
 }
 
 void Actor::RequestAIMode(AIMode newMode) {

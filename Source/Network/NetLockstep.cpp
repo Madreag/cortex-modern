@@ -410,6 +410,16 @@ namespace RTE {
 						}
 						break;
 					}
+					case NetGameCommandType::AIOrder: {
+						const NetGameAIOrder& order = std::get<NetGameAIOrder>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(order.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(order.team));
+						AppendU8(out, order.op);
+						AppendU32LE(out, FloatToBitsLE(order.x));
+						AppendU32LE(out, FloatToBitsLE(order.y));
+						AppendU64LE(out, static_cast<uint64_t>(order.targetUID));
+						break;
+					}
 				}
 			}
 			return true;
@@ -735,6 +745,33 @@ namespace RTE {
 						command.payload = std::move(equip);
 						break;
 					}
+					case NetGameCommandType::AIOrder: {
+						NetGameAIOrder order;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						uint32_t xBits = 0;
+						uint32_t yBits = 0;
+						uint64_t targetUID = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "ai_order_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_order_team") ||
+						    !ReadOrTruncated(reader.ReadU8(order.op), reader, error, "ai_order_op") ||
+						    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "ai_order_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "ai_order_y") ||
+						    !ReadOrTruncated(reader.ReadU64LE(targetUID), reader, error, "ai_order_target_uid")) {
+							return false;
+						}
+						if (order.op > NetGameAIOrder::DisbandSquad) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai order op is invalid");
+							return false;
+						}
+						order.actorUID = static_cast<int64_t>(actorUID);
+						order.team = static_cast<int32_t>(team);
+						order.x = FloatFromBitsLE(xBits);
+						order.y = FloatFromBitsLE(yBits);
+						order.targetUID = static_cast<int64_t>(targetUID);
+						command.payload = order;
+						break;
+					}
 					default:
 						SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
 						return false;
@@ -950,7 +987,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version != c_Version && version != c_LegacyVersion) {
+		if (version < c_MinVersion || version > c_Version) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
