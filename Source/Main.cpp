@@ -1687,6 +1687,12 @@ void RunGameLoop() {
 		}
 		s_pacePrevActive = paceActiveAtIterStart;
 
+		// A free-running lockstep match takes one tick per iteration, so the preview and the polls still run per tick.
+		const bool freeRunLockstep = ScenarioRunner::GetArgs().freeRunSim && ScenarioRunner::IsLockstepControllerSyncActive();
+		if (ScenarioRunner::GetArgs().freeRunSim) {
+			g_TimerMan.SetFreeRunSim(freeRunLockstep);
+		}
+
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
@@ -2436,6 +2442,9 @@ void RunGameLoop() {
 				g_PerformanceMan.ResetSimUpdateTimer();
 				updateStartTime = g_TimerMan.GetAbsoluteTime();
 			}
+			if (ScenarioRunner::GetArgs().freeRunSim) {
+				break;
+			}
 		}
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
@@ -2466,7 +2475,9 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(false);
 			t_simRNGOverride = prevSimRNG;
 		}
-		DrawFrameWithPreviews();
+		if (!freeRunLockstep) {
+			DrawFrameWithPreviews();
+		}
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);

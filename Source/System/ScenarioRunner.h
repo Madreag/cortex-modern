@@ -52,6 +52,7 @@ namespace RTE {
 			bool        selftestScuttleCommand = false; // -net-match-e2e-scuttle-command: host scuttles the delivered craft at tick 100.
 			bool        selftestBrainKillCommand = false; // -net-match-e2e-brain-kill-command: host delivers + scuttles a craft onto the enemy brain.
 			bool        selftestStall = false; // -net-match-e2e-stall: this peer stops producing frames for 8s at tick 300 (stall-grace test).
+			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
 			bool        selftestInventoryCommand = false; // -net-match-e2e-inventory-command: host-issued inventory ops at fixed ticks.
