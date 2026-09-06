@@ -116,6 +116,10 @@ namespace RTE {
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
+			if (m_IsHost) {
+				// A rematch restarts from a zeroed sim count.
+				runner->SetStartFrame(1);
+			}
 			m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
 			m_WorkerDone = false;
@@ -179,6 +183,10 @@ namespace RTE {
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
+			if (isHost) {
+				// The snapshot restores verbatim at its saved sim tick, so the healed round's first frame follows it.
+				runner->SetStartFrame(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U);
+			}
 			m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
 			m_WorkerDone = false;

@@ -2033,7 +2033,7 @@ void RunGameLoop() {
 						if (resyncOk) {
 							std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
 							if (s_netMatchServiceE2E) {
-								// Round accounting restarts with the zeroed sim count.
+								// Round accounting restarts from the restored sim count.
 								s_netMatchServiceE2EStartTick = UINT64_MAX;
 								s_netMatchServiceE2ERunningTicks = 0;
 							}
