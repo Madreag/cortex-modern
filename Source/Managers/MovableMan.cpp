@@ -563,6 +563,29 @@ bool MovableMan::RunLockstepPausedTick() {
 	return true;
 }
 
+// Snapshot forensics: one line per attachable and wound, recursively, so limb-level state is diffable.
+static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::ostream& out) {
+	auto dumpNode = [&](const char* kind, const Attachable* node) {
+		out << tick << " " << kind << " uid=" << node->GetUniqueID() << " " << node->GetPresetName()
+		    << std::defaultfloat << " par=" << parent->GetUniqueID() << " moid=" << node->GetID() << "/" << node->GetRootID() << " frame=" << node->GetFrame()
+		    << std::hexfloat << " pos=" << node->GetPos().m_X << "," << node->GetPos().m_Y
+		    << " vel=" << node->GetVel().m_X << "," << node->GetVel().m_Y
+		    << " angvel=" << node->GetAngularVel() << " rot=" << node->GetRotAngle()
+		    << " mass=" << node->GetMass() << " awm=" << node->GetAttachableAndWoundMassForSave();
+		if (const AtomGroup* group = const_cast<Attachable*>(node)->GetAtomGroup()) {
+			out << " moi=" << group->GetStoredMomentOfInertia() << "/" << group->GetStoredOwnerMass() << std::defaultfloat << " atoms=" << group->GetAtomCount() << std::hexfloat;
+		}
+		out << std::defaultfloat << "\n" << std::hexfloat;
+		DumpAttachableTree(tick, node, out);
+	};
+	for (const Attachable* attachable: parent->GetAttachables()) {
+		dumpNode("att", attachable);
+	}
+	for (const AEmitter* wound: parent->GetWoundList()) {
+		dumpNode("wnd", wound);
+	}
+}
+
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 	auto dumpMO = [&](const char* kind, MovableObject* mo) {
 		out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
@@ -570,6 +593,26 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 		    << " prev=" << mo->GetPrevPos().m_X << "," << mo->GetPrevPos().m_Y
 		    << " vel=" << mo->GetVel().m_X << "," << mo->GetVel().m_Y
 		    << " angvel=" << mo->GetAngularVel()
+		    << std::defaultfloat << " moid=" << mo->GetID() << "/" << mo->GetRootID() << std::hexfloat
+		    << " mass=" << mo->GetMass();
+		{
+			auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
+			uint64_t forceHash = 1469598103934665603ULL;
+			for (const auto& [force, offset]: mo->GetForces()) {
+				forceHash = fnv(fnv(fnv(fnv(forceHash, std::bit_cast<uint32_t>(force.m_X)), std::bit_cast<uint32_t>(force.m_Y)), std::bit_cast<uint32_t>(offset.m_X)), std::bit_cast<uint32_t>(offset.m_Y));
+			}
+			uint64_t impulseHash = 1469598103934665603ULL;
+			for (const auto& [impulse, offset]: mo->GetImpulses()) {
+				impulseHash = fnv(fnv(fnv(fnv(impulseHash, std::bit_cast<uint32_t>(impulse.m_X)), std::bit_cast<uint32_t>(impulse.m_Y)), std::bit_cast<uint32_t>(offset.m_X)), std::bit_cast<uint32_t>(offset.m_Y));
+			}
+			out << std::defaultfloat << " frc=" << mo->GetForces().size() << ":" << std::hex << forceHash << " imps=" << std::dec << mo->GetImpulses().size() << ":" << std::hex << impulseHash << std::dec << std::hexfloat;
+			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+				if (const AtomGroup* group = const_cast<MOSRotating*>(rotating)->GetAtomGroup()) {
+					out << " moi=" << group->GetStoredMomentOfInertia() << "/" << group->GetStoredOwnerMass();
+				}
+			}
+		}
+		out
 		    << " rest=" << mo->GetRestTimerElapsedSimMS() << std::defaultfloat
 		    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat;
 		if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
@@ -583,7 +626,7 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 					states |= 1ULL << s;
 				}
 			}
-			out << std::defaultfloat << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " aimode=" << static_cast<int>(actor->GetAIMode()) << " health=" << std::hexfloat << actor->GetHealth() << std::defaultfloat;
+			out << std::defaultfloat << " awm=" << std::hexfloat << actor->GetAttachableAndWoundMassForSave() << " inv=" << actor->GetInventoryMass() << " gold=" << actor->GetGoldCarried() << " base=" << actor->MovableObject::GetMass() << std::defaultfloat << " ninv=" << actor->GetInventorySize() << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " aimode=" << static_cast<int>(actor->GetAIMode()) << " health=" << std::hexfloat << actor->GetHealth() << std::defaultfloat;
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
 				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS();
 			}
@@ -596,11 +639,44 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				}
 				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(const_cast<AHuman*>(human)->GetEquippedItem())) {
 					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading();
+					out << " gate[" << gun->DescribeFireGate() << "]";
 				}
 				out << " limbs=" << human->GetLimbGroupPositions();
+				// Snapshot forensics: the walk paths, the foot groups and the identity the MO-hit layer sees.
+				auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
+				uint64_t pathHash = 1469598103934665603ULL;
+				for (const std::string& state: human->GetLimbPathStates()) {
+					for (unsigned char c: state) {
+						pathHash = fnv(pathHash, c);
+					}
+					pathHash = fnv(pathHash, 0x7Cu);
+				}
+				uint64_t feetHash = 1469598103934665603ULL;
+				for (const AtomGroup* group: {human->GetFGFootGroup(), human->GetBGFootGroup()}) {
+					if (!group) {
+						feetHash = fnv(feetHash, 0xFFFFFFFFu);
+						continue;
+					}
+					for (const Atom* atom: group->GetAtomList()) {
+						feetHash = fnv(feetHash, std::bit_cast<uint32_t>(atom->GetOffset().m_X));
+						feetHash = fnv(feetHash, std::bit_cast<uint32_t>(atom->GetOffset().m_Y));
+					}
+					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetRawLimbPos().m_X));
+					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetRawLimbPos().m_Y));
+					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetStoredMomentOfInertia()));
+					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetStoredOwnerMass()));
+					for (const MOID ignored: group->GetIgnoreMOIDs()) {
+						feetHash = fnv(feetHash, static_cast<uint32_t>(ignored));
+					}
+					feetHash = fnv(feetHash, static_cast<uint32_t>(group->GetAtomCount()));
+				}
+				out << " paths=" << std::hex << pathHash << " feet=" << feetHash << std::dec;
 			}
 		}
 		out << std::defaultfloat << "\n";
+		if (const MOSRotating* tree = dynamic_cast<const MOSRotating*>(mo)) {
+			DumpAttachableTree(tick, tree, out);
+		}
 	};
 	if (const Activity* activity = g_ActivityMan.GetActivity()) {
 		out << tick << " activity state=" << static_cast<int>(activity->GetActivityState());
@@ -787,7 +863,11 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	}
 
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
-	m_KnownObjects.erase(mo->GetUniqueID());
+	// Only drop the entry this object owns; an off-world snapshot clone shares its UniqueID with the live resident.
+	auto entry = m_KnownObjects.find(mo->GetUniqueID());
+	if (entry != m_KnownObjects.end() && entry->second == mo) {
+		m_KnownObjects.erase(entry);
+	}
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int ignoreTeam, bool getsHitByMOsOnly) const {
@@ -806,6 +886,108 @@ const std::vector<MovableObject*>* MovableMan::GetMOsAtPosition(int pixelX, int 
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsAtPosition(pixelX, pixelY, ignoreTeam, getsHitByMOsOnly));
 	return vectorForLua;
+}
+
+void MovableMan::WorldSnapshot::Clear() {
+	for (Actor* actor: actors) {
+		delete actor;
+	}
+	for (MovableObject* item: items) {
+		delete item;
+	}
+	for (MovableObject* particle: particles) {
+		delete particle;
+	}
+	actors.clear();
+	items.clear();
+	particles.clear();
+	joinQuarantine.clear();
+	uniqueIDCounter = 0;
+}
+
+bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
+	out.Clear();
+	if (!m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
+		return false;
+	}
+	const long counter = MovableObject::GetUniqueIDCounter();
+	{
+		MovableObject::FaithfulCloneScope scope(false);
+		out.actors.reserve(m_Actors.size());
+		out.items.reserve(m_Items.size());
+		out.particles.reserve(m_Particles.size());
+		for (const Actor* actor: m_Actors) {
+			Actor* clone = dynamic_cast<Actor*>(actor->Clone());
+			out.actors.push_back(clone);
+		}
+		for (const MovableObject* item: m_Items) {
+			MovableObject* clone = dynamic_cast<MovableObject*>(item->Clone());
+			out.items.push_back(clone);
+		}
+		for (const MovableObject* particle: m_Particles) {
+			MovableObject* clone = dynamic_cast<MovableObject*>(particle->Clone());
+			out.particles.push_back(clone);
+		}
+	}
+	out.joinQuarantine = m_LockstepJoinQuarantine;
+	// Faithful clones keep their identity, but anything the clone chain drew from the counter is undone.
+	MovableObject::PinUniqueIDCounter(counter);
+	out.uniqueIDCounter = counter;
+	return true;
+}
+
+bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
+	CompleteQueuedMOIDDrawings();
+	for (Actor* actor: m_AddedActors) {
+		actor->DestroyScriptState();
+		delete actor;
+	}
+	for (MovableObject* item: m_AddedItems) {
+		item->DestroyScriptState();
+		delete item;
+	}
+	for (MovableObject* particle: m_AddedParticles) {
+		particle->DestroyScriptState();
+		delete particle;
+	}
+	m_AddedActors.clear();
+	m_AddedItems.clear();
+	m_AddedParticles.clear();
+	PurgeAllMOs();
+	{
+		MovableObject::FaithfulCloneScope scope(true);
+		for (const Actor* actor: in.actors) {
+			Actor* live = dynamic_cast<Actor*>(actor->Clone());
+			live->AdoptPersistedUniqueID();
+			m_Actors.push_back(live);
+			m_ValidActors.insert(live);
+			AddActorToTeamRoster(live);
+		}
+		for (const MovableObject* item: in.items) {
+			MovableObject* live = dynamic_cast<MovableObject*>(item->Clone());
+			live->AdoptPersistedUniqueID();
+			m_Items.push_back(live);
+			m_ValidItems.insert(live);
+		}
+		for (const MovableObject* particle: in.particles) {
+			MovableObject* live = dynamic_cast<MovableObject*>(particle->Clone());
+			live->AdoptPersistedUniqueID();
+			m_Particles.push_back(live);
+			m_ValidParticles.insert(live);
+		}
+	}
+	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
+	m_LockstepJoinQuarantine = in.joinQuarantine;
+	for (Actor* actor: m_Actors) {
+		actor->ResolveFaithfulLinks();
+	}
+	for (MovableObject* item: m_Items) {
+		item->ResolveFaithfulLinks();
+	}
+	for (MovableObject* particle: m_Particles) {
+		particle->ResolveFaithfulLinks();
+	}
+	return true;
 }
 
 void MovableMan::PurgeAllMOs() {

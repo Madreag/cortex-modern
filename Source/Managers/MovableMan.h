@@ -108,6 +108,26 @@ namespace RTE {
 		/// of anything moving, without resetting all of this' settings.
 		void PurgeAllMOs();
 
+		/// An in-memory world snapshot for rollback: faithful clones of every resident MO, kept in list order.
+		struct WorldSnapshot {
+			std::vector<Actor*> actors;
+			std::vector<MovableObject*> items;
+			std::vector<MovableObject*> particles;
+			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
+			long uniqueIDCounter = 0;
+			WorldSnapshot() = default;
+			WorldSnapshot(const WorldSnapshot&) = delete;
+			WorldSnapshot& operator=(const WorldSnapshot&) = delete;
+			~WorldSnapshot() { Clear(); }
+			void Clear();
+		};
+
+		/// Captures every resident MO as an off-world faithful clone. Only valid between ticks, after the add queues drained.
+		bool CaptureWorld(WorldSnapshot& out) const;
+
+		/// Replaces the resident MOs with registered faithful clones of a snapshot. Only valid between ticks.
+		bool RestoreWorld(const WorldSnapshot& in);
+
 		/// Get a pointer to the first Actor in the internal Actor list that is
 		/// of a specifc group, alternatively the first one AFTER a specific actor!
 		/// @param group Which group to try to get an Actor for.
