@@ -2115,7 +2115,7 @@ void MovableMan::ReapplyPersistedControllerModes() {
 
 void MovableMan::AddActor(Actor* actorToAdd) {
 	if (actorToAdd && g_ActivityMan.GetActivity()) {
-		if (!ScenarioRunner::GetArgs().testScript.empty() && !m_RestoringSnapshot) {
+		if (!ScenarioRunner::GetArgs().testScript.empty()) {
 			if (const int status = actorToAdd->LoadScript(g_PresetMan.GetFullModulePath(ScenarioRunner::GetArgs().testScript), true); status < 0 && status != -3) {
 				std::cout << "[test-script] ERROR: could not attach " << ScenarioRunner::GetArgs().testScript << " to " << actorToAdd->GetPresetName() << " (" << status << ")" << std::endl;
 			}

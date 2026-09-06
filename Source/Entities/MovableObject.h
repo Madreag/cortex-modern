@@ -118,6 +118,9 @@ namespace RTE {
 		/// @return Whether or not this MO has any scripts on it.
 		bool HasAnyScripts() const { return !m_AllLoadedScripts.empty(); }
 
+		/// Gets every script loaded onto this MO, in load order.
+		const std::vector<std::string>& GetAllLoadedScripts() const { return m_AllLoadedScripts; }
+
 		/// Checks if the script at the given path is one of the scripts on this MO.
 		/// @param scriptPath The path to the script to check.
 		/// @return Whether or not the script is on this MO.
