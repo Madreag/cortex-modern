@@ -32,6 +32,9 @@
 
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
+#include <iterator>
+
 using namespace RTE;
 
 ConcreteClassInfo(Actor, MOSRotating, 20);
@@ -112,6 +115,7 @@ void Actor::Clear() {
 
 	m_AIMode = AIMODE_NONE;
 	m_Waypoints.clear();
+	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
 	m_pMOMoveTarget = nullptr;
@@ -828,6 +832,13 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 	}
 }
 
+void Actor::PopFrontWaypoint(const Vector& expected) {
+	if (!m_Waypoints.empty() && m_Waypoints.front().first == expected) {
+		m_Waypoints.pop_front();
+		m_WaypointCursor = std::max(m_WaypointCursor - 1, 0);
+	}
+}
+
 void Actor::AlarmPoint(const Vector& alarmPoint) {
 	if (m_AlarmSound && m_AlarmTimer.IsPastSimTimeLimit()) {
 		m_AlarmSound->Play(alarmPoint);
@@ -1225,19 +1236,29 @@ void Actor::UpdateMovePath() {
 		// Do we currently have a path to a static target we would like to still pursue?
 		if (m_MovePath.empty()) {
 			// Ok no path going, so get a new path to the next waypoint, if there is a next waypoint
-			if (!m_Waypoints.empty()) {
+			const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+			const size_t loaded = lockstep ? static_cast<size_t>(std::max(m_WaypointCursor, 0)) : 0;
+			if (m_Waypoints.size() > loaded) {
+				const auto& waypoint = *std::next(m_Waypoints.begin(), static_cast<long>(loaded));
 				// Make sure the path starts from the ground and not somewhere up in the air if/when dropped out of ship
-				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), m_Waypoints.front().first, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), waypoint.first, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
 
 				// If the waypoint was tied to an MO to pursue, then load it into the current MO target
-				if (g_MovableMan.ValidMO(m_Waypoints.front().second)) {
-					m_pMOMoveTarget = m_Waypoints.front().second;
+				if (g_MovableMan.ValidMO(waypoint.second)) {
+					m_pMOMoveTarget = waypoint.second;
 				} else {
 					m_pMOMoveTarget = 0;
 				}
 
-				// We loaded the waypoint, no need to keep it
-				m_Waypoints.pop_front();
+				// We loaded the waypoint, no need to keep it. The queue is sim state, so under lockstep the owner drops it through the wire.
+				if (lockstep) {
+					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
+					}
+					++m_WaypointCursor;
+				} else {
+					m_Waypoints.pop_front();
+				}
 			}
 			// Just try to get to the last Move Target
 			else {

@@ -176,6 +176,7 @@ namespace RTE {
 			ClearWaypoints = 2,
 			FormSquad = 3,
 			DisbandSquad = 4,
+			PopWaypoint = 5,
 		};
 
 		int64_t actorUID = 0;

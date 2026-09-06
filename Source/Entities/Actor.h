@@ -443,11 +443,16 @@ namespace RTE {
 		/// OWNERSHIP IS NOT TRANSFERRED!
 		void AddAIMOWaypoint(const MovableObject* pMOWaypoint);
 
+		/// Drops the front waypoint if it is the expected one: the owner's AI loaded it into its path, and the drop lands on every peer through the wire.
+		/// @param expected The scene point of the waypoint being dropped.
+		void PopFrontWaypoint(const Vector& expected);
+
 		/// Removes all AI waypoints and clears the current path to the current
 		/// waypoint. The AI Actor will stop in its tracks.
 		void ClearAIWaypoints() {
 			m_pMOMoveTarget = 0;
 			m_Waypoints.clear();
+			m_WaypointCursor = 0;
 			m_MovePath.clear();
 			m_MoveTarget = m_Pos;
 			m_MoveVector.Reset();
@@ -1114,6 +1119,8 @@ namespace RTE {
 		// The list of waypoints remaining between which the paths are made. If this is empty, the last path is in teh MovePath
 		// The MO pointer in the pair is nonzero if the waypoint is tied to an MO in the scene, and gets updated each UpdateAI. This needs to be checked for validity/existence each UpdateAI
 		std::list<std::pair<Vector, const MovableObject*>> m_Waypoints;
+		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
+		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
 		bool m_DrawWaypoints;
 		// Absolute target to move to on the scene; this is usually the point at the front of the movepath list

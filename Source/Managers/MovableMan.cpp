@@ -518,6 +518,9 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					case NetGameAIOrder::DisbandSquad:
 						actor->DisbandSquad();
 						break;
+					case NetGameAIOrder::PopWaypoint:
+						actor->PopFrontWaypoint(Vector(order->x, order->y));
+						break;
 					default:
 						break;
 				}
