@@ -527,8 +527,8 @@ namespace RTE {
 		void Update();
 
 		/// The per-object stages of a sim tick, shared by the world update and speculative previews.
-		static void TravelStage(MovableObject* mo);
-		static void UpdateStage(MovableObject* mo);
+		static void TravelStage(MovableObject* mo, bool actor = false);
+		static void UpdateStage(MovableObject* mo, bool actor = false);
 		static void PostUpdateStage(MovableObject* mo);
 		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
 		static bool ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error);

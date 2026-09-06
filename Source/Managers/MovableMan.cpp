@@ -2765,7 +2765,7 @@ void MovableMan::Update() {
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsUpdate);
 			for (Actor* actor: m_Actors) {
-				UpdateStage(actor);
+				UpdateStage(actor, true);
 			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsUpdate);
 		}
@@ -3113,7 +3113,7 @@ void MovableMan::Travel() {
 
 		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsTravel);
 		for (Actor* actor: m_Actors) {
-			TravelStage(actor);
+			TravelStage(actor, true);
 		}
 		g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsTravel);
 	}
@@ -3139,7 +3139,10 @@ void MovableMan::Travel() {
 	}
 }
 
-void MovableMan::TravelStage(MovableObject* mo) {
+// An actor's travel and update draw from a per-actor per-tick stream, so a preview of the actor draws
+// exactly what its canonical tick will.
+void MovableMan::TravelStage(MovableObject* mo, bool actor) {
+	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorTravel"), actor);
 	if (!mo->IsUpdated()) {
 		mo->ApplyForces();
 		mo->PreTravel();
@@ -3149,7 +3152,8 @@ void MovableMan::TravelStage(MovableObject* mo) {
 	mo->NewFrame();
 }
 
-void MovableMan::UpdateStage(MovableObject* mo) {
+void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
+	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorUpdate"), actor);
 	mo->Update();
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
