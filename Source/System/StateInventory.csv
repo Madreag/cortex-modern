@@ -1,0 +1,74 @@
+class,member,classification,reason
+MovableObject,m_MOID,identity,assigned by UpdateMOID from the MOID layer draw each frame; a clone adopts the original's or registers fresh ones
+MovableObject,m_RootMOID,identity,assigned by UpdateMOID from the MOID layer draw each frame; a clone adopts the original's or registers fresh ones
+MovableObject,m_MOIDFootprint,identity,assigned by UpdateMOID from the MOID layer draw each frame
+MovableObject,m_ThreadedLuaState,link,the Lua state the object binds to when its scripts initialize; the probe's set-aside originals keep theirs
+MovableObject,m_ScriptIsEnabled,reconstructed,per-function flag rebuilt from m_AllLoadedScripts when the scripts initialize; the Lua-side object state is outside the native boundary (probe: set-aside originals; heal: the save format)
+MovableObject,m_LuaFunction,reconstructed,rebuilt from m_AllLoadedScripts when the scripts initialize; the Lua-side object state is outside the native boundary
+MovableObject,m_ScriptObjectName,reconstructed,derived from the unique id when the scripts initialize
+MovableObject,m_FunctionsAndScripts,reconstructed,rebuilt from m_AllLoadedScripts when the scripts initialize
+MOSprite,m_GraphicalIcon,render,GUI icon bitmap fetched from m_IconFile in Create
+MOSRotating,m_FaithfulFarthestAttachableDistanceAndRadius,copied,the faithful carrier of m_FarthestAttachableDistanceAndRadius laid back at link resolution
+MOSRotating,m_EntryWoundBurstSoundPlayedThisFrame,transient,cleared in Update before any read each tick
+MOSRotating,m_ExitWoundBurstSoundPlayedThisFrame,transient,cleared in Update before any read each tick
+MOSRotating,m_ReferenceHardcodedAttachableUniqueIDs,transient,scratch filled and cleared inside Create
+MOSRotating,m_FlashWhiteTimer,render,real-time white-flash draw effect
+MOSRotating,m_pFlipBitmap,render,scratch bitmap for flipped drawing created per object
+MOSRotating,m_pFlipBitmapS,render,scratch bitmap for flipped MOID drawing created per object
+Attachable,m_Parent,link,set by the parent's attachable copy through SetParent
+Attachable,m_AtomSubgroupID,identity,the attachable's unique id; re-keyed at unique-id adoption (RenameSubgroup)
+Actor,m_pHitBody,outside,declared and never assigned or read
+Actor,m_pControllerIcon,render,HUD icon pointer
+Actor,m_OffWireAimTick,transient,the owner's pending one-shot intent for the current tick consumed by that tick's frame snapshot; nothing is pending between ticks
+Actor,m_OffWireAim,transient,the owner's pending one-shot intent for the current tick consumed by that tick's frame snapshot
+Actor,m_OffWireFlipTick,transient,the owner's pending one-shot intent for the current tick consumed by that tick's frame snapshot
+Actor,m_OffWireFlip,transient,the owner's pending one-shot intent for the current tick consumed by that tick's frame snapshot
+Actor,m_HUDStack,render,HUD layout cursor recomputed every draw
+Actor,m_PathRequest,outside,the per-machine async pathfinding request (off-wire AI); a clone issues its own
+AHuman,m_PendingDeferredEquips,transient,queued during the AI pass and drained the same tick
+AHuman,m_PersistedLimbPathStatesFromFile,reconstructed,load-path bookkeeping consumed on the first update; false on a live clone
+AHuman,m_IconBlinkTimer,render,HUD blink timer
+AHuman,m_EquipHUDTimer,render,HUD equip-name display timer
+ACrab,m_PersistedLimbPathStatesFromFile,reconstructed,load-path bookkeeping consumed on the first update; false on a live clone
+ACrab,m_IconBlinkTimer,render,HUD blink timer
+ACraft,m_Offset,copied,an Exit member; the Exit list is copied whole in ACraft::Create
+ACraft,m_Velocity,copied,an Exit member; the Exit list is copied whole in ACraft::Create
+ACraft,m_VelSpread,copied,an Exit member; the Exit list is copied whole in ACraft::Create
+ACraft,m_Radius,copied,an Exit member; the Exit list is copied whole in ACraft::Create
+ACraft,m_Range,copied,an Exit member; the Exit list is copied whole in ACraft::Create
+ACraft,m_Clear,copied,an Exit member; the Exit list is copied whole in ACraft::Create
+ACraft,m_pIncomingMO,link,resolved from m_FaithfulIncomingMOUID at link resolution
+ACraft,m_FaithfulIncomingMOUID,copied,the faithful carrier of an exit's incoming object
+Arm,m_HandSpriteBitmap,render,bitmap fetched from the hand sprite file
+HeldDevice,m_SeenByPlayer,render,per-player unheld-item HUD visibility
+HeldDevice,m_BlinkTimer,render,HUD blink timer reset in Update and read only when drawing
+HDFirearm,m_HasPlayedEndReloadSound,render,audio cue bookkeeping
+Magazine,m_AIAimMaxDistance,outside,declared and only cleared; no reader or copier
+AtomGroup,m_Atoms,copied,deep-copied atom by atom in Create
+AtomGroup,m_SubGroups,copied,rebuilt from the copied atoms' subgroup ids in Create
+AtomGroup,m_OwnerMOSR,link,set by the owning MOSRotating
+AtomGroup,m_IgnoreMOIDs,copied,copied element by element in Create
+Atom,m_OwnerMO,link,set by the owning group
+Atom,m_IgnoreMOIDsByGroup,link,points at the owning group's ignore list
+Atom,m_LastHit,transient,last-collision scratch written by Travel before the group reads it in the same step
+Atom,m_HitImpulse,transient,last-collision scratch written by Travel before the group reads it in the same step
+LimbPath,m_CurrentSegment,copied,carried as the segment index by the traversal pack in Create
+LimbPath,m_PathTimer,copied,carried as its start time by the traversal pack in Create
+LimbPath,m_SegTimer,copied,carried as its start time by the traversal pack in Create
+LimbPath,m_Ended,copied,carried by the traversal pack in Create
+Controller,m_ControlledActor,link,set by the actor that owns the controller
+Controller,m_NextIgnore,outside,this machine's input-edge latch for sampling; the sim reads only the wire-applied control states
+Controller,m_PrevIgnore,outside,this machine's input-edge latch for sampling; the sim reads only the wire-applied control states
+Controller,m_WeaponPrimaryHotkeyIgnore,outside,this machine's input-edge latch for sampling; the sim reads only the wire-applied control states
+Controller,m_ReleaseTimer,outside,real-time sampling timer of this machine's input
+Controller,m_JoyAccelTimer,outside,real-time sampling timer of this machine's input
+Controller,m_KeyAccelTimer,outside,real-time sampling timer of this machine's input
+Controller,m_MouseMovement,reconstructed,the committed frame re-applies it before any read in the tick
+Timer,m_TicksPerMS,reconstructed,derived from TimerMan's tick rate at construction; identical on every timer
+PieMenu,m_CurrentPieSlices,reconstructed,repopulated from the quadrants at the end of Create
+PieMenu,m_BGBitmap,render,menu background bitmap
+PieMenu,m_BGRotationBitmap,render,menu background bitmap
+PieMenu,m_BGPieSlicesWithSubPieMenuBitmap,render,menu background bitmap
+PieMenu,m_BGBitmapNeedsRedrawing,render,menu background redraw flag
+PieMenu,m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing,render,menu background redraw flag
+PieSlice,m_OriginalSource,link,the entity that added the slice; the quadrant copy and SetOwner re-point it
