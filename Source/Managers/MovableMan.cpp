@@ -1079,6 +1079,23 @@ void MovableMan::WaitForActorsSeeTask() {
 	m_ActorsSeeFuture.wait();
 }
 
+std::string MovableMan::DescribeScriptBindings() const {
+	std::string out;
+	const auto describe = [&out](const std::string& name, const LuaStateWrapper& state) {
+		out += name;
+		for (const MovableObject* mo: SortedRegisteredMOs(state)) {
+			out += " " + std::to_string(mo->GetUniqueID()) + (mo->ObjectScriptsInitialized() ? "+" : "-");
+		}
+		out += "\n";
+	};
+	describe("master", g_LuaMan.GetMasterScriptState());
+	int index = 0;
+	for (const LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		describe("thread" + std::to_string(index++), state);
+	}
+	return out;
+}
+
 void MovableMan::PurgeAllMOs() {
 	for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
 		(*itr)->DestroyScriptState();

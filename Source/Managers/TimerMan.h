@@ -86,6 +86,7 @@ namespace RTE {
 		/// Gets the sim time in timer ticks, for rollback snapshots.
 		/// @return The accumulated sim time in ticks.
 		long long GetSimTimeTicks() const { return m_SimTimeTicks; }
+		long long GetSimAccumulator() const { return m_SimAccumulator; }
 
 		/// Tells whether there is enough sim time accumulated to do at least one physics update.
 		/// @return Whether there is enough sim time to do a physics update.

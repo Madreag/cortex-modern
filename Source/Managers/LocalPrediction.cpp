@@ -28,6 +28,7 @@ namespace RTE {
 	std::vector<LocalPrediction::Preview> LocalPrediction::s_Previews;
 	bool LocalPrediction::s_Rendering = false;
 	int LocalPrediction::s_Override = -1;
+	int LocalPrediction::s_DepthOverride = 0;
 	long long LocalPrediction::s_PreviewedTick = -1;
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
@@ -62,6 +63,9 @@ namespace RTE {
 
 	void LocalPrediction::RunPreview() {
 		if (!IsEnabled() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsLockstepPaused() || !g_ActivityMan.ActivityRunning()) {
+			if (TraceEnabled()) {
+				std::cout << "[localpred] skip: enabled=" << IsEnabled() << " lockstep=" << ScenarioRunner::IsLockstepControllerSyncActive() << " paused=" << ScenarioRunner::IsLockstepPaused() << " running=" << g_ActivityMan.ActivityRunning() << std::endl;
+			}
 			Clear();
 			return;
 		}
@@ -70,7 +74,7 @@ namespace RTE {
 			return;
 		}
 		Clear();
-		const int delay = static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
+		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
 		const int depth = std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
 		if (depth <= 0) {
 			return;
@@ -85,7 +89,8 @@ namespace RTE {
 			if (!actor || !g_MovableMan.ValidMO(actor) || !g_MovableMan.IsActor(actor)) {
 				continue;
 			}
-			if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled())) {
+			// Playback owns nothing on the wire, but the recording carries the human's frames; preview them.
+			if (!ScenarioRunner::IsLockstepReplayPlayback() && !ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled())) {
 				continue;
 			}
 			if (std::any_of(targets.begin(), targets.end(), [actor](const Preview& preview) { return preview.original == actor; })) {
@@ -94,6 +99,15 @@ namespace RTE {
 			targets.push_back({actor, nullptr, activity->ScreenOfPlayer(player)});
 		}
 		if (targets.empty()) {
+			if (TraceEnabled()) {
+				for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+					const Actor* actor = activity->GetControlledActor(player);
+					std::cout << "[localpred] no target: player " << player << " active=" << activity->PlayerActive(player) << " human=" << activity->PlayerHuman(player)
+					          << " actor=" << (actor ? static_cast<long long>(actor->GetUniqueID()) : 0) << " valid=" << (actor ? g_MovableMan.ValidMO(actor) : false)
+					          << " isactor=" << (actor ? g_MovableMan.IsActor(actor) : false)
+					          << " local=" << (actor ? ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled()) : false) << std::endl;
+				}
+			}
 			return;
 		}
 		Trace("preview start");
@@ -105,6 +119,7 @@ namespace RTE {
 		const long long simCount = g_TimerMan.GetSimUpdateCount();
 		const long long simTicks = g_TimerMan.GetSimTimeTicks();
 		const std::mt19937 rngState = g_SimRNG.GetEngineState();
+		const uint64_t rngDraws = g_SimRNG.GetDrawCount();
 		const long uidCounter = MovableObject::GetUniqueIDCounter();
 		Activity::RollbackState activityState;
 		activity->CaptureRollbackState(activityState);
@@ -168,6 +183,7 @@ namespace RTE {
 		terrain.Restore();
 		activity->RestoreRollbackState(activityState);
 		g_SimRNG.SetEngineState(rngState);
+		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 		MovableObject::PinUniqueIDCounter(uidCounter);
 		PostProcessMan::SetRegistrationSuppressed(false);
