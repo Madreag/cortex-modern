@@ -223,6 +223,9 @@ namespace RTE {
 		std::unique_ptr<Activity> m_StartActivity; //!< The starting condition of the next Activity to be (re)started.
 		bool m_StartActivityResumed = false; //!< The staged Activity is a loaded save resuming mid-state, not a fresh start.
 		std::unique_ptr<Scene> m_PendingLoadedScene; //!< A loaded save's Scene, kept alive until its deferred restart clones it.
+		bool m_RestartRestoresSnapshot = false; //!< The staged restart places the loaded save verbatim at its saved sim time.
+		long long m_PendingSnapshotSimUpdateCount = -1; //!< The loaded save's sim update count, -1 when the file carries none.
+		long long m_PendingSnapshotSimTimeTicks = 0; //!< The loaded save's sim time ticks.
 
 		std::future<void> m_SaveGameTask; //!< The current save game task.
 

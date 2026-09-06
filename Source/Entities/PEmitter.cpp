@@ -1,4 +1,7 @@
 #include "PEmitter.h"
+
+#include <bit>
+#include "SceneMan.h"
 #include "Atom.h"
 #include "RTETools.h"
 #include "PresetMan.h"

@@ -343,6 +343,12 @@ namespace RTE {
 		/// Clears the sim-facing input for a tick no frame was committed for; the mode, player and disabled flag stay.
 		void ApplyWireNeutral() { ResetCommandState(); }
 
+		/// Sets the wire-owned input mode and player, leaving this machine's seat alone.
+		void ApplyWireMode(InputMode mode, int player) {
+			m_InputMode = mode;
+			m_Player = player;
+		}
+
 		/// Replaces the scheme facts the sim reads (device class, digital aim speed) with the owner's, from a wire frame.
 		void ApplyWireScheme(WireDeviceClass deviceClass, float digitalAimSpeed);
 		bool HasWireScheme() const { return m_WireSchemeValid; }

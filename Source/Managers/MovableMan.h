@@ -446,7 +446,7 @@ namespace RTE {
 		/// @param pMOToCheck A pointer to the MovableObject to check for being actively kept by
 		/// this MovableMan.
 		/// @return Whether the MO instance was found in the active list or not.
-		bool ValidMO(const MovableObject* pMOToCheck);
+		bool ValidMO(const MovableObject* pMOToCheck) const;
 
 		/// Indicates whether the passed in MovableObject is an active Actor kept
 		/// by this MovableMan or not.
@@ -751,6 +751,7 @@ namespace RTE {
 		MovableObject* SpeculativeView(MovableObject* found);
 		MovableObject* TakeShadow(MovableObject* mo, int kind);
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
+		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
 		std::deque<MovableObject*> m_AddedItems;
 		std::deque<MovableObject*> m_AddedParticles;
 

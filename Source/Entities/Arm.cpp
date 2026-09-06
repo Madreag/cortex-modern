@@ -95,7 +95,7 @@ int Arm::Create(const Arm& reference) {
 		m_FaithfulSupportedDeviceUID = reference.m_HeldDeviceThisArmIsTryingToSupport ? reference.m_HeldDeviceThisArmIsTryingToSupport->GetUniqueID() : reference.m_FaithfulSupportedDeviceUID;
 		m_HeldDeviceThisArmIsTryingToSupport = nullptr;
 	} else {
-		m_FaithfulSupportedDeviceUID = 0;
+		m_FaithfulSupportedDeviceUID = reference.m_FaithfulSupportedDeviceUID;
 	}
 	return 0;
 }

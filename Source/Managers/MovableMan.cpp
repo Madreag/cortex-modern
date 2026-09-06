@@ -14,6 +14,8 @@
 #include "Arm.h"
 #include "Leg.h"
 #include "ACraft.h"
+#include "ACDropShip.h"
+#include "PEmitter.h"
 #include "MOPixel.h"
 #include "HeldDevice.h"
 #include "HDFirearm.h"
@@ -2060,11 +2062,14 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 			}
 		}
 		actorToAdd->SetAsAddedToMovableMan();
-		actorToAdd->CorrectAttachableAndWoundPositionsAndRotations();
+		if (!m_RestoringSnapshot) {
+			actorToAdd->CorrectAttachableAndWoundPositionsAndRotations();
+		}
 
 		if (m_RestoringSnapshot) {
 			// A snapshot resident enters exactly as captured.
 			actorToAdd->AdoptPersistedUniqueID();
+			m_PendingLinkResolves.push_back(actorToAdd);
 		} else {
 			// A normal add spawn-normalizes; drop pending snapshot stashes so later saves read live state.
 			actorToAdd->DiscardPersistedSnapshotState();
@@ -2106,10 +2111,13 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(itemToAdd->GetTeam());
 
 		itemToAdd->SetAsAddedToMovableMan();
-		itemToAdd->CorrectAttachableAndWoundPositionsAndRotations();
+		if (!m_RestoringSnapshot) {
+			itemToAdd->CorrectAttachableAndWoundPositionsAndRotations();
+		}
 
 		if (m_RestoringSnapshot) {
 			itemToAdd->AdoptPersistedUniqueID();
+			m_PendingLinkResolves.push_back(itemToAdd);
 		} else {
 			itemToAdd->DiscardPersistedSnapshotState();
 			if (itemToAdd->IsTooFast()) {
@@ -2136,12 +2144,13 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 		g_ActivityMan.GetActivity()->ForceSetTeamAsActive(particleToAdd->GetTeam());
 
 		particleToAdd->SetAsAddedToMovableMan();
-		if (MOSRotating* particleToAddAsMOSRotating = dynamic_cast<MOSRotating*>(particleToAdd)) {
+		if (MOSRotating* particleToAddAsMOSRotating = dynamic_cast<MOSRotating*>(particleToAdd); particleToAddAsMOSRotating && !m_RestoringSnapshot) {
 			particleToAddAsMOSRotating->CorrectAttachableAndWoundPositionsAndRotations();
 		}
 
 		if (m_RestoringSnapshot) {
 			particleToAdd->AdoptPersistedUniqueID();
+			m_PendingLinkResolves.push_back(particleToAdd);
 		} else {
 			particleToAdd->DiscardPersistedSnapshotState();
 			if (particleToAdd->IsTooFast()) {
@@ -2348,7 +2357,7 @@ bool MovableMan::ValidateMOIDs() {
 	return true;
 }
 
-bool MovableMan::ValidMO(const MovableObject* pMOToCheck) {
+bool MovableMan::ValidMO(const MovableObject* pMOToCheck) const {
 	if (!pMOToCheck) {
 		return false;
 	}
@@ -2793,10 +2802,12 @@ static void TraceTrackedPhase(const char* tag) {
 }
 
 void MovableMan::AbsorbAddedMOs() {
-	// Sort the added queues before the drain so the transfer order is stable across runs.
-	std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
-	std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
-	std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
+	// Sort the added queues before the drain so the transfer order is stable across runs; a restored world arrives in its saved live order.
+	if (m_PendingLinkResolves.empty()) {
+		std::sort(m_AddedActors.begin(), m_AddedActors.end(), MOUniqueIDLess());
+		std::sort(m_AddedItems.begin(), m_AddedItems.end(), MOUniqueIDLess());
+		std::sort(m_AddedParticles.begin(), m_AddedParticles.end(), MOUniqueIDLess());
+	}
 
 	for (Actor* addedActor: m_AddedActors) {
 		// Delete instead if it's marked for it
@@ -2834,6 +2845,14 @@ void MovableMan::AbsorbAddedMOs() {
 		}
 	}
 	m_AddedParticles.clear();
+
+	// A restored world's saved links resolve once every resident is in.
+	for (MovableObject* mo: m_PendingLinkResolves) {
+		if (ValidMO(mo)) {
+			mo->ResolveFaithfulLinks();
+		}
+	}
+	m_PendingLinkResolves.clear();
 }
 
 void MovableMan::ClearLockstepJoinQuarantine() {

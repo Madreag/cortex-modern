@@ -61,6 +61,7 @@ void MovableObject::Clear() {
 	m_CheckTerrIntersection = false;
 	m_HitsMOs = false;
 	m_pMOToNotHit = 0;
+	m_MOToNotHitUID = 0;
 	m_MOIgnoreTimer.Reset();
 	m_GetsHitByMOs = false;
 	m_IgnoresTeamHits = false;
@@ -233,6 +234,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_IgnoresAGHitsWhenSlowerThan = reference.m_IgnoresAGHitsWhenSlowerThan;
 	m_IgnoresActorHits = reference.m_IgnoresActorHits;
 	m_pMOToNotHit = reference.m_pMOToNotHit;
+	m_MOToNotHitUID = reference.m_MOToNotHitUID;
 	m_MOIgnoreTimer = reference.m_MOIgnoreTimer;
 	m_MissionCritical = reference.m_MissionCritical;
 	m_CanBeSquished = reference.m_CanBeSquished;
@@ -314,13 +316,13 @@ int MovableObject::Create(const MovableObject& reference) {
 		m_ApplyWoundBurstDamageOnCollision = reference.m_ApplyWoundBurstDamageOnCollision;
 		m_HasEverBeenAddedToMovableMan = reference.m_HasEverBeenAddedToMovableMan;
 		m_RequestedSyncedUpdate = reference.m_RequestedSyncedUpdate;
-		m_FaithfulMOToNotHitUID = reference.m_pMOToNotHit ? reference.m_pMOToNotHit->GetUniqueID() : reference.m_FaithfulMOToNotHitUID;
+		m_FaithfulMOToNotHitUID = reference.m_pMOToNotHit ? reference.m_MOToNotHitUID : reference.m_FaithfulMOToNotHitUID;
 		m_pMOToNotHit = nullptr;
 		if (FaithfulCloneRegisters()) {
 			g_MovableMan.RegisterObject(this);
 		}
 	} else {
-		m_FaithfulMOToNotHitUID = 0;
+		m_FaithfulMOToNotHitUID = reference.m_FaithfulMOToNotHitUID;
 		m_UniqueID = MovableObject::GetNextUniqueID();
 		g_MovableMan.RegisterObject(this);
 	}
@@ -390,6 +392,23 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 		reader >> m_PersistedAgeTimerAnchor.startTicks;
 		m_PersistedAgeTimerAnchor.pending = true;
 	});
+	MatchProperty("MOToNotHitUniqueID", {
+		reader >> m_FaithfulMOToNotHitUID;
+		m_MOToNotHitUID = m_FaithfulMOToNotHitUID;
+	});
+	MatchProperty("MOIgnoreTimerStart", {
+		reader >> m_PersistedMOIgnoreTimerAnchor.startTicks;
+		m_PersistedMOIgnoreTimerAnchor.pending = true;
+	});
+	MatchProperty("MOIgnoreTimerLimitTicks", {
+		int64_t limit = 0;
+		reader >> limit;
+		m_MOIgnoreTimer.SetSimTimeLimitTicks(limit);
+	});
+	MatchProperty("PrevVelocity", { reader >> m_PrevVel; });
+	MatchProperty("SpecialBehaviour_AirResistanceRaw", { reader >> m_AirResistance; });
+	MatchProperty("SpecialBehaviour_ApplyWoundDamageOnCollision", { reader >> m_ApplyWoundDamageOnCollision; });
+	MatchProperty("SpecialBehaviour_ApplyWoundBurstDamageOnCollision", { reader >> m_ApplyWoundBurstDamageOnCollision; });
 	MatchProperty("Velocity", { reader >> m_Vel; });
 	MatchProperty("Scale", { reader >> m_Scale; });
 	MatchProperty("GlobalAccScalar", { reader >> m_GlobalAccScalar; });

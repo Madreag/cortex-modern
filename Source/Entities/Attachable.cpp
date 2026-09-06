@@ -302,13 +302,17 @@ bool Attachable::CanCollideWithTerrain() const {
 void Attachable::AdoptPersistedUniqueID() {
 	const long provisionalID = GetUniqueID();
 	MOSRotating::AdoptPersistedUniqueID();
+	if (GetUniqueID() != provisionalID && IsAttached()) {
+		m_Parent->RekeyHardcodedAttachable(provisionalID, GetUniqueID());
+	}
 	// The subgroup follows the clone-time UniqueID; re-key any folded atoms to the restored
 	// identity so a later save writes a consistent pair.
 	if (GetUniqueID() != provisionalID && m_AtomSubgroupID == provisionalID) {
 		m_AtomSubgroupID = GetUniqueID();
-		if (IsAttached()) {
-			if (MOSRotating* rootParent = dynamic_cast<MOSRotating*>(GetRootParent()); rootParent && rootParent->GetAtomGroup()) {
-				rootParent->GetAtomGroup()->RenameSubgroup(provisionalID, m_AtomSubgroupID);
+		// Every ancestor's own group may hold the subgroup from an earlier attach, not only the root's.
+		for (MOSRotating* ancestor = m_Parent; ancestor; ancestor = dynamic_cast<Attachable*>(ancestor) ? dynamic_cast<Attachable*>(ancestor)->GetParent() : nullptr) {
+			if (ancestor->GetAtomGroup()) {
+				ancestor->GetAtomGroup()->RenameSubgroup(provisionalID, m_AtomSubgroupID);
 			}
 		}
 	}
@@ -508,6 +512,10 @@ float Attachable::RemoveWounds(int numberOfWoundsToRemove, bool includeAttachabl
 	return result;
 }
 
+bool Attachable::AttachKeepsLiveState() {
+	return IsFaithfulClone() || g_MovableMan.IsRestoringSnapshot();
+}
+
 void Attachable::SetParent(MOSRotating* newParent) {
 	if (newParent == m_Parent) {
 		return;
@@ -517,7 +525,8 @@ void Attachable::SetParent(MOSRotating* newParent) {
 
 	// A faithful snapshot clone re-attaches with its live state intact; only a real (re)parent normalizes.
 	const bool faithful = IsFaithfulClone();
-	if (!faithful) {
+	const bool keepsLiveState = AttachKeepsLiveState();
+	if (!keepsLiveState) {
 		m_MountedRotAngleOffset = 0.0F;
 
 		// TODO Get rid of the need for calling ResetAllTimers, if something like inventory swapping needs timers reset it should do it itself! This blanket handling probably has side-effects.
@@ -527,17 +536,17 @@ void Attachable::SetParent(MOSRotating* newParent) {
 
 	if (newParent) {
 		m_Parent = newParent;
-		if (!faithful) {
+		if (!keepsLiveState) {
 			m_Team = newParent->GetTeam();
 		}
-		if (InheritsHFlipped() != 0 && !faithful) {
+		if (InheritsHFlipped() != 0 && !keepsLiveState) {
 			m_HFlipped = m_InheritsHFlipped == 1 ? m_Parent->IsHFlipped() : !m_Parent->IsHFlipped();
 		}
-		if (InheritsRotAngle() && !faithful) {
+		if (InheritsRotAngle() && !keepsLiveState) {
 			SetRotAngle(m_Parent->GetRotAngle() + m_InheritedRotAngleOffset * m_Parent->GetFlipFactor());
 			m_AngularVel = 0.0F;
 		}
-		if (!faithful) {
+		if (!keepsLiveState) {
 			// The copied pose is the live one; a normal attach derives it from the parent.
 			UpdatePositionAndJointPositionBasedOnOffsets();
 			// Snap prev to current on reparent so the render lerp doesn't fling from the old standalone position
