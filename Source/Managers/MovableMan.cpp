@@ -687,6 +687,16 @@ static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::os
 		if (const HeldDevice* device = dynamic_cast<const HeldDevice*>(node)) {
 			out << std::defaultfloat << " act=" << (device->IsActivated() ? 1 : 0) << std::hexfloat;
 		}
+		out << " dmg=" << node->GetDamageCount();
+		if (const AEmitter* emitter = dynamic_cast<const AEmitter*>(node)) {
+			out << std::defaultfloat << " em=" << emitter->IsEmitting() << "/" << emitter->GetEmitCount() << "/" << emitter->IsSetToBurst() << "/" << emitter->WasEmitting() << std::hexfloat << "/" << emitter->GetThrottle() << "/" << emitter->GetBurstTimerElapsedSimMS() << "/" << emitter->GetLastEmitTimerElapsedSimMS();
+			for (double accumulator: emitter->GetEmissionAccumulators()) {
+				out << "/" << accumulator;
+			}
+			for (const auto& [startElapsed, stopElapsed]: emitter->GetEmissionTimerElapsed()) {
+				out << "/" << startElapsed << ":" << stopElapsed;
+			}
+		}
 		out << std::defaultfloat << "\n" << std::hexfloat;
 		DumpAttachableTree(tick, node, out);
 	};
@@ -721,12 +731,37 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
 				if (const AtomGroup* group = const_cast<MOSRotating*>(rotating)->GetAtomGroup()) {
 					out << " moi=" << group->GetStoredMomentOfInertia() << "/" << group->GetStoredOwnerMass();
+					// The root group's atoms in list order: offsets and subgroup ids drive collision and are not visible elsewhere.
+					uint64_t atomHash = 1469598103934665603ULL;
+					int atomIndex = 0;
+					for (const Atom* atom: group->GetAtomList()) {
+						atomHash = fnv(fnv(fnv(atomHash, std::bit_cast<uint32_t>(atom->GetOffset().m_X)), std::bit_cast<uint32_t>(atom->GetOffset().m_Y)), static_cast<uint32_t>(atom->GetSubID()));
+						if (SceneMan::IsTrackedUID(mo->GetUniqueID())) {
+							SceneMan::TraceTerrainEvent("atom", std::bit_cast<int32_t>(atom->GetOffset().m_X), std::bit_cast<int32_t>(atom->GetOffset().m_Y), static_cast<int32_t>(atom->GetSubID()), atomIndex, static_cast<int>(mo->GetUniqueID()));
+						}
+						++atomIndex;
+					}
+					out << std::defaultfloat << " atoms=" << group->GetAtomCount() << ":" << std::hex << atomHash << std::dec << std::hexfloat;
 				}
 			}
 		}
 		out
 		    << " rest=" << mo->GetRestTimerElapsedSimMS() << std::defaultfloat
-		    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat;
+		    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat
+		    << " pvel=" << mo->GetPrevVel().m_X << "," << mo->GetPrevVel().m_Y << std::defaultfloat << " wdmg=" << mo->GetApplyWoundDamageOnCollision() << mo->GetApplyWoundBurstDamageOnCollision() << std::hexfloat
+		    << " air=" << mo->GetAirResistance() << "/" << mo->GetAirThreshold() << "/" << mo->GetGlobalAccScalar();
+		if (const MOSParticle* particle = dynamic_cast<const MOSParticle*>(mo)) {
+			out << " trest=" << particle->GetTimeRest();
+		}
+		if (const PEmitter* emitter = dynamic_cast<const PEmitter*>(mo)) {
+			out << std::defaultfloat << " pem=" << emitter->IsEmitting() << "/" << emitter->GetEmitCount() << "/" << emitter->IsSetToBurst() << "/" << emitter->WasEmitting() << std::hexfloat << "/" << emitter->GetThrottle() << "/" << emitter->GetBurstTimerElapsedSimMS() << "/" << emitter->GetLastEmitTimerElapsedSimMS();
+			for (double accumulator: emitter->GetEmissionAccumulators()) {
+				out << "/" << accumulator;
+			}
+			for (const auto& [startElapsed, stopElapsed]: emitter->GetEmissionTimerElapsed()) {
+				out << "/" << startElapsed << ":" << stopElapsed;
+			}
+		}
 		if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
 			out << " rot=" << sprite->GetRotAngle();
 		}
@@ -742,6 +777,15 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 			if (const PieMenu* pieMenu = actor->GetPieMenu()) {
 				out << " pie=" << pieMenu->DescribeInteractionState();
 			}
+			out << " inv=[";
+			for (const MovableObject* inventoryItem: *actor->GetInventory()) {
+				out << inventoryItem->GetUniqueID() << ":" << inventoryItem->GetPresetName() << ";";
+			}
+			out << "]";
+			out << " mstate=" << static_cast<int>(actor->GetMovementState()) << " goldpicked=" << actor->GetGoldPicked() << std::hexfloat
+			    << " atmr=" << actor->GetLastSecondTimerElapsedSimMS() << "/" << actor->GetStableRecoverTimerElapsedSimMS() << "/" << actor->GetHeartBeatTimerElapsedSimMS() << "/" << actor->GetNewControlTimerElapsedSimMS() << "/" << actor->GetDeathTimerElapsedSimMS() << "/" << actor->GetAlarmTimerElapsedSimMS()
+			    << " recent=" << actor->GetRecentMovement().m_X << "," << actor->GetRecentMovement().m_Y << " lastalarm=" << actor->GetLastAlarmPosRaw().m_X << "," << actor->GetLastAlarmPosRaw().m_Y << " view=" << actor->GetViewPointRaw().m_X << "," << actor->GetViewPointRaw().m_Y
+			    << " prevhealth=" << actor->GetPrevHealth() << " aimspeed=" << actor->GetSharpAimSpeed() << std::defaultfloat;
 			if (!ScenarioRunner::GetArgs().testScript.empty()) {
 				LuaStateWrapper* state = actor->GetLuaState();
 				const long create = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCreate", -1.0)) : -1;
@@ -750,20 +794,33 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				out << " script=" << create << "/" << update << "/" << static_cast<long>(actor->GetNumberValue("TestUpdates")) << "/" << carried;
 			}
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
-				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS();
+				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS() << std::hexfloat << " hatchms=" << craft->GetHatchTimerElapsedSimMS() << " exitms=" << craft->GetExitTimerElapsedSimMS();
+				if (const ACDropShip* dropShip = dynamic_cast<const ACDropShip*>(craft)) {
+					out << " lateral=" << dropShip->GetLateralControl();
+				}
+				out << " ctmr=" << craft->GetFlippedTimerElapsedSimMS() << "/" << craft->GetCrashTimerElapsedSimMS() << "/" << craft->GetNetworkDeliveryTimerElapsedSimMS() << std::defaultfloat << " netdel=" << craft->IsNetworkDelivery() << " exit=" << craft->GetCurrentExitIndex() << "/" << craft->GetExitLinePhase();
+				for (long uid: craft->GetExitIncomingMOUniqueIDs()) {
+					out << "/" << uid;
+				}
+			}
+			if (const MovableObject* moToNotHit = mo->GetWhichMOToNotHit(); moToNotHit && const_cast<MovableMan*>(this)->FindObjectByUniqueID(mo->GetMOToNotHitUID()) == moToNotHit) {
+				out << std::defaultfloat << " nothit=" << mo->GetMOToNotHitUID() << std::hexfloat << ":" << mo->GetMOIgnoreTimerElapsedSimMS() << "/" << mo->GetMOIgnoreTimerLimitMS() << std::defaultfloat;
 			}
 			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
 				out << " imp=" << std::hexfloat << rotating->GetTravelImpulse().GetMagnitude() << std::defaultfloat << " wounds=" << rotating->GetWoundCount();
 			}
 			if (const AHuman* human = dynamic_cast<const AHuman*>(mo)) {
 				if (const AEJetpack* jetpack = human->GetJetpack()) {
-					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
+					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << " bonus=" << jetpack->GetJetThrustBonusMultiplier() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
 				}
+				out << " hstate=" << static_cast<int>(human->GetProneState()) << "/" << static_cast<int>(human->GetUpperBodyState()) << "/" << human->IsArmClimbing(0) << human->IsArmClimbing(1) << "/" << human->IsAiming() << "/" << human->StrideFrame() << human->GetStrideStart()
+				    << std::hexfloat << " htmr=" << human->GetProneTimerElapsedSimMS() << "/" << human->GetStrideTimerElapsedSimMS() << "/" << human->GetThrowTimerElapsedSimMS() << " crouch=" << human->GetCrouchAmount() << "/" << human->GetCrouchAmountOverride() << std::defaultfloat;
 				const HeldDevice* fgItem = const_cast<AHuman*>(human)->GetEquippedItem();
 				const HeldDevice* bgItem = const_cast<AHuman*>(human)->GetEquippedBGItem();
 				out << " fg=" << (fgItem ? fgItem->GetUniqueID() : 0) << " bg=" << (bgItem ? bgItem->GetUniqueID() : 0);
+				out << " offhandwait=" << (human->IsWaitingToReloadOffhand() ? 1 : 0);
 				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(fgItem)) {
-					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading();
+					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading() << "/" << gun->DoneReloading() << std::hexfloat << " reloadms=" << gun->GetReloadTimerElapsedSimMS() << "/" << gun->GetReloadTimerLimitMS() << std::defaultfloat << " fire=" << gun->FiredFrame() << gun->FiredLastFrame();
 					out << " gate[" << gun->DescribeFireGate() << "]";
 				}
 				out << " limbs=" << human->GetLimbGroupPositions();
