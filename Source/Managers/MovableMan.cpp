@@ -1035,6 +1035,10 @@ void MovableMan::WorldSnapshot::Clear() {
 	items.clear();
 	particles.clear();
 	joinQuarantine.clear();
+	for (const LuaFields& fields: luaFields) {
+		fields.state->ReleaseCapture(fields.ref);
+	}
+	luaFields.clear();
 	uniqueIDCounter = 0;
 }
 
@@ -1075,6 +1079,18 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 		}
 	}
 	out.joinQuarantine = m_LockstepJoinQuarantine;
+	// Every scripted object's Lua fields go with it (attachables and inventory included), so a re-run's scripts start from the captured state.
+	const auto captureState = [&out](LuaStateWrapper& state) {
+		for (const MovableObject* mo: SortedRegisteredMOs(state)) {
+			if (mo->ObjectScriptsInitialized()) {
+				out.luaFields.push_back({&state, mo->GetUniqueID(), state.CaptureScriptObjectFields(mo->GetUniqueID())});
+			}
+		}
+	};
+	captureState(g_LuaMan.GetMasterScriptState());
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		captureState(state);
+	}
 	// Faithful clones keep their identity, but anything the clone chain drew from the counter is undone.
 	MovableObject::PinUniqueIDCounter(counter);
 	out.uniqueIDCounter = counter;
@@ -1125,6 +1141,27 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
 	m_LockstepJoinQuarantine = in.joinQuarantine;
+	// Every live scripted original steps out of its _ScriptedObjects slot (the re-run's objects take the slots); a captured object's clone takes it now with the captured fields, Create not re-run.
+	const auto stashState = [this](LuaStateWrapper& state) {
+		for (const MovableObject* mo: SortedRegisteredMOs(state)) {
+			if (mo->ObjectScriptsInitialized()) {
+				state.StashScriptObject(mo->GetUniqueID());
+				m_RestoredScriptObjects.emplace_back(&state, mo->GetUniqueID());
+			}
+		}
+	};
+	stashState(g_LuaMan.GetMasterScriptState());
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		stashState(state);
+	}
+	for (const WorldSnapshot::LuaFields& fields: in.luaFields) {
+		MovableObject* clone = FindObjectByUniqueID(fields.uid);
+		if (!clone || clone->ObjectScriptsInitialized()) {
+			continue;
+		}
+		clone->AdoptScriptObject();
+		fields.state->RestoreScriptObjectFields(fields.uid, fields.ref);
+	}
 	for (Actor* actor: m_Actors) {
 		actor->ResolveFaithfulLinks();
 	}
@@ -1155,6 +1192,10 @@ void MovableMan::SetAsideWorld(WorldSetAside& out) {
 		m_SortTeamRoster[team] = false;
 	}
 	out.joinQuarantine.swap(m_LockstepJoinQuarantine);
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		out.knownObjects = m_KnownObjects;
+	}
 	m_ValidActors.clear();
 	m_ValidItems.clear();
 	m_ValidParticles.clear();
@@ -1168,23 +1209,47 @@ void MovableMan::ReinstateWorld(WorldSetAside& in) {
 	}
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
-	// The re-run's residents never initialized their scripts (frozen), so purging them leaves the originals' Lua objects alone.
+	// The re-run never happened: every scripted object of its world (nested ones included) drops its script object without Destroy, and the originals' slots come back.
+	const auto isOriginal = [&in](const MovableObject* mo) {
+		const auto known = in.knownObjects.find(mo->GetUniqueID());
+		return known != in.knownObjects.end() && known->second == mo;
+	};
+	const auto discardState = [&isOriginal](LuaStateWrapper& state) {
+		for (MovableObject* mo: SortedRegisteredMOs(state)) {
+			if (isOriginal(mo)) {
+				continue;
+			}
+			if (mo->ObjectScriptsInitialized()) {
+				state.RunScriptString("_ScriptedObjects[\"" + std::to_string(mo->GetUniqueID()) + "\"] = nil;");
+			}
+			mo->DiscardScriptState();
+		}
+	};
+	discardState(g_LuaMan.GetMasterScriptState());
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		discardState(state);
+	}
 	for (Actor* actor: m_AddedActors) {
-		actor->DestroyScriptState();
 		delete actor;
 	}
 	for (MovableObject* item: m_AddedItems) {
-		item->DestroyScriptState();
 		delete item;
 	}
 	for (MovableObject* particle: m_AddedParticles) {
-		particle->DestroyScriptState();
 		delete particle;
 	}
 	m_AddedActors.clear();
 	m_AddedItems.clear();
 	m_AddedParticles.clear();
 	PurgeAllMOs();
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		m_KnownObjects = std::move(in.knownObjects);
+	}
+	for (const auto& [state, uid]: m_RestoredScriptObjects) {
+		state->UnstashScriptObject(uid);
+	}
+	m_RestoredScriptObjects.clear();
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
 	m_Actors.swap(in.actors);
 	m_Items.swap(in.items);

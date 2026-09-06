@@ -240,6 +240,10 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_PostEffectEnabled = reference.m_PostEffectEnabled;
 
 	m_ForceIntoMasterLuaState = reference.m_ForceIntoMasterLuaState;
+	// A faithful clone scripts in the original's state, so its self can stand in for the original's slot.
+	if (IsFaithfulClone()) {
+		m_ThreadedLuaState = reference.m_ThreadedLuaState;
+	}
 	for (const auto& scriptPath: reference.m_AllLoadedScripts) {
 		LoadScript(scriptPath, reference.m_EnabledScripts.at(scriptPath));
 	}
@@ -603,6 +607,15 @@ int MovableObject::Save(Writer& writer) const {
 	return 0;
 }
 
+void MovableObject::DiscardScriptState() {
+	if (m_ThreadedLuaState) {
+		std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
+		m_ScriptObjectName.clear();
+		m_ThreadedLuaState->UnregisterMO(this);
+		m_ThreadedLuaState = nullptr;
+	}
+}
+
 void MovableObject::DestroyScriptState() {
 	if (m_ThreadedLuaState) {
 		std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
@@ -713,7 +726,7 @@ int MovableObject::ReloadScripts() {
 	return status;
 }
 
-int MovableObject::InitializeObjectScripts() {
+int MovableObject::InitializeObjectScripts(bool runCreate) {
 	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";
 	m_ThreadedLuaState->RegisterMO(this);
@@ -722,7 +735,7 @@ int MovableObject::InitializeObjectScripts() {
 		RTEAbort("Failed to initialize object scripts for " + GetModuleAndPresetName() + ". Please report this to a developer.");
 	}
 
-	if (!m_FunctionsAndScripts.at("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
+	if (runCreate && !m_FunctionsAndScripts.at("Create").empty() && RunScriptedFunctionInAppropriateScripts("Create", false, true) < 0) {
 		m_ScriptObjectName = "ERROR";
 		return -1;
 	}

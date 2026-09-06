@@ -147,6 +147,12 @@ namespace RTE {
 
 		/// Cleans up and destroys the script state of this object, calling the Destroy callback in lua
 		virtual void DestroyScriptState();
+
+		/// Drops this object's script registration without running Destroy or touching its _ScriptedObjects slot: a discarded re-run copy, never a death.
+		void DiscardScriptState();
+
+		/// Registers this' script object without running Create: a restored copy standing in for a live original.
+		int AdoptScriptObject() { return InitializeObjectScripts(false); }
 #pragma endregion
 
 		/// Gets the MO type code of this MO. Either Actor, Item, or Generic.
@@ -1179,7 +1185,7 @@ namespace RTE {
 	protected:
 		/// Does necessary work to setup a script object name for this object, allowing it to be accessed in Lua, then runs all of the MO's scripts' Create functions in Lua.
 		/// @return 0 on success, -2 if it fails to setup the script object in Lua, and -3 if it fails to run any Create function.
-		int InitializeObjectScripts();
+		int InitializeObjectScripts(bool runCreate = true);
 
 		/// Runs the given function for the given script, with the given arguments. The first argument to the function will always be 'self'.
 		/// If either argument list is not empty, its entries will be passed into the Lua function in order, with entity arguments first.

@@ -94,6 +94,24 @@ namespace RTE {
 		const std::unordered_set<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
 		/// The address of the object's Lua table (as a hex string), or "-" when it has none; the identity oracles compare it.
 		std::string DescribeScriptObjectIdentity(long uniqueID);
+
+		/// Deep-copies the fields a script keeps on the object's self: values and nested tables by value, entities by unique id, everything else by reference.
+		/// @return A registry reference to the copy, or LUA_NOREF when the object holds no fields.
+		int CaptureScriptObjectFields(long uniqueID);
+
+		/// Gives the object's self the fields of a capture, resolving entity references against the live world.
+		void RestoreScriptObjectFields(long uniqueID, int captureRef);
+
+		/// Releases a capture reference.
+		void ReleaseCapture(int captureRef);
+
+		/// Moves _ScriptedObjects[uid] into a stash so a stand-in self can take the slot; UnstashScriptObject puts it back.
+		void StashScriptObject(long uniqueID);
+		void UnstashScriptObject(long uniqueID);
+
+		/// Reads a number field off the object's self.
+		/// @return The field, or the fallback when the object or the field is absent.
+		double GetScriptObjectNumberField(long uniqueID, const std::string& field, double fallback);
 #pragma endregion
 
 #pragma region Script Execution Handling
@@ -260,6 +278,7 @@ namespace RTE {
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
+		bool m_ScriptFieldsHelperLoaded = false; //!< Whether the field capture helper has been defined in this state.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
 		std::string m_LastError; //!< Description of the last error that occurred in the script execution.
