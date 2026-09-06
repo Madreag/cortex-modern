@@ -1707,7 +1707,6 @@ void GameActivity::Update() {
 					m_InventoryMenuGUI[player]->SetMenuMode(InventoryMenuGUI::MenuMode::Full);
 					m_InventoryMenuGUI[player]->SetEnabled(true);
 				}
-				m_ControlledActor[player]->HandlePieCommand(command);
 			}
 
 			m_InventoryMenuGUI[player]->SetInventoryActor(m_ControlledActor[player]);

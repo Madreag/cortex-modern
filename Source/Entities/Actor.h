@@ -402,6 +402,9 @@ namespace RTE {
 		/// @return Whether or not the activated PieSlice SliceType was able to be handled.
 		virtual bool HandlePieCommand(PieSliceType pieSliceType) { return false; }
 
+		/// Handles the PieSlice this' PieMenu activated last tick, if any. Runs in the update stage, so every peer applies it at the same tick.
+		void HandlePendingPieCommand();
+
 		/// Gets this' AI mode.
 		/// @return The current AI mode.
 		int GetAIMode() const { return m_AIMode; }
