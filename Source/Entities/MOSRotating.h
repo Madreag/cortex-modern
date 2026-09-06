@@ -566,6 +566,7 @@ namespace RTE {
 		std::vector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
 		std::vector<Vector> m_PersistedAtomGroupOffsets; //!< Saved per-atom offsets, applied on snapshot adopt.
 		std::vector<long long> m_PersistedAtomGroupSubIDs; //!< Saved per-atom subgroup IDs binding the arrays above by identity.
+		std::vector<int> m_PersistedAtomGroupMaterials; //!< Saved per-atom material indices, applied on snapshot adopt.
 		float m_PersistedGroupMomentOfInertia; //!< Saved group moment of inertia, applied on snapshot adopt.
 		float m_PersistedGroupStoredMass; //!< Saved owner-mass anchor for the inertia recompute gate.
 		bool m_HasPersistedGroupInertia; //!< Whether a saved moment of inertia is pending application.

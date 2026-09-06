@@ -225,6 +225,7 @@ int MOSRotating::Create(const MOSRotating& reference) {
 	m_PersistedAtomGroupResidue = reference.m_PersistedAtomGroupResidue;
 	m_PersistedAtomGroupOffsets = reference.m_PersistedAtomGroupOffsets;
 	m_PersistedAtomGroupSubIDs = reference.m_PersistedAtomGroupSubIDs;
+	m_PersistedAtomGroupMaterials = reference.m_PersistedAtomGroupMaterials;
 	m_PersistedGroupMomentOfInertia = reference.m_PersistedGroupMomentOfInertia;
 	m_PersistedGroupStoredMass = reference.m_PersistedGroupStoredMass;
 	m_HasPersistedGroupInertia = reference.m_HasPersistedGroupInertia;
@@ -345,6 +346,11 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		long long subIDValue = 0;
 		reader >> subIDValue;
 		m_PersistedAtomGroupSubIDs.push_back(subIDValue);
+	});
+	MatchProperty("AtomGroupMaterial", {
+		int materialIndex = 0;
+		reader >> materialIndex;
+		m_PersistedAtomGroupMaterials.push_back(materialIndex);
 	});
 	MatchProperty("AtomGroupMomentOfInertia", {
 		reader >> m_PersistedGroupMomentOfInertia;
@@ -1539,17 +1545,18 @@ void MOSRotating::AdoptPersistedUniqueID() {
 			}
 		}
 	}
+	if (!m_PersistedAtomGroupOffsets.empty()) {
+		if (m_pAtomGroup) {
+			m_pAtomGroup->RebuildFromPersisted(m_PersistedAtomGroupOffsets, m_PersistedAtomGroupSubIDs, m_PersistedAtomGroupMaterials);
+		}
+		m_PersistedAtomGroupOffsets.clear();
+	}
+	m_PersistedAtomGroupMaterials.clear();
 	if (!m_PersistedAtomGroupResidue.empty()) {
 		if (m_pAtomGroup) {
 			m_pAtomGroup->SetTravelResidue(m_PersistedAtomGroupResidue, m_PersistedAtomGroupSubIDs);
 		}
 		m_PersistedAtomGroupResidue.clear();
-	}
-	if (!m_PersistedAtomGroupOffsets.empty()) {
-		if (m_pAtomGroup) {
-			m_pAtomGroup->SetAtomOffsets(m_PersistedAtomGroupOffsets, m_PersistedAtomGroupSubIDs);
-		}
-		m_PersistedAtomGroupOffsets.clear();
 	}
 	m_PersistedAtomGroupSubIDs.clear();
 	if (m_HasPersistedGroupInertia) {
