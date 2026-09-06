@@ -672,6 +672,10 @@ void Actor::SetControllerMode(Controller::InputMode newMode, int newPlayer) {
 void Actor::OnControllerInputModeChanged(Controller::InputMode previousMode, int previousPlayer) {
 	RunScriptedFunctionInAppropriateScripts("OnControllerInputModeChange", false, false, {}, {std::to_string(previousMode), std::to_string(previousPlayer)});
 	m_NewControlTmr.Reset();
+	// The selection wobble is sim state, so it plays where the handoff lands: on every peer at the same tick.
+	if (m_PieMenu && m_Controller.GetInputMode() == Controller::CIM_PLAYER) {
+		m_PieMenu->DoDisableAnimation();
+	}
 }
 
 Controller::InputMode Actor::SwapControllerModes(Controller::InputMode newMode, int newPlayer) {

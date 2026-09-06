@@ -352,9 +352,6 @@ bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
 	if (!m_IsHuman[player])
 		return false;
 
-	if (pActor && pActor->GetPieMenu()) {
-		pActor->GetPieMenu()->DoDisableAnimation();
-	}
 	m_InventoryMenuGUI[player]->SetEnabled(false);
 
 	// Disable the AI command mode since it's connected to the current actor
@@ -372,10 +369,6 @@ void GameActivity::SwitchToNextActor(int player, int team, Actor* pSkip) {
 		m_ViewState[player] = ViewState::Normal;
 
 	Activity::SwitchToNextActor(player, team, pSkip);
-
-	if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
-		m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
-	}
 }
 
 void GameActivity::SwitchToPrevActor(int player, int team, Actor* pSkip) {
@@ -386,10 +379,6 @@ void GameActivity::SwitchToPrevActor(int player, int team, Actor* pSkip) {
 		m_ViewState[player] = ViewState::Normal;
 
 	Activity::SwitchToPrevActor(player, team, pSkip);
-
-	if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
-		m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
-	}
 }
 
 void GameActivity::AddObjectivePoint(const std::string& description, Vector objPos, int whichTeam, ObjectiveArrowDir arrowDir) {
