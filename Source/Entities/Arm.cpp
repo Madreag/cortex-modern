@@ -1,4 +1,7 @@
 #include "Arm.h"
+
+#include <cstdlib>
+#include <sstream>
 #include "MovableMan.h"
 #include "RTETools.h"
 #include "HDFirearm.h"
@@ -33,6 +36,10 @@ void Arm::Clear() {
 	m_HandTargets = {};
 	m_HandMovementDelayTimer.Reset();
 	m_HandMovementDelayTimer.SetSimTimeLimitMS(0);
+	m_PersistedHandMovementDelayTimerAnchor = {};
+	m_PersistedHandPos.Reset();
+	m_PersistedHandPrevPos.Reset();
+	m_HasPersistedHandPos = false;
 	m_HandHasReachedCurrentTarget = false;
 
 	m_HandSpriteFile.Reset();
@@ -77,6 +84,10 @@ int Arm::Create(const Arm& reference) {
 	m_HandTargets = reference.m_HandTargets;
 	m_HandMovementDelayTimer = reference.m_HandMovementDelayTimer;
 	m_HandHasReachedCurrentTarget = reference.m_HandHasReachedCurrentTarget;
+	m_PersistedHandMovementDelayTimerAnchor = reference.m_PersistedHandMovementDelayTimerAnchor;
+	m_PersistedHandPos = reference.m_PersistedHandPos;
+	m_PersistedHandPrevPos = reference.m_PersistedHandPrevPos;
+	m_HasPersistedHandPos = reference.m_HasPersistedHandPos;
 
 	m_HandSpriteFile = reference.m_HandSpriteFile;
 	m_HandSpriteBitmap = m_HandSpriteFile.GetAsBitmap();
@@ -113,6 +124,31 @@ int Arm::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("GripStrength", { reader >> m_GripStrength; });
 	MatchProperty("ThrowStrength", { reader >> m_ThrowStrength; });
 	MatchProperty("HeldDevice", { SetHeldDevice(dynamic_cast<HeldDevice*>(g_PresetMan.ReadReflectedPreset(reader))); });
+	MatchProperty("HandCurrentOffset", { reader >> m_HandCurrentOffset; });
+	MatchProperty("HandPosition", {
+		reader >> m_PersistedHandPos;
+		m_HasPersistedHandPos = true;
+	});
+	MatchProperty("HandPrevPosition", {
+		reader >> m_PersistedHandPrevPos;
+		m_HasPersistedHandPos = true;
+	});
+	MatchProperty("SpecialBehaviour_HandHasReachedCurrentTarget", { reader >> m_HandHasReachedCurrentTarget; });
+	MatchProperty("HandMovementDelayTimerStart", {
+		reader >> m_PersistedHandMovementDelayTimerAnchor.startTicks;
+		m_PersistedHandMovementDelayTimerAnchor.pending = true;
+	});
+	MatchProperty("HandMovementDelayTimerLimitTicks", {
+		int64_t limit = 0;
+		reader >> limit;
+		m_HandMovementDelayTimer.SetSimTimeLimitTicks(limit);
+	});
+	MatchProperty("AddHandTarget", {
+		std::string packed;
+		reader >> packed;
+		AddHandTargetFromSave(packed);
+	});
+	MatchProperty("SupportedDeviceUniqueID", { reader >> m_FaithfulSupportedDeviceUID; });
 
 	EndPropertyList;
 }
@@ -394,6 +430,49 @@ void Arm::DrawHand(BITMAP* targetBitmap, const Vector& targetPos, DrawMode mode)
 			draw_sprite_h_flip(targetBitmap, m_HandSpriteBitmap, handPos.GetFloorIntX(), handPos.GetFloorIntY());
 		}
 	}
+}
+
+std::vector<std::string> Arm::GetHandTargetsForSave() const {
+	std::vector<std::string> packed;
+	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
+		const HandTarget& target = targets.front();
+		std::ostringstream out;
+		out << std::hexfloat << target.TargetOffset.m_X << "|" << target.TargetOffset.m_Y << "|" << target.DelayAtTarget << "|" << (target.HFlippedWhenTargetWasCreated ? 1 : 0) << "|" << target.Description;
+		packed.push_back(out.str());
+	}
+	return packed;
+}
+
+void Arm::AddHandTargetFromSave(const std::string& packed) {
+	std::istringstream in(packed);
+	std::string x;
+	std::string y;
+	std::string delay;
+	std::string flipped;
+	std::string description;
+	std::getline(in, x, '|');
+	std::getline(in, y, '|');
+	std::getline(in, delay, '|');
+	std::getline(in, flipped, '|');
+	std::getline(in, description);
+	m_HandTargets.emplace(description, Vector(std::strtof(x.c_str(), nullptr), std::strtof(y.c_str(), nullptr)), std::strtof(delay.c_str(), nullptr), flipped == "1");
+}
+
+void Arm::AdoptPersistedUniqueID() {
+	Attachable::AdoptPersistedUniqueID();
+	m_PersistedHandMovementDelayTimerAnchor.Apply(m_HandMovementDelayTimer);
+	if (m_HasPersistedHandPos) {
+		m_HandPos = m_PersistedHandPos;
+		m_HandPrevPos = m_PersistedHandPrevPos;
+		m_HasPersistedHandPos = false;
+	}
+}
+
+void Arm::DiscardPersistedSnapshotState() {
+	Attachable::DiscardPersistedSnapshotState();
+	m_PersistedHandMovementDelayTimerAnchor.pending = false;
+	m_HasPersistedHandPos = false;
+	m_FaithfulSupportedDeviceUID = 0;
 }
 
 void Arm::ResolveFaithfulLinks() {

@@ -46,6 +46,10 @@ void MOSprite::Clear() {
 	m_AngOscillations = 0;
 	m_PersistedAngOscillations = 0;
 	m_HasPersistedAngOscillations = false;
+	m_PersistedSpriteAnimTimerAnchor = {};
+	m_PersistedPrevAngVel = 0;
+	m_PersistedSpriteAnimIsReversingFrames = false;
+	m_HasPersistedSpriteAnimState = false;
 	m_SettleMaterialDisabled = false;
 	m_pEntryWound = 0;
 	m_pExitWound = 0;
@@ -137,6 +141,10 @@ int MOSprite::Create(const MOSprite& reference) {
 	m_AngOscillations = reference.m_AngOscillations;
 	m_PersistedAngOscillations = reference.m_PersistedAngOscillations;
 	m_HasPersistedAngOscillations = reference.m_HasPersistedAngOscillations;
+	m_PersistedSpriteAnimTimerAnchor = reference.m_PersistedSpriteAnimTimerAnchor;
+	m_PersistedPrevAngVel = reference.m_PersistedPrevAngVel;
+	m_PersistedSpriteAnimIsReversingFrames = reference.m_PersistedSpriteAnimIsReversingFrames;
+	m_HasPersistedSpriteAnimState = reference.m_HasPersistedSpriteAnimState;
 	m_SettleMaterialDisabled = reference.m_SettleMaterialDisabled;
 	m_pEntryWound = reference.m_pEntryWound;
 	m_pExitWound = reference.m_pExitWound;
@@ -191,6 +199,19 @@ int MOSprite::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("Rotation", { reader >> m_Rotation; });
 	MatchProperty("PrevRotation", { reader >> m_PrevRotation; });
 	MatchProperty("AngularVel", { reader >> m_AngularVel; });
+	MatchProperty("Frame", { reader >> m_Frame; });
+	MatchProperty("SpecialBehaviour_PrevAngVel", {
+		reader >> m_PersistedPrevAngVel;
+		m_HasPersistedSpriteAnimState = true;
+	});
+	MatchProperty("SpriteAnimTimerStart", {
+		reader >> m_PersistedSpriteAnimTimerAnchor.startTicks;
+		m_PersistedSpriteAnimTimerAnchor.pending = true;
+	});
+	MatchProperty("SpecialBehaviour_SpriteAnimIsReversingFrames", {
+		reader >> m_PersistedSpriteAnimIsReversingFrames;
+		m_HasPersistedSpriteAnimState = true;
+	});
 	MatchProperty("SpecialBehaviour_AngOscillations", {
 		reader >> m_PersistedAngOscillations;
 		m_HasPersistedAngOscillations = true;
@@ -209,11 +230,19 @@ void MOSprite::AdoptPersistedUniqueID() {
 		m_AngOscillations = m_PersistedAngOscillations;
 		m_HasPersistedAngOscillations = false;
 	}
+	m_PersistedSpriteAnimTimerAnchor.Apply(m_SpriteAnimTimer);
+	if (m_HasPersistedSpriteAnimState) {
+		m_PrevAngVel = m_PersistedPrevAngVel;
+		m_SpriteAnimIsReversingFrames = m_PersistedSpriteAnimIsReversingFrames;
+		m_HasPersistedSpriteAnimState = false;
+	}
 }
 
 void MOSprite::DiscardPersistedSnapshotState() {
 	MovableObject::DiscardPersistedSnapshotState();
 	m_HasPersistedAngOscillations = false;
+	m_PersistedSpriteAnimTimerAnchor.pending = false;
+	m_HasPersistedSpriteAnimState = false;
 }
 
 void MOSprite::SetEntryWound(const std::string& presetName, std::string moduleName) {

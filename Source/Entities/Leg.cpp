@@ -96,6 +96,9 @@ int Leg::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("IdleOffset", { reader >> m_IdleOffset; });
 	MatchProperty("WillIdle", { reader >> m_WillIdle; });
 	MatchProperty("MoveSpeed", { reader >> m_MoveSpeed; });
+	MatchProperty("AnkleOffset", { reader >> m_AnkleOffset; });
+	MatchProperty("TargetPosition", { reader >> m_TargetPosition; });
+	MatchProperty("SpecialBehaviour_NormalizedExtension", { reader >> m_NormalizedExtension; });
 
 	EndPropertyList;
 }

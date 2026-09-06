@@ -216,6 +216,7 @@ namespace RTE {
 		/// Adds the specified number of damage points to this attachable.
 		/// @param damageAmount The amount of damage to add.
 		void AddDamage(float damageAmount) { m_DamageCount += damageAmount; }
+		float GetDamageCount() const { return m_DamageCount; }
 
 		/// Calculates the amount of damage this Attachable has sustained since the last time this method was called and returns it, modified by the Attachable's damage multiplier.
 		/// This should normally be called AFTER updating this Attachable in order to get the correct damage for a given frame.

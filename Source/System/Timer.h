@@ -184,6 +184,20 @@ namespace RTE {
 		/// Sets the start time in raw sim ticks, for state restores (the getter above returns raw ticks).
 		/// @param newStartTime The absolute sim tick count to anchor at.
 		void SetStartSimTimeTicks(const int64_t newStartTime) { m_StartSimTime = newStartTime; }
+		void SetStartRealTimeTicks(const int64_t newStartTime) { m_StartRealTime = newStartTime; }
+		int64_t GetSimTimeLimitTicks() const { return m_SimTimeLimit; }
+		void SetSimTimeLimitTicks(const int64_t newTimeLimit) { m_SimTimeLimit = newTimeLimit; }
+		int64_t GetRealTimeLimitTicks() const { return m_RealTimeLimit; }
+		void SetRealTimeLimitTicks(const int64_t newTimeLimit) { m_RealTimeLimit = newTimeLimit; }
+		// Lua sees the tick counts as numbers; a 64-bit return has no binding.
+		double GetStartSimTimeTicksNumber() const { return static_cast<double>(m_StartSimTime); }
+		void SetStartSimTimeTicksNumber(double ticks) { m_StartSimTime = static_cast<int64_t>(ticks); }
+		double GetSimTimeLimitTicksNumber() const { return static_cast<double>(m_SimTimeLimit); }
+		void SetSimTimeLimitTicksNumber(double ticks) { m_SimTimeLimit = static_cast<int64_t>(ticks); }
+		double GetStartRealTimeTicksNumber() const { return static_cast<double>(m_StartRealTime); }
+		void SetStartRealTimeTicksNumber(double ticks) { m_StartRealTime = static_cast<int64_t>(ticks); }
+		double GetRealTimeLimitTicksNumber() const { return static_cast<double>(m_RealTimeLimit); }
+		void SetRealTimeLimitTicksNumber(double ticks) { m_RealTimeLimit = static_cast<int64_t>(ticks); }
 
 		/// Sets the sim time limit value of this Timer, RELATVE to the start time.
 		/// This is when the timer is supposed to show that it has 'expired' or reached whatever time limit it is supposed to keep track of.

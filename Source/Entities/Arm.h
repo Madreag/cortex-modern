@@ -167,6 +167,18 @@ namespace RTE {
 		/// @return Whether or not the hand has reached its current target.
 		bool GetHandHasReachedCurrentTarget() const { return m_HandHasReachedCurrentTarget; }
 
+		/// Packs each queued hand target as one save line, front first.
+		std::vector<std::string> GetHandTargetsForSave() const;
+
+		/// Queues a hand target from its save line.
+		void AddHandTargetFromSave(const std::string& packed);
+
+		int64_t GetHandMovementDelayTimerStart() const { return m_HandMovementDelayTimer.GetStartSimTimeMS(); }
+		int64_t GetHandMovementDelayTimerLimitTicks() const { return m_HandMovementDelayTimer.GetSimTimeLimitTicks(); }
+
+		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
+
 		/// Empties the queue of HandTargets. With the queue empty, the hand will move to its appropriate idle offset.
 		void ClearHandTargets() { m_HandTargets = {}; }
 #pragma endregion
@@ -252,6 +264,10 @@ namespace RTE {
 		std::queue<HandTarget> m_HandTargets; // A queue of target positions this Arm's hand is reaching towards. If it's empty, the Arm isn't reaching towards anything.
 		Timer m_HandMovementDelayTimer; //!< A Timer for making the hand wait at its current HandTarget.
 		bool m_HandHasReachedCurrentTarget; //!< A flag for whether or not the hand has reached its current target. The target is either the front of the HandTarget queue, or the appropriate target to move to if the queue is empty.
+		PersistedTimerAnchor m_PersistedHandMovementDelayTimerAnchor;
+		Vector m_PersistedHandPos; //!< Saved hand position, applied on snapshot adopt.
+		Vector m_PersistedHandPrevPos; //!< Saved previous hand position, applied on snapshot adopt.
+		bool m_HasPersistedHandPos;
 
 		ContentFile m_HandSpriteFile; //!< The ContentFile containing this Arm's hand bitmap.
 		BITMAP* m_HandSpriteBitmap; //!< An unowned pointer to the Bitmap held by the hand sprite ContentFile.
