@@ -293,7 +293,9 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 
 bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error) {
 	std::string applyError;
-	if (!ControllerFrameCodec::ApplyActorStateIntents(frame, actor, &applyError)) {
+	// A legacy recording applied the actor state absolutely every tick; it keeps that semantics.
+	const bool applied = frame.IsLegacy() ? ControllerFrameCodec::ApplyActorState(frame, actor, &applyError) : ControllerFrameCodec::ApplyActorStateIntents(frame, actor, &applyError);
+	if (!applied) {
 		if (error) {
 			*error = "lockstep actor-state apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
 		}

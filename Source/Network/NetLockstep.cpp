@@ -454,10 +454,11 @@ namespace RTE {
 			return true;
 		}
 
-		bool DecodeFrame(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error) {
+		bool DecodeFrame(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t controllerFrameVersion) {
 			NetLockstepFrame payload;
 			uint8_t reserved = 0;
 			uint16_t frameCount = 0;
+			const size_t frameBytesSize = ControllerFrameCodec::EncodedSizeFor(controllerFrameVersion);
 			if (!ReadOrTruncated(reader.ReadU8(payload.senderPeerId), reader, error, "sender_peer_id") ||
 			    !ReadOrTruncated(reader.ReadU8(reserved), reader, error, "reserved") ||
 			    !ReadOrTruncated(reader.ReadU16LE(frameCount), reader, error, "frame_count") ||
@@ -478,13 +479,13 @@ namespace RTE {
 			payload.frames.reserve(frameCount);
 			for (uint16_t i = 0; i < frameCount; ++i) {
 				const uint8_t* frameBytes = nullptr;
-				if (!ReadOrTruncated(reader.ReadBytes(frameBytes, ControllerFrame::c_EncodedSize), reader, error, "ControllerFrame")) {
+				if (!ReadOrTruncated(reader.ReadBytes(frameBytes, frameBytesSize), reader, error, "ControllerFrame")) {
 					return false;
 				}
 				ControllerFrame frame;
 				std::string frameError;
-				if (!ControllerFrameCodec::Decode(frameBytes, ControllerFrame::c_EncodedSize, frame, &frameError)) {
-					SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - ControllerFrame::c_EncodedSize, "ControllerFrame decode failed: " + frameError);
+				if (!ControllerFrameCodec::Decode(frameBytes, frameBytesSize, frame, &frameError, controllerFrameVersion)) {
+					SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - frameBytesSize, "ControllerFrame decode failed: " + frameError);
 					return false;
 				}
 				payload.frames.push_back(frame);
@@ -882,9 +883,12 @@ namespace RTE {
 		return true;
 	}
 
-	NetLockstepDecodeResult NetLockstepCodec::Decode(const uint8_t* data, size_t size) {
+	NetLockstepDecodeResult NetLockstepCodec::Decode(const uint8_t* data, size_t size, uint16_t controllerFrameVersion) {
 		if (!data && size > 0) {
 			return Fail(NetLockstepErrorCode::NullBuffer, 0, "input buffer is null");
+		}
+		if (!ControllerFrameCodec::IsSupportedVersion(controllerFrameVersion)) {
+			return Fail(NetLockstepErrorCode::UnsupportedVersion, 0, "unsupported ControllerFrame version");
 		}
 		if (size < c_HeaderBytes) {
 			return Fail(NetLockstepErrorCode::ShortHeader, 0, "packet header is truncated");
@@ -945,7 +949,7 @@ namespace RTE {
 				payloadOk = DecodeStart(payloadReader, payload, &payloadError);
 				break;
 			case NetLockstepPacketType::Frame:
-				payloadOk = DecodeFrame(payloadReader, payload, &payloadError);
+				payloadOk = DecodeFrame(payloadReader, payload, &payloadError, controllerFrameVersion);
 				break;
 			case NetLockstepPacketType::Ack:
 				payloadOk = DecodeAck(payloadReader, payload, &payloadError);
@@ -973,8 +977,8 @@ namespace RTE {
 		return result;
 	}
 
-	NetLockstepDecodeResult NetLockstepCodec::Decode(const std::vector<uint8_t>& bytes) {
-		return Decode(bytes.data(), bytes.size());
+	NetLockstepDecodeResult NetLockstepCodec::Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion) {
+		return Decode(bytes.data(), bytes.size(), controllerFrameVersion);
 	}
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {

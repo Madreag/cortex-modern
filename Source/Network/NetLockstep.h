@@ -209,8 +209,9 @@ namespace RTE {
 		static const char* ErrorCodeName(NetLockstepErrorCode code);
 
 		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr);
-		static NetLockstepDecodeResult Decode(const uint8_t* data, size_t size);
-		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes);
+		/// The frame version selects the ControllerFrame layout and semantics; a recording carries its own.
+		static NetLockstepDecodeResult Decode(const uint8_t* data, size_t size, uint16_t controllerFrameVersion = ControllerFrame::c_Version);
+		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion = ControllerFrame::c_Version);
 	};
 
 	class NetLockstepCoordinator {

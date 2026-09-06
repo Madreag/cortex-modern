@@ -12,7 +12,8 @@ namespace RTE {
 		using nlohmann::json;
 
 		constexpr char c_Magic[] = {'C', 'C', 'C', 'F', 'L', 'O', 'G', '1'};
-		constexpr uint16_t c_LogVersion = 1;
+		// Version 2 logs carry the current ControllerFrame layout; version 1 logs carry the legacy one.
+		constexpr uint16_t c_LogVersion = 2;
 
 		void SetError(std::string* error, const std::string& message) {
 			if (error) {
@@ -194,10 +195,12 @@ namespace RTE {
 		}
 
 		uint16_t version = 0;
-		if (!ReadU16LE(in, version) || version != c_LogVersion) {
+		if (!ReadU16LE(in, version) || version < 1 || version > c_LogVersion) {
 			SetError(error, "ControllerLog version mismatch.");
 			return false;
 		}
+		const uint16_t frameVersion = version == 1 ? ControllerFrame::c_LegacyVersion : ControllerFrame::c_Version;
+		const size_t frameSize = ControllerFrameCodec::EncodedSizeFor(frameVersion);
 
 		uint32_t metadataSize = 0;
 		if (!ReadU32LE(in, metadataSize)) {
@@ -211,8 +214,8 @@ namespace RTE {
 		}
 		try {
 			const json j = json::parse(metadataJson);
-			if (j.value("controller_frame_version", 0) != ControllerFrame::c_Version ||
-			    j.value("controller_frame_size", 0U) != ControllerFrame::c_EncodedSize ||
+			if (j.value("controller_frame_version", 0) != frameVersion ||
+			    j.value("controller_frame_size", 0U) != frameSize ||
 			    j.value("control_state_count", 0) != ControlState::CONTROLSTATECOUNT) {
 				SetError(error, "ControllerLog metadata is incompatible with this build.");
 				return false;
@@ -246,11 +249,11 @@ namespace RTE {
 				SetError(error, "ControllerLog ticks are not strictly sorted.");
 				return false;
 			}
-			if (frameCount > std::numeric_limits<size_t>::max() / ControllerFrame::c_EncodedSize) {
+			if (frameCount > std::numeric_limits<size_t>::max() / frameSize) {
 				SetError(error, "ControllerLog tick frame count is too large.");
 				return false;
 			}
-			const size_t payloadSize = static_cast<size_t>(frameCount) * ControllerFrame::c_EncodedSize;
+			const size_t payloadSize = static_cast<size_t>(frameCount) * frameSize;
 			const std::streampos payloadPos = in.tellg();
 			if (payloadPos == std::streampos(-1) || fileEnd < payloadPos ||
 			    static_cast<std::streamoff>(payloadSize) > fileEnd - payloadPos) {
@@ -272,8 +275,8 @@ namespace RTE {
 			for (uint32_t i = 0; i < frameCount; ++i) {
 				ControllerFrame frame;
 				std::string decodeError;
-				const uint8_t* frameBytes = payload.data() + (static_cast<size_t>(i) * ControllerFrame::c_EncodedSize);
-				if (!ControllerFrameCodec::Decode(frameBytes, ControllerFrame::c_EncodedSize, frame, &decodeError)) {
+				const uint8_t* frameBytes = payload.data() + (static_cast<size_t>(i) * frameSize);
+				if (!ControllerFrameCodec::Decode(frameBytes, frameSize, frame, &decodeError, frameVersion)) {
 					SetError(error, "ControllerLog frame decode failed: " + decodeError);
 					return false;
 				}

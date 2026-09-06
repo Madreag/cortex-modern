@@ -45,6 +45,7 @@ namespace RTE {
 		std::vector<uint8_t> header;
 		AppendU32(header, c_Magic);
 		AppendU16(header, c_Version);
+		AppendU16(header, ControllerFrame::c_Version);
 		AppendU32(header, static_cast<uint32_t>(configBytes.size()));
 		m_Out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
 		m_Out.write(reinterpret_cast<const char*>(configBytes.data()), static_cast<std::streamsize>(configBytes.size()));
@@ -121,13 +122,29 @@ namespace RTE {
 			return false;
 		}
 		const uint16_t version = static_cast<uint16_t>(versionBytes[0]) | (static_cast<uint16_t>(versionBytes[1]) << 8);
-		// Version 1 (no end marker) still reads; version 2 adds the truncation-detecting marker.
-		if (version != 1 && version != NetMatchReplayWriter::c_Version) {
+		// Version 1 (no end marker) still reads; version 2 adds the truncation-detecting marker;
+		// version 3 names the ControllerFrame version its records were encoded with.
+		if (version < 1 || version > NetMatchReplayWriter::c_Version) {
 			if (error) *error = "unsupported replay version " + std::to_string(version);
 			Close();
 			return false;
 		}
 		m_Version = version;
+		m_ControllerFrameVersion = ControllerFrame::c_LegacyVersion;
+		if (version >= 3) {
+			uint8_t frameVersionBytes[2];
+			if (!m_In.read(reinterpret_cast<char*>(frameVersionBytes), 2)) {
+				if (error) *error = "truncated replay header";
+				Close();
+				return false;
+			}
+			m_ControllerFrameVersion = static_cast<uint16_t>(frameVersionBytes[0]) | (static_cast<uint16_t>(frameVersionBytes[1]) << 8);
+			if (!ControllerFrameCodec::IsSupportedVersion(m_ControllerFrameVersion)) {
+				if (error) *error = "unsupported replay ControllerFrame version " + std::to_string(m_ControllerFrameVersion);
+				Close();
+				return false;
+			}
+		}
 		uint32_t configLength = 0;
 		if (!ReadU32(m_In, configLength) || configLength == 0 || configLength > (1U << 20)) {
 			if (error) *error = "invalid replay config length";
@@ -206,7 +223,7 @@ namespace RTE {
 			if (error) *error = "truncated replay record";
 			return false;
 		}
-		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes, m_ControllerFrameVersion);
 		if (!decoded.ok) {
 			if (error) *error = "could not decode a replay record: " + decoded.error.message;
 			return false;
@@ -225,6 +242,7 @@ namespace RTE {
 		std::string json = "{";
 		json += "\"ok\":" + std::string(ok ? "true" : "false");
 		json += ",\"version\":" + std::to_string(version);
+		json += ",\"controller_frame_version\":" + std::to_string(controllerFrameVersion);
 		json += ",\"frames\":" + std::to_string(frames);
 		json += ",\"first_frame\":" + std::to_string(firstFrame);
 		json += ",\"last_frame\":" + std::to_string(lastFrame);
@@ -254,6 +272,7 @@ namespace RTE {
 			return false;
 		}
 		outReport.version = reader.GetVersion();
+		outReport.controllerFrameVersion = reader.GetControllerFrameVersion();
 		uint64_t previousFrame = 0;
 		while (true) {
 			NetLockstepFrame record;
@@ -305,6 +324,7 @@ namespace RTE {
 		m_HasLookahead = false;
 		m_StartFrame = 0;
 		m_Version = 0;
+		m_ControllerFrameVersion = 0;
 	}
 
 } // namespace RTE

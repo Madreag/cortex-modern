@@ -24,6 +24,9 @@ namespace RTE {
 		/// Constructs this Singleton.
 		inline static void Construct() { s_Instance = new Type(); }
 
+		/// Whether the sole instance exists yet; selftests run engine paths before the managers are built.
+		inline static bool IsConstructed() { return s_Instance != nullptr; }
+
 	protected:
 		/// Constructor method used to instantiate a Singleton object.
 		Singleton() { RTEAssert(!s_Instance, "Trying to create a second instance of a Singleton!"); }
