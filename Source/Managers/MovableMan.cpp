@@ -652,6 +652,18 @@ bool MovableMan::RunLockstepPausedTick() {
 	return true;
 }
 
+// The object's script set as one hash: each loaded path and whether it is enabled, in load order.
+static uint64_t ScriptSetHash(const MovableObject& mo) {
+	uint64_t hash = 1469598103934665603ULL;
+	for (const std::string& scriptPath: mo.GetAllLoadedScripts()) {
+		for (unsigned char c: scriptPath) {
+			hash = (hash ^ c) * 1099511628211ULL;
+		}
+		hash = (hash ^ (mo.ScriptEnabled(scriptPath) ? 0x7Cu : 0x7Du)) * 1099511628211ULL;
+	}
+	return hash;
+}
+
 // Snapshot forensics: one line per attachable and wound, recursively, so limb-level state is diffable.
 static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::ostream& out) {
 	auto dumpNode = [&](const char* kind, const Attachable* node) {
@@ -659,7 +671,11 @@ static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::os
 		const AEmitter* parentEmitter = dynamic_cast<const AEmitter*>(parent);
 		const bool isFlash = (parentFirearm && parentFirearm->GetFlash() == node) || (parentEmitter && parentEmitter->GetFlash() == node);
 		out << tick << " " << kind << " uid=" << node->GetUniqueID() << " " << node->GetPresetName()
-		    << std::defaultfloat << " par=" << parent->GetUniqueID() << " moid=" << node->GetID() << "/" << node->GetRootID() << " frame=";
+		    << std::defaultfloat << " par=" << parent->GetUniqueID() << " moid=" << node->GetID() << "/" << node->GetRootID();
+		if (node->HasAnyScripts()) {
+			out << " scr=" << std::hex << ScriptSetHash(*node) << std::dec;
+		}
+		out << " frame=";
 		if (isFlash) {
 			out << "-";
 		} else {
@@ -715,8 +731,11 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 		    << " prev=" << mo->GetPrevPos().m_X << "," << mo->GetPrevPos().m_Y
 		    << " vel=" << mo->GetVel().m_X << "," << mo->GetVel().m_Y
 		    << " angvel=" << mo->GetAngularVel()
-		    << std::defaultfloat << " moid=" << mo->GetID() << "/" << mo->GetRootID() << std::hexfloat
-		    << " mass=" << mo->GetMass();
+		    << std::defaultfloat << " moid=" << mo->GetID() << "/" << mo->GetRootID();
+		if (mo->HasAnyScripts()) {
+			out << " scr=" << std::hex << ScriptSetHash(*mo) << std::dec;
+		}
+		out << std::hexfloat << " mass=" << mo->GetMass();
 		{
 			auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
 			uint64_t forceHash = 1469598103934665603ULL;
