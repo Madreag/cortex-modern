@@ -68,6 +68,7 @@
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
 #include "NetLockstep.h"
+#include "NetMatchReplay.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
@@ -539,6 +540,10 @@ void HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-replay") {
 			s_netReplayInPath = argValue[++i];
 			continue;
+		if (!lastArg && currentArg == "-net-replay-verify") {
+			s_netReplayVerifyPath = argValue[++i];
+			continue;
+		}
 		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
@@ -1520,9 +1525,15 @@ void RunGameLoop() {
 				} else if (!s_netReplayInPath.empty()) {
 					// Playback ends when the recording does; anything else is a reproduction failure.
 					s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-					if (error.find("replay ended") == std::string::npos) {
-						std::cerr << "[net-replay] playback failed: " << error << std::endl;
-						s_netReplayExitCode = 1;
+					using Outcome = ScenarioRunner::LockstepReplayOutcome;
+					Outcome outcome = ScenarioRunner::GetLockstepReplayOutcome();
+					if (outcome == Outcome::Playing || outcome == Outcome::None) {
+						outcome = Outcome::SimFailure;
+						ScenarioRunner::SetLockstepReplayOutcome(outcome);
+					}
+					if (outcome != Outcome::Completed) {
+						std::cerr << "[net-replay] playback stopped: " << ScenarioRunner::ReplayOutcomeName(outcome) << ": " << error << std::endl;
+						s_netReplayExitCode = outcome == Outcome::Truncated ? 2 : (outcome == Outcome::Corrupt ? 3 : 4);
 					}
 					g_ActivityMan.EndActivity();
 					ScenarioRunner::ClearControllerReplayError();
@@ -1880,6 +1891,15 @@ void RunGameLoop() {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
 					}
+			// Playback honours -max-ticks as a bounded run: distinct from the recording's own end.
+			if (!s_netReplayInPath.empty() && ScenarioRunner::GetArgs().maxTicks > 0 && !ScenarioRunner::HasControllerReplayError() &&
+			    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+				s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::TickCap);
+				g_ActivityMan.EndActivity();
+				System::SetQuit(true);
+				break;
+			}
 					// The e2e has no menu to return to; a leaver's run ends here.
 					if (s_netMatchServiceE2E) {
 						System::SetQuit(true);
@@ -2512,7 +2532,9 @@ int RunNetReplayPlayback() {
 		}
 	}
 	std::cout << "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
-	          << "ms, ticks=" << s_netReplayTicks << std::endl;
+	          << "ms, ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(finalOutcome)
+	          << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed() << " last_tick=" << ScenarioRunner::GetLockstepReplayLastTick()
+	          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << " exit=" << s_netReplayExitCode << std::endl;
 	std::cout << "[pace] " << BuildLoopPaceJson() << std::endl;
 	if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
 		std::cout << "[localpred] " << stats << std::endl;
@@ -2672,7 +2694,18 @@ int main(int argc, char** argv) {
 			NetLanDiscovery browser;
 			std::string error;
 			int exitCode = 1;
+	using ReplayOutcome = ScenarioRunner::LockstepReplayOutcome;
+	const ReplayOutcome finalOutcome = ScenarioRunner::GetLockstepReplayOutcome();
 			if (!browser.StartBrowser(&error) ||
+		g_MetricsCollector.RecordString("replay_outcome", ScenarioRunner::ReplayOutcomeName(finalOutcome));
+		g_MetricsCollector.Record("replay_frames_consumed", static_cast<double>(ScenarioRunner::GetLockstepReplayFramesConsumed()));
+		g_MetricsCollector.Record("replay_last_tick", static_cast<double>(ScenarioRunner::GetLockstepReplayLastTick()));
+		g_MetricsCollector.Record("replay_end_marker", ScenarioRunner::LockstepReplaySawEndMarker() ? 1.0 : 0.0);
+		g_MetricsCollector.Record("replay_exit_code", static_cast<double>(s_netReplayExitCode));
+		if (finalOutcome == ReplayOutcome::Completed || finalOutcome == ReplayOutcome::TickCap) {
+			g_MetricsCollector.RecordString("controller_replay_error", "");
+		}
+		g_MetricsCollector.SetResult(s_netReplayExitCode == 0);
 			    !beacon.StartBeacon(42120, "SelftestHost", "P4 Alpha Duel", "pvp-skirmish", 1, 4, &error)) {
 				std::cerr << "[net-discovery-selftest] FAIL: " << error << std::endl;
 				return 1;
@@ -2959,3 +2992,16 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) { return main(__argc, __argv); }
 #endif
+	if (!s_netReplayVerifyPath.empty()) {
+		NetReplayVerifyReport report;
+		NetMatchReplayReader::Verify(s_netReplayVerifyPath, report);
+		const std::string json = report.ToJson();
+		std::cout << "[net-replay-verify] " << json << std::endl;
+		if (!ScenarioRunner::GetArgs().outPath.empty()) {
+			std::string writeError;
+			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {
+				std::cerr << "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError << std::endl;
+			}
+		}
+		return report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1));
+	}
