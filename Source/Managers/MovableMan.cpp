@@ -1,4 +1,6 @@
 #include "MovableMan.h"
+#include <chrono>
+#include <map>
 
 #include "SimChecksum.h"
 #include "PrimitiveMan.h"
@@ -941,6 +943,14 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 		out.actors.reserve(m_Actors.size());
 		out.items.reserve(m_Items.size());
 		out.particles.reserve(m_Particles.size());
+		std::map<std::string, std::pair<int, double>> profile;
+		const auto timed = [&profile](const MovableObject* mo, auto&& fn) {
+			const auto start = std::chrono::steady_clock::now();
+			fn();
+			auto& slot = profile[mo->GetClassName() + " " + mo->GetPresetName()];
+			++slot.first;
+			slot.second += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		};
 		for (const Actor* actor: m_Actors) {
 			Actor* clone = dynamic_cast<Actor*>(actor->Clone());
 			out.actors.push_back(clone);
@@ -950,8 +960,14 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 			out.items.push_back(clone);
 		}
 		for (const MovableObject* particle: m_Particles) {
-			MovableObject* clone = dynamic_cast<MovableObject*>(particle->Clone());
-			out.particles.push_back(clone);
+			timed(particle, [&] { out.particles.push_back(dynamic_cast<MovableObject*>(particle->Clone())); });
+		}
+		if (std::getenv("CC_CAPTURE_PROFILE")) {
+			std::vector<std::pair<std::string, std::pair<int, double>>> rows(profile.begin(), profile.end());
+			std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+			for (size_t i = 0; i < rows.size() && i < 12; ++i) {
+				std::cout << "[capture-profile] " << rows[i].first << " n=" << rows[i].second.first << " ms=" << rows[i].second.second << std::endl;
+			}
 		}
 	}
 	out.joinQuarantine = m_LockstepJoinQuarantine;
