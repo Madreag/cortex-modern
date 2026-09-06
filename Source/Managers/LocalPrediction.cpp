@@ -212,16 +212,24 @@ namespace RTE {
 		Trace("render begin");
 		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
+		Activity* activity = g_ActivityMan.GetActivity();
 		for (const Preview& preview: s_Previews) {
 			g_MovableMan.SwapActorForRender(preview.original, preview.clone);
+			if (activity) {
+				activity->SubstituteActorForRender(preview.original, preview.clone);
+			}
 		}
 		s_Rendering = true;
 	}
 
 	void LocalPrediction::EndRender() {
 		if (s_Rendering) {
+			Activity* activity = g_ActivityMan.GetActivity();
 			for (const Preview& preview: s_Previews) {
 				g_MovableMan.SwapActorForRender(preview.clone, preview.original);
+				if (activity) {
+					activity->SubstituteActorForRender(preview.clone, preview.original);
+				}
 			}
 			s_Rendering = false;
 		}
