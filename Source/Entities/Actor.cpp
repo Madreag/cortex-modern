@@ -139,6 +139,11 @@ void Actor::Clear() {
 	m_LimbPushForcesAndCollisionsDisabled = false;
 
 	m_PieMenu.reset();
+	m_MovementState = NOMOVE;
+	m_PersistedViewPoint.Reset();
+	m_PersistedSharpAimTimerAnchor = {};
+	m_PersistedAimTimerAnchor = {};
+	m_FaithfulWaypointUIDs.clear();
 }
 
 int Actor::Create() {

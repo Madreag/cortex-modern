@@ -97,6 +97,8 @@ void AHuman::Clear() {
 	m_WalkPathOffset.Reset();
 	m_ArmSwingRate = 1.0F;
 	m_DeviceArmSwayRate = 0.5F;
+	m_PendingDeferredEquips.clear();
+	m_PersistedSharpAimRevertTimerAnchor = {};
 }
 
 int AHuman::Create() {
