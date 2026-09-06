@@ -1187,7 +1187,7 @@ static std::string DumpSimStateToString() {
 
 static void WriteProbeText(const std::string& suffix, const std::string& text) {
 	const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
-	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::trunc);
+	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::binary | std::ios::trunc);
 	out << text;
 }
 
@@ -1636,8 +1636,8 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			}
 			if (s_rbProbeFailCount > 0) {
 				s_netReplayExitCode = 1;
+				System::SetQuit(true);
 			}
-			System::SetQuit(true);
 		}
 	}
 }
@@ -2115,7 +2115,7 @@ void RunGameLoop() {
 			if (hashThisTick) {
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
-				if (s_recordTickHashes) {
+				if (s_recordTickHashes && s_rbProbePhase != 3) {
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 				}
 				if (desyncSampleTick) {
