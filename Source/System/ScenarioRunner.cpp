@@ -1,4 +1,5 @@
 #include "ScenarioRunner.h"
+#include "Actor.h"
 
 #include "Constants.h"
 #include "ConsoleMan.h"
@@ -57,6 +58,41 @@ namespace RTE {
 		uint64_t s_ReplayRewindCount = 0;
 		std::deque<NetLockstepFrame> s_ReplayRewindKeep; //!< Records kept during the first pass.
 		std::deque<NetLockstepFrame> s_ReplayRewindBuffer; //!< The kept window, re-fed on the re-run.
+		std::deque<NetLockstepFrame> s_ReplayLookahead; //!< Records read ahead for the local-actor preview, consumed in order.
+		bool s_ReplayLookaheadFailed = false; //!< A read-ahead hit the stream's end or a bad record; the feed reports it when it gets there.
+		bool s_ReplayLookaheadEof = false;
+		std::string s_ReplayLookaheadError;
+		ScenarioRunner::LockstepReplayOutcome s_ReplayOutcome = ScenarioRunner::LockstepReplayOutcome::None;
+		uint64_t s_ReplayFramesConsumed = 0;
+		uint64_t s_ReplayLastTick = 0;
+		bool s_ReplayEndMarkerSeen = false;
+		uint64_t s_ReplayRecordFrames = 0;
+		bool s_ReplayRecordClosed = false;
+
+		// Reads the next record: the read-ahead first, then the file. A read-ahead failure is replayed
+		// here so the feed classifies it at the tick it belongs to.
+		bool NextReplayRecord(NetLockstepFrame& outRecord, NetReplayReadStatus& outStatus, std::string* error) {
+			if (!s_ReplayLookahead.empty()) {
+				outRecord = std::move(s_ReplayLookahead.front());
+				s_ReplayLookahead.pop_front();
+				outStatus = NetReplayReadStatus::Frame;
+				return true;
+			}
+			if (s_ReplayLookaheadFailed) {
+				outStatus = s_ReplayLookaheadEof ? NetReplayReadStatus::CleanEnd : s_ReplayReader.GetLastReadStatus();
+				if (error) *error = s_ReplayLookaheadError;
+				return false;
+			}
+			bool eof = false;
+			std::string readError;
+			if (s_ReplayReader.ReadFrame(outRecord, eof, &readError)) {
+				outStatus = NetReplayReadStatus::Frame;
+				return true;
+			}
+			outStatus = s_ReplayReader.GetLastReadStatus();
+			if (error) *error = readError;
+			return false;
+		}
 		bool s_SimSettingsPinned = false;
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
@@ -644,21 +680,27 @@ namespace RTE {
 				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error);
 			}
 			NetLockstepFrame record;
-			bool eof = false;
+			NetReplayReadStatus status = NetReplayReadStatus::None;
 			std::string readError;
-			if (!s_ReplayReader.ReadFrame(record, eof, &readError)) {
-				if (eof) {
+			if (!NextReplayRecord(record, status, &readError)) {
+				if (status == NetReplayReadStatus::CleanEnd) {
+					s_ReplayEndMarkerSeen = s_ReplayReader.GetVersion() >= 2;
+					s_ReplayOutcome = LockstepReplayOutcome::Completed;
 					s_LockstepCoordinator->Complete("replay ended");
 					if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 					return false;
 				}
-				if (error) *error = readError;
+				s_ReplayOutcome = status == NetReplayReadStatus::Truncated ? LockstepReplayOutcome::Truncated : LockstepReplayOutcome::Corrupt;
+				if (error) *error = std::string(status == NetReplayReadStatus::Truncated ? "replay truncated at tick " : "replay corrupt at tick ") + std::to_string(tick) + ": " + readError;
 				return false;
 			}
 			if (record.targetFrame != tick) {
+				s_ReplayOutcome = LockstepReplayOutcome::Corrupt;
 				if (error) *error = "replay record frame " + std::to_string(record.targetFrame) + " does not match tick " + std::to_string(tick);
 				return false;
 			}
+			++s_ReplayFramesConsumed;
+			s_ReplayLastTick = record.targetFrame;
 			if (record.targetFrame >= s_ReplayRewindFrom && record.targetFrame < s_ReplayRewindFrom + s_ReplayRewindCount) {
 				s_ReplayRewindKeep.push_back(record);
 			}
@@ -668,7 +710,50 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames) {
-		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->PeekLocalFrames(tick, outFrames);
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->IsRunning()) {
+			return false;
+		}
+		if (!s_ReplayReader.IsOpen()) {
+			return s_LockstepCoordinator->PeekLocalFrames(tick, outFrames);
+		}
+		// Playback: read ahead to the tick and hand back the recorded frames of the actors this
+		// peer owns, so the preview runs the same inputs the canonical tick will.
+		const NetLockstepFrame* found = nullptr;
+		for (const NetLockstepFrame& buffered: s_ReplayRewindBuffer) {
+			if (buffered.targetFrame == tick) {
+				found = &buffered;
+				break;
+			}
+		}
+		while (!found && (s_ReplayLookahead.empty() || s_ReplayLookahead.back().targetFrame < tick)) {
+			if (s_ReplayLookaheadFailed) {
+				return false;
+			}
+			NetLockstepFrame record;
+			bool eof = false;
+			std::string readError;
+			if (!s_ReplayReader.ReadFrame(record, eof, &readError)) {
+				s_ReplayLookaheadFailed = true;
+				s_ReplayLookaheadEof = eof;
+				s_ReplayLookaheadError = readError;
+				return false;
+			}
+			s_ReplayLookahead.push_back(std::move(record));
+		}
+		if (!found) {
+			for (const NetLockstepFrame& record: s_ReplayLookahead) {
+				if (record.targetFrame == tick) {
+					found = &record;
+					break;
+				}
+			}
+		}
+		if (!found) {
+			return false;
+		}
+		// Every recorded frame rides; the preview applies only the ones addressed to its clones.
+		outFrames = found->frames;
+		return true;
 	}
 
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
@@ -743,9 +828,52 @@ namespace RTE {
 
 	void ScenarioRunner::CloseLockstepReplayRecord() {
 		if (s_ReplayWriter.IsOpen()) {
-			std::cout << "[net-match] replay recorded: " << s_ReplayWriter.GetFramesWritten() << " frames" << std::endl;
+			s_ReplayRecordFrames = s_ReplayWriter.GetFramesWritten();
+			s_ReplayRecordClosed = true;
+			std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
 		}
 		s_ReplayWriter.Close();
+	}
+
+	uint64_t ScenarioRunner::GetLockstepReplayRecordFrames() {
+		return s_ReplayWriter.IsOpen() ? s_ReplayWriter.GetFramesWritten() : s_ReplayRecordFrames;
+	}
+
+	bool ScenarioRunner::WasLockstepReplayRecordClosed() {
+		return s_ReplayRecordClosed && !s_ReplayWriter.IsOpen();
+	}
+
+	ScenarioRunner::LockstepReplayOutcome ScenarioRunner::GetLockstepReplayOutcome() {
+		return s_ReplayOutcome;
+	}
+
+	void ScenarioRunner::SetLockstepReplayOutcome(LockstepReplayOutcome outcome) {
+		s_ReplayOutcome = outcome;
+	}
+
+	const char* ScenarioRunner::ReplayOutcomeName(LockstepReplayOutcome outcome) {
+		switch (outcome) {
+			case LockstepReplayOutcome::None: return "none";
+			case LockstepReplayOutcome::Playing: return "playing";
+			case LockstepReplayOutcome::Completed: return "completed";
+			case LockstepReplayOutcome::TickCap: return "tick_cap";
+			case LockstepReplayOutcome::Truncated: return "truncated";
+			case LockstepReplayOutcome::Corrupt: return "corrupt";
+			case LockstepReplayOutcome::SimFailure: return "sim_failure";
+		}
+		return "unknown";
+	}
+
+	uint64_t ScenarioRunner::GetLockstepReplayFramesConsumed() {
+		return s_ReplayFramesConsumed;
+	}
+
+	uint64_t ScenarioRunner::GetLockstepReplayLastTick() {
+		return s_ReplayLastTick;
+	}
+
+	bool ScenarioRunner::LockstepReplaySawEndMarker() {
+		return s_ReplayEndMarkerSeen;
 	}
 
 	bool ScenarioRunner::SetLockstepReplaySource(const std::string& path, std::string* error) {
@@ -753,7 +881,16 @@ namespace RTE {
 		s_ReplayRewindCount = 0;
 		s_ReplayRewindKeep.clear();
 		s_ReplayRewindBuffer.clear();
-		return s_ReplayReader.Open(path, error);
+		s_ReplayLookahead.clear();
+		s_ReplayLookaheadFailed = false;
+		s_ReplayLookaheadEof = false;
+		s_ReplayLookaheadError.clear();
+		s_ReplayFramesConsumed = 0;
+		s_ReplayLastTick = 0;
+		s_ReplayEndMarkerSeen = false;
+		const bool opened = s_ReplayReader.Open(path, error);
+		s_ReplayOutcome = opened ? LockstepReplayOutcome::Playing : LockstepReplayOutcome::Corrupt;
+		return opened;
 	}
 
 	bool ScenarioRunner::IsLockstepReplayPlayback() {

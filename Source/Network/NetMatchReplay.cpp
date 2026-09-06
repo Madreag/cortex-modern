@@ -165,6 +165,7 @@ namespace RTE {
 			outEof = false;
 			outFrame = std::move(m_Lookahead);
 			m_HasLookahead = false;
+			m_LastStatus = NetReplayReadStatus::Frame;
 			return true;
 		}
 		return ReadFrameFromFile(outFrame, outEof, error);
@@ -181,22 +182,27 @@ namespace RTE {
 			// A version-2 file ends with the marker below, so raw EOF here means the record stream was
 			// cut off mid-write. Version-1 files have no marker, so raw EOF is their clean end.
 			if (m_Version >= 2) {
+				m_LastStatus = NetReplayReadStatus::Truncated;
 				if (error) *error = "replay ended without its end marker (truncated)";
 				return false;
 			}
+			m_LastStatus = NetReplayReadStatus::CleanEnd;
 			outEof = true;
 			return false;
 		}
 		if (recordLength == NetMatchReplayWriter::c_EndMarker) {
+			m_LastStatus = NetReplayReadStatus::CleanEnd;
 			outEof = true;
 			return false;
 		}
+		m_LastStatus = NetReplayReadStatus::Corrupt;
 		if (recordLength == 0 || recordLength > (1U << 24)) {
 			if (error) *error = "invalid replay record length";
 			return false;
 		}
 		std::vector<uint8_t> bytes(recordLength);
 		if (!m_In.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(recordLength))) {
+			m_LastStatus = NetReplayReadStatus::Truncated;
 			if (error) *error = "truncated replay record";
 			return false;
 		}
@@ -211,7 +217,83 @@ namespace RTE {
 			return false;
 		}
 		outFrame = *frame;
+		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;
+	}
+
+	std::string NetReplayVerifyReport::ToJson() const {
+		std::string json = "{";
+		json += "\"ok\":" + std::string(ok ? "true" : "false");
+		json += ",\"version\":" + std::to_string(version);
+		json += ",\"frames\":" + std::to_string(frames);
+		json += ",\"first_frame\":" + std::to_string(firstFrame);
+		json += ",\"last_frame\":" + std::to_string(lastFrame);
+		json += ",\"gaps\":" + std::to_string(gaps);
+		json += ",\"end_marker\":" + std::string(endMarker ? "true" : "false");
+		json += ",\"truncated\":" + std::string(truncated ? "true" : "false");
+		json += ",\"corrupt\":" + std::string(corrupt ? "true" : "false");
+		std::string escaped;
+		for (const char c: error) {
+			if (c == '"' || c == '\\') {
+				escaped += '\\';
+			}
+			escaped += (c == '\n') ? ' ' : c;
+		}
+		json += ",\"error\":\"" + escaped + "\"";
+		json += "}";
+		return json;
+	}
+
+	bool NetMatchReplayReader::Verify(const std::string& path, NetReplayVerifyReport& outReport) {
+		outReport = NetReplayVerifyReport{};
+		NetMatchReplayReader reader;
+		std::string error;
+		if (!reader.Open(path, &error)) {
+			outReport.error = error;
+			outReport.corrupt = true;
+			return false;
+		}
+		outReport.version = reader.GetVersion();
+		uint64_t previousFrame = 0;
+		while (true) {
+			NetLockstepFrame record;
+			bool eof = false;
+			error.clear();
+			if (reader.ReadFrame(record, eof, &error)) {
+				if (outReport.frames == 0) {
+					outReport.firstFrame = record.targetFrame;
+				} else if (record.targetFrame != previousFrame + 1) {
+					++outReport.gaps;
+				}
+				previousFrame = record.targetFrame;
+				outReport.lastFrame = record.targetFrame;
+				++outReport.frames;
+				continue;
+			}
+			switch (reader.GetLastReadStatus()) {
+				case NetReplayReadStatus::CleanEnd:
+					// Version-1 files have no marker; their raw EOF is the clean end they know.
+					outReport.endMarker = true;
+					break;
+				case NetReplayReadStatus::Truncated:
+					outReport.truncated = true;
+					outReport.error = error;
+					break;
+				default:
+					outReport.corrupt = true;
+					outReport.error = error.empty() ? "replay record failed to decode" : error;
+					break;
+			}
+			break;
+		}
+		if (outReport.gaps > 0) {
+			outReport.corrupt = true;
+		}
+		outReport.ok = outReport.endMarker && !outReport.truncated && !outReport.corrupt && outReport.frames > 0 && outReport.gaps == 0;
+		if (!outReport.ok && outReport.error.empty()) {
+			outReport.error = outReport.frames == 0 ? "replay has no frames" : (outReport.gaps > 0 ? "replay has tick gaps" : "replay is incomplete");
+		}
+		return outReport.ok;
 	}
 
 	void NetMatchReplayReader::Close() {
