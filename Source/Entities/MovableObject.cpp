@@ -480,6 +480,7 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 				break;
 		}
 	});
+	MatchProperty("DisabledScriptPath", { EnableOrDisableScript(g_PresetMan.GetFullModulePath(reader.ReadPropValue()), false); });
 	MatchProperty("ScreenEffect", {
 		reader >> m_ScreenEffectFile;
 		m_pScreenEffect = m_ScreenEffectFile.GetAsBitmap();

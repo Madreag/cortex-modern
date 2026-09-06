@@ -1241,6 +1241,18 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		// Identity survives the restore: UID-keyed RNG scopes and wire commands must address
 		// the same objects the first pass saw.
 		writer.NewPropertyWithValue("UniqueID", movableObjectToSave->GetUniqueID());
+		// The scripts added or disabled since the preset made it; CopyOf already loads the preset's own.
+		const MovableObject* presetObject = presetBacked ? dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset(movableObjectToSave->GetClassName(), movableObjectToSave->GetPresetName(), movableObjectToSave->GetModuleID())) : nullptr;
+		for (const std::string& scriptPath: movableObjectToSave->GetAllLoadedScripts()) {
+			if (!presetObject || !presetObject->HasScript(scriptPath)) {
+				writer.NewPropertyWithValue("ScriptPath", scriptPath);
+			}
+		}
+		for (const std::string& scriptPath: movableObjectToSave->GetAllLoadedScripts()) {
+			if (!movableObjectToSave->ScriptEnabled(scriptPath)) {
+				writer.NewPropertyWithValue("DisabledScriptPath", scriptPath);
+			}
+		}
 		if (movableObjectToSave->ObjectScriptsInitialized()) {
 			if (const std::string scriptState = movableObjectToSave->SerializeScriptState(); !scriptState.empty()) {
 				writer.NewPropertyWithValue("ScriptState", scriptState);
