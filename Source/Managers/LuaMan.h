@@ -99,6 +99,15 @@ namespace RTE {
 		/// @return A registry reference to the copy, or LUA_NOREF when the object holds no fields.
 		int CaptureScriptObjectFields(long uniqueID);
 
+		/// Installs the capture helper and its class-name hook into this state once.
+		void LoadScriptFieldsHelper();
+
+		/// Serializes the fields set on the object's script instance as one save line; empty when the object has none.
+		std::string SerializeScriptObjectFields(long uniqueID);
+
+		/// Restores the fields a SerializeScriptObjectFields line carries onto the object's script instance.
+		void RestoreScriptObjectFieldsFromString(long uniqueID, const std::string& serialized);
+
 		/// Gives the object's self the fields of a capture, resolving entity references against the live world.
 		void RestoreScriptObjectFields(long uniqueID, int captureRef);
 

@@ -236,6 +236,12 @@ function _ScriptFields.capture(value, seen)
 		end
 		return setmetatable(copy, getmetatable(value))
 	elseif kind == "userdata" then
+		local class, owned = _ScriptFieldsClassOf(value)
+		if owned and class == "Vector" then
+			return { __scriptFieldsVector = true, x = value.X, y = value.Y }
+		elseif owned and class == "Timer" then
+			return { __scriptFieldsTimer = true, simStart = value.StartSimTimeTicks, simLimit = value.SimTimeLimitTicks, realStart = value.StartRealTimeTicks, realLimit = value.RealTimeLimitTicks }
+		end
 		local ok, uid = pcall(function() return value.UniqueID end)
 		if ok and type(uid) == "number" and uid > 0 then
 			local okClass, class = pcall(function() return value.ClassName end)
@@ -253,6 +259,15 @@ function _ScriptFields.restore(value, seen)
 		local cast = _G["To" .. value.__scriptFieldsClass]
 		return cast and cast(mo) or mo
 	end
+	if value.__scriptFieldsVector then return Vector(value.x, value.y) end
+	if value.__scriptFieldsTimer then
+		local timer = Timer()
+		timer.StartSimTimeTicks = value.simStart
+		timer.SimTimeLimitTicks = value.simLimit
+		timer.StartRealTimeTicks = value.realStart
+		timer.RealTimeLimitTicks = value.realLimit
+		return timer
+	end
 	if seen[value] then return seen[value] end
 	local copy = {}
 	seen[value] = copy
@@ -261,15 +276,178 @@ function _ScriptFields.restore(value, seen)
 	end
 	return setmetatable(copy, getmetatable(value))
 end
+local function globalNameOf(table)
+	for name, global in pairs(_G) do
+		if global == table and type(name) == "string" then return name end
+	end
+	return nil
+end
+local function moduleNameOf(table)
+	if type(package) ~= "table" or type(package.loaded) ~= "table" then return nil end
+	for name, module in pairs(package.loaded) do
+		if module == table and type(name) == "string" then return name end
+	end
+	return nil
+end
+local function escapeString(s)
+	return (s:gsub('[%c"\\\128-\255]', function(c)
+		if c == '"' then return '\\"' elseif c == '\\' then return '\\\\' end
+		return string.format('\\%03d', c:byte())
+	end))
+end
+local function serializeValue(value, ids, out)
+	local kind = type(value)
+	if kind == "nil" then out[#out + 1] = "nil"
+	elseif kind == "boolean" then out[#out + 1] = value and "true" or "false"
+	elseif kind == "number" then
+		if value ~= value then out[#out + 1] = "(0/0)"
+		elseif value == math.huge then out[#out + 1] = "(1/0)"
+		elseif value == -math.huge then out[#out + 1] = "(-1/0)"
+		else out[#out + 1] = string.format("%.17g", value) end
+	elseif kind == "string" then out[#out + 1] = '"' .. escapeString(value) .. '"'
+	elseif kind == "userdata" then
+		local converted = _ScriptFields.capture(value)
+		if type(converted) == "table" then serializeValue(converted, ids, out) else out[#out + 1] = "nil" end
+	elseif kind == "table" then
+		if ids[value] then out[#out + 1] = "{__scriptFieldsRef=" .. ids[value] .. "}" return end
+		local moduleName = moduleNameOf(value)
+		if moduleName then out[#out + 1] = '{__scriptFieldsModule="' .. escapeString(moduleName) .. '"}' return end
+		ids.count = ids.count + 1
+		ids[value] = ids.count
+		out[#out + 1] = "{__scriptFieldsId=" .. ids.count
+		local meta = getmetatable(value)
+		if type(meta) == "table" then
+			local metaName = globalNameOf(meta)
+			if metaName then out[#out + 1] = ',__scriptFieldsMeta="' .. escapeString(metaName) .. '"'
+			elseif type(meta.__index) == "table" then
+				local indexName = globalNameOf(meta.__index)
+				if indexName then out[#out + 1] = ',__scriptFieldsMetaIndex="' .. escapeString(indexName) .. '"' end
+			end
+		end
+		for k, v in pairs(value) do
+			local keyKind, valueKind = type(k), type(v)
+			if (keyKind == "string" or keyKind == "number" or keyKind == "boolean") and valueKind ~= "function" and valueKind ~= "thread" then
+				out[#out + 1] = ",["
+				serializeValue(k, ids, out)
+				out[#out + 1] = "]="
+				serializeValue(v, ids, out)
+			end
+		end
+		out[#out + 1] = "}"
+	else
+		out[#out + 1] = "nil"
+	end
+end
+function _ScriptFields.serialize(value)
+	local out = {}
+	serializeValue(value, { count = 0 }, out)
+	return table.concat(out)
+end
+function _ScriptFields.serializeObject(instance)
+	return _ScriptFields.serialize(instance)
+end
+local function fixupRefs(value, ids, seen)
+	if type(value) ~= "table" or seen[value] then return value end
+	seen[value] = true
+	if value.__scriptFieldsId then
+		ids[value.__scriptFieldsId] = value
+		value.__scriptFieldsId = nil
+	end
+	if value.__scriptFieldsMeta then
+		local meta = _G[value.__scriptFieldsMeta]
+		if type(meta) == "table" then setmetatable(value, meta) end
+		value.__scriptFieldsMeta = nil
+	elseif value.__scriptFieldsMetaIndex then
+		local index = _G[value.__scriptFieldsMetaIndex]
+		if type(index) == "table" then setmetatable(value, { __index = index }) end
+		value.__scriptFieldsMetaIndex = nil
+	end
+	for k, v in pairs(value) do
+		if type(v) == "table" then
+			if v.__scriptFieldsRef then value[k] = ids[v.__scriptFieldsRef]
+			elseif v.__scriptFieldsModule then value[k] = require(v.__scriptFieldsModule)
+			else fixupRefs(v, ids, seen) end
+		end
+	end
+	return value
+end
+function _ScriptFields.deserialize(serialized)
+	local chunk = (loadstring or load)("return " .. serialized)
+	if not chunk then return nil end
+	local ok, value = pcall(chunk)
+	if not ok then return nil end
+	return fixupRefs(value, {}, {})
+end
 )lua";
+
+// The luabind class name of a bound object, nil for anything else: the capture tells Vectors and Timers from entities by it.
+static int ScriptFieldsClassOf(lua_State* L) {
+	if (luabind::detail::object_rep* rep = luabind::detail::is_class_object(L, 1); rep && rep->crep()) {
+		lua_pushstring(L, rep->crep()->name());
+		// A reference into an engine object may be gone by now; only a Lua-owned copy is safe to read.
+		lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::owner) != 0);
+	} else {
+		lua_pushnil(L);
+		lua_pushboolean(L, 0);
+	}
+	return 2;
+}
 } // namespace
 
-int LuaStateWrapper::CaptureScriptObjectFields(long uniqueID) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+void LuaStateWrapper::LoadScriptFieldsHelper() {
 	if (!m_ScriptFieldsHelperLoaded) {
+		lua_pushcfunction(m_State, ScriptFieldsClassOf);
+		lua_setglobal(m_State, "_ScriptFieldsClassOf");
 		RunScriptString(c_ScriptFieldsHelper);
 		m_ScriptFieldsHelperLoaded = true;
 	}
+}
+
+std::string LuaStateWrapper::SerializeScriptObjectFields(long uniqueID) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptFieldsHelper();
+	PushScriptObjectInstanceTable(m_State, uniqueID);
+	if (lua_isnil(m_State, -1)) {
+		lua_pop(m_State, 1);
+		return "";
+	}
+	lua_getglobal(m_State, "_ScriptFields");
+	lua_getfield(m_State, -1, "serializeObject");
+	lua_pushvalue(m_State, -3);
+	if (lua_pcall(m_State, 1, 1, 0) != 0) {
+		g_ConsoleMan.PrintString(std::string("ERROR: script field serialize failed: ") + lua_tostring(m_State, -1));
+		lua_pop(m_State, 3);
+		return "";
+	}
+	std::string serialized = lua_isstring(m_State, -1) ? lua_tostring(m_State, -1) : "";
+	lua_pop(m_State, 3);
+	return serialized;
+}
+
+void LuaStateWrapper::RestoreScriptObjectFieldsFromString(long uniqueID, const std::string& serialized) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptFieldsHelper();
+	lua_getglobal(m_State, "_ScriptFields");
+	lua_getfield(m_State, -1, "deserialize");
+	lua_pushlstring(m_State, serialized.data(), serialized.size());
+	if (lua_pcall(m_State, 1, 1, 0) != 0) {
+		g_ConsoleMan.PrintString(std::string("ERROR: script field deserialize failed: ") + lua_tostring(m_State, -1));
+		lua_pop(m_State, 2);
+		return;
+	}
+	if (lua_isnil(m_State, -1)) {
+		lua_pop(m_State, 2);
+		return;
+	}
+	const int ref = luaL_ref(m_State, LUA_REGISTRYINDEX);
+	lua_pop(m_State, 1);
+	RestoreScriptObjectFields(uniqueID, ref);
+	luaL_unref(m_State, LUA_REGISTRYINDEX, ref);
+}
+
+int LuaStateWrapper::CaptureScriptObjectFields(long uniqueID) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptFieldsHelper();
 	PushScriptObjectInstanceTable(m_State, uniqueID);
 	if (lua_isnil(m_State, -1)) {
 		lua_pop(m_State, 1);

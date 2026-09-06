@@ -108,6 +108,12 @@ namespace RTE {
 		/// @return Whether or not the object's scripts have been successfully initialized.
 		bool ObjectScriptsInitialized() const { return !m_ScriptObjectName.empty() && m_ScriptObjectName != "ERROR"; }
 
+		/// Whether a saved script state waits to be restored when the scripts initialize.
+		bool HasPersistedScriptState() const { return !m_PersistedScriptState.empty(); }
+
+		/// Serializes this object's script fields for a save; empty when it has none.
+		std::string SerializeScriptState() const;
+
 		/// Checks if this MO has any scripts on it.
 		/// @return Whether or not this MO has any scripts on it.
 		bool HasAnyScripts() const { return !m_AllLoadedScripts.empty(); }
@@ -1366,6 +1372,7 @@ namespace RTE {
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
 		long m_PersistedUniqueID;
+		std::string m_PersistedScriptState; //!< Saved script fields, restored in place of Create when the scripts initialize.
 		long m_FaithfulMOToNotHitUID = 0; //!< Snapshot link for m_pMOToNotHit, resolved after a restore.
 		static int s_FaithfulCloneDepth;
 		static bool s_FaithfulCloneRegisters;
