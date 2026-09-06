@@ -178,7 +178,7 @@ namespace RTE {
 			for (Preview& preview: targets) {
 				Actor* clone = preview.clone;
 				// The same stages in the same order as the world update: travel, pre-controller, wire, update, post.
-				MovableMan::TravelStage(clone);
+				MovableMan::TravelStage(clone, true);
 				Trace("traveled");
 				clone->PreControllerUpdate();
 				for (const ControllerFrame& frame: frames) {
@@ -191,7 +191,7 @@ namespace RTE {
 					}
 				}
 				Trace("applied");
-				MovableMan::UpdateStage(clone);
+				MovableMan::UpdateStage(clone, true);
 				Trace("updated");
 				if (TraceEnabled()) {
 					const HeldDevice* reach = clone->GetItemInReach();
