@@ -1244,6 +1244,11 @@ static std::string DescribeCanonicalExtras() {
 }
 
 // One rendered frame with the previews standing in for their actors, on the render RNG and off the MOID grid.
+// The probe's save file is per process, so concurrent probes never read each other's world.
+static std::string RollbackProbeSaveName() {
+	return "rbprobe_" + std::to_string(System::GetProcessID());
+}
+
 static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -1481,7 +1486,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				}
 			}
 			worldCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldStart).count();
-		} else if (!g_ActivityMan.SaveCurrentGame("rbprobe")) {
+		} else if (!g_ActivityMan.SaveCurrentGame(RollbackProbeSaveName())) {
 			std::cout << "[rbprobe] FAIL: the capture save was refused" << std::endl;
 			System::SetQuit(true);
 			return;
@@ -1533,10 +1538,12 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					activity->CaptureRollbackState(s_rbProbeActivityAtWindowEnd);
 				}
 				s_rbProbeMemoryRestorePending = true;
-			} else if (!g_ActivityMan.LoadGameToRestart("rbprobe")) {
+			} else if (!g_ActivityMan.LoadGameToRestart(RollbackProbeSaveName())) {
 				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
 				System::SetQuit(true);
 				return;
+			} else {
+				g_ActivityMan.RemoveSavedGame(RollbackProbeSaveName());
 			}
 			s_rbProbePhase = 2;
 			std::cout << "[rbprobe] window recorded; restore staged" << std::endl;

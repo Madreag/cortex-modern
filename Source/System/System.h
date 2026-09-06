@@ -39,6 +39,9 @@ namespace RTE {
 		/// @return Absolute path to current working directory.
 		static const std::string& GetWorkingDirectory() { return s_WorkingDirectory; }
 
+		/// Gets this process's id, for files that concurrent instances must not share.
+		static unsigned long GetProcessID();
+
 		/// Gets the game data directory name.
 		/// @return Folder name of the game data directory.
 		static const std::string& GetDataDirectory() { return s_DataDirectory; }
