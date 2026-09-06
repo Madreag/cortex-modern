@@ -61,6 +61,9 @@ namespace RTE {
 		/// Takes the state file the lobby round received (empty when the round carried none).
 		std::vector<uint8_t> TakeReceivedState() { return std::move(m_ReceivedStateBytes); }
 
+		/// Sets the first lockstep tick of the next round; the lobby start carries it to the clients.
+		void SetStartFrame(uint64_t startFrame) { m_Config.startFrame = startFrame; }
+
 		NetMatchRuntimeState GetState() const { return m_State; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
