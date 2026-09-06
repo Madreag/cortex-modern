@@ -71,7 +71,7 @@ namespace RTE {
 		/// active. The intended call site is `Main.cpp`'s sim-loop right after
 		/// `g_SimChecksum.EndTick()` — that's when the per-subsystem accumulators are finalized
 		/// for the tick.
-		void RecordTickHash(const SimChecksum::Result& result);
+		void RecordTickHash(const SimChecksum::Result& result, bool paused = false);
 
 		/// Number of tick-hash records captured this run. For tests and CLI diagnostics.
 		size_t GetTickHashCount() const {
@@ -98,6 +98,7 @@ namespace RTE {
 		/// JSON output and any diff is order-stable across runs.
 		struct TickHashRecord {
 			uint64_t                           tick = 0;
+			bool                               paused = false;
 			std::string                        totalHex;
 			std::map<std::string, std::string> subsystemHex;
 		};
