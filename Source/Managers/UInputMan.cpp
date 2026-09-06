@@ -809,6 +809,34 @@ bool UInputMan::GetMouseButtonState(int whichPlayer, int whichButton, InputState
 		return false;
 	}
 
+	// A scripted player's mouse buttons are its fire and pie-menu elements, so a mouse scheme reads the script too.
+	if (whichPlayer != Players::NoPlayer && InputScript::DrivesPlayer(whichPlayer)) {
+		if (whichButton != MouseButtons::MOUSE_LEFT && whichButton != MouseButtons::MOUSE_RIGHT) {
+			return false;
+		}
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const auto heldAt = [&](uint64_t at) {
+			if (whichButton == MouseButtons::MOUSE_LEFT) {
+				return InputScript::HeldAt(whichPlayer, InputElements::INPUT_FIRE, at);
+			}
+			return InputScript::HeldAt(whichPlayer, InputElements::INPUT_PIEMENU_ANALOG, at) || InputScript::HeldAt(whichPlayer, InputElements::INPUT_PIEMENU_DIGITAL, at);
+		};
+		const bool held = heldAt(tick);
+		const bool heldBefore = tick > 0 && heldAt(tick - 1);
+		switch (whichState) {
+			case InputState::Held:
+				return held;
+			case InputState::Pressed:
+			case InputState::PressedSim:
+				return held && !heldBefore;
+			case InputState::Released:
+			case InputState::ReleasedSim:
+				return !held && heldBefore;
+			default:
+				return false;
+		}
+	}
+
 	InputDevice playerDevice = InputDevice::DEVICE_COUNT;
 	if (whichPlayer != Players::NoPlayer) {
 		playerDevice = m_ControlScheme.at(whichPlayer).GetDevice();
