@@ -69,7 +69,7 @@ void PieMenu::Clear() {
 	m_EnableDisableAnimationTimer.Reset();
 	m_HoverTimer.Reset();
 	m_SubPieMenuHoverOpenTimer.Reset();
-	m_SubPieMenuHoverOpenTimer.SetRealTimeLimitMS(g_SettingsMan.GetSubPieMenuHoverOpenDelay());
+	m_SubPieMenuHoverOpenTimer.SetSimTimeLimitMS(g_SettingsMan.GetSubPieMenuHoverOpenDelay());
 
 	m_IconSeparatorMode = IconSeparatorMode::Line;
 	m_FullInnerRadius = c_DefaultFullRadius;
@@ -330,7 +330,7 @@ void PieMenu::SetEnabled(bool enable, bool playSounds) {
 
 		if (!enable) {
 			m_AlreadyActivatedPieSlice = nullptr;
-			m_HoverTimer.SetRealTimeLimitMS(100);
+			m_HoverTimer.SetSimTimeLimitMS(100);
 			m_HoverTimer.Reset();
 			SetHoveredPieSlice(nullptr);
 			if (m_ActiveSubPieMenu) {
@@ -621,7 +621,7 @@ void PieMenu::Update() {
 					Directions activeSubPieMenuDirection = m_ActiveSubPieMenu->m_DirectionIfSubPieMenu;
 					m_ActiveSubPieMenu = nullptr;
 					m_SubPieMenuHoverOpenTimer.Reset();
-					m_HoverTimer.SetRealTimeLimitMS(2000);
+					m_HoverTimer.SetSimTimeLimitMS(2000);
 					if (IsSubPieMenu()) {
 						PrepareAnalogCursorForEnableOrDisable(true);
 						m_CursorInVisiblePosition = true;
@@ -666,7 +666,7 @@ void PieMenu::Update() {
 		if (!IsSubPieMenu()) {
 			SetEnabled(controller->IsState(ControlState::PIE_MENU_ACTIVE));
 
-			if (m_HoverTimer.IsPastRealTimeLimit()) {
+			if (m_HoverTimer.IsPastSimTimeLimit()) {
 				SetHoveredPieSlice(nullptr);
 			}
 		}
@@ -743,7 +743,7 @@ void PieMenu::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
 }
 
 void PieMenu::UpdateWobbling() {
-	float innerRadiusChange = static_cast<float>(m_EnableDisableAnimationTimer.GetElapsedRealTimeMS()) / 6.0F;
+	float innerRadiusChange = static_cast<float>(m_EnableDisableAnimationTimer.GetElapsedSimTimeMS()) / 6.0F;
 
 	m_BGBitmapNeedsRedrawing = true;
 	m_CurrentInnerRadius += static_cast<int>(innerRadiusChange) * (m_EnabledState == EnabledState::Disabling ? -1 : 1);
@@ -761,15 +761,15 @@ void PieMenu::UpdateWobbling() {
 void PieMenu::UpdateEnablingAndDisablingProgress() {
 	m_BGBitmapNeedsRedrawing = true;
 	if (m_EnabledState == EnabledState::Enabling) {
-		m_CurrentInnerRadius = static_cast<int>(Lerp(0.0F, static_cast<float>(c_EnablingDelay), 0.0F, static_cast<float>(m_FullInnerRadius), static_cast<float>(m_EnableDisableAnimationTimer.GetElapsedRealTimeMS())));
-		if (IsSubPieMenu() || m_EnableDisableAnimationTimer.IsPastRealMS(c_EnablingDelay)) {
+		m_CurrentInnerRadius = static_cast<int>(Lerp(0.0F, static_cast<float>(c_EnablingDelay), 0.0F, static_cast<float>(m_FullInnerRadius), static_cast<float>(m_EnableDisableAnimationTimer.GetElapsedSimTimeMS())));
+		if (IsSubPieMenu() || m_EnableDisableAnimationTimer.IsPastSimMS(c_EnablingDelay)) {
 			m_EnabledState = EnabledState::Enabled;
 			m_CurrentInnerRadius = m_FullInnerRadius;
 			m_SubPieMenuHoverOpenTimer.Reset();
 		}
 	} else if (m_EnabledState == EnabledState::Disabling) {
-		m_CurrentInnerRadius = static_cast<int>(Lerp(0.0F, static_cast<float>(c_EnablingDelay), static_cast<float>(m_FullInnerRadius), 0.0F, static_cast<float>(m_EnableDisableAnimationTimer.GetElapsedRealTimeMS())));
-		if (IsSubPieMenu() || m_EnableDisableAnimationTimer.IsPastRealMS(c_EnablingDelay)) {
+		m_CurrentInnerRadius = static_cast<int>(Lerp(0.0F, static_cast<float>(c_EnablingDelay), static_cast<float>(m_FullInnerRadius), 0.0F, static_cast<float>(m_EnableDisableAnimationTimer.GetElapsedSimTimeMS())));
+		if (IsSubPieMenu() || m_EnableDisableAnimationTimer.IsPastSimMS(c_EnablingDelay)) {
 			m_EnabledState = EnabledState::Disabled;
 			m_CurrentInnerRadius = 0;
 			if (Actor* affectedObjectAsActor = dynamic_cast<Actor*>(m_AffectedObject)) {
@@ -796,9 +796,9 @@ bool PieMenu::HandleAnalogInput(const Vector& input) {
 			}
 		}
 		SetHoveredPieSlice(pieSliceToSelect);
-		m_HoverTimer.SetRealTimeLimitMS(controller->IsMouseControlled() ? 50 : 500);
+		m_HoverTimer.SetSimTimeLimitMS(controller->IsMouseControlled() ? 50 : 500);
 		return true;
-	} else if (IsSubPieMenu() && m_HoverTimer.IsPastRealTimeLimit()) {
+	} else if (IsSubPieMenu() && m_HoverTimer.IsPastSimTimeLimit()) {
 		SetEnabled(false);
 	}
 
@@ -893,7 +893,7 @@ bool PieMenu::HandleDigitalInput() {
 					}
 				}
 			}
-			m_HoverTimer.SetRealTimeLimitMS(2000);
+			m_HoverTimer.SetSimTimeLimitMS(2000);
 			return true;
 		}
 	}
@@ -917,7 +917,7 @@ void PieMenu::UpdateSliceActivation() {
 	}
 
 	if (IsEnabled()) {
-		if ((m_ActivatedPieSlice && m_ActivatedPieSlice->GetSubPieMenu() != nullptr) || (m_HoveredPieSlice->GetSubPieMenu() && m_SubPieMenuHoverOpenTimer.IsPastRealTimeLimit())) {
+		if ((m_ActivatedPieSlice && m_ActivatedPieSlice->GetSubPieMenu() != nullptr) || (m_HoveredPieSlice->GetSubPieMenu() && m_SubPieMenuHoverOpenTimer.IsPastSimTimeLimit())) {
 			PreparePieSliceSubPieMenuForUse(m_ActivatedPieSlice ? m_ActivatedPieSlice : m_HoveredPieSlice);
 			m_ActiveSubPieMenu = m_ActivatedPieSlice ? m_ActivatedPieSlice->GetSubPieMenu() : m_HoveredPieSlice->GetSubPieMenu();
 			if (m_Owner) {
@@ -928,7 +928,7 @@ void PieMenu::UpdateSliceActivation() {
 			}
 			m_ActiveSubPieMenu->SetEnabled(true);
 			m_ActiveSubPieMenu->SetHoveredPieSlice(m_ActiveSubPieMenu->m_PieQuadrants.at(m_ActiveSubPieMenu->m_DirectionIfSubPieMenu).m_MiddlePieSlice.get(), true);
-			m_ActiveSubPieMenu->m_HoverTimer.SetRealTimeLimitMS(2000);
+			m_ActiveSubPieMenu->m_HoverTimer.SetSimTimeLimitMS(2000);
 			m_ActiveSubPieMenu->m_HoverTimer.Reset();
 		} else if (m_ActivatedPieSlice && m_ActivatedPieSlice->GetLuabindFunctionObjectWrapper() && m_ActivatedPieSlice->GetLuabindFunctionObjectWrapper()->GetLuabindObject()) {
 			if (const MovableObject* scriptTarget = m_Owner ? m_Owner : m_AffectedObject) {
