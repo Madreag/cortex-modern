@@ -142,7 +142,7 @@ void AudioMan::Update() {
 		if (m_MuteAudioOnFocusLoss && !g_WindowMan.AnyWindowHasFocus()) {
 			m_MasterChannelGroup->setMute(true);
 		} else {
-			m_MasterChannelGroup->setMute(m_MuteMaster);
+			m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
 		}
 
 		float globalPitch = 1.0F;

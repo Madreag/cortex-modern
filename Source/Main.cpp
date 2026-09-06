@@ -289,6 +289,10 @@ void InitializeManagers() {
 	if (g_AudioMan.Initialize()) {
 		g_GUISound.Initialize();
 		g_MusicMan.Initialize();
+		if (std::getenv("CCCP_HEADLESS") != nullptr) {
+			g_AudioMan.SetOutputSilenced(true);
+			std::cout << "[audio] output silenced for the headless run" << std::endl;
+		}
 	}
 
 	g_UInputMan.Initialize();

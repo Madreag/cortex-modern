@@ -139,7 +139,15 @@ namespace RTE {
 		void SetMasterMuted(bool muteOrUnmute = true) {
 			m_MuteMaster = muteOrUnmute;
 			if (m_AudioEnabled) {
-				m_MasterChannelGroup->setMute(m_MuteMaster);
+				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
+			}
+		}
+
+		/// Silences this process's output without touching the mute setting: sounds still play, end and callback as usual.
+		void SetOutputSilenced(bool silenced) {
+			m_OutputSilenced = silenced;
+			if (m_AudioEnabled) {
+				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
 			}
 		}
 
@@ -333,6 +341,7 @@ namespace RTE {
 		FMOD::ChannelGroup* m_MusicChannelGroup; //!< The FMOD ChannelGroup for music.
 
 		bool m_AudioEnabled; //!< Bool to tell whether audio is enabled or not.
+		bool m_OutputSilenced = false; //!< Whether this process's output is silenced (a headless run); not a saved setting.
 		std::vector<std::unique_ptr<const Vector>> m_CurrentActivityHumanPlayerPositions; //!< The stored positions of each human player in the current activity. Only filled when there's an activity running.
 		std::unordered_map<int, float> m_SoundChannelMinimumAudibleDistances; //!<  An unordered map of sound channel indices to floats representing each Sound Channel's minimum audible distances. This is necessary to keep safe data in case the SoundContainer is destroyed while the sound is still playing, as happens often with TDExplosives.
 
