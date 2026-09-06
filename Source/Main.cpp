@@ -79,6 +79,7 @@
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
 #include "InputScript.h"
+#include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
 #include "TerrainLayerSnapshot.h"
@@ -196,6 +197,8 @@ static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
 static std::string s_netReplayInPath;
 static std::string s_netReplayVerifyPath;
+static uint64_t s_netReplayDumpFrom = 1;
+static uint64_t s_netReplayDumpTo = 0;
 static long long s_lpInvarianceTick = 0;
 static std::vector<int> s_lpInvarianceDepths;
 static std::vector<int> s_lpInvarianceRepeats;
@@ -560,6 +563,18 @@ void HandleMainArgs(int argCount, char** argValue) {
 			s_netReplayVerifyPath = argValue[++i];
 			continue;
 		}
+		if (!lastArg && currentArg == "-net-replay-dump") {
+			// <from>:<to> — with -net-replay-verify, print the recorded frames and commands of those ticks.
+			const std::string spec = argValue[++i];
+			const size_t colon = spec.find(':');
+			if (colon == std::string::npos) {
+				std::cerr << "[net-replay-dump] bad range '" << spec << "': expected <from>:<to>" << std::endl;
+				std::exit(1);
+			}
+			s_netReplayDumpFrom = std::strtoull(spec.c_str(), nullptr, 10);
+			s_netReplayDumpTo = std::strtoull(spec.c_str() + colon + 1, nullptr, 10);
+			continue;
+		}
 		if (!lastArg && currentArg == "-input-script") {
 			// A fixture's inputs stand in for the player's devices at the UInputMan boundary.
 			std::string scriptError;
@@ -567,6 +582,30 @@ void HandleMainArgs(int argCount, char** argValue) {
 				std::cerr << "[input-script] " << scriptError << std::endl;
 				std::exit(1);
 			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-ai-write-script") {
+			// A fixture's direct AI writes on a local actor, made inside the owner's AI pass.
+			std::string scriptError;
+			if (!AIWriteScript::Load(argValue[++i], &scriptError)) {
+				std::cerr << "[ai-write-script] " << scriptError << std::endl;
+				std::exit(1);
+			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-digital-aim-speed") {
+			// <player>:<multiplier> — this machine's digital aim speed for the player, a per-machine setting the sim may only read off the wire.
+			const std::string spec = argValue[++i];
+			const size_t colon = spec.find(':');
+			char* end = nullptr;
+			const float speed = colon == std::string::npos ? 0.0F : std::strtof(spec.c_str() + colon + 1, &end);
+			const int player = colon == std::string::npos ? -1 : std::atoi(spec.substr(0, colon).c_str());
+			if (colon == std::string::npos || player < 0 || player >= Players::MaxPlayerCount || !end || *end != '\0' || !(speed > 0.0F)) {
+				std::cerr << "[digital-aim-speed] bad spec '" << spec << "': expected <player>:<multiplier>" << std::endl;
+				std::exit(1);
+			}
+			g_UInputMan.GetControlScheme(player)->SetDigitalAimSpeed(speed);
+			std::cout << "[digital-aim-speed] player " << player << " -> " << speed << std::endl;
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-depth") {
@@ -3192,6 +3231,36 @@ int main(int argc, char** argv) {
 		NetMatchReplayReader::Verify(s_netReplayVerifyPath, report);
 		const std::string json = report.ToJson();
 		std::cout << "[net-replay-verify] " << json << std::endl;
+		if (s_netReplayDumpTo >= s_netReplayDumpFrom) {
+			// The recorded wire, tick by tick: what every peer's sim applied.
+			NetMatchReplayReader reader;
+			std::string openError;
+			if (reader.Open(s_netReplayVerifyPath, &openError)) {
+				NetLockstepFrame record;
+				bool eof = false;
+				while (reader.ReadFrame(record, eof, nullptr)) {
+					if (record.targetFrame < s_netReplayDumpFrom || record.targetFrame > s_netReplayDumpTo) {
+						continue;
+					}
+					for (const ControllerFrame& frame: record.frames) {
+						std::cout << "[net-replay-dump] frame=" << record.targetFrame << " uid=" << frame.actorUniqueID << " mode=" << static_cast<int>(frame.inputMode)
+						          << " player=" << static_cast<int>(frame.playerRaw) << " flags=0x" << std::hex << static_cast<int>(frame.flags) << std::dec
+						          << " flip=" << (frame.IsActorHFlipped() ? 1 : 0) << " aim_intent=" << (frame.HasAimIntent() ? 1 : 0) << " flip_intent=" << (frame.HasFlipIntent() ? 1 : 0)
+						          << " aim=" << std::hexfloat << frame.aimAngle << std::defaultfloat << " fg=" << frame.equippedFGUniqueID << " bg=" << frame.equippedBGUniqueID
+						          << " device=" << static_cast<int>(frame.deviceClass) << " aim_speed=" << frame.digitalAimSpeed << std::endl;
+					}
+					for (const NetGameCommand& command: record.commands) {
+						std::cout << "[net-replay-dump] frame=" << record.targetFrame << " command=" << NetGameCommandTypeName(NetGameCommandTypeOf(command.payload)) << " sender=" << static_cast<int>(command.senderPeerId);
+						if (const NetGameAIEquip* equip = std::get_if<NetGameAIEquip>(&command.payload)) {
+							std::cout << " uid=" << equip->actorUID << " op=" << static_cast<int>(equip->op) << " group=" << equip->group << " preset=" << equip->presetName;
+						}
+						std::cout << std::endl;
+					}
+				}
+			} else {
+				std::cerr << "[net-replay-dump] " << openError << std::endl;
+			}
+		}
 		if (!ScenarioRunner::GetArgs().outPath.empty()) {
 			std::string writeError;
 			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {

@@ -20,6 +20,7 @@ sources += files(
 'RTETools.cpp',
 'ScenarioRunner.cpp',
 'InputScript.cpp',
+'AIWriteScript.cpp',
 'FaultInjection.cpp',
 'System.cpp',
 'InputMapping.cpp',
