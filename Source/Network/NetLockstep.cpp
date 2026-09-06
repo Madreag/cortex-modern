@@ -1372,6 +1372,15 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const {
+		const auto found = m_LocalFrames.find(frame);
+		if (found == m_LocalFrames.end()) {
+			return false;
+		}
+		outFrames = found->second;
+		return true;
+	}
+
 	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
 			return true;

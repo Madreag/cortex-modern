@@ -240,6 +240,8 @@ namespace RTE {
 		/// would otherwise discard while it owns the transport queue.
 		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { m_SessionEventSink = std::move(sink); }
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		/// The local frames already queued for a future frame; the local-actor preview runs them early.
+		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }

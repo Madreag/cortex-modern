@@ -63,6 +63,20 @@ namespace RTE {
 		/// and sim times the first pass saw.
 		/// @param simUpdateCount The captured update count.
 		/// @param simTimeTicks The captured sim time in ticks.
+		/// Advances one sim tick without touching the frame accumulator; the caller rewinds afterwards.
+		void AdvanceSimTickForPreview() {
+			if (!m_SimTimeFrozen) {
+				m_SimTimeTicks += m_DeltaTime;
+			}
+			++m_SimUpdateCount;
+		}
+
+		/// Puts the sim tick back after a preview; the frame accumulator keeps whatever it had.
+		void RestoreSimTickAfterPreview(long long simUpdateCount, long long simTimeTicks) {
+			m_SimUpdateCount = simUpdateCount;
+			m_SimTimeTicks = simTimeTicks;
+		}
+
 		void RewindSimTo(long long simUpdateCount, long long simTimeTicks) {
 			m_SimUpdateCount = simUpdateCount;
 			m_SimTimeTicks = simTimeTicks;

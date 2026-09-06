@@ -952,12 +952,10 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 			slot.second += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		};
 		for (const Actor* actor: m_Actors) {
-			Actor* clone = dynamic_cast<Actor*>(actor->Clone());
-			out.actors.push_back(clone);
+			timed(actor, [&] { out.actors.push_back(dynamic_cast<Actor*>(actor->Clone())); });
 		}
 		for (const MovableObject* item: m_Items) {
-			MovableObject* clone = dynamic_cast<MovableObject*>(item->Clone());
-			out.items.push_back(clone);
+			timed(item, [&] { out.items.push_back(dynamic_cast<MovableObject*>(item->Clone())); });
 		}
 		for (const MovableObject* particle: m_Particles) {
 			timed(particle, [&] { out.particles.push_back(dynamic_cast<MovableObject*>(particle->Clone())); });
@@ -1029,6 +1027,56 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 		particle->ResolveFaithfulLinks();
 	}
 	return true;
+}
+
+MovableMan::AddQueueMark MovableMan::MarkAddQueues() {
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
+	return {m_AddedActors.size(), m_AddedItems.size(), m_AddedParticles.size(), m_AddedAlarmEvents.size()};
+}
+
+void MovableMan::DiscardAddedSince(const AddQueueMark& mark) {
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
+	while (m_AddedActors.size() > mark.actors) {
+		Actor* actor = m_AddedActors.back();
+		m_AddedActors.pop_back();
+		if (actor->GetTeam() >= 0) {
+			RemoveActorFromTeamRoster(actor);
+		}
+		m_ValidActors.erase(actor);
+		actor->DestroyScriptState();
+		delete actor;
+	}
+	while (m_AddedItems.size() > mark.items) {
+		MovableObject* item = m_AddedItems.back();
+		m_AddedItems.pop_back();
+		m_ValidItems.erase(item);
+		item->DestroyScriptState();
+		delete item;
+	}
+	while (m_AddedParticles.size() > mark.particles) {
+		MovableObject* particle = m_AddedParticles.back();
+		m_AddedParticles.pop_back();
+		m_ValidParticles.erase(particle);
+		particle->DestroyScriptState();
+		delete particle;
+	}
+	while (m_AddedAlarmEvents.size() > mark.alarms) {
+		delete m_AddedAlarmEvents.back();
+		m_AddedAlarmEvents.pop_back();
+	}
+}
+
+bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
+	const auto found = std::find(m_Actors.begin(), m_Actors.end(), original);
+	if (found == m_Actors.end()) {
+		return false;
+	}
+	*found = substitute;
+	return true;
+}
+
+void MovableMan::WaitForActorsSeeTask() {
+	m_ActorsSeeFuture.wait();
 }
 
 void MovableMan::PurgeAllMOs() {

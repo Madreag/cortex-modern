@@ -168,13 +168,13 @@ void PostProcessMan::RegisterPostEffect(const Vector& effectPos, BITMAP* effect,
 	// These effects get applied when there's a drawn frame that followed one or more sim updates.
 	// They are not only registered on drawn sim updates; flashes and stuff could be missed otherwise if they occur on undrawn sim updates.
 
-	if (effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
+	if (!s_RegistrationSuppressed && effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
 		m_PostSceneEffects.push_back(PostEffect(effectPos, effect, hash, strength, angle));
 	}
 }
 
 void PostProcessMan::RegisterPostEffect(const Vector& effectPos, BITMAP* effect, size_t hash, int strength, float angle, MOID attachedToMOID) {
-	if (effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
+	if (!s_RegistrationSuppressed && effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
 		m_PostSceneEffects.push_back(PostEffect(effectPos, effect, hash, strength, angle, attachedToMOID));
 	}
 }
@@ -225,6 +225,9 @@ BITMAP* PostProcessMan::GetTempEffectBitmap(BITMAP* bitmap) const {
 }
 
 void PostProcessMan::RegisterGlowDotEffect(const Vector& effectPos, DotGlowColor color, int strength) {
+	if (s_RegistrationSuppressed) {
+		return;
+	}
 	// These effects only apply only once per drawn sim update, and only on the first frame drawn after one or more sim updates
 	if (color != NoDot && g_TimerMan.DrawnSimUpdate() && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
 		RegisterPostEffect(effectPos, GetDotGlowEffect(color), GetDotGlowEffectHash(color), strength);

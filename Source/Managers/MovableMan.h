@@ -128,6 +128,21 @@ namespace RTE {
 		/// Replaces the resident MOs with registered faithful clones of a snapshot. Only valid between ticks.
 		bool RestoreWorld(const WorldSnapshot& in);
 
+		struct AddQueueMark {
+			size_t actors = 0;
+			size_t items = 0;
+			size_t particles = 0;
+			size_t alarms = 0;
+		};
+		/// Marks the add queues so a preview's spawns can be discarded afterwards.
+		AddQueueMark MarkAddQueues();
+		/// Deletes everything queued since the mark; a preview's spawns never reach the world.
+		void DiscardAddedSince(const AddQueueMark& mark);
+		/// Draws the substitute in the original's slot until swapped back.
+		bool SwapActorForRender(Actor* original, Actor* substitute);
+		/// Blocks until the async seeing pass that reads the actor list has finished.
+		void WaitForActorsSeeTask();
+
 		/// Get a pointer to the first Actor in the internal Actor list that is
 		/// of a specifc group, alternatively the first one AFTER a specific actor!
 		/// @param group Which group to try to get an Actor for.
