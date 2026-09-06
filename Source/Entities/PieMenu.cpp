@@ -313,6 +313,12 @@ void PieMenu::SetPos(const Vector& newPos) {
 	}
 }
 
+// The menu runs on every peer for every actor; only the seat driving it hears it.
+bool PieMenu::SeatHearsSounds() const {
+	const Controller* controller = GetController();
+	return !controller || controller->IsSeatedByPlayer();
+}
+
 void PieMenu::SetEnabled(bool enable, bool playSounds) {
 	m_MenuMode = MenuMode::Normal;
 
@@ -323,7 +329,7 @@ void PieMenu::SetEnabled(bool enable, bool playSounds) {
 
 		PrepareAnalogCursorForEnableOrDisable(enable);
 
-		if (playSounds) {
+		if (playSounds && SeatHearsSounds()) {
 			SoundContainer* soundToPlay = enable ? g_GUISound.PieMenuEnterSound() : g_GUISound.PieMenuExitSound();
 			soundToPlay->Play();
 		}
@@ -867,13 +873,15 @@ bool PieMenu::HandleDigitalInput() {
 						SetEnabled(false);
 					} else if (pieQuadrantAtControlStateDirection.m_Enabled) {
 						MoveToPieQuadrant(pieQuadrantAtControlStateDirection);
-					} else {
+					} else if (SeatHearsSounds()) {
 						g_GUISound.HoverDisabledSound()->Play();
 					}
 				} else if (hoveredPieSlicePieQuadrant->m_Direction == controlStateDirection) {
 					if (m_HoveredPieSlice == pieQuadrantAtControlStateDirection.m_MiddlePieSlice.get()) {
 						if (IsSubPieMenu()) {
-							g_GUISound.HoverDisabledSound()->Play();
+							if (SeatHearsSounds()) {
+								g_GUISound.HoverDisabledSound()->Play();
+							}
 						} else {
 							SetHoveredPieSlice(nullptr);
 						}
@@ -908,11 +916,13 @@ void PieMenu::UpdateSliceActivation() {
 		m_ActivatedPieSlice = m_HoveredPieSlice->IsEnabled() ? m_HoveredPieSlice : m_ActivatedPieSlice;
 		m_AlreadyActivatedPieSlice = m_ActivatedPieSlice;
 
-		if (m_HoveredPieSlice->GetSubPieMenu() && controller->IsState(ControlState::RELEASE_SECONDARY)) {
-			g_GUISound.UserErrorSound()->Play();
-		} else {
-			SoundContainer* soundToPlay = m_HoveredPieSlice->IsEnabled() ? g_GUISound.SlicePickedSound() : g_GUISound.DisabledPickedSound();
-			soundToPlay->Play();
+		if (SeatHearsSounds()) {
+			if (m_HoveredPieSlice->GetSubPieMenu() && controller->IsState(ControlState::RELEASE_SECONDARY)) {
+				g_GUISound.UserErrorSound()->Play();
+			} else {
+				SoundContainer* soundToPlay = m_HoveredPieSlice->IsEnabled() ? g_GUISound.SlicePickedSound() : g_GUISound.DisabledPickedSound();
+				soundToPlay->Play();
+			}
 		}
 	}
 
@@ -1297,8 +1307,10 @@ bool PieMenu::SetHoveredPieSlice(const PieSlice* pieSliceToSelect, bool moveCurs
 			m_CursorAngle = GetRotAngle() + m_HoveredPieSlice->GetMidAngle();
 		}
 
-		SoundContainer* soundToPlay = pieSliceToSelect->IsEnabled() ? g_GUISound.HoverChangeSound() : g_GUISound.HoverDisabledSound();
-		soundToPlay->Play();
+		if (SeatHearsSounds()) {
+			SoundContainer* soundToPlay = pieSliceToSelect->IsEnabled() ? g_GUISound.HoverChangeSound() : g_GUISound.HoverDisabledSound();
+			soundToPlay->Play();
+		}
 	} else {
 		m_CursorInVisiblePosition = false;
 	}
