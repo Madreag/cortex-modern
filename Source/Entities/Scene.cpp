@@ -1293,6 +1293,25 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 	if (const MOSParticle* moSParticleToSave = dynamic_cast<const MOSParticle*>(sceneObjectToSave); moSParticleToSave && saveFullData) {
 		writer.NewPropertyWithValue("AtomResidue", moSParticleToSave->GetAtomResidue());
+		writer.NewPropertyWithValue("SpecialBehaviour_TimeRest", moSParticleToSave->GetTimeRest());
+	}
+
+	if (const PEmitter* pEmitterToSave = dynamic_cast<const PEmitter*>(sceneObjectToSave); pEmitterToSave && saveFullData) {
+		writer.NewPropertyWithValue("EmissionEnabled", pEmitterToSave->IsEmitting());
+		writer.NewPropertyWithValue("EmissionCount", pEmitterToSave->GetEmitCount());
+		writer.NewPropertyWithValue("Throttle", pEmitterToSave->GetThrottle());
+		writer.NewPropertyWithValue("BurstTriggered", pEmitterToSave->IsSetToBurst());
+		writer.NewPropertyWithValue("BurstTimerStart", pEmitterToSave->GetBurstTimerStart());
+		writer.NewPropertyWithValue("LastEmitTimerStart", pEmitterToSave->GetLastEmitTimerStart());
+		writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", pEmitterToSave->WasEmitting());
+		writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", pEmitterToSave->GetAvgBurstImpulse());
+		writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", pEmitterToSave->GetAvgImpulse());
+		for (double accumulator: pEmitterToSave->GetEmissionAccumulators()) {
+			writer.NewPropertyWithValue("EmissionAccumulator", accumulator);
+		}
+		for (const std::string& timers: pEmitterToSave->GetEmissionTimers()) {
+			writer.NewPropertyWithValue("EmissionTimers", timers);
+		}
 	}
 
 	if (const MOSprite* moSpriteToSave = dynamic_cast<const MOSprite*>(sceneObjectToSave)) {
@@ -1408,9 +1427,15 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 		if (const AEmitter* aemitterToSave = dynamic_cast<const AEmitter*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("BurstTimerStart", aemitterToSave->GetBurstTimerStart());
+			writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", aemitterToSave->WasEmitting());
+			writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", aemitterToSave->GetAvgBurstImpulse());
+			writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", aemitterToSave->GetAvgImpulse());
 			writer.NewPropertyWithValue("LastEmitTimerStart", aemitterToSave->GetLastEmitTimerStart());
 			for (double accumulator: aemitterToSave->GetEmissionAccumulators()) {
 				writer.NewPropertyWithValue("EmissionAccumulator", accumulator);
+			}
+			for (const std::string& timers: aemitterToSave->GetEmissionTimers()) {
+				writer.NewPropertyWithValue("EmissionTimers", timers);
 			}
 			writer.NewPropertyWithValue("EmissionEnabled", aemitterToSave->IsEmitting());
 			writer.NewPropertyWithValue("EmissionCount", aemitterToSave->GetEmitCount());

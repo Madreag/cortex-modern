@@ -4,6 +4,9 @@
 /// Something to bundle the properties of an emission together.
 /// 07/21/2006 Emission turned into 'Serializable' class.
 #include "Serializable.h"
+
+#include <cstdlib>
+#include <string>
 #include "MovableObject.h"
 
 namespace RTE {
@@ -113,6 +116,32 @@ namespace RTE {
 			m_StartTimer.Reset();
 			m_StopTimer.Reset();
 		}
+
+		/// Packs the start and stop timers (start ticks and limits) as one save line.
+		std::string PackTimers() const {
+			return std::to_string(m_StartTimer.GetStartSimTimeMS()) + "|" + std::to_string(m_StartTimer.GetSimTimeLimitTicks()) + "|" + std::to_string(m_StopTimer.GetStartSimTimeMS()) + "|" + std::to_string(m_StopTimer.GetSimTimeLimitTicks());
+		}
+
+		/// Restores the timers PackTimers wrote.
+		void UnpackTimers(const std::string& packed) {
+			int64_t values[4] = {0, 0, 0, 0};
+			size_t start = 0;
+			for (int i = 0; i < 4 && start <= packed.size(); ++i) {
+				const size_t end = packed.find('|', start);
+				values[i] = std::strtoll(packed.substr(start, end == std::string::npos ? std::string::npos : end - start).c_str(), nullptr, 10);
+				if (end == std::string::npos) {
+					break;
+				}
+				start = end + 1;
+			}
+			m_StartTimer.SetStartSimTimeTicks(values[0]);
+			m_StartTimer.SetSimTimeLimitTicks(values[1]);
+			m_StopTimer.SetStartSimTimeTicks(values[2]);
+			m_StopTimer.SetSimTimeLimitTicks(values[3]);
+		}
+
+		double GetStartTimerElapsedSimMS() const { return m_StartTimer.GetElapsedSimTimeMS(); }
+		double GetStopTimerElapsedSimMS() const { return m_StopTimer.GetElapsedSimTimeMS(); }
 
 		/// How much of the root parent's velocity this emission inherits
 		/// @return The proportion of the velocity inherited. 0.1 = 10% inheritance.
