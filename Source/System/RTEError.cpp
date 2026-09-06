@@ -182,6 +182,39 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 		}
 	}
 
+	// A call through a corrupted pointer faults outside every module; the return addresses still on the stack name the caller.
+	if (std::FILE* recordFile = std::fopen("AbortCode.txt", "a")) {
+		const uintptr_t imageBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+		const IMAGE_NT_HEADERS* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(imageBase + reinterpret_cast<const IMAGE_DOS_HEADER*>(imageBase)->e_lfanew);
+		const uintptr_t imageEnd = imageBase + ntHeaders->OptionalHeader.SizeOfImage;
+		const bool symbols = SymInitialize(processHandle, nullptr, TRUE);
+		if (symbols) {
+			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+		}
+		const uintptr_t* stackWord = reinterpret_cast<const uintptr_t*>(exceptPtr->ContextRecord->Rsp);
+		for (int i = 0; i < 1024; ++i) {
+			MEMORY_BASIC_INFORMATION region{};
+			if (VirtualQuery(stackWord + i, &region, sizeof(region)) == 0 || region.State != MEM_COMMIT || (region.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+				break;
+			}
+			const uintptr_t word = stackWord[i];
+			if (word < imageBase || word >= imageEnd) {
+				continue;
+			}
+			char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+			PSYMBOL_INFO symbolInfo = reinterpret_cast<PSYMBOL_INFO>(symbolBuffer);
+			symbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
+			symbolInfo->MaxNameLen = MAX_SYM_NAME;
+			DWORD64 displacement = 0;
+			const char* name = (symbols && SymFromAddr(processHandle, word, &displacement, symbolInfo)) ? symbolInfo->Name : "?";
+			std::fprintf(recordFile, "stack[%d] exe+0x%zX %s+0x%llX\n", i, static_cast<size_t>(word - imageBase), name, static_cast<unsigned long long>(displacement));
+		}
+		if (symbols) {
+			SymCleanup(processHandle);
+		}
+		std::fclose(recordFile);
+	}
+
 	std::string symbolNameAtAddress = getSymbolNameFromAddress(processHandle, exceptionAddress);
 	RTEError::FormatFunctionSignature(symbolNameAtAddress);
 
