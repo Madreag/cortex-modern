@@ -1310,7 +1310,6 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 	if (const MOSParticle* moSParticleToSave = dynamic_cast<const MOSParticle*>(sceneObjectToSave); moSParticleToSave && saveFullData) {
 		writer.NewPropertyWithValue("AtomResidue", moSParticleToSave->GetAtomResidue());
-		writer.NewPropertyWithValue("SpecialBehaviour_TimeRest", moSParticleToSave->GetTimeRest());
 	}
 
 	if (const PEmitter* pEmitterToSave = dynamic_cast<const PEmitter*>(sceneObjectToSave); pEmitterToSave && saveFullData) {
@@ -1603,7 +1602,6 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("SpecialBehaviour_ViewPoint", actorToSave->GetViewPointRaw());
 			writer.NewPropertyWithValue("SpecialBehaviour_GoldPicked", actorToSave->GetGoldPicked());
 			writer.NewPropertyWithValue("SpecialBehaviour_PrevHealth", actorToSave->GetPrevHealth());
-			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimSpeed", actorToSave->GetSharpAimSpeed());
 
 			int aiModeToSave = actorToSave->GetAIMode() == Actor::AIMode::AIMODE_SQUAD ? Actor::AIMode::AIMODE_GOTO : actorToSave->GetAIMode();
 			if (aiModeToSave == Actor::AIMode::AIMODE_GOTO && (!actorToSave->GetMOMoveTarget() && g_SceneMan.ShortestDistance(actorToSave->GetMovePathEnd(), actorToSave->GetPos(), g_SceneMan.SceneWrapsX()).MagnitudeIsLessThan(1.0F))) {

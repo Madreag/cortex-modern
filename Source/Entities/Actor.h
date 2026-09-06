@@ -315,7 +315,6 @@ namespace RTE {
 		const Vector& GetLastAlarmPosRaw() const { return m_LastAlarmPos; }
 		const Vector& GetViewPointRaw() const { return m_ViewPoint; }
 		bool GetGoldPicked() const { return m_GoldPicked; }
-		float GetSharpAimSpeed() const { return m_SharpAimSpeed; }
 		int64_t GetLastSecondTimerStart() const { return m_LastSecondTimer.GetStartSimTimeMS(); }
 		int64_t GetStableRecoverTimerStart() const { return m_StableRecoverTimer.GetStartSimTimeMS(); }
 		int64_t GetHeartBeatTimerStart() const { return m_HeartBeat.GetStartSimTimeMS(); }
@@ -1045,8 +1044,6 @@ namespace RTE {
 		PersistedTimerAnchor m_PersistedAimTimerAnchor; //!< Saved digital-aim timer anchor, applied on snapshot adopt.
 		// The time it takes to achieve complete full sharp aiming
 		int m_SharpAimDelay;
-		// The velocity
-		float m_SharpAimSpeed;
 		// Normalzied scalar showing storing much sharp aim progress has been made
 		float m_SharpAimProgress;
 		// If sharp aim has been maxed out, ie it's either at its max, or being limited by some obstruction

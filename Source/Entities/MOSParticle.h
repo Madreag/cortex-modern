@@ -123,10 +123,8 @@ namespace RTE {
 		Atom* m_Atom; //!< The Atom that will be the physical representation of this MOSParticle.
 		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
 		bool m_HasPersistedAtomResidue = false;
-		float m_TimeRest; //!< Accumulated time in seconds that did not cause a frame change.
 
 	public:
-		float GetTimeRest() const { return m_TimeRest; }
 
 	protected:
 

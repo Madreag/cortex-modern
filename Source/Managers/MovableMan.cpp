@@ -769,9 +769,6 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 		    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat
 		    << " pvel=" << mo->GetPrevVel().m_X << "," << mo->GetPrevVel().m_Y << std::defaultfloat << " wdmg=" << mo->GetApplyWoundDamageOnCollision() << mo->GetApplyWoundBurstDamageOnCollision() << std::hexfloat
 		    << " air=" << mo->GetAirResistance() << "/" << mo->GetAirThreshold() << "/" << mo->GetGlobalAccScalar();
-		if (const MOSParticle* particle = dynamic_cast<const MOSParticle*>(mo)) {
-			out << " trest=" << particle->GetTimeRest();
-		}
 		if (const PEmitter* emitter = dynamic_cast<const PEmitter*>(mo)) {
 			out << std::defaultfloat << " pem=" << emitter->IsEmitting() << "/" << emitter->GetEmitCount() << "/" << emitter->IsSetToBurst() << "/" << emitter->WasEmitting() << std::hexfloat << "/" << emitter->GetThrottle() << "/" << emitter->GetBurstTimerElapsedSimMS() << "/" << emitter->GetLastEmitTimerElapsedSimMS();
 			for (double accumulator: emitter->GetEmissionAccumulators()) {
@@ -804,7 +801,7 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 			out << " mstate=" << static_cast<int>(actor->GetMovementState()) << " goldpicked=" << actor->GetGoldPicked() << std::hexfloat
 			    << " atmr=" << actor->GetLastSecondTimerElapsedSimMS() << "/" << actor->GetStableRecoverTimerElapsedSimMS() << "/" << actor->GetHeartBeatTimerElapsedSimMS() << "/" << actor->GetNewControlTimerElapsedSimMS() << "/" << actor->GetDeathTimerElapsedSimMS()
 			    << " recent=" << actor->GetRecentMovement().m_X << "," << actor->GetRecentMovement().m_Y << " view=" << actor->GetViewPointRaw().m_X << "," << actor->GetViewPointRaw().m_Y
-			    << " prevhealth=" << actor->GetPrevHealth() << " aimspeed=" << actor->GetSharpAimSpeed();
+			    << " prevhealth=" << actor->GetPrevHealth();
 			// The alarm point is the owner's AI perception, per machine like the walk paths; peer compares skip it.
 			out << " alarm=" << actor->GetAlarmTimerElapsedSimMS() << "@" << actor->GetLastAlarmPosRaw().m_X << "," << actor->GetLastAlarmPosRaw().m_Y << std::defaultfloat;
 			if (!ScenarioRunner::GetArgs().testScript.empty()) {

@@ -322,7 +322,6 @@ int Actor::Create(const Actor& reference) {
 		m_GoldPicked = reference.m_GoldPicked;
 		m_AimTmr = reference.m_AimTmr;
 		m_SharpAimTimer = reference.m_SharpAimTimer;
-		m_SharpAimSpeed = reference.m_SharpAimSpeed;
 		m_AlarmTimer = reference.m_AlarmTimer;
 		m_ViewPoint = reference.m_ViewPoint;
 		m_MovePath = reference.m_MovePath;
@@ -446,7 +445,6 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("SpecialBehaviour_GoldPicked", { reader >> m_GoldPicked; });
 	MatchProperty("SpecialBehaviour_PrevHealth", { reader >> m_PrevHealth; });
-	MatchProperty("SpecialBehaviour_SharpAimSpeed", { reader >> m_SharpAimSpeed; });
 	MatchProperty("ControllerPlayer", { reader >> m_PersistedControllerPlayer; });
 	MatchProperty("DeploymentID", { reader >> m_DeploymentID; });
 	MatchProperty("PassengerSlots", { reader >> m_PassengerSlots; });
