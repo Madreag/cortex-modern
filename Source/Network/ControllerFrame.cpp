@@ -136,6 +136,30 @@ namespace RTE {
 		}
 	}
 
+	void ControllerFrame::SetEquipIntent(bool intent) {
+		if (intent) {
+			flags |= 0x4U;
+		} else {
+			flags &= static_cast<uint8_t>(~0x4U);
+		}
+	}
+
+	void ControllerFrame::SetAimIntent(bool intent) {
+		if (intent) {
+			flags |= 0x8U;
+		} else {
+			flags &= static_cast<uint8_t>(~0x8U);
+		}
+	}
+
+	void ControllerFrame::SetFlipIntent(bool intent) {
+		if (intent) {
+			flags |= 0x10U;
+		} else {
+			flags &= static_cast<uint8_t>(~0x10U);
+		}
+	}
+
 	ControllerFrame ControllerFrameCodec::Snapshot(int64_t actorUniqueID, const Controller& controller, const Actor* actor) {
 		static_assert(ControlState::CONTROLSTATECOUNT <= 64, "ControllerFrame state_mask must grow if ControlState exceeds 64 entries.");
 
@@ -185,7 +209,10 @@ namespace RTE {
 				if (const HeldDevice* equippedBG = human->GetEquippedBGItem()) {
 					frame.equippedBGUniqueID = static_cast<int64_t>(equippedBG->GetUniqueID());
 				}
+				frame.SetEquipIntent(human->GetOffWireEquipTick() == static_cast<long long>(g_TimerMan.GetSimUpdateCount()));
 			}
+			frame.SetAimIntent(actor->GetOffWireAimTick() == static_cast<long long>(g_TimerMan.GetSimUpdateCount()));
+			frame.SetFlipIntent(actor->GetOffWireFlipTick() == static_cast<long long>(g_TimerMan.GetSimUpdateCount()));
 		}
 		return frame;
 	}
@@ -199,7 +226,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
-		if ((frame.flags & static_cast<uint8_t>(~0x3U)) != 0) {
+		if ((frame.flags & static_cast<uint8_t>(~0x1FU)) != 0) {
 			SetError(error, "ControllerFrame reserved flags must be zero.");
 			return false;
 		}
@@ -244,6 +271,28 @@ namespace RTE {
 		} else if (frame.equippedFGUniqueID != 0 || frame.equippedBGUniqueID != 0) {
 			SetError(error, "ControllerFrame equipped item state targets a non-AHuman actor.");
 			return false;
+		}
+		return true;
+	}
+
+	bool ControllerFrameCodec::ApplyActorStateIntents(const ControllerFrame& frame, Actor& actor, std::string* error) {
+		if (frame.HasAimIntent()) {
+			if (!std::isfinite(frame.aimAngle)) {
+				SetError(error, "ControllerFrame aim intent must be finite.");
+				return false;
+			}
+			actor.SetAimAngle(frame.aimAngle);
+		}
+		if (frame.HasFlipIntent()) {
+			actor.SetHFlipped(frame.IsActorHFlipped());
+		}
+		if (frame.HasEquipIntent()) {
+			AHuman* human = dynamic_cast<AHuman*>(&actor);
+			if (!human) {
+				SetError(error, "ControllerFrame equip intent targets a non-AHuman actor.");
+				return false;
+			}
+			human->SyncEquippedItemsByUniqueID(frame.equippedFGUniqueID, frame.equippedBGUniqueID);
 		}
 		return true;
 	}
@@ -320,7 +369,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
-		if ((frame.flags & static_cast<uint8_t>(~0x3U)) != 0) {
+		if ((frame.flags & static_cast<uint8_t>(~0x1FU)) != 0) {
 			SetError(error, "ControllerFrame reserved flags must be zero.");
 			return false;
 		}
@@ -454,7 +503,7 @@ namespace RTE {
 		}
 
 		ControllerFrame malformed = frame;
-		malformed.flags |= 0x4U;
+		malformed.flags |= 0x20U;
 		const std::vector<uint8_t> malformedFlagsBytes = ControllerFrameCodec::Encode(malformed);
 		if (ControllerFrameCodec::Decode(malformedFlagsBytes.data(), malformedFlagsBytes.size(), decoded, nullptr)) {
 			return fail("malformed flags were accepted");

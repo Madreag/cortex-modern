@@ -43,6 +43,13 @@ namespace RTE {
 		void SetQuickDisabled(bool disabled);
 		bool IsActorHFlipped() const { return (flags & 0x2U) != 0; }
 		void SetActorHFlipped(bool flipped);
+		/// One-shot writes the owner's AI made directly to the actor; every peer applies them at this frame's tick.
+		bool HasEquipIntent() const { return (flags & 0x4U) != 0; }
+		void SetEquipIntent(bool intent);
+		bool HasAimIntent() const { return (flags & 0x8U) != 0; }
+		void SetAimIntent(bool intent);
+		bool HasFlipIntent() const { return (flags & 0x10U) != 0; }
+		void SetFlipIntent(bool intent);
 	};
 
 	class ControllerFrameCodec {
@@ -50,6 +57,8 @@ namespace RTE {
 		static ControllerFrame Snapshot(int64_t actorUniqueID, const Controller& controller, const Actor* actor = nullptr);
 		static bool Apply(const ControllerFrame& frame, Controller& controller, std::string* error = nullptr);
 		static bool ApplyActorState(const ControllerFrame& frame, Actor& actor, std::string* error = nullptr);
+		/// Applies only the frame's off-wire intents; the sim derives everything else from the controller.
+		static bool ApplyActorStateIntents(const ControllerFrame& frame, Actor& actor, std::string* error = nullptr);
 
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
 		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr);
