@@ -92,6 +92,8 @@ namespace RTE {
 		/// Gets a list of the MOs registed as using us.
 		/// @return The MOs registed as using us.
 		const std::unordered_set<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
+		/// The address of the object's Lua table (as a hex string), or "-" when it has none; the identity oracles compare it.
+		std::string DescribeScriptObjectIdentity(long uniqueID);
 #pragma endregion
 
 #pragma region Script Execution Handling

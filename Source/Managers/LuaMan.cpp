@@ -175,6 +175,24 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 	}
 }
 
+std::string LuaStateWrapper::DescribeScriptObjectIdentity(long uniqueID) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	lua_getglobal(m_State, "_ScriptedObjects");
+	std::string identity = "-";
+	if (lua_istable(m_State, -1)) {
+		lua_pushstring(m_State, std::to_string(uniqueID).c_str());
+		lua_gettable(m_State, -2);
+		if (const void* address = lua_topointer(m_State, -1)) {
+			char buffer[32];
+			std::snprintf(buffer, sizeof(buffer), "%p", address);
+			identity = buffer;
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 1);
+	return identity;
+}
+
 LuaStateWrapper::LuaStateWrapper() {
 	Clear();
 }

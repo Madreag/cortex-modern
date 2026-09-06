@@ -113,8 +113,8 @@ namespace RTE {
 			float teamFunds[Teams::MaxTeamCount] = {};
 			int teamDeaths[Teams::MaxTeamCount] = {};
 			bool teamActive[Teams::MaxTeamCount] = {};
-			Actor* controlledActor[Players::MaxPlayerCount] = {};
-			Actor* brain[Players::MaxPlayerCount] = {};
+			long controlledActorUID[Players::MaxPlayerCount] = {};
+			long brainUID[Players::MaxPlayerCount] = {};
 			bool brainEvacuated[Players::MaxPlayerCount] = {};
 		};
 		void CaptureRollbackState(RollbackState& out) const;
