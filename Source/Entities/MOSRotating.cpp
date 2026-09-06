@@ -289,9 +289,11 @@ int MOSRotating::Create(const MOSRotating& reference) {
 
 	if (IsFaithfulClone()) {
 		m_DeepHardness = reference.m_DeepHardness;
-		m_FarthestAttachableDistanceAndRadius = reference.m_FarthestAttachableDistanceAndRadius;
-		m_FaithfulFarthestAttachableDistanceAndRadius = reference.m_FarthestAttachableDistanceAndRadius;
-		m_FaithfulRadiusAffectingAttachableUID = reference.m_RadiusAffectingAttachable ? reference.m_RadiusAffectingAttachable->GetUniqueID() : reference.m_FaithfulRadiusAffectingAttachableUID;
+		// An unresolved clone's own construction re-ran the radius bookkeeping, so its pending carriers hold the live state.
+		const bool referencePending = reference.m_FaithfulRadiusAffectingAttachableUID != 0;
+		m_FaithfulFarthestAttachableDistanceAndRadius = referencePending ? reference.m_FaithfulFarthestAttachableDistanceAndRadius : reference.m_FarthestAttachableDistanceAndRadius;
+		m_FaithfulRadiusAffectingAttachableUID = referencePending ? reference.m_FaithfulRadiusAffectingAttachableUID : (reference.m_RadiusAffectingAttachable ? reference.m_RadiusAffectingAttachable->GetUniqueID() : 0);
+		m_FarthestAttachableDistanceAndRadius = m_FaithfulFarthestAttachableDistanceAndRadius;
 		m_AttachableAndWoundMass = reference.m_AttachableAndWoundMass;
 		// Hardcoded attachables re-attach in declaration order; remember the live order so the update order survives.
 		if (!reference.m_FaithfulAttachableOrder.empty()) {
