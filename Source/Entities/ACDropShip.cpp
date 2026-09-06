@@ -117,6 +117,7 @@ int ACDropShip::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("AutoStabilize", { reader >> m_AutoStabilize; });
 	MatchProperty("MaxEngineAngle", { reader >> m_MaxEngineAngle; });
 	MatchProperty("LateralControlSpeed", { reader >> m_LateralControlSpeed; });
+	MatchProperty("SpecialBehaviour_LateralControl", { reader >> m_LateralControl; });
 	MatchProperty("HoverHeightModifier", { reader >> m_HoverHeightModifier; });
 
 	EndPropertyList;

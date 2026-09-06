@@ -15,6 +15,8 @@
 #include "AllegroBitmap.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <sstream>
 #include <array>
 
 using namespace RTE;
@@ -185,6 +187,62 @@ int PieMenu::Create(const PieMenu& reference) {
 	RepopulateAndRealignCurrentPieSlices();
 
 	return 0;
+}
+
+std::string PieMenu::PackInteractionState() const {
+	const auto indexOf = [this](const PieSlice* slice) {
+		const auto found = std::find(m_CurrentPieSlices.begin(), m_CurrentPieSlices.end(), slice);
+		return found == m_CurrentPieSlices.end() ? -1 : static_cast<int>(found - m_CurrentPieSlices.begin());
+	};
+	int activeSubMenuSlice = -1;
+	for (size_t i = 0; m_ActiveSubPieMenu && i < m_CurrentPieSlices.size(); ++i) {
+		if (m_CurrentPieSlices[i]->GetSubPieMenu() == m_ActiveSubPieMenu) {
+			activeSubMenuSlice = static_cast<int>(i);
+		}
+	}
+	std::ostringstream out;
+	out << static_cast<int>(m_EnabledState) << "|" << static_cast<int>(m_MenuMode) << "|" << m_EnableDisableAnimationTimer.GetStartSimTimeMS() << "|" << m_HoverTimer.GetStartSimTimeMS() << "|" << m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS()
+	    << "|" << std::hexfloat << m_CursorAngle << std::defaultfloat << "|" << (m_CursorInVisiblePosition ? 1 : 0) << "|" << indexOf(m_HoveredPieSlice) << "|" << indexOf(m_ActivatedPieSlice) << "|" << indexOf(m_AlreadyActivatedPieSlice) << "|" << activeSubMenuSlice;
+	if (m_ActiveSubPieMenu) {
+		out << "|{" << m_ActiveSubPieMenu->PackInteractionState() << "}";
+	}
+	return out.str();
+}
+
+void PieMenu::UnpackInteractionState(const std::string& packed) {
+	std::string own = packed;
+	std::string sub;
+	if (const size_t brace = packed.find("|{"); brace != std::string::npos && !packed.empty() && packed.back() == '}') {
+		own = packed.substr(0, brace);
+		sub = packed.substr(brace + 2, packed.size() - brace - 3);
+	}
+	std::vector<std::string> fields;
+	std::istringstream in(own);
+	for (std::string field; std::getline(in, field, '|');) {
+		fields.push_back(field);
+	}
+	if (fields.size() < 11) {
+		return;
+	}
+	const auto sliceAt = [this](const std::string& field) -> const PieSlice* {
+		const int index = std::atoi(field.c_str());
+		return index >= 0 && index < static_cast<int>(m_CurrentPieSlices.size()) ? m_CurrentPieSlices[index] : nullptr;
+	};
+	m_EnabledState = static_cast<EnabledState>(std::atoi(fields[0].c_str()));
+	m_MenuMode = static_cast<MenuMode>(std::atoi(fields[1].c_str()));
+	m_EnableDisableAnimationTimer.SetStartSimTimeTicks(std::strtoll(fields[2].c_str(), nullptr, 10));
+	m_HoverTimer.SetStartSimTimeTicks(std::strtoll(fields[3].c_str(), nullptr, 10));
+	m_SubPieMenuHoverOpenTimer.SetStartSimTimeTicks(std::strtoll(fields[4].c_str(), nullptr, 10));
+	m_CursorAngle = std::strtof(fields[5].c_str(), nullptr);
+	m_CursorInVisiblePosition = fields[6] == "1";
+	m_HoveredPieSlice = sliceAt(fields[7]);
+	m_ActivatedPieSlice = sliceAt(fields[8]);
+	m_AlreadyActivatedPieSlice = sliceAt(fields[9]);
+	const PieSlice* subMenuSlice = sliceAt(fields[10]);
+	m_ActiveSubPieMenu = subMenuSlice ? subMenuSlice->GetSubPieMenu() : nullptr;
+	if (m_ActiveSubPieMenu && !sub.empty()) {
+		m_ActiveSubPieMenu->UnpackInteractionState(sub);
+	}
 }
 
 std::string PieMenu::DescribeInteractionState() const {

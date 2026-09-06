@@ -130,6 +130,11 @@ namespace RTE {
 		float m_JetTimeTotal; //!< The max total time, in ms, that the jetpack can be used without pause
 		float m_JetTimeLeft; //!< How much time left the jetpack can go, in ms
 		float m_JetThrustBonusMultiplier; //!< A multiplier bonus to our produced thrust, which doesn't cost extra fuel. Used for AI buffs.
+
+	public:
+		float GetJetThrustBonusMultiplier() const { return m_JetThrustBonusMultiplier; }
+
+	protected:
 		float m_JetReplenishRate; //!< A multiplier affecting how fast the jetpack fuel will replenish when not in use. 1 means that jet time replenishes at 2x speed in relation to depletion.
 		float m_MinimumFuelRatio; // Minimum ratio of current fuel to max fuel to be able to initiate the jetpack.
 		float m_JetAngleRange; //!< Ratio at which the jetpack angle follows aim angle

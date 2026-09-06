@@ -1446,14 +1446,34 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("MinimumFuelRatio", jetpackToSave->GetMinimumFuelRatio());
 			writer.NewPropertyWithValue("JumpAngleRange", jetpackToSave->GetJetAngleRange());
 			writer.NewPropertyWithValue("CanAdjustAngleWhileFiring", jetpackToSave->GetCanAdjustAngleWhileFiring());
+			writer.NewPropertyWithValue("SpecialBehaviour_JetThrustBonusMultiplier", jetpackToSave->GetJetThrustBonusMultiplier());
 		}
 
 		if (const Arm* armToSave = dynamic_cast<const Arm*>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("HeldDevice", armToSave->GetHeldDevice());
+			if (saveFullData) {
+				writer.NewPropertyWithValue("HandCurrentOffset", armToSave->GetHandCurrentOffset());
+				writer.NewPropertyWithValue("HandPosition", armToSave->GetHandPos());
+				writer.NewPropertyWithValue("HandPrevPosition", armToSave->GetHandPrevPos());
+				writer.NewPropertyWithValue("SpecialBehaviour_HandHasReachedCurrentTarget", armToSave->GetHandHasReachedCurrentTarget());
+				writer.NewPropertyWithValue("HandMovementDelayTimerStart", armToSave->GetHandMovementDelayTimerStart());
+				writer.NewPropertyWithValue("HandMovementDelayTimerLimitTicks", armToSave->GetHandMovementDelayTimerLimitTicks());
+				for (const std::string& target: armToSave->GetHandTargetsForSave()) {
+					writer.NewPropertyWithValue("AddHandTarget", target);
+				}
+				if (const HeldDevice* supported = armToSave->GetHeldDeviceThisArmIsTryingToSupport()) {
+					writer.NewPropertyWithValue("SupportedDeviceUniqueID", supported->GetUniqueID());
+				}
+			}
 		}
 
 		if (const Leg* legToSave = dynamic_cast<const Leg*>(sceneObjectToSave)) {
 			WriteHardcodedAttachableOrNone("Foot", legToSave->GetFoot());
+			if (saveFullData) {
+				writer.NewPropertyWithValue("AnkleOffset", legToSave->GetAnkleOffset());
+				writer.NewPropertyWithValue("TargetPosition", legToSave->GetTargetPosition());
+				writer.NewPropertyWithValue("SpecialBehaviour_NormalizedExtension", legToSave->GetNormalizedExtension());
+			}
 		}
 
 		if (const Turret* turretToSave = dynamic_cast<const Turret*>(sceneObjectToSave)) {
@@ -1519,6 +1539,29 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimProgress", actorToSave->GetSharpAimProgress());
 			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimMaxedOut", actorToSave->GetSharpAimMaxedOut());
 			writer.NewPropertyWithValue("SharpAimTimerStart", actorToSave->GetSharpAimTimerStart());
+			if (const PieMenu* pieMenu = actorToSave->GetPieMenu()) {
+				writer.NewPropertyWithValue("PieMenuState", pieMenu->PackInteractionState());
+			}
+			writer.NewPropertyWithValue("SpecialBehaviour_MovementState", static_cast<int>(actorToSave->GetMovementState()));
+			writer.NewPropertyWithValue("LastSecondTimerStart", actorToSave->GetLastSecondTimerStart());
+			writer.NewPropertyWithValue("StableRecoverTimerStart", actorToSave->GetStableRecoverTimerStart());
+			writer.NewPropertyWithValue("HeartBeatTimerStart", actorToSave->GetHeartBeatTimerStart());
+			writer.NewPropertyWithValue("NewControlTimerStart", actorToSave->GetNewControlTimerStart());
+			writer.NewPropertyWithValue("DeathTimerStart", actorToSave->GetDeathTimerStart());
+			writer.NewPropertyWithValue("AlarmTimerStart", actorToSave->GetAlarmTimerStart());
+			writer.NewPropertyWithValue("SpecialBehaviour_RecentMovement", actorToSave->GetRecentMovement());
+			writer.NewPropertyWithValue("SpecialBehaviour_LastSecondPos", actorToSave->GetLastSecondPos());
+			if (const long itemInReach = actorToSave->GetItemInReachUniqueID(); itemInReach > 0) {
+				writer.NewPropertyWithValue("ItemInReachUniqueID", itemInReach);
+			}
+			if (const long moveTarget = actorToSave->GetMOMoveTargetUniqueID(); moveTarget > 0) {
+				writer.NewPropertyWithValue("MOMoveTargetUniqueID", moveTarget);
+			}
+			writer.NewPropertyWithValue("SpecialBehaviour_LastAlarmPos", actorToSave->GetLastAlarmPosRaw());
+			writer.NewPropertyWithValue("SpecialBehaviour_ViewPoint", actorToSave->GetViewPointRaw());
+			writer.NewPropertyWithValue("SpecialBehaviour_GoldPicked", actorToSave->GetGoldPicked());
+			writer.NewPropertyWithValue("SpecialBehaviour_PrevHealth", actorToSave->GetPrevHealth());
+			writer.NewPropertyWithValue("SpecialBehaviour_SharpAimSpeed", actorToSave->GetSharpAimSpeed());
 
 			int aiModeToSave = actorToSave->GetAIMode() == Actor::AIMode::AIMODE_SQUAD ? Actor::AIMode::AIMODE_GOTO : actorToSave->GetAIMode();
 			if (aiModeToSave == Actor::AIMode::AIMODE_GOTO && (!actorToSave->GetMOMoveTarget() && g_SceneMan.ShortestDistance(actorToSave->GetMovePathEnd(), actorToSave->GetPos(), g_SceneMan.SceneWrapsX()).MagnitudeIsLessThan(1.0F))) {
@@ -1578,6 +1621,19 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				writer.NewPropertyWithValue("SharpAimRevertTimerStart", aHumanToSave->GetSharpAimRevertTimerStart());
 				writer.NewPropertyWithValue("SpecialBehaviour_CanActivateBGItem", aHumanToSave->GetCanActivateBGItem());
 				writer.NewPropertyWithValue("SpecialBehaviour_TriggerPulled", aHumanToSave->GetTriggerPulled());
+				writer.NewPropertyWithValue("SpecialBehaviour_WaitingToReloadOffhand", aHumanToSave->IsWaitingToReloadOffhand());
+				writer.NewPropertyWithValue("SpecialBehaviour_ProneState", static_cast<int>(aHumanToSave->GetProneState()));
+				writer.NewPropertyWithValue("SpecialBehaviour_ArmsState", static_cast<int>(aHumanToSave->GetUpperBodyState()));
+				writer.NewPropertyWithValue("SpecialBehaviour_ArmClimbingFG", aHumanToSave->IsArmClimbing(0));
+				writer.NewPropertyWithValue("SpecialBehaviour_ArmClimbingBG", aHumanToSave->IsArmClimbing(1));
+				writer.NewPropertyWithValue("SpecialBehaviour_Aiming", aHumanToSave->IsAiming());
+				writer.NewPropertyWithValue("SpecialBehaviour_StrideFrame", aHumanToSave->StrideFrame());
+				writer.NewPropertyWithValue("SpecialBehaviour_StrideStart", aHumanToSave->GetStrideStart());
+				writer.NewPropertyWithValue("ProneTimerStart", aHumanToSave->GetProneTimerStart());
+				writer.NewPropertyWithValue("StrideTimerStart", aHumanToSave->GetStrideTimerStart());
+				writer.NewPropertyWithValue("ThrowTimerStart", aHumanToSave->GetThrowTimerStart());
+				writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmount", aHumanToSave->GetCrouchAmount());
+				writer.NewPropertyWithValue("SpecialBehaviour_CrouchAmountOverride", aHumanToSave->GetCrouchAmountOverride());
 			} else if (const ACrab* aCrabToSave = dynamic_cast<const ACrab*>(sceneObjectToSave)) {
 				WriteHardcodedAttachableOrNone("Turret", aCrabToSave->GetTurret());
 				WriteHardcodedAttachableOrNone("Jetpack", aCrabToSave->GetJetpack());
@@ -1629,6 +1685,21 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				WriteHardcodedAttachableOrNone("UpLeftThruster", acDropShipToSave->GetULeftThruster());
 				WriteHardcodedAttachableOrNone("RightHatchDoor", acDropShipToSave->GetRightHatch());
 				WriteHardcodedAttachableOrNone("LeftHatchDoor", acDropShipToSave->GetLeftHatch());
+				writer.NewPropertyWithValue("SpecialBehaviour_LateralControl", acDropShipToSave->GetLateralControl());
+			}
+			if (const ACraft* aCraftToSave = dynamic_cast<const ACraft*>(sceneObjectToSave)) {
+				writer.NewPropertyWithValue("SpecialBehaviour_HatchState", static_cast<int>(aCraftToSave->GetHatchState()));
+				writer.NewPropertyWithValue("HatchTimerStart", aCraftToSave->GetHatchTimerStart());
+				writer.NewPropertyWithValue("ExitTimerStart", aCraftToSave->GetExitTimerStart());
+				writer.NewPropertyWithValue("FlippedTimerStart", aCraftToSave->GetFlippedTimerStart());
+				writer.NewPropertyWithValue("CrashTimerStart", aCraftToSave->GetCrashTimerStart());
+				writer.NewPropertyWithValue("NetworkDeliveryTimerStart", aCraftToSave->GetNetworkDeliveryTimerStart());
+				writer.NewPropertyWithValue("SpecialBehaviour_NetworkDelivery", aCraftToSave->IsNetworkDelivery());
+				writer.NewPropertyWithValue("SpecialBehaviour_ExitLinePhase", aCraftToSave->GetExitLinePhase());
+				writer.NewPropertyWithValue("SpecialBehaviour_CurrentExit", aCraftToSave->GetCurrentExitIndex());
+				for (long uid: aCraftToSave->GetExitIncomingMOUniqueIDs()) {
+					writer.NewPropertyWithValue("ExitIncomingMOUniqueID", uid);
+				}
 			}
 		} else if (const AHuman* aHumanToSave = dynamic_cast<const AHuman*>(sceneObjectToSave)) {
 			if (const HeldDevice* equippedItem = aHumanToSave->GetEquippedItem()) {

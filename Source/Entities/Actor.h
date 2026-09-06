@@ -308,6 +308,25 @@ namespace RTE {
 		/// Gets this Actor's MovementState.
 		/// @return This Actor's MovementState.
 		MovementState GetMovementState() const { return m_MovementState; }
+		const Vector& GetRecentMovement() const { return m_RecentMovement; }
+		const Vector& GetLastSecondPos() const { return m_LastSecondPos; }
+		long GetItemInReachUniqueID() const;
+		long GetMOMoveTargetUniqueID() const { return m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : m_FaithfulMOMoveTargetUID; }
+		const Vector& GetLastAlarmPosRaw() const { return m_LastAlarmPos; }
+		const Vector& GetViewPointRaw() const { return m_ViewPoint; }
+		bool GetGoldPicked() const { return m_GoldPicked; }
+		float GetSharpAimSpeed() const { return m_SharpAimSpeed; }
+		int64_t GetLastSecondTimerStart() const { return m_LastSecondTimer.GetStartSimTimeMS(); }
+		int64_t GetStableRecoverTimerStart() const { return m_StableRecoverTimer.GetStartSimTimeMS(); }
+		int64_t GetHeartBeatTimerStart() const { return m_HeartBeat.GetStartSimTimeMS(); }
+		int64_t GetNewControlTimerStart() const { return m_NewControlTmr.GetStartSimTimeMS(); }
+		int64_t GetDeathTimerStart() const { return m_DeathTmr.GetStartSimTimeMS(); }
+		int64_t GetAlarmTimerStart() const { return m_AlarmTimer.GetStartSimTimeMS(); }
+		double GetLastSecondTimerElapsedSimMS() const { return m_LastSecondTimer.GetElapsedSimTimeMS(); }
+		double GetStableRecoverTimerElapsedSimMS() const { return m_StableRecoverTimer.GetElapsedSimTimeMS(); }
+		double GetHeartBeatTimerElapsedSimMS() const { return m_HeartBeat.GetElapsedSimTimeMS(); }
+		double GetNewControlTimerElapsedSimMS() const { return m_NewControlTmr.GetElapsedSimTimeMS(); }
+		double GetAlarmTimerElapsedSimMS() const { return m_AlarmTimer.GetElapsedSimTimeMS(); }
 
 		/// Sets this Actor's MovementState to the new state.
 		/// @param newMovementState This Actor's new MovementState.
@@ -960,6 +979,9 @@ namespace RTE {
 		AtomGroup* m_pHitBody;
 		Controller m_Controller;
 		long long m_PersistedControllerInputMode; //!< Saved wire-applied input mode, -1 when absent.
+		std::string m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
+		Vector m_PersistedViewPoint; //!< Saved view point, applied on snapshot adopt (Create re-derives the live one).
+		bool m_HasPersistedViewPoint = false;
 		long long m_PersistedControllerPlayer; //!< Saved wire-applied player binding.
 		bool m_PlayerControllable; //!< Whether or not this Actor can be controlled by human players.
 

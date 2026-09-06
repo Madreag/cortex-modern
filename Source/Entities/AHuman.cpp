@@ -518,6 +518,39 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("SpecialBehaviour_CanActivateBGItem", { reader >> m_CanActivateBGItem; });
 	MatchProperty("SpecialBehaviour_TriggerPulled", { reader >> m_TriggerPulled; });
+	MatchProperty("SpecialBehaviour_WaitingToReloadOffhand", { reader >> m_WaitingToReloadOffhand; });
+	MatchProperty("SpecialBehaviour_ProneState", {
+		int state = 0;
+		reader >> state;
+		m_ProneState = static_cast<ProneState>(state);
+	});
+	MatchProperty("SpecialBehaviour_ArmsState", {
+		int state = 0;
+		reader >> state;
+		m_ArmsState = static_cast<UpperBodyState>(state);
+	});
+	MatchProperty("SpecialBehaviour_ArmClimbingFG", { reader >> m_ArmClimbing[FGROUND]; });
+	MatchProperty("SpecialBehaviour_ArmClimbingBG", { reader >> m_ArmClimbing[BGROUND]; });
+	MatchProperty("SpecialBehaviour_Aiming", { reader >> m_Aiming; });
+	MatchProperty("SpecialBehaviour_StrideFrame", { reader >> m_StrideFrame; });
+	MatchProperty("SpecialBehaviour_StrideStart", { reader >> m_StrideStart; });
+	MatchProperty("ProneTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_ProneTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("StrideTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_StrideTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("ThrowTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_ThrowTmr.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("SpecialBehaviour_CrouchAmount", { reader >> m_CrouchAmount; });
+	MatchProperty("SpecialBehaviour_CrouchAmountOverride", { reader >> m_CrouchAmountOverride; });
 
 	MatchProperty("ThrowPrepTime", { reader >> m_ThrowPrepTime; });
 	MatchProperty("Head", { SetHead(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });

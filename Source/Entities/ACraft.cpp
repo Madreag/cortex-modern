@@ -1,4 +1,5 @@
 #include "ACraft.h"
+#include <algorithm>
 
 #include "AtomGroup.h"
 #include "Leg.h"
@@ -188,6 +189,8 @@ void ACraft::Clear() {
 	m_MovementState = NOMOVE;
 	m_HatchState = CLOSED;
 	m_HatchTimer.Reset();
+	m_PersistedHatchTimerAnchor = {};
+	m_PersistedExitTimerAnchor = {};
 	m_HatchDelay = 0;
 	m_NetworkDelivery = false;
 	m_NetworkDeliveryTimer.Reset();
@@ -235,6 +238,8 @@ int ACraft::Create(const ACraft& reference) {
 
 	m_MovementState = reference.m_MovementState;
 	m_HatchState = reference.m_HatchState;
+	m_PersistedHatchTimerAnchor = reference.m_PersistedHatchTimerAnchor;
+	m_PersistedExitTimerAnchor = reference.m_PersistedExitTimerAnchor;
 	m_HatchDelay = reference.m_HatchDelay;
 	if (reference.m_HatchOpenSound) {
 		m_HatchOpenSound = dynamic_cast<SoundContainer*>(reference.m_HatchOpenSound->Clone());
@@ -319,8 +324,73 @@ int ACraft::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("MaxPassengers", { reader >> m_MaxPassengers; });
 	MatchProperty("ScuttleIfFlippedTime", { reader >> m_ScuttleIfFlippedTime; });
 	MatchProperty("ScuttleOnDeath", { reader >> m_ScuttleOnDeath; });
+	MatchProperty("SpecialBehaviour_HatchState", { reader >> m_HatchState; });
+	MatchProperty("HatchTimerStart", {
+		reader >> m_PersistedHatchTimerAnchor.startTicks;
+		m_PersistedHatchTimerAnchor.pending = true;
+	});
+	MatchProperty("ExitTimerStart", {
+		reader >> m_PersistedExitTimerAnchor.startTicks;
+		m_PersistedExitTimerAnchor.pending = true;
+	});
+	MatchProperty("FlippedTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_FlippedTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("CrashTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_CrashTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("NetworkDeliveryTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_NetworkDeliveryTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("SpecialBehaviour_NetworkDelivery", { reader >> m_NetworkDelivery; });
+	MatchProperty("SpecialBehaviour_ExitLinePhase", { reader >> m_ExitLinePhase; });
+	MatchProperty("SpecialBehaviour_CurrentExit", {
+		int index = 0;
+		reader >> index;
+		m_CurrentExit = m_Exits.begin();
+		std::advance(m_CurrentExit, std::min<int>(std::max(index, 0), static_cast<int>(m_Exits.size())));
+	});
+	MatchProperty("ExitIncomingMOUniqueID", {
+		long uid = 0;
+		reader >> uid;
+		if (m_ReadExitIncomingCursor < m_Exits.size()) {
+			std::next(m_Exits.begin(), static_cast<long>(m_ReadExitIncomingCursor))->m_FaithfulIncomingMOUID = uid;
+		}
+		++m_ReadExitIncomingCursor;
+	});
 
 	EndPropertyList;
+}
+
+int ACraft::GetCurrentExitIndex() const {
+	return static_cast<int>(std::distance(m_Exits.begin(), std::list<Exit>::const_iterator(m_CurrentExit)));
+}
+
+std::vector<long> ACraft::GetExitIncomingMOUniqueIDs() const {
+	std::vector<long> uids;
+	uids.reserve(m_Exits.size());
+	for (const Exit& exit: m_Exits) {
+		uids.push_back(exit.m_pIncomingMO ? exit.m_pIncomingMO->GetUniqueID() : exit.m_FaithfulIncomingMOUID);
+	}
+	return uids;
+}
+
+void ACraft::AdoptPersistedUniqueID() {
+	Actor::AdoptPersistedUniqueID();
+	m_PersistedHatchTimerAnchor.Apply(m_HatchTimer);
+	m_PersistedExitTimerAnchor.Apply(m_ExitTimer);
+}
+
+void ACraft::DiscardPersistedSnapshotState() {
+	Actor::DiscardPersistedSnapshotState();
+	m_PersistedHatchTimerAnchor.pending = false;
+	m_PersistedExitTimerAnchor.pending = false;
 }
 
 int ACraft::Save(Writer& writer) const {
