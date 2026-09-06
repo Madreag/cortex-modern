@@ -3297,11 +3297,14 @@ void MovableMan::TravelStage(MovableObject* mo, bool actor) {
 	mo->NewFrame();
 }
 
+// The pie command lands before the pre-controller pass that consumes its controller states, as the activity used to do.
+void MovableMan::PreControllerStage(Actor* actor) {
+	actor->HandlePendingPieCommand();
+	actor->PreControllerUpdate();
+}
+
 void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorUpdate"), actor);
-	if (actor) {
-		static_cast<Actor*>(mo)->HandlePendingPieCommand();
-	}
 	mo->Update();
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
@@ -3615,7 +3618,7 @@ void MovableMan::PreControllerUpdate() {
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsUpdate);
 	for (Actor* actor: m_Actors) {
-		actor->PreControllerUpdate();
+		PreControllerStage(actor);
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsUpdate);
 

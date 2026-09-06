@@ -170,7 +170,7 @@ namespace RTE {
 				// The same stages in the same order as the world update: travel, pre-controller, wire, update, post.
 				MovableMan::TravelStage(clone, true);
 				Trace("traveled");
-				clone->PreControllerUpdate();
+				MovableMan::PreControllerStage(clone);
 				for (const ControllerFrame& frame: frames) {
 					if (frame.actorUniqueID == static_cast<int64_t>(clone->GetUniqueID())) {
 						MovableMan::ApplyLockstepFrameToActor(*clone, frame, tick, &error);
