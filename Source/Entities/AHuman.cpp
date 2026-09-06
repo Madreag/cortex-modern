@@ -3377,8 +3377,8 @@ void AHuman::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 		// Draw the aiming dots for the currently held device.
 		if (m_ArmsState == THROWING_PREP) {
 			DrawThrowingReticle(pTargetBitmap, targetPos, GetThrowProgress());
-		} else if (m_Controller.IsState(AIM_SHARP) || (m_Controller.IsPlayerControlled() && !m_Controller.IsState(PIE_MENU_ACTIVE))) {
-			m_pFGArm->GetHeldDevice()->DrawHUD(pTargetBitmap, targetPos, whichScreen, m_Controller.IsState(AIM_SHARP) && m_Controller.IsPlayerControlled());
+		} else if (m_Controller.IsState(AIM_SHARP) || (m_Controller.IsSeatedByPlayer() && !m_Controller.IsState(PIE_MENU_ACTIVE))) {
+			m_pFGArm->GetHeldDevice()->DrawHUD(pTargetBitmap, targetPos, whichScreen, m_Controller.IsState(AIM_SHARP) && m_Controller.IsSeatedByPlayer());
 		}
 	}
 
@@ -3390,7 +3390,7 @@ void AHuman::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 	GUIFont* pSmallFont = g_FrameMan.GetSmallFont();
 
 	// Only show extra HUD if this guy is controlled by the same player that this screen belongs to
-	if (m_Controller.IsPlayerControlled() && g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetPlayer()) == whichScreen && pSmallFont && pSymbolFont) {
+	if (m_Controller.IsSeatedByPlayer() && g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetSeatPlayer()) == whichScreen && pSmallFont && pSymbolFont) {
 		AllegroBitmap allegroBitmap(pTargetBitmap);
 		/*
 		        // Device aiming reticle

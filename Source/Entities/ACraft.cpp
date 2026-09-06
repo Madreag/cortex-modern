@@ -590,8 +590,8 @@ void ACraft::DropAllInventory() {
 				g_MovableMan.AddActor(pPassenger);
 
 				// If this craft is being directly controlled by a player, and has landed, switch control to the first guy out
-				if (pPassenger->GetTeam() == m_Team && m_Controller.IsPlayerControlled() && g_ActivityMan.GetActivity()->GetControlledActor(m_Controller.GetPlayer()) == this && m_LandingCraft) {
-					g_ActivityMan.GetActivity()->SwitchToActor(pPassenger, m_Controller.GetPlayer(), m_Team);
+				if (pPassenger->GetTeam() == m_Team && m_Controller.IsSeatedByPlayer() && g_ActivityMan.GetActivity()->GetControlledActor(m_Controller.GetSeatPlayer()) == this && m_LandingCraft) {
+					g_ActivityMan.GetActivity()->SwitchToActor(pPassenger, m_Controller.GetSeatPlayer(), m_Team);
 					// To avoid jump in the view, Update the passenger so its viewpoint is next to it and not at 0,0
 					pPassenger->Update();
 				}
@@ -749,8 +749,8 @@ void ACraft::Update() {
 					if (pCaughtActor = dynamic_cast<Actor*>(pNewObject)) {
 						// Switch control to this craft if the Actor we just caught is on our team and currently player controlled
 						// Set AI controller of the Actor going into the ship
-						if (pCaughtActor->GetTeam() == m_Team && g_ActivityMan.GetActivity() && pCaughtActor->GetController()->IsPlayerControlled())
-							g_ActivityMan.GetActivity()->SwitchToActor(this, pCaughtActor->GetController()->GetPlayer(), pCaughtActor->GetTeam());
+						if (pCaughtActor->GetTeam() == m_Team && g_ActivityMan.GetActivity() && pCaughtActor->GetController()->IsSeatedByPlayer())
+							g_ActivityMan.GetActivity()->SwitchToActor(this, pCaughtActor->GetController()->GetSeatPlayer(), pCaughtActor->GetTeam());
 						// Add (copy) of caught Actor to this' inventory
 						AddInventoryItem(dynamic_cast<MovableObject*>(pCaughtActor->Clone()));
 						// Delete the original from scene - this is safer than 'removing' or handing over ownership halfway through MovableMan's update

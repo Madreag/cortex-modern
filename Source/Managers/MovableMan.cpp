@@ -301,13 +301,19 @@ bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& 
 		}
 		return false;
 	}
-	if (!ControllerFrameCodec::Apply(frame, *actor.GetController(), &applyError)) {
+	Controller& controller = *actor.GetController();
+	const Controller::InputMode previousMode = controller.GetInputMode();
+	const int previousPlayer = controller.GetPlayer();
+	if (!ControllerFrameCodec::Apply(frame, controller, &applyError)) {
 		if (error) {
 			*error = "lockstep controller apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
 		}
 		return false;
 	}
-	actor.GetController()->SetWireApplyTick(static_cast<int64_t>(simTick));
+	controller.SetWireApplyTick(static_cast<int64_t>(simTick));
+	if (controller.GetInputMode() != previousMode || controller.GetPlayer() != previousPlayer) {
+		actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+	}
 	return true;
 }
 
@@ -2053,8 +2059,8 @@ void MovableMan::ChangeActorTeam(Actor* pActor, int team) {
 		return;
 	}
 
-	if (pActor->IsPlayerControlled()) {
-		g_ActivityMan.GetActivity()->LoseControlOfActor(pActor->GetController()->GetPlayer());
+	if (pActor->GetController()->IsSeatedByPlayer()) {
+		g_ActivityMan.GetActivity()->LoseControlOfActor(pActor->GetController()->GetSeatPlayer());
 	}
 
 	RemoveActorFromTeamRoster(pActor);

@@ -946,7 +946,7 @@ void HDFirearm::Update() {
 
 		// Screen shake
 		if (pActor) {
-			int controllingPlayer = pActor->GetController()->GetPlayer();
+			int controllingPlayer = pActor->GetController()->GetSeatPlayer();
 			int screenId = g_ActivityMan.GetActivity()->ScreenOfPlayer(controllingPlayer);
 			if (screenId != -1) {
 				const float shakiness = g_CameraMan.GetDefaultShakePerUnitOfRecoilEnergy();
