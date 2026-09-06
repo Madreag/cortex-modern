@@ -1,4 +1,7 @@
 #include "AEmitter.h"
+
+#include <bit>
+#include "SceneMan.h"
 #include "Atom.h"
 #include "Emission.h"
 #include "PresetMan.h"
@@ -40,6 +43,7 @@ void AEmitter::Clear() {
 	m_BurstTimer.SetElapsedRealTimeS(50000);
 	m_PersistedBurstTimerAnchor = {};
 	m_PersistedEmissionAccumulators.clear();
+	m_PersistedEmissionTimers.clear();
 	m_PlayBurstSound = true;
 	m_EmitAngle.Reset();
 	m_EmissionOffset.Reset();
@@ -96,6 +100,7 @@ int AEmitter::Create(const AEmitter& reference) {
 	m_PersistedBurstTimerAnchor = reference.m_PersistedBurstTimerAnchor;
 	m_PersistedLastEmitTimerAnchor = reference.m_PersistedLastEmitTimerAnchor;
 	m_PersistedEmissionAccumulators = reference.m_PersistedEmissionAccumulators;
+	m_PersistedEmissionTimers = reference.m_PersistedEmissionTimers;
 	m_PlayBurstSound = reference.m_PlayBurstSound;
 	m_EmitAngle = reference.m_EmitAngle;
 	m_EmissionOffset = reference.m_EmissionOffset;
@@ -176,6 +181,9 @@ int AEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_PersistedBurstTimerAnchor.startTicks;
 		m_PersistedBurstTimerAnchor.pending = true;
 	});
+	MatchProperty("SpecialBehaviour_WasEmitting", { reader >> m_WasEmitting; });
+	MatchProperty("SpecialBehaviour_AvgBurstImpulse", { reader >> m_AvgBurstImpulse; });
+	MatchProperty("SpecialBehaviour_AvgImpulse", { reader >> m_AvgImpulse; });
 	MatchProperty("LastEmitTimerStart", {
 		reader >> m_PersistedLastEmitTimerAnchor.startTicks;
 		m_PersistedLastEmitTimerAnchor.pending = true;
@@ -185,8 +193,31 @@ int AEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> accumulator;
 		m_PersistedEmissionAccumulators.push_back(accumulator);
 	});
+	MatchProperty("EmissionTimers", {
+		std::string packed;
+		reader >> packed;
+		m_PersistedEmissionTimers.push_back(packed);
+	});
 
 	EndPropertyList;
+}
+
+std::vector<std::string> AEmitter::GetEmissionTimers() const {
+	std::vector<std::string> timers;
+	timers.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		timers.push_back(emission->PackTimers());
+	}
+	return timers;
+}
+
+std::vector<std::pair<double, double>> AEmitter::GetEmissionTimerElapsed() const {
+	std::vector<std::pair<double, double>> elapsed;
+	elapsed.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		elapsed.emplace_back(emission->GetStartTimerElapsedSimMS(), emission->GetStopTimerElapsedSimMS());
+	}
+	return elapsed;
 }
 
 std::vector<double> AEmitter::GetEmissionAccumulators() const {
@@ -212,6 +243,16 @@ void AEmitter::AdoptPersistedUniqueID() {
 		}
 		m_PersistedEmissionAccumulators.clear();
 	}
+	if (!m_PersistedEmissionTimers.empty()) {
+		size_t index = 0;
+		for (Emission* emission: m_EmissionList) {
+			if (index >= m_PersistedEmissionTimers.size()) {
+				break;
+			}
+			emission->UnpackTimers(m_PersistedEmissionTimers[index++]);
+		}
+		m_PersistedEmissionTimers.clear();
+	}
 }
 
 void AEmitter::DiscardPersistedSnapshotState() {
@@ -219,6 +260,7 @@ void AEmitter::DiscardPersistedSnapshotState() {
 	m_PersistedBurstTimerAnchor.pending = false;
 	m_PersistedLastEmitTimerAnchor.pending = false;
 	m_PersistedEmissionAccumulators.clear();
+	m_PersistedEmissionTimers.clear();
 }
 
 int AEmitter::Save(Writer& writer) const {

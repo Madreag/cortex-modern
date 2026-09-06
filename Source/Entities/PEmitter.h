@@ -61,6 +61,19 @@ namespace RTE {
 		/// Returns whether this emitter was emitting last frame.
 		/// @return Whether this emitter was emitting last frame.
 		bool WasEmitting() const { return m_WasEmitting; }
+		long GetEmitCount() const { return m_EmitCount; }
+		int64_t GetBurstTimerStart() const { return m_BurstTimer.GetStartSimTimeMS(); }
+		int64_t GetLastEmitTimerStart() const { return m_LastEmitTmr.GetStartSimTimeMS(); }
+		double GetBurstTimerElapsedSimMS() const { return m_BurstTimer.GetElapsedSimTimeMS(); }
+		double GetLastEmitTimerElapsedSimMS() const { return m_LastEmitTmr.GetElapsedSimTimeMS(); }
+		float GetAvgBurstImpulse() const { return m_AvgBurstImpulse; }
+		float GetAvgImpulse() const { return m_AvgImpulse; }
+		std::vector<double> GetEmissionAccumulators() const;
+		std::vector<std::string> GetEmissionTimers() const;
+		std::vector<std::pair<double, double>> GetEmissionTimerElapsed() const;
+
+		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Reset the timers of all emissions so they will start/stop at the
 		/// correct relative offsets from now.
@@ -289,6 +302,10 @@ namespace RTE {
 		bool m_EmitEnabled;
 		// Whether or not the it was emitting last frame or not.
 		bool m_WasEmitting;
+		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
+		PersistedTimerAnchor m_PersistedLastEmitTimerAnchor;
+		std::vector<double> m_PersistedEmissionAccumulators;
+		std::vector<std::string> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
 		// The number of emissions emitted since emission was last enabled
 		long m_EmitCount;
 		// The max number of emissions to emit per emit being enabled

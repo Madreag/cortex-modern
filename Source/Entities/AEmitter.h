@@ -57,6 +57,8 @@ namespace RTE {
 		/// Returns whether this emitter was emitting last frame.
 		/// @return Whether this emitter was emitting last frame.
 		bool WasEmitting() const { return m_WasEmitting; }
+		float GetAvgBurstImpulse() const { return m_AvgBurstImpulse; }
+		float GetAvgImpulse() const { return m_AvgImpulse; }
 
 		/// Reset the timers of all emissions so they will start/stop at the
 		/// correct relative offsets from now.
@@ -114,12 +116,16 @@ namespace RTE {
 
 		/// Gets the burst spacing timer start in raw sim ticks, for full-game saves.
 		int64_t GetBurstTimerStart() const { return m_BurstTimer.GetStartSimTimeMS(); }
+		double GetBurstTimerElapsedSimMS() const { return m_BurstTimer.GetElapsedSimTimeMS(); }
+		double GetLastEmitTimerElapsedSimMS() const { return m_LastEmitTmr.GetElapsedSimTimeMS(); }
 
 		/// Gets the emission timer start in raw sim ticks, for full-game saves.
 		int64_t GetLastEmitTimerStart() const { return m_LastEmitTmr.GetStartSimTimeMS(); }
 
 		/// Gets each emission's fractional-rate accumulator in list order, for full-game saves.
 		std::vector<double> GetEmissionAccumulators() const;
+		std::vector<std::string> GetEmissionTimers() const;
+		std::vector<std::pair<double, double>> GetEmissionTimerElapsed() const;
 
 		void AdoptPersistedUniqueID() override;
 		void DiscardPersistedSnapshotState() override;
@@ -414,6 +420,7 @@ namespace RTE {
 		Timer m_BurstTimer;
 		PersistedTimerAnchor m_PersistedBurstTimerAnchor;
 		std::vector<double> m_PersistedEmissionAccumulators;
+		std::vector<std::string> m_PersistedEmissionTimers; //!< Saved per-emission start/stop timers, applied on snapshot adopt.
 		// Whether to play the BurstSound when a burst is triggered or not.
 		bool m_PlayBurstSound;
 		// The angle of the direction the emitted particles will head in.

@@ -26,6 +26,10 @@ void PEmitter::Clear() {
 	m_EndSound.Reset();
 	m_EmitEnabled = false;
 	m_WasEmitting = false;
+	m_PersistedBurstTimerAnchor = {};
+	m_PersistedLastEmitTimerAnchor = {};
+	m_PersistedEmissionAccumulators.clear();
+	m_PersistedEmissionTimers.clear();
 	m_EmitCount = 0;
 	m_EmitCountLimit = 0;
 	m_NegativeThrottleMultiplier = 1.0F;
@@ -68,6 +72,10 @@ int PEmitter::Create(const PEmitter& reference) {
 	m_BurstSound = reference.m_BurstSound;
 	m_EndSound = reference.m_EndSound;
 	m_EmitEnabled = reference.m_EmitEnabled;
+	m_PersistedBurstTimerAnchor = reference.m_PersistedBurstTimerAnchor;
+	m_PersistedLastEmitTimerAnchor = reference.m_PersistedLastEmitTimerAnchor;
+	m_PersistedEmissionAccumulators = reference.m_PersistedEmissionAccumulators;
+	m_PersistedEmissionTimers = reference.m_PersistedEmissionTimers;
 	m_EmitCount = reference.m_EmitCount;
 	m_EmitCountLimit = reference.m_EmitCountLimit;
 	m_NegativeThrottleMultiplier = reference.m_NegativeThrottleMultiplier;
@@ -139,6 +147,27 @@ int PEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SustainBurstSound", { reader >> m_SustainBurstSound; });
 	MatchProperty("BurstSoundFollowsEmitter", { reader >> m_BurstSoundFollowsEmitter; });
 	MatchProperty("LoudnessOnEmit", { reader >> m_LoudnessOnEmit; });
+	MatchProperty("BurstTimerStart", {
+		reader >> m_PersistedBurstTimerAnchor.startTicks;
+		m_PersistedBurstTimerAnchor.pending = true;
+	});
+	MatchProperty("LastEmitTimerStart", {
+		reader >> m_PersistedLastEmitTimerAnchor.startTicks;
+		m_PersistedLastEmitTimerAnchor.pending = true;
+	});
+	MatchProperty("EmissionAccumulator", {
+		double accumulator = 0;
+		reader >> accumulator;
+		m_PersistedEmissionAccumulators.push_back(accumulator);
+	});
+	MatchProperty("EmissionTimers", {
+		std::string packed;
+		reader >> packed;
+		m_PersistedEmissionTimers.push_back(packed);
+	});
+	MatchProperty("SpecialBehaviour_WasEmitting", { reader >> m_WasEmitting; });
+	MatchProperty("SpecialBehaviour_AvgBurstImpulse", { reader >> m_AvgBurstImpulse; });
+	MatchProperty("SpecialBehaviour_AvgImpulse", { reader >> m_AvgImpulse; });
 
 	EndPropertyList;
 }
@@ -449,4 +478,65 @@ void PEmitter::Draw(BITMAP* pTargetBitmap,
                     DrawMode mode,
                     bool onlyPhysical) const {
 	MOSParticle::Draw(pTargetBitmap, targetPos, mode, onlyPhysical);
+}
+
+std::vector<std::string> PEmitter::GetEmissionTimers() const {
+	std::vector<std::string> timers;
+	timers.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		timers.push_back(emission->PackTimers());
+	}
+	return timers;
+}
+
+std::vector<std::pair<double, double>> PEmitter::GetEmissionTimerElapsed() const {
+	std::vector<std::pair<double, double>> elapsed;
+	elapsed.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		elapsed.emplace_back(emission->GetStartTimerElapsedSimMS(), emission->GetStopTimerElapsedSimMS());
+	}
+	return elapsed;
+}
+
+std::vector<double> PEmitter::GetEmissionAccumulators() const {
+	std::vector<double> accumulators;
+	accumulators.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		accumulators.push_back(emission->m_Accumulator);
+	}
+	return accumulators;
+}
+
+void PEmitter::AdoptPersistedUniqueID() {
+	MOSParticle::AdoptPersistedUniqueID();
+	m_PersistedBurstTimerAnchor.Apply(m_BurstTimer);
+	m_PersistedLastEmitTimerAnchor.Apply(m_LastEmitTmr);
+	if (!m_PersistedEmissionAccumulators.empty()) {
+		size_t index = 0;
+		for (Emission* emission: m_EmissionList) {
+			if (index >= m_PersistedEmissionAccumulators.size()) {
+				break;
+			}
+			emission->m_Accumulator = m_PersistedEmissionAccumulators[index++];
+		}
+		m_PersistedEmissionAccumulators.clear();
+	}
+	if (!m_PersistedEmissionTimers.empty()) {
+		size_t index = 0;
+		for (Emission* emission: m_EmissionList) {
+			if (index >= m_PersistedEmissionTimers.size()) {
+				break;
+			}
+			emission->UnpackTimers(m_PersistedEmissionTimers[index++]);
+		}
+		m_PersistedEmissionTimers.clear();
+	}
+}
+
+void PEmitter::DiscardPersistedSnapshotState() {
+	MOSParticle::DiscardPersistedSnapshotState();
+	m_PersistedBurstTimerAnchor.pending = false;
+	m_PersistedLastEmitTimerAnchor.pending = false;
+	m_PersistedEmissionAccumulators.clear();
+	m_PersistedEmissionTimers.clear();
 }
