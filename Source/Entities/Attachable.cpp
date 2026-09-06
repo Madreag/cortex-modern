@@ -527,8 +527,10 @@ void Attachable::SetParent(MOSRotating* newParent) {
 
 	if (newParent) {
 		m_Parent = newParent;
-		m_Team = newParent->GetTeam();
-		if (InheritsHFlipped() != 0) {
+		if (!faithful) {
+			m_Team = newParent->GetTeam();
+		}
+		if (InheritsHFlipped() != 0 && !faithful) {
 			m_HFlipped = m_InheritsHFlipped == 1 ? m_Parent->IsHFlipped() : !m_Parent->IsHFlipped();
 		}
 		if (InheritsRotAngle() && !faithful) {
