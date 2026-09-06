@@ -349,6 +349,15 @@ namespace RTE {
 		void UpdateEditing();
 
 		/// Updates the state of this Activity.
+		/// Keeps faithful copies of the pending deliveries, crafts cloned off-world, as the rollback snapshot.
+		void CaptureDeliveriesForRollback();
+
+		/// Replaces the pending deliveries with registered faithful clones of the rollback snapshot.
+		void RestoreDeliveriesFromRollback();
+
+		/// Drops the rollback delivery snapshot and its off-world crafts.
+		void ClearRollbackDeliveries();
+
 		virtual void Update();
 
 		/// Updates the render/realtime state of this Activity. Supposed to be done every frame before drawing.
@@ -600,6 +609,7 @@ namespace RTE {
 
 		// The delivery queue which contains all the info about all the made orders currently in transit to delivery
 		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
+		std::array<std::deque<Delivery>, Teams::MaxTeamCount> m_RollbackDeliveries; //!< Off-world faithful copies of the pending deliveries for a rollback restore.
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
 		// How wide around the brain the automatic LZ is following
