@@ -1,4 +1,7 @@
 #include "UInputMan.h"
+#include "InputScript.h"
+#include <iostream>
+#include "TimerMan.h"
 #include "Constants.h"
 #include "SceneMan.h"
 #include "ActivityMan.h"
@@ -137,6 +140,9 @@ void UInputMan::LoadDeviceIcons() {
 }
 
 Vector UInputMan::AnalogMoveValues(int whichPlayer) {
+	if (InputScript::DrivesPlayer(whichPlayer)) {
+		return Vector(0, 0);
+	}
 	// Determinism runs are hermetic: never feed live host input into the sim, or the per-tick
 	// controller hash gets perturbed by host cursor / gamepad jitter.
 	if (g_MetricsCollector.IsRecordingTickHashes()) {
@@ -160,6 +166,10 @@ Vector UInputMan::AnalogMoveValues(int whichPlayer) {
 }
 
 Vector UInputMan::AnalogAimValues(int whichPlayer) {
+	if (InputScript::DrivesPlayer(whichPlayer)) {
+		Vector aim;
+		return InputScript::AimAt(whichPlayer, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), aim) ? aim : Vector(0, 0);
+	}
 	// See AnalogMoveValues — determinism runs must not read live host input.
 	if (g_MetricsCollector.IsRecordingTickHashes()) {
 		return Vector(0, 0);
@@ -382,6 +392,10 @@ void UInputMan::SetAbsoluteMousePosition(const Vector& pos, int whichPlayer) {
 }
 
 Vector UInputMan::GetMouseMovement(int whichPlayer) const {
+	if (whichPlayer != Players::NoPlayer && InputScript::DrivesPlayer(whichPlayer)) {
+		Vector movement;
+		return InputScript::MouseAt(whichPlayer, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), movement) ? movement : Vector(0, 0);
+	}
 	if (whichPlayer == Players::NoPlayer || (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB && !m_EnableMultiMouseKeyboard)) {
 		return m_MouseStates.at(0).relativeMotion;
 	} else if (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB) {
@@ -665,6 +679,34 @@ bool UInputMan::AnyJoyButtonPress(int whichJoy) const {
 }
 
 bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputState whichState) {
+	// A scripted player's devices are the script: held ranges, with press/release edges at the range ends.
+	if (InputScript::DrivesPlayer(whichPlayer)) {
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const bool held = InputScript::HeldAt(whichPlayer, whichElement, tick);
+		const bool heldBefore = tick > 0 && InputScript::HeldAt(whichPlayer, whichElement, tick - 1);
+		switch (whichState) {
+			case InputState::Held:
+				return held;
+			case InputState::Pressed:
+			case InputState::PressedSim:
+				if (held && !heldBefore) {
+					static uint64_t s_lastLoggedTick = 0;
+					static int s_lastLoggedElement = -1;
+					if (s_lastLoggedTick != tick || s_lastLoggedElement != whichElement) {
+						s_lastLoggedTick = tick;
+						s_lastLoggedElement = whichElement;
+						std::cout << "[input-script] tick " << tick << " player " << whichPlayer << " pressed " << InputScript::ElementName(whichElement) << std::endl;
+					}
+					return true;
+				}
+				return false;
+			case InputState::Released:
+			case InputState::ReleasedSim:
+				return !held && heldBefore;
+			default:
+				return false;
+		}
+	}
 	bool elementState = false;
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
 	const InputMapping* element = &(m_ControlScheme.at(whichPlayer).GetInputMappings()->at(whichElement));

@@ -19,6 +19,7 @@ sources += files(
 'InputScheme.cpp',
 'RTETools.cpp',
 'ScenarioRunner.cpp',
+'InputScript.cpp',
 'System.cpp',
 'InputMapping.cpp',
 'PathFinder.cpp',
