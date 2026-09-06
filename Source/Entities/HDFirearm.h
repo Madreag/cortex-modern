@@ -476,6 +476,8 @@ namespace RTE {
 		/// Gets whether this HDFirearm is ready to be fired.
 		/// @return Whether this HDFirearm is ready to pop another Round.
 		bool CanFire() const { return m_LastFireTmr.IsPastSimMS(GetMSPerRound()); }
+		double GetMSSinceLastFire() const { return m_LastFireTmr.GetElapsedSimTimeMS(); }
+		double GetMSSinceActivation() const { return m_ActivationTimer.GetElapsedSimTimeMS(); }
 
 		/// Gets whether this HDFirearm is halfway to be fired. Used for evenly spacing out dual-wielded fire.
 		/// @return Whether this HDFirearm is halfway to pop another Round.

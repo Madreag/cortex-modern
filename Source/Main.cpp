@@ -79,6 +79,7 @@
 #include "SimChecksum.h"
 #include "ScenarioRunner.h"
 #include "InputScript.h"
+#include "FaultInjection.h"
 #include "LocalPrediction.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
@@ -1108,30 +1109,6 @@ static void CheckRestoredDeepState() {
 		WriteProbeText("rb_restored_" + std::to_string(s_rbProbeAtTick), restored);
 		std::cout << "[rbprobe] RESTORE MISMATCH: the restored world's dump differs from the captured one (rb_captured vs rb_restored)" << std::endl;
 	}
-}
-
-// CC_FAULT_INJECT=<name>[,<name>...] arms deliberate faults in the test drivers only, to prove the gates catch them.
-static bool FaultInjected(const char* name) {
-	static const std::string armed = [] {
-		const char* env = std::getenv("CC_FAULT_INJECT");
-		return std::string(env ? env : "");
-	}();
-	if (armed.empty()) {
-		return false;
-	}
-	size_t start = 0;
-	while (start <= armed.size()) {
-		const size_t comma = armed.find(',', start);
-		const std::string item = armed.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-		if (item == name) {
-			return true;
-		}
-		if (comma == std::string::npos) {
-			break;
-		}
-		start = comma + 1;
-	}
-	return false;
 }
 
 // Everything a preview may touch besides the MO dump: clocks, RNG, identity counter, queues, activity
@@ -2634,7 +2611,8 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
-	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"refusals\":" << LocalPrediction::GetRefusals() << "},";
+	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
+	    << ",\"violations\":" << LocalPrediction::GetViolations() << "},";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";

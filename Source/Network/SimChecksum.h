@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -60,6 +61,10 @@ namespace RTE {
 		/// Whether a tick is currently being accumulated (between BeginTick and EndTick). Thread-safe.
 		bool IsActive() const;
 
+		/// Speculative execution (a preview) runs sim code inside a tick without being part of it; its feeds are dropped.
+		void SetSuppressed(bool suppressed);
+		bool IsSuppressed() const;
+
 		/// Convert a hash to a 64-character lowercase hex string.
 		static std::string HashHex(const Hash& h);
 
@@ -72,6 +77,7 @@ namespace RTE {
 
 		mutable std::mutex m_Mutex;
 		Result             m_LastResult;
+		std::atomic<bool>  m_Suppressed{false};
 	};
 
 } // namespace RTE

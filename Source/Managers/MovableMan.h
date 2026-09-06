@@ -16,6 +16,7 @@
 #include <future>
 #include <ostream>
 #include <unordered_set>
+#include <unordered_map>
 
 #define g_MovableMan MovableMan::Instance()
 
@@ -139,15 +140,34 @@ namespace RTE {
 		AddQueueMark MarkAddQueues();
 		/// Deletes everything queued since the mark; a preview's spawns never reach the world.
 		void DiscardAddedSince(const AddQueueMark& mark);
+		/// The preset names of everything queued since the mark, comma separated; the gates name a preview's spawns with it.
+		std::string DescribeAddedSince(const AddQueueMark& mark) const;
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 
-		/// Speculative execution (a presentation preview): canonical residents are read-only. A removal of a
-		/// resident while speculative is refused and counted instead of tearing the canonical world.
-		void SetSpeculative(bool speculative) { m_Speculative = speculative; }
-		bool IsSpeculative() const { return m_Speculative; }
-		uint64_t GetSpeculativeRefusals() const { return m_SpeculativeRefusals; }
-		bool RefuseSpeculativeRemoval(const MovableObject* mo, const char* kind);
+		/// Speculative execution (a preview): gameplay runs against an overlay of the world. Lookups hand out
+		/// shadow clones of the residents they resolve, membership and ownership changes land on the overlay,
+		/// and ending it leaves the world as it was. A write to a resident itself is a violation.
+		void BeginSpeculation();
+		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
+		/// @param takenResidents Receives the residents whose shadows were taken out of the overlay's world.
+		void EndSpeculation(std::vector<MovableObject*>* takenResidents = nullptr);
+		bool IsSpeculative() const { return m_Speculation.active; }
+		struct SpeculationStats {
+			uint64_t shadows = 0;
+			uint64_t taken = 0;
+			uint64_t violations = 0;
+		};
+		const SpeculationStats& GetSpeculationStats() const { return m_SpeculationStats; }
+		/// Counts and reports a write to the world attempted from speculative execution; ordinary gameplay never gets here.
+		void ReportSpeculationViolation(const char* what, const MovableObject* mo);
+		/// Keeps a resident out of the draw loops while a preview shows its taken shadow instead.
+		void HideForRender(const MovableObject* mo, bool hidden);
+		size_t GetRenderHiddenCount() const { return m_RenderHidden.size(); }
+		/// Faithful links resolve inside this object's own part tree before the world registry.
+		void SetFaithfulLinkRoot(MovableObject* root) { m_LinkRoot = root; }
+		/// One line per team listing its roster in order plus the pending sort flag; the invariance tests compare it.
+		std::string DescribeTeamRosters() const;
 		/// Blocks until the async seeing pass that reads the actor list has finished.
 		void WaitForActorsSeeTask();
 		/// One line per Lua state listing its registered MOs (UID and whether their scripts are live); the invariance tests compare it.
@@ -561,12 +581,7 @@ namespace RTE {
 		/// Uses a global lookup map to find an object by it's unique id.
 		/// @param id Unique Id to look for.
 		/// @return Object found or 0 if not found any.
-		MovableObject* FindObjectByUniqueID(long int id) {
-			if (m_KnownObjects.count(id) > 0)
-				return m_KnownObjects[id];
-			else
-				return 0;
-		}
+		MovableObject* FindObjectByUniqueID(long int id);
 
 		/// Gets the unique id of the first ACraft on a team, for the network-command harness.
 		/// @param team The team to search.
@@ -665,8 +680,31 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
-		bool m_Speculative = false;
-		uint64_t m_SpeculativeRefusals = 0;
+		struct Speculation {
+			struct Shadow {
+				MovableObject* object = nullptr;
+				int kind = 0; //!< 1 actor, 2 item, 3 particle.
+				bool inWorld = true; //!< Standing in for its resident until a caller takes it.
+			};
+			bool active = false;
+			std::unordered_map<const MovableObject*, Shadow> shadows; //!< Resident -> its shadow.
+			std::unordered_map<const MovableObject*, MovableObject*> residents; //!< Shadow -> its resident.
+			std::vector<MovableObject*> taken;
+			AddQueueMark mark;
+			std::list<Actor*> rosters[Activity::MaxTeamCount];
+			bool sortRoster[Activity::MaxTeamCount] = {};
+		};
+		Speculation m_Speculation;
+		SpeculationStats m_SpeculationStats;
+		std::unordered_set<const MovableObject*> m_RenderHidden;
+		MovableObject* m_LinkRoot = nullptr;
+
+		MovableObject* LookupMOID(MOID whichID) const;
+		int ResidentKind(const MovableObject* mo) const;
+		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
+		MovableObject* ShadowOf(MovableObject* resident);
+		MovableObject* SpeculativeView(MovableObject* found);
+		MovableObject* TakeShadow(MovableObject* mo, int kind);
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		std::deque<MovableObject*> m_AddedItems;
 		std::deque<MovableObject*> m_AddedParticles;

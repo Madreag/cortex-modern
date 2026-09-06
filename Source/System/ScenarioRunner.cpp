@@ -761,6 +761,10 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		if (g_MovableMan.IsSpeculative()) {
+			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
+			return;
+		}
 		s_PendingLocalGameCommands.push_back(command);
 	}
 

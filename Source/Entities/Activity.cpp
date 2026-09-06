@@ -743,10 +743,6 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 }
 
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
-	// A preview clone may not move the player's control; the canonical tick does that.
-	if (g_MovableMan.IsSpeculative()) {
-		return false;
-	}
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsHuman[player]) {
 		return false;
 	}
@@ -809,9 +805,6 @@ void Activity::LoseControlOfActor(int player) {
 }
 
 void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
-	if (g_MovableMan.IsSpeculative()) {
-		return;
-	}
 	if (!orbitedCraft) {
 		return;
 	}
@@ -946,6 +939,12 @@ void Activity::CaptureRollbackState(RollbackState& out) const {
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
 		out.teamFunds[team] = m_TeamFunds[team];
 		out.teamDeaths[team] = m_TeamDeaths[team];
+		out.teamActive[team] = m_TeamActive[team];
+	}
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		out.controlledActor[player] = m_ControlledActor[player];
+		out.brain[player] = m_Brain[player];
+		out.brainEvacuated[player] = m_BrainEvacuated[player];
 	}
 }
 
@@ -954,5 +953,11 @@ void Activity::RestoreRollbackState(const RollbackState& in) {
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
 		m_TeamFunds[team] = in.teamFunds[team];
 		m_TeamDeaths[team] = in.teamDeaths[team];
+		m_TeamActive[team] = in.teamActive[team];
+	}
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		m_ControlledActor[player] = in.controlledActor[player];
+		m_Brain[player] = in.brain[player];
+		m_BrainEvacuated[player] = in.brainEvacuated[player];
 	}
 }

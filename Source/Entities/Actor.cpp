@@ -1263,6 +1263,18 @@ void Actor::AdoptPersistedUniqueID() {
 	}
 }
 
+MovableObject* Actor::FindPartByUniqueID(long uid) {
+	if (MovableObject* found = MOSRotating::FindPartByUniqueID(uid)) {
+		return found;
+	}
+	for (MovableObject* inventoryItem: m_Inventory) {
+		if (MovableObject* found = inventoryItem->FindPartByUniqueID(uid)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
 void Actor::ResolveFaithfulLinks() {
 	MOSRotating::ResolveFaithfulLinks();
 	if (m_FaithfulItemInReachUID > 0) {
