@@ -132,7 +132,7 @@ void Turret::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode mode,
 
 void Turret::SetParent(MOSRotating* newParent) {
 	Attachable::SetParent(newParent);
-	if (IsFaithfulClone()) {
+	if (AttachKeepsLiveState()) {
 		return;
 	}
 	for (HeldDevice* mountedDevice: m_MountedDevices) {

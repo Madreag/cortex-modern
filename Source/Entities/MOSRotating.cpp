@@ -306,12 +306,24 @@ int MOSRotating::Create(const MOSRotating& reference) {
 				m_FaithfulAttachableOrder.push_back(attachable->GetUniqueID());
 			}
 		}
+	} else {
+		m_FaithfulFarthestAttachableDistanceAndRadius = reference.m_FaithfulFarthestAttachableDistanceAndRadius;
+		m_FaithfulRadiusAffectingAttachableUID = reference.m_FaithfulRadiusAffectingAttachableUID;
+		m_FaithfulAttachableOrder = reference.m_FaithfulAttachableOrder;
 	}
 	return 0;
 }
 
 int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSprite::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_FarthestAttachableDistanceAndRadius", { reader >> m_FaithfulFarthestAttachableDistanceAndRadius; });
+	MatchProperty("RadiusAffectingAttachableUniqueID", { reader >> m_FaithfulRadiusAffectingAttachableUID; });
+	MatchProperty("SpecialBehaviour_DeepHardness", { reader >> m_DeepHardness; });
+	MatchProperty("AttachableOrderUniqueID", {
+		long uid = 0;
+		reader >> uid;
+		m_FaithfulAttachableOrder.push_back(uid);
+	});
 
 	MatchProperty("AtomGroup",
 	              {
@@ -2093,6 +2105,16 @@ bool MOSRotating::HandlePotentialRadiusAffectingAttachable(const Attachable* att
 		return true;
 	}
 	return false;
+}
+
+void MOSRotating::RekeyHardcodedAttachable(unsigned long oldUniqueID, unsigned long newUniqueID) {
+	for (auto* hooks: {&m_HardcodedAttachableUniqueIDsAndSetters, &m_HardcodedAttachableUniqueIDsAndRemovers}) {
+		if (const auto entry = hooks->find(oldUniqueID); entry != hooks->end()) {
+			auto hook = std::move(entry->second);
+			hooks->erase(entry);
+			hooks->emplace(newUniqueID, std::move(hook));
+		}
+	}
 }
 
 void MOSRotating::CorrectAttachableAndWoundPositionsAndRotations() const {

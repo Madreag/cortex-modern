@@ -186,6 +186,11 @@ namespace RTE {
 		/// Gets the absolute position of the joint that the parent of this Attachable sets upon Update().
 		/// @return A Vector describing the current absolute position of the joint.
 		const Vector& GetJointPos() const { return m_JointPos; }
+		const Vector& GetPrevParentOffset() const { return m_PrevParentOffset; }
+		const Vector& GetPrevJointOffset() const { return m_PrevJointOffset; }
+
+		/// Whether an attach keeps the attachable's live state: a faithful clone re-attaching, or a snapshot restore placing what it read.
+		static bool AttachKeepsLiveState();
 #pragma endregion
 
 #pragma region Force Transferral

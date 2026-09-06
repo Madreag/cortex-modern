@@ -2,6 +2,8 @@
 
 #include "PresetMan.h"
 #include "MovableMan.h"
+
+#include <optional>
 #include "TimerMan.h"
 #include "FrameMan.h"
 #include "ConsoleMan.h"
@@ -14,6 +16,7 @@
 #include "MovableObject.h"
 #include "MOPixel.h"
 #include "MOSParticle.h"
+#include "PEmitter.h"
 #include "AtomGroup.h"
 #include "TerrainObject.h"
 #include "Deployment.h"
@@ -406,6 +409,11 @@ int Scene::Create(const Scene& reference) {
 	m_Revealed = reference.m_Revealed;
 	m_OwnedByTeam = reference.m_OwnedByTeam;
 	m_RoundIncome = reference.m_RoundIncome;
+	// A snapshot restore places the loaded objects verbatim; a normal load spawn-normalizes them.
+	std::optional<MovableObject::FaithfulCloneScope> restoringScope;
+	if (g_MovableMan.IsRestoringSnapshot()) {
+		restoringScope.emplace(true);
+	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (reference.m_ResidentBrains[player])
 			m_ResidentBrains[player] = dynamic_cast<SceneObject*>(reference.m_ResidentBrains[player]->Clone());
@@ -1241,6 +1249,20 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("SpecialBehaviour_DistanceTravelled", movableObjectToSave->GetDistanceTravelled());
 		writer.NewPropertyWithValue("RestTimerStart", movableObjectToSave->GetRestTimerStart());
 		writer.NewPropertyWithValue("AgeTimerStart", movableObjectToSave->GetAgeTimerStart());
+		writer.NewPropertyWithValue("PrevVelocity", movableObjectToSave->GetPrevVel());
+		writer.NewPropertyWithValue("IgnoresTeamHits", movableObjectToSave->IgnoresTeamHits());
+		writer.NewPropertyWithValue("IgnoresActorHits", movableObjectToSave->GetIgnoresActorHits());
+		writer.NewPropertyWithValue("IgnoreTerrain", movableObjectToSave->IgnoreTerrain());
+		writer.NewPropertyWithValue("GlobalAccScalar", movableObjectToSave->GetGlobalAccScalar());
+		writer.NewPropertyWithValue("AirThreshold", movableObjectToSave->GetAirThreshold());
+		writer.NewPropertyWithValue("SpecialBehaviour_AirResistanceRaw", movableObjectToSave->GetAirResistance());
+		writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundDamageOnCollision", movableObjectToSave->GetApplyWoundDamageOnCollision());
+		writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundBurstDamageOnCollision", movableObjectToSave->GetApplyWoundBurstDamageOnCollision());
+		if (const MovableObject* moToNotHit = movableObjectToSave->GetWhichMOToNotHit(); moToNotHit && g_MovableMan.FindObjectByUniqueID(movableObjectToSave->GetMOToNotHitUID()) == moToNotHit) {
+			writer.NewPropertyWithValue("MOToNotHitUniqueID", movableObjectToSave->GetMOToNotHitUID());
+			writer.NewPropertyWithValue("MOIgnoreTimerStart", movableObjectToSave->GetMOIgnoreTimerStart());
+			writer.NewPropertyWithValue("MOIgnoreTimerLimitTicks", movableObjectToSave->GetMOIgnoreTimerLimitTicks());
+		}
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());
 		writer.NewPropertyWithValue("Age", movableObjectToSave->GetAge());
 		writer.NewPropertyWithValue("PinStrength", movableObjectToSave->GetPinStrength());

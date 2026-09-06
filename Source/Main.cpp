@@ -2391,17 +2391,7 @@ void RunGameLoop() {
 			if (g_ActivityMan.ActivitySetToRestart()) {
 				g_LoadingScreen.DrawLoadingSplash();
 				g_WindowMan.UploadFrame();
-				// A fidelity restore places snapshot residents verbatim: no spawn normalization,
-				// no quarantine, saved identities adopted.
-				bool restartOk = false;
-				{
-					struct RestoreScope {
-						explicit RestoreScope(bool restoring) { g_MovableMan.SetRestoringSnapshot(restoring); }
-						~RestoreScope() { g_MovableMan.SetRestoringSnapshot(false); }
-					} restoreScope(s_rbProbePhase == 2);
-					restartOk = g_ActivityMan.RestartActivity();
-				}
-				if (!restartOk) {
+				if (!g_ActivityMan.RestartActivity()) {
 					break;
 				}
 				if (s_rbProbePhase == 2) {

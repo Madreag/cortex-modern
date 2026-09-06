@@ -164,6 +164,8 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	}
 
 	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
+	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
+	writer->NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
 	writer->NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", g_SceneMan.GetPlaceObjectsOnLoad());
 	writer->NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", g_SceneMan.GetPlaceUnitsOnLoad());
 	writer->NewPropertyWithValue("Scene", modifiableScene.get());
@@ -397,6 +399,10 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 			reader >> outActivity.get();
 		} else if (propName == "OriginalScenePresetName") {
 			reader >> outOriginalScenePresetName;
+		} else if (propName == "SimUpdateCount") {
+			reader >> m_PendingSnapshotSimUpdateCount;
+		} else if (propName == "SimTimeTicks") {
+			reader >> m_PendingSnapshotSimTimeTicks;
 		} else if (propName == "PlaceObjectsIfSceneIsRestarted") {
 			reader >> outPlaceObjects;
 		} else if (propName == "PlaceUnitsIfSceneIsRestarted") {
@@ -444,9 +450,16 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	bool placeObjectsIfSceneIsRestarted = true;
 	bool placeUnitsIfSceneIsRestarted = true;
 	const auto readStart = std::chrono::steady_clock::now();
-	if (!ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted)) {
+	// A snapshot is read and later placed verbatim: no attach normalizes what the file says.
+	m_PendingSnapshotSimUpdateCount = -1;
+	m_PendingSnapshotSimTimeTicks = 0;
+	g_MovableMan.SetRestoringSnapshot(true);
+	const bool read = ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted);
+	g_MovableMan.SetRestoringSnapshot(false);
+	if (!read) {
 		return false;
 	}
+	m_RestartRestoresSnapshot = true;
 	std::cout << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count() << std::endl;
 
 	scene->SetPresetName(originalScenePresetName);
@@ -636,6 +649,12 @@ bool ActivityMan::RestartActivity() {
 	g_MovableMan.PurgeAllMOs();
 	// Have to reset TimerMan before creating anything else because all timers are reset against it.
 	g_TimerMan.ResetTime();
+	const bool restoresSnapshot = m_RestartRestoresSnapshot;
+	m_RestartRestoresSnapshot = false;
+	if (restoresSnapshot && m_PendingSnapshotSimUpdateCount >= 0) {
+		g_TimerMan.RewindSimTo(m_PendingSnapshotSimUpdateCount, m_PendingSnapshotSimTimeTicks);
+	}
+	g_MovableMan.SetRestoringSnapshot(restoresSnapshot);
 
 	// TODO: Deal with GUI resetting here!$@#") // Figure out what the hell this is about.
 
@@ -653,6 +672,7 @@ bool ActivityMan::RestartActivity() {
 	} else {
 		activityStarted = StartActivity(m_DefaultActivityType, m_DefaultActivityName);
 	}
+	g_MovableMan.SetRestoringSnapshot(false);
 	g_TimerMan.PauseSim(false);
 	std::cout << "[snapbench] restart_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count() << std::endl;
 	if (activityStarted >= 0) {

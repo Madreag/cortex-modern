@@ -516,12 +516,18 @@ namespace RTE {
 		/// Gets the MO this MO is set not to hit even when MO hitting is enabled on this MO.
 		/// @return The MO this MO is set not to hit.
 		const MovableObject* GetWhichMOToNotHit() const { return m_pMOToNotHit; }
+		long GetMOToNotHitUID() const { return m_MOToNotHitUID; }
+		int64_t GetMOIgnoreTimerStart() const { return m_MOIgnoreTimer.GetStartSimTimeMS(); }
+		double GetMOIgnoreTimerLimitMS() const { return m_MOIgnoreTimer.GetSimTimeLimitMS(); }
+		int64_t GetMOIgnoreTimerLimitTicks() const { return m_MOIgnoreTimer.GetSimTimeLimitTicks(); }
+		double GetMOIgnoreTimerElapsedSimMS() const { return m_MOIgnoreTimer.GetElapsedSimTimeMS(); }
 
 		/// Sets this MO to not hit a specific other MO and all its children even when MO hitting is enabled on this MO.
 		/// @param moToNotHit A pointer to the MO to not be hitting. Null pointer means don't ignore anyhting. Ownership is NOT transferred!
 		/// @param forHowLong How long, in seconds, to ignore the specified MO. A negative number means forever.
 		virtual void SetWhichMOToNotHit(MovableObject* moToNotHit = nullptr, float forHowLong = -1) {
 			m_pMOToNotHit = moToNotHit;
+			m_MOToNotHitUID = moToNotHit ? moToNotHit->m_UniqueID : 0;
 			m_MOIgnoreTimer.Reset();
 			m_MOIgnoreTimer.SetSimTimeLimitS(forHowLong);
 		}
@@ -1259,6 +1265,7 @@ namespace RTE {
 		bool m_HitsMOs;
 		// Another MovableObject that this should not be hitting even if it is set to hit MOs.
 		MovableObject* m_pMOToNotHit;
+		long m_MOToNotHitUID = 0; //!< The UniqueID m_pMOToNotHit had when it was set; names it without touching a pointer that may be gone.
 		// For how long to not hit specific MO above
 		Timer m_MOIgnoreTimer;
 		// Whether or not this MovableObject can get hit by other MOs.

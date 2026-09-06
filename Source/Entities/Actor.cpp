@@ -333,9 +333,9 @@ int Actor::Create(const Actor& reference) {
 			m_FaithfulWaypointUIDs = reference.m_FaithfulWaypointUIDs;
 		}
 	} else {
-		m_FaithfulItemInReachUID = 0;
-		m_FaithfulMOMoveTargetUID = 0;
-		m_FaithfulWaypointUIDs.clear();
+		m_FaithfulItemInReachUID = reference.m_FaithfulItemInReachUID;
+		m_FaithfulMOMoveTargetUID = reference.m_FaithfulMOMoveTargetUID;
+		m_FaithfulWaypointUIDs = reference.m_FaithfulWaypointUIDs;
 	}
 	return 0;
 }

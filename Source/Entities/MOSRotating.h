@@ -245,6 +245,12 @@ namespace RTE {
 		/// Gets the list of Attachables on this MOSRotating.
 		/// @return The list of Attachables on this MOSRotating.
 		const std::list<Attachable*>& GetAttachables() const { return m_Attachables; }
+		float GetFarthestAttachableDistanceAndRadius() const { return m_FarthestAttachableDistanceAndRadius; }
+		float GetDeepHardness() const { return m_DeepHardness; }
+		const Attachable* GetRadiusAffectingAttachable() const { return m_RadiusAffectingAttachable; }
+
+		/// Moves the hardcoded attachable hooks keyed by an attachable's old UniqueID to its new one.
+		void RekeyHardcodedAttachable(unsigned long oldUniqueID, unsigned long newUniqueID);
 
 		/// Gets whether or not the given Attachable is a hardcoded Attachable (e.g. an Arm, Leg, Turret, etc.)
 		/// @param attachableToCheck The Attachable to check.
