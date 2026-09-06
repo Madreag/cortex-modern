@@ -2615,6 +2615,8 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 	return true;
 }
 
+std::string BuildControllerBoundaryJson();
+
 std::string BuildNetLockstepReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator, const NetMatchRunner& runner, int scenarioExitCode, const std::string& setupError) {
 	const MetricsCollector::AggregatedRun run = g_MetricsCollector.GetCurrentRun();
 	const NetLockstepStats& stats = coordinator.GetStats();
@@ -2634,6 +2636,7 @@ std::string BuildNetLockstepReportJson(const NetSession& session, const NetLocks
 	out << "\"match_config_hash\":\"" << JsonEscape(NetIdentity::HashHex(runner.GetMatchConfigHash())) << "\",";
 	out << "\"ownership_policy\":\"" << JsonEscape(NetMatchConfigUtil::OwnershipPolicyName(runner.GetMatchConfig().ownershipPolicy)) << "\",";
 	out << "\"input_delay_frames\":" << stats.inputDelayFrames << ",";
+	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : ScenarioRunner::GetArgs().maxTicks) << ",";
 	out << "\"frames_sent\":" << stats.framePacketsSent << ",";
 	out << "\"frames_received\":" << stats.framePacketsReceived << ",";
@@ -2672,6 +2675,15 @@ const char* ActivityStateName(Activity::ActivityState state) {
 		case Activity::Over: return "Over";
 	}
 	return "Unknown";
+}
+
+// How this peer's AI pass crossed the controller boundary; a direct write is a boundary violation.
+std::string BuildControllerBoundaryJson() {
+	const MovableMan::ControllerBoundaryStats& stats = g_MovableMan.GetControllerBoundaryStats();
+	std::ostringstream out;
+	out << "{\"equip_commands\":" << stats.equipCommands << ",\"aim_intents\":" << stats.aimIntents
+	    << ",\"flip_intents\":" << stats.flipIntents << ",\"direct_writes\":" << stats.directWrites << "}";
+	return out.str();
 }
 
 // The in-match loop pace: wall_tps is the number that answers "does the match run at the pinned
@@ -2729,6 +2741,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
 	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
 	    << ",\"violations\":" << LocalPrediction::GetViolations() << "},";
+	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";

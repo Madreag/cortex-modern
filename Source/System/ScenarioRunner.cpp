@@ -526,6 +526,17 @@ namespace RTE {
 		return s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
 	}
 
+	bool ScenarioRunner::IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId) {
+		if (!s_LockstepCoordinator) {
+			return true;
+		}
+		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
+		if (overrideIt != s_LockstepControlOverrides.end()) {
+			return overrideIt->second == peerId;
+		}
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled) == peerId;
+	}
+
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}

@@ -52,13 +52,13 @@ namespace RTE {
 		bool IsActorHFlipped() const { return (flags & 0x2U) != 0; }
 		void SetActorHFlipped(bool flipped);
 		/// One-shot writes the owner's AI made directly to the actor; every peer applies them at this frame's tick.
-		bool HasEquipIntent() const { return (flags & 0x4U) != 0; }
-		void SetEquipIntent(bool intent);
-		bool HasAimIntent() const { return (flags & 0x8U) != 0; }
+		bool HasAimIntent() const { return (flags & 0x4U) != 0; }
 		void SetAimIntent(bool intent);
-		bool HasFlipIntent() const { return (flags & 0x10U) != 0; }
+		bool HasFlipIntent() const { return (flags & 0x8U) != 0; }
 		void SetFlipIntent(bool intent);
 		bool IsLegacy() const { return version < c_Version; }
+		static constexpr uint8_t c_KnownFlags = 0x0FU;
+		static constexpr uint8_t c_LegacyKnownFlags = 0x03U;
 	};
 
 	class ControllerFrameCodec {

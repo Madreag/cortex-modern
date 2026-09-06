@@ -926,11 +926,36 @@ MovableObject* AHuman::SwapPrevInventory(MovableObject* inventoryItemToSwapIn) {
 	return swappedInventoryItem;
 }
 
-void AHuman::DrainPendingDeferredMutations() {
-	if (m_PendingDeferredMutations.empty()) return;
-	std::vector<std::function<void()>> local;
-	local.swap(m_PendingDeferredMutations);
-	for (const auto& fn: local) fn();
+std::vector<AHuman::DeferredEquip> AHuman::TakePendingDeferredEquips() {
+	std::vector<DeferredEquip> taken;
+	taken.swap(m_PendingDeferredEquips);
+	return taken;
+}
+
+bool AHuman::ExecuteDeferredEquip(const DeferredEquip& equip) {
+	switch (equip.op) {
+		case DeferredEquip::Firearm:
+			return EquipFirearm(true);
+		case DeferredEquip::DeviceInGroup:
+			return EquipDeviceInGroup(equip.group, true);
+		case DeferredEquip::LoadedFirearmInGroup:
+			return EquipLoadedFirearmInGroup(equip.group, equip.excludeGroup, true);
+		case DeferredEquip::NamedDevice:
+			return EquipNamedDevice(equip.moduleName, equip.presetName, true);
+		case DeferredEquip::Throwable:
+			return EquipThrowable(true);
+		case DeferredEquip::DiggingTool:
+			return EquipDiggingTool(true);
+		case DeferredEquip::Shield:
+			return EquipShield();
+		case DeferredEquip::ShieldInBGArm:
+			return EquipShieldInBGArm(equip.depositToFront);
+		case DeferredEquip::UnequipFGArm:
+			return UnequipFGArm();
+		case DeferredEquip::UnequipBGArm:
+			return UnequipBGArm();
+	}
+	return false;
 }
 
 bool AHuman::EquipFirearm(bool doEquip) {
@@ -940,7 +965,7 @@ bool AHuman::EquipFirearm(bool doEquip) {
 		if (HDFirearm* d = dynamic_cast<HDFirearm*>(m_pFGArm->GetHeldDevice()); d && d->IsWeapon()) return true;
 		for (auto* item: m_Inventory) {
 			if (HDFirearm* w = dynamic_cast<HDFirearm*>(item); w && w->IsWeapon()) {
-				m_PendingDeferredMutations.emplace_back([this]{ EquipFirearm(true); });
+				QueueDeferredEquip({DeferredEquip::Firearm});
 				return true;
 			}
 		}
@@ -1007,7 +1032,7 @@ bool AHuman::EquipDeviceInGroup(const std::string& group, bool doEquip) {
 		if (HeldDevice* hd = m_pFGArm->GetHeldDevice(); hd && hd->IsInGroup(group)) return true;
 		for (auto* item: m_Inventory) {
 			if (HeldDevice* hd = dynamic_cast<HeldDevice*>(item); hd && hd->IsInGroup(group)) {
-				m_PendingDeferredMutations.emplace_back([this, group]{ EquipDeviceInGroup(group, true); });
+				QueueDeferredEquip({DeferredEquip::DeviceInGroup, false, group});
 				return true;
 			}
 		}
@@ -1081,7 +1106,7 @@ bool AHuman::EquipLoadedFirearmInGroup(const std::string& group, const std::stri
 		if (HeldDevice* hd = m_pFGArm->GetHeldDevice(); hd && !hd->NeedsReloading() && hd->IsInGroup(group) && !hd->IsInGroup(excludeGroup)) return true;
 		for (auto* item: m_Inventory) {
 			if (HDFirearm* f = dynamic_cast<HDFirearm*>(item); f && !f->NeedsReloading() && f->IsInGroup(group) && !f->IsInGroup(excludeGroup)) {
-				m_PendingDeferredMutations.emplace_back([this, group, excludeGroup]{ EquipLoadedFirearmInGroup(group, excludeGroup, true); });
+				QueueDeferredEquip({DeferredEquip::LoadedFirearmInGroup, false, group, excludeGroup});
 				return true;
 			}
 		}
@@ -1149,7 +1174,7 @@ bool AHuman::EquipNamedDevice(const std::string& moduleName, const std::string& 
 		for (auto* item: m_Inventory) {
 			if (HeldDevice* hd = dynamic_cast<HeldDevice*>(item);
 			    hd && (moduleName.empty() || hd->GetModuleName() == moduleName) && hd->GetPresetName() == presetName) {
-				m_PendingDeferredMutations.emplace_back([this, moduleName, presetName]{ EquipNamedDevice(moduleName, presetName, true); });
+				QueueDeferredEquip({DeferredEquip::NamedDevice, false, "", "", moduleName, presetName});
 				return true;
 			}
 		}
@@ -1215,7 +1240,7 @@ bool AHuman::EquipThrowable(bool doEquip) {
 		if (dynamic_cast<ThrownDevice*>(m_pFGArm->GetHeldDevice())) return true;
 		for (auto* item: m_Inventory) {
 			if (dynamic_cast<ThrownDevice*>(item)) {
-				m_PendingDeferredMutations.emplace_back([this]{ EquipThrowable(true); });
+				QueueDeferredEquip({DeferredEquip::Throwable});
 				return true;
 			}
 		}
@@ -1286,7 +1311,7 @@ bool AHuman::EquipDiggingTool(bool doEquip) {
 				if (const HDFirearm* f = dynamic_cast<HDFirearm*>(item); f && f->IsInGroup("Tools - Diggers")) { any = true; break; }
 			}
 		}
-		if (any) m_PendingDeferredMutations.emplace_back([this]{ EquipDiggingTool(true); });
+		if (any) QueueDeferredEquip({DeferredEquip::DiggingTool});
 		return any;
 	}
 
@@ -1407,7 +1432,7 @@ bool AHuman::EquipShield() {
 		if (HeldDevice* hd = m_pFGArm->GetHeldDevice(); hd && hd->IsShield()) return true;
 		for (auto* item: m_Inventory) {
 			if (HeldDevice* hd = dynamic_cast<HeldDevice*>(item); hd && hd->IsShield()) {
-				m_PendingDeferredMutations.emplace_back([this]{ EquipShield(); });
+				QueueDeferredEquip({DeferredEquip::Shield});
 				return true;
 			}
 		}
@@ -1469,7 +1494,7 @@ bool AHuman::EquipShieldInBGArm(bool depositToFront) {
 		if (!(m_pBGArm && m_pBGArm->IsAttached())) return false;
 		if (HeldDevice* hd = m_pBGArm->GetHeldDevice(); hd && (hd->IsShield() || hd->IsDualWieldable())) {
 			if (m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->GetHeldDevice() && !m_pFGArm->GetHeldDevice()->IsOneHanded()) {
-				m_PendingDeferredMutations.emplace_back([this, depositToFront] { EquipShieldInBGArm(depositToFront); });
+				QueueDeferredEquip({DeferredEquip::ShieldInBGArm, depositToFront});
 				return false;
 			}
 			return true;
@@ -1477,7 +1502,7 @@ bool AHuman::EquipShieldInBGArm(bool depositToFront) {
 		if (m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->GetHeldDevice() && !m_pFGArm->GetHeldDevice()->IsOneHanded()) return false;
 		for (auto* item: m_Inventory) {
 			if (HeldDevice* hd = dynamic_cast<HeldDevice*>(item); hd && (hd->IsShield() || hd->IsDualWieldable())) {
-				m_PendingDeferredMutations.emplace_back([this, depositToFront] { EquipShieldInBGArm(depositToFront); });
+				QueueDeferredEquip({DeferredEquip::ShieldInBGArm, depositToFront});
 				return true;
 			}
 		}
@@ -1550,6 +1575,14 @@ bool AHuman::EquipShieldInBGArm(bool depositToFront) {
 }
 
 bool AHuman::UnequipFGArm() {
+	// Defer the mutation if called from the AI pass; return whether there is anything to unequip.
+	if (g_CurrentAIActor) {
+		const bool held = m_pFGArm && m_pFGArm->GetHeldDevice();
+		if (held) {
+			QueueDeferredEquip({DeferredEquip::UnequipFGArm});
+		}
+		return held;
+	}
 	if (m_pFGArm) {
 		if (HeldDevice* heldDevice = m_pFGArm->GetHeldDevice()) {
 			heldDevice->Deactivate();
@@ -1562,6 +1595,13 @@ bool AHuman::UnequipFGArm() {
 }
 
 bool AHuman::UnequipBGArm() {
+	if (g_CurrentAIActor) {
+		const bool held = m_pBGArm && m_pBGArm->GetHeldDevice();
+		if (held) {
+			QueueDeferredEquip({DeferredEquip::UnequipBGArm});
+		}
+		return held;
+	}
 	if (m_pBGArm) {
 		if (HeldDevice* heldDevice = m_pBGArm->GetHeldDevice()) {
 			heldDevice->Deactivate();

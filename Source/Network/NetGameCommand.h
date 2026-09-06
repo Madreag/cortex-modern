@@ -18,6 +18,7 @@ namespace RTE {
 		PauseMatch = 6,
 		SetActorAIMode = 7,
 		SwitchControl = 8,
+		AIEquip = 9,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -137,7 +138,35 @@ namespace RTE {
 		bool operator==(const NetGameSwitchControl&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl>;
+	// An AI's equip call on an actor the issuing peer drives. The decision is per-machine (off-wire); the
+	// call itself crosses the wire so every peer's sim, the owner's included, performs it at the committed tick.
+	struct NetGameAIEquip {
+		enum Op : uint8_t {
+			Firearm = 0,
+			DeviceInGroup = 1,
+			LoadedFirearmInGroup = 2,
+			NamedDevice = 3,
+			Throwable = 4,
+			DiggingTool = 5,
+			Shield = 6,
+			ShieldInBGArm = 7,
+			UnequipFGArm = 8,
+			UnequipBGArm = 9,
+		};
+
+		int64_t actorUID = 0;
+		int32_t team = 0;
+		uint8_t op = Firearm;
+		bool depositToFront = false;
+		std::string group;
+		std::string excludeGroup;
+		std::string moduleName;
+		std::string presetName;
+
+		bool operator==(const NetGameAIEquip&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

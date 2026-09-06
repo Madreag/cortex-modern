@@ -641,17 +641,38 @@ namespace RTE {
 		Arm* m_pFGArm;
 		// Background arm.
 		Arm* m_pBGArm;
-		std::vector<std::function<void()>> m_PendingDeferredMutations; //!< Equip ops queued from parallel AI; drained serially by MovableMan.
-		long long m_OffWireEquipTick = -1;
-
 	public:
-		/// Drained in MOID order by MovableMan after the parallel ThreadedUpdateAI; mods don't call this.
-		void DrainPendingDeferredMutations();
-		/// The sim tick the owner's AI last changed the equipment directly; the wire carries it as a one-shot intent.
-		void MarkOffWireEquip(long long simTick) { m_OffWireEquipTick = simTick; }
-		long long GetOffWireEquipTick() const { return m_OffWireEquipTick; }
+		/// An equip call the AI made this tick: run after the parallel AI pass, or under lockstep sent as a
+		/// game command so every peer performs it at the committed tick.
+		struct DeferredEquip {
+			enum Op : uint8_t {
+				Firearm = 0,
+				DeviceInGroup = 1,
+				LoadedFirearmInGroup = 2,
+				NamedDevice = 3,
+				Throwable = 4,
+				DiggingTool = 5,
+				Shield = 6,
+				ShieldInBGArm = 7,
+				UnequipFGArm = 8,
+				UnequipBGArm = 9,
+			};
+			Op op = Firearm;
+			bool depositToFront = false;
+			std::string group;
+			std::string excludeGroup;
+			std::string moduleName;
+			std::string presetName;
+		};
+		/// Hands out the equip calls the AI queued this tick, in call order; mods don't call this.
+		std::vector<DeferredEquip> TakePendingDeferredEquips();
+		/// Performs one deferred equip call for real.
+		bool ExecuteDeferredEquip(const DeferredEquip& equip);
 
 	protected:
+		std::vector<DeferredEquip> m_PendingDeferredEquips; //!< Equip calls queued from the AI pass.
+		void QueueDeferredEquip(DeferredEquip equip) { m_PendingDeferredEquips.push_back(std::move(equip)); }
+
 		// Foreground leg.
 		Leg* m_pFGLeg;
 		// Background leg.
