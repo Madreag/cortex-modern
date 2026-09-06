@@ -293,7 +293,7 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 
 bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error) {
 	std::string applyError;
-	if (!ControllerFrameCodec::ApplyActorState(frame, actor, &applyError)) {
+	if (!ControllerFrameCodec::ApplyActorStateIntents(frame, actor, &applyError)) {
 		if (error) {
 			*error = "lockstep actor-state apply failed for actor " + std::to_string(frame.actorUniqueID) + ": " + applyError;
 		}
@@ -3209,6 +3209,24 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 
+		// What the AI pass may write to the actor directly; whatever it changes rides the wire as a one-shot intent.
+		struct DirectState {
+			Actor* actor;
+			float aim;
+			bool flipped;
+			int64_t fg;
+			int64_t bg;
+		};
+		std::vector<DirectState> directBefore;
+		for (Actor* actor: m_Actors) {
+			if (isLocalControllerActor(actor)) {
+				const AHuman* human = dynamic_cast<const AHuman*>(actor);
+				directBefore.push_back({actor, actor->GetAimAngle(false), actor->IsHFlipped(),
+				                        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
+				                        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0});
+			}
+		}
+
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
@@ -3250,6 +3268,23 @@ void MovableMan::UpdateControllers() {
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				actor->RunScriptedFunctionInAppropriateScripts("UpdateAI", false, true, {}, {}, {});
+			}
+		}
+
+		for (const DirectState& before: directBefore) {
+			Actor* actor = before.actor;
+			if (actor->GetAimAngle(false) != before.aim) {
+				actor->MarkOffWireAim(static_cast<long long>(simTick));
+			}
+			if (actor->IsHFlipped() != before.flipped) {
+				actor->MarkOffWireFlip(static_cast<long long>(simTick));
+			}
+			if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
+				const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
+				const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
+				if (fg != before.fg || bg != before.bg) {
+					human->MarkOffWireEquip(static_cast<long long>(simTick));
+				}
 			}
 		}
 	}

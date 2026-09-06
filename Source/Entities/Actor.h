@@ -325,6 +325,12 @@ namespace RTE {
 			Clamp(m_AimAngle, m_AimRange, -m_AimRange);
 		}
 
+		/// The sim tick the owner's AI last wrote the aim or the facing directly; the wire carries those as one-shot intents.
+		void MarkOffWireAim(long long simTick) { m_OffWireAimTick = simTick; }
+		long long GetOffWireAimTick() const { return m_OffWireAimTick; }
+		void MarkOffWireFlip(long long simTick) { m_OffWireFlipTick = simTick; }
+		long long GetOffWireFlipTick() const { return m_OffWireFlipTick; }
+
 		/// Sets this Actor's passenger slots.
 		/// @param newPassengerSlots A new amount of passenger slots.
 		void SetPassengerSlots(int newPassengerSlots) { m_PassengerSlots = newPassengerSlots; }
@@ -1025,6 +1031,8 @@ namespace RTE {
 		// The device that can/will be picked up
 		HeldDevice* m_pItemInReach;
 		long m_FaithfulItemInReachUID = 0; //!< Snapshot link for m_pItemInReach, resolved after a restore.
+		long long m_OffWireAimTick = -1;
+		long long m_OffWireFlipTick = -1;
 		long m_FaithfulMOMoveTargetUID = 0; //!< Snapshot link for m_pMOMoveTarget, resolved after a restore.
 		std::vector<long> m_FaithfulWaypointUIDs; //!< Snapshot links for the waypoint objects, resolved after a restore.
 		// An array that holds activation states for the various hotkey actions of this Actor.

@@ -642,10 +642,14 @@ namespace RTE {
 		// Background arm.
 		Arm* m_pBGArm;
 		std::vector<std::function<void()>> m_PendingDeferredMutations; //!< Equip ops queued from parallel AI; drained serially by MovableMan.
+		long long m_OffWireEquipTick = -1;
 
 	public:
 		/// Drained in MOID order by MovableMan after the parallel ThreadedUpdateAI; mods don't call this.
 		void DrainPendingDeferredMutations();
+		/// The sim tick the owner's AI last changed the equipment directly; the wire carries it as a one-shot intent.
+		void MarkOffWireEquip(long long simTick) { m_OffWireEquipTick = simTick; }
+		long long GetOffWireEquipTick() const { return m_OffWireEquipTick; }
 
 	protected:
 		// Foreground leg.
