@@ -41,10 +41,8 @@ namespace RTE {
 	class NetMatchReplayWriter {
 	public:
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
-		// Version 3 records the ControllerFrame version its records were encoded with, so playback
-		// applies old recordings with the semantics they were recorded under. Version 4 checksums
-		// every record, so a flipped byte inside a frame reads as corruption instead of as input.
-		static constexpr uint16_t c_Version = 4;
+		// Version 5 preserves each committed command's sender beside the checksummed wire frame.
+		static constexpr uint16_t c_Version = 5;
 		// A length prefix above the record cap; the writer appends it as the last record so playback
 		// tells a clean end from a mid-write crash. Version-1 files have no marker.
 		static constexpr uint32_t c_EndMarker = 0xFFFFFFFFU;

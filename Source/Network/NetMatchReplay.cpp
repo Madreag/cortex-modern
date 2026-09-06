@@ -16,13 +16,17 @@ namespace RTE {
 			}
 		}
 
+		uint32_t ReadU32(const uint8_t* bytes) {
+			return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
+			       (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
+		}
+
 		bool ReadU32(std::ifstream& in, uint32_t& outValue) {
 			uint8_t bytes[4];
 			if (!in.read(reinterpret_cast<char*>(bytes), 4)) {
 				return false;
 			}
-			outValue = static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
-			           (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
+			outValue = ReadU32(bytes);
 			return true;
 		}
 	} // namespace
@@ -64,17 +68,29 @@ namespace RTE {
 			return false;
 		}
 		NetLockstepFrame record;
-		// The codec wants a valid peer id; a replay record's sender is meaningless (commands carry
-		// their own).
+		// The wire codec authenticates one sender; a committed tick can contain several.
 		record.senderPeerId = 1;
 		record.targetFrame = frame;
 		record.frames = frames;
 		record.commands = commands;
-		std::vector<uint8_t> bytes;
+		for (const NetGameCommand& command : commands) {
+			if (command.senderPeerId == 0 || command.senderPeerId > NetLockstepCodec::c_MaxPeerCount) {
+				if (error) *error = "invalid replay command sender";
+				return false;
+			}
+		}
+		std::vector<uint8_t> wireBytes;
 		NetLockstepError codecError;
-		if (!NetLockstepCodec::Encode({record}, bytes, &codecError)) {
+		if (!NetLockstepCodec::Encode({record}, wireBytes, &codecError)) {
 			if (error) *error = "could not encode a replay frame: " + codecError.message;
 			return false;
+		}
+		std::vector<uint8_t> bytes;
+		bytes.reserve(4 + wireBytes.size() + commands.size());
+		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()));
+		bytes.insert(bytes.end(), wireBytes.begin(), wireBytes.end());
+		for (const NetGameCommand& command : commands) {
+			bytes.push_back(command.senderPeerId);
 		}
 		std::vector<uint8_t> lengthPrefix;
 		AppendU32(lengthPrefix, static_cast<uint32_t>(bytes.size()));
@@ -123,8 +139,7 @@ namespace RTE {
 			return false;
 		}
 		const uint16_t version = static_cast<uint16_t>(versionBytes[0]) | (static_cast<uint16_t>(versionBytes[1]) << 8);
-		// Version 1 (no end marker) still reads; version 2 adds the truncation-detecting marker;
-		// version 3 names the ControllerFrame version its records were encoded with; version 4 checksums each record.
+		// Older versions retain their original frame and command semantics.
 		if (version < 1 || version > NetMatchReplayWriter::c_Version) {
 			if (error) *error = "unsupported replay version " + std::to_string(version);
 			Close();
@@ -234,7 +249,21 @@ namespace RTE {
 			if (error) *error = "replay record checksum mismatch";
 			return false;
 		}
-		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes, m_ControllerFrameVersion);
+		size_t wireOffset = 0;
+		size_t wireLength = bytes.size();
+		if (m_Version >= 5) {
+			if (bytes.size() < 4) {
+				if (error) *error = "truncated replay frame envelope";
+				return false;
+			}
+			wireOffset = 4;
+			wireLength = ReadU32(bytes.data());
+			if (wireLength == 0 || wireLength > bytes.size() - wireOffset) {
+				if (error) *error = "invalid replay wire frame length";
+				return false;
+			}
+		}
+		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes.data() + wireOffset, wireLength, m_ControllerFrameVersion);
 		if (!decoded.ok) {
 			if (error) *error = "could not decode a replay record: " + decoded.error.message;
 			return false;
@@ -245,6 +274,21 @@ namespace RTE {
 			return false;
 		}
 		outFrame = *frame;
+		if (m_Version >= 5) {
+			const size_t senderOffset = wireOffset + wireLength;
+			if (bytes.size() - senderOffset != outFrame.commands.size()) {
+				if (error) *error = "replay command sender count mismatch";
+				return false;
+			}
+			for (size_t i = 0; i < outFrame.commands.size(); ++i) {
+				const uint8_t sender = bytes[senderOffset + i];
+				if (sender == 0 || sender > NetLockstepCodec::c_MaxPeerCount) {
+					if (error) *error = "invalid replay command sender";
+					return false;
+				}
+				outFrame.commands[i].senderPeerId = sender;
+			}
+		}
 		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;
 	}
