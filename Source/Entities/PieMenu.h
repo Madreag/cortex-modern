@@ -89,6 +89,9 @@ namespace RTE {
 		/// @return Whether or not this PieMenu is a sub-PieMenu.
 		bool IsSubPieMenu() const { return m_DirectionIfSubPieMenu != Directions::None; }
 
+		/// Gets whether this menu's sounds play on this machine: its controller is seated by a local player, or it has none.
+		bool SeatHearsSounds() const;
+
 		/// Gets the absolute center position of this PieMenu.
 		/// @return A Vector describing the current absolute position of this PieMenu in pixels.
 		const Vector& GetPos() const { return m_CenterPos; }
