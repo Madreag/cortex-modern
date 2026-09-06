@@ -156,7 +156,7 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			g_ActivityMan.WaitForSaveGameTask();
-			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/p5resync.ccsave";
+			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + ResyncSaveName() + ".ccsave";
 			std::ifstream in(savePath, std::ios::binary);
 			if (!in) {
 				if (error) *error = "resync snapshot is unreadable: " + savePath;
