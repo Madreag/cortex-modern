@@ -95,6 +95,11 @@ void MOSRotating::Clear() {
 	m_NoSetDamageMultiplier = true;
 	m_FlashWhiteTimer.Reset();
 	m_FlashWhiteTimer.SetRealTimeLimitMS(0);
+	m_PersistedAtomGroupResidue.clear();
+	m_PersistedAtomGroupOffsets.clear();
+	m_PersistedAtomGroupSubIDs.clear();
+	m_PersistedAtomGroupMaterials.clear();
+	m_FaithfulAttachableOrder.clear();
 }
 
 int MOSRotating::Create() {

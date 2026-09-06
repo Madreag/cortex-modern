@@ -134,6 +134,7 @@ void MovableObject::Clear() {
 	m_SimUpdatesBetweenScriptedUpdates = 1;
 	m_SimUpdatesSinceLastScriptedUpdate = 0;
 	m_RequestedSyncedUpdate = false;
+	m_PersistedMOIgnoreTimerAnchor = {};
 }
 
 LuaStateWrapper& MovableObject::GetAndLockStateForScript(const std::string& scriptPath, const LuaFunction* function) {
