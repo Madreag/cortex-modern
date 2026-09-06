@@ -200,6 +200,11 @@ static long long s_lpInvarianceTick = 0;
 static std::vector<int> s_lpInvarianceDepths;
 static std::vector<int> s_lpInvarianceRepeats;
 static int s_lpInvarianceFailures = -1; //!< -1 = not run, else the count of failed checks.
+static std::string s_lpExpectEquip; //!< -lpinv-expect: the preset the previews must hold once their horizon passes its pickup tick.
+static long long s_lpExpectEquipTick = 0;
+static long long s_lpExpectEquipSlack = 0; //!< Ticks the preview's pickup may lag the canonical one (the reach ray is a random cast).
+static long long s_lpExpectFireTick = 0;
+static long long s_lpExpectFireSlack = 0;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -620,6 +625,45 @@ void HandleMainArgs(int argCount, char** argValue) {
 			}
 			if (s_lpInvarianceRepeats.empty()) {
 				s_lpInvarianceRepeats = {1, 3};
+			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-lpinv-expect") {
+			// equip=<preset>@<tick>[~<slack>],fire@<tick>[~<slack>] — the canonical ticks the previews must reproduce once their horizon passes them.
+			const std::string spec = argValue[++i];
+			bool ok = !spec.empty();
+			size_t start = 0;
+			while (ok && start < spec.size()) {
+				const size_t comma = spec.find(',', start);
+				const std::string item = spec.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+				const size_t at = item.rfind('@');
+				const size_t tilde = item.find('~', at == std::string::npos ? 0 : at);
+				const std::string tickText = at == std::string::npos ? std::string() : item.substr(at + 1, tilde == std::string::npos ? std::string::npos : tilde - at - 1);
+				const std::string slackText = tilde == std::string::npos ? std::string("0") : item.substr(tilde + 1);
+				if (at == std::string::npos || tickText.empty() || tickText.find_first_not_of("0123456789") != std::string::npos || slackText.empty() || slackText.find_first_not_of("0123456789") != std::string::npos) {
+					ok = false;
+					break;
+				}
+				const long long tick = std::strtoll(tickText.c_str(), nullptr, 10);
+				const long long slack = std::strtoll(slackText.c_str(), nullptr, 10);
+				if (item.rfind("equip=", 0) == 0 && at > 6) {
+					s_lpExpectEquip = item.substr(6, at - 6);
+					s_lpExpectEquipTick = tick;
+					s_lpExpectEquipSlack = slack;
+				} else if (item.substr(0, at) == "fire") {
+					s_lpExpectFireTick = tick;
+					s_lpExpectFireSlack = slack;
+				} else {
+					ok = false;
+				}
+				if (comma == std::string::npos) {
+					break;
+				}
+				start = comma + 1;
+			}
+			if (!ok || (s_lpExpectEquip.empty() && s_lpExpectFireTick <= 0)) {
+				std::cerr << "[lpinv] bad expectation '" << spec << "': expected equip=<preset>@<tick>,fire@<tick>" << std::endl;
+				std::exit(1);
 			}
 			continue;
 		}
@@ -1126,10 +1170,18 @@ static std::string DescribeCanonicalExtras() {
 		activity->CaptureRollbackState(state);
 		out << "activity state=" << static_cast<int>(state.state);
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
-			out << " t" << team << "=" << std::hexfloat << state.teamFunds[team] << std::defaultfloat << "/" << state.teamDeaths[team];
+			out << " t" << team << "=" << std::hexfloat << state.teamFunds[team] << std::defaultfloat << "/" << state.teamDeaths[team] << (state.teamActive[team] ? "a" : "");
+		}
+		out << "\n";
+		const auto uidOf = [](const Actor* actor) { return actor ? (g_MovableMan.IsActor(actor) ? actor->GetUniqueID() : -1L) : 0L; };
+		out << "players";
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			out << " p" << player << "=" << uidOf(state.controlledActor[player]) << "/" << uidOf(state.brain[player]) << (state.brainEvacuated[player] ? "e" : "");
 		}
 		out << "\n";
 	}
+	out << "rosters\n" << g_MovableMan.DescribeTeamRosters();
+	out << "render_hidden=" << g_MovableMan.GetRenderHiddenCount() << " speculative=" << (g_MovableMan.IsSpeculative() ? 1 : 0) << " registry=" << g_MovableMan.GetKnownObjectsCount() << "\n";
 	TerrainLayerSnapshot terrain;
 	if (terrain.Capture()) {
 		auto fnv = [](const std::vector<uint8_t>& bytes) {
@@ -1143,6 +1195,60 @@ static std::string DescribeCanonicalExtras() {
 	}
 	out << "scripts\n" << g_MovableMan.DescribeScriptBindings();
 	return out.str();
+}
+
+// One rendered frame with the previews standing in for their actors, on the render RNG and off the MOID grid.
+static void DrawFrameWithPreviews() {
+	RandomGenerator* prevSimRNG = t_simRNGOverride;
+	t_simRNGOverride = &g_RenderRNG;
+	g_SceneMan.SetRenderDrawContext(true);
+	LocalPrediction::BeginRender();
+	g_FrameMan.Draw();
+	g_WindowMan.DrawPostProcessBuffer();
+	g_WindowMan.UploadFrame();
+	LocalPrediction::EndRender();
+	g_SceneMan.SetRenderDrawContext(false);
+	t_simRNGOverride = prevSimRNG;
+}
+
+// The previews' gameplay against -lpinv-expect. A preview that starts before the canonical pickup must
+// have picked up once its horizon passes that tick (plus the slack of the reach ray's random cast) and
+// never before it; one that starts after already holds the item and takes nothing. The shot likewise.
+static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
+	const LocalPrediction::Outcome& outcome = LocalPrediction::GetLastOutcome();
+	if (outcome.violations > 0) {
+		return "the previews wrote to the world " + std::to_string(outcome.violations) + " time(s)";
+	}
+	const bool holdsExpected = !s_lpExpectEquip.empty() && outcome.equipped == s_lpExpectEquip;
+	const bool pickedUp = holdsExpected && outcome.taken == 1;
+	if (!s_lpExpectEquip.empty()) {
+		if (startTick >= s_lpExpectEquipTick) {
+			if (outcome.taken != 0 || !holdsExpected) {
+				return "after the canonical pickup the preview should hold '" + s_lpExpectEquip + "' and take nothing, but it took " + std::to_string(outcome.taken) + " and holds '" + outcome.equipped + "'";
+			}
+		} else if (horizon < s_lpExpectEquipTick) {
+			if (outcome.taken != 0) {
+				return "a pickup before its tick " + std::to_string(s_lpExpectEquipTick) + " (horizon " + std::to_string(horizon) + ", took " + std::to_string(outcome.taken) + ")";
+			}
+		} else if (horizon >= s_lpExpectEquipTick + s_lpExpectEquipSlack) {
+			if (!pickedUp) {
+				return "expected the pickup of '" + s_lpExpectEquip + "' by tick " + std::to_string(horizon) + " but the preview took " + std::to_string(outcome.taken) + " resident(s) and holds '" + outcome.equipped + "'";
+			}
+		} else if (outcome.taken > 1) {
+			return "the pickup took " + std::to_string(outcome.taken) + " residents, expected at most 1";
+		}
+	}
+	if (s_lpExpectFireTick > 0 && startTick < s_lpExpectFireTick) {
+		const bool fired = holdsExpected && (outcome.firedOnce || (outcome.takenRounds >= 0 && outcome.roundsInMag >= 0 && outcome.roundsInMag < outcome.takenRounds));
+		if (horizon < s_lpExpectFireTick) {
+			if (fired) {
+				return "a shot before its tick " + std::to_string(s_lpExpectFireTick) + " (horizon " + std::to_string(horizon) + ")";
+			}
+		} else if (horizon >= s_lpExpectFireTick + s_lpExpectFireSlack && !fired) {
+			return "expected a shot from '" + s_lpExpectEquip + "' by tick " + std::to_string(horizon) + " but rounds went " + std::to_string(outcome.takenRounds) + " -> " + std::to_string(outcome.roundsInMag) + " and fired_once=" + std::to_string(outcome.firedOnce ? 1 : 0);
+		}
+	}
+	return "";
 }
 
 // -local-prediction-invariance: at tick T, run and discard previews of every depth and repeat count and
@@ -1161,15 +1267,26 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	int cases = 0;
 	for (const int depth: s_lpInvarianceDepths) {
 		for (const int repeats: s_lpInvarianceRepeats) {
+			const std::string label = "depth " + std::to_string(depth) + " x" + std::to_string(repeats);
+			bool caseFailed = false;
+			const auto fail = [&caseFailed, &label](const std::string& what) {
+				caseFailed = true;
+				std::cout << "[lpinv] FAIL " << label << ": " << what << std::endl;
+			};
 			LocalPrediction::SetDepthOverride(depth);
 			const uint64_t previewsBefore = LocalPrediction::GetPreviewCount();
+			std::string outcomeFailure;
 			for (int n = 0; n < repeats; ++n) {
 				LocalPrediction::Clear();
 				LocalPrediction::RunPreview();
-				LocalPrediction::BeginRender();
-				LocalPrediction::EndRender();
+				// A real frame: the substitution, the HUD and the hidden residents all go through the draw.
+				DrawFrameWithPreviews();
+				if (const std::string failure = CheckPreviewOutcome(static_cast<long long>(simTick), static_cast<long long>(simTick) + depth); !failure.empty() && outcomeFailure.empty()) {
+					outcomeFailure = failure;
+				}
 			}
 			const uint64_t previewsRun = LocalPrediction::GetPreviewCount() - previewsBefore;
+			const std::string outcome = LocalPrediction::DescribeLastOutcome();
 			if (FaultInjected("preview_mutate_canonical") && depth == s_lpInvarianceDepths.front() && repeats == s_lpInvarianceRepeats.front()) {
 				if (Actor* victim = g_MovableMan.GetFirstBrainActor(0)) {
 					victim->SetVel(victim->GetVel() + Vector(0.001F, 0.0F));
@@ -1178,17 +1295,20 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			LocalPrediction::Clear();
 			const std::string after = DumpSimStateToString() + DescribeCanonicalExtras();
 			++cases;
-			const std::string label = "depth " + std::to_string(depth) + " x" + std::to_string(repeats);
 			if (previewsRun != static_cast<uint64_t>(repeats)) {
-				++failures;
-				std::cout << "[lpinv] FAIL " << label << ": " << previewsRun << " previews ran, expected " << repeats << " (no local actor to preview?)" << std::endl;
+				fail(std::to_string(previewsRun) + " previews ran, expected " + std::to_string(repeats) + " (no local actor to preview?)");
+			}
+			if (!outcomeFailure.empty()) {
+				fail(outcomeFailure + " [" + outcome + "]");
 			}
 			if (after != before) {
-				++failures;
 				WriteProbeText("lpinv_after_d" + std::to_string(depth) + "_x" + std::to_string(repeats), after);
-				std::cout << "[lpinv] FAIL " << label << ": canonical state changed after discarded previews (lpinv_before vs lpinv_after_d" << depth << "_x" << repeats << ")" << std::endl;
+				fail("canonical state changed after discarded previews (lpinv_before vs lpinv_after_d" + std::to_string(depth) + "_x" + std::to_string(repeats) + ")");
+			}
+			if (caseFailed) {
+				++failures;
 			} else {
-				std::cout << "[lpinv] ok " << label << ": " << previewsRun << " previews, canonical state byte-identical" << std::endl;
+				std::cout << "[lpinv] ok " << label << ": " << previewsRun << " previews, " << outcome << ", canonical state byte-identical" << std::endl;
 			}
 		}
 	}
@@ -2223,21 +2343,17 @@ void RunGameLoop() {
 		// MOID-grid registration for the frame.
 		LocalPrediction::RunPreview();
 
-		RandomGenerator* prevSimRNG = t_simRNGOverride;
-		t_simRNGOverride = &g_RenderRNG;
-		g_SceneMan.SetRenderDrawContext(true);
-
-		g_UInputMan.Update();
-		g_ActivityMan.RenderUpdate();
-		g_UInputMan.EndFrame();
-
-		LocalPrediction::BeginRender();
-		g_FrameMan.Draw();
-		g_WindowMan.DrawPostProcessBuffer();
-		g_WindowMan.UploadFrame();
-		LocalPrediction::EndRender();
-		g_SceneMan.SetRenderDrawContext(false);
-		t_simRNGOverride = prevSimRNG;
+		{
+			RandomGenerator* prevSimRNG = t_simRNGOverride;
+			t_simRNGOverride = &g_RenderRNG;
+			g_SceneMan.SetRenderDrawContext(true);
+			g_UInputMan.Update();
+			g_ActivityMan.RenderUpdate();
+			g_UInputMan.EndFrame();
+			g_SceneMan.SetRenderDrawContext(false);
+			t_simRNGOverride = prevSimRNG;
+		}
+		DrawFrameWithPreviews();
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
