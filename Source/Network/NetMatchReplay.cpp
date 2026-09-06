@@ -78,6 +78,7 @@ namespace RTE {
 		}
 		std::vector<uint8_t> lengthPrefix;
 		AppendU32(lengthPrefix, static_cast<uint32_t>(bytes.size()));
+		AppendU32(lengthPrefix, ControllerFrameCodec::PayloadChecksum(bytes));
 		m_Out.write(reinterpret_cast<const char*>(lengthPrefix.data()), static_cast<std::streamsize>(lengthPrefix.size()));
 		m_Out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 		if (!m_Out) {
@@ -123,7 +124,7 @@ namespace RTE {
 		}
 		const uint16_t version = static_cast<uint16_t>(versionBytes[0]) | (static_cast<uint16_t>(versionBytes[1]) << 8);
 		// Version 1 (no end marker) still reads; version 2 adds the truncation-detecting marker;
-		// version 3 names the ControllerFrame version its records were encoded with.
+		// version 3 names the ControllerFrame version its records were encoded with; version 4 checksums each record.
 		if (version < 1 || version > NetMatchReplayWriter::c_Version) {
 			if (error) *error = "unsupported replay version " + std::to_string(version);
 			Close();
@@ -217,10 +218,20 @@ namespace RTE {
 			if (error) *error = "invalid replay record length";
 			return false;
 		}
+		uint32_t checksum = 0;
+		if (m_Version >= 4 && !ReadU32(m_In, checksum)) {
+			m_LastStatus = NetReplayReadStatus::Truncated;
+			if (error) *error = "truncated replay record";
+			return false;
+		}
 		std::vector<uint8_t> bytes(recordLength);
 		if (!m_In.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(recordLength))) {
 			m_LastStatus = NetReplayReadStatus::Truncated;
 			if (error) *error = "truncated replay record";
+			return false;
+		}
+		if (m_Version >= 4 && ControllerFrameCodec::PayloadChecksum(bytes) != checksum) {
+			if (error) *error = "replay record checksum mismatch";
 			return false;
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes, m_ControllerFrameVersion);
