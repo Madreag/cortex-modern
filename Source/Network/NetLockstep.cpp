@@ -760,7 +760,7 @@ namespace RTE {
 						    !ReadOrTruncated(reader.ReadU64LE(targetUID), reader, error, "ai_order_target_uid")) {
 							return false;
 						}
-						if (order.op > NetGameAIOrder::DisbandSquad) {
+						if (order.op > NetGameAIOrder::PopWaypoint) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai order op is invalid");
 							return false;
 						}
