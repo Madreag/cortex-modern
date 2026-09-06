@@ -152,7 +152,7 @@ int ACRocket::Create(const ACRocket& reference) {
 	m_PersistedLFootResidue = reference.m_PersistedLFootResidue;
 	// The LimbPath copy terminates traversal, so a save clone of a WORLD craft carries the live
 	// state in the stash; preset copies just pass any stash along.
-	if (reference.HasEverBeenAddedToMovableMan()) {
+	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();

@@ -1,4 +1,5 @@
 #include "AtomGroup.h"
+#include "MovableObject.h"
 
 #include "Actor.h"
 #include "SLTerrain.h"
@@ -110,6 +111,12 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 		m_Material = reference.m_Atoms.front()->GetMaterial();
 	}
 
+	if (MovableObject::IsFaithfulClone()) {
+		m_AutoGenerate = reference.m_AutoGenerate;
+		m_StoredOwnerMass = reference.m_StoredOwnerMass;
+		m_LimbPos = reference.m_LimbPos;
+		m_MomentOfInertia = reference.m_MomentOfInertia;
+	}
 	return 0;
 }
 

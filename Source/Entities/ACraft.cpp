@@ -266,6 +266,27 @@ int ACraft::Create(const ACraft& reference) {
 	m_ScuttleIfFlippedTime = reference.m_ScuttleIfFlippedTime;
 	m_ScuttleOnDeath = reference.m_ScuttleOnDeath;
 
+	if (IsFaithfulClone()) {
+		m_HatchTimer = reference.m_HatchTimer;
+		m_ExitTimer = reference.m_ExitTimer;
+		m_ExitLinePhase = reference.m_ExitLinePhase;
+		m_FlippedTimer = reference.m_FlippedTimer;
+		m_CrashTimer = reference.m_CrashTimer;
+		m_NetworkDelivery = reference.m_NetworkDelivery;
+		m_NetworkDeliveryTimer = reference.m_NetworkDeliveryTimer;
+		m_CurrentExit = m_Exits.begin();
+		std::advance(m_CurrentExit, std::distance(reference.m_Exits.begin(), std::list<Exit>::const_iterator(reference.m_CurrentExit)));
+		auto referenceExit = reference.m_Exits.begin();
+		for (Exit& exit: m_Exits) {
+			exit.m_FaithfulIncomingMOUID = referenceExit->m_pIncomingMO ? referenceExit->m_pIncomingMO->GetUniqueID() : referenceExit->m_FaithfulIncomingMOUID;
+			exit.m_pIncomingMO = nullptr;
+			++referenceExit;
+		}
+	} else {
+		for (Exit& exit: m_Exits) {
+			exit.m_FaithfulIncomingMOUID = 0;
+		}
+	}
 	return 0;
 }
 
@@ -872,6 +893,16 @@ void ACraft::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 			g_FrameMan.DrawLine(pTargetBitmap, exitCorner, exitCorner + arrowVec, 120, 120, EXITLINESPACING, m_ExitLinePhase);
 			exitCorner -= exitRadius * 2;
 			g_FrameMan.DrawLine(pTargetBitmap, exitCorner, exitCorner + arrowVec, 120, 120, EXITLINESPACING, m_ExitLinePhase);
+		}
+	}
+}
+
+void ACraft::ResolveFaithfulLinks() {
+	Actor::ResolveFaithfulLinks();
+	for (Exit& exit: m_Exits) {
+		if (exit.m_FaithfulIncomingMOUID > 0) {
+			exit.m_pIncomingMO = dynamic_cast<MOSRotating*>(g_MovableMan.FindObjectByUniqueID(exit.m_FaithfulIncomingMOUID));
+			exit.m_FaithfulIncomingMOUID = 0;
 		}
 	}
 }

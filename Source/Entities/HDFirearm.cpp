@@ -170,6 +170,13 @@ int HDFirearm::Create(const HDFirearm& reference) {
 
 	m_LegacyCompatibilityRoundsAlwaysFireUnflipped = reference.m_LegacyCompatibilityRoundsAlwaysFireUnflipped;
 
+	if (IsFaithfulClone()) {
+		m_FireFrame = reference.m_FireFrame;
+		m_FiredLastFrame = reference.m_FiredLastFrame;
+		m_AIFireVel = reference.m_AIFireVel;
+		m_AIBulletLifeTime = reference.m_AIBulletLifeTime;
+		m_AIBulletAccScalar = reference.m_AIBulletAccScalar;
+	}
 	return 0;
 }
 
@@ -1099,4 +1106,13 @@ void HDFirearm::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whic
 		g_SceneMan.WrapPosition(aimPoint);
 		putpixel(pTargetBitmap, aimPoint.GetFloorIntX(), aimPoint.GetFloorIntY(), g_YellowGlowColor);
 	}
+}
+
+std::string HDFirearm::DescribeFireGate() const {
+	char buffer[256];
+	std::snprintf(buffer, sizeof(buffer), "act=%d fired1=%d clicked=%d full=%d reload=%d lastfire=%lld acttmr=%lld prefire=%d frame=%d/%d",
+	              m_Activated ? 1 : 0, m_FiredOnce ? 1 : 0, m_AlreadyClicked ? 1 : 0, m_FullAuto ? 1 : 0, m_Reloading ? 1 : 0,
+	              static_cast<long long>(m_LastFireTmr.GetStartSimTimeMS()), static_cast<long long>(m_ActivationTimer.GetStartSimTimeMS()),
+	              (m_PreFireSound && m_PreFireSound->IsBeingPlayed()) ? 1 : 0, m_FireFrame ? 1 : 0, m_FiredLastFrame ? 1 : 0);
+	return std::string(buffer);
 }

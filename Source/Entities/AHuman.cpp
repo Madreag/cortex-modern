@@ -221,7 +221,7 @@ int AHuman::Create(const AHuman& reference) {
 	// state in the stash; preset copies just pass any stash along.
 	m_CanActivateBGItem = reference.m_CanActivateBGItem;
 	m_TriggerPulled = reference.m_TriggerPulled;
-	if (reference.HasEverBeenAddedToMovableMan()) {
+	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
@@ -261,6 +261,33 @@ int AHuman::Create(const AHuman& reference) {
 		m_Paths[BGROUND][RUN].SetBaseScaleMultiplier(Vector(1.1F, 1.0F));
 	}
 
+	if (IsFaithfulClone()) {
+		m_ProneTimer = reference.m_ProneTimer;
+		m_CrouchAmount = reference.m_CrouchAmount;
+		m_CrouchAmountOverride = reference.m_CrouchAmountOverride;
+		m_Aiming = reference.m_Aiming;
+		m_ArmClimbing[FGROUND] = reference.m_ArmClimbing[FGROUND];
+		m_ArmClimbing[BGROUND] = reference.m_ArmClimbing[BGROUND];
+		m_StrideFrame = reference.m_StrideFrame;
+		m_StrideStart = reference.m_StrideStart;
+		m_StrideTimer = reference.m_StrideTimer;
+		m_ThrowTmr = reference.m_ThrowTmr;
+		m_SharpAimRevertTimer = reference.m_SharpAimRevertTimer;
+		m_WalkAngle[FGROUND] = reference.m_WalkAngle[FGROUND];
+		m_WalkAngle[BGROUND] = reference.m_WalkAngle[BGROUND];
+		m_WalkPathOffset = reference.m_WalkPathOffset;
+		// The live groups may sit swapped with their backups, so each backup comes from the reference verbatim.
+		if (reference.m_BackupFGFootGroup) {
+			delete m_BackupFGFootGroup;
+			m_BackupFGFootGroup = dynamic_cast<AtomGroup*>(reference.m_BackupFGFootGroup->Clone());
+			m_BackupFGFootGroup->SetOwner(this);
+		}
+		if (reference.m_BackupBGFootGroup) {
+			delete m_BackupBGFootGroup;
+			m_BackupBGFootGroup = dynamic_cast<AtomGroup*>(reference.m_BackupBGFootGroup->Clone());
+			m_BackupBGFootGroup->SetOwner(this);
+		}
+	}
 	return 0;
 }
 

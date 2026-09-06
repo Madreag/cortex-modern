@@ -88,6 +88,9 @@ namespace RTE {
 		int64_t GetReloadTimerStart() const { return m_ReloadTmr.GetStartSimTimeMS(); }
 
 		void AdoptPersistedUniqueID() override;
+
+		/// The fire-gate state as one line, for snapshot forensics.
+		std::string DescribeFireGate() const;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Sets the Magazine for this HDFirearm. Ownership IS transferred!

@@ -226,7 +226,7 @@ int MOSRotating::Create(const MOSRotating& reference) {
 	m_PersistedGroupStoredMass = reference.m_PersistedGroupStoredMass;
 	m_HasPersistedGroupInertia = reference.m_HasPersistedGroupInertia;
 	// The accumulated mass is captured from the live reference; every copy path re-derives its own.
-	if (reference.HasEverBeenAddedToMovableMan()) {
+	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && !reference.m_HasPersistedAttachableAndWoundMass) {
 		m_PersistedAttachableAndWoundMass = reference.m_AttachableAndWoundMass;
 		m_HasPersistedAttachableAndWoundMass = true;
 	} else {
@@ -286,6 +286,20 @@ int MOSRotating::Create(const MOSRotating& reference) {
 		m_pFlipBitmapS = create_bitmap_ex(c_MOIDLayerBitDepth, m_aSprite[0]->w, m_aSprite[0]->h);
 	}
 
+	if (IsFaithfulClone()) {
+		m_DeepHardness = reference.m_DeepHardness;
+		m_FarthestAttachableDistanceAndRadius = reference.m_FarthestAttachableDistanceAndRadius;
+		m_AttachableAndWoundMass = reference.m_AttachableAndWoundMass;
+		// Subgroup atoms are re-derived as the attachables re-attach; stash the live group so the adopt lays them back.
+		if (m_pAtomGroup && reference.m_pAtomGroup && m_PersistedAtomGroupOffsets.empty()) {
+			m_PersistedAtomGroupSubIDs = reference.m_pAtomGroup->GetAtomSubIDs();
+			m_PersistedAtomGroupOffsets = reference.m_pAtomGroup->GetAtomOffsets();
+			m_PersistedAtomGroupResidue = reference.m_pAtomGroup->GetTravelResidue();
+			m_PersistedGroupMomentOfInertia = reference.m_pAtomGroup->GetStoredMomentOfInertia();
+			m_PersistedGroupStoredMass = reference.m_pAtomGroup->GetStoredOwnerMass();
+			m_HasPersistedGroupInertia = true;
+		}
+	}
 	return 0;
 }
 
@@ -1498,9 +1512,12 @@ void MOSRotating::AdoptPersistedUniqueID() {
 		std::unordered_map<long, long> savedToLiveSubID;
 		savedToLiveSubID[0] = 0;
 		CollectSubgroupIDTranslation(savedToLiveSubID);
-		for (long long& subID: m_PersistedAtomGroupSubIDs) {
-			auto translation = savedToLiveSubID.find(static_cast<long>(subID));
-			subID = translation != savedToLiveSubID.end() ? translation->second : -1;
+		// Without pending identities the saved sub-IDs already are the live ones (an in-memory snapshot).
+		if (savedToLiveSubID.size() > 1) {
+			for (long long& subID: m_PersistedAtomGroupSubIDs) {
+				auto translation = savedToLiveSubID.find(static_cast<long>(subID));
+				subID = translation != savedToLiveSubID.end() ? translation->second : -1;
+			}
 		}
 	}
 	if (!m_PersistedAtomGroupResidue.empty()) {
@@ -1531,6 +1548,16 @@ void MOSRotating::AdoptPersistedUniqueID() {
 	}
 	for (AEmitter* wound: m_Wounds) {
 		wound->AdoptPersistedUniqueID();
+	}
+}
+
+void MOSRotating::ResolveFaithfulLinks() {
+	MOSprite::ResolveFaithfulLinks();
+	for (Attachable* attachable: m_Attachables) {
+		attachable->ResolveFaithfulLinks();
+	}
+	for (AEmitter* wound: m_Wounds) {
+		wound->ResolveFaithfulLinks();
 	}
 }
 

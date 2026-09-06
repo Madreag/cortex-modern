@@ -217,7 +217,7 @@ int ACrab::Create(const ACrab& reference) {
 	m_PersistedRBGFootResidue = reference.m_PersistedRBGFootResidue;
 	// The LimbPath copy terminates traversal, so a save clone of a WORLD actor carries the live
 	// state in the stash; preset copies just pass any stash along.
-	if (reference.HasEverBeenAddedToMovableMan()) {
+	if ((reference.HasEverBeenAddedToMovableMan() || IsFaithfulClone()) && reference.m_PersistedLimbPathStates.empty()) {
 		m_PersistedLimbPathStates = reference.GetLimbPathStates();
 		m_PersistedLimbGroupPositions = reference.GetLimbGroupPositions();
 		m_PersistedLimbGroupInertia = reference.GetLimbGroupInertia();
@@ -245,6 +245,35 @@ int ACrab::Create(const ACrab& reference) {
 	m_AimRangeLowerLimit = reference.m_AimRangeLowerLimit;
 	m_LockMouseAimInput = reference.m_LockMouseAimInput;
 
+	if (IsFaithfulClone()) {
+		m_StrideFrame = reference.m_StrideFrame;
+		m_Aiming = reference.m_Aiming;
+		for (int side = 0; side < SIDECOUNT; ++side) {
+			m_StrideStart[side] = reference.m_StrideStart[side];
+			m_StrideTimer[side] = reference.m_StrideTimer[side];
+		}
+		// The live groups may sit swapped with their backups, so each backup comes from the reference verbatim.
+		if (reference.m_BackupLFGFootGroup) {
+			delete m_BackupLFGFootGroup;
+			m_BackupLFGFootGroup = dynamic_cast<AtomGroup*>(reference.m_BackupLFGFootGroup->Clone());
+			m_BackupLFGFootGroup->SetOwner(this);
+		}
+		if (reference.m_BackupLBGFootGroup) {
+			delete m_BackupLBGFootGroup;
+			m_BackupLBGFootGroup = dynamic_cast<AtomGroup*>(reference.m_BackupLBGFootGroup->Clone());
+			m_BackupLBGFootGroup->SetOwner(this);
+		}
+		if (reference.m_BackupRFGFootGroup) {
+			delete m_BackupRFGFootGroup;
+			m_BackupRFGFootGroup = dynamic_cast<AtomGroup*>(reference.m_BackupRFGFootGroup->Clone());
+			m_BackupRFGFootGroup->SetOwner(this);
+		}
+		if (reference.m_BackupRBGFootGroup) {
+			delete m_BackupRBGFootGroup;
+			m_BackupRBGFootGroup = dynamic_cast<AtomGroup*>(reference.m_BackupRBGFootGroup->Clone());
+			m_BackupRBGFootGroup->SetOwner(this);
+		}
+	}
 	return 0;
 }
 

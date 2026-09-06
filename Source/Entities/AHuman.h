@@ -154,6 +154,10 @@ namespace RTE {
 		int64_t GetSharpAimRevertTimerStart() const { return m_SharpAimRevertTimer.GetStartSimTimeMS(); }
 
 		void AdoptPersistedUniqueID() override;
+
+		/// The live foot groups, for snapshot forensics.
+		const AtomGroup* GetFGFootGroup() const { return m_pFGFootGroup; }
+		const AtomGroup* GetBGFootGroup() const { return m_pBGFootGroup; }
 		void DiscardPersistedSnapshotState() override;
 
 		/// Sets the head for this AHuman.

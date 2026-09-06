@@ -106,6 +106,11 @@ int AEmitter::Create(const AEmitter& reference) {
 	m_BurstSoundFollowsEmitter = reference.m_BurstSoundFollowsEmitter;
 	m_LoudnessOnEmit = reference.m_LoudnessOnEmit;
 
+	if (IsFaithfulClone()) {
+		m_WasEmitting = reference.m_WasEmitting;
+		m_AvgBurstImpulse = reference.m_AvgBurstImpulse;
+		m_AvgImpulse = reference.m_AvgImpulse;
+	}
 	return 0;
 }
 

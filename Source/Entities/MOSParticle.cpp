@@ -44,6 +44,9 @@ int MOSParticle::Create(const MOSParticle& reference) {
 	m_PersistedAtomResidue = reference.m_PersistedAtomResidue;
 	m_HasPersistedAtomResidue = reference.m_HasPersistedAtomResidue;
 
+	if (IsFaithfulClone()) {
+		m_TimeRest = reference.m_TimeRest;
+	}
 	return 0;
 }
 

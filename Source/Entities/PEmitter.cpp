@@ -83,6 +83,13 @@ int PEmitter::Create(const PEmitter& reference) {
 	m_BurstSoundFollowsEmitter = reference.m_BurstSoundFollowsEmitter;
 	m_LoudnessOnEmit = reference.m_LoudnessOnEmit;
 
+	if (IsFaithfulClone()) {
+		m_WasEmitting = reference.m_WasEmitting;
+		m_BurstTimer = reference.m_BurstTimer;
+		m_LastEmitTmr = reference.m_LastEmitTmr;
+		m_AvgBurstImpulse = reference.m_AvgBurstImpulse;
+		m_AvgImpulse = reference.m_AvgImpulse;
+	}
 	return 0;
 }
 
