@@ -1077,6 +1077,8 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				System::SetQuit(true);
 				return;
 			}
+		const auto captureStart = std::chrono::steady_clock::now();
+		double worldCaptureMs = 0.0;
 			if (Activity* activity = g_ActivityMan.GetActivity()) {
 				activity->CaptureRollbackState(s_rbProbeActivity);
 				if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
@@ -1091,6 +1093,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		}
 		// The GC tail can consume sim RNG after this callback; the true re-run stream starts at
 		// the next tick's entry, so capture the engine there.
+			worldCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldStart).count();
 		s_rbProbeCaptureRngNextTick = true;
 		s_rbProbeSimCount = g_TimerMan.GetSimUpdateCount();
 		s_rbProbeSimTimeTicks = g_TimerMan.GetSimTimeTicks();
@@ -1102,6 +1105,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		}
 		if (ScenarioRunner::IsLockstepReplayPlayback()) {
 			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
+		const auto terrainStart = std::chrono::steady_clock::now();
 		}
 		s_rbProbeCapturedDeep = DumpSimStateToString();
 		WriteProbeText("rb_captured", s_rbProbeCapturedDeep);
@@ -1110,6 +1114,13 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		s_rbProbeDeepDivergence = -1;
 		s_rbProbeRestoreMismatch = false;
 		DumpTerrainNow("rb_cap");
+		const double terrainCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - terrainStart).count();
+		// A second, warm copy shows the steady-state cost a per-frame ring would pay.
+		const auto warmStart = std::chrono::steady_clock::now();
+		s_rbProbeTerrain.Capture();
+		const double terrainWarmMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmStart).count();
+		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+		std::cout << "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " terrain_ms=" << terrainCaptureMs << " terrain_warm_ms=" << terrainWarmMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size()) << std::endl;
 		s_rbProbePhase = 1;
 		std::cout << "[rbprobe] captured at tick " << simTick << std::endl;
 	} else if (s_rbProbePhase == 1 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
@@ -1880,15 +1891,19 @@ void RunGameLoop() {
 				}
 				if (Activity* activity = g_ActivityMan.GetActivity()) {
 					activity->RestoreRollbackState(s_rbProbeActivity);
+				const auto restoreStart = std::chrono::steady_clock::now();
 					if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 						gameActivity->RestoreDeliveriesFromRollback();
 					}
 				}
 				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
+				const auto terrainRestoreStart = std::chrono::steady_clock::now();
 					std::cout << "[rbprobe] FAIL: world restore refused" << std::endl;
 					System::SetQuit(true);
 				}
 				MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
+				const double terrainRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - terrainRestoreStart).count();
+				const auto worldRestoreStart = std::chrono::steady_clock::now();
 				std::string rewindError;
 				if (ScenarioRunner::IsLockstepReplayPlayback() &&
 				    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
@@ -1900,6 +1915,7 @@ void RunGameLoop() {
 				g_MovableMan.UpdateDrawMOIDs();
 				CheckRestoredDeepState();
 				DumpTerrainNow("rb_res");
+				const double worldRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldRestoreStart).count();
 				s_rbProbePhase = 3;
 				std::cout << "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount << std::endl;
 			}
@@ -1908,7 +1924,11 @@ void RunGameLoop() {
 				g_WindowMan.UploadFrame();
 				// A fidelity restore places snapshot residents verbatim: no spawn normalization,
 				// no quarantine, saved identities adopted.
+				const auto moidStart = std::chrono::steady_clock::now();
 				bool restartOk = false;
+				const double moidMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - moidStart).count();
+				const double restoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count();
+				std::cout << "[rbprobe] restore_ms=" << restoreMs << " terrain_ms=" << terrainRestoreMs << " world_ms=" << worldRestoreMs << " moid_ms=" << moidMs << std::endl;
 				{
 					struct RestoreScope {
 						explicit RestoreScope(bool restoring) { g_MovableMan.SetRestoringSnapshot(restoring); }
