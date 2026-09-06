@@ -221,6 +221,9 @@ namespace RTE {
 		InputMode GetSeatMode() const { return m_SeatMode; }
 		int GetSeatPlayer() const { return m_SeatMode == InputMode::CIM_PLAYER ? m_SeatPlayer : Players::NoPlayer; }
 		int GetSeatPlayerRaw() const { return m_SeatPlayer; }
+
+		/// Whether the actor-switch debounce has run out for this seat.
+		bool ReleaseDelayPassed();
 		bool IsSeatedByPlayer(int player = Players::NoPlayer) const { return m_SeatMode == InputMode::CIM_PLAYER && m_SeatPlayer >= Players::PlayerOne && (player < Players::PlayerOne || m_SeatPlayer == player); }
 
 		/// Gets the analog movement input data.

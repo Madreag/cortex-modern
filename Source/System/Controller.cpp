@@ -6,12 +6,18 @@
 #include "Actor.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
+#include "InputScript.h"
 
 #include <array>
 
 using namespace RTE;
 
 thread_local Actor* RTE::g_CurrentAIActor = nullptr;
+
+// A scripted seat measures the switch debounce in sim time, so an unpaced test run samples the same ticks a paced one does.
+bool Controller::ReleaseDelayPassed() {
+	return InputScript::DrivesPlayer(m_SeatPlayer) ? m_ReleaseTimer.IsPastSimMS(m_ReleaseDelay) : m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay);
+}
 
 void Controller::Clear() {
 	m_ControlStates.fill(false);
@@ -237,7 +243,7 @@ void Controller::RenderUpdate() {
 	Vector move = g_UInputMan.AnalogMoveValues(m_SeatPlayer);
 	Vector aim = g_UInputMan.AnalogAimValues(m_SeatPlayer);
 
-	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
+	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && ReleaseDelayPassed()) {
 		m_AnalogMove = move;
 	}
 
@@ -379,7 +385,7 @@ void Controller::UpdatePlayerPieMenuInput(std::array<bool, ControlState::CONTROL
 		m_ControlStates[ControlState::ACTOR_PREV_PREP] = true;
 		m_ReleaseTimer.Reset();
 		// No actions can be performed while switching actors, and short time thereafter
-	} else if (m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
+	} else if (ReleaseDelayPassed()) {
 		m_ControlStates[ControlState::WEAPON_FIRE] = g_UInputMan.ElementHeld(m_SeatPlayer, InputElements::INPUT_FIRE);
 		m_ControlStates[ControlState::AIM_SHARP] = g_UInputMan.ElementHeld(m_SeatPlayer, InputElements::INPUT_AIM);
 		m_ControlStates[ControlState::BODY_JUMPSTART] = g_UInputMan.ElementPressedSim(m_SeatPlayer, InputElements::INPUT_JUMP);
@@ -501,7 +507,7 @@ void Controller::UpdatePlayerAnalogInput() {
 	bool pieMenuActive = m_ControlStates[ControlState::PIE_MENU_ACTIVE];
 
 	// Only change aim and move if not holding actor switch buttons - don't want to mess up AI's aim
-	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay)) {
+	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && ReleaseDelayPassed()) {
 		m_AnalogMove = move;
 	}
 
