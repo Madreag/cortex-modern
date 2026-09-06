@@ -71,6 +71,7 @@ namespace RTE {
 		/// Gets the number of raw 32-bit draws consumed since construction.
 		/// @return The draw count.
 		uint64_t GetDrawCount() const { return m_DrawCount; }
+		void SetDrawCount(uint64_t count) { m_DrawCount = count; }
 
 		/// Sets whether each draw fires g_RNGDrawHook.
 		/// @param enabled Whether to trace draws.

@@ -192,6 +192,11 @@ static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
 static std::string s_netReplayInPath;
+static std::string s_netReplayVerifyPath;
+static long long s_lpInvarianceTick = 0;
+static std::vector<int> s_lpInvarianceDepths;
+static std::vector<int> s_lpInvarianceRepeats;
+static int s_lpInvarianceFailures = -1; //!< -1 = not run, else the count of failed checks.
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -540,10 +545,48 @@ void HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-replay") {
 			s_netReplayInPath = argValue[++i];
 			continue;
+		}
 		if (!lastArg && currentArg == "-net-replay-verify") {
 			s_netReplayVerifyPath = argValue[++i];
 			continue;
 		}
+		if (!lastArg && currentArg == "-local-prediction-depth") {
+			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-local-prediction-invariance") {
+			// T:d1,d2,...:r1,r2,... — at tick T run previews of each depth, each repeat count, and prove the canonical world untouched.
+			const std::string spec = argValue[++i];
+			const size_t first = spec.find(':');
+			const size_t second = first == std::string::npos ? std::string::npos : spec.find(':', first + 1);
+			s_lpInvarianceTick = std::strtoll(spec.c_str(), nullptr, 10);
+			const auto parseList = [](const std::string& text, std::vector<int>& out) {
+				size_t start = 0;
+				while (start < text.size()) {
+					const size_t comma = text.find(',', start);
+					const std::string item = text.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+					if (!item.empty()) {
+						out.push_back(static_cast<int>(std::strtol(item.c_str(), nullptr, 10)));
+					}
+					if (comma == std::string::npos) {
+						break;
+					}
+					start = comma + 1;
+				}
+			};
+			if (first != std::string::npos) {
+				parseList(spec.substr(first + 1, second == std::string::npos ? std::string::npos : second - first - 1), s_lpInvarianceDepths);
+			}
+			if (second != std::string::npos) {
+				parseList(spec.substr(second + 1), s_lpInvarianceRepeats);
+			}
+			if (s_lpInvarianceDepths.empty()) {
+				s_lpInvarianceDepths = {1, 3, 8, 14};
+			}
+			if (s_lpInvarianceRepeats.empty()) {
+				s_lpInvarianceRepeats = {1, 3};
+			}
+			continue;
 		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
@@ -1033,6 +1076,122 @@ static void CheckRestoredDeepState() {
 	}
 }
 
+// CC_FAULT_INJECT=<name>[,<name>...] arms deliberate faults in the test drivers only, to prove the gates catch them.
+static bool FaultInjected(const char* name) {
+	static const std::string armed = [] {
+		const char* env = std::getenv("CC_FAULT_INJECT");
+		return std::string(env ? env : "");
+	}();
+	if (armed.empty()) {
+		return false;
+	}
+	size_t start = 0;
+	while (start <= armed.size()) {
+		const size_t comma = armed.find(',', start);
+		const std::string item = armed.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+		if (item == name) {
+			return true;
+		}
+		if (comma == std::string::npos) {
+			break;
+		}
+		start = comma + 1;
+	}
+	return false;
+}
+
+// Everything a preview may touch besides the MO dump: clocks, RNG, identity counter, queues, activity
+// scalars, terrain layers and the Lua bindings. The camera and the previews themselves are the only
+// presentation-side changes a preview is allowed to make.
+static std::string DescribeCanonicalExtras() {
+	std::ostringstream out;
+	out << "sim_count=" << g_TimerMan.GetSimUpdateCount() << " sim_ticks=" << g_TimerMan.GetSimTimeTicks() << " accumulator=" << g_TimerMan.GetSimAccumulator() << "\n";
+	out << "rng_draws=" << g_SimRNG.GetDrawCount() << " rng_state=" << g_SimRNG.GetEngineState() << "\n";
+	out << "uid_counter=" << MovableObject::GetUniqueIDCounter() << "\n";
+	const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
+	out << "queues actors=" << mark.actors << " items=" << mark.items << " particles=" << mark.particles << " alarms=" << mark.alarms << "\n";
+	if (const Activity* activity = g_ActivityMan.GetActivity()) {
+		Activity::RollbackState state;
+		activity->CaptureRollbackState(state);
+		out << "activity state=" << static_cast<int>(state.state);
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
+			out << " t" << team << "=" << std::hexfloat << state.teamFunds[team] << std::defaultfloat << "/" << state.teamDeaths[team];
+		}
+		out << "\n";
+	}
+	TerrainLayerSnapshot terrain;
+	if (terrain.Capture()) {
+		auto fnv = [](const std::vector<uint8_t>& bytes) {
+			uint64_t h = 1469598103934665603ULL;
+			for (const uint8_t b: bytes) {
+				h = (h ^ b) * 1099511628211ULL;
+			}
+			return h;
+		};
+		out << "terrain mat=" << std::hex << fnv(terrain.mat) << " fg=" << fnv(terrain.fg) << " bg=" << fnv(terrain.bg) << std::dec << "\n";
+	}
+	out << "scripts\n" << g_MovableMan.DescribeScriptBindings();
+	return out.str();
+}
+
+// -local-prediction-invariance: at tick T, run and discard previews of every depth and repeat count and
+// require the canonical world (dump + extras) byte-identical afterwards. The run then continues, so the
+// trace compare against a no-preview reference closes the resume half of the guarantee.
+static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
+	if (s_lpInvarianceTick <= 0 || simTick != static_cast<uint64_t>(s_lpInvarianceTick)) {
+		return;
+	}
+	const int savedDepth = LocalPrediction::GetDepthOverride();
+	g_MovableMan.WaitForActorsSeeTask();
+	g_MovableMan.CompleteQueuedMOIDDrawings();
+	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras();
+	WriteProbeText("lpinv_before", before);
+	int failures = 0;
+	int cases = 0;
+	for (const int depth: s_lpInvarianceDepths) {
+		for (const int repeats: s_lpInvarianceRepeats) {
+			LocalPrediction::SetDepthOverride(depth);
+			const uint64_t previewsBefore = LocalPrediction::GetPreviewCount();
+			for (int n = 0; n < repeats; ++n) {
+				LocalPrediction::Clear();
+				LocalPrediction::RunPreview();
+				LocalPrediction::BeginRender();
+				LocalPrediction::EndRender();
+			}
+			const uint64_t previewsRun = LocalPrediction::GetPreviewCount() - previewsBefore;
+			if (FaultInjected("preview_mutate_canonical") && depth == s_lpInvarianceDepths.front() && repeats == s_lpInvarianceRepeats.front()) {
+				if (Actor* victim = g_MovableMan.GetFirstBrainActor(0)) {
+					victim->SetVel(victim->GetVel() + Vector(0.001F, 0.0F));
+				}
+			}
+			LocalPrediction::Clear();
+			const std::string after = DumpSimStateToString() + DescribeCanonicalExtras();
+			++cases;
+			const std::string label = "depth " + std::to_string(depth) + " x" + std::to_string(repeats);
+			if (previewsRun != static_cast<uint64_t>(repeats)) {
+				++failures;
+				std::cout << "[lpinv] FAIL " << label << ": " << previewsRun << " previews ran, expected " << repeats << " (no local actor to preview?)" << std::endl;
+			}
+			if (after != before) {
+				++failures;
+				WriteProbeText("lpinv_after_d" + std::to_string(depth) + "_x" + std::to_string(repeats), after);
+				std::cout << "[lpinv] FAIL " << label << ": canonical state changed after discarded previews (lpinv_before vs lpinv_after_d" << depth << "_x" << repeats << ")" << std::endl;
+			} else {
+				std::cout << "[lpinv] ok " << label << ": " << previewsRun << " previews, canonical state byte-identical" << std::endl;
+			}
+		}
+	}
+	LocalPrediction::SetDepthOverride(savedDepth);
+	s_lpInvarianceFailures = failures;
+	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases left the canonical world untouched" << std::endl;
+	g_MetricsCollector.RecordString("lpinv_result", failures == 0 ? "pass" : "fail");
+	g_MetricsCollector.Record("lpinv_cases", cases);
+	g_MetricsCollector.Record("lpinv_failures", failures);
+	if (failures > 0) {
+		s_netReplayExitCode = 5;
+	}
+}
+
 static void DumpTerrainIfArmed(uint64_t simTick) {
 	static uint64_t s_tick = 0;
 	static bool s_checked = false;
@@ -1126,6 +1285,12 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		const double terrainWarmMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmStart).count();
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
 		std::cout << "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " terrain_ms=" << terrainCaptureMs << " terrain_warm_ms=" << terrainWarmMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size()) << std::endl;
+		if (FaultInjected("snapshot_skew") && !s_rbProbeWorld.actors.empty()) {
+			// A deliberately wrong captured field: the restore must be caught by the deep compare.
+			Actor* skewed = s_rbProbeWorld.actors.front();
+			skewed->SetVel(skewed->GetVel() + Vector(0.001F, 0.0F));
+			std::cout << "[rbprobe] fault injected: snapshot_skew on uid " << skewed->GetUniqueID() << std::endl;
+		}
 		s_rbProbeCapturedDeep = DumpSimStateToString();
 		WriteProbeText("rb_captured", s_rbProbeCapturedDeep);
 		WriteProbeText("rb_captured_" + std::to_string(simTick), s_rbProbeCapturedDeep);
@@ -1523,7 +1688,7 @@ void RunGameLoop() {
 					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
 					System::SetQuit(true);
 				} else if (!s_netReplayInPath.empty()) {
-					// Playback ends when the recording does; anything else is a reproduction failure.
+					// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
 					s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 					using Outcome = ScenarioRunner::LockstepReplayOutcome;
 					Outcome outcome = ScenarioRunner::GetLockstepReplayOutcome();
@@ -1654,6 +1819,7 @@ void RunGameLoop() {
 
 			DumpSimStateIfArmed(simTick);
 			TickProbeIfArmed(simTick);
+			LocalPredictionInvarianceOnTick(simTick);
 			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
 			{
@@ -1725,6 +1891,15 @@ void RunGameLoop() {
 				}
 			}
 
+			// Playback honours -max-ticks as a bounded run: distinct from the recording's own end.
+			if (!s_netReplayInPath.empty() && ScenarioRunner::GetArgs().maxTicks > 0 && !ScenarioRunner::HasControllerReplayError() &&
+			    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+				s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::TickCap);
+				g_ActivityMan.EndActivity();
+				System::SetQuit(true);
+				break;
+			}
 			// Menu-launched MP match with tracing armed: cap at -max-ticks so the trace is bounded for the
 			// host-vs-client sim-gated compare (the menu has no scenario/e2e cap of its own).
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
@@ -1891,15 +2066,6 @@ void RunGameLoop() {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
 					}
-			// Playback honours -max-ticks as a bounded run: distinct from the recording's own end.
-			if (!s_netReplayInPath.empty() && ScenarioRunner::GetArgs().maxTicks > 0 && !ScenarioRunner::HasControllerReplayError() &&
-			    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
-				s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-				ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::TickCap);
-				g_ActivityMan.EndActivity();
-				System::SetQuit(true);
-				break;
-			}
 					// The e2e has no menu to return to; a leaver's run ends here.
 					if (s_netMatchServiceE2E) {
 						System::SetQuit(true);
@@ -2414,6 +2580,11 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"pace\":" << BuildLoopPaceJson() << ",";
 	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
+	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
+	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
+	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << "},";
+	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
+	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
 	out << "\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",";
 	out << "\"service\":" << g_NetMatchService.BuildReportJson();
@@ -2521,7 +2692,18 @@ int RunNetReplayPlayback() {
 	const auto playbackStart = std::chrono::steady_clock::now();
 	RunGameLoop();
 	const auto playbackMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - playbackStart).count();
+	using ReplayOutcome = ScenarioRunner::LockstepReplayOutcome;
+	const ReplayOutcome finalOutcome = ScenarioRunner::GetLockstepReplayOutcome();
 	if (traceRun) {
+		g_MetricsCollector.RecordString("replay_outcome", ScenarioRunner::ReplayOutcomeName(finalOutcome));
+		g_MetricsCollector.Record("replay_frames_consumed", static_cast<double>(ScenarioRunner::GetLockstepReplayFramesConsumed()));
+		g_MetricsCollector.Record("replay_last_tick", static_cast<double>(ScenarioRunner::GetLockstepReplayLastTick()));
+		g_MetricsCollector.Record("replay_end_marker", ScenarioRunner::LockstepReplaySawEndMarker() ? 1.0 : 0.0);
+		g_MetricsCollector.Record("replay_exit_code", static_cast<double>(s_netReplayExitCode));
+		if (finalOutcome == ReplayOutcome::Completed || finalOutcome == ReplayOutcome::TickCap) {
+			g_MetricsCollector.RecordString("controller_replay_error", "");
+		}
+		g_MetricsCollector.SetResult(s_netReplayExitCode == 0);
 		g_MetricsCollector.EndRun();
 		const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 		if (!g_MetricsCollector.WriteReport(tracePath)) {
@@ -2694,18 +2876,7 @@ int main(int argc, char** argv) {
 			NetLanDiscovery browser;
 			std::string error;
 			int exitCode = 1;
-	using ReplayOutcome = ScenarioRunner::LockstepReplayOutcome;
-	const ReplayOutcome finalOutcome = ScenarioRunner::GetLockstepReplayOutcome();
 			if (!browser.StartBrowser(&error) ||
-		g_MetricsCollector.RecordString("replay_outcome", ScenarioRunner::ReplayOutcomeName(finalOutcome));
-		g_MetricsCollector.Record("replay_frames_consumed", static_cast<double>(ScenarioRunner::GetLockstepReplayFramesConsumed()));
-		g_MetricsCollector.Record("replay_last_tick", static_cast<double>(ScenarioRunner::GetLockstepReplayLastTick()));
-		g_MetricsCollector.Record("replay_end_marker", ScenarioRunner::LockstepReplaySawEndMarker() ? 1.0 : 0.0);
-		g_MetricsCollector.Record("replay_exit_code", static_cast<double>(s_netReplayExitCode));
-		if (finalOutcome == ReplayOutcome::Completed || finalOutcome == ReplayOutcome::TickCap) {
-			g_MetricsCollector.RecordString("controller_replay_error", "");
-		}
-		g_MetricsCollector.SetResult(s_netReplayExitCode == 0);
 			    !beacon.StartBeacon(42120, "SelftestHost", "P4 Alpha Duel", "pvp-skirmish", 1, 4, &error)) {
 				std::cerr << "[net-discovery-selftest] FAIL: " << error << std::endl;
 				return 1;
@@ -2852,6 +3023,19 @@ int main(int argc, char** argv) {
 		std::_Exit(exitCode);
 	}
 
+	if (!s_netReplayVerifyPath.empty()) {
+		NetReplayVerifyReport report;
+		NetMatchReplayReader::Verify(s_netReplayVerifyPath, report);
+		const std::string json = report.ToJson();
+		std::cout << "[net-replay-verify] " << json << std::endl;
+		if (!ScenarioRunner::GetArgs().outPath.empty()) {
+			std::string writeError;
+			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {
+				std::cerr << "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError << std::endl;
+			}
+		}
+		return report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1));
+	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();
 		std::cout.flush();
@@ -2992,16 +3176,3 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) { return main(__argc, __argv); }
 #endif
-	if (!s_netReplayVerifyPath.empty()) {
-		NetReplayVerifyReport report;
-		NetMatchReplayReader::Verify(s_netReplayVerifyPath, report);
-		const std::string json = report.ToJson();
-		std::cout << "[net-replay-verify] " << json << std::endl;
-		if (!ScenarioRunner::GetArgs().outPath.empty()) {
-			std::string writeError;
-			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {
-				std::cerr << "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError << std::endl;
-			}
-		}
-		return report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1));
-	}

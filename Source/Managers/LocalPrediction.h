@@ -15,6 +15,9 @@ namespace RTE {
 		/// Command-line override: -1 leaves the setting in charge, 0 forces off, 1 forces on.
 		static void SetCommandLineOverride(int enabled) { s_Override = enabled; }
 		static bool IsEnabled();
+		/// A fixed preview depth for tests; 0 means the local input delay decides.
+		static void SetDepthOverride(int depth) { s_DepthOverride = depth; }
+		static int GetDepthOverride() { return s_DepthOverride; }
 
 		/// Advances a clone of every locally controlled actor to the input-delay horizon; call before drawing.
 		static void RunPreview();
@@ -41,6 +44,7 @@ namespace RTE {
 		static std::vector<Preview> s_Previews;
 		static bool s_Rendering;
 		static int s_Override;
+		static int s_DepthOverride;
 		static long long s_PreviewedTick;
 		static uint64_t s_PreviewCount;
 		static uint64_t s_PreviewTicks;

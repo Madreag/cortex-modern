@@ -142,6 +142,8 @@ namespace RTE {
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 		/// Blocks until the async seeing pass that reads the actor list has finished.
 		void WaitForActorsSeeTask();
+		/// One line per Lua state listing its registered MOs (UID and whether their scripts are live); the invariance tests compare it.
+		std::string DescribeScriptBindings() const;
 
 		/// Get a pointer to the first Actor in the internal Actor list that is
 		/// of a specifc group, alternatively the first one AFTER a specific actor!
