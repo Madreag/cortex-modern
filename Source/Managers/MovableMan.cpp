@@ -30,6 +30,7 @@
 #include "SettingsMan.h"
 #include "ControllerFrame.h"
 #include "ScenarioRunner.h"
+#include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
 
@@ -540,6 +541,26 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 		} else if (const NetGamePauseMatch* pauseMatch = std::get_if<NetGamePauseMatch>(&command.payload)) {
 			ScenarioRunner::ApplyLockstepPauseCommand(pauseMatch->pause);
+		} else if (const NetGameAIEquip* equip = std::get_if<NetGameAIEquip>(&command.payload)) {
+			// The AI's equip call runs here on every peer; only the peer driving the actor may issue it.
+			AHuman* human = dynamic_cast<AHuman*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(equip->actorUID)));
+			if (!human) {
+				g_ConsoleMan.PrintString("NETWORK: AI equip command target not found: UID " + std::to_string(equip->actorUID));
+				std::cout << "[net-match] AI equip command target not found: UID " << equip->actorUID << std::endl;
+				continue;
+			}
+			if (human->GetTeam() != equip->team || !ScenarioRunner::IsLockstepActorOwner(equip->actorUID, human->GetTeam(), !human->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AI equip command from a peer that does not drive actor " + std::to_string(equip->actorUID));
+				continue;
+			}
+			AHuman::DeferredEquip deferred;
+			deferred.op = static_cast<AHuman::DeferredEquip::Op>(equip->op);
+			deferred.depositToFront = equip->depositToFront;
+			deferred.group = equip->group;
+			deferred.excludeGroup = equip->excludeGroup;
+			deferred.moduleName = equip->moduleName;
+			deferred.presetName = equip->presetName;
+			human->ExecuteDeferredEquip(deferred);
 		}
 	}
 }
@@ -672,7 +693,7 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 					states |= 1ULL << s;
 				}
 			}
-			out << std::defaultfloat << " awm=" << std::hexfloat << actor->GetAttachableAndWoundMassForSave() << " inv=" << actor->GetInventoryMass() << " gold=" << actor->GetGoldCarried() << " base=" << actor->MovableObject::GetMass() << std::defaultfloat << " ninv=" << actor->GetInventorySize() << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " aimode=" << static_cast<int>(actor->GetAIMode()) << " health=" << std::hexfloat << actor->GetHealth() << std::defaultfloat;
+			out << std::defaultfloat << " awm=" << std::hexfloat << actor->GetAttachableAndWoundMassForSave() << " inv=" << actor->GetInventoryMass() << " gold=" << actor->GetGoldCarried() << " base=" << actor->MovableObject::GetMass() << std::defaultfloat << " ninv=" << actor->GetInventorySize() << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " aimode=" << static_cast<int>(actor->GetAIMode()) << " health=" << std::hexfloat << actor->GetHealth() << " aim=" << actor->GetAimAngle(false) << std::defaultfloat << " flip=" << actor->IsHFlipped();
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
 				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS();
 			}
@@ -683,7 +704,10 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				if (const AEJetpack* jetpack = human->GetJetpack()) {
 					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
 				}
-				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(const_cast<AHuman*>(human)->GetEquippedItem())) {
+				const HeldDevice* fgItem = const_cast<AHuman*>(human)->GetEquippedItem();
+				const HeldDevice* bgItem = const_cast<AHuman*>(human)->GetEquippedBGItem();
+				out << " fg=" << (fgItem ? fgItem->GetUniqueID() : 0) << " bg=" << (bgItem ? bgItem->GetUniqueID() : 0);
+				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(fgItem)) {
 					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading();
 					out << " gate[" << gun->DescribeFireGate() << "]";
 				}
@@ -1291,6 +1315,17 @@ void MovableMan::ReportSpeculationViolation(const char* what, const MovableObjec
 	}
 #ifdef DEBUG_BUILD
 	RTEAssert(false, "Speculative execution wrote to the world: " + std::string(what) + " " + subject);
+#endif
+}
+
+void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor* actor) {
+	++m_ControllerBoundaryStats.directWrites;
+	const std::string subject = actor ? actor->GetPresetName() + " uid=" + std::to_string(actor->GetUniqueID()) : std::string("an actor");
+	if (m_ControllerBoundaryStats.directWrites <= 3) {
+		std::cout << "[controller-boundary] VIOLATION: the AI pass wrote " << what << " of " << subject << " directly" << std::endl;
+	}
+#ifdef DEBUG_BUILD
+	RTEAssert(false, "The AI pass wrote to the canonical actor outside the controller boundary: " + std::string(what) + " " + subject);
 #endif
 }
 
@@ -3217,7 +3252,9 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 
-		// What the AI pass may write to the actor directly; whatever it changes rides the wire as a one-shot intent.
+		// Under lockstep the AI pass may not change the canonical actor: its aim and facing writes are
+		// taken as one-shot intents and undone here, its equip calls become commands, and every peer
+		// (this one included) applies them at the committed tick.
 		struct DirectState {
 			Actor* actor;
 			float aim;
@@ -3226,15 +3263,45 @@ void MovableMan::UpdateControllers() {
 			int64_t bg;
 		};
 		std::vector<DirectState> directBefore;
-		for (Actor* actor: m_Actors) {
-			if (isLocalControllerActor(actor)) {
-				const AHuman* human = dynamic_cast<const AHuman*>(actor);
-				directBefore.push_back({actor, actor->GetAimAngle(false), actor->IsHFlipped(),
-				                        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
-				                        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0});
+		if (lockstepActive) {
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					const AHuman* human = dynamic_cast<const AHuman*>(actor);
+					directBefore.push_back({actor, actor->GetAimAngle(false), actor->IsHFlipped(),
+					                        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
+					                        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0});
+				}
 			}
 		}
-
+		auto drainDeferredEquips = [&]() {
+			// The equip calls the AI queued, in MOID order: performed now, or sent as commands under lockstep.
+			for (Actor* actor: m_Actors) {
+				if (!isLocalControllerActor(actor)) {
+					continue;
+				}
+				AHuman* human = dynamic_cast<AHuman*>(actor);
+				if (!human) {
+					continue;
+				}
+				for (const AHuman::DeferredEquip& equip: human->TakePendingDeferredEquips()) {
+					if (!lockstepActive) {
+						human->ExecuteDeferredEquip(equip);
+						continue;
+					}
+					NetGameAIEquip command;
+					command.actorUID = static_cast<int64_t>(human->GetUniqueID());
+					command.team = human->GetTeam();
+					command.op = static_cast<uint8_t>(equip.op);
+					command.depositToFront = equip.depositToFront;
+					command.group = equip.group;
+					command.excludeGroup = equip.excludeGroup;
+					command.moduleName = equip.moduleName;
+					command.presetName = equip.presetName;
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepLocalPeerId(), std::move(command)});
+					++m_ControllerBoundaryStats.equipCommands;
+				}
+			}
+		};
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
@@ -3264,34 +3331,44 @@ void MovableMan::UpdateControllers() {
 		                                                     luaStates.size())
 		    .wait();
 
-		// Drain the equip mutations AHuman::Equip* queued under parallel AI, in MOID order.
-		for (Actor* actor: m_Actors) {
-			if (isLocalControllerActor(actor)) {
-				if (AHuman* asHuman = dynamic_cast<AHuman*>(actor)) {
-					asHuman->DrainPendingDeferredMutations();
-				}
-			}
-		}
+		drainDeferredEquips();
 
+		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				if (lockstepActive) {
+					g_CurrentAIActor = actor;
+				}
 				actor->RunScriptedFunctionInAppropriateScripts("UpdateAI", false, true, {}, {}, {});
+				g_CurrentAIActor = nullptr;
 			}
+		}
+		if (lockstepActive) {
+			drainDeferredEquips();
+		}
+		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
+		if (AIWriteScript::IsActive()) {
+			AIWriteScript::RunTick(simTick, m_Actors, isLocalControllerActor);
+			drainDeferredEquips();
 		}
 
 		for (const DirectState& before: directBefore) {
 			Actor* actor = before.actor;
-			if (actor->GetAimAngle(false) != before.aim) {
-				actor->MarkOffWireAim(static_cast<long long>(simTick));
+			if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
+				actor->MarkOffWireAim(static_cast<long long>(simTick), aim);
+				actor->SetAimAngle(before.aim);
+				++m_ControllerBoundaryStats.aimIntents;
 			}
-			if (actor->IsHFlipped() != before.flipped) {
-				actor->MarkOffWireFlip(static_cast<long long>(simTick));
+			if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
+				actor->MarkOffWireFlip(static_cast<long long>(simTick), flipped);
+				actor->SetHFlipped(before.flipped);
+				++m_ControllerBoundaryStats.flipIntents;
 			}
 			if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
 				const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
 				const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
 				if (fg != before.fg || bg != before.bg) {
-					human->MarkOffWireEquip(static_cast<long long>(simTick));
+					ReportControllerBoundaryViolation("the equipment", actor);
 				}
 			}
 		}

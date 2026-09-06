@@ -396,6 +396,20 @@ namespace RTE {
 						AppendU8(out, pauseMatch.pause ? 1 : 0);
 						break;
 					}
+					case NetGameCommandType::AIEquip: {
+						const NetGameAIEquip& equip = std::get<NetGameAIEquip>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(equip.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(equip.team));
+						AppendU8(out, equip.op);
+						AppendU8(out, equip.depositToFront ? 1 : 0);
+						if (!AppendString(out, equip.group, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_group", error) ||
+						    !AppendString(out, equip.excludeGroup, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_exclude_group", error) ||
+						    !AppendString(out, equip.moduleName, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_module", error) ||
+						    !AppendString(out, equip.presetName, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_preset", error)) {
+							return false;
+						}
+						break;
+					}
 				}
 			}
 			return true;
@@ -696,6 +710,31 @@ namespace RTE {
 						command.payload = pauseMatch;
 						break;
 					}
+					case NetGameCommandType::AIEquip: {
+						NetGameAIEquip equip;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						uint8_t depositToFront = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "ai_equip_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_equip_team") ||
+						    !ReadOrTruncated(reader.ReadU8(equip.op), reader, error, "ai_equip_op") ||
+						    !ReadOrTruncated(reader.ReadU8(depositToFront), reader, error, "ai_equip_deposit_to_front") ||
+						    !reader.ReadString(equip.group, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_group", error) ||
+						    !reader.ReadString(equip.excludeGroup, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_exclude_group", error) ||
+						    !reader.ReadString(equip.moduleName, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_module", error) ||
+						    !reader.ReadString(equip.presetName, NetLockstepCodec::c_MaxScenarioBytes, "ai_equip_preset", error)) {
+							return false;
+						}
+						if (equip.op > NetGameAIEquip::UnequipBGArm) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai equip op is invalid");
+							return false;
+						}
+						equip.actorUID = static_cast<int64_t>(actorUID);
+						equip.team = static_cast<int32_t>(team);
+						equip.depositToFront = depositToFront != 0;
+						command.payload = std::move(equip);
+						break;
+					}
 					default:
 						SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
 						return false;
@@ -911,7 +950,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version != c_Version) {
+		if (version != c_Version && version != c_LegacyVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -1385,9 +1424,9 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
-			return true;
+			return m_Config.localPeerId;
 		}
 		if (!m_Config.matchConfig.players.empty()) {
 			const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
@@ -1401,11 +1440,17 @@ namespace RTE {
 			if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
 				ownerPeerId = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			}
-			return ownerPeerId == m_Config.localPeerId;
+			return ownerPeerId;
 		}
 		const uint64_t normalized = actorUniqueID < 0 ? static_cast<uint64_t>(-(actorUniqueID + 1)) + 1U : static_cast<uint64_t>(actorUniqueID);
-		const uint8_t ownerPeerId = static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
-		return ownerPeerId == m_Config.localPeerId;
+		return static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
+	}
+
+	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
+			return true;
+		}
+		return ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled) == m_Config.localPeerId;
 	}
 
 	uint8_t NetLockstepCoordinator::ResolveTeamCommandAuthority(int team) const {

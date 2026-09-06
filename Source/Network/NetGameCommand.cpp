@@ -23,6 +23,8 @@ namespace RTE {
 				return NetGameCommandType::SetActorAIMode;
 			} else if constexpr (std::is_same_v<T, NetGameSwitchControl>) {
 				return NetGameCommandType::SwitchControl;
+			} else if constexpr (std::is_same_v<T, NetGameAIEquip>) {
+				return NetGameCommandType::AIEquip;
 			}
 		}, payload);
 	}
@@ -51,6 +53,8 @@ namespace RTE {
 				return "SetActorAIMode";
 			case NetGameCommandType::SwitchControl:
 				return "SwitchControl";
+			case NetGameCommandType::AIEquip:
+				return "AIEquip";
 		}
 		return "Unknown";
 	}

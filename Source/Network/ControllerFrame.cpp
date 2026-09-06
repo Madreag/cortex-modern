@@ -136,7 +136,7 @@ namespace RTE {
 		}
 	}
 
-	void ControllerFrame::SetEquipIntent(bool intent) {
+	void ControllerFrame::SetAimIntent(bool intent) {
 		if (intent) {
 			flags |= 0x4U;
 		} else {
@@ -144,19 +144,11 @@ namespace RTE {
 		}
 	}
 
-	void ControllerFrame::SetAimIntent(bool intent) {
+	void ControllerFrame::SetFlipIntent(bool intent) {
 		if (intent) {
 			flags |= 0x8U;
 		} else {
 			flags &= static_cast<uint8_t>(~0x8U);
-		}
-	}
-
-	void ControllerFrame::SetFlipIntent(bool intent) {
-		if (intent) {
-			flags |= 0x10U;
-		} else {
-			flags &= static_cast<uint8_t>(~0x10U);
 		}
 	}
 
@@ -190,8 +182,14 @@ namespace RTE {
 		frame.deviceClass = static_cast<uint8_t>(controller.GetLocalDeviceClass());
 		frame.digitalAimSpeed = controller.GetLocalDigitalAimSpeed();
 		if (actor) {
-			frame.SetActorHFlipped(actor->IsHFlipped());
-			frame.aimAngle = actor->GetAimAngle(false);
+			// A direct AI write this tick rides as the intent value; the live state stays what the wire last applied.
+			const long long simTick = static_cast<long long>(g_TimerMan.GetSimUpdateCount());
+			const bool aimIntent = actor->GetOffWireAimTick() == simTick;
+			const bool flipIntent = actor->GetOffWireFlipTick() == simTick;
+			frame.SetActorHFlipped(flipIntent ? actor->GetOffWireFlip() : actor->IsHFlipped());
+			frame.aimAngle = aimIntent ? actor->GetOffWireAim() : actor->GetAimAngle(false);
+			frame.SetAimIntent(aimIntent);
+			frame.SetFlipIntent(flipIntent);
 			const Vector viewPoint = actor->GetViewPoint();
 			frame.viewPointX = viewPoint.m_X;
 			frame.viewPointY = viewPoint.m_Y;
@@ -212,10 +210,7 @@ namespace RTE {
 				if (const HeldDevice* equippedBG = human->GetEquippedBGItem()) {
 					frame.equippedBGUniqueID = static_cast<int64_t>(equippedBG->GetUniqueID());
 				}
-				frame.SetEquipIntent(human->GetOffWireEquipTick() == static_cast<long long>(g_TimerMan.GetSimUpdateCount()));
 			}
-			frame.SetAimIntent(actor->GetOffWireAimTick() == static_cast<long long>(g_TimerMan.GetSimUpdateCount()));
-			frame.SetFlipIntent(actor->GetOffWireFlipTick() == static_cast<long long>(g_TimerMan.GetSimUpdateCount()));
 		}
 		return frame;
 	}
@@ -229,7 +224,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
-		if ((frame.flags & static_cast<uint8_t>(~0x1FU)) != 0) {
+		if ((frame.flags & static_cast<uint8_t>(~(frame.IsLegacy() ? ControllerFrame::c_LegacyKnownFlags : ControllerFrame::c_KnownFlags))) != 0) {
 			SetError(error, "ControllerFrame reserved flags must be zero.");
 			return false;
 		}
@@ -291,14 +286,6 @@ namespace RTE {
 		}
 		if (frame.HasFlipIntent()) {
 			actor.SetHFlipped(frame.IsActorHFlipped());
-		}
-		if (frame.HasEquipIntent()) {
-			AHuman* human = dynamic_cast<AHuman*>(&actor);
-			if (!human) {
-				SetError(error, "ControllerFrame equip intent targets a non-AHuman actor.");
-				return false;
-			}
-			human->SyncEquippedItemsByUniqueID(frame.equippedFGUniqueID, frame.equippedBGUniqueID);
 		}
 		return true;
 	}
@@ -374,10 +361,6 @@ namespace RTE {
 				SetError(error, "ControllerFrame reserved byte must be zero.");
 				return false;
 			}
-			if ((frame.flags & static_cast<uint8_t>(~0x3U)) != 0) {
-				SetError(error, "ControllerFrame reserved flags must be zero.");
-				return false;
-			}
 		} else {
 			frame.digitalAimSpeed = ReadF32LE(p);
 			if (frame.deviceClass >= static_cast<uint8_t>(Controller::WireDeviceClass::Count)) {
@@ -397,7 +380,7 @@ namespace RTE {
 			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
 			return false;
 		}
-		if ((frame.flags & static_cast<uint8_t>(~0x1FU)) != 0) {
+		if ((frame.flags & static_cast<uint8_t>(~(frame.IsLegacy() ? ControllerFrame::c_LegacyKnownFlags : ControllerFrame::c_KnownFlags))) != 0) {
 			SetError(error, "ControllerFrame reserved flags must be zero.");
 			return false;
 		}

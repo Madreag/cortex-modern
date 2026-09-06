@@ -328,11 +328,20 @@ namespace RTE {
 			Clamp(m_AimAngle, m_AimRange, -m_AimRange);
 		}
 
-		/// The sim tick the owner's AI last wrote the aim or the facing directly; the wire carries those as one-shot intents.
-		void MarkOffWireAim(long long simTick) { m_OffWireAimTick = simTick; }
+		/// What the owner's AI wrote to the aim or the facing directly this tick; the wire carries it as a
+		/// one-shot intent and every peer, the owner included, applies it at the committed tick.
+		void MarkOffWireAim(long long simTick, float aim) {
+			m_OffWireAimTick = simTick;
+			m_OffWireAim = aim;
+		}
 		long long GetOffWireAimTick() const { return m_OffWireAimTick; }
-		void MarkOffWireFlip(long long simTick) { m_OffWireFlipTick = simTick; }
+		float GetOffWireAim() const { return m_OffWireAim; }
+		void MarkOffWireFlip(long long simTick, bool flipped) {
+			m_OffWireFlipTick = simTick;
+			m_OffWireFlip = flipped;
+		}
 		long long GetOffWireFlipTick() const { return m_OffWireFlipTick; }
+		bool GetOffWireFlip() const { return m_OffWireFlip; }
 
 		/// Sets this Actor's passenger slots.
 		/// @param newPassengerSlots A new amount of passenger slots.
@@ -1035,7 +1044,9 @@ namespace RTE {
 		HeldDevice* m_pItemInReach;
 		long m_FaithfulItemInReachUID = 0; //!< Snapshot link for m_pItemInReach, resolved after a restore.
 		long long m_OffWireAimTick = -1;
+		float m_OffWireAim = 0.0F;
 		long long m_OffWireFlipTick = -1;
+		bool m_OffWireFlip = false;
 		long m_FaithfulMOMoveTargetUID = 0; //!< Snapshot link for m_pMOMoveTarget, resolved after a restore.
 		std::vector<long> m_FaithfulWaypointUIDs; //!< Snapshot links for the waypoint objects, resolved after a restore.
 		// An array that holds activation states for the various hotkey actions of this Actor.

@@ -159,6 +159,16 @@ namespace RTE {
 			uint64_t violations = 0;
 		};
 		const SpeculationStats& GetSpeculationStats() const { return m_SpeculationStats; }
+		/// How the owner's AI pass crossed the controller boundary: its equip calls as commands, its aim and
+		/// facing writes as intents, and any write that reached the canonical actor outside those paths.
+		struct ControllerBoundaryStats {
+			uint64_t equipCommands = 0;
+			uint64_t aimIntents = 0;
+			uint64_t flipIntents = 0;
+			uint64_t directWrites = 0;
+		};
+		const ControllerBoundaryStats& GetControllerBoundaryStats() const { return m_ControllerBoundaryStats; }
+		void ReportControllerBoundaryViolation(const char* what, const Actor* actor);
 		/// Counts and reports a write to the world attempted from speculative execution; ordinary gameplay never gets here.
 		void ReportSpeculationViolation(const char* what, const MovableObject* mo);
 		/// Keeps a resident out of the draw loops while a preview shows its taken shadow instead.
@@ -696,6 +706,7 @@ namespace RTE {
 		};
 		Speculation m_Speculation;
 		SpeculationStats m_SpeculationStats;
+		ControllerBoundaryStats m_ControllerBoundaryStats;
 		std::unordered_set<const MovableObject*> m_RenderHidden;
 		MovableObject* m_LinkRoot = nullptr;
 
