@@ -158,6 +158,26 @@ namespace RTE {
 		static void ArmReplayRewindBuffer(uint64_t fromFrame, uint64_t frameCount);
 		static bool RewindReplayForProbe(uint64_t firstFrame, std::string* error = nullptr);
 
+		/// How a playback ended. Set where the condition is detected, never inferred from message text.
+		enum class LockstepReplayOutcome {
+			None,
+			Playing,
+			Completed,
+			TickCap,
+			Truncated,
+			Corrupt,
+			SimFailure,
+		};
+		static LockstepReplayOutcome GetLockstepReplayOutcome();
+		static void SetLockstepReplayOutcome(LockstepReplayOutcome outcome);
+		static const char* ReplayOutcomeName(LockstepReplayOutcome outcome);
+		static uint64_t GetLockstepReplayFramesConsumed();
+		static uint64_t GetLockstepReplayLastTick();
+		static bool LockstepReplaySawEndMarker();
+		/// The last recording's frame count and whether it was closed with its end marker.
+		static uint64_t GetLockstepReplayRecordFrames();
+		static bool WasLockstepReplayRecordClosed();
+
 		/// The synced lockstep pause: both sims stop after the same frame and resume together after a
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();

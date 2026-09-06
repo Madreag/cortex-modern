@@ -13,6 +13,30 @@ namespace RTE {
 	/// A recorded lockstep match: the synced config, then every committed frame (all peers' controller
 	/// frames + game commands per tick). Replaying feeds the records through the standard lockstep
 	/// apply path, so a deterministic sim reproduces the match bit-for-bit.
+	/// How the last read on a replay stream ended. Playback classifies its outcome from this, never from text.
+	enum class NetReplayReadStatus {
+		None,
+		Frame,
+		CleanEnd,
+		Truncated,
+		Corrupt,
+	};
+
+	/// The whole-file integrity scan (-net-replay-verify): every record decodes, the end marker is present, no tick gaps.
+	struct NetReplayVerifyReport {
+		bool ok = false;
+		std::string error;
+		uint16_t version = 0;
+		uint64_t frames = 0;
+		uint64_t firstFrame = 0;
+		uint64_t lastFrame = 0;
+		uint64_t gaps = 0;
+		bool endMarker = false;
+		bool truncated = false;
+		bool corrupt = false;
+		std::string ToJson() const;
+	};
+
 	class NetMatchReplayWriter {
 	public:
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
@@ -41,6 +65,9 @@ namespace RTE {
 		uint64_t GetStartFrame() const { return m_StartFrame; }
 		/// Reads the next record. Returns false with outEof=true at the clean end of the file.
 		bool ReadFrame(NetLockstepFrame& outFrame, bool& outEof, std::string* error = nullptr);
+		NetReplayReadStatus GetLastReadStatus() const { return m_LastStatus; }
+		uint16_t GetVersion() const { return m_Version; }
+		static bool Verify(const std::string& path, NetReplayVerifyReport& outReport);
 		void Close();
 		bool IsOpen() const { return m_In.is_open(); }
 
@@ -53,6 +80,7 @@ namespace RTE {
 		bool m_HasLookahead = false;
 		uint64_t m_StartFrame = 0;
 		uint16_t m_Version = 0; //!< Version-2 files carry an end marker, so raw EOF without it is a truncation.
+		NetReplayReadStatus m_LastStatus = NetReplayReadStatus::None;
 	};
 
 } // namespace RTE
