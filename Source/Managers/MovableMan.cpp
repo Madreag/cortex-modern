@@ -29,6 +29,7 @@
 #include "SceneMan.h"
 #include "SettingsMan.h"
 #include "ControllerFrame.h"
+#include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
@@ -694,6 +695,9 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				}
 			}
 			out << std::defaultfloat << " awm=" << std::hexfloat << actor->GetAttachableAndWoundMassForSave() << " inv=" << actor->GetInventoryMass() << " gold=" << actor->GetGoldCarried() << " base=" << actor->MovableObject::GetMass() << std::defaultfloat << " ninv=" << actor->GetInventorySize() << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " aimode=" << static_cast<int>(actor->GetAIMode()) << " health=" << std::hexfloat << actor->GetHealth() << " aim=" << actor->GetAimAngle(false) << std::defaultfloat << " flip=" << actor->IsHFlipped();
+			if (const PieMenu* pieMenu = actor->GetPieMenu()) {
+				out << " pie=" << pieMenu->DescribeInteractionState();
+			}
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
 				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS();
 			}

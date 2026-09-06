@@ -422,6 +422,13 @@ namespace RTE {
 		/// Clears and refills the vector of current PieSlices for this PieMenu. Also realigns PieSlices and expands them into empty space if possible, to ensure everything is properly ready.
 		void RepopulateAndRealignCurrentPieSlices();
 
+		/// The slice of this menu in the same quadrant slot as the reference menu's slice, for a faithful clone's interaction state.
+		PieSlice* MatchingPieSlice(const PieMenu& reference, const PieSlice* referenceSlice) const;
+
+	public:
+		/// One token naming the enabled state, the slice count and the hovered, activated and already-activated slices; the sim dump carries it.
+		std::string DescribeInteractionState() const;
+
 		/// Expands any PieSlices that border onto another PieQuadrant's unfilled slot, so they visually occupy that empty slot.
 		void ExpandPieSliceIntoEmptySpaceIfPossible();
 
