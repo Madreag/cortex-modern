@@ -499,9 +499,11 @@ namespace RTE {
 		/// @param newParent A pointer to the MOSRotating to set as the new parent. Ownership is NOT transferred!
 		void SetParent(MOSRotating* newParent) override {
 			HeldDevice::SetParent(newParent);
-			Deactivate();
-			m_Reloading = false;
-			m_ReloadTmr.Reset();
+			if (!IsFaithfulClone()) {
+				Deactivate();
+				m_Reloading = false;
+				m_ReloadTmr.Reset();
+			}
 		}
 
 		// Member variables.
