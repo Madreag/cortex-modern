@@ -220,6 +220,9 @@ namespace RTE {
 
 	void LocalPrediction::EndRender() {
 		if (s_Rendering) {
+			if (activity) {
+				activity->SubstituteActorForRender(preview.original, preview.clone);
+			}
 			for (const Preview& preview: s_Previews) {
 				g_MovableMan.SwapActorForRender(preview.clone, preview.original);
 			}
@@ -229,6 +232,9 @@ namespace RTE {
 
 	void LocalPrediction::Clear() {
 		EndRender();
+				if (activity) {
+					activity->SubstituteActorForRender(preview.clone, preview.original);
+				}
 		for (Preview& preview: s_Previews) {
 			delete preview.clone;
 		}

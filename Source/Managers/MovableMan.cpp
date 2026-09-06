@@ -1072,6 +1072,13 @@ bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 		return false;
 	}
 	*found = substitute;
+	// The HUD walks the team roster by identity; the substitute takes that slot too.
+	for (std::list<Actor*>& roster: m_ActorRoster) {
+		const auto slot = std::find(roster.begin(), roster.end(), original);
+		if (slot != roster.end()) {
+			*slot = substitute;
+		}
+	}
 	return true;
 }
 
