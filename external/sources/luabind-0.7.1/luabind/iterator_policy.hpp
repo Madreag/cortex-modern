@@ -8,6 +8,7 @@
 # include <luabind/config.hpp>
 # include <luabind/detail/policy.hpp>
 # include <luabind/detail/convert_to_lua.hpp>
+# include <luabind/detail/object_rep.hpp>
 
 namespace luabind { namespace detail {
 
@@ -22,6 +23,9 @@ struct iterator
         if (self->first != self->last)
         {
             convert_to_lua(L, *self->first);
+            object_rep* value = is_class_object(L, -1);
+            if (value && !(value->flags() & object_rep::owner) && !lua_isnil(L, lua_upvalueindex(2)))
+                value->add_dependency(L, lua_upvalueindex(2));
             ++self->first;
         }
         else
@@ -35,7 +39,7 @@ struct iterator
     static int destroy(lua_State* L)
     {
         iterator* self = static_cast<iterator*>(
-            lua_touserdata(L, lua_upvalueindex(1)));
+            lua_touserdata(L, 1));
         self->~iterator();
         return 0;
     }
@@ -57,7 +61,9 @@ int make_range(lua_State* L, Iterator first, Iterator last)
     lua_pushcclosure(L, iterator<Iterator>::destroy, 0);
     lua_setfield(L, -2, "__gc");
     lua_setmetatable(L, -2);
-    lua_pushcclosure(L, iterator<Iterator>::next, 1);
+    if (is_class_object(L, 1)) lua_pushvalue(L, 1);
+    else lua_pushnil(L);
+    lua_pushcclosure(L, iterator<Iterator>::next, 2);
     new (storage) iterator<Iterator>(first, last);
     return 1;
 }
@@ -117,4 +123,3 @@ LUABIND_ANONYMOUS_FIX detail::policy_cons<
 }} // namespace luabind::unnamed
 
 #endif // LUABIND_ITERATOR_POLICY__071111_HPP
-
