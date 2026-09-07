@@ -4,6 +4,7 @@
 
 #include "PieSlice.h"
 #include "SoundSet.h"
+#include "luabind/dependency_policy.hpp"
 
 using namespace RTE;
 
@@ -1234,7 +1235,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SceneArea) {
 
 	    .property("ClassName", &Scene::Area::GetClassName)
 	    .property("Name", &Scene::Area::GetName)
-	    .property("FirstBox", &Scene::Area::GetFirstBox)
+	    .property("FirstBox", &Scene::Area::GetFirstBox, luabind::return_internal_reference(_1))
 	    .property("Center", &Scene::Area::GetCenterPoint)
 	    .property("RandomPoint", &Scene::Area::GetRandomPoint)
 
@@ -1247,7 +1248,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SceneArea) {
 	    .def("IsInside", &Scene::Area::IsInside)
 	    .def("IsInsideX", &Scene::Area::IsInsideX)
 	    .def("IsInsideY", &Scene::Area::IsInsideY)
-	    .def("GetBoxInside", &Scene::Area::GetBoxInside)
+	    .def("GetBoxInside", &Scene::Area::GetBoxInside, luabind::return_internal_reference(_1))
 	    .def("RemoveBoxInside", &Scene::Area::RemoveBoxInside)
 	    .def("GetCenterPoint", &Scene::Area::GetCenterPoint)
 	    .def("GetRandomPoint", &Scene::Area::GetRandomPoint);
