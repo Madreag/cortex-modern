@@ -276,6 +276,10 @@ namespace RTE {
 			s_Args.freeRunSim = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-join-rejection") {
+			s_Args.selftestJoinRejection = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
