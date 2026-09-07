@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 using namespace RTE;
 
@@ -25,6 +26,7 @@ void Reader::Clear() {
 	m_OverwriteExisting = false;
 	m_SkipIncludes = false;
 	m_CanFail = false;
+	m_ThrowOnError = false;
 	m_NonModulePath = false;
 }
 
@@ -326,6 +328,9 @@ bool Reader::DiscardEmptySpace() {
 }
 
 void Reader::ReportError(const std::string& errorDesc) const {
+	if (m_ThrowOnError) {
+		throw std::runtime_error(errorDesc + " in " + m_FilePath + " at line " + std::to_string(m_CurrentLine));
+	}
 	if (!m_CanFail) {
 		RTEAbort(errorDesc + "\nError happened in " + m_FilePath + " at line " + std::to_string(m_CurrentLine) + "!");
 	} else {

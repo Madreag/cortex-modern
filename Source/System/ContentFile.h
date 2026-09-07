@@ -122,7 +122,25 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Data Handling
-		static void ManuallyLoadDataPNG(const std::string& filePath, SDL_Surface* bitmap);
+		/// Keeps replacement save images temporary until their scene has parsed successfully.
+		class MemoryPNGScope {
+		public:
+			MemoryPNGScope() = default;
+			~MemoryPNGScope();
+			MemoryPNGScope(const MemoryPNGScope&) = delete;
+			MemoryPNGScope& operator=(const MemoryPNGScope&) = delete;
+			/// Takes ownership of the image on success.
+			bool Add(const std::string& filePath, SDL_Surface* image);
+			void Commit() { m_Committed = true; }
+		private:
+			struct Entry {
+				std::string path;
+				SDL_Surface* previousImage;
+				BITMAP* previousBitmap;
+			};
+			std::vector<Entry> m_Entries;
+			bool m_Committed = false;
+		};
 
 		/// Reloads all BITMAPs in the cache from disk, allowing any changes to be reflected at runtime.
 		static void ReloadAllBitmaps();

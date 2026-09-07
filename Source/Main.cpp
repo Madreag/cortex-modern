@@ -133,6 +133,9 @@ static std::string s_saveIoSelfTestName;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
+static std::string s_loadSelfTestName;
+static bool s_loadSelfTestExpected = false;
+static bool s_loadSelfTestPassed = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -355,6 +358,7 @@ void DestroyManagers() {
 int ShutDown(int exitCode) {
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
+	if (!s_loadSelfTestName.empty() && !s_loadSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_saveIoSelfTest) {
 		const bool saved = s_saveIoSelfTestQueued && g_ActivityMan.WaitForSaveGameTask();
 		std::cout << "[save-selftest] completed=" << saved << std::endl;
@@ -413,6 +417,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-bitmap-save-selftest") {
 			s_bitmapSaveSelfTest = true;
 			++i;
+			continue;
+		}
+		if ((currentArg == "-load-io-selftest" || currentArg == "-load-io-success-selftest") && i + 1 < argCount) {
+			s_loadSelfTestName = argValue[i + 1];
+			s_loadSelfTestExpected = currentArg == "-load-io-success-selftest";
+			i += 2;
 			continue;
 		}
 		if ((currentArg == "-save-io-selftest" || currentArg == "-save-menu-selftest") && i + 1 < argCount) {
@@ -2230,6 +2240,12 @@ void RunGameLoop() {
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
 				s_bitmapSaveSelfTestResult = g_FrameMan.RunBitmapSaveSelfTest() ? 0 : 1;
 				System::SetQuit(true);
+				break;
+			}
+			if (!s_loadSelfTestName.empty() && simTick > 0) {
+				s_loadSelfTestPassed = g_ActivityMan.RunLoadSelfTest(s_loadSelfTestName, s_loadSelfTestExpected);
+				System::SetQuit(true);
+				g_ActivityMan.EndActivity();
 				break;
 			}
 			if (s_saveIoSelfTest && simTick > 0) {

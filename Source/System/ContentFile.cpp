@@ -58,7 +58,10 @@ void ContentFile::FreeAllLoaded() {
 		for (const auto& [bitmapPath, bitmapPtr]: s_LoadedBitmaps[depth]) {
 			destroy_bitmap(bitmapPtr);
 		}
+		s_LoadedBitmaps[depth].clear();
 	}
+	for (const auto& [path, image]: s_MemoryPNGs) SDL_DestroySurface(image);
+	s_MemoryPNGs.clear();
 }
 
 void ContentFile::FreeAllLoadedSounds() {
@@ -210,20 +213,32 @@ void ContentFile::ReadAndStoreBMPFileInfo(FILE* imageFile) {
 	}
 }
 
-void ContentFile::ManuallyLoadDataPNG(const std::string& filePath, SDL_Surface* surface) {
-	s_MemoryPNGs[filePath] = surface;
-
-	int bitDepth = SDL_GetPixelFormatDetails(surface->format)->bits_per_pixel;
-	BITMAP* bitmap = create_bitmap_ex(bitDepth, surface->w, surface->h);
-
-	// Allegro doesn't align lines, SDL does 4byte alignment
-	for (int y = 0; y < surface->h; y++) {
-		memcpy(bitmap->line[y],
-		       static_cast<unsigned char*>(surface->pixels) + surface->pitch * y,
-		       surface->w * SDL_BYTESPERPIXEL(surface->format));
+bool ContentFile::MemoryPNGScope::Add(const std::string& filePath, SDL_Surface* image) {
+	if (!image || image->format != SDL_PIXELFORMAT_INDEX8 || image->w <= 0 || image->h <= 0) return false;
+	std::unique_ptr<BITMAP, decltype(&destroy_bitmap)> bitmap(create_bitmap_ex(8, image->w, image->h), destroy_bitmap);
+	if (!bitmap) return false;
+	for (int y = 0; y < image->h; ++y) {
+		std::memcpy(bitmap->line[y], static_cast<const unsigned char*>(image->pixels) + image->pitch * y, image->w);
 	}
+	auto& cachedImage = s_MemoryPNGs[filePath];
+	auto& cachedBitmap = s_LoadedBitmaps[BitDepths::Eight][filePath];
+	m_Entries.push_back({filePath, cachedImage, cachedBitmap});
+	cachedImage = image;
+	cachedBitmap = bitmap.release();
+	return true;
+}
 
-	s_LoadedBitmaps[BitDepths::Eight].try_emplace(filePath, bitmap);
+ContentFile::MemoryPNGScope::~MemoryPNGScope() {
+	for (auto entry = m_Entries.rbegin(); entry != m_Entries.rend(); ++entry) {
+		if (!m_Committed) {
+			std::swap(s_MemoryPNGs[entry->path], entry->previousImage);
+			std::swap(s_LoadedBitmaps[BitDepths::Eight][entry->path], entry->previousBitmap);
+			if (!s_MemoryPNGs[entry->path]) s_MemoryPNGs.erase(entry->path);
+			if (!s_LoadedBitmaps[BitDepths::Eight][entry->path]) s_LoadedBitmaps[BitDepths::Eight].erase(entry->path);
+		}
+		SDL_DestroySurface(entry->previousImage);
+		if (entry->previousBitmap) destroy_bitmap(entry->previousBitmap);
+	}
 }
 
 void ContentFile::ReloadAllBitmaps() {
