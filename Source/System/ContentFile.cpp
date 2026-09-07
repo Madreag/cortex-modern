@@ -13,8 +13,10 @@
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <limits>
+#include <thread>
 
 using namespace RTE;
 
@@ -430,6 +432,45 @@ BITMAP* ContentFile::LoadAndReleaseBitmap(int conversionMode, const std::string&
 	RTEAssert(returnBitmap, "Failed to load image file with following path and name:\n\n" + m_DataPathAndReaderPosition + "\nThe file may be corrupt, incorrectly converted or saved with unsupported parameters.");
 
 	return returnBitmap;
+}
+
+bool ContentFile::WaitForPendingSounds(const ProgressCallback& progressCallback) {
+	std::vector<std::pair<std::string, FMOD::Sound*>> pending(s_LoadedSamples.begin(), s_LoadedSamples.end());
+	const auto start = std::chrono::steady_clock::now();
+	auto nextProgress = start;
+	size_t initiallyPending = 0;
+	bool firstPass = true;
+	bool success = true;
+	while (!pending.empty()) {
+		std::erase_if(pending, [&success](const auto& entry) {
+			const auto& [path, sound] = entry;
+			if (!sound) return true; // The synchronous loader already reported this failure.
+			FMOD_OPENSTATE state = FMOD_OPENSTATE_ERROR;
+			const FMOD_RESULT result = sound->getOpenState(&state, nullptr, nullptr, nullptr);
+			if (result != FMOD_OK || state == FMOD_OPENSTATE_ERROR) {
+				g_ConsoleMan.PrintString("ERROR: Could not finish loading sound " + path + ": " + FMOD_ErrorString(result));
+				success = false;
+				return true;
+			}
+			return state == FMOD_OPENSTATE_READY || state == FMOD_OPENSTATE_PLAYING;
+		});
+		if (firstPass) {
+			initiallyPending = pending.size();
+			firstPass = false;
+		}
+		if (pending.empty()) break;
+		const auto now = std::chrono::steady_clock::now();
+		if (progressCallback && now >= nextProgress) {
+			progressCallback("Finishing sound loading: " + std::to_string(pending.size()) + " remaining", nextProgress == start);
+			nextProgress = now + std::chrono::milliseconds(100);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (initiallyPending != 0) {
+		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		g_ConsoleMan.PrintString("Sound loading completed: " + std::to_string(initiallyPending) + " pending samples, " + std::to_string(elapsed) + "ms");
+	}
+	return success;
 }
 
 FMOD::Sound* ContentFile::GetAsSound(bool abortGameForInvalidSound, bool asyncLoading) {
