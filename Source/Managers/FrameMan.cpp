@@ -707,8 +707,7 @@ bool FrameMan::RunBitmapSaveSelfTest() {
 	check("preview failed save", SaveWorldPreviewToPNG("missing/bitmap_preview") < 0);
 	BITMAP* materials = g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap();
 	for (int x = 0; x < 256; ++x) putpixel(materials, x, 0, x);
-	const bool saved = g_ActivityMan.SaveCurrentGame("bitmap_indices");
-	g_ActivityMan.WaitForSaveGameTask();
+	const bool saved = g_ActivityMan.SaveCurrentGame("bitmap_indices") && g_ActivityMan.WaitForSaveGameTask();
 	check("material save", saved);
 	if (saved && g_ActivityMan.LoadAndLaunchGame("bitmap_indices")) {
 		materials = g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap();

@@ -3,6 +3,7 @@
 #include "ActivityMan.h"
 #include "PresetMan.h"
 #include "WindowMan.h"
+#include "FrameMan.h"
 
 #include "PauseMenuGUI.h"
 #include "SettingsGUI.h"
@@ -20,6 +21,7 @@
 #include "GUIComboBox.h"
 
 #include <execution>
+#include <iostream>
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -222,11 +224,11 @@ bool SaveLoadMenuGUI::LoadSave() {
 void SaveLoadMenuGUI::CreateSave() {
 	bool success = g_ActivityMan.SaveCurrentGame(m_SaveGameName->GetText());
 	if (success) {
-		g_GUISound.ConfirmSound()->Play();
+		m_WasSaving = true;
 	} else {
 		g_GUISound.UserErrorSound()->Play();
 	}
-
+	m_SavingBlinkTimer.Reset();
 	m_SaveGamesFetched = false;
 }
 
@@ -240,7 +242,8 @@ void SaveLoadMenuGUI::DeleteSave() {
 }
 
 void SaveLoadMenuGUI::UpdateButtonEnabledStates() {
-	bool allowSave = g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->GetAllowsUserSaving() && m_SaveGameName->GetText() != "";
+	const bool isSaving = g_ActivityMan.IsCurrentlySaving();
+	bool allowSave = !isSaving && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->GetAllowsUserSaving() && m_SaveGameName->GetText() != "";
 
 	int existingSaveItemIndex = -1;
 	for (int i = 0; i < m_SaveGamesListBox->GetItemList()->size(); ++i) {
@@ -264,14 +267,17 @@ void SaveLoadMenuGUI::UpdateButtonEnabledStates() {
 	m_OverwriteButton->SetVisible(allowOverwrite);
 	m_OverwriteButton->SetEnabled(allowOverwrite);
 
-	m_LoadButton->SetEnabled(saveExists);
-	m_DeleteButton->SetEnabled(saveExists);
+	m_LoadButton->SetEnabled(saveExists && !isSaving);
+	m_DeleteButton->SetEnabled(saveExists && !isSaving);
 	
 	m_DescriptionLabel->SetText("");
 
-	bool isSaving = g_ActivityMan.IsCurrentlySaving();
 	if (isSaving != m_WasSaving) {
 		m_SavingBlinkTimer.Reset();
+		if (!isSaving) {
+			if (g_ActivityMan.WaitForSaveGameTask()) g_GUISound.ConfirmSound()->Play();
+			else g_GUISound.UserErrorSound()->Play();
+		}
 	}
 
 	if (g_ActivityMan.GetActivity()) {
@@ -293,9 +299,8 @@ void SaveLoadMenuGUI::UpdateButtonEnabledStates() {
 			}
 
 			m_DescriptionLabel->SetText(saveText);
-		} else if (!m_SavingBlinkTimer.IsPastRealTimeLimit()) {
-			// Show "Saved!" for a little while after saving
-			m_DescriptionLabel->SetText("Game saved successfully!");
+		} else if (g_ActivityMan.GetSaveGameTask().valid() && !m_SavingBlinkTimer.IsPastRealTimeLimit()) {
+			m_DescriptionLabel->SetText(g_ActivityMan.WaitForSaveGameTask() ? "Game saved successfully!" : "Game could not be saved. See the console for details.");
 		} else if (!g_ActivityMan.GetActivity()->GetAllowsUserSaving()) {
 			m_DescriptionLabel->SetText("The currently played activity does not allow saving.");
 		} else if (m_SaveGameName->GetText().empty()) {
@@ -386,4 +391,24 @@ void SaveLoadMenuGUI::Refresh() {
 
 void SaveLoadMenuGUI::Draw() const {
 	m_GUIControlManager->Draw();
+}
+
+bool SaveLoadMenuGUI::RunSaveSelfTest(const std::string& name, bool& queued) {
+	AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+	GUIInputWrapper input(-1, false);
+	SaveLoadMenuGUI menu(&screen, &input, true);
+	menu.m_SaveGameName->SetText(name);
+	menu.PopulateSaveGamesList();
+	menu.CreateSave();
+	queued = menu.m_WasSaving;
+	menu.UpdateButtonEnabledStates();
+	const bool pendingControls = !menu.m_WasSaving || (!menu.m_CreateButton->GetEnabled() && !menu.m_OverwriteButton->GetEnabled() &&
+	                                                 !menu.m_LoadButton->GetEnabled() && !menu.m_DeleteButton->GetEnabled());
+	const bool pendingText = !menu.m_WasSaving || menu.m_DescriptionLabel->GetText().find("Saving game") == 0;
+	const bool saved = g_ActivityMan.WaitForSaveGameTask();
+	menu.UpdateButtonEnabledStates();
+	const bool resultText = menu.m_DescriptionLabel->GetText() == (saved ? "Game saved successfully!" : "Game could not be saved. See the console for details.");
+	const bool pass = pendingControls && pendingText && resultText;
+	std::cout << "[save-menu-selftest] " << (pass ? "PASS" : "FAIL") << " controls=" << pendingControls << " pending_text=" << pendingText << " result_text=" << resultText << std::endl;
+	return pass;
 }

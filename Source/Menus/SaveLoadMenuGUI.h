@@ -44,6 +44,9 @@ namespace RTE {
 
 		/// Draws the SaveLoadMenuGUI to the screen.
 		void Draw() const;
+
+		/// Checks save-menu status and controls using the real save handler.
+		static bool RunSaveSelfTest(const std::string& name, bool& queued);
 #pragma endregion
 
 	private:

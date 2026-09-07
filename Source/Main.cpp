@@ -35,6 +35,7 @@
 #include "LoadingScreen.h"
 
 #include "MenuMan.h"
+#include "SaveLoadMenuGUI.h"
 #include "ConsoleMan.h"
 #include "Constants.h"
 #include "SettingsMan.h"
@@ -126,6 +127,11 @@ static bool s_recordTickHashes = false;
 static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
+static bool s_saveIoSelfTest = false;
+static bool s_saveIoSelfTestQueued = false;
+static std::string s_saveIoSelfTestName;
+static bool s_saveMenuSelfTest = false;
+static bool s_saveMenuSelfTestPassed = true;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -347,6 +353,11 @@ void DestroyManagers() {
 
 int ShutDown(int exitCode) {
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
+	if (s_saveIoSelfTest) {
+		const bool saved = s_saveIoSelfTestQueued && g_ActivityMan.WaitForSaveGameTask();
+		std::cout << "[save-selftest] completed=" << saved << std::endl;
+		if (!saved || !s_saveMenuSelfTestPassed) exitCode = EXIT_FAILURE;
+	}
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	LocalPrediction::Clear();
@@ -400,6 +411,13 @@ void HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-bitmap-save-selftest") {
 			s_bitmapSaveSelfTest = true;
 			++i;
+			continue;
+		}
+		if ((currentArg == "-save-io-selftest" || currentArg == "-save-menu-selftest") && i + 1 < argCount) {
+			s_saveIoSelfTest = true;
+			s_saveMenuSelfTest = currentArg == "-save-menu-selftest";
+			s_saveIoSelfTestName = argValue[i + 1];
+			i += 2;
 			continue;
 		}
 
@@ -1572,6 +1590,11 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		s_rbProbeFirst.push_back(tickResult);
 		s_rbProbeFirstDeep.push_back(DumpSimStateToString());
 		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
+			if (!s_rbProbeInMemory && !g_ActivityMan.WaitForSaveGameTask()) {
+				std::cout << "[rbprobe] FAIL: the capture save did not complete" << std::endl;
+				System::SetQuit(true);
+				return;
+			}
 			if (s_rbProbeInMemory) {
 				if (Activity* activity = g_ActivityMan.GetActivity()) {
 					activity->CaptureRollbackState(s_rbProbeActivityAtWindowEnd);
@@ -1926,8 +1949,7 @@ void RunGameLoop() {
 				if (ScenarioRunner::GetArgs().selftestSnapshot && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
 					const auto saveStart = std::chrono::steady_clock::now();
 					const std::string saveName = "p5snap_p" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId());
-					const bool saved = g_ActivityMan.SaveCurrentGame(saveName);
-					g_ActivityMan.WaitForSaveGameTask();
+					const bool saved = g_ActivityMan.SaveCurrentGame(saveName) && g_ActivityMan.WaitForSaveGameTask();
 					const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
 					std::cout << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick << std::endl;
 				}
@@ -2205,6 +2227,14 @@ void RunGameLoop() {
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
 				s_bitmapSaveSelfTestResult = g_FrameMan.RunBitmapSaveSelfTest() ? 0 : 1;
 				System::SetQuit(true);
+				break;
+			}
+			if (s_saveIoSelfTest && simTick > 0) {
+				if (s_saveMenuSelfTest) s_saveMenuSelfTestPassed = SaveLoadMenuGUI::RunSaveSelfTest(s_saveIoSelfTestName, s_saveIoSelfTestQueued);
+				else s_saveIoSelfTestQueued = g_ActivityMan.SaveCurrentGame(s_saveIoSelfTestName);
+				std::cout << "[save-selftest] queued=" << s_saveIoSelfTestQueued << " pending=" << g_ActivityMan.IsCurrentlySaving() << std::endl;
+				System::SetQuit(true);
+				g_ActivityMan.EndActivity();
 				break;
 			}
 

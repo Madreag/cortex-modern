@@ -14,6 +14,7 @@
 #include "PostProcessMan.h"
 #include "MetaMan.h"
 #include "ThreadMan.h"
+#include "System.h"
 
 #include "GAScripted.h"
 #include "SLTerrain.h"
@@ -45,6 +46,8 @@
 #include <cstdlib>
 #include <execution>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 
 using namespace RTE;
 
@@ -61,7 +64,7 @@ void ActivityMan::Clear() {
 	m_DefaultActivityName = "Tutorial Mission";
 	m_Activity = nullptr;
 	m_StartActivity = nullptr;
-	m_SaveGameTask = std::future<void>();
+	m_SaveGameTask = std::shared_future<bool>();
 	m_InActivity = false;
 	m_ActivityNeedsRestart = false;
 	m_ActivityNeedsResume = false;
@@ -85,7 +88,15 @@ bool ActivityMan::Initialize() {
 bool ActivityMan::ForceAbortSave() {
 	// Just a utility function we can call in the debugger quickwatch window to force an abort save to occur (great for force-saving the game when it crashes)
 	// Throw ActivityMan::Instance().ForceAbortSave() into a quickwatch window and evaluate :)
-	return SaveCurrentGame("AbortSave");
+	return SaveCurrentGame("AbortSave") && WaitForSaveGameTask();
+}
+
+bool ActivityMan::WaitForSaveGameTask() const {
+	try {
+		return !m_SaveGameTask.valid() || m_SaveGameTask.get();
+	} catch (const std::exception&) {
+		return false;
+	}
 }
 
 // For some reason these aren't defined on Linux/MacOS... so
@@ -94,16 +105,17 @@ bool ActivityMan::ForceAbortSave() {
 #define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
 bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
-	if (m_SaveGameTask.valid()) {
-		m_SaveGameTask.wait();
-	}
+	WaitForSaveGameTask();
+	std::promise<bool> refused;
+	refused.set_value(false);
+	m_SaveGameTask = refused.get_future().share();
 
 	ZoneScopedN("Save Game");
 
 	Scene* scene = g_SceneMan.GetScene();
 	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
 
-	if (!scene || !activity || (activity && activity->GetActivityState() == Activity::ActivityState::Over)) {
+	if (fileName.empty() || !scene || !activity || activity->GetActivityState() == Activity::ActivityState::Over) {
 		g_ConsoleMan.PrintString("ERROR: Cannot save when there's no game running, or the game is finished!");
 		return false;
 	}
@@ -111,10 +123,13 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	const auto saveStart = std::chrono::steady_clock::now();
 
 	// Get BITMAPS so save into our zip, do this async so we can copy the scene info at the same time
-	std::vector<SceneLayerInfo>* sceneLayerInfos = new std::vector<SceneLayerInfo>();
-	std::future<void> copyBitmaps = g_ThreadMan.GetBackgroundThreadPool().submit([&]() {
-		*sceneLayerInfos = std::move(scene->GetCopiedSceneLayerBitmaps());
+	auto copyBitmaps = g_ThreadMan.GetBackgroundThreadPool().submit([scene]() {
+		return scene->GetCopiedSceneLayerBitmaps();
 	});
+	struct AwaitBitmapCopy {
+		std::future<std::vector<SceneLayerInfo>>& task;
+		~AwaitBitmapCopy() { if (task.valid()) task.wait(); }
+	} awaitBitmapCopy{copyBitmaps};
 
 	// We need a copy of our scene, because we have to do some fixup to remove PLACEONLOAD items and only keep the current MovableMan state.
 	std::unique_ptr<Scene> modifiableScene(dynamic_cast<Scene*>(scene->Clone()));
@@ -152,12 +167,16 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	std::unique_ptr<std::stringstream> iniStream = std::make_unique<std::stringstream>();
 
 	// Block the main thread for a bit to let the Writer access the relevant data.
-	std::unique_ptr<Writer> writer(std::make_unique<Writer>(std::move(iniStream)));
+	auto writer = std::make_shared<Writer>(std::move(iniStream));
 	writer->NewPropertyWithValue("Activity", activity);
 
 	// Pull all stuff from MovableMan into the Scene for saving, so existing Actors/ADoors are saved, without transferring ownership, so the game can continue.
 	// This is done after the activity is saved, in case the activity wants to add anything to the scene while saving.
 	// TODO- copying may be faster, and lets us move all this actual writing into async
+	struct BorrowedSceneObjects {
+		Scene& scene;
+		~BorrowedSceneObjects() { scene.ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, false); }
+	} borrowedObjects{*modifiableScene};
 	modifiableScene->RetrieveSceneObjects(false);
 	for (SceneObject* objectToSave: *modifiableScene->GetPlacedObjects(Scene::PlacedObjectSets::PLACEONLOAD)) {
 		if (MovableObject* objectToSaveAsMovableObject = dynamic_cast<MovableObject*>(objectToSave)) {
@@ -174,64 +193,70 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 	// Save a small little file with index info (activity and original scene name) so we can display info in the samegame menu without needing to decompress and read through the entire zip
 	std::unique_ptr<std::stringstream> indexStream = std::make_unique<std::stringstream>();
-	Writer* indexWriter = new Writer(std::move(indexStream));
+	auto indexWriter = std::make_shared<Writer>(std::move(indexStream));
 	indexWriter->NewPropertyWithValue("ActivityName", activity->GetPresetName());
 	indexWriter->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
 
-	auto saveWriterData = [fileName, sceneLayerInfos, indexWriter](Writer* mainWriter) {
-		// Create zip sav file
-		zipFile zippedSaveFile = zipOpen((g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave").c_str(), APPEND_STATUS_CREATE);
-		if (!zippedSaveFile) {
-			g_ConsoleMan.PrintString("ERROR: Couldn't create zip save file!");
-			delete mainWriter;
-			delete indexWriter;
-			delete sceneLayerInfos;
-			return;
-		}
-
-		std::stringstream* mainStream = static_cast<std::stringstream*>(mainWriter->GetStream());
-		std::stringstream* indexStream = static_cast<std::stringstream*>(indexWriter->GetStream());
-		mainStream->flush();
-		indexStream->flush();
-
-		std::string_view mainStreamView = mainStream->view();
-		std::string_view indexStreamView = indexStream->view();
-
-		zip_fileinfo zfi = {0};
-
-		zipOpenNewFileInZip(zippedSaveFile, "Index.ini", &zfi, nullptr, 0, nullptr, 0, nullptr, HACK_MZ_COMPRESS_METHOD_STORE, HACK_MZ_COMPRESS_LEVEL_FAST);
-		zipWriteInFileInZip(zippedSaveFile, indexStreamView.data(), indexStreamView.size());
-		zipCloseFileInZip(zippedSaveFile);
-
-		zipOpenNewFileInZip(zippedSaveFile, "Save.ini", &zfi, nullptr, 0, nullptr, 0, nullptr, HACK_MZ_COMPRESS_METHOD_DEFLATE, HACK_MZ_COMPRESS_LEVEL_FAST);
-		zipWriteInFileInZip(zippedSaveFile, mainStreamView.data(), mainStreamView.size());
-		zipCloseFileInZip(zippedSaveFile);
+	auto sceneLayerInfos = std::make_shared<std::vector<SceneLayerInfo>>(copyBitmaps.get());
+	const std::filesystem::path savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
+	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer]() {
+		struct PendingArchive {
+			std::filesystem::path path;
+			zipFile file = nullptr;
+			~PendingArchive() {
+				if (file) zipClose(file, nullptr);
+				std::error_code ignored;
+				std::filesystem::remove(path, ignored);
+			}
+		} archive{savePath.string() + ".tmp." + std::to_string(System::GetProcessID())};
+		archive.file = zipOpen(archive.path.string().c_str(), APPEND_STATUS_CREATE);
+		if (!archive.file) throw std::runtime_error("could not create temporary archive");
+		const auto writeEntry = [&](const std::string& name, const void* data, size_t size, int method) {
+			zip_fileinfo info{};
+			const auto openEntry =
+#ifdef SYSTEM_MINIZIP
+			    zipOpenNewFileInZip64;
+#else
+			    zipOpenNewFileInZip_64;
+#endif
+			if (openEntry(archive.file, name.c_str(), &info, nullptr, 0, nullptr, 0, nullptr, method,
+			                        HACK_MZ_COMPRESS_LEVEL_FAST, size >= 0xFFFFFFFFULL) != ZIP_OK) {
+				throw std::runtime_error("could not open " + name + " in archive");
+			}
+			const char* bytes = static_cast<const char*>(data);
+			while (size > 0) {
+				const auto count = static_cast<unsigned int>(std::min<size_t>(size, std::numeric_limits<unsigned int>::max()));
+				if (zipWriteInFileInZip(archive.file, bytes, count) != ZIP_OK) throw std::runtime_error("could not write " + name);
+				bytes += count;
+				size -= count;
+			}
+			if (zipCloseFileInZip(archive.file) != ZIP_OK) throw std::runtime_error("could not finish " + name);
+		};
+		const std::string_view mainText = static_cast<std::stringstream*>(writer->GetStream())->view();
+		const std::string_view indexText = static_cast<std::stringstream*>(indexWriter->GetStream())->view();
+		writeEntry("Index.ini", indexText.data(), indexText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
+		writeEntry("Save.ini", mainText.data(), mainText.size(), HACK_MZ_COMPRESS_METHOD_DEFLATE);
 
 		std::vector<std::vector<unsigned char>> pngData(sceneLayerInfos->size());
 		std::for_each(std::execution::par, sceneLayerInfos->begin(), sceneLayerInfos->end(), [&](const SceneLayerInfo& layerInfo) {
 			const size_t index = &layerInfo - sceneLayerInfos->data();
-			ContentFile::EncodeIndexedPNG(layerInfo.bitmap.get(), pngData[index]);
+			try {
+				ContentFile::EncodeIndexedPNG(layerInfo.bitmap.get(), pngData[index]);
+			} catch (const std::exception&) {
+				pngData[index].clear();
+			}
 		});
-
 		for (size_t i = 0; i < pngData.size(); ++i) {
 			const auto& png = pngData[i];
-			if (png.empty()) {
-				g_ConsoleMan.PrintString("ERROR: Failed to save scenelayers to PNG!");
-				continue;
-			}
-			zipOpenNewFileInZip(zippedSaveFile, ("Save " + (*sceneLayerInfos)[i].name + ".png").c_str(), &zfi, nullptr, 0, nullptr, 0, nullptr, HACK_MZ_COMPRESS_METHOD_STORE, HACK_MZ_COMPRESS_LEVEL_FAST);
-			zipWriteInFileInZip(zippedSaveFile, png.data(), png.size());
-			zipCloseFileInZip(zippedSaveFile);
+			const std::string name = "Save " + (*sceneLayerInfos)[i].name + ".png";
+			if (png.empty()) throw std::runtime_error("could not encode " + name);
+			writeEntry(name, png.data(), png.size(), HACK_MZ_COMPRESS_METHOD_STORE);
 		}
-
-		zipClose(zippedSaveFile, fileName.c_str());
-
-		delete mainWriter;
-		delete indexWriter;
-		delete sceneLayerInfos;
+		const int closed = zipClose(archive.file, fileName.c_str());
+		archive.file = nullptr;
+		if (closed != ZIP_OK) throw std::runtime_error("could not finish archive");
+		std::filesystem::rename(archive.path, savePath);
 	};
-
-	copyBitmaps.wait();
 
 	const long long saveMainMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
 
@@ -249,39 +274,34 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		std::cout << "[snapbench] parse_ms=" << parseMs << " props=" << parsedProps << " bytes=" << snapshotText.size() << std::endl;
 	}
 
-	// For some reason I can't std::move a unique ptr in, so just releasing and deleting manually...
-	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit([saveWriterData, saveMainMs](Writer* mainWriter) {
+	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit([saveWriterData, saveMainMs, fileName]() {
 		const auto asyncStart = std::chrono::steady_clock::now();
-		saveWriterData(mainWriter);
+		bool saved = false;
+		try {
+			saveWriterData();
+			saved = true;
+			g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
+		} catch (const std::exception& error) {
+			g_ConsoleMan.PrintString("ERROR: Could not save game \"" + fileName + "\": " + error.what());
+		}
 		const long long asyncMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asyncStart).count();
-		std::cout << "[snapbench] save main_ms=" << saveMainMs << " zip_io_ms=" << asyncMs << std::endl;
-	}, writer.release());
+		std::cout << "[snapbench] save main_ms=" << saveMainMs << " zip_io_ms=" << asyncMs << " saved=" << saved << std::endl;
+		return saved;
+	}).share();
 
-	// We didn't transfer ownership, so we must be very careful that sceneAltered's deletion doesn't touch the stuff we got from MovableMan.
-	modifiableScene->ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, false);
-
-	g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 	return true;
 }
 
 bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Scene>& outScene, std::unique_ptr<GAScripted>& outActivity, std::string& outOriginalScenePresetName, bool& outPlaceObjects, bool& outPlaceUnits) {
+	WaitForSaveGameTask();
 	std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
 
 	// load zip sav file
 	std::string saveFilePath = filePath + ".ccsave";
 	unzFile zippedSaveFile = unzOpen(saveFilePath.c_str());
 	if (!zippedSaveFile) {
-		// Might be trying to open one we're already saving too, wait until we finish saving and try again
-		if (m_SaveGameTask.valid()) {
-			m_SaveGameTask.wait();
-			zippedSaveFile = unzOpen(saveFilePath.c_str());
-		}
-
-		if (!zippedSaveFile) {
-			// Some other process is stopping us from loading, oh well
-			RTEError::ShowMessageBox("Game loading failed! Make sure you have a saved game called \"" + fileName + "\"");
-			return false;
-		}
+		RTEError::ShowMessageBox("Game loading failed! Make sure you have a saved game called \"" + fileName + "\"");
+		return false;
 	}
 
 	unz_file_info info;
