@@ -15,6 +15,7 @@
 #include "MetaMan.h"
 #include "ThreadMan.h"
 #include "System.h"
+#include "SaveGameArchive.h"
 
 #include "GAScripted.h"
 #include "SLTerrain.h"
@@ -297,40 +298,9 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 	const std::string modulePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	const std::string filePath = modulePath + "/" + fileName;
 	try {
-		struct Archive {
-			unzFile file;
-			~Archive() { if (file) unzClose(file); }
-		} archive{unzOpen((filePath + ".ccsave").c_str())};
-		if (!archive.file) throw std::runtime_error("could not open the save archive");
-		const auto readEntry = [&](const std::string& name, std::string& data, bool required = true) {
-			const int found = unzLocateFile(archive.file, name.c_str(), NULL);
-			if (!required && found == UNZ_END_OF_LIST_OF_FILE) return false;
-			if (found != UNZ_OK) throw std::runtime_error("missing or unreadable " + name);
-			unz_file_info64 info{};
-			if (unzGetCurrentFileInfo64(archive.file, &info, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK ||
-			    info.uncompressed_size > data.max_size() || unzOpenCurrentFile(archive.file) != UNZ_OK) {
-				throw std::runtime_error("could not open " + name);
-			}
-			struct Entry {
-				unzFile file;
-				~Entry() { if (file) unzCloseCurrentFile(file); }
-			} entry{archive.file};
-			data.clear();
-			std::array<char, 65536> chunk;
-			int count;
-			while ((count = unzReadCurrentFile(archive.file, chunk.data(), chunk.size())) > 0) {
-				if (data.size() + count > info.uncompressed_size) throw std::runtime_error("incorrect size for " + name);
-				data.append(chunk.data(), count);
-			}
-			const int closed = unzCloseCurrentFile(archive.file);
-			entry.file = nullptr;
-			if (count < 0 || closed != UNZ_OK || data.size() != info.uncompressed_size) {
-				throw std::runtime_error("incomplete or corrupt " + name);
-			}
-			return true;
-		};
+		SaveGameArchive archive(filePath + ".ccsave");
 		std::string text;
-		readEntry("Save.ini", text);
+		archive.ReadEntry("Save.ini", text);
 		if (text.empty() || text.find('\0') != std::string::npos) throw std::runtime_error("empty or invalid Save.ini");
 
 		using Image = std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
@@ -338,7 +308,7 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 		for (int layer = 0; layer < 3 + Activity::MaxTeamCount; ++layer) {
 			const std::string name = layer == 0 ? "Save Mat.png" : layer == 1 ? "Save FG.png" : layer == 2 ? "Save BG.png" : std::format("Save UST{}.png", layer - 3);
 			std::string bytes;
-			if (!readEntry(name, bytes, layer < 3)) continue;
+			if (!archive.ReadEntry(name, bytes, layer < 3)) continue;
 			std::unique_ptr<SDL_IOStream, decltype(&SDL_CloseIO)> stream(SDL_IOFromConstMem(bytes.data(), bytes.size()), SDL_CloseIO);
 			Image image(stream ? IMG_LoadPNG_IO(stream.get()) : nullptr, SDL_DestroySurface);
 			if (!image || image->w <= 0 || image->h <= 0) throw std::runtime_error("invalid image " + name);

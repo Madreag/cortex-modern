@@ -136,6 +136,7 @@ static bool s_menuScriptFailed = false;
 static std::string s_loadSelfTestName;
 static bool s_loadSelfTestExpected = false;
 static bool s_loadSelfTestPassed = false;
+static bool s_saveCatalogSelfTest = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -416,6 +417,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-bitmap-save-selftest") {
 			s_bitmapSaveSelfTest = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-save-catalog-selftest") {
+			s_saveCatalogSelfTest = true;
 			++i;
 			continue;
 		}
@@ -2240,6 +2246,12 @@ void RunGameLoop() {
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
 				s_bitmapSaveSelfTestResult = g_FrameMan.RunBitmapSaveSelfTest() ? 0 : 1;
 				System::SetQuit(true);
+				break;
+			}
+			if (s_saveCatalogSelfTest && simTick > 0) {
+				SaveLoadMenuGUI::RunCatalogSelfTest();
+				System::SetQuit(true);
+				g_ActivityMan.EndActivity();
 				break;
 			}
 			if (!s_loadSelfTestName.empty() && simTick > 0) {

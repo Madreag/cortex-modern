@@ -47,6 +47,9 @@ namespace RTE {
 
 		/// Checks save-menu status and controls using the real save handler.
 		static bool RunSaveSelfTest(const std::string& name, bool& queued);
+
+		/// Prints the entries produced by the real save list.
+		static void RunCatalogSelfTest();
 #pragma endregion
 
 	private:
