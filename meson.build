@@ -91,6 +91,8 @@ elif compiler.get_argument_syntax()== 'msvc'
 #TODO: add MSVC related arguments and stuff in here
   message('cl detected')
   elfname = 'Cortex Command'
+  # LuaJIT's C API raises errors across C++ frames; /EHsc assumes it cannot.
+  override_options += ['cpp_eh=s']
   # /fp:precise stops MSVC rearranging FP ops; /arch:SSE2 keeps x86 off x87's 80-bit registers.
   extra_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-bigobj', '/fp:precise', '/arch:SSE2']
   add_global_arguments('-D_ITERATOR_DEBUG_LEVEL=0', language:'cpp')
@@ -331,6 +333,7 @@ cccpelf = executable(
   elfname, ['Source/Main.cpp', sources], include_directories:[source_inc_dirs, external_inc_dirs], cpp_pch:pch, # Sources options
   link_with:[external_libs, source_libs], objects:[external_objects], dependencies:deps,                                # Link options
   cpp_args:[extra_args, preprocessor_flags], link_args:[link_args], build_rpath:build_rpath,               # Compiler setup
+  override_options:override_options,
   name_suffix:suffix,   # Executable name options
   build_by_default:true, # Meson options
   install: true, install_rpath: install_rpath, install_dir: get_option('install_runner') ? get_option('libdir')/'CortexCommand' : get_option('bindir'),

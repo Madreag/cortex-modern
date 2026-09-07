@@ -754,6 +754,12 @@
       <AdditionalDependencies>GameNetworkingSockets_s.lib;libprotobuf.lib;utf8_validity.lib;abseil_dll.lib;libcrypto.lib;ws2_32.lib;crypt32.lib;winmm.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- LuaJIT errors unwind through its C API and must destroy live C++ locals. -->
+      <ExceptionHandling>SyncCThrow</ExceptionHandling>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Source\Entities\Activity.h" />
     <ClInclude Include="Source\Entities\ADSensor.h" />
