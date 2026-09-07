@@ -942,6 +942,8 @@ void LuaMan::AddLuaScriptCallback(const std::function<void()>& callback) {
 }
 
 void LuaMan::ExecuteLuaScriptCallbacks() {
+	static const long holdUntil = []() { const char* value = std::getenv("CC_TEST_ASYNC_PATH_DELIVERY_TICK"); return value ? std::strtol(value, nullptr, 10) : 0L; }();
+	if (holdUntil > 0 && g_TimerMan.GetSimUpdateCount() < holdUntil) return;
 	std::vector<std::function<void()>> callbacks;
 
 	// Move our functions into the local buffer to clear the existing callbacks and to lock for as little time as possible
