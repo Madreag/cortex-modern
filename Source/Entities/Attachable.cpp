@@ -26,6 +26,8 @@ Attachable::~Attachable() {
 void Attachable::Clear() {
 	m_Parent = nullptr;
 	m_ParentOffset.Reset();
+	m_PersistedParentOffset.Reset();
+	m_HasPersistedParentOffset = false;
 	m_DrawAfterParent = true;
 	m_DrawnNormallyByParent = true;
 	m_DeleteWhenRemovedFromParent = false;
@@ -78,6 +80,8 @@ int Attachable::Create(const Attachable& reference) {
 	MOSRotating::Create(reference);
 
 	m_ParentOffset = reference.m_ParentOffset;
+	m_PersistedParentOffset = reference.m_PersistedParentOffset;
+	m_HasPersistedParentOffset = reference.m_HasPersistedParentOffset;
 	m_DrawAfterParent = reference.m_DrawAfterParent;
 	m_DrawnNormallyByParent = reference.m_DrawnNormallyByParent;
 	m_DeleteWhenRemovedFromParent = reference.m_DeleteWhenRemovedFromParent;
@@ -128,6 +132,11 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSRotating::ReadProperty(propName, reader));
 
 	MatchProperty("ParentOffset", { reader >> m_ParentOffset; });
+	MatchProperty("SpecialBehaviour_ParentOffset", {
+		reader >> m_PersistedParentOffset;
+		m_ParentOffset = m_PersistedParentOffset;
+		m_HasPersistedParentOffset = true;
+	});
 	MatchProperty("DrawAfterParent", { reader >> m_DrawAfterParent; });
 	MatchProperty("DeleteWhenRemovedFromParent", { reader >> m_DeleteWhenRemovedFromParent; });
 	MatchProperty("GibWhenRemovedFromParent", { reader >> m_GibWhenRemovedFromParent; });
@@ -327,6 +336,10 @@ bool Attachable::CanCollideWithTerrain() const {
 void Attachable::AdoptPersistedUniqueID() {
 	const long provisionalID = GetUniqueID();
 	MOSRotating::AdoptPersistedUniqueID();
+	if (m_HasPersistedParentOffset) {
+		m_ParentOffset = m_PersistedParentOffset;
+		m_HasPersistedParentOffset = false;
+	}
 	if (GetUniqueID() != provisionalID && IsAttached()) {
 		m_Parent->RekeyHardcodedAttachable(provisionalID, GetUniqueID());
 	}
@@ -341,6 +354,11 @@ void Attachable::AdoptPersistedUniqueID() {
 			}
 		}
 	}
+}
+
+void Attachable::DiscardPersistedSnapshotState() {
+	MOSRotating::DiscardPersistedSnapshotState();
+	m_HasPersistedParentOffset = false;
 }
 
 bool Attachable::CollideAtPoint(HitData& hd) {

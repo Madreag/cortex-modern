@@ -1450,6 +1450,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 	if (const Attachable* attachableToSave = dynamic_cast<const Attachable*>(sceneObjectToSave); attachableToSave && saveFullData) {
 		writer.NewPropertyWithValue("ParentOffset", attachableToSave->GetParentOffset());
+		writer.NewPropertyWithValue("SpecialBehaviour_ParentOffset", attachableToSave->GetParentOffset());
 		writer.NewPropertyWithValue("SpecialBehaviour_JointPosition", attachableToSave->GetJointPos());
 		writer.NewPropertyWithValue("SpecialBehaviour_PrevParentOffset", attachableToSave->GetPrevParentOffset());
 		writer.NewPropertyWithValue("SpecialBehaviour_PrevJointOffset", attachableToSave->GetPrevJointOffset());
