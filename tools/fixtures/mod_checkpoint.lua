@@ -9,6 +9,17 @@ local function counter(shared)
 	end, function() return count; end;
 end
 
+local function checked(fn)
+	return function(self)
+		local ok, message = pcall(fn, self);
+		if not ok then
+			ConsoleMan:PrintString("ERROR: " .. tostring(message));
+			ConsoleMan:SaveAllText("Userdata/CheckpointErrors.txt");
+			error(message);
+		end
+	end;
+end
+
 local function work(shared, scale)
 	return function()
 		local count = 0;
@@ -130,8 +141,12 @@ function Create(self)
 	self.checkpoint.owned.GibImpulseLimit = 1000;
 	self.checkpoint.configuration = configure(self.checkpoint.owned, 0);
 	self.checkpoint.actorConfiguration = configureActor(self.checkpoint.owned, 0);
-	self.checkpoint.device = CreateHDFirearm("Battle Rifle", "Base.rte");
+	self.checkpoint.device = CreateHDFirearm("Old Stock Battle Rifle", "Base.rte");
 	self.checkpoint.deviceConfiguration = configureDevice(self.checkpoint.device, 0);
+	self.checkpoint.device.Pos = Vector(32 + self.UniqueID % 96, 32);
+	self.checkpoint.device.PinStrength = 10000;
+	self.checkpoint.deviceResident = true;
+	MovableMan:AddItem(self.checkpoint.device);
 	self.checkpoint.owned:SetNumberValue("CheckpointCount", 0);
 	self.checkpoint.owned.shared = self.checkpoint;
 	self.checkpoint.ownedAlias = self.checkpoint.owned;
@@ -165,6 +180,9 @@ function Update(self)
 	verifyConfiguration(state.owned, state.configuration);
 	verifyConfiguration(state.owned, state.actorConfiguration);
 	verifyConfiguration(state.device, state.deviceConfiguration);
+	assert(MovableMan:IsDevice(state.device) == state.deviceResident, "checkpoint device residency");
+	local registeredDevice = MovableMan:FindObjectByUniqueID(state.device.UniqueID);
+	assert(registeredDevice and registeredDevice.PinStrength == 10000 + self.testUpdate, "checkpoint device registry");
 	local count = state.step();
 	assert(count == self.testUpdate + 1 and state.peek() == count, "checkpoint shared upvalue");
 	local ok, job = coroutine.resume(state.job);
@@ -186,6 +204,18 @@ function Update(self)
 	state.configuration = configure(state.owned, count);
 	state.actorConfiguration = configureActor(state.owned, count);
 	state.deviceConfiguration = configureDevice(state.device, count);
+	state.device.PinStrength = 10000 + count;
+	if count == 10 or count == 360 then
+		state.deviceOwner = MovableMan:RemoveItem(state.device);
+		assert(state.deviceOwner and state.deviceOwner.UniqueID == state.device.UniqueID, "checkpoint device ownership transfer");
+		state.deviceResident = false;
+	elseif count == 350 then
+		MovableMan:AddMO(state.deviceOwner);
+		state.deviceOwner = nil;
+		state.deviceResident = true;
+	end
 	self:SetNumberValue("TestUpdates", count);
 	self:SetNumberValue("TestCheckpointState", count + job + wrapped + state.vector.X + #word);
 end
+
+Create, Update = checked(Create), checked(Update);
