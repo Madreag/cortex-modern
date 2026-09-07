@@ -3,7 +3,7 @@
 Public API (stable):
     run(argv, cwd, out, timeout=90, env=None, evidence_expected=None, startup_checks=True) -> record dict
     IsolatedRun(argv, cwd, out, timeout=90, env=None, evidence_expected=None, startup_checks=True)
-        .start() -> self, .poll() -> exit code or None, .finish() -> record dict, .close()
+        .start() -> self, .poll() -> exit code or None, .terminate(), .finish() -> record dict, .close()
 
 What a launch gets:
   - explicit argument policy: at least an exe and one test argument; no empty / whitespace-only
@@ -477,6 +477,13 @@ class IsolatedRun:
         self.record["evidence_present"] = present
         self.record["evidence_missing"] = missing
         self.record["evidence_complete"] = not missing
+
+    def terminate(self, code=137, reason="injected process drop"):
+        if not self.process or self.poll() is not None:
+            raise RuntimeError("the test process is not running")
+        self.record["injected_termination"] = reason
+        check(terminate_job(self.job, code))
+        self._save()
 
     def finish(self):
         code = None

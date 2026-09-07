@@ -854,6 +854,10 @@ void ProcessMenuScript() {
 		bool met = false;
 		if (waitCond.rfind("members:", 0) == 0) {
 			met = static_cast<int>(snapshot.members.size()) >= std::atoi(waitCond.c_str() + 8);
+		} else if (waitCond.rfind("connected:", 0) == 0) {
+			met = std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) { return member.connected; }) == std::atoi(waitCond.c_str() + 10);
+		} else if (waitCond == "allready") {
+			met = snapshot.members.size() > 1 && std::all_of(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) { return member.connected && member.ready; });
 		} else if (waitCond.rfind("state:", 0) == 0) {
 			met = snapshot.serviceState == waitCond.substr(6);
 		} else if (waitCond == "remoteready") {
@@ -889,6 +893,14 @@ void ProcessMenuScript() {
 		waitCondTimeout = 4000;
 	} else if (cmd == "wait_remote_ready") {
 		waitCond = "remoteready";
+		waitCondTimeout = 4000;
+	} else if (cmd == "wait_connected") {
+		int n = 0;
+		iss >> n;
+		waitCond = "connected:" + std::to_string(n);
+		waitCondTimeout = 4000;
+	} else if (cmd == "wait_all_ready") {
+		waitCond = "allready";
 		waitCondTimeout = 4000;
 	} else if (cmd == "screenshot") {
 		std::string name;
