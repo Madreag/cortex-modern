@@ -11,6 +11,8 @@ namespace RTE {
 		friend struct EntityLuaBindings;
 
 	public:
+		void DiscardPersistedSnapshotState() override;
+		void AdoptPersistedUniqueID() override;
 		// Concrete allocation and cloning definitions
 		EntityAllocation(AEJetpack);
 		SerializableOverrideMethods;
@@ -145,6 +147,10 @@ namespace RTE {
 		bool m_AdjustsThrottleForWeight; //!< Whether or not the jetpack throttle auto-adjusts for weight, at the cost of fuel usage.
 
 	private:
+		std::string m_PersistedAEJetpackRuntime;
+		std::string SaveAEJetpackRuntime() const;
+		bool LoadAEJetpackRuntime(std::string_view text, bool validateOnly = false);
+
 		/// The logic to run when bursting.
 		/// @param parentActor The parent actor using this jetpack.
 		/// @param fuelUseMultiplier The multiplier to fuel usage rate.

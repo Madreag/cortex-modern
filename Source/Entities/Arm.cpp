@@ -1,4 +1,6 @@
 #include "Arm.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -23,6 +25,7 @@ Arm::~Arm() {
 }
 
 void Arm::Clear() {
+	m_PersistedArmRuntime.clear();
 	m_MaxLength = 0;
 	m_MoveSpeed = 0;
 
@@ -112,11 +115,17 @@ int Arm::Create(const Arm& reference) {
 	} else {
 		m_FaithfulSupportedDeviceUID = reference.m_FaithfulSupportedDeviceUID;
 	}
+	m_PersistedArmRuntime = reference.m_PersistedArmRuntime;
+	if (IsFaithfulClone() && m_PersistedArmRuntime.empty()) m_PersistedArmRuntime = reference.SaveArmRuntime();
 	return 0;
 }
 
 int Arm::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Attachable::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ArmRuntime", {
+		m_PersistedArmRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadArmRuntime(m_PersistedArmRuntime, true)) reader.ReportError("invalid Arm runtime checkpoint");
+	});
 
 	MatchProperty("MaxLength", { reader >> m_MaxLength; });
 	MatchProperty("MoveSpeed", { reader >> m_MoveSpeed; });
@@ -169,6 +178,7 @@ void Arm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("HandSprite", m_HandSpriteFile);
 	writer.NewPropertyWithValue("GripStrength", m_GripStrength);
 	writer.NewPropertyWithValue("ThrowStrength", m_ThrowStrength);
+	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", base64_encode(m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime, true));
 }
 
 int Arm::Save(Writer& writer) const {
@@ -491,6 +501,10 @@ void Arm::AdoptPersistedUniqueID() {
 		m_HandPrevPos = m_PersistedHandPrevPos;
 		m_HasPersistedHandPos = false;
 	}
+	if (!m_PersistedArmRuntime.empty()) {
+		if (!LoadArmRuntime(m_PersistedArmRuntime)) throw std::runtime_error("could not restore Arm runtime checkpoint");
+		m_PersistedArmRuntime.clear();
+	}
 }
 
 void Arm::DiscardPersistedSnapshotState() {
@@ -499,6 +513,7 @@ void Arm::DiscardPersistedSnapshotState() {
 	m_HasPersistedHandCurrentOffset = false;
 	m_HasPersistedHandPos = false;
 	m_FaithfulSupportedDeviceUID = 0;
+	m_PersistedArmRuntime.clear();
 }
 
 void Arm::ResolveFaithfulLinks() {
@@ -507,4 +522,45 @@ void Arm::ResolveFaithfulLinks() {
 		m_HeldDeviceThisArmIsTryingToSupport = dynamic_cast<HeldDevice*>(g_MovableMan.FindObjectByUniqueID(m_FaithfulSupportedDeviceUID));
 		m_FaithfulSupportedDeviceUID = 0;
 	}
+}
+
+std::string Arm::SaveArmRuntime() const {
+	CheckpointWriter archive("ArmRuntime1");
+	archive(m_MaxLength, m_MoveSpeed, m_HandIdleOffset, m_HandIdleRotation, m_HandCurrentOffset, m_HandPrevPos, m_HandPos);
+	archive(m_HandMovementDelayTimer, m_HandHasReachedCurrentTarget, m_GripStrength, m_ThrowStrength);
+	std::vector<std::string> targets;
+	auto queue = m_HandTargets;
+	while (!queue.empty()) {
+		const HandTarget& target = queue.front();
+		CheckpointWriter value("HandTarget1");
+		value(target.Description, target.TargetOffset, target.DelayAtTarget, target.HFlippedWhenTargetWasCreated);
+		targets.push_back(value.Text());
+		queue.pop();
+	}
+	archive(targets);
+	return archive.Text();
+}
+
+bool Arm::LoadArmRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ArmRuntime1", validateOnly);
+		archive(m_MaxLength, m_MoveSpeed, m_HandIdleOffset, m_HandIdleRotation, m_HandCurrentOffset, m_HandPrevPos, m_HandPos);
+		archive(m_HandMovementDelayTimer, m_HandHasReachedCurrentTarget, m_GripStrength, m_ThrowStrength);
+		std::vector<std::string> savedTargets;
+		archive.Value(savedTargets);
+		std::queue<HandTarget> targets;
+		for (const std::string& text: savedTargets) {
+			std::string description;
+			Vector offset;
+			float delay;
+			bool flipped;
+			CheckpointReader value(text, "HandTarget1");
+			value(description, offset, delay, flipped);
+			value.Finish();
+			targets.emplace(description, offset, delay, flipped);
+		}
+		archive.OnCommit([this, targets = std::move(targets)]() mutable { m_HandTargets = std::move(targets); });
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

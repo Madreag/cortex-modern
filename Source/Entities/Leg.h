@@ -12,6 +12,8 @@ namespace RTE {
 
 
 	public:
+		void DiscardPersistedSnapshotState() override;
+		void AdoptPersistedUniqueID() override;
 		EntityAllocation(Leg);
 		SerializableOverrideMethods;
 		void SaveSnapshotConfiguration(Writer& writer) const override;
@@ -124,6 +126,10 @@ namespace RTE {
 		float m_MoveSpeed; //!< How fast the Leg moves to a reach target, 0 means it doesn't and 1 means it moves instantly.
 
 	private:
+		std::string m_PersistedLegRuntime;
+		std::string SaveLegRuntime() const;
+		bool LoadLegRuntime(std::string_view text, bool validateOnly = false);
+
 #pragma region Update Breakdown
 		/// Updates the current ankle offset for this Leg. Should only be called from Update.
 		/// If the Leg is attached, the current ankle offset is based on the target offset and move speed, and whether the Leg should idle or not, otherwise it puts it in a reasonable position.
