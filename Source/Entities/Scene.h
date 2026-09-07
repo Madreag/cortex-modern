@@ -74,6 +74,14 @@ namespace RTE {
 				Clear();
 				Create(reference);
 			}
+			~Area() override { Destroy(true); }
+			Area& operator=(const Area& reference) {
+				if (this != &reference) {
+					Reset();
+					Create(reference);
+				}
+				return *this;
+			}
 
 			/// Makes the Area object ready for use.
 			/// @return An error return value signaling sucess or any particular failure.
@@ -92,7 +100,7 @@ namespace RTE {
 
 			/// Resets the entire Serializable, including its inherited members, to their
 			/// default settings or values.
-			void Reset() override { Clear(); }
+			void Reset() override { Destroy(true); }
 
 			/// Adds a Box to this' area coverage.
 			/// @param newBox The Box to add. A copy will be made and added.
