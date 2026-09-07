@@ -144,7 +144,7 @@ namespace RTE {
 
 		/// Sets the abstract rate of LateralControl change. Default is 6
 		/// @param newSpeed New lateral control speed value.
-		void SetLateralControlSpeed(float newSpeed) { m_LateralControl = newSpeed; }
+		void SetLateralControlSpeed(float newSpeed) { m_LateralControlSpeed = newSpeed; }
 
 		/// Sets lateral control value -1.0 to 1.0 control of sideways movement. 0 means try to stand still in X.
 		/// @return Current lateral control value.
