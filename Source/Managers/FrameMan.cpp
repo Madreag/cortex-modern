@@ -10,6 +10,7 @@
 #include "CameraMan.h"
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
+#include "ThreadMan.h"
 #include "UInputMan.h"
 #include "GLResourceMan.h"
 
@@ -547,19 +548,19 @@ int FrameMan::SaveBitmap(SaveBitmapMode modeToSave, const std::string& nameBase,
 			if (m_ScreenDumpBuffer) {
 				SaveScreenToBitmap();
 
-				// Make a copy of the buffer because it may be overwritten mid thread and everything will be on fire.
-				SDL_Surface* saveSurface = SDL_ConvertSurface(m_ScreenDumpBuffer.get(), m_ScreenDumpBuffer->format);
-				auto saveScreenDump = [fullFileName](SDL_Surface* bitmapToSaveCopy) {
-					// nullptr for the PALETTE parameter here because we're saving a 24bpp file and it's irrelevant.
-					if (IMG_SavePNG(bitmapToSaveCopy, fullFileName.c_str()) == 0) {
+				// The next frame may overwrite the screen buffer while this copy is saved.
+				std::shared_ptr<SDL_Surface> saveSurface(SDL_ConvertSurface(m_ScreenDumpBuffer.get(), m_ScreenDumpBuffer->format), SurfaceDeleter());
+				if (!saveSurface) {
+					break;
+				}
+				g_ThreadMan.GetBackgroundThreadPool().push_task([fullFileName, saveSurface]() mutable {
+					const auto surface = std::move(saveSurface);
+					if (IMG_SavePNG(surface.get(), fullFileName.c_str())) {
 						g_ConsoleMan.PrintString("SYSTEM: Screen was dumped to: " + fullFileName);
 					} else {
 						g_ConsoleMan.PrintString("ERROR: Unable to save bitmap to: " + fullFileName);
 					}
-					// SDL_FreeSurface(bitmapToSaveCopy);
-				};
-				std::thread saveThread(saveScreenDump, saveSurface);
-				saveThread.detach();
+				});
 
 				saveSuccess = true;
 			}
