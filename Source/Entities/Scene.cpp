@@ -1588,6 +1588,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			// input-delay window holds per-machine AI residue that must not ride the save.
 			// Read-only; a const accessor would make the luabind GetController overload ambiguous.
 			const Controller* actorController = const_cast<Actor*>(actorToSave)->GetController();
+			writer.NewPropertyWithValue("ControllerQuickDisabled", static_cast<int>(actorController->IsQuickDisabled()));
 			if (actorController->GetWireApplyTick() == static_cast<int64_t>(g_TimerMan.GetSimUpdateCount())) {
 				long long controllerStateMask = 0;
 				for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
