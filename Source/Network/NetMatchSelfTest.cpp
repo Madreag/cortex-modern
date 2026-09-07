@@ -134,6 +134,17 @@ namespace RTE {
 				return true;
 			};
 			auto bytes = original;
+			bytes[16] = 2;
+			const std::vector<uint8_t> legacyConfig(bytes.begin() + 12, bytes.begin() + recordOffset);
+			if (NetLobbyProtocol::Decode(legacyConfig).ok || !writeFile(bytes) || !reader.Open(path.string(), error) ||
+			    reader.GetConfig() != MakeConfig() || !reader.ReadFrame(decoded, eof, error) || decoded != first) {
+				*error = "legacy recorded config failed or was accepted on the live wire";
+				return false;
+			}
+			reader.Close();
+			bytes[16] = 255;
+			if (!rejects(bytes, "unsupported lobby protocol version")) return false;
+			bytes = original;
 			bytes[senderOffset + 1] = 1;
 			if (!rejects(bytes, "checksum")) return false;
 			for (const uint8_t sender : {uint8_t(0), uint8_t(NetLockstepCodec::c_MaxPeerCount + 1)}) {
