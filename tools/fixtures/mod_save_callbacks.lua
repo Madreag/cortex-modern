@@ -1,5 +1,10 @@
+local saves = 0;
+
 function SaveActivity(self)
-	self.save_callback_count = (self.save_callback_count or 0) + 1;
+	-- The native callback stays cached until the next activity update.
+	self.OnSave = nil;
+	saves = saves + 1;
+	self.save_callback_count = saves;
 	ActivityMan:GetActivity():SetTeamFunds(246, 0);
 	SceneMan.Scene:SetArea(Area("Activity save callback area"));
 end
