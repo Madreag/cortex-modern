@@ -280,6 +280,23 @@ function Create(self)
 	self.checkpoint.moduleAlias = self.checkpoint.module;
 	self.checkpoint.moduleIterator = self.checkpoint.module.Presets;
 	self.checkpoint.moduleIterator();
+	do
+		local state = self.checkpoint;
+		SceneMan.Scene:CalculatePathAsync(function(result)
+			state.pathRequest = result;
+			state.pathRequestAlias = result;
+			result.shared = state;
+			state.pathLength = result.PathLength;
+			state.pathCost = result.TotalCost;
+			state.pathStatus = result.Status;
+			state.pathPoints = {};
+			for point in result.Path do
+				state.pathPoints[#state.pathPoints + 1] = point;
+			end
+			state.pathIterator = result.Path;
+			state.pathIterator();
+		end, Vector(32, 32), Vector(160, 32), 0, 1, Activity.NOTEAM);
+	end
 	self.checkpoint.gibSpawnParticle = CreateMOSRotating("Gib Panel Dark Small A", "Base.rte");
 	self.checkpoint.gibSpawnParticle:SetNumberValue("CheckpointGibParticle", self.UniqueID);
 	self.checkpoint.gibSpawnParticle.PinStrength = 10000;
@@ -401,6 +418,16 @@ function Update(self)
 	assert(state.alarm.ScenePos.X == 13 + self.testUpdate and state.alarmPosition.Y == -15, "checkpoint alarm position");
 	assert(state.alarm.Team == Activity.TEAM_2 and state.alarm.Range == 173.5 + self.testUpdate / 8, "checkpoint alarm values");
 	assert(rawequal(state.module, state.moduleAlias) and state.module.FileName == "Base.rte", "checkpoint module reference");
+	if self.testUpdate >= 40 then
+		assert(state.pathRequest and rawequal(state.pathRequest, state.pathRequestAlias) and state.pathRequest.shared == state, "checkpoint path result aliases");
+		assert(state.pathRequest.PathLength == state.pathLength and state.pathRequest.TotalCost == state.pathCost and state.pathRequest.Status == state.pathStatus, "checkpoint path result values");
+		local points = 0;
+		for point in state.pathRequest.Path do
+			points = points + 1;
+			assert(point.X == state.pathPoints[points].X and point.Y == state.pathPoints[points].Y, "checkpoint path point");
+		end
+		assert(points == #state.pathPoints and points > 1, "checkpoint path points");
+	end
 	assert(state.limb == state.limbAlias and state.limb.StartOffset.X == 17 + self.testUpdate, "checkpoint limb alias");
 	assert(state.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK).PushForce == 310 + self.testUpdate, "checkpoint limb owner");
 	assert(state.limb.BaseTravelSpeedMultiplier == 1.25 and state.limb.TravelSpeed == 2.5, "checkpoint limb configuration");
@@ -426,6 +453,10 @@ function Update(self)
 	local registeredDevice = MovableMan:FindObjectByUniqueID(state.device.UniqueID);
 	assert(registeredDevice and registeredDevice.PinStrength == 10000 + self.testUpdate, "checkpoint device registry");
 	local count = state.step();
+	if count == 61 then
+		local point = state.pathIterator();
+		assert(point and point.X == state.pathPoints[2].X and point.Y == state.pathPoints[2].Y, "checkpoint path iterator continuation");
+	end
 	if count == 20 then
 		local script = rawget(state.globals, "Userdata/UserScenes.rte/ScriptState/mod_checkpoint.lua");
 		assert(type(script) == "table", "checkpoint script function table");
