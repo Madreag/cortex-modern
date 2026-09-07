@@ -1,0 +1,505 @@
+#include "LuaThreadCodec.h"
+
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+#include "lj_obj.h"
+#include "lj_frame.h"
+#include "lj_gc.h"
+#include "lj_state.h"
+#include "lj_func.h"
+#include "lj_bc.h"
+#include "lj_vm.h"
+}
+
+#include <cstring>
+#include <limits>
+#include <string>
+#include <vector>
+
+// Return addresses are offsets into Lua functions; native continuations have stable names.
+namespace {
+	struct ContSymbol {
+		const char* name;
+		ASMFunction function;
+	};
+
+	const ContSymbol c_ContSymbols[] = {
+	    {"cat", reinterpret_cast<ASMFunction>(lj_cont_cat)},
+	    {"ra", reinterpret_cast<ASMFunction>(lj_cont_ra)},
+	    {"nop", reinterpret_cast<ASMFunction>(lj_cont_nop)},
+	    {"condt", reinterpret_cast<ASMFunction>(lj_cont_condt)},
+	    {"condf", reinterpret_cast<ASMFunction>(lj_cont_condf)},
+	    {"hook", reinterpret_cast<ASMFunction>(lj_cont_hook)},
+	    {"stitch", reinterpret_cast<ASMFunction>(lj_cont_stitch)},
+	};
+
+	const char* ContName(ASMFunction function) {
+		for (const ContSymbol& symbol: c_ContSymbols) {
+			if (symbol.function == function) {
+				return symbol.name;
+			}
+		}
+		return nullptr;
+	}
+
+	ASMFunction ContFunction(const char* name) {
+		for (const ContSymbol& symbol: c_ContSymbols) {
+			if (name && std::strcmp(symbol.name, name) == 0) {
+				return symbol.function;
+			}
+		}
+		return nullptr;
+	}
+
+	int Failure(lua_State* L, const std::string& message) {
+		lua_pushnil(L);
+		lua_pushlstring(L, message.data(), message.size());
+		return 2;
+	}
+
+	int SameNativeFunction(lua_State* L) {
+		bool same = false;
+		if (lua_isfunction(L, 1) && lua_isfunction(L, 2)) {
+			const GCfunc* first = funcV(L->base);
+			const GCfunc* second = funcV(L->base + 1);
+			same = !isluafunc(first) && first->c.ffid == second->c.ffid && (!iscfunc(first) || first->c.f == second->c.f);
+		}
+		lua_pushboolean(L, same);
+		return 1;
+	}
+
+	int GmatchPosition(lua_State* L) {
+		luaL_checktype(L, 1, LUA_TFUNCTION);
+		GCfunc* function = funcV(L->base);
+		if (isluafunc(function) || function->c.nupvalues != 3 || !tvisstr(&function->c.upvalue[0]) || !tvisstr(&function->c.upvalue[1])) {
+			return luaL_error(L, "not a string match iterator");
+		}
+		TValue* cursor = &function->c.upvalue[2];
+		if (lua_gettop(L) > 1) {
+			const lua_Integer position = luaL_checkinteger(L, 2);
+			if (position < 0 || position > static_cast<lua_Integer>(strV(&function->c.upvalue[0])->len) + 1) {
+				return luaL_error(L, "string match cursor is out of range");
+			}
+			cursor->u64 = 0;
+			cursor->u32.lo = static_cast<uint32_t>(position);
+		}
+		lua_pushinteger(L, cursor->u32.lo);
+		return 1;
+	}
+
+	const char* ThreadStatus(lua_State* L, lua_State* co) {
+		const TValue* stack = tvref(co->stack);
+		if (co == L) {
+			return "running";
+		} else if (co->status == LUA_YIELD) {
+			return "suspended";
+		} else if (co->status != LUA_OK) {
+			return "dead";
+		} else if (co->base > stack + 1 + LJ_FR2) {
+			return "normal";
+		} else if (co->top == co->base) {
+			return "dead";
+		}
+		return "notstarted";
+	}
+
+	// (coroutine) -> { status, base, top, slots = {[i] = value}, links = {[i] = {type, ftsz | pcslot, pos}}, conts = {[i] = name} }, or nil, message.
+	int ThreadCapture(lua_State* L) {
+		if (!lua_isthread(L, 1)) {
+			return Failure(L, "not a coroutine");
+		}
+		lua_State* co = lua_tothread(L, 1);
+		const std::string status = ThreadStatus(L, co);
+		if (status == "running" || status == "normal") {
+			return Failure(L, "a " + status + " coroutine cannot be captured");
+		}
+		TValue* stack = tvref(co->stack);
+		const ptrdiff_t topIndex = co->top - stack;
+		const ptrdiff_t baseIndex = co->base - stack;
+		lua_newtable(L);
+		const int desc = lua_gettop(L);
+		lua_pushstring(L, status.c_str());
+		lua_setfield(L, desc, "status");
+		lua_pushinteger(L, static_cast<lua_Integer>(baseIndex));
+		lua_setfield(L, desc, "base");
+		lua_pushinteger(L, static_cast<lua_Integer>(topIndex));
+		lua_setfield(L, desc, "top");
+		lua_pushinteger(L, 1 + LJ_FR2);
+		lua_setfield(L, desc, "first");
+		lua_newtable(L);
+		const int slots = lua_gettop(L);
+		lua_newtable(L);
+		const int links = lua_gettop(L);
+		lua_newtable(L);
+		const int conts = lua_gettop(L);
+		std::vector<char> kind(static_cast<size_t>(topIndex) + 1, 0);
+		struct PcRef {
+			ptrdiff_t index;
+			const BCIns* pc;
+		};
+		std::vector<PcRef> pcs;
+		std::vector<ptrdiff_t> funcSlots;
+		if (status == "suspended") {
+			int guard = 0;
+			for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
+				if (++guard > 100000 || frame - stack >= topIndex) {
+					lua_settop(L, desc - 1);
+					return Failure(L, "the coroutine's frame chain is corrupt");
+				}
+				const ptrdiff_t index = frame - stack;
+				kind[index] = 1;
+				funcSlots.push_back(index - 1);
+				lua_newtable(L);
+				lua_pushinteger(L, static_cast<lua_Integer>(frame_ftsz(frame) & FRAME_TYPEP));
+				lua_setfield(L, -2, "type");
+				if (frame_islua(frame)) {
+					pcs.push_back({index, frame_pc(frame)});
+				} else {
+					lua_pushinteger(L, static_cast<lua_Integer>(frame_ftsz(frame)));
+					lua_setfield(L, -2, "ftsz");
+				}
+				lua_rawseti(L, links, static_cast<int>(index));
+				if (frame_iscont(frame)) {
+					if (frame_iscont_fficb(frame) || frame_contv(frame) == LJ_CONT_TAILCALL) {
+						lua_settop(L, desc - 1);
+						return Failure(L, "the coroutine is suspended inside an unsupported continuation");
+					}
+					const char* name = ContName(frame_contf(frame));
+					if (!name) {
+						lua_settop(L, desc - 1);
+						return Failure(L, "the coroutine is suspended inside an unknown continuation");
+					}
+					kind[index - 3] = 2;
+					kind[index - 2] = 3;
+					if (std::strcmp(name, "stitch") == 0) {
+						kind[index - 4] = 4;
+					}
+					lua_pushstring(L, name);
+					lua_rawseti(L, conts, static_cast<int>(index - 3));
+					pcs.push_back({index - 2, frame_contpc(frame)});
+				}
+				frame = frame_islua(frame) ? frame_prevl(frame) : frame_prevd(frame);
+			}
+		}
+		// Each return address as a position inside a function that sits on this stack.
+		for (const PcRef& ref: pcs) {
+			bool found = false;
+			for (const ptrdiff_t funcSlot: funcSlots) {
+				const TValue* funcValue = stack + funcSlot;
+				if (!tvisfunc(funcValue) || !isluafunc(funcV(funcValue))) {
+					continue;
+				}
+				GCproto* proto = funcproto(funcV(funcValue));
+				const BCIns* code = proto_bc(proto);
+				if (ref.pc >= code && ref.pc <= code + proto->sizebc) {
+					lua_rawgeti(L, links, static_cast<int>(ref.index));
+					if (lua_isnil(L, -1)) {
+						lua_pop(L, 1);
+						lua_newtable(L);
+						lua_pushvalue(L, -1);
+						lua_rawseti(L, links, static_cast<int>(ref.index));
+					}
+					lua_pushinteger(L, static_cast<lua_Integer>(funcSlot));
+					lua_setfield(L, -2, "pcslot");
+					lua_pushinteger(L, static_cast<lua_Integer>(ref.pc - code));
+					lua_setfield(L, -2, "pos");
+					lua_pop(L, 1);
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				lua_settop(L, desc - 1);
+				return Failure(L, "a frame's return address lies in no function on the coroutine's stack");
+			}
+		}
+		for (ptrdiff_t i = 1 + LJ_FR2; i < topIndex; ++i) {
+			if (kind[i] == 4) {
+				// A restored stitch can return through the interpreter without its old machine code.
+				lua_pushnumber(L, 0);
+				lua_rawseti(L, slots, static_cast<int>(i));
+				continue;
+			}
+			if (kind[i] != 0 || tvisnil(stack + i)) {
+				continue;
+			}
+			copyTV(L, L->top, stack + i);
+			incr_top(L);
+			lua_rawseti(L, slots, static_cast<int>(i));
+		}
+		lua_setfield(L, desc, "conts");
+		lua_setfield(L, desc, "links");
+		lua_setfield(L, desc, "slots");
+		return 1;
+	}
+
+	void EmptyThread(lua_State* co) {
+		TValue* stack = tvref(co->stack);
+		co->base = co->top = stack + 1 + LJ_FR2;
+		co->status = LUA_OK;
+		co->cframe = nullptr;
+	}
+
+	// (description) -> coroutine, or nil, message.
+	int ThreadRestore(lua_State* L) {
+		luaL_checktype(L, 1, LUA_TTABLE);
+		lua_getfield(L, 1, "status");
+		const std::string status = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+		lua_pop(L, 1);
+		lua_State* co;
+		if (lua_isthread(L, 2)) {
+			co = lua_tothread(L, 2);
+			const std::string currentStatus = ThreadStatus(L, co);
+			if (currentStatus == "running" || currentStatus == "normal") {
+				return Failure(L, "an active coroutine cannot be replaced");
+			}
+			lua_pushvalue(L, 2);
+			lua_settop(co, 0);
+		} else {
+			co = lua_newthread(L);
+		}
+		const int thread = lua_gettop(L);
+		if (status == "dead") {
+			return 1;
+		}
+		lua_getfield(L, 1, "slots");
+		const int slots = lua_gettop(L);
+		if (status == "notstarted") {
+			lua_rawgeti(L, slots, 1 + LJ_FR2);
+			if (!lua_isfunction(L, -1)) {
+				lua_settop(L, thread - 1);
+				return Failure(L, "the coroutine's function is missing");
+			}
+			lua_xmove(L, co, 1);
+			lua_settop(L, thread);
+			return 1;
+		}
+		if (status != "suspended") {
+			lua_settop(L, thread - 1);
+			return Failure(L, "unknown coroutine status '" + status + "'");
+		}
+		lua_getfield(L, 1, "base");
+		const ptrdiff_t base = static_cast<ptrdiff_t>(lua_tointeger(L, -1));
+		lua_pop(L, 1);
+		lua_getfield(L, 1, "top");
+		const ptrdiff_t top = static_cast<ptrdiff_t>(lua_tointeger(L, -1));
+		lua_pop(L, 1);
+		if (base < 1 + LJ_FR2 + 2 || top < base || top > 1000000) {
+			lua_settop(L, thread - 1);
+			return Failure(L, "the coroutine's stack bounds are invalid");
+		}
+		if (!lua_checkstack(co, static_cast<int>(top) + 16)) {
+			lua_settop(L, thread - 1);
+			return Failure(L, "the coroutine's stack exceeds the VM limit");
+		}
+		TValue* stack = tvref(co->stack);
+		for (ptrdiff_t i = 1 + LJ_FR2; i < top; ++i) {
+			setnilV(stack + i);
+		}
+		lua_pushnil(L);
+		while (lua_next(L, slots) != 0) {
+			const ptrdiff_t index = static_cast<ptrdiff_t>(lua_tointeger(L, -2));
+			if (index >= 1 + LJ_FR2 && index < top) {
+				copyTV(co, stack + index, L->top - 1);
+			}
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+		lua_getfield(L, 1, "links");
+		const int links = lua_gettop(L);
+		std::vector<ptrdiff_t> linkSlots;
+		lua_pushnil(L);
+		while (lua_next(L, links) != 0) {
+			const ptrdiff_t index = static_cast<ptrdiff_t>(lua_tointeger(L, -2));
+			if (!lua_istable(L, -1) || index < 1 + LJ_FR2 + 1 || index >= top) {
+				EmptyThread(co);
+				lua_settop(L, thread - 1);
+				return Failure(L, "a frame link is out of the coroutine's stack");
+			}
+			lua_getfield(L, -1, "pcslot");
+			if (!lua_isnil(L, -1)) {
+				const ptrdiff_t funcSlot = static_cast<ptrdiff_t>(lua_tointeger(L, -1));
+				lua_pop(L, 1);
+				lua_getfield(L, -1, "pos");
+				const ptrdiff_t pos = static_cast<ptrdiff_t>(lua_tointeger(L, -1));
+				lua_pop(L, 1);
+				const TValue* funcValue = funcSlot >= 0 && funcSlot < top ? stack + funcSlot : nullptr;
+				if (!funcValue || !tvisfunc(funcValue) || !isluafunc(funcV(funcValue))) {
+					EmptyThread(co);
+					lua_settop(L, thread - 1);
+					return Failure(L, "a frame's function is not a Lua function");
+				}
+				GCproto* proto = funcproto(funcV(funcValue));
+				if (pos < 1 || pos > static_cast<ptrdiff_t>(proto->sizebc)) {
+					EmptyThread(co);
+					lua_settop(L, thread - 1);
+					return Failure(L, "a frame's return address lies outside its function");
+				}
+				setframe_pc(stack + index, proto_bc(proto) + pos);
+			} else {
+				lua_pop(L, 1);
+				lua_getfield(L, -1, "ftsz");
+				const int64_t ftsz = static_cast<int64_t>(lua_tointeger(L, -1));
+				lua_pop(L, 1);
+				const int64_t bytes = ftsz & ~FRAME_TYPEP;
+				if ((ftsz & FRAME_TYPE) == FRAME_LUA || bytes <= 0 || bytes % sizeof(TValue) != 0 || bytes / sizeof(TValue) > index - LJ_FR2) {
+					EmptyThread(co);
+					lua_settop(L, thread - 1);
+					return Failure(L, "a frame's size is outside the coroutine's stack");
+				}
+				setframe_ftsz(stack + index, ftsz);
+			}
+			linkSlots.push_back(index);
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+		lua_getfield(L, 1, "conts");
+		const int conts = lua_gettop(L);
+		lua_pushnil(L);
+		while (lua_next(L, conts) != 0) {
+			const ptrdiff_t index = static_cast<ptrdiff_t>(lua_tointeger(L, -2));
+			const ASMFunction function = ContFunction(lua_tostring(L, -1));
+			if (!function || index < 1 + LJ_FR2 || index >= top) {
+				EmptyThread(co);
+				lua_settop(L, thread - 1);
+				return Failure(L, "a continuation slot is invalid");
+			}
+			setcont(stack + index, function);
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+		co->base = stack + base;
+		co->top = stack + top;
+		co->status = LUA_YIELD;
+		co->cframe = nullptr;
+		// The chain must walk down to the bottom through function slots, or the GC and the resume would not.
+		int guard = 0;
+		for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
+			const ptrdiff_t index = frame - stack;
+			bool listed = false;
+			for (const ptrdiff_t slot: linkSlots) {
+				if (slot == index) {
+					listed = true;
+					break;
+				}
+			}
+			if (!listed || !tvisfunc(frame - 1) || ++guard > 100000) {
+				EmptyThread(co);
+				lua_settop(L, thread - 1);
+				return Failure(L, "the rebuilt frame chain does not reach the bottom of the stack");
+			}
+			const ptrdiff_t step = frame_islua(frame) ? 1 + LJ_FR2 + bc_a(frame_pc(frame)[-1]) : frame_sized(frame) / sizeof(TValue);
+			if (step <= 0 || step > index - LJ_FR2) {
+				EmptyThread(co);
+				lua_settop(L, thread - 1);
+				return Failure(L, "the rebuilt frame chain runs below the stack");
+			}
+			frame = stack + index - step;
+		}
+		lua_settop(L, thread);
+		return 1;
+	}
+
+	// () -> { [upvalue id] = { thread = coroutine, slot = index } } for every open upvalue of every coroutine.
+	int OpenUpvalues(lua_State* L) {
+		global_State* g = G(L);
+		const auto threshold = g->gc.threshold;
+		// The tables allocated during this walk must not collect the list being walked.
+		g->gc.threshold = std::numeric_limits<decltype(g->gc.threshold)>::max();
+		lua_newtable(L);
+		const int result = lua_gettop(L);
+		for (GCobj* object = gcref(g->gc.root); object != nullptr; object = gcnext(object)) {
+			if (object->gch.gct != ~LJ_TTHREAD) {
+				continue;
+			}
+			lua_State* thread = &object->th;
+			const TValue* stack = tvref(thread->stack);
+			for (GCobj* entry = gcref(thread->openupval); entry != nullptr; entry = gcnext(entry)) {
+				GCupval* upvalue = &entry->uv;
+				lua_pushlightuserdata(L, upvalue);
+				lua_newtable(L);
+				setthreadV(L, L->top, thread);
+				incr_top(L);
+				lua_setfield(L, -2, "thread");
+				lua_pushinteger(L, static_cast<lua_Integer>(uvval(upvalue) - stack));
+				lua_setfield(L, -2, "slot");
+				lua_settable(L, result);
+			}
+		}
+		g->gc.threshold = threshold;
+		return 1;
+	}
+
+	GCupval* FindOpenUpvalue(lua_State* L, lua_State* co, TValue* slot) {
+		global_State* g = G(L);
+		GCRef* link = &co->openupval;
+		while (gcref(*link) != nullptr) {
+			GCupval* candidate = &gcref(*link)->uv;
+			if (uvval(candidate) < slot) {
+				break;
+			}
+			if (uvval(candidate) == slot) {
+				if (isdead(g, obj2gco(candidate))) {
+					flipwhite(obj2gco(candidate));
+				}
+				return candidate;
+			}
+			link = &candidate->nextgc;
+		}
+		GCupval* upvalue = static_cast<GCupval*>(lj_mem_realloc(L, nullptr, 0, sizeof(GCupval)));
+		newwhite(g, upvalue);
+		upvalue->gct = ~LJ_TUPVAL;
+		upvalue->closed = 0;
+		upvalue->immutable = 0;
+		upvalue->dhash = 0;
+		setmref(upvalue->v, slot);
+		setgcrefr(upvalue->nextgc, *link);
+		setgcref(*link, obj2gco(upvalue));
+		setgcref(upvalue->prev, obj2gco(&g->uvhead));
+		setgcrefr(upvalue->next, g->uvhead.next);
+		setgcref(uvnext(upvalue)->prev, obj2gco(upvalue));
+		setgcref(g->uvhead.next, obj2gco(upvalue));
+		return upvalue;
+	}
+
+	// (function, index, coroutine, slot): the closure's upvalue becomes the coroutine's open upvalue on that slot.
+	int JoinOpenUpvalue(lua_State* L) {
+		if (!lua_isfunction(L, 1) || !lua_isthread(L, 3)) {
+			return Failure(L, "a Lua function and a coroutine are needed");
+		}
+		GCfunc* function = funcV(L->base);
+		const int index = static_cast<int>(luaL_checkinteger(L, 2));
+		lua_State* co = lua_tothread(L, 3);
+		const ptrdiff_t slot = static_cast<ptrdiff_t>(luaL_checkinteger(L, 4));
+		if (!isluafunc(function) || index < 1 || index > function->l.nupvalues) {
+			return Failure(L, "the upvalue index is out of range");
+		}
+		TValue* stack = tvref(co->stack);
+		if (slot < 1 + LJ_FR2 || slot >= co->top - stack) {
+			return Failure(L, "the upvalue slot is outside the coroutine's stack");
+		}
+		GCupval* upvalue = FindOpenUpvalue(L, co, stack + slot);
+		setgcref(function->l.uvptr[index - 1], obj2gco(upvalue));
+		lj_gc_objbarrier(L, function, upvalue);
+		lua_pushboolean(L, 1);
+		return 1;
+	}
+} // namespace
+
+namespace RTE::LuaThreadCodec {
+	void Register(lua_State* state) {
+		lua_pushcfunction(state, GmatchPosition);
+		lua_setglobal(state, "_ScriptGraphGmatchPosition");
+		lua_pushcfunction(state, SameNativeFunction);
+		lua_setglobal(state, "_ScriptGraphSameNativeFunction");
+		lua_pushcfunction(state, ThreadCapture);
+		lua_setglobal(state, "_ScriptGraphThreadCapture");
+		lua_pushcfunction(state, ThreadRestore);
+		lua_setglobal(state, "_ScriptGraphThreadRestore");
+		lua_pushcfunction(state, OpenUpvalues);
+		lua_setglobal(state, "_ScriptGraphOpenUpvalues");
+		lua_pushcfunction(state, JoinOpenUpvalue);
+		lua_setglobal(state, "_ScriptGraphJoinOpenUpvalue");
+	}
+} // namespace RTE::LuaThreadCodec
