@@ -69,6 +69,9 @@ namespace RTE {
 			}
 		}
 
+		/// Finishes the intro and opens the main menu.
+		void SkipIntro();
+
 		/// Sets the title transition to a pending state, stores the orbit timer elapsed time and resets the fade screen blend value.
 		/// This is used to correctly restart transition states after breaking out of the game loop back to the menu loop.
 		void SetTitlePendingTransition() {

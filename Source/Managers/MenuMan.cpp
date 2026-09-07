@@ -105,12 +105,8 @@ void MenuMan::SetActiveMenu() {
 }
 
 void MenuMan::SkipTitleIntroForAutomation() {
-	m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::MainMenu);
+	m_TitleScreen->SkipIntro();
 	SetActiveMenu();
-}
-
-void MenuMan::SkipTitleTransitionForAutomation() {
-	m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::TransitionEnd);
 }
 
 void MenuMan::HandleTransitionIntoMenuLoop() {
