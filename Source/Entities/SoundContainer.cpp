@@ -2,6 +2,7 @@
 
 #include "SoundSet.h"
 #include "SettingsMan.h"
+#include "ConsoleMan.h"
 
 using namespace RTE;
 
@@ -363,6 +364,12 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 		result = (result == FMOD_OK) ? soundData->SoundObject->setLoopCount(m_Loops) : result;
 		m_AttenuationStartDistance = std::clamp(m_AttenuationStartDistance, 0.0F, static_cast<float>(c_SoundMaxAudibleDistance) - soundData->MinimumAudibleDistance);
 		result = (result == FMOD_OK) ? soundData->SoundObject->set3DMinMaxDistance(soundData->MinimumAudibleDistance + m_AttenuationStartDistance, c_SoundMaxAudibleDistance) : result;
+		if (result != FMOD_OK) {
+			FMOD_OPENSTATE openState = FMOD_OPENSTATE_ERROR;
+			const FMOD_RESULT openResult = soundData->SoundObject->getOpenState(&openState, nullptr, nullptr, nullptr);
+			g_ConsoleMan.PrintString("ERROR: Sound property update failed for " + soundData->SoundFile.GetDataPath() + " (open state=" + std::to_string(static_cast<int>(openState)) + ", result=" + std::to_string(static_cast<int>(openResult)) + ")");
+			break;
+		}
 	}
 	m_SoundPropertiesUpToDate = result == FMOD_OK;
 

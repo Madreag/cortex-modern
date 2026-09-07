@@ -3432,6 +3432,7 @@ int main(int argc, char** argv) {
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 
 	g_PresetMan.LoadAllDataModules();
+	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
 
 	if (!s_netIdentityDumpPath.empty()) {
 		NetIdentityManifest manifest;
