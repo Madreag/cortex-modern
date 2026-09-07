@@ -1323,7 +1323,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SoundContainer) {
 	    .property("PitchVariation", &SoundContainer::GetPitchVariation, &SoundContainer::SetPitchVariation)
 
 	    .def("HasAnySounds", &SoundContainer::HasAnySounds)
-	    .def("GetTopLevelSoundSet", &SoundContainer::GetTopLevelSoundSet)
+	    .def("GetTopLevelSoundSet", &SoundContainer::GetTopLevelSoundSet, luabind::return_internal_reference(_1))
 	    .def("SetTopLevelSoundSet", &SoundContainer::SetTopLevelSoundSet)
 	    .def("GetAudibleVolume", &SoundContainer::GetAudibleVolume)
 	    .def("IsBeingPlayed", &SoundContainer::IsBeingPlayed)
