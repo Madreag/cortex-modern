@@ -132,6 +132,7 @@ static bool s_saveIoSelfTestQueued = false;
 static std::string s_saveIoSelfTestName;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
+static bool s_menuScriptFailed = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -352,6 +353,7 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	if (s_saveIoSelfTest) {
 		const bool saved = s_saveIoSelfTestQueued && g_ActivityMan.WaitForSaveGameTask();
@@ -380,12 +382,12 @@ int ShutDown(int exitCode) {
 /// </summary>
 /// <param name="argCount">Argument count.</param>
 /// <param name="argValue">Argument values.</param>
-void HandleMainArgs(int argCount, char** argValue) {
+bool HandleMainArgs(int argCount, char** argValue) {
 	// Discard the first argument because it's always the executable path/name
 	argCount--;
 	argValue++;
 	if (argCount == 0) {
-		return;
+		return true;
 	}
 	bool launchModeSet = false;
 	bool singleModuleSet = false;
@@ -626,7 +628,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			const size_t colon = spec.find(':');
 			if (colon == std::string::npos) {
 				std::cerr << "[net-replay-dump] bad range '" << spec << "': expected <from>:<to>" << std::endl;
-				std::exit(1);
+				return false;
 			}
 			s_netReplayDumpFrom = std::strtoull(spec.c_str(), nullptr, 10);
 			s_netReplayDumpTo = std::strtoull(spec.c_str() + colon + 1, nullptr, 10);
@@ -637,7 +639,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			std::string scriptError;
 			if (!InputScript::Load(argValue[++i], &scriptError)) {
 				std::cerr << "[input-script] " << scriptError << std::endl;
-				std::exit(1);
+				return false;
 			}
 			continue;
 		}
@@ -646,7 +648,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			std::string scriptError;
 			if (!AIWriteScript::Load(argValue[++i], &scriptError)) {
 				std::cerr << "[ai-write-script] " << scriptError << std::endl;
-				std::exit(1);
+				return false;
 			}
 			continue;
 		}
@@ -659,7 +661,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			const int player = colon == std::string::npos ? -1 : std::atoi(spec.substr(0, colon).c_str());
 			if (colon == std::string::npos || player < 0 || player >= Players::MaxPlayerCount || !end || *end != '\0' || !(speed > 0.0F)) {
 				std::cerr << "[digital-aim-speed] bad spec '" << spec << "': expected <player>:<multiplier>" << std::endl;
-				std::exit(1);
+				return false;
 			}
 			g_UInputMan.GetControlScheme(player)->SetDigitalAimSpeed(speed);
 			std::cout << "[digital-aim-speed] player " << player << " -> " << speed << std::endl;
@@ -669,7 +671,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			const std::string text = argValue[++i];
 			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
 				std::cerr << "[localpred] bad depth '" << text << "': expected a whole number" << std::endl;
-				std::exit(1);
+				return false;
 			}
 			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(text.c_str(), nullptr, 10)));
 			continue;
@@ -713,7 +715,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			}
 			if (!ok) {
 				std::cerr << "[lpinv] bad spec '" << spec << "': expected T:d1,d2,...:r1,r2,... with positive whole numbers" << std::endl;
-				std::exit(1);
+				return false;
 			}
 			s_lpInvarianceTick = tick;
 			if (s_lpInvarianceDepths.empty()) {
@@ -759,7 +761,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 			}
 			if (!ok || (s_lpExpectEquip.empty() && s_lpExpectFireTick <= 0)) {
 				std::cerr << "[lpinv] bad expectation '" << spec << "': expected equip=<preset>@<tick>,fire@<tick>" << std::endl;
-				std::exit(1);
+				return false;
 			}
 			continue;
 		}
@@ -782,6 +784,7 @@ void HandleMainArgs(int argCount, char** argValue) {
 	if (launchModeSet) {
 		g_SettingsMan.SetSkipIntro(true);
 	}
+	return true;
 }
 
 /// <summary>
@@ -830,8 +833,8 @@ void PollSDLEvents() {
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
 	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
-	std::cout.flush();
-	std::_Exit(EXIT_FAILURE);
+	s_menuScriptFailed = true;
+	System::SetQuit(true);
 }
 
 // Drives the real MainMenuGUI from a script for automated UI testing: one step per call, after the
@@ -847,7 +850,7 @@ void ProcessMenuScript() {
 	if (!loaded) {
 		std::ifstream in(s_menuScriptPath);
 		if (!in) {
-			MenuScriptFail("could not open menu-script file: " + s_menuScriptPath);
+			return MenuScriptFail("could not open menu-script file: " + s_menuScriptPath);
 		}
 		std::string line;
 		while (std::getline(in, line)) {
@@ -858,7 +861,7 @@ void ProcessMenuScript() {
 		loaded = true;
 		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
 		if (steps.empty()) {
-			MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
+			return MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
 		}
 	}
 	static bool introSkipped = false;
@@ -891,7 +894,7 @@ void ProcessMenuScript() {
 		}
 		if (met || --waitCondTimeout <= 0) {
 			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
-			if (!met) { MenuScriptFail("condition wait timed out: " + waitCond); }
+			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
 		}
 		return;
@@ -939,21 +942,21 @@ void ProcessMenuScript() {
 		iss >> control;
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
-		if (!ok) { MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "settext") {
 		std::string control;
 		std::string text;
 		iss >> control;
 		std::getline(iss, text);
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
-		if (!menu->AutomationSetText(control, text)) { MenuScriptFail("settext failed (textbox missing): " + control); }
+		if (!menu->AutomationSetText(control, text)) { return MenuScriptFail("settext failed (textbox missing): " + control); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
 		const std::string actual = menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
-		if (!pass) { MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
+		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
 	} else if (cmd == "assert_status") {
 		std::string sub;
 		std::getline(iss, sub);
@@ -961,14 +964,14 @@ void ProcessMenuScript() {
 		const std::string status = menu->AutomationMultiplayerStatus();
 		const bool pass = status.find(sub) != std::string::npos;
 		std::cout << "[menu-script] assert_status \"" << sub << "\" status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
-		if (!pass) { MenuScriptFail("assert_status missing substring: " + sub); }
+		if (!pass) { return MenuScriptFail("assert_status missing substring: " + sub); }
 	} else if (cmd == "assert_substate") {
 		std::string expected;
 		iss >> expected;
 		const std::string actual = menu->AutomationMultiplayerSubScreen();
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
-		if (!pass) { MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
+		if (!pass) { return MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
@@ -985,11 +988,11 @@ void ProcessMenuScript() {
 		const int actual = menu->AutomationControlEnabled(control) ? 1 : 0;
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_enabled " << control << " expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
-		if (!pass) { MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
+		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
 	} else if (cmd == "exit") {
 		System::SetQuit(true);
 	} else {
-		MenuScriptFail("unknown command: " + cmd);
+		return MenuScriptFail("unknown command: " + cmd);
 	}
 }
 
@@ -3370,7 +3373,7 @@ int main(int argc, char** argv) {
 
 	InitializeManagers();
 
-	HandleMainArgs(argc, argv);
+	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 
 	g_PresetMan.LoadAllDataModules();
 
@@ -3385,16 +3388,12 @@ int main(int argc, char** argv) {
 		} else {
 			std::cerr << "[net-identity-dump] failed: " << error << std::endl;
 		}
-		std::cout.flush();
-		std::cerr.flush();
-		std::_Exit(exitCode);
+		return ShutDown(exitCode);
 	}
 
 	if (NetSessionCliRequested()) {
 		const int exitCode = RunNetSessionCli();
-		std::cout.flush();
-		std::cerr.flush();
-		std::_Exit(exitCode);
+		return ShutDown(exitCode);
 	}
 
 	if (s_netMatchServiceE2E) {
@@ -3443,9 +3442,14 @@ int main(int argc, char** argv) {
 			std::string writeError;
 			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {
 				std::cerr << "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError << std::endl;
+				return ShutDown(EXIT_FAILURE);
 			}
 		}
-		return report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1));
+		return ShutDown(report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1)));
+	}
+	if (ScenarioRunner::GetArgs().scriptGraphSelfTest) {
+		const bool pass = g_LuaMan.RunScriptGraphSelfTest();
+		return ShutDown(pass ? 0 : 1);
 	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();
