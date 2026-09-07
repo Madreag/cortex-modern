@@ -1604,22 +1604,6 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("SpecialBehaviour_GoldPicked", actorToSave->GetGoldPicked());
 			writer.NewPropertyWithValue("SpecialBehaviour_PrevHealth", actorToSave->GetPrevHealth());
 
-			int aiModeToSave = actorToSave->GetAIMode() == Actor::AIMode::AIMODE_SQUAD ? Actor::AIMode::AIMODE_GOTO : actorToSave->GetAIMode();
-			if (aiModeToSave == Actor::AIMode::AIMODE_GOTO && (!actorToSave->GetMOMoveTarget() && g_SceneMan.ShortestDistance(actorToSave->GetMovePathEnd(), actorToSave->GetPos(), g_SceneMan.SceneWrapsX()).MagnitudeIsLessThan(1.0F))) {
-				aiModeToSave = Actor::AIMode::AIMODE_SENTRY;
-			}
-			writer.NewPropertyWithValue("AIMode", aiModeToSave);
-			if (aiModeToSave == Actor::AIMode::AIMODE_GOTO) {
-				const std::string addWaypointPropertyName = "SpecialBehaviour_AddAISceneWaypoint";
-				if (const MovableObject* actorToSaveMOMoveTarget = actorToSave->GetMOMoveTarget()) {
-					writer.NewPropertyWithValue(addWaypointPropertyName, actorToSaveMOMoveTarget->GetPos());
-				} else {
-					writer.NewPropertyWithValue(addWaypointPropertyName, actorToSave->GetMovePathEnd());
-					for (auto& [waypointPosition, waypointObject]: actorToSave->GetWaypointList()) {
-						writer.NewPropertyWithValue(addWaypointPropertyName, waypointPosition);
-					}
-				}
-			}
 		}
 
 		if (actorToSave->GetDeploymentID()) {

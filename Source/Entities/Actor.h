@@ -984,6 +984,7 @@ namespace RTE {
 		std::string m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
 		Vector m_PersistedViewPoint; //!< Saved view point, applied on snapshot adopt (Create re-derives the live one).
 		bool m_HasPersistedViewPoint = false;
+		bool m_HasPersistedMovePath = false;
 		long long m_PersistedControllerPlayer; //!< Saved wire-applied player binding.
 		bool m_PlayerControllable; //!< Whether or not this Actor can be controlled by human players.
 
