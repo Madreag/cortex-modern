@@ -931,6 +931,8 @@ void ProcessMenuScript() {
 			met = snapshot.serviceState == waitCond.substr(6);
 		} else if (waitCond == "remoteready") {
 			met = snapshot.remoteReady;
+		} else if (waitCond.starts_with("error:")) {
+			met = snapshot.errorText.find(waitCond.substr(6)) != std::string::npos;
 		}
 		if (met || --waitCondTimeout <= 0) {
 			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
@@ -959,6 +961,12 @@ void ProcessMenuScript() {
 		std::string s;
 		iss >> s;
 		waitCond = "state:" + s;
+		waitCondTimeout = 4000;
+	} else if (cmd == "wait_error") {
+		std::string text;
+		std::getline(iss >> std::ws, text);
+		if (text.empty()) return MenuScriptFail("wait_error requires a nonempty substring");
+		waitCond = "error:" + text;
 		waitCondTimeout = 4000;
 	} else if (cmd == "wait_remote_ready") {
 		waitCond = "remoteready";
@@ -997,14 +1005,14 @@ void ProcessMenuScript() {
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
-	} else if (cmd == "assert_status") {
+	} else if (cmd == "assert_status" || cmd == "assert_error") {
 		std::string sub;
 		std::getline(iss, sub);
 		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
-		const std::string status = menu->AutomationMultiplayerStatus();
+		const std::string status = cmd == "assert_error" ? menu->AutomationMultiplayerError() : menu->AutomationMultiplayerStatus();
 		const bool pass = status.find(sub) != std::string::npos;
-		std::cout << "[menu-script] assert_status \"" << sub << "\" status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
-		if (!pass) { return MenuScriptFail("assert_status missing substring: " + sub); }
+		std::cout << "[menu-script] " << cmd << " \"" << sub << "\" status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail(cmd + " missing substring: " + sub); }
 	} else if (cmd == "assert_substate") {
 		std::string expected;
 		iss >> expected;
@@ -3231,6 +3239,14 @@ int RunNetMatchServiceE2E() {
 		const auto waitStart = std::chrono::steady_clock::now();
 		while (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
 			const NetMatchServiceState state = g_NetMatchService.GetState();
+			if (s_netHost && ScenarioRunner::GetArgs().selftestJoinRejection && state == NetMatchServiceState::Starting) {
+				const std::string rejection = g_NetMatchService.GetErrorText();
+				if (!rejection.empty()) {
+					setupError = rejection;
+					s_netMatchServiceE2EExitCode = 1;
+					break;
+				}
+			}
 			if (state == NetMatchServiceState::Failed) {
 				setupError = g_NetMatchService.GetErrorText();
 				s_netMatchServiceE2EExitCode = 1;
