@@ -332,6 +332,7 @@ namespace RTE {
 
 		/// Adopts saved identity, then re-keys the atom subgroup to the restored UniqueID so the next save stays consistent.
 		void AdoptPersistedUniqueID() override;
+		void DiscardPersistedSnapshotState() override;
 
 		/// Gets whether this Attachable currently ignores collisions with single-atom particles.
 		/// @return >Whether this attachable ignores collisions with single-atom particles.
@@ -452,6 +453,8 @@ namespace RTE {
 
 		MOSRotating* m_Parent; //!< Pointer to the MOSRotating this attachable is attached to.
 		Vector m_ParentOffset; //!< The offset from the parent's Pos to the joint point this Attachable is attached with.
+		Vector m_PersistedParentOffset;
+		bool m_HasPersistedParentOffset;
 		bool m_DrawAfterParent; //!< Whether to draw this Attachable after (in front of) or before (behind) the parent.
 		bool m_DrawnNormallyByParent; //!< Whether this Attachable will be drawn normally when attached, or will require special handling by some non-MOSR parent type.
 		bool m_DeleteWhenRemovedFromParent; //!< Whether this Attachable should be deleted when removed from its parent.
