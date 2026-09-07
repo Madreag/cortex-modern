@@ -346,8 +346,10 @@ namespace RTE {
 			AppendU16LE(out, 0);
 			AppendU32LE(out, payload.pingMs);
 			AppendU32LE(out, payload.jitterMs);
-			return AppendString(out, payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) &&
-			       AppendString(out, payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error);
+			if (!AppendString(out, payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			    !AppendString(out, payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error)) return false;
+			AppendBool(out, payload.connected);
+			return true;
 		}
 
 		bool EncodePayload(const NetLobbyMatchConfig& payload, std::vector<uint8_t>& out, NetLobbyError* error) {
@@ -430,7 +432,8 @@ namespace RTE {
 						return false;
 					}
 					if (!reader.ReadString(payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
-					    !reader.ReadString(payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error)) return false;
+					    !reader.ReadString(payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error) ||
+					    !ReadOrTruncated(reader.ReadBool(payload.connected), reader, error, "connected")) return false;
 					out = std::move(payload);
 					return true;
 				}

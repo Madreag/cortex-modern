@@ -304,6 +304,7 @@ namespace RTE {
 			const NetHash32 configHash = NetMatchConfigUtil::HashConfig(config);
 			if (!RoundTrip(NetLobbyHello{1, 1, 1, "Host", "host"}, error) ||
 			    !RoundTrip(NetLobbyPeerState{2, true, 12, 2, "Client", "windows"}, error) ||
+			    !RoundTrip(NetLobbyPeerState{2, false, 0, 0, "Client", "windows", false}, error) ||
 			    !RoundTrip(NetLobbyMatchConfig{config}, error) ||
 			    !RoundTrip(NetLobbyConfigAck{2, true, configHash, ""}, error) ||
 			    !RoundTrip(NetLobbyReady{2, true}, error) ||
