@@ -121,22 +121,27 @@ def add_evidence(rows, parents, directory):
     if hashlib.sha256(fixture.read_bytes()).hexdigest() != provenance["script"]["sha256"]:
         raise ValueError("The current fixture differs from the recorded run")
     source = fixture.read_text(encoding="utf-8")
-    match = re.search(r"local function configure\(owned, count\).*?local values = \{(.*?)\};", source, re.S)
-    if not match:
-        raise ValueError("The named owned-actor configuration fixture was not found")
-    properties = re.findall(r"\b([A-Za-z_]\w*)\s*=(?!=)", match[1])
-    for prop in properties:
-        cls = "AHuman"
-        while cls:
-            target = next((row for row in rows if row["class"] == cls and row["api"] == prop and row["writable_property"]), None)
-            if target:
-                target["evidence"].append({"case": "owned_ahuman_configuration", "result": str(directory / "result.json"), "modes": sorted({key.split("_")[0] for key in result["results"] if key != "reference"})})
-                target["assessment"] = "exercised on Lua-owned AHuman; other owners and transitions unreviewed"
-                break
-            cls = parents.get(cls)
-        else:
-            raise ValueError(f"Fixture property {prop} has no writable binding in the AHuman hierarchy")
-    return {"verified": True, "directory": str(directory), "fixture_properties": len(properties), "source_head": provenance["head"], "fixture_sha256": provenance["script"]["sha256"]}
+    cases = {}
+    for function, owner in {"configure": "AHuman", "configureActor": "AHuman", "configureDevice": "HDFirearm", "configureAttachment": "Attachable"}.items():
+        match = re.search(r"local function " + function + r"\(owned, count\).*?local values = \{(.*?)\};", source, re.S)
+        if not match:
+            continue
+        properties = re.findall(r"\b([A-Za-z_]\w*)\s*=(?!=)", match[1])
+        cases[function] = {"owner": owner, "properties": len(properties)}
+        for prop in properties:
+            cls = owner
+            while cls:
+                target = next((row for row in rows if row["class"] == cls and row["api"] == prop and row["writable_property"]), None)
+                if target:
+                    target["evidence"].append({"case": function, "owner": "lua_owned_" + owner, "result": str(directory / "result.json"), "modes": sorted({key.split("_")[0] for key in result["results"] if key != "reference"})})
+                    target["assessment"] = f"exercised on Lua-owned {owner}; other owners and transitions unreviewed"
+                    break
+                cls = parents.get(cls)
+            else:
+                raise ValueError(f"Fixture property {prop} has no writable binding in the {owner} hierarchy")
+    if not cases:
+        raise ValueError("No named configuration fixture was found")
+    return {"verified": True, "directory": str(directory), "cases": cases, "source_head": provenance["head"], "fixture_sha256": provenance["script"]["sha256"]}
 
 
 def main():

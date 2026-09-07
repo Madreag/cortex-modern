@@ -531,8 +531,61 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("Organic", { reader >> m_Organic; });
 	MatchProperty("Mechanical", { reader >> m_Mechanical; });
 	MatchProperty("AIBaseDigStrength", { reader >> m_AIBaseDigStrength; });
+	MatchProperty("SpecialBehaviour_MoveProximityLimit", { reader >> m_MoveProximityLimit; });
+	MatchProperty("SpecialBehaviour_LimbPushForcesAndCollisionsDisabled", { reader >> m_LimbPushForcesAndCollisionsDisabled; });
+	MatchProperty("SpecialBehaviour_BodyHitSound", {
+		delete m_BodyHitSound;
+		m_BodyHitSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_AlarmSound", {
+		delete m_AlarmSound;
+		m_AlarmSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_PainSound", {
+		delete m_PainSound;
+		m_PainSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_DeathSound", {
+		delete m_DeathSound;
+		m_DeathSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_DeviceSwitchSound", {
+		delete m_DeviceSwitchSound;
+		m_DeviceSwitchSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
 
 	EndPropertyList;
+}
+
+void Actor::SaveSnapshotConfiguration(Writer& writer) const {
+	MOSRotating::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("PassengerSlots", m_PassengerSlots);
+	writer.NewPropertyWithValue("ImpulseDamageThreshold", m_TravelImpulseDamage);
+	writer.NewPropertyWithValue("StableVelocityThreshold", m_StableVel);
+	writer.NewPropertyWithValue("StableRecoveryDelay", m_StableRecoverDelay);
+	writer.NewPropertyWithValue("CanRun", m_CanRun);
+	writer.NewPropertyWithValue("CrouchWalkSpeedMultiplier", m_CrouchWalkSpeedMultiplier);
+	writer.NewPropertyWithValue("AimRange", m_AimRange);
+	writer.NewPropertyWithValue("AimDistance", m_AimDistance);
+	writer.NewPropertyWithValue("SharpAimDelay", m_SharpAimDelay);
+	writer.NewPropertyWithValue("SightDistance", m_SightDistance);
+	writer.NewPropertyWithValue("Perceptiveness", m_Perceptiveness);
+	writer.NewPropertyWithValue("PainThreshold", m_PainThreshold);
+	writer.NewPropertyWithValue("CanRevealUnseen", m_CanRevealUnseen);
+	writer.NewPropertyWithValue("CharHeight", m_CharHeight);
+	writer.NewPropertyWithValue("HolsterOffset", m_HolsterOffset);
+	writer.NewPropertyWithValue("ReloadOffset", m_ReloadOffset);
+	writer.NewPropertyWithValue("MaxInventoryMass", m_MaxInventoryMass);
+	writer.NewPropertyWithValue("Organic", m_Organic);
+	writer.NewPropertyWithValue("Mechanical", m_Mechanical);
+	writer.NewPropertyWithValue("AIBaseDigStrength", m_AIBaseDigStrength);
+	writer.NewPropertyWithValue("SpecialBehaviour_MoveProximityLimit", m_MoveProximityLimit);
+	writer.NewPropertyWithValue("SpecialBehaviour_LimbPushForcesAndCollisionsDisabled", m_LimbPushForcesAndCollisionsDisabled);
+	writer.NewPropertyWithValue("SpecialBehaviour_BodyHitSound", m_BodyHitSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_AlarmSound", m_AlarmSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_DeathSound", m_DeathSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_DeviceSwitchSound", m_DeviceSwitchSound);
 }
 
 int Actor::Save(Writer& writer) const {

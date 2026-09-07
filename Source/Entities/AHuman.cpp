@@ -597,6 +597,10 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_StrideSound = new SoundContainer;
 		reader >> m_StrideSound;
 	});
+	MatchProperty("SpecialBehaviour_StrideSound", {
+		delete m_StrideSound;
+		m_StrideSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
 	MatchProperty("StandLimbPath", { reader >> m_Paths[FGROUND][STAND]; });
 	MatchProperty("StandLimbPathBG", { reader >> m_Paths[BGROUND][STAND]; });
 	MatchProperty("WalkLimbPath", { reader >> m_Paths[FGROUND][WALK]; });
@@ -616,6 +620,23 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("JumpRotAngleTarget", { reader >> m_RotAngleTargets[JUMP]; });
 
 	EndPropertyList;
+}
+
+void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
+	Actor::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("ThrowPrepTime", m_ThrowPrepTime);
+	writer.NewPropertyWithValue("LookToAimRatio", m_LookToAimRatio);
+	writer.NewPropertyWithValue("FGArmFlailScalar", m_FGArmFlailScalar);
+	writer.NewPropertyWithValue("BGArmFlailScalar", m_BGArmFlailScalar);
+	writer.NewPropertyWithValue("ArmSwingRate", m_ArmSwingRate);
+	writer.NewPropertyWithValue("DeviceArmSwayRate", m_DeviceArmSwayRate);
+	writer.NewPropertyWithValue("MaxWalkPathCrouchShift", m_MaxWalkPathCrouchShift);
+	writer.NewPropertyWithValue("StandRotAngleTarget", m_RotAngleTargets[STAND]);
+	writer.NewPropertyWithValue("WalkRotAngleTarget", m_RotAngleTargets[WALK]);
+	writer.NewPropertyWithValue("RunRotAngleTarget", m_RotAngleTargets[RUN]);
+	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
+	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
+	writer.NewPropertyWithValue("SpecialBehaviour_StrideSound", m_StrideSound);
 }
 
 int AHuman::Save(Writer& writer) const {

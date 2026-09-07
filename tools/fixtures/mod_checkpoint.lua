@@ -45,6 +45,40 @@ local function configure(owned, count)
 	return values;
 end
 
+local function configureActor(owned, count)
+	local values = {
+		PlayerControllable = false, ImpulseDamageThreshold = 2400 + count,
+		StableRecoveryDelay = 177, CanRun = true, CrouchWalkSpeedMultiplier = 0.625,
+		PassengerSlots = 4, Perceptiveness = 0.375, PainThreshold = 23,
+		CanRevealUnseen = false, AimRange = 0.75, AimDistance = 245,
+		SightDistance = 333, AIBaseDigStrength = 123, MoveProximityLimit = 12.5,
+		LimbPushForcesAndCollisionsDisabled = true, HolsterOffset = Vector(7, 9),
+		ReloadOffset = Vector(-3, 6), ArmSwingRate = 1.25, DeviceArmSwayRate = 0.625,
+		ThrowPrepTime = 444, MaxWalkPathCrouchShift = 3.75,
+		CrouchAmountOverride = 0.375, ProneState = AHuman.GOPRONE,
+		UpperBodyState = AHuman.AIMING_SHARP, MovementState = Actor.CROUCH,
+	};
+	for key, value in pairs(values) do
+		owned[key] = value;
+	end
+	for key in pairs(values) do
+		local value = owned[key];
+		values[key] = type(value) == "userdata" and Vector(value.X, value.Y) or value;
+	end
+	return values;
+end
+
+local function verifyConfiguration(owned, values)
+	for key, value in pairs(values) do
+		local actual = owned[key];
+		if type(value) == "userdata" then
+			assert(actual.X == value.X and actual.Y == value.Y, "checkpoint owned configuration " .. key);
+		else
+			assert(actual == value, "checkpoint owned configuration " .. key);
+		end
+	end
+end
+
 function Create(self)
 	self.testCarried = self:GetNumberValue("TestUpdates");
 	self.testCreate = (self.testCreate or 0) + 1;
@@ -66,6 +100,7 @@ function Create(self)
 	self.checkpoint.owned.GlobalAccScalar = 0.25;
 	self.checkpoint.owned.GibImpulseLimit = 1000;
 	self.checkpoint.configuration = configure(self.checkpoint.owned, 0);
+	self.checkpoint.actorConfiguration = configureActor(self.checkpoint.owned, 0);
 	self.checkpoint.owned:SetNumberValue("CheckpointCount", 0);
 	self.checkpoint.owned.shared = self.checkpoint;
 	self.checkpoint.ownedAlias = self.checkpoint.owned;
@@ -94,9 +129,8 @@ function Update(self)
 	assert(state.ownedController:IsState(Controller.WEAPON_FIRE) == (self.testUpdate % 2 == 1), "checkpoint owned controller state");
 	assert(state.owned.GlobalAccScalar == 0.25 + self.testUpdate / 1024, "checkpoint owned acceleration setting");
 	assert(state.owned.GibImpulseLimit == 1000 + self.testUpdate, "checkpoint owned gib setting");
-	for key, value in pairs(state.configuration) do
-		assert(state.owned[key] == value, "checkpoint owned configuration " .. key);
-	end
+	verifyConfiguration(state.owned, state.configuration);
+	verifyConfiguration(state.owned, state.actorConfiguration);
 	local count = state.step();
 	assert(count == self.testUpdate + 1 and state.peek() == count, "checkpoint shared upvalue");
 	local ok, job = coroutine.resume(state.job);
@@ -115,6 +149,7 @@ function Update(self)
 	state.owned.GlobalAccScalar = 0.25 + count / 1024;
 	state.owned.GibImpulseLimit = 1000 + count;
 	state.configuration = configure(state.owned, count);
+	state.actorConfiguration = configureActor(state.owned, count);
 	self:SetNumberValue("TestUpdates", count);
 	self:SetNumberValue("TestCheckpointState", count + job + wrapped + state.vector.X + #word);
 end

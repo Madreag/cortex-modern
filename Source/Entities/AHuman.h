@@ -54,6 +54,9 @@ namespace RTE {
 		EntityAllocation(AHuman);
 		AddScriptFunctionNames(Actor, "OnStride");
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 		DefaultPieMenuNameGetter("Default Human Pie Menu");
 
