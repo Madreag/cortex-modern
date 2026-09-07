@@ -181,6 +181,28 @@ function Create(self)
 	self.checkpoint.bareCrab.Health = 53;
 	self.checkpoint.bareHuman.Pos = Vector(13, 17);
 	self.checkpoint.bareCrab.Pos = Vector(19, 23);
+	self.checkpoint.limb = self.checkpoint.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK);
+	self.checkpoint.limbAlias = self.checkpoint.limb;
+	self.checkpoint.crabLimb = self.checkpoint.bareCrab:GetLimbPath(0, 0, Actor.WALK);
+	self.checkpoint.limb.StartOffset = Vector(17, 29);
+	self.checkpoint.limb.BaseTravelSpeedMultiplier = 1.25;
+	self.checkpoint.limb.TravelSpeed = 2.5;
+	self.checkpoint.limb.PushForce = 310;
+	self.checkpoint.limbStart = self.checkpoint.limb.StartOffset;
+	self.checkpoint.limbSegment = self.checkpoint.limb:GetSegment(0);
+	assert(self.checkpoint.limbSegment, "checkpoint limb segment present");
+	self.checkpoint.limbSegment.X = 37;
+	self.checkpoint.aLimbStart = self.checkpoint.limbStart;
+	self.checkpoint.aLimbSegment = self.checkpoint.limbSegment;
+	self.checkpoint.limb.shared = self.checkpoint;
+	self.checkpoint.limbSegment.parent = self.checkpoint.limb;
+	do
+		local owner = CreateAHuman("Green Dummy", "Base.rte");
+		self.checkpoint.onlyLimb = owner:GetLimbPath(AHuman.BGROUND, Actor.WALK);
+		self.checkpoint.onlyLimb.PushForce = 610;
+	end
+	self.checkpoint.crabLimb.StartOffset = Vector(23, 31);
+	self.checkpoint.crabLimb.PushForce = 410;
 	self.checkpoint.owned.Pos = Vector(10, 20);
 	self.checkpoint.owned.GlobalAccScalar = 0.25;
 	self.checkpoint.owned.GibImpulseLimit = 1000;
@@ -245,6 +267,15 @@ function Update(self)
 	for _, group in ipairs(state.ownedGroups) do assert(not state.owned:IsInGroup(group), "checkpoint removed group"); end
 	assert(state.bareHuman.Health == 37 and state.bareHuman.Pos.X == 13 and state.bareHuman.Pos.Y == 17, "checkpoint bare human");
 	assert(state.bareCrab.Health == 53 and state.bareCrab.Pos.X == 19 and state.bareCrab.Pos.Y == 23, "checkpoint bare crab");
+	assert(state.limb == state.limbAlias and state.limb.StartOffset.X == 17 + self.testUpdate, "checkpoint limb alias");
+	assert(state.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK).PushForce == 310 + self.testUpdate, "checkpoint limb owner");
+	assert(state.limb.BaseTravelSpeedMultiplier == 1.25 and state.limb.TravelSpeed == 2.5, "checkpoint limb configuration");
+	assert(state.limbStart.X == 17 + self.testUpdate and state.limbSegment.X == 37 + self.testUpdate, "checkpoint limb vector references");
+	assert(state.limb:GetSegment(0).X == state.limbSegment.X, "checkpoint limb segment owner");
+	assert(state.aLimbStart == state.limbStart and state.aLimbSegment == state.limbSegment, "checkpoint limb vector order");
+	assert(state.limbSegment.parent == state.limb and state.limb.shared == state, "checkpoint limb userdata cycle");
+	assert(state.onlyLimb.PushForce == 610, "checkpoint limb owner lifetime");
+	assert(state.crabLimb.StartOffset.X == 23 and state.crabLimb.PushForce == 410 + self.testUpdate, "checkpoint crab limb");
 	assert(state.owned.UniqueID == state.ownedUID and not MovableMan:IsActor(state.owned), "checkpoint owned object lifetime");
 	assert(state.owned:GetNumberValue("CheckpointCount") == self.testUpdate, "checkpoint owned object state");
 	assert(state.ownedPos.X == self.testUpdate + 10, "checkpoint owned field alias");
@@ -277,6 +308,10 @@ function Update(self)
 	state.vector.X = state.vector.X + 1;
 	assert(state.vectorAlias.X == count + 1, "checkpoint vector mutation");
 	self.testUpdate = count;
+	state.limb.StartOffset = Vector(17 + count, 29);
+	state.limb.PushForce = 310 + count;
+	state.limbSegment.X = 37 + count;
+	state.crabLimb.PushForce = 410 + count;
 	state.box.Width = -7 - count;
 	state.aBox.Width = -10 - count;
 	state.sceneBox.Width = -10 - 2 * count;
