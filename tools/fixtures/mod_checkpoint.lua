@@ -269,6 +269,17 @@ function Create(self)
 		self.checkpoint.bareGib.Count = 0;
 	end
 	self.checkpoint.gibSpawnSource = CreateHDFirearm("Old Stock Battle Rifle", "Base.rte");
+	self.checkpoint.alarm = AlarmEvent();
+	self.checkpoint.alarm.ScenePos = Vector(13, -15);
+	self.checkpoint.alarm.Team = Activity.TEAM_2;
+	self.checkpoint.alarm.Range = 173.5;
+	self.checkpoint.alarm.shared = self.checkpoint;
+	self.checkpoint.alarmAlias = self.checkpoint.alarm;
+	self.checkpoint.alarmPosition = self.checkpoint.alarm.ScenePos;
+	self.checkpoint.module = PresetMan:GetDataModule(PresetMan:GetModuleID("Base.rte"));
+	self.checkpoint.moduleAlias = self.checkpoint.module;
+	self.checkpoint.moduleIterator = self.checkpoint.module.Presets;
+	self.checkpoint.moduleIterator();
 	self.checkpoint.gibSpawnParticle = CreateMOSRotating("Gib Panel Dark Small A", "Base.rte");
 	self.checkpoint.gibSpawnParticle:SetNumberValue("CheckpointGibParticle", self.UniqueID);
 	self.checkpoint.gibSpawnParticle.PinStrength = 10000;
@@ -386,6 +397,10 @@ function Update(self)
 	local worldParticle = ToMovableObject(self.Gibs().ParticlePreset);
 	assert(worldParticle and worldParticle.UniqueID == state.customGibParticle.UniqueID and worldParticle.GlobalAccScalar == customParticle.GlobalAccScalar, "checkpoint world gib target");
 	assert(ToMovableObject(state.bareGib.ParticlePreset).GlobalAccScalar == 0.625 + self.testUpdate / 32, "checkpoint bare gib target");
+	assert(rawequal(state.alarm, state.alarmAlias) and state.alarm.shared == state, "checkpoint alarm aliases");
+	assert(state.alarm.ScenePos.X == 13 + self.testUpdate and state.alarmPosition.Y == -15, "checkpoint alarm position");
+	assert(state.alarm.Team == Activity.TEAM_2 and state.alarm.Range == 173.5 + self.testUpdate / 8, "checkpoint alarm values");
+	assert(rawequal(state.module, state.moduleAlias) and state.module.FileName == "Base.rte", "checkpoint module reference");
 	assert(state.limb == state.limbAlias and state.limb.StartOffset.X == 17 + self.testUpdate, "checkpoint limb alias");
 	assert(state.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK).PushForce == 310 + self.testUpdate, "checkpoint limb owner");
 	assert(state.limb.BaseTravelSpeedMultiplier == 1.25 and state.limb.TravelSpeed == 2.5, "checkpoint limb configuration");
@@ -433,6 +448,8 @@ function Update(self)
 	state.customGibParticle.GlobalAccScalar = 0.375 + count / 16;
 	state.bareGibParticle.GlobalAccScalar = 0.625 + count / 32;
 	state.gibSpawnParticle.GlobalAccScalar = 0.125 + count / 64;
+	state.alarmPosition.X = 13 + count;
+	state.alarm.Range = 173.5 + count / 8;
 	state.limb.StartOffset = Vector(17 + count, 29);
 	state.limb.PushForce = 310 + count;
 	state.limbSegment.X = 37 + count;
