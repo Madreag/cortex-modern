@@ -554,7 +554,7 @@ static std::string ResyncSaveName() {
 		NetLobbySnapshot snapshot = m_LobbySnapshot;
 		snapshot.serviceState = StateName(m_State);
 		snapshot.statusText = m_StatusText;
-		snapshot.errorText = m_ErrorText;
+		if (!m_ErrorText.empty()) snapshot.errorText = m_ErrorText;
 		snapshot.isHost = m_IsHost;
 		snapshot.localPeerId = m_LocalPeerId;
 		snapshot.localTeam = m_LocalTeam;
@@ -584,7 +584,7 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetErrorText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_ErrorText;
+		return m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText;
 	}
 
 	std::string NetMatchService::BuildReportJson() const {
@@ -592,7 +592,7 @@ static std::string ResyncSaveName() {
 		json report{
 			{"state", StateName(m_State)},
 			{"status", m_StatusText},
-			{"error", m_ErrorText},
+			{"error", m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText},
 			{"activity_preset", m_ActivityPreset},
 			{"is_host", m_IsHost},
 			{"local_peer_id", static_cast<int>(m_LocalPeerId)},
