@@ -22,7 +22,7 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_states=None, hold_path_callbacks_until=None):
+def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_states=None, hold_path_callbacks_until=None, hold_path_results_until=None):
     trace = out / "trace.json"
     dump = Path(str(trace) + ".simdump.txt")
     args = ["-net-replay", recording, "-tick-hashes", "-max-ticks", ticks, "-out", trace]
@@ -35,6 +35,8 @@ def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_s
     environment = {"CC_SIM_DUMP": f"{ticks - 1}:{ticks - 1}"}
     if hold_path_callbacks_until is not None:
         environment["CC_TEST_ASYNC_PATH_DELIVERY_TICK"] = str(hold_path_callbacks_until)
+    if hold_path_results_until is not None:
+        environment["CC_TEST_ASYNC_PATH_PUBLICATION_TICK"] = str(hold_path_results_until)
     run = make_run(repo, args, out, 180, environment, [trace, dump])
     if script:
         target = Path(run.cwd) / "Userdata/UserScenes.rte/ScriptState" / script.name
@@ -77,6 +79,7 @@ def main():
     parser.add_argument("--modes", nargs="+", choices=["memory", "file", "launch"], default=["memory", "file"])
     parser.add_argument("--lua-states", type=int)
     parser.add_argument("--hold-path-callbacks-until", type=int)
+    parser.add_argument("--hold-path-results-until", type=int)
     options = parser.parse_args()
     if any(c < 1 or c + 31 >= options.ticks for c in options.captures):
         parser.error("every capture and window must finish before the continuation dump")
@@ -100,7 +103,7 @@ def main():
     cases = [(None, None)] + [(m, c) for m in options.modes for c in options.captures]
     for mode, capture in cases:
         label = f"{mode}_{capture}" if mode else "reference"
-        result = run_case(options.repo, options.recording, options.script, root / label, options.ticks, capture, mode, options.lua_states, options.hold_path_callbacks_until)
+        result = run_case(options.repo, options.recording, options.script, root / label, options.ticks, capture, mode, options.lua_states, options.hold_path_callbacks_until, options.hold_path_results_until)
         if mode:
             reference = results["reference"]
             same, comparison = strict_compare(reference["trace"], result["trace"], options.ticks)

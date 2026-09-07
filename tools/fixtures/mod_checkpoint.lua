@@ -282,8 +282,19 @@ function Create(self)
 	self.checkpoint.moduleIterator();
 	do
 		local state = self.checkpoint;
-		state.pathExpectedBy = math.max(40, (tonumber(os.getenv("CC_TEST_ASYNC_PATH_DELIVERY_TICK")) or 0) + 10);
+		state.pathExpectedBy = math.max(40, (tonumber(os.getenv("CC_TEST_ASYNC_PATH_DELIVERY_TICK")) or 0) + 10, (tonumber(os.getenv("CC_TEST_ASYNC_PATH_PUBLICATION_TICK")) or 0) + 10);
 		state.pathCallbacks = 0;
+		state.futurePathCallbacks = 0;
+		state.futurePaths = {};
+		state.requestFuturePath = function(id)
+			SceneMan.Scene:CalculatePathAsync(function(result)
+				assert(not state.futurePaths[id], "checkpoint duplicate future path callback");
+				state.futurePaths[id] = result;
+				state.futurePathCallbacks = state.futurePathCallbacks + 1;
+				local first = result.Path();
+				assert(first and first.Y == 32 + id * 8, "checkpoint future path callback identity");
+			end, Vector(32, 32 + id * 8), Vector(160, 32 + id * 8), 0, 1, Activity.NOTEAM);
+		end;
 		SceneMan.Scene:CalculatePathAsync(function(result)
 			state.pathCallbacks = state.pathCallbacks + 1;
 			state.pathRequest = result;
@@ -457,9 +468,14 @@ function Update(self)
 	local registeredDevice = MovableMan:FindObjectByUniqueID(state.device.UniqueID);
 	assert(registeredDevice and registeredDevice.PinStrength == 10000 + self.testUpdate, "checkpoint device registry");
 	local count = state.step();
-	if count == 61 then
+	if count == math.max(61, state.pathExpectedBy + 1) then
 		local point = state.pathIterator();
 		assert(point and point.X == state.pathPoints[2].X and point.Y == state.pathPoints[2].Y, "checkpoint path iterator continuation");
+	end
+	if count == 91 then state.requestFuturePath(1); end
+	if count == 311 then state.requestFuturePath(2); end
+	if count >= math.max(341, state.pathExpectedBy) then
+		assert(state.futurePathCallbacks == 2 and state.futurePaths[1] and state.futurePaths[2], "checkpoint future path callback count");
 	end
 	if count == 20 then
 		local script = rawget(state.globals, "Userdata/UserScenes.rte/ScriptState/mod_checkpoint.lua");
