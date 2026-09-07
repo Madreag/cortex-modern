@@ -163,6 +163,10 @@ namespace RTE {
 		/// @param preMask Whether to replace mask color with 0 alpha (necessary for loading indexed to 32-bit image)
 		static SDL_Palette* DefaultPaletteToSDL(bool preMask = false);
 
+		/// Encodes an 8-bit bitmap without changing its palette indices.
+		/// @return Whether the complete PNG was written to the output buffer.
+		static bool EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output);
+
 	private:
 		/// Enumeration for loading BITMAPs by bit depth. NOTE: This can't be lower down because s_LoadedBitmaps relies on this definition.
 		enum BitDepths {

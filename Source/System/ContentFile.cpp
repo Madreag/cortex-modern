@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstring>
+#include <limits>
 
 using namespace RTE;
 
@@ -335,6 +336,35 @@ SDL_Palette* ContentFile::DefaultPaletteToSDL(bool preMask) {
 	}
 	SDL_SetPaletteColors(palette, paletteColor.data(), 0, 256);
 	return palette;
+}
+
+bool ContentFile::EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output) {
+	output.clear();
+	if (!bitmap || bitmap_color_depth(bitmap) != 8 || bitmap->w <= 0 || bitmap->h <= 0) return false;
+	const auto pitch = bitmap->h > 1 ? bitmap->line[1] - bitmap->line[0] : bitmap->w;
+	if (pitch < bitmap->w || pitch > std::numeric_limits<png_int_32>::max() ||
+	    (static_cast<uint64_t>(bitmap->w) + 1) * bitmap->h > std::numeric_limits<png_uint_32>::max()) return false;
+
+	png_image image{};
+	image.version = PNG_IMAGE_VERSION;
+	image.width = bitmap->w;
+	image.height = bitmap->h;
+	image.format = PNG_FORMAT_RGB_COLORMAP;
+	image.colormap_entries = 256;
+	image.flags = PNG_IMAGE_FLAG_FAST;
+	std::array<unsigned char, 256 * 3> palette{};
+	const PALETTE& colors = g_FrameMan.GetDefaultPalette();
+	for (size_t i = 0; i < 256; ++i) {
+		palette[i * 3] = colors[i].r;
+		palette[i * 3 + 1] = colors[i].g;
+		palette[i * 3 + 2] = colors[i].b;
+	}
+	png_alloc_size_t size = PNG_IMAGE_PNG_SIZE_MAX(image);
+	output.resize(size);
+	const bool saved = png_image_write_to_memory(&image, output.data(), &size, 0, bitmap->line[0], static_cast<png_int_32>(pitch), palette.data()) != 0;
+	png_image_free(&image);
+	output.resize(saved ? size : 0);
+	return saved;
 }
 
 SDL_Surface* ContentFile::LoadImageAsSurface(int conversionMode, const std::string& dataPathToLoad) {
