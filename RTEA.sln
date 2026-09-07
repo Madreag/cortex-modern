@@ -8,6 +8,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libluajit", "external\sourc
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "luabind", "external\sources\luabind-0.7.1\luabind.vcxproj", "{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "allegro", "external\sources\allegro 4.4.3.1-custom\allegro.vcxproj", "{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug Full|x64 = Debug Full|x64
@@ -47,6 +49,16 @@ Global
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final|x64.Build.0 = Release|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Profiling|x64.Build.0 = RelWithDebInfo|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Full|x64.ActiveCfg = Debug|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Full|x64.Build.0 = Debug|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Minimal|x64.ActiveCfg = Debug|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Minimal|x64.Build.0 = Debug|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Release|x64.ActiveCfg = RelWithDebInfo|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Release|x64.Build.0 = RelWithDebInfo|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Final|x64.ActiveCfg = Release|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Final|x64.Build.0 = Release|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Profiling|x64.Build.0 = RelWithDebInfo|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

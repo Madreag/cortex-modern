@@ -1593,6 +1593,13 @@
       <SetConfiguration Condition="'$(Configuration)'=='Final'">Configuration=Release</SetConfiguration>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
+    <ProjectReference Include="external\sources\allegro 4.4.3.1-custom\allegro.vcxproj" Condition="'$(Platform)'=='x64'">
+      <Project>{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}</Project>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Full' Or '$(Configuration)'=='Debug Minimal'">Configuration=Debug</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Release' Or '$(Configuration)'=='Profiling'">Configuration=RelWithDebInfo</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Final'">Configuration=Release</SetConfiguration>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
