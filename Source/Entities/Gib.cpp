@@ -51,6 +51,7 @@ int Gib::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_GibParticle = dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset(reader));
 		RTEAssert(m_GibParticle, "Stream suggests allocating an unallocable type in Gib::Create!");
 	});
+	MatchProperty("SpecialBehaviour_ClearParticle", { bool clear; reader >> clear; if (clear) m_GibParticle = nullptr; });
 	MatchProperty("Offset", { reader >> m_Offset; });
 	MatchProperty("Count", { reader >> m_Count; });
 	MatchProperty("Spread", { reader >> m_Spread; });
@@ -68,33 +69,25 @@ int Gib::ReadProperty(const std::string_view& propName, Reader& reader) {
 int Gib::Save(Writer& writer) const {
 	Serializable::Save(writer);
 
-	writer.NewProperty("GibParticle");
-	// All of this is needed to make a preset look like not original and save as CopyOf instead of separate preset.
-	std::unique_ptr<Entity> gibEntity(m_GibParticle->Clone());
-	gibEntity->ResetOriginalPresetFlag();
-	gibEntity->Entity::Save(writer);
-	writer.ObjectEnd();
-
-	writer.NewProperty("Offset");
-	writer << m_Offset;
-
-	// These are disabled because we're writing CopyOfs. Might need these in the future if we need to write original presets.
-	/*
-	writer.NewProperty("Count");
-	writer << m_Count;
-	writer.NewProperty("Spread");
-	writer << m_Spread;
-	writer.NewProperty("MinVelocity");
-	writer << GetMinVelocity();
-	writer.NewProperty("MaxVelocity");
-	writer << GetMaxVelocity();
-	writer.NewProperty("LifeVariation");
-	writer << m_LifeVariation;
-	writer.NewProperty("InheritsVel");
-	writer << m_InheritsVel;
-	writer.NewProperty("InheritsAngularVel");
-	writer << m_InheritsAngularVel;
-	*/
+	if (m_GibParticle) {
+		writer.NewProperty("GibParticle");
+		writer.ObjectStart(m_GibParticle->GetClassName());
+		const Entity* preset = m_GibParticle->GetPresetForCopy();
+		writer.NewPropertyWithValue("CopyOf", preset ? preset->GetModuleAndPresetName() : m_GibParticle->GetModuleAndPresetName());
+		writer.ObjectEnd();
+	} else {
+		writer.NewPropertyWithValue("SpecialBehaviour_ClearParticle", true);
+	}
+	writer.NewPropertyWithValue("Offset", m_Offset);
+	writer.NewPropertyWithValue("Count", m_Count);
+	writer.NewPropertyWithValue("Spread", m_Spread);
+	writer.NewPropertyWithValue("MinVelocity", m_MinVelocity);
+	writer.NewPropertyWithValue("MaxVelocity", m_MaxVelocity);
+	writer.NewPropertyWithValue("LifeVariation", m_LifeVariation);
+	writer.NewPropertyWithValue("InheritsVel", m_InheritsVel);
+	writer.NewPropertyWithValue("InheritsAngularVel", m_InheritsAngularVel);
+	writer.NewPropertyWithValue("IgnoresTeamHits", m_IgnoresTeamHits);
+	writer.NewPropertyWithValue("SpreadMode", m_SpreadMode);
 
 	return 0;
 }

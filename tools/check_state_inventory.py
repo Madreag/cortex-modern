@@ -57,6 +57,7 @@ CLASSES = {
     "PieMenu": ENTITIES,
     "PieSlice": ENTITIES,
     "SoundSet": ENTITIES,
+    "Gib": ENTITIES,
 }
 CLASSIFICATIONS = {
     "copied",

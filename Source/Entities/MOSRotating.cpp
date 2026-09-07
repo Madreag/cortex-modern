@@ -402,6 +402,13 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		reader >> wound;
 		AddWound(wound, wound->GetParentOffset());
 	});
+	MatchProperty("SpecialBehaviour_ClearGibs", {
+		bool clear; reader >> clear;
+		if (clear) {
+			for (Gib* gib: m_Gibs) delete gib;
+			m_Gibs.clear();
+		}
+	});
 	MatchProperty("AddGib",
 	              {
 		              Gib* gib = new Gib();
@@ -437,6 +444,8 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 
 void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSprite::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearGibs", true);
+	for (const Gib* gib: m_Gibs) writer.NewPropertyWithValue("AddGib", *gib);
 	writer.NewPropertyWithValue("OrientToVel", m_OrientToVel);
 	writer.NewPropertyWithValue("GibImpulseLimit", m_GibImpulseLimit);
 	writer.NewPropertyWithValue("GibWoundLimit", m_GibWoundLimit);
