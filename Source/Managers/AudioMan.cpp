@@ -8,6 +8,7 @@
 #include "SoundContainer.h"
 #include "WindowMan.h"
 #include "SoundSet.h"
+#include "ContentFile.h"
 
 #include <array>
 #include <cstring>
@@ -130,6 +131,7 @@ bool AudioMan::Initialize() {
 void AudioMan::Destroy() {
 	if (m_AudioEnabled) {
 		StopAll();
+		ContentFile::FreeAllLoadedSounds();
 		m_AudioSystem->release();
 		Clear();
 	}
