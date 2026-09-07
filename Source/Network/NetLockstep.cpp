@@ -1150,8 +1150,10 @@ namespace RTE {
 		m_RemotePeerIds = std::move(remotePeerIds);
 		m_RemoteTransports = std::move(remoteTransports);
 		m_RelayHost = config.relayToOtherPeers;
-		m_DeferRecoveryStops = false;
+		m_DeferStops = false;
 		m_PendingRecoveryStop.reset();
+		m_PendingCompleteStop.reset();
+		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
@@ -1206,8 +1208,10 @@ namespace RTE {
 		m_RemotePeerIds.clear();
 		m_RemoteTransports.clear();
 		m_RelayHost = false;
-		m_DeferRecoveryStops = false;
+		m_DeferStops = false;
 		m_PendingRecoveryStop.reset();
+		m_PendingCompleteStop.reset();
+		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
@@ -1398,7 +1402,7 @@ namespace RTE {
 			NetLockstepStop stop;
 			stop.senderPeerId = m_Config.localPeerId;
 			stop.reason = NetLockstepStopReason::Complete;
-			stop.frame = m_Stats.nextFrame;
+			stop.frame = m_DeferStops && m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Stats.nextFrame;
 			stop.message = message;
 			std::string ignored;
 			(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
@@ -1434,7 +1438,7 @@ namespace RTE {
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
 			return;
 		}
-		if (m_DeferRecoveryStops) {
+		if (m_DeferStops) {
 			ScheduleRecoveryStop(NetLockstepStopReason::ResyncRequested, m_Stats.nextFrame, message);
 			return;
 		}
@@ -1452,7 +1456,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message) {
-		if (!m_DeferRecoveryStops) {
+		if (!m_DeferStops) {
 			Fail(reason, frame, message);
 			return;
 		}
@@ -1466,11 +1470,21 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::FinishSimulationTick(uint64_t completedTick) {
-		if (!m_DeferRecoveryStops || !m_PendingRecoveryStop || !IsRunning() || m_Config.localPeerId != m_Config.matchConfig.hostPeerId) return false;
-		const NetLockstepStop stop = *m_PendingRecoveryStop;
-		m_PendingRecoveryStop.reset();
-		Fail(stop.reason, completedTick + 1, stop.message);
-		return true;
+		if (!m_DeferStops || !IsRunning()) return false;
+		m_LastCompletedSimulationTick = completedTick;
+		if (m_PendingRecoveryStop && m_Config.localPeerId == m_Config.matchConfig.hostPeerId) {
+			const NetLockstepStop stop = *m_PendingRecoveryStop;
+			m_PendingRecoveryStop.reset();
+			Fail(stop.reason, completedTick + 1, stop.message);
+			return true;
+		}
+		if (m_PendingCompleteStop && completedTick + 1 >= m_PendingCompleteStop->frame) {
+			m_Stats.timeoutReason = "Complete:" + m_PendingCompleteStop->message;
+			m_PendingCompleteStop.reset();
+			m_State = NetLockstepState::Stopped;
+			return true;
+		}
+		return false;
 	}
 
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
@@ -1903,7 +1917,12 @@ namespace RTE {
 			return;
 		}
 		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
-		if (m_DeferRecoveryStops && stop.senderPeerId != m_Config.matchConfig.hostPeerId &&
+		if (m_DeferStops && stop.reason == NetLockstepStopReason::Complete &&
+		    (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick + 1 < stop.frame)) {
+			if (!m_PendingCompleteStop || stop.frame < m_PendingCompleteStop->frame) m_PendingCompleteStop = stop;
+			return;
+		}
+		if (m_DeferStops && stop.senderPeerId != m_Config.matchConfig.hostPeerId &&
 		    (stop.reason == NetLockstepStopReason::Desync || stop.reason == NetLockstepStopReason::ResyncRequested)) {
 			ScheduleRecoveryStop(stop.reason, stop.frame, stop.message);
 			return;

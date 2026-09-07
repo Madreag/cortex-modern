@@ -357,8 +357,8 @@ namespace RTE {
 					if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client,
 					    MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable),
 					    MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable), error)) return false;
-					host.DeferRecoveryStopsToTickBoundary();
-					client.DeferRecoveryStopsToTickBoundary();
+					host.DeferStopsToTickBoundary();
+					client.DeferStopsToTickBoundary();
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) return false;
 					if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(101, 1)}, {}, error)) return false;
 					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, error)) return false;
@@ -389,6 +389,43 @@ namespace RTE {
 				}
 			}
 			std::cout << "[net-lockstep-selftest] PASS recovery_stops_at_completed_tick D=0,3 desync/rejoin" << std::endl;
+			return true;
+		}
+
+		bool TestCompletionDrainsAppliedTicks(std::string* error) {
+			for (uint16_t delay: {0, 3}) {
+				LoopbackTransport hostTransport, clientTransport;
+				NetLockstepCoordinator host, client;
+				const uint16_t port = 43940 + delay;
+				if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client,
+				    MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable),
+				    MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable), error)) return false;
+				host.DeferStopsToTickBoundary();
+				client.DeferStopsToTickBoundary();
+				if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) return false;
+				for (uint64_t produced = 0; produced < 2; ++produced) {
+					if (!host.QueueLocalInput(produced, {MakeFrame(100, produced)}, {}, error) || !client.QueueLocalInput(produced, {MakeFrame(101, produced)}, {}, error)) return false;
+				}
+				if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 2 && client.GetStats().framesAccepted == 2; }, error)) return false;
+				host.FinishSimulationTick(delay);
+				host.Complete("finished at applied tick");
+				for (int poll = 0; poll < 10; ++poll) {
+					hostTransport.AdvanceTimeMs(1);
+					clientTransport.AdvanceTimeMs(1);
+					client.Tick(clientTransport.NowMs());
+				}
+				if (!client.IsRunning()) {
+					*error = "completion discarded an unapplied final simulation tick";
+					return false;
+				}
+				NetLockstepReadyFrame finalFrame;
+				if (!client.PopReadyFrame(finalFrame) || finalFrame.frame != delay || !client.FinishSimulationTick(delay) || !client.IsStopped()) {
+					*error = "completion used prefetched input instead of the sender's completed simulation tick";
+					return false;
+				}
+				if (client.GetStats().timeoutReason != "Complete:finished at applied tick") return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS completion_drains_applied_ticks D=0,3" << std::endl;
 			return true;
 		}
 
@@ -912,6 +949,7 @@ namespace RTE {
 		    !TestDecodeFailures(&error) ||
 		    !TestSemanticFailures(&error) ||
 		    !TestRecoveryStopsAtCompletedTick(&error) ||
+		    !TestCompletionDrainsAppliedTicks(&error) ||
 		    !TestCoordinatorDelayedHappyPath(&error) ||
 		    !TestCoordinatorPerSenderDelay(&error) ||
 		    !TestCoordinatorPerSenderDelayMismatch(&error) ||
