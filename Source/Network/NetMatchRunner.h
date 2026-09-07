@@ -6,7 +6,6 @@
 #include "NetSession.h"
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -44,7 +43,7 @@ namespace RTE {
 		bool autoReady = true;
 		bool autoStart = true;
 		const std::atomic<bool>* readyRequested = nullptr;
-		const std::atomic<bool>* startRequested = nullptr;
+		std::atomic<bool>* startRequested = nullptr;
 		const std::atomic<bool>* cancelRequested = nullptr;
 		std::function<void(const NetLobbySnapshot&)> publishLobby;
 	};
@@ -93,7 +92,6 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		bool m_UseLobbyProtocol = false;
 		std::string m_SetupError;
-		std::chrono::steady_clock::time_point m_RunStartTime; //!< One continuous clock across the setup phases for the session keepalive.
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
 	};

@@ -11,6 +11,7 @@
 #include <vector>
 
 namespace RTE {
+	class NetSession;
 
 	enum class NetLobbyState {
 		Idle,
@@ -37,6 +38,8 @@ namespace RTE {
 		std::string platform = "unknown";
 		bool autoReady = true;
 		bool autoStart = true;
+		NetSession* session = nullptr; //!< Shared admission state while the lobby owns transport events.
+		bool autoInputDelay = false;
 	};
 
 	struct NetLobbyStats {
@@ -110,6 +113,9 @@ namespace RTE {
 		void HandleReady(const NetLobbyReady& message);
 		void HandleStart(const NetLobbyStart& message);
 		void HandlePeerState(const NetLobbyPeerState& message);
+		void SyncSessionPeers();
+		void RemoveRemote(NetPeerId transportPeerId);
+		void RejectRemote(NetPeerId transportPeerId, const std::string& reason);
 		void HandleStateChunk(const NetLobbyStateChunk& message);
 		void SendQueuedStateChunks();
 		void Reject(const std::string& reason);
@@ -127,6 +133,8 @@ namespace RTE {
 		uint64_t m_LastConfigSentMs = 0;
 		uint64_t m_LastPeerStateSentMs = 0;
 		uint64_t m_LastReceiveMs = 0;
+		uint64_t m_SessionClockBaseMs = 0;
+		bool m_PeerStatePending = false;
 		bool m_LocalReady = false;
 		bool m_ReadySent = false;
 		bool m_StartRequested = false;
@@ -137,7 +145,9 @@ namespace RTE {
 		std::map<uint8_t, bool> m_RemoteReadyByPeer; //!< Which peers are ready, from direct or relayed peer-state.
 		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
+		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
 		std::deque<NetLobbyStateChunk> m_OutgoingChunks; //!< Host: queued state-file chunks, paced out through Tick.
+		std::vector<uint8_t> m_StateBytesToSend;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
 		uint32_t m_IncomingTotalBytes = 0;

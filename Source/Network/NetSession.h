@@ -64,7 +64,8 @@ namespace RTE {
 	public:
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
-		void Tick(uint64_t nowMs);
+		void Tick(uint64_t nowMs, bool pollTransport = true);
+		uint64_t GetClockMs() const { return m_NowMs; }
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
 		void TickKeepalive(uint64_t nowMs);

@@ -116,7 +116,7 @@ namespace RTE {
 		return true;
 	}
 
-	void NetSession::Tick(uint64_t nowMs) {
+	void NetSession::Tick(uint64_t nowMs, bool pollTransport) {
 		// Callers clock each setup phase from its own start; never let a later phase rewind us.
 		m_NowMs = std::max(m_NowMs, nowMs);
 		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
@@ -124,10 +124,12 @@ namespace RTE {
 			return;
 		}
 
-		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
-			ProcessEvent(event);
-			if (m_State == NetSessionState::Closed || m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
-				return;
+		if (pollTransport) {
+			for (const NetTransportEvent& event : m_Transport->PollEvents()) {
+				ProcessEvent(event);
+				if (m_State == NetSessionState::Closed || m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+					return;
+				}
 			}
 		}
 		CheckTimeouts();
@@ -322,8 +324,7 @@ namespace RTE {
 			// Another phase's packet on the shared wire: a peer that finished its session handshake
 			// starts its lobby round while we still wait for the others (N-peer), or a prior match's
 			// in-flight lockstep frames. The lobby protocol tolerates our packets the same way.
-			if (decoded.error.code == NetProtocolErrorCode::BadMagic &&
-			    (NetLobbyProtocol::Decode(bytes).ok || NetLockstepCodec::Decode(bytes).ok)) {
+			if (NetLobbyProtocol::Decode(bytes).ok || NetLockstepCodec::Decode(bytes).ok) {
 				++m_Stats.ignoredPhasePackets;
 				return;
 			}
@@ -485,8 +486,11 @@ namespace RTE {
 			m_LastReceiveMs = m_NowMs;
 			return;
 		}
-		if (std::holds_alternative<NetDisconnect>(message.payload)) {
+		if (const auto* disconnect = std::get_if<NetDisconnect>(&message.payload)) {
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+				if (!m_HasReject && !disconnect->message.empty()) {
+					RecordReject(NetRejectReason::InternalError, "", "", "", disconnect->message);
+				}
 				m_State = NetSessionState::Closed;
 			}
 			return;

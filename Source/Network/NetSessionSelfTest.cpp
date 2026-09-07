@@ -2,8 +2,10 @@
 
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
+#include "NetLobbySession.h"
 #include "NetSession.h"
 
+#include <array>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -527,6 +529,143 @@ namespace RTE {
 			}, error);
 		}
 
+		bool TestLobbyMembership(std::string* error) {
+			constexpr uint16_t port = 42208;
+			LoopbackTransport hostTransport;
+			NetSession hostSession;
+			NetSessionConfig hostConfig = MakeConfig(port, 1601, "Host");
+			hostConfig.maxPeers = 2;
+			hostConfig.timeoutMs = 1000;
+			if (!hostSession.StartHost(hostTransport, hostConfig, error)) return false;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(hostConfig.sessionId);
+			match.peerCount = 3;
+			match.players.push_back({3, 2, false, "Client B"});
+			NetLobbySessionConfig config;
+			config.host = true;
+			config.localPeerId = 1;
+			config.matchConfig = match;
+			config.autoStart = false;
+			config.session = &hostSession;
+			config.peerStateIntervalMs = 10;
+			NetLobbySession hostLobby;
+			if (!hostLobby.Start(hostTransport, config, error)) return false;
+			std::array<LoopbackTransport, 2> transports;
+			std::array<NetSession, 2> sessions;
+			std::array<NetLobbySession, 2> lobbies;
+			std::array<bool, 2> active{}, started{}, autoReady{};
+			std::array<uint64_t, 2> startedAt{};
+			std::array<std::string, 2> names;
+			uint64_t now = 0;
+			std::string phase = "initial join";
+			auto join = [&](size_t i, const char* name, bool ready) {
+				names[i] = name;
+				active[i] = true;
+				started[i] = false;
+				autoReady[i] = ready;
+				return sessions[i].StartClient(transports[i], "loopback", MakeConfig(port, 1701 + i, name), error);
+			};
+			auto pump = [&]() {
+				hostLobby.Tick(now);
+				for (size_t i = 0; i < active.size(); ++i) {
+					if (!active[i]) continue;
+					if (!started[i]) {
+						sessions[i].Tick(now);
+						if (sessions[i].IsReady()) {
+							NetLobbySessionConfig client = config;
+							client.host = false;
+							client.localPeerId = static_cast<uint8_t>(sessions[i].GetLocalPeerId() + 1);
+							client.remoteTransportPeerIds = {{1, sessions[i].GetRemoteTransportPeerId()}};
+							client.session = &sessions[i];
+							client.displayName = names[i];
+							client.autoReady = autoReady[i];
+							if (!lobbies[i].Start(transports[i], client, error)) return false;
+							started[i] = true;
+							startedAt[i] = now;
+						}
+					} else {
+						lobbies[i].Tick(now - startedAt[i]);
+					}
+					if (lobbies[i].IsFailed() || lobbies[i].IsRejected()) {
+						*error = "membership " + phase + " client " + names[i] + " at " + std::to_string(now) + ": " + lobbies[i].GetFailureReason() + "; " + hostSession.BuildReportJson();
+						return false;
+					}
+				}
+				if (hostLobby.IsFailed() || hostLobby.IsRejected()) {
+					*error = "membership host failed: " + hostLobby.GetFailureReason();
+					return false;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				for (auto& transport: transports) transport.AdvanceTimeMs(10);
+				now += 10;
+				return true;
+			};
+			auto until = [&](const std::function<bool()>& done) {
+				for (int i = 0; i < 300; ++i) {
+					if (!pump()) return false;
+					if (done()) return true;
+				}
+				*error = "lobby membership condition timed out";
+				return false;
+			};
+			if (!join(0, "Client A", true) || !join(1, "Client B", true) ||
+			    !until([&] { return hostLobby.IsRemoteReady() && lobbies[0].HasHeardFrom(3) && lobbies[1].HasHeardFrom(2); })) return false;
+			LoopbackTransport unbound;
+			phase = "unbound admission";
+			if (!unbound.Connect("loopback", port, error)) return false;
+			std::vector<uint8_t> bytes;
+			if (!NetLobbyProtocol::Encode({NetLobbyReady{2, false}}, bytes) || !unbound.Send(1, NetTransportLane::ControlReliable, bytes, error) || !pump()) return false;
+			if (!hostLobby.IsRemoteReady() || hostSession.GetReadyPeerCount() != 2) {
+				*error = "unaccepted connection changed lobby readiness";
+				return false;
+			}
+			if (!unbound.Send(1, NetTransportLane::ControlReliable, {1, 2, 3}, error) || !pump()) return false;
+			std::vector<uint8_t> state(5 * NetLobbyProtocol::c_MaxStateChunkBytes + 17);
+			for (size_t i = 0; i < state.size(); ++i) state[i] = static_cast<uint8_t>(i * 17);
+			hostLobby.BeginStateTransfer(state);
+			phase = "partial state transfer";
+			if (!pump()) return false;
+			sessions[0].Close("left lobby");
+			phase = "client leave";
+			active[0] = false;
+			if (!until([&] { return hostSession.GetReadyPeerCount() == 1 && !lobbies[1].HasHeardFrom(2); })) return false;
+			if (hostLobby.IsRemoteReady() || !hostLobby.IsRemoteReady(3) || !lobbies[1].IsLocalReady()) {
+				*error = "leave changed the remaining player's readiness or left the room startable";
+				return false;
+			}
+			hostLobby.RequestStart();
+			phase = "replacement";
+			if (!join(0, "Returner", false) || !until([&] { return hostLobby.GetState() == NetLobbyState::WaitingForReady && started[0]; })) return false;
+			if (hostLobby.IsStarted() || lobbies[0].IsLocalReady() || hostLobby.GetRemoteName(2) != "Returner") {
+				*error = "replacement inherited readiness or stale identity";
+				return false;
+			}
+			lobbies[0].SetLocalReady(true);
+			phase = "replacement state transfer";
+			if (!until([&] { return hostLobby.IsRemoteReady() && lobbies[0].HasCompleteStateTransfer() && lobbies[1].HasCompleteStateTransfer(); })) return false;
+			if (hostLobby.IsStarted() || hostLobby.IsStartRequested() || lobbies[0].TakeReceivedState() != state || lobbies[1].TakeReceivedState() != state) {
+				*error = "replacement lost state-transfer bytes or retained an obsolete Start request";
+				return false;
+			}
+			if (!NetLobbyProtocol::Encode({NetLobbyReady{2, false}}, bytes) || !transports[1].Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+			active[1] = false;
+			phase = "forged readiness";
+			if (!pump()) return false;
+			sessions[1].Tick(now);
+			if (!sessions[1].IsClosed() || hostSession.GetReadyPeerCount() != 1 || !hostLobby.IsRemoteReady(2)) {
+				*error = "forged readiness was not isolated to its sending connection";
+				return false;
+			}
+			phase = "replacement after rejection";
+			if (!join(1, "Newcomer", true) || !until([&] { return hostLobby.IsRemoteReady() && hostLobby.GetState() == NetLobbyState::WaitingForReady; })) return false;
+			hostLobby.RequestStart();
+			if (!until([&] { return hostLobby.IsStarted() && lobbies[0].IsStarted() && lobbies[1].IsStarted(); })) return false;
+			if (hostLobby.GetMatchConfigHash() != lobbies[0].GetMatchConfigHash() || hostLobby.GetMatchConfigHash() != lobbies[1].GetMatchConfigHash()) {
+				*error = "replacement lobby started with different configs";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLatencyAndCleanDisconnect(std::string* error) {
 			const uint16_t port = 42206;
 			LoopbackTransport hostTransport;
@@ -580,6 +719,7 @@ namespace RTE {
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
+		if (!TestLobbyMembership(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;
 		return 0;

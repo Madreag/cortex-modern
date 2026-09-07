@@ -39,7 +39,6 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
-		m_RunStartTime = std::chrono::steady_clock::now();
 		m_Config = config;
 		m_UseLobbyProtocol = config.useLobbyProtocol;
 		m_MatchConfig = config.matchConfig;
@@ -115,7 +114,6 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream) {
-		m_RunStartTime = std::chrono::steady_clock::now();
 		const uint32_t expectedReadyPeers = m_Config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
 		if (!session.IsReady() || session.GetReadyPeerCount() < expectedReadyPeers) {
 			SetFailed(std::string("session is no longer connected") + (session.HasReject() ? ": " + session.BuildRejectText() : ""));
@@ -185,6 +183,9 @@ namespace RTE {
 			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now() - startTime).count());
 			session.Tick(nowMs);
+			if (m_Config.publishLobby) {
+				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
+			}
 			// N-peer: the host must have every client Ready, not just the first to connect.
 			if (session.IsReady() && session.GetReadyPeerCount() >= expectedReadyPeers) {
 				return true;
@@ -238,6 +239,8 @@ namespace RTE {
 		lobbyConfig.platform = m_Config.sessionConfig.localIdentity.platform;
 		lobbyConfig.autoReady = m_Config.autoReady;
 		lobbyConfig.autoStart = m_Config.autoStart;
+		lobbyConfig.session = &session;
+		lobbyConfig.autoInputDelay = m_Config.autoInputDelay;
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately.
 		lobbyConfig.timeoutMs = static_cast<uint32_t>(maxWaitMs);
@@ -261,16 +264,12 @@ namespace RTE {
 			if (m_Config.readyRequested && m_Config.readyRequested->load()) {
 				m_Lobby.SetLocalReady(true);
 			}
-			if (m_Config.startRequested && m_Config.startRequested->load()) {
+			if (m_Config.startRequested && m_Config.startRequested->exchange(false)) {
 				m_Lobby.RequestStart();
 			}
 			const auto now = std::chrono::steady_clock::now();
 			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			m_Lobby.Tick(nowMs);
-			// Keep session heartbeats flowing while the lobby owns the event queue: an N-peer host is
-			// still session-waiting for the other clients and would otherwise declare us dead. The
-			// keepalive rides the continuous run clock so the session clock never rewinds.
-			session.TickKeepalive(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - m_RunStartTime).count()));
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
@@ -363,6 +362,10 @@ namespace RTE {
 
 		const uint8_t localId = LocalLockstepPeerId(session);
 		const std::map<uint8_t, NetPeerId> remoteTransports = BuildRemoteTransportMap(session);
+		std::map<uint8_t, std::string> sessionNames;
+		for (const NetSessionPeerInfo& peer: session.GetReadyPeers()) {
+			sessionNames[LockstepPeerId(peer.assignedPeerId)] = peer.displayName;
+		}
 		for (const NetMatchPlayerSlot& slot: rosterConfig.players) {
 			NetLobbyMember member;
 			member.peerId = slot.peerId;
@@ -372,6 +375,9 @@ namespace RTE {
 			// The remote peer's typed name arrives via its periodic peer-state; the slot only has the default.
 			const std::string& remoteName = m_Lobby.GetRemoteName(slot.peerId);
 			member.displayName = (!member.isLocal && !remoteName.empty()) ? remoteName : slot.displayName;
+			if (!member.isLocal && remoteName.empty() && sessionNames.contains(slot.peerId)) {
+				member.displayName = sessionNames.at(slot.peerId);
+			}
 			member.ready = member.isLocal ? snapshot.localReady : m_Lobby.IsRemoteReady(slot.peerId);
 			// Host-star: the host has a transport for every client; a client sees its SIBLINGS through
 			// the host's peer-state relay, with the host's measured ping standing in for theirs.
