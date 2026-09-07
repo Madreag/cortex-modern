@@ -1,4 +1,5 @@
 #include "MOSParticle.h"
+#include "NativeCheckpoint.h"
 
 #include "Atom.h"
 #include "PostProcessMan.h"
@@ -19,6 +20,7 @@ MOSParticle::~MOSParticle() {
 }
 
 void MOSParticle::Clear() {
+	m_PersistedAtomCheckpoint.clear();
 	m_Atom = nullptr;
 	m_PersistedAtomResidue = 0;
 	m_HasPersistedAtomResidue = false;
@@ -41,6 +43,7 @@ int MOSParticle::Create(const MOSParticle& reference) {
 
 	m_Atom = new Atom(*(reference.m_Atom));
 	m_Atom->SetOwner(this);
+	m_PersistedAtomCheckpoint = reference.m_PersistedAtomCheckpoint;
 	m_PersistedAtomResidue = reference.m_PersistedAtomResidue;
 	m_HasPersistedAtomResidue = reference.m_HasPersistedAtomResidue;
 
@@ -51,6 +54,7 @@ int MOSParticle::Create(const MOSParticle& reference) {
 
 int MOSParticle::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSprite::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_AtomCheckpoint", { ReadOwnedCheckpoint<Atom>(reader, m_PersistedAtomCheckpoint); });
 
 	MatchProperty("Atom", {
 		if (!m_Atom) {
@@ -79,11 +83,23 @@ void MOSParticle::AdoptPersistedUniqueID() {
 		}
 		m_HasPersistedAtomResidue = false;
 	}
+	RestoreOwnedCheckpoint(m_Atom, m_PersistedAtomCheckpoint);
+}
+
+void MOSParticle::ResolveFaithfulLinks() {
+	MOSprite::ResolveFaithfulLinks();
+	if (m_Atom) m_Atom->ResolveCheckpointLinks();
 }
 
 void MOSParticle::DiscardPersistedSnapshotState() {
+	m_PersistedAtomCheckpoint.clear();
 	MOSprite::DiscardPersistedSnapshotState();
 	m_HasPersistedAtomResidue = false;
+}
+
+void MOSParticle::SaveSnapshotConfiguration(Writer& writer) const {
+	MOSprite::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_AtomCheckpoint", base64_encode(m_PersistedAtomCheckpoint.empty() ? CaptureOwnedCheckpoint(m_Atom) : m_PersistedAtomCheckpoint, true));
 }
 
 int MOSParticle::Save(Writer& writer) const {

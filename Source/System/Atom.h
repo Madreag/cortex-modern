@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Matrix.h"
+#include <array>
 #include "Material.h"
 #include "SceneMan.h"
 
@@ -65,6 +66,9 @@ namespace RTE {
 	public:
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		void ResolveCheckpointLinks();
 
 #pragma region Creation
 		/// Constructor method used to instantiate an Atom object in system memory. Create() should be called before using the object.
@@ -443,6 +447,31 @@ namespace RTE {
 		int m_DomSteps;
 		int m_SubSteps;
 		bool m_SubStepped;
+
+	private:
+		// Owner, collision bodies and their roots are resolved after the complete
+		// native world has adopted its saved identities.
+		std::array<long, 5> m_CheckpointLinkIDs{};
+		bool m_HasCheckpointLinks = false;
+		std::array<long, 5> CaptureCheckpointLinkIDs() const;
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_Offset, self.m_OriginalOffset, self.m_Normal, self.m_SubgroupID,
+			    self.m_StepWasTaken, self.m_StepRatio, self.m_SegTraj, self.m_SegProgress,
+			    self.m_ChangedDir, self.m_PrevError, self.m_ResultWrapped,
+			    self.m_MOHitsDisabled, self.m_TerrainHitsDisabled, self.m_IgnoreMOID,
+			    self.m_IgnoreMOIDs, self.m_LastTrailPoints, self.m_TrailPoints,
+			    self.m_MOIDHit, self.m_TerrainMatHit, self.m_NumPenetrations,
+			    self.m_TrailColor, self.m_TrailLength, self.m_TrailLengthVariation,
+			    self.m_IntPos, self.m_PrevIntPos, self.m_TrailPos, self.m_HitPos,
+			    self.m_Delta, self.m_Delta2, self.m_Increment, self.m_Error, self.m_Dom,
+			    self.m_Sub, self.m_DomSteps, self.m_SubSteps, self.m_SubStepped);
+			archive(self.m_LastHit.BitmapNormal, self.m_LastHit.TotalMass,
+			    self.m_LastHit.MomInertia, self.m_LastHit.SquaredMIHandle,
+			    self.m_LastHit.HitPoint, self.m_LastHit.HitRadius, self.m_LastHit.HitVel,
+			    self.m_LastHit.VelDiff, self.m_LastHit.PreImpulse, self.m_LastHit.ResImpulse,
+			    self.m_LastHit.HitDenominator, self.m_LastHit.ImpulseFactor, self.m_LastHit.Terminate);
+		}
 
 	private:
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this.
