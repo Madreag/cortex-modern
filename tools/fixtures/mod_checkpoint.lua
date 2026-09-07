@@ -129,6 +129,7 @@ function Create(self)
 	self.testCreate = (self.testCreate or 0) + 1;
 	self.testUpdate = 0;
 	self.checkpoint = { count = 0, spawned = {} };
+	self.checkpoint.legacy = _ScriptGraph.restoreLegacy([=[{__scriptFieldsId=1,["toggleUpdates"]=249,["tallyUpdates"]=129,["AI"]={__scriptFieldsId=2,__scriptFieldsMeta="NativeHumanAI",["proneState"]=0,["jumpState"]=0,["deviceState"]=0,["lastAIMode"]=0,["teamBlockState"]=0,["minBurstTime"]=140,["SentryFacing"]=false,["fire"]=false,["running"]=false,["flying"]=false,["squadShoot"]=false,["useMedikit"]=false,["AirTimer"]={__scriptFieldsId=3,["simLimit"]=-1,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["PickUpTimer"]={__scriptFieldsId=4,["simLimit"]=-1,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["ReloadTimer"]={__scriptFieldsId=5,["simLimit"]=-1,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["BlockedTimer"]={__scriptFieldsId=6,["simLimit"]=-1,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["SquadShootTimer"]={__scriptFieldsId=7,["simLimit"]=-1,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["SquadShootDelay"]=60,["RunStateTimer"]={__scriptFieldsId=8,["simLimit"]=4542000,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["AlarmTimer"]={__scriptFieldsId=9,["simLimit"]=400000,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["TargetLostTimer"]={__scriptFieldsId=10,["simLimit"]=1000000,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["idleAimTime"]=500,["PlayerInterferedTimer"]={__scriptFieldsId=11,["simLimit"]=500000,["realStart"]=71618,["realLimit"]=-1,["__scriptFieldsTimer"]=true,["simStart"]=33332},["aimSpeed"]=0.77096108620446435,["aimSkill"]=0.80149960804386922,["skill"]=87.5,["isPlayerOwned"]=true,["lateralMoveState"]=0,["groundContact"]=5}}]=]);
 	self.checkpoint.self = self.checkpoint;
 	self.checkpoint.alias = self.checkpoint;
 	self.checkpoint.globals = getfenv(0);
@@ -179,6 +180,9 @@ end
 function Update(self)
 	if self:NumberValueExists("CheckpointSpawnChild") then return; end
 	local state = self.checkpoint;
+	assert(state.legacy.toggleUpdates == 249 and state.legacy.tallyUpdates == 129, "checkpoint legacy saved counters");
+	assert(state.legacy.AI.AirTimer.StartSimTimeTicks == 33332 and state.legacy.AI.AirTimer.SimTimeLimitTicks == -1, "checkpoint legacy saved timer");
+	assert(getmetatable(state.legacy.AI) == NativeHumanAI, "checkpoint legacy saved metatable");
 	assert(state == state.self and state == state.alias, "checkpoint table identity");
 	assert(state.globals == getfenv(0) and rawget(state.globals, state.globalKey) == state, "checkpoint global table identity");
 	assert(rawget(state.globals, "_ScriptGraphCallbacks") == nil, "checkpoint callback capture escaped");
