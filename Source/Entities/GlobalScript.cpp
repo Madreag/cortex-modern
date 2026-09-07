@@ -148,7 +148,7 @@ int GlobalScript::End() const {
 }
 
 void GlobalScript::HandleCraftEnteringOrbit(const ACraft* orbitedCraft) {
-	if (!m_IsActive || !!m_HasStarted || orbitedCraft == nullptr || !g_MovableMan.IsActor(orbitedCraft) || !g_SettingsMan.IsGlobalScriptEnabled(GetModuleAndPresetName())) {
+	if (!m_IsActive || !m_HasStarted || orbitedCraft == nullptr || !g_MovableMan.IsActor(orbitedCraft) || !g_SettingsMan.IsGlobalScriptEnabled(GetModuleAndPresetName())) {
 		return;
 	}
 
