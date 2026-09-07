@@ -421,27 +421,10 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 }
 
 bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
-	std::unique_ptr<Scene> scene;
-	std::unique_ptr<GAScripted> activity;
-	std::string originalScenePresetName;
-	bool placeObjectsIfSceneIsRestarted = true;
-	bool placeUnitsIfSceneIsRestarted = true;
-	if (!ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted)) {
+	if (!LoadGameToRestart(fileName) || !RestartActivity()) {
 		return false;
 	}
-
-	// SetSceneToLoad() doesn't Clone(), but when the Activity starts, it will eventually call LoadScene(), which does a Clone() of scene internally.
-	g_SceneMan.SetSceneToLoad(scene.get(), true, true);
-	// Saved Scenes get their presetname set to their filename to ensure they're separate from the preset Scene they're based off of.
-	// However, saving a game you've already saved will end up with its OriginalScenePresetName set to the filename, which will screw up restarting the Activity, so we set its PresetName here.
-	scene->SetPresetName(originalScenePresetName);
-	// For starting Activity, we need to directly clone the Activity we want to start.
-	StartActivity(dynamic_cast<GAScripted*>(activity->Clone()));
-	// When this method exits, our Scene object will be destroyed, which will cause problems if you try to restart it. To avoid this, set the Scene to load to the preset object with the same name.
-	g_SceneMan.SetSceneToLoad(originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted);
-
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" loaded!");
-
 	return true;
 }
 
@@ -470,6 +453,9 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	std::cout << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count() << std::endl;
 
 	scene->SetPresetName(originalScenePresetName);
+	m_LoadedSceneRestartPreset = originalScenePresetName;
+	m_LoadedSceneRestartObjects = placeObjectsIfSceneIsRestarted;
+	m_LoadedSceneRestartUnits = placeUnitsIfSceneIsRestarted;
 	// The deferred restart clones the scene later, so it must outlive this call.
 	m_PendingLoadedScene = std::move(scene);
 	g_SceneMan.SetSceneToLoad(m_PendingLoadedScene.get(), true, true);
@@ -680,6 +666,11 @@ bool ActivityMan::RestartActivity() {
 		activityStarted = StartActivity(m_DefaultActivityType, m_DefaultActivityName);
 	}
 	g_MovableMan.SetRestoringSnapshot(false);
+	if (restoresSnapshot) {
+		g_SceneMan.SetSceneToLoad(m_LoadedSceneRestartPreset, m_LoadedSceneRestartObjects, m_LoadedSceneRestartUnits);
+		m_PendingLoadedScene.reset();
+		m_LoadedSceneRestartPreset.clear();
+	}
 	g_TimerMan.PauseSim(false);
 	std::cout << "[snapbench] restart_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count() << std::endl;
 	if (activityStarted >= 0) {
