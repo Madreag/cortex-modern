@@ -4,6 +4,7 @@
 #include "PresetMan.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "SaveGameArchive.h"
 
 #include "PauseMenuGUI.h"
 #include "SettingsGUI.h"
@@ -22,14 +23,6 @@
 
 #include <execution>
 #include <iostream>
-
-#ifdef SYSTEM_MINIZIP
-#include <minizip/zip.h>
-#include <minizip/unzip.h>
-#else
-#include "zip.h"
-#include "unzip.h"
-#endif
 
 using namespace RTE;
 
@@ -98,62 +91,41 @@ void SaveLoadMenuGUI::PopulateSaveGamesList() {
 
 	m_GUIControlManager->GetManager()->SetFocus(nullptr);
 
-	std::string saveFilePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/";
-	for (const auto& entry: std::filesystem::directory_iterator(saveFilePath)) {
-		if (entry.path().extension() == ".ccsave") {
+	const std::string saveFilePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/";
+	std::error_code directoryError;
+	for (std::filesystem::directory_iterator entry(saveFilePath, directoryError), end; !directoryError && entry != end; entry.increment(directoryError)) {
+		if (entry->path().extension() == ".ccsave" && entry->is_regular_file(directoryError)) {
 			SaveRecord record;
-			record.SavePath = entry.path();
-			record.SaveDate = entry.last_write_time();
-			m_SaveGames.push_back(record);
+			record.SavePath = entry->path();
+			record.SaveDate = entry->last_write_time(directoryError);
+			if (!directoryError) m_SaveGames.push_back(std::move(record));
 		}
 	}
 
-	std::for_each(std::execution::par_unseq,
-	              m_SaveGames.begin(), m_SaveGames.end(),
-	              [](SaveRecord& record) {
-		              // load zip sav file
-		              std::string filePath = record.SavePath.string();
-		              unzFile zippedSaveFile = unzOpen(filePath.c_str());
-		              if (!zippedSaveFile) {
-			              return;
-		              }
-
-					  // These need to use NULL instead of nullptr to compile on Linux/OSX?
-		              if (unzLocateFile(zippedSaveFile, "Index.ini", NULL) == UNZ_END_OF_LIST_OF_FILE) {
-			              unzClose(zippedSaveFile);
-			              return;
-		              }
-
-					  unz_file_info info;
-		              unzOpenCurrentFile(zippedSaveFile);
-		              unzGetCurrentFileInfo(zippedSaveFile, &info, nullptr, 0, nullptr, 0, nullptr, 0);
-
-		              char* buffer = (char*)malloc(info.uncompressed_size + 1);
-		              if (!buffer) {
-			              // If this ever hits I've lost all faith in modern OSes, but alas when one is writing C, one must dance along
-			              RTEError::ShowMessageBox("Catastrophic failure! Failed to allocate memory for savegame");
-			              unzClose(zippedSaveFile);
-			              return;
-		              }
-
-		              unzReadCurrentFile(zippedSaveFile, buffer, info.uncompressed_size);
-					  unzCloseCurrentFile(zippedSaveFile);
-					  
-		              buffer[info.uncompressed_size] = 0; // need to null-terminate manually
-
-					  Reader reader(std::make_unique<std::istringstream>(buffer), record.SavePath.string(), true, nullptr, false);
-		              while (reader.NextProperty()) {
-			              std::string propName = reader.ReadPropName();
-			              if (propName == "ActivityName") {
-				              reader >> record.Activity;
-			              } else if (propName == "OriginalScenePresetName") {
-				              reader >> record.Scene;
-			              }
-		              }
-
-					  unzClose(zippedSaveFile);
-					  free(buffer);
-	              });
+	std::for_each(std::execution::par, m_SaveGames.begin(), m_SaveGames.end(), [](SaveRecord& record) {
+		try {
+			SaveGameArchive archive(record.SavePath.string());
+			std::string text;
+			archive.ReadEntry("Index.ini", text);
+			if (text.empty() || text.find('\0') != std::string::npos) throw std::runtime_error("invalid index");
+			Reader reader(std::make_unique<std::istringstream>(text), record.SavePath.string(), true, nullptr, true);
+			reader.SetThrowOnError(true);
+			reader.SetSkipIncludes(true);
+			std::string activity, scene;
+			while (reader.NextProperty()) {
+				const std::string propName = reader.ReadPropName();
+				if (propName == "ActivityName") reader >> activity;
+				else if (propName == "OriginalScenePresetName") reader >> scene;
+				else reader.ReadPropValue();
+			}
+			if (activity.empty() || scene.empty()) throw std::runtime_error("incomplete index");
+			record.Activity = std::move(activity);
+			record.Scene = std::move(scene);
+		} catch (const std::exception&) {
+			record.Activity = "Save details unavailable";
+			record.Scene.clear();
+		}
+	});
 
 	UpdateSaveGamesGUIList();
 	m_SaveGamesFetched = true;
@@ -391,6 +363,17 @@ void SaveLoadMenuGUI::Refresh() {
 
 void SaveLoadMenuGUI::Draw() const {
 	m_GUIControlManager->Draw();
+}
+
+void SaveLoadMenuGUI::RunCatalogSelfTest() {
+	AllegroScreen screen(g_FrameMan.GetBackBuffer32());
+	GUIInputWrapper input(-1, false);
+	SaveLoadMenuGUI menu(&screen, &input, true);
+	menu.PopulateSaveGamesList();
+	for (const auto& record: menu.m_SaveGames) {
+		std::cout << "[save-catalog] " << std::quoted(record.SavePath.stem().string()) << ' ' << std::quoted(record.Scene) << ' ' << std::quoted(record.Activity) << std::endl;
+	}
+	std::cout << "[save-catalog] complete=" << menu.m_SaveGamesFetched << " count=" << menu.m_SaveGames.size() << std::endl;
 }
 
 bool SaveLoadMenuGUI::RunSaveSelfTest(const std::string& name, bool& queued) {

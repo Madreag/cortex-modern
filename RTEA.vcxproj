@@ -865,6 +865,7 @@
     <ClInclude Include="Source\System\AIWriteScript.h" />
     <ClInclude Include="Source\System\FaultInjection.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
+    <ClInclude Include="Source\System\SaveGameArchive.h" />
     <ClInclude Include="Source\System\DataModule.h" />
     <ClInclude Include="Source\System\RTEError.h" />
     <ClInclude Include="Source\System\RTETools.h" />
