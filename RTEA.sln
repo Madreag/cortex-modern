@@ -6,6 +6,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RTEA", "RTEA.vcxproj", "{A5
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libluajit", "external\sources\LuaJIT-2.1\libluajit.vcxproj", "{9C341649-AA1F-35E8-81E3-228A6A09B2BB}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "luabind", "external\sources\luabind-0.7.1\luabind.vcxproj", "{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug Full|x64 = Debug Full|x64
@@ -35,6 +37,16 @@ Global
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Final|x64.Build.0 = Release|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Profiling|x64.Build.0 = RelWithDebInfo|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Full|x64.ActiveCfg = Debug|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Full|x64.Build.0 = Debug|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Minimal|x64.ActiveCfg = Debug|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Minimal|x64.Build.0 = Debug|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Release|x64.ActiveCfg = RelWithDebInfo|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Release|x64.Build.0 = RelWithDebInfo|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final|x64.ActiveCfg = Release|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final|x64.Build.0 = Release|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Profiling|x64.Build.0 = RelWithDebInfo|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

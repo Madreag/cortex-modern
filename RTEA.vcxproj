@@ -1579,6 +1579,13 @@
     <ProjectReference Include="external\sources\LuaJIT-2.1\libluajit.vcxproj">
       <Project>{9C341649-AA1F-35E8-81E3-228A6A09B2BB}</Project>
     </ProjectReference>
+    <ProjectReference Include="external\sources\luabind-0.7.1\luabind.vcxproj" Condition="'$(Platform)'=='x64'">
+      <Project>{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}</Project>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Full' Or '$(Configuration)'=='Debug Minimal'">Configuration=Debug</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Release' Or '$(Configuration)'=='Profiling'">Configuration=RelWithDebInfo</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Final'">Configuration=Release</SetConfiguration>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
