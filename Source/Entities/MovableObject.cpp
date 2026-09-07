@@ -39,6 +39,7 @@ MovableObject::~MovableObject() {
 }
 
 void MovableObject::Clear() {
+	if (m_UniqueID > 0) g_MovableMan.UnregisterObject(this);
 	m_MOType = TypeGeneric;
 	m_Mass = 0;
 	m_Vel.Reset();
@@ -162,6 +163,7 @@ int MovableObject::Create() {
 	if (m_EffectStopTime <= 0)
 		m_EffectStopTime = m_Lifetime;
 
+	g_MovableMan.UnregisterObject(this);
 	m_UniqueID = MovableObject::GetNextUniqueID();
 
 	m_MOIDHit = g_NoMOID;
@@ -192,6 +194,7 @@ int MovableObject::Create(const float mass,
 	m_HitsMOs = hitMOs;
 	m_GetsHitByMOs = getHitByMOs;
 
+	g_MovableMan.UnregisterObject(this);
 	m_UniqueID = MovableObject::GetNextUniqueID();
 
 	m_MOIDHit = g_NoMOID;
@@ -299,6 +302,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_HasPersistedVelOscillations = reference.m_HasPersistedVelOscillations;
 	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
 	m_PersistedMOIgnoreTimerAnchor = reference.m_PersistedMOIgnoreTimerAnchor;
+	g_MovableMan.UnregisterObject(this);
 	if (IsFaithfulClone()) {
 		// A snapshot clone carries the live sim state a spawn copy deliberately resets.
 		m_UniqueID = reference.m_UniqueID;
