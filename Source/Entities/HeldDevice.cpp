@@ -190,6 +190,15 @@ int HeldDevice::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("Loudness", { reader >> m_Loudness; });
 	MatchProperty("GetsHitByMOsWhenHeld", { reader >> m_GetsHitByMOsWhenHeld; });
 	MatchProperty("VisualRecoilMultiplier", { reader >> m_VisualRecoilMultiplier; });
+	MatchProperty("SpecialBehaviour_Supported", { reader >> m_Supported; });
+	MatchProperty("SpecialBehaviour_SupportAvailable", { reader >> m_SupportAvailable; });
+	MatchProperty("SpecialBehaviour_SharpAim", { reader >> m_SharpAim; });
+	MatchProperty("SpecialBehaviour_UnPickupable", { reader >> m_IsUnPickupable; });
+	MatchProperty("SpecialBehaviour_ClearPickupableBy", {
+		reader.ReadPropValue();
+		m_PickupableByPresetNames.clear();
+	});
+	MatchProperty("SpecialBehaviour_PickupableByPreset", { m_PickupableByPresetNames.insert(reader.ReadPropValue()); });
 	MatchProperty("SpecialBehaviour_Activated", { reader >> m_Activated; });
 	MatchProperty("SpecialBehaviour_ActivationTimerElapsedSimTimeMS", {
 		double elapsedSimTimeMS;
@@ -212,6 +221,33 @@ void HeldDevice::AdoptPersistedUniqueID() {
 void HeldDevice::DiscardPersistedSnapshotState() {
 	Attachable::DiscardPersistedSnapshotState();
 	m_PersistedActivationTimerAnchor.pending = false;
+}
+
+void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
+	Attachable::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("HeldDeviceType", m_HeldDeviceType);
+	writer.NewPropertyWithValue("OneHanded", m_OneHanded);
+	writer.NewPropertyWithValue("DualWieldable", m_DualWieldable);
+	writer.NewPropertyWithValue("StanceOffset", m_StanceOffset);
+	writer.NewPropertyWithValue("SharpStanceOffset", m_SharpStanceOffset);
+	writer.NewPropertyWithValue("Supportable", m_Supportable);
+	writer.NewPropertyWithValue("SupportOffset", m_SupportOffset);
+	writer.NewPropertyWithValue("UseSupportOffsetWhileReloading", m_UseSupportOffsetWhileReloading);
+	writer.NewPropertyWithValue("GripStrengthMultiplier", m_GripStrengthMultiplier);
+	writer.NewPropertyWithValue("SharpLength", m_MaxSharpLength);
+	writer.NewPropertyWithValue("Loudness", m_Loudness);
+	writer.NewPropertyWithValue("GetsHitByMOsWhenHeld", m_GetsHitByMOsWhenHeld);
+	writer.NewPropertyWithValue("VisualRecoilMultiplier", m_VisualRecoilMultiplier);
+	writer.NewPropertyWithValue("SpecialBehaviour_Supported", m_Supported);
+	writer.NewPropertyWithValue("SpecialBehaviour_SupportAvailable", m_SupportAvailable);
+	writer.NewPropertyWithValue("SpecialBehaviour_SharpAim", m_SharpAim);
+	writer.NewPropertyWithValue("SpecialBehaviour_UnPickupable", m_IsUnPickupable);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearPickupableBy", true);
+	std::vector<std::string> pickupableBy(m_PickupableByPresetNames.begin(), m_PickupableByPresetNames.end());
+	std::sort(pickupableBy.begin(), pickupableBy.end());
+	for (const std::string& preset: pickupableBy) {
+		writer.NewPropertyWithValue("SpecialBehaviour_PickupableByPreset", preset);
+	}
 }
 
 int HeldDevice::Save(Writer& writer) const {

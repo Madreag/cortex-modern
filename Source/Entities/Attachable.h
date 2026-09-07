@@ -15,6 +15,9 @@ namespace RTE {
 		EntityAllocation(Attachable);
 		AddScriptFunctionNames(MOSRotating, "OnAttach", "OnDetach");
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 #pragma region Creation

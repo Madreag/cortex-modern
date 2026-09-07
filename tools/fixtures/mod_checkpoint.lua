@@ -68,6 +68,31 @@ local function configureActor(owned, count)
 	return values;
 end
 
+local function configureDevice(owned, count)
+	local values = {
+		RateOfFire = 777 + count, FullAuto = true, Reloadable = true, DualReloadable = false,
+		OneHandedReloadTimeMultiplier = 1.75, ReloadAngle = 0.25, OneHandedReloadAngle = 0.375,
+		ActivationDelay = 55, DeactivationDelay = 77, BaseReloadTime = 987,
+		ShakeRange = 0.125, SharpShakeRange = 0.375, NoSupportFactor = 2.5,
+		ParticleSpreadRange = 0.75, ShellVelVariation = 0.25, IsAnimatedManually = true,
+		RecoilTransmission = 0.25, ReloadEndOffset = 0.375, MuzzleOffset = Vector(7, 9),
+		EjectionOffset = Vector(3, -2), StanceOffset = Vector(4, 5), SharpStanceOffset = Vector(6, 7),
+		SupportOffset = Vector(-4, 3), Supportable = true, Supported = true, SharpLength = 123,
+		UseSupportOffsetWhileReloading = true, UnPickupable = true, GripStrengthMultiplier = 1.5,
+		GetsHitByMOsWhenHeld = true, VisualRecoilMultiplier = 0.875,
+		ApplyTransferredForcesAtOffset = false, IgnoresParticlesWhileAttached = true,
+		InheritsVelWhenDetached = 0.625, InheritsAngularVelWhenDetached = 0.875,
+	};
+	for key, value in pairs(values) do
+		owned[key] = value;
+	end
+	for key in pairs(values) do
+		local value = owned[key];
+		values[key] = type(value) == "userdata" and Vector(value.X, value.Y) or value;
+	end
+	return values;
+end
+
 local function verifyConfiguration(owned, values)
 	for key, value in pairs(values) do
 		local actual = owned[key];
@@ -101,6 +126,8 @@ function Create(self)
 	self.checkpoint.owned.GibImpulseLimit = 1000;
 	self.checkpoint.configuration = configure(self.checkpoint.owned, 0);
 	self.checkpoint.actorConfiguration = configureActor(self.checkpoint.owned, 0);
+	self.checkpoint.device = CreateHDFirearm("Battle Rifle", "Base.rte");
+	self.checkpoint.deviceConfiguration = configureDevice(self.checkpoint.device, 0);
 	self.checkpoint.owned:SetNumberValue("CheckpointCount", 0);
 	self.checkpoint.owned.shared = self.checkpoint;
 	self.checkpoint.ownedAlias = self.checkpoint.owned;
@@ -131,6 +158,7 @@ function Update(self)
 	assert(state.owned.GibImpulseLimit == 1000 + self.testUpdate, "checkpoint owned gib setting");
 	verifyConfiguration(state.owned, state.configuration);
 	verifyConfiguration(state.owned, state.actorConfiguration);
+	verifyConfiguration(state.device, state.deviceConfiguration);
 	local count = state.step();
 	assert(count == self.testUpdate + 1 and state.peek() == count, "checkpoint shared upvalue");
 	local ok, job = coroutine.resume(state.job);
@@ -150,6 +178,7 @@ function Update(self)
 	state.owned.GibImpulseLimit = 1000 + count;
 	state.configuration = configure(state.owned, count);
 	state.actorConfiguration = configureActor(state.owned, count);
+	state.deviceConfiguration = configureDevice(state.device, count);
 	self:SetNumberValue("TestUpdates", count);
 	self:SetNumberValue("TestCheckpointState", count + job + wrapped + state.vector.X + #word);
 end

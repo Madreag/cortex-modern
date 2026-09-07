@@ -148,6 +148,8 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 		}
 	});
 	MatchProperty("ParentBreakWound", { m_ParentBreakWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });
+	MatchProperty("SpecialBehaviour_BreakWoundPreset", { m_BreakWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", reader.ReadPropValue())); });
+	MatchProperty("SpecialBehaviour_ParentBreakWoundPreset", { m_ParentBreakWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", reader.ReadPropValue())); });
 	MatchProperty("InheritsHFlipped", {
 		reader >> m_InheritsHFlipped;
 		if (m_InheritsHFlipped != 0 && m_InheritsHFlipped != 1) {
@@ -172,6 +174,18 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("AddPieSlice", { m_PieSlices.emplace_back(std::unique_ptr<PieSlice>(dynamic_cast<PieSlice*>(g_PresetMan.ReadReflectedPreset(reader)))); });
 
 	EndPropertyList;
+}
+
+void Attachable::SaveSnapshotConfiguration(Writer& writer) const {
+	MOSRotating::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("ApplyTransferredForcesAtOffset", m_ApplyTransferredForcesAtOffset);
+	writer.NewPropertyWithValue("GibWithParentChance", m_GibWithParentChance);
+	writer.NewPropertyWithValue("ParentGibBlastStrengthMultiplier", m_ParentGibBlastStrengthMultiplier);
+	writer.NewPropertyWithValue("InheritsVelWhenDetached", m_InheritsVelWhenDetached);
+	writer.NewPropertyWithValue("InheritsAngularVelWhenDetached", m_InheritsAngularVelWhenDetached);
+	writer.NewPropertyWithValue("IgnoresParticlesWhileAttached", m_IgnoresParticlesWhileAttached);
+	writer.NewPropertyWithValue("SpecialBehaviour_BreakWoundPreset", m_BreakWound ? m_BreakWound->GetModuleAndPresetName() : "None");
+	writer.NewPropertyWithValue("SpecialBehaviour_ParentBreakWoundPreset", m_ParentBreakWound ? m_ParentBreakWound->GetModuleAndPresetName() : "None");
 }
 
 int Attachable::Save(Writer& writer) const {
@@ -390,7 +404,7 @@ bool Attachable::HandlePotentialRadiusAffectingAttachable(const Attachable* atta
 }
 
 int Attachable::UpdateScripts() {
-	if (m_Parent && !m_AllLoadedScripts.empty() && !ObjectScriptsInitialized() && !HasPersistedScriptState()) {
+	if (m_Parent && !m_AllLoadedScripts.empty() && !ObjectScriptsInitialized() && !ScriptStateRestorePending()) {
 		RunScriptedFunctionInAppropriateScripts("OnAttach", false, false, {m_Parent}, {}, {});
 	}
 
@@ -445,7 +459,7 @@ void Attachable::Update() {
 	// If we're attached to something, MovableMan doesn't own us, and therefore isn't calling our UpdateScripts method (and neither is our parent), so we should here.
 	if (m_Parent && GetRootParent()->HasEverBeenAddedToMovableMan()) {
 		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-		if (!m_AllLoadedScripts.empty() && !ObjectScriptsInitialized() && !HasPersistedScriptState()) {
+		if (!m_AllLoadedScripts.empty() && !ObjectScriptsInitialized() && !ScriptStateRestorePending()) {
 			RunScriptedFunctionInAppropriateScripts("OnAttach", false, false, {m_Parent}, {}, {});
 		}
 		UpdateScripts();
@@ -579,13 +593,15 @@ void Attachable::SetParent(MOSRotating* newParent) {
 		m_IsWound = false;
 
 		if (MovableObject* rootParent = GetRootParent()) {
-			const MovableObject* whichMOToNotHit = GetWhichMOToNotHit();
-			const MovableObject* rootParentMOToNotHit = rootParent->GetWhichMOToNotHit();
-			if ((whichMOToNotHit && whichMOToNotHit != rootParent) || (rootParentMOToNotHit && rootParentMOToNotHit != this)) {
-				m_pMOToNotHit = nullptr;
-			} else {
-				m_pMOToNotHit = rootParent;
-				rootParent->SetWhichMOToNotHit(this);
+			if (!keepsLiveState) {
+				const MovableObject* whichMOToNotHit = GetWhichMOToNotHit();
+				const MovableObject* rootParentMOToNotHit = rootParent->GetWhichMOToNotHit();
+				if ((whichMOToNotHit && whichMOToNotHit != rootParent) || (rootParentMOToNotHit && rootParentMOToNotHit != this)) {
+					m_pMOToNotHit = nullptr;
+				} else {
+					m_pMOToNotHit = rootParent;
+					rootParent->SetWhichMOToNotHit(this);
+				}
 			}
 
 			if (const Actor* rootParentAsActor = dynamic_cast<const Actor*>(rootParent)) {
@@ -607,7 +623,7 @@ void Attachable::SetParent(MOSRotating* newParent) {
 		}
 	}
 
-	if (!faithful && parentToUseForScriptCall && parentToUseForScriptCall->GetRootParent()->HasEverBeenAddedToMovableMan()) {
+	if (!keepsLiveState && parentToUseForScriptCall && parentToUseForScriptCall->GetRootParent()->HasEverBeenAddedToMovableMan()) {
 		RunScriptedFunctionInAppropriateScripts(newParent ? "OnAttach" : "OnDetach", false, false, {parentToUseForScriptCall});
 	}
 }
