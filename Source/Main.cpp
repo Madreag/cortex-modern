@@ -175,6 +175,8 @@ static long long s_rbProbeSimCount = 0;
 static long long s_rbProbeSimTimeTicks = 0;
 static long s_rbProbeUidCounter = 0;
 static bool s_rbProbeInMemory = true;
+static bool s_rbProbeUseLoadGame = false;
+static bool s_rbProbeLaunchRestorePending = false;
 static bool s_rbProbeMemoryRestorePending = false;
 static MovableMan::WorldSnapshot s_rbProbeWorld;
 static MovableMan::WorldSetAside s_rbProbeOriginals;
@@ -537,7 +539,9 @@ void HandleMainArgs(int argCount, char** argValue) {
 		}
 
 		if (!lastArg && currentArg == "-rollback-fidelity-probe-mode") {
-			s_rbProbeInMemory = std::string(argValue[++i]) != "file";
+			const std::string mode = argValue[++i];
+			s_rbProbeUseLoadGame = mode == "launch";
+			s_rbProbeInMemory = mode != "file" && !s_rbProbeUseLoadGame;
 			continue;
 		}
 
@@ -1538,6 +1542,8 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					activity->CaptureRollbackState(s_rbProbeActivityAtWindowEnd);
 				}
 				s_rbProbeMemoryRestorePending = true;
+			} else if (s_rbProbeUseLoadGame) {
+				s_rbProbeLaunchRestorePending = true;
 			} else if (!g_ActivityMan.LoadGameToRestart(RollbackProbeSaveName())) {
 				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
 				System::SetQuit(true);
@@ -2405,10 +2411,15 @@ void RunGameLoop() {
 				s_rbProbePhase = 3;
 				std::cout << "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount << std::endl;
 			}
-			if (g_ActivityMan.ActivitySetToRestart()) {
+			if (g_ActivityMan.ActivitySetToRestart() || s_rbProbeLaunchRestorePending) {
 				g_LoadingScreen.DrawLoadingSplash();
 				g_WindowMan.UploadFrame();
-				if (!g_ActivityMan.RestartActivity()) {
+				const bool restarted = s_rbProbeLaunchRestorePending ? g_ActivityMan.LoadAndLaunchGame(RollbackProbeSaveName()) : g_ActivityMan.RestartActivity();
+				if (s_rbProbeLaunchRestorePending) {
+					s_rbProbeLaunchRestorePending = false;
+					g_ActivityMan.RemoveSavedGame(RollbackProbeSaveName());
+				}
+				if (!restarted) {
 					break;
 				}
 				if (s_rbProbePhase == 2) {

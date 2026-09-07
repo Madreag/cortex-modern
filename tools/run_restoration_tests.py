@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--script", type=Path)
     parser.add_argument("--ticks", type=int, default=521)
     parser.add_argument("--captures", type=int, nargs="+", default=[50, 150, 250, 400])
-    parser.add_argument("--modes", nargs="+", choices=["memory", "file"], default=["memory", "file"])
+    parser.add_argument("--modes", nargs="+", choices=["memory", "file", "launch"], default=["memory", "file"])
     parser.add_argument("--lua-states", type=int)
     options = parser.parse_args()
     if any(c < 1 or c + 31 >= options.ticks for c in options.captures):
