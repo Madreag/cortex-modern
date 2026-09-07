@@ -445,9 +445,12 @@ bool ActivityMan::RunSaveCallbacksSelfTest() {
 	const bool objects = loaded && actors.size() == expectedActors && restoredActor && restoredActor->GetNumberValue("save_callback_count") == 1;
 	const bool activityState = loaded && GetActivity()->GetTeamFunds(Activity::TeamOne) == 357 &&
 	                           scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 1)") == 0;
-	const bool passed = callback && loaded && images && scene && objects && activityState;
+	const bool savedAgain = loaded && SaveCurrentGame("save_callbacks_again") && WaitForSaveGameTask();
+	const bool repeated = savedAgain && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0 &&
+	                      LoadAndLaunchGame("save_callbacks_again") && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0;
+	const bool passed = callback && loaded && images && scene && objects && activityState && repeated;
 	std::cout << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
-	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << std::endl;
+	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated << std::endl;
 	return passed;
 }
 
