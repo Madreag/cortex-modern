@@ -282,7 +282,10 @@ function Create(self)
 	self.checkpoint.moduleIterator();
 	do
 		local state = self.checkpoint;
+		state.pathExpectedBy = math.max(40, (tonumber(os.getenv("CC_TEST_ASYNC_PATH_DELIVERY_TICK")) or 0) + 10);
+		state.pathCallbacks = 0;
 		SceneMan.Scene:CalculatePathAsync(function(result)
+			state.pathCallbacks = state.pathCallbacks + 1;
 			state.pathRequest = result;
 			state.pathRequestAlias = result;
 			result.shared = state;
@@ -418,7 +421,8 @@ function Update(self)
 	assert(state.alarm.ScenePos.X == 13 + self.testUpdate and state.alarmPosition.Y == -15, "checkpoint alarm position");
 	assert(state.alarm.Team == Activity.TEAM_2 and state.alarm.Range == 173.5 + self.testUpdate / 8, "checkpoint alarm values");
 	assert(rawequal(state.module, state.moduleAlias) and state.module.FileName == "Base.rte", "checkpoint module reference");
-	if self.testUpdate >= 40 then
+	if self.testUpdate >= state.pathExpectedBy then
+		assert(state.pathCallbacks == 1, "checkpoint path callback count");
 		assert(state.pathRequest and rawequal(state.pathRequest, state.pathRequestAlias) and state.pathRequest.shared == state, "checkpoint path result aliases");
 		assert(state.pathRequest.PathLength == state.pathLength and state.pathRequest.TotalCost == state.pathCost and state.pathRequest.Status == state.pathStatus, "checkpoint path result values");
 		local points = 0;
