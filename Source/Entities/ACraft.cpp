@@ -198,6 +198,7 @@ void ACraft::Clear() {
 	m_HatchCloseSound = nullptr;
 	m_CollectedInventory.clear();
 	m_Exits.clear();
+	m_ReadExitIncomingCursor = 0;
 	m_CurrentExit = m_Exits.begin();
 	m_ExitInterval = 1000;
 	m_ExitTimer.Reset();

@@ -39,6 +39,7 @@ ACraft,m_Range,copied,an Exit member; the Exit list is copied whole in ACraft::C
 ACraft,m_Clear,copied,an Exit member; the Exit list is copied whole in ACraft::Create
 ACraft,m_pIncomingMO,link,resolved from m_FaithfulIncomingMOUID at link resolution
 ACraft,m_FaithfulIncomingMOUID,copied,the faithful carrier of an exit's incoming object
+ACraft,m_ReadExitIncomingCursor,transient,reader-only cursor reset by Clear and consumed while reading SavedIncomingUID entries
 Arm,m_HandSpriteBitmap,render,bitmap fetched from the hand sprite file
 HeldDevice,m_SeenByPlayer,render,per-player unheld-item HUD visibility
 HeldDevice,m_BlinkTimer,render,HUD blink timer reset in Update and read only when drawing
@@ -51,7 +52,6 @@ AtomGroup,m_IgnoreMOIDs,copied,copied element by element in Create
 Atom,m_OwnerMO,link,set by the owning group
 Atom,m_IgnoreMOIDsByGroup,link,points at the owning group's ignore list
 Atom,m_LastHit,transient,last-collision scratch written by Travel before the group reads it in the same step
-Atom,m_HitImpulse,transient,last-collision scratch written by Travel before the group reads it in the same step
 LimbPath,m_CurrentSegment,copied,carried as the segment index by the traversal pack in Create
 LimbPath,m_PathTimer,copied,carried as its start time by the traversal pack in Create
 LimbPath,m_SegTimer,copied,carried as its start time by the traversal pack in Create
