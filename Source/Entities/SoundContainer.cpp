@@ -102,7 +102,12 @@ int SoundContainer::Create(const std::string& soundFilePath, bool immobile, bool
 int SoundContainer::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Entity::ReadProperty(propName, reader));
 
-	MatchProperty("SpecialBehaviour_TopLevelSoundSet", { reader >> *m_TopLevelSoundSet; });
+	MatchProperty("SpecialBehaviour_TopLevelSoundSet", {
+		SoundSet topLevelSoundSet;
+		reader >> topLevelSoundSet;
+		m_TopLevelSoundSet->Destroy();
+		m_TopLevelSoundSet->Create(topLevelSoundSet);
+	});
 	MatchProperty("AddSound", { m_TopLevelSoundSet->AddSoundData(SoundSet::ReadAndGetSoundData(reader)); });
 	MatchProperty("AddSoundSet", {
 		SoundSet soundSetToAdd;
