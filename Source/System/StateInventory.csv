@@ -53,9 +53,14 @@ Atom,m_OwnerMO,link,set by the owning group
 Atom,m_IgnoreMOIDsByGroup,link,points at the owning group's ignore list
 Atom,m_LastHit,transient,last-collision scratch written by Travel before the group reads it in the same step
 LimbPath,m_CurrentSegment,copied,carried as the segment index by the traversal pack in Create
-LimbPath,m_PathTimer,copied,carried as its start time by the traversal pack in Create
-LimbPath,m_SegTimer,copied,carried as its start time by the traversal pack in Create
+LimbPath,m_PathTimer,copied,simulation and real anchors and limits carried by the LP2 pack in faithful Create
+LimbPath,m_SegTimer,copied,simulation and real anchors and limits carried by the LP2 pack in faithful Create
 LimbPath,m_Ended,copied,carried by the traversal pack in Create
+LimbPath,m_JointPos,copied,carried by the LP2 pack in faithful Create
+LimbPath,m_JointVel,copied,carried by the LP2 pack in faithful Create
+LimbPath,m_Rotation,copied,angle and flips and cached elements carried by the LP2 pack in faithful Create
+LimbPath,m_RotationOffset,copied,carried by the LP2 pack in faithful Create
+LimbPath,m_PositionOffset,copied,carried by the LP2 pack in faithful Create
 Controller,m_ControlledActor,link,set by the actor that owns the controller
 Controller,m_NextIgnore,outside,this machine's input-edge latch for sampling; the sim reads only the wire-applied control states
 Controller,m_PrevIgnore,outside,this machine's input-edge latch for sampling; the sim reads only the wire-applied control states
