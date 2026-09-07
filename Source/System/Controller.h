@@ -4,6 +4,8 @@
 #include "Vector.h"
 
 #include <array>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace RTE {
@@ -132,6 +134,7 @@ namespace RTE {
 		/// Copy constructor method used to instantiate a Controller object identical to an already existing one.
 		/// @param reference A Controller object which is passed in by reference.
 		Controller(const Controller& reference) {
+			Clear();
 			if (this != &reference) {
 				Create(reference);
 			}
@@ -159,6 +162,11 @@ namespace RTE {
 		/// @param reference A reference to the Controller to deep copy.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create(const Controller& reference);
+
+		/// Complete runtime values; the controlled actor remains a separate graph reference.
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		void CopyCheckpointFrom(const Controller& reference);
 #pragma endregion
 
 #pragma region Destruction
@@ -435,6 +443,14 @@ namespace RTE {
 		std::pair<std::pair<float, float>, bool> m_AnalogCursorAngleLimits; //!< Analog aim value limits, as well as whether or not the limit is actually enabled.
 
 	private:
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_ControlStates, self.m_AnalogMove, self.m_AnalogAim, self.m_AnalogCursor,
+				self.m_Disabled, self.m_WireApplyTick, self.m_WireSchemeValid, self.m_WireDeviceClass, self.m_WireDigitalAimSpeed,
+				self.m_InputMode, self.m_SeatMode, self.m_Player, self.m_SeatPlayer, self.m_Team, self.m_NextIgnore, self.m_PrevIgnore,
+				self.m_WeaponChangeNextIgnore, self.m_WeaponChangePrevIgnore, self.m_WeaponPickupIgnore, self.m_WeaponDropIgnore,
+				self.m_WeaponReloadIgnore, self.m_WeaponPrimaryHotkeyIgnore, self.m_ReleaseTimer, self.m_JoyAccelTimer,
+				self.m_KeyAccelTimer, self.m_MouseMovement, self.m_AnalogCursorAngleLimits);
+		}
 #pragma region Update Breakdown
 		/// Updates the player's inputs portion of this Controller. For breaking down Update into more comprehensible chunks.
 		/// This method will call both UpdatePlayerPieMenuInput and UpdatePlayerAnalogInput.

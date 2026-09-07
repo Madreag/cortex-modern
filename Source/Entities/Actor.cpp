@@ -191,7 +191,9 @@ int Actor::Create(const Actor& reference) {
 	m_MOType = MovableObject::TypeActor;
 
 	m_Controller = reference.m_Controller;
-	if (!IsFaithfulClone()) {
+	if (IsFaithfulClone()) {
+		m_Controller.CopyCheckpointFrom(reference.m_Controller);
+	} else {
 		m_Controller.SetInputMode(Controller::CIM_AI);
 	}
 	m_Controller.SetControlledActor(this);

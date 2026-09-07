@@ -7,6 +7,7 @@
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "InputScript.h"
+#include "CheckpointArchive.h"
 
 #include <array>
 
@@ -90,6 +91,34 @@ int Controller::Create(const Controller& reference) {
 	m_AnalogCursorAngleLimits = reference.m_AnalogCursorAngleLimits;
 
 	return 0;
+}
+
+std::string Controller::SaveCheckpoint() const {
+	CheckpointWriter writer("Controller1");
+	VisitCheckpoint(writer, *this);
+	return writer.Text();
+}
+
+bool Controller::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "Controller1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) {
+		return false;
+	}
+}
+
+void Controller::CopyCheckpointFrom(const Controller& reference) {
+	Create(reference);
+	m_NextIgnore = reference.m_NextIgnore;
+	m_PrevIgnore = reference.m_PrevIgnore;
+	m_WeaponPrimaryHotkeyIgnore = reference.m_WeaponPrimaryHotkeyIgnore;
+	m_ReleaseTimer = reference.m_ReleaseTimer;
+	m_JoyAccelTimer = reference.m_JoyAccelTimer;
+	m_KeyAccelTimer = reference.m_KeyAccelTimer;
+	m_MouseMovement = reference.m_MouseMovement;
 }
 
 bool Controller::RelativeCursorMovement(Vector& cursorPos, float moveScale) const {
