@@ -63,6 +63,7 @@ void Actor::Clear() {
 	m_PersistedControllerPlayer = 0;
 	m_PersistedPieMenuState.clear();
 	m_HasPersistedViewPoint = false;
+	m_HasPersistedMovePath = false;
 	m_PlayerControllable = true;
 	m_BodyHitSound = nullptr;
 	m_AlarmSound = nullptr;
@@ -198,6 +199,7 @@ int Actor::Create(const Actor& reference) {
 	m_PersistedPieMenuState = reference.m_PersistedPieMenuState;
 	m_PersistedViewPoint = reference.m_PersistedViewPoint;
 	m_HasPersistedViewPoint = reference.m_HasPersistedViewPoint;
+	m_HasPersistedMovePath = reference.m_HasPersistedMovePath;
 	m_PlayerControllable = reference.m_PlayerControllable;
 
 	if (reference.m_BodyHitSound) {
@@ -302,6 +304,10 @@ int Actor::Create(const Actor& reference) {
 	m_MoveVector = reference.m_MoveVector;
 	m_MovePath.clear();
 	m_UpdateMovePath = reference.m_UpdateMovePath;
+	if (IsFaithfulClone() || m_HasPersistedMovePath) {
+		m_MovePath = reference.m_MovePath;
+		m_WaypointCursor = reference.m_WaypointCursor;
+	}
 	m_MoveProximityLimit = reference.m_MoveProximityLimit;
 	m_AIBaseDigStrength = reference.m_AIBaseDigStrength;
 	m_BaseMass = reference.m_BaseMass;
@@ -521,6 +527,27 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> waypointToAdd;
 		AddAISceneWaypoint(waypointToAdd);
 	});
+	MatchProperty("SpecialBehaviour_ClearAIOrders", {
+		reader >> m_HasPersistedMovePath;
+		m_Waypoints.clear();
+		m_FaithfulWaypointUIDs.clear();
+		m_MovePath.clear();
+	});
+	MatchProperty("SpecialBehaviour_AIWaypointUniqueID", {
+		long uid = 0;
+		reader >> uid;
+		m_FaithfulWaypointUIDs.push_back(uid);
+	});
+	MatchProperty("SpecialBehaviour_AddMovePathPoint", {
+		Vector point;
+		reader >> point;
+		m_MovePath.push_back(point);
+	});
+	MatchProperty("SpecialBehaviour_WaypointCursor", { reader >> m_WaypointCursor; });
+	MatchProperty("SpecialBehaviour_MoveTarget", { reader >> m_MoveTarget; });
+	MatchProperty("SpecialBehaviour_PrevPathTarget", { reader >> m_PrevPathTarget; });
+	MatchProperty("SpecialBehaviour_MoveVector", { reader >> m_MoveVector; });
+	MatchProperty("SpecialBehaviour_UpdateMovePath", { reader >> m_UpdateMovePath; });
 	MatchProperty("PieMenu", {
 		m_PieMenu = std::unique_ptr<PieMenu>(dynamic_cast<PieMenu*>(g_PresetMan.ReadReflectedPreset(reader)));
 		if (!m_PieMenu) {
@@ -559,6 +586,24 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSRotating::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("GoldCarried", m_GoldCarried);
+	writer.NewPropertyWithValue("AIMode", m_AIMode);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearAIOrders", true);
+	size_t waypointIndex = 0;
+	for (const auto& [position, object]: m_Waypoints) {
+		const long uid = object ? object->GetUniqueID() : (waypointIndex < m_FaithfulWaypointUIDs.size() ? m_FaithfulWaypointUIDs[waypointIndex] : 0);
+		writer.NewPropertyWithValue("SpecialBehaviour_AddAISceneWaypoint", position);
+		writer.NewPropertyWithValue("SpecialBehaviour_AIWaypointUniqueID", uid);
+		++waypointIndex;
+	}
+	for (const Vector& point: m_MovePath) {
+		writer.NewPropertyWithValue("SpecialBehaviour_AddMovePathPoint", point);
+	}
+	writer.NewPropertyWithValue("SpecialBehaviour_WaypointCursor", m_WaypointCursor);
+	writer.NewPropertyWithValue("SpecialBehaviour_MoveTarget", m_MoveTarget);
+	writer.NewPropertyWithValue("SpecialBehaviour_PrevPathTarget", m_PrevPathTarget);
+	writer.NewPropertyWithValue("SpecialBehaviour_MoveVector", m_MoveVector);
+	writer.NewPropertyWithValue("SpecialBehaviour_UpdateMovePath", m_UpdateMovePath);
 	writer.NewPropertyWithValue("PassengerSlots", m_PassengerSlots);
 	writer.NewPropertyWithValue("ImpulseDamageThreshold", m_TravelImpulseDamage);
 	writer.NewPropertyWithValue("StableVelocityThreshold", m_StableVel);
@@ -1464,6 +1509,7 @@ void Actor::AdoptPersistedUniqueID() {
 		m_ViewPoint = m_PersistedViewPoint;
 		m_HasPersistedViewPoint = false;
 	}
+	m_HasPersistedMovePath = false;
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
 	}
@@ -1518,6 +1564,7 @@ void Actor::DiscardPersistedSnapshotState() {
 	m_PersistedControllerInputMode = -1;
 	m_PersistedPieMenuState.clear();
 	m_HasPersistedViewPoint = false;
+	m_HasPersistedMovePath = false;
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->DiscardPersistedSnapshotState();
 	}

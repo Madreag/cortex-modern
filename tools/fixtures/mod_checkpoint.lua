@@ -68,6 +68,8 @@ local function configureActor(owned, count)
 		ThrowPrepTime = 444, MaxWalkPathCrouchShift = 3.75,
 		CrouchAmountOverride = 0.375, ProneState = AHuman.GOPRONE,
 		UpperBodyState = AHuman.AIMING_SHARP, MovementState = Actor.CROUCH,
+		Status = Actor.UNSTABLE, Health = 77, MaxHealth = 222,
+		GoldCarried = 12.5 + count / 16, ViewPoint = Vector(123, 234), AIMode = Actor.AIMODE_SQUAD,
 	};
 	for key, value in pairs(values) do
 		owned[key] = value;
@@ -153,6 +155,13 @@ function Create(self)
 	self.checkpoint.ownedUID = self.checkpoint.owned.UniqueID;
 	self.checkpoint.ownedPos = self.checkpoint.owned.Pos;
 	self.checkpoint.ownedController = self.checkpoint.owned:GetController();
+	self.checkpoint.owned:ClearAIWaypoints();
+	self.checkpoint.owned:AddAISceneWaypoint(Vector(31, 47));
+	self.checkpoint.owned:AddAISceneWaypoint(Vector(53, 61));
+	self.checkpoint.owned:AddAIMOWaypoint(self);
+	self.checkpoint.owned:AddToMovePathBeginning(Vector(13, 17));
+	self.checkpoint.owned:AddToMovePathEnd(Vector(19, 23));
+	self.checkpoint.owned.MOMoveTarget = self;
 	self.checkpoint.step, self.checkpoint.peek = counter(self.checkpoint);
 	self.checkpoint.job = coroutine.create(work(self.checkpoint, 2));
 	self.checkpoint.wrap = coroutine.wrap(work(self.checkpoint, 3));
@@ -177,6 +186,9 @@ function Update(self)
 	assert(state.ownedController:IsState(Controller.WEAPON_FIRE) == (self.testUpdate % 2 == 1), "checkpoint owned controller state");
 	assert(state.owned.GlobalAccScalar == 0.25 + self.testUpdate / 1024, "checkpoint owned acceleration setting");
 	assert(state.owned.GibImpulseLimit == 1000 + self.testUpdate, "checkpoint owned gib setting");
+	assert(state.owned:GetWaypointListSize() == 3 and state.owned:GetAIMOWaypointID() == self.ID, "checkpoint waypoint object identity");
+	assert(state.owned.MovePathSize == 2 and state.owned.MovePathEnd.X == 19 and state.owned.MovePathEnd.Y == 23, "checkpoint move path");
+	assert(state.owned.MOMoveTarget.UniqueID == self.UniqueID, "checkpoint move target identity");
 	verifyConfiguration(state.owned, state.configuration);
 	verifyConfiguration(state.owned, state.actorConfiguration);
 	verifyConfiguration(state.device, state.deviceConfiguration);
