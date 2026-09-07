@@ -219,6 +219,8 @@ int MOSprite::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SettleMaterialDisabled", { reader >> m_SettleMaterialDisabled; });
 	MatchProperty("EntryWound", { m_pEntryWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });
 	MatchProperty("ExitWound", { m_pExitWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });
+	MatchProperty("SpecialBehaviour_EntryWoundPreset", { m_pEntryWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", reader.ReadPropValue())); });
+	MatchProperty("SpecialBehaviour_ExitWoundPreset", { m_pExitWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", reader.ReadPropValue())); });
 
 	EndPropertyList;
 }
@@ -266,6 +268,17 @@ std::string MOSprite::GetEntryWoundPresetName() const {
 std::string MOSprite::GetExitWoundPresetName() const {
 	return m_pExitWound ? m_pExitWound->GetPresetName() : "";
 };
+
+void MOSprite::SaveSnapshotConfiguration(Writer& writer) const {
+	MovableObject::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpriteOffset", m_SpriteOffset);
+	writer.NewPropertyWithValue("SpriteAnimMode", static_cast<int>(m_SpriteAnimMode));
+	writer.NewPropertyWithValue("SpriteAnimDuration", m_SpriteAnimDuration);
+	writer.NewPropertyWithValue("ForcedHFlip", m_ForcedHFlip);
+	writer.NewPropertyWithValue("SettleMaterialDisabled", m_SettleMaterialDisabled);
+	writer.NewPropertyWithValue("SpecialBehaviour_EntryWoundPreset", m_pEntryWound ? m_pEntryWound->GetModuleAndPresetName() : "None");
+	writer.NewPropertyWithValue("SpecialBehaviour_ExitWoundPreset", m_pExitWound ? m_pExitWound->GetModuleAndPresetName() : "None");
+}
 
 int MOSprite::Save(Writer& writer) const {
 	MovableObject::Save(writer);
