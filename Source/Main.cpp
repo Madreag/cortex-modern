@@ -123,6 +123,7 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+static std::string s_menuMpTraceError;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -2013,7 +2014,16 @@ void RunGameLoop() {
 						(error.find("Complete:") != std::string::npos ||
 						 error.find("MissingFrameTimeout") != std::string::npos ||
 						 error.find("PeerDisconnected") != std::string::npos);
-					if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
+					if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
+						const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
+						if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
+							s_menuMpTraceError = error;
+							std::cerr << "[menu-mp] trace stopped: " << error << std::endl;
+						}
+						g_ActivityMan.EndActivity();
+						ScenarioRunner::ClearControllerReplayError();
+						System::SetQuit(true);
+					} else if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
 						g_NetMatchService.Complete("e2e complete");
 						g_ActivityMan.EndActivity();
 						ScenarioRunner::ClearControllerReplayError();
@@ -2203,16 +2213,11 @@ void RunGameLoop() {
 				System::SetQuit(true);
 				break;
 			}
-			// Menu-launched MP match with tracing armed: cap at -max-ticks so the trace is bounded for the
-			// host-vs-client sim-gated compare (the menu has no scenario/e2e cap of its own).
+			// Stop after the last requested trace tick has completed.
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
-				static uint64_t s_menuMpStartTick = UINT64_MAX;
-				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-				if (s_menuMpStartTick == UINT64_MAX) {
-					s_menuMpStartTick = nowTick;
-				}
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
-				if (nowTick - s_menuMpStartTick >= cap) {
+				if (g_MetricsCollector.GetTickHashCount() >= cap) {
+					std::cout << "[menu-mp] trace complete at tick " << g_TimerMan.GetSimUpdateCount() << std::endl;
 					g_NetMatchService.Complete("menu mp trace complete");
 					// Same capped-stop drain as the e2e path.
 					std::this_thread::sleep_for(std::chrono::milliseconds(1500));
@@ -3491,9 +3496,17 @@ int main(int argc, char** argv) {
 
 			if (traceMenuMp) {
 				g_MetricsCollector.EndRun();
+				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
+				if (!s_menuMpTraceError.empty() || g_MetricsCollector.GetTickHashCount() != cap) {
+					std::cerr << "[menu-mp] FAIL: collected " << g_MetricsCollector.GetTickHashCount() << " of " << cap << " requested ticks" << std::endl;
+					g_MetricsCollector.SetResult(false);
+					scenarioExitCode = 1;
+				}
 				const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 				if (g_MetricsCollector.WriteReport(tracePath)) {
 					std::cout << "[menu-mp] wrote trace: " << tracePath << std::endl;
+				} else {
+					scenarioExitCode = 1;
 				}
 			}
 		}
