@@ -175,9 +175,6 @@ int SoundContainer::Save(Writer& writer) const {
 	// Due to writer limitations, the top level SoundSet has to be explicitly written out, even though SoundContainer standard behaviour is to hide it in INI and just have properties be part of the SoundContainer.
 	writer.NewPropertyWithValue("SpecialBehaviour_TopLevelSoundSet", *m_TopLevelSoundSet);
 
-	writer.NewProperty("SoundSelectionCycleMode");
-	SoundSet::SaveSoundSelectionCycleMode(writer, m_TopLevelSoundSet->GetSoundSelectionCycleMode());
-
 	writer.NewProperty("SoundOverlapMode");
 	auto overlapModeMapEntry = std::find_if(c_SoundOverlapModeMap.begin(), c_SoundOverlapModeMap.end(), [&soundOverlapMode = m_SoundOverlapMode](auto element) { return element.second == soundOverlapMode; });
 	if (overlapModeMapEntry != c_SoundOverlapModeMap.end()) {
