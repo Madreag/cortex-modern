@@ -19,6 +19,9 @@ namespace RTE {
 		// Concrete allocation and cloning definitions
 		EntityAllocation(HDFirearm);
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 		AddScriptFunctionNames(HeldDevice, "OnFire", "OnReload");
 
