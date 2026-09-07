@@ -182,6 +182,27 @@ function Create(self)
 	self.checkpoint.aSoundLeaf = self.checkpoint.aSoundSubset.SubSoundSets();
 	self.checkpoint.aSoundLeaf.shared = self.checkpoint;
 	do
+		local second = SoundSet();
+		second.SoundSelectionCycleMode = SoundSet.FORWARDS;
+		self.checkpoint.soundSet:AddSoundSet(second);
+		local third = SoundSet();
+		third.SoundSelectionCycleMode = SoundSet.ALL;
+		self.checkpoint.soundSet:AddSoundSet(third);
+	end
+	self.checkpoint.soundIterator = self.checkpoint.soundSet.SubSoundSets;
+	self.checkpoint.soundIteratorAlias = self.checkpoint.soundIterator;
+	self.checkpoint.soundUnstartedIterator = self.checkpoint.soundSet.SubSoundSets;
+	self.checkpoint.soundExhaustedIterator = self.checkpoint.soundSet.SubSoundSets;
+	while self.checkpoint.soundExhaustedIterator() do end
+	self.checkpoint.emptyIterator = SoundSet().SubSoundSets;
+	assert(self.checkpoint.soundIterator().SoundSelectionCycleMode == SoundSet.RANDOM, "checkpoint iterator first");
+	self.checkpoint.soundLoop = coroutine.create(function(owner)
+		for child in owner.SubSoundSets do coroutine.yield(child.SoundSelectionCycleMode); end
+		return "done";
+	end);
+	local ok, first = coroutine.resume(self.checkpoint.soundLoop, self.checkpoint.soundSet);
+	assert(ok and first == SoundSet.RANDOM, "checkpoint iterator loop first");
+	do
 		local owner = SoundSet();
 		local child = SoundSet();
 		child.SoundSelectionCycleMode = SoundSet.ALL;
@@ -209,6 +230,10 @@ function Create(self)
 	self.checkpoint.bareCrab.Health = 53;
 	self.checkpoint.bareHuman.Pos = Vector(13, 17);
 	self.checkpoint.bareCrab.Pos = Vector(19, 23);
+	for _, x in ipairs({11, 21, 31}) do self.checkpoint.bareHuman:AddAISceneWaypoint(Vector(x, 43)); end
+	self.checkpoint.waypointIterator = self.checkpoint.bareHuman.SceneWaypoints;
+	assert(self.checkpoint.waypointIterator().X == 11, "checkpoint owned iterator first");
+	self.checkpoint.bareHuman:ClearAIWaypoints();
 	self.checkpoint.limb = self.checkpoint.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK);
 	self.checkpoint.limbAlias = self.checkpoint.limb;
 	self.checkpoint.crabLimb = self.checkpoint.bareCrab:GetLimbPath(0, 0, Actor.WALK);
@@ -348,6 +373,17 @@ function Update(self)
 	state.limb.PushForce = 310 + count;
 	state.limbSegment.X = 37 + count;
 	state.crabLimb.PushForce = 410 + count;
+	assert(state.soundIterator == state.soundIteratorAlias, "checkpoint native iterator alias");
+	assert(state.soundExhaustedIterator() == nil and state.emptyIterator() == nil, "checkpoint empty native iterators");
+	if count == 61 or count == 311 or count == 401 then
+		local value = state.soundIterator();
+		local ok, yielded = coroutine.resume(state.soundLoop);
+		local expected = count == 61 and SoundSet.FORWARDS or (count == 311 and SoundSet.ALL or "done");
+		assert((value and value.SoundSelectionCycleMode or "done") == expected, "checkpoint native iterator continuation");
+		assert(ok and yielded == expected, "checkpoint native iterator coroutine");
+		local waypoint = state.waypointIterator();
+		assert((waypoint and waypoint.X or -1) == (count == 61 and 21 or (count == 311 and 31 or -1)), "checkpoint owned iterator continuation");
+	end
 	state.box.Width = -7 - count;
 	state.aBox.Width = -10 - count;
 	state.sceneBox.Width = -10 - 2 * count;
