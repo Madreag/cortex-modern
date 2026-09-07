@@ -60,6 +60,7 @@ Actor::~Actor() {
 void Actor::Clear() {
 	m_Controller.Reset();
 	m_PersistedControllerInputMode = -1;
+	m_PersistedControllerQuickDisabled = -1;
 	m_PersistedControllerPlayer = 0;
 	m_PersistedPieMenuState.clear();
 	m_HasPersistedViewPoint = false;
@@ -195,6 +196,7 @@ int Actor::Create(const Actor& reference) {
 	}
 	m_Controller.SetControlledActor(this);
 	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
+	m_PersistedControllerQuickDisabled = reference.m_PersistedControllerQuickDisabled;
 	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
 	m_PersistedPieMenuState = reference.m_PersistedPieMenuState;
 	m_PersistedViewPoint = reference.m_PersistedViewPoint;
@@ -409,6 +411,7 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_Controller.SetAnalogAim(analogAim);
 	});
 	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
+	MatchProperty("ControllerQuickDisabled", { reader >> m_PersistedControllerQuickDisabled; });
 	MatchProperty("PieMenuState", { reader >> m_PersistedPieMenuState; });
 	MatchProperty("SpecialBehaviour_MovementState", {
 		int state = 0;
@@ -1562,6 +1565,7 @@ void Actor::DiscardPersistedSnapshotState() {
 	m_PersistedSharpAimTimerAnchor.pending = false;
 	m_PersistedAimTimerAnchor.pending = false;
 	m_PersistedControllerInputMode = -1;
+	m_PersistedControllerQuickDisabled = -1;
 	m_PersistedPieMenuState.clear();
 	m_HasPersistedViewPoint = false;
 	m_HasPersistedMovePath = false;
@@ -1580,6 +1584,14 @@ void Actor::ApplyPersistedControllerMode() {
 			m_Controller.SetPlayerRaw(static_cast<int>(m_PersistedControllerPlayer));
 		}
 		m_PersistedControllerInputMode = -1;
+	}
+	if (m_PersistedControllerQuickDisabled >= 0) {
+		std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
+		for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+			controlStates[state] = m_Controller.IsState(static_cast<ControlState>(state));
+		}
+		m_Controller.ApplyWireState(controlStates, m_Controller.GetAnalogMove(), m_Controller.GetAnalogAim(), m_Controller.GetAnalogCursor(), m_Controller.GetMouseMovement(), m_Controller.GetInputMode(), m_Controller.GetPlayerRaw(), m_PersistedControllerQuickDisabled != 0);
+		m_PersistedControllerQuickDisabled = -1;
 	}
 }
 
