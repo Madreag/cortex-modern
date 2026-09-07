@@ -422,6 +422,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedMOSpriteRuntime;
+		std::string SaveMOSpriteRuntime() const;
+		bool LoadMOSpriteRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this MOSprite, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

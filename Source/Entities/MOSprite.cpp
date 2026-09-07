@@ -1,4 +1,6 @@
 #include "MOSprite.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include "AEmitter.h"
 #include "PresetMan.h"
@@ -24,6 +26,7 @@ MOSprite::~MOSprite() {
 }
 
 void MOSprite::Clear() {
+	m_PersistedMOSpriteRuntime.clear();
 	m_SpriteFile.Reset();
 	m_aSprite.clear();
 	m_IconFile.Reset();
@@ -157,11 +160,17 @@ int MOSprite::Create(const MOSprite& reference) {
 		m_SpriteAnimIsReversingFrames = reference.m_SpriteAnimIsReversingFrames;
 		m_SpriteModified = reference.m_SpriteModified;
 	}
+	m_PersistedMOSpriteRuntime = reference.m_PersistedMOSpriteRuntime;
+	if (IsFaithfulClone() && m_PersistedMOSpriteRuntime.empty()) m_PersistedMOSpriteRuntime = reference.SaveMOSpriteRuntime();
 	return 0;
 }
 
 int MOSprite::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MovableObject::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_MOSpriteRuntime", {
+		m_PersistedMOSpriteRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadMOSpriteRuntime(m_PersistedMOSpriteRuntime, true)) reader.ReportError("invalid MOSprite runtime checkpoint");
+	});
 
 	MatchProperty("SpriteFile", { reader >> m_SpriteFile; });
 	MatchProperty("IconFile", {
@@ -238,6 +247,10 @@ void MOSprite::AdoptPersistedUniqueID() {
 		m_SpriteAnimIsReversingFrames = m_PersistedSpriteAnimIsReversingFrames;
 		m_HasPersistedSpriteAnimState = false;
 	}
+	if (!m_PersistedMOSpriteRuntime.empty()) {
+		if (!LoadMOSpriteRuntime(m_PersistedMOSpriteRuntime)) throw std::runtime_error("could not restore MOSprite runtime checkpoint");
+		m_PersistedMOSpriteRuntime.clear();
+	}
 }
 
 void MOSprite::DiscardPersistedSnapshotState() {
@@ -245,6 +258,7 @@ void MOSprite::DiscardPersistedSnapshotState() {
 	m_HasPersistedAngOscillations = false;
 	m_PersistedSpriteAnimTimerAnchor.pending = false;
 	m_HasPersistedSpriteAnimState = false;
+	m_PersistedMOSpriteRuntime.clear();
 }
 
 void MOSprite::SetEntryWound(const std::string& presetName, std::string moduleName) {
@@ -278,6 +292,7 @@ void MOSprite::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SettleMaterialDisabled", m_SettleMaterialDisabled);
 	writer.NewPropertyWithValue("SpecialBehaviour_EntryWoundPreset", m_pEntryWound ? m_pEntryWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ExitWoundPreset", m_pExitWound ? m_pExitWound->GetModuleAndPresetName() : "None");
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", base64_encode(m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime, true));
 }
 
 int MOSprite::Save(Writer& writer) const {
@@ -653,4 +668,23 @@ void MOSprite::Draw(BITMAP* pTargetBitmap,
 
 		g_SceneMan.RegisterDrawing(pTargetBitmap, m_MOID, spriteX, spriteY, spriteX + m_aSprite[m_Frame]->w, spriteY + m_aSprite[m_Frame]->h);
 	}
+}
+
+std::string MOSprite::SaveMOSpriteRuntime() const {
+	CheckpointWriter archive("MOSpriteRuntime1");
+	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
+	archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
+	archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
+	return archive.Text();
+}
+
+bool MOSprite::LoadMOSpriteRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "MOSpriteRuntime1", validateOnly);
+		archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
+		archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
+		archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

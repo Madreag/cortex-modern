@@ -1,7 +1,10 @@
 #include "Attachable.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include <bit>
 #include "SceneMan.h"
+#include "Scene.h"
 
 #include "AtomGroup.h"
 #include "PresetMan.h"
@@ -24,6 +27,7 @@ Attachable::~Attachable() {
 }
 
 void Attachable::Clear() {
+	m_PersistedAttachableRuntime.clear();
 	m_Parent = nullptr;
 	m_ParentOffset.Reset();
 	m_PersistedParentOffset.Reset();
@@ -47,6 +51,10 @@ void Attachable::Clear() {
 	m_DamageCount = 0.0F;
 	m_BreakWound = nullptr;
 	m_ParentBreakWound = nullptr;
+	m_OwnedBreakWound.reset();
+	m_OwnedParentBreakWound.reset();
+	m_PersistedBreakWoundUID = 0;
+	m_PersistedParentBreakWoundUID = 0;
 
 	m_InheritsHFlipped = 1;
 	m_InheritsRotAngle = true;
@@ -101,6 +109,16 @@ int Attachable::Create(const Attachable& reference) {
 	m_DamageCount = reference.m_DamageCount;
 	m_BreakWound = reference.m_BreakWound;
 	m_ParentBreakWound = reference.m_ParentBreakWound;
+	m_PersistedBreakWoundUID = reference.m_PersistedBreakWoundUID;
+	m_PersistedParentBreakWoundUID = reference.m_PersistedParentBreakWoundUID;
+	if (reference.m_OwnedBreakWound) SetOwnedBreakWound(static_cast<AEmitter*>(reference.m_OwnedBreakWound->Clone()));
+	if (reference.m_OwnedParentBreakWound) SetOwnedParentBreakWound(static_cast<AEmitter*>(reference.m_OwnedParentBreakWound->Clone()));
+	if (reference.m_ParentBreakWound == reference.m_OwnedBreakWound.get() && m_OwnedBreakWound) m_ParentBreakWound = m_OwnedBreakWound.get();
+	if (reference.m_BreakWound == reference.m_OwnedParentBreakWound.get() && m_OwnedParentBreakWound) m_BreakWound = m_OwnedParentBreakWound.get();
+	if (IsFaithfulClone()) {
+		if (!m_OwnedBreakWound && m_BreakWound && !m_BreakWound->IsOriginalPreset()) m_PersistedBreakWoundUID = m_BreakWound->GetUniqueID();
+		if (!m_OwnedParentBreakWound && m_ParentBreakWound && !m_ParentBreakWound->IsOriginalPreset()) m_PersistedParentBreakWoundUID = m_ParentBreakWound->GetUniqueID();
+	}
 
 	m_InheritsHFlipped = reference.m_InheritsHFlipped;
 	m_InheritsRotAngle = reference.m_InheritsRotAngle;
@@ -125,11 +143,17 @@ int Attachable::Create(const Attachable& reference) {
 		m_PrevJointOffset = reference.m_PrevJointOffset;
 		m_PreUpdateHasRunThisFrame = reference.m_PreUpdateHasRunThisFrame;
 	}
+	m_PersistedAttachableRuntime = reference.m_PersistedAttachableRuntime;
+	if (IsFaithfulClone() && m_PersistedAttachableRuntime.empty()) m_PersistedAttachableRuntime = reference.SaveAttachableRuntime();
 	return 0;
 }
 
 int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSRotating::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_AttachableRuntime", {
+		m_PersistedAttachableRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadAttachableRuntime(m_PersistedAttachableRuntime, true)) reader.ReportError("invalid Attachable runtime checkpoint");
+	});
 
 	MatchProperty("ParentOffset", { reader >> m_ParentOffset; });
 	MatchProperty("SpecialBehaviour_ParentOffset", {
@@ -159,12 +183,17 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("ParentBreakWound", { m_ParentBreakWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset(reader)); });
 	MatchProperty("SpecialBehaviour_BreakWoundPreset", { m_BreakWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", reader.ReadPropValue())); });
 	MatchProperty("SpecialBehaviour_ParentBreakWoundPreset", { m_ParentBreakWound = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", reader.ReadPropValue())); });
+	MatchProperty("SpecialBehaviour_OwnedBreakWound", { SetOwnedBreakWound(dynamic_cast<AEmitter*>(g_PresetMan.ReadReflectedPreset(reader))); });
+	MatchProperty("SpecialBehaviour_OwnedParentBreakWound", { SetOwnedParentBreakWound(dynamic_cast<AEmitter*>(g_PresetMan.ReadReflectedPreset(reader))); });
+	MatchProperty("SpecialBehaviour_BreakWoundUID", { reader >> m_PersistedBreakWoundUID; });
+	MatchProperty("SpecialBehaviour_ParentBreakWoundUID", { reader >> m_PersistedParentBreakWoundUID; });
 	MatchProperty("InheritsHFlipped", {
 		reader >> m_InheritsHFlipped;
 		if (m_InheritsHFlipped != 0 && m_InheritsHFlipped != 1) {
 			m_InheritsHFlipped = -1;
 		}
 	});
+	MatchProperty("SpecialBehaviour_InheritsHFlipped", { reader >> m_InheritsHFlipped; });
 	MatchProperty("InheritsRotAngle", { reader >> m_InheritsRotAngle; });
 	MatchForwards("InheritedRotAngleRadOffset") MatchProperty("InheritedRotAngleOffset", { reader >> m_InheritedRotAngleOffset; });
 	MatchProperty("InheritedRotAngleDegOffset", { m_InheritedRotAngleOffset = DegreesToRadians(std::stof(reader.ReadPropValue())); });
@@ -195,6 +224,40 @@ void Attachable::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("IgnoresParticlesWhileAttached", m_IgnoresParticlesWhileAttached);
 	writer.NewPropertyWithValue("SpecialBehaviour_BreakWoundPreset", m_BreakWound ? m_BreakWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ParentBreakWoundPreset", m_ParentBreakWound ? m_ParentBreakWound->GetModuleAndPresetName() : "None");
+	const auto saveWound = [&](const char* ownedProperty, const char* uidProperty, const std::unique_ptr<AEmitter>& owned, const AEmitter* wound) {
+		if (owned) {
+			writer.NewProperty(ownedProperty);
+			Scene::SaveSceneObject(writer, owned.get(), false, true);
+		}
+		if (wound && !wound->IsOriginalPreset()) writer.NewPropertyWithValue(uidProperty, wound->GetUniqueID());
+	};
+	saveWound("SpecialBehaviour_OwnedBreakWound", "SpecialBehaviour_BreakWoundUID", m_OwnedBreakWound, m_BreakWound);
+	saveWound("SpecialBehaviour_OwnedParentBreakWound", "SpecialBehaviour_ParentBreakWoundUID", m_OwnedParentBreakWound, m_ParentBreakWound);
+	writer.NewPropertyWithValue("SpecialBehaviour_AttachableRuntime", base64_encode(m_PersistedAttachableRuntime.empty() ? SaveAttachableRuntime() : m_PersistedAttachableRuntime, true));
+}
+
+void Attachable::SetOwnedBreakWound(AEmitter* wound) {
+	m_OwnedBreakWound.reset(wound);
+	m_BreakWound = wound;
+}
+
+void Attachable::SetOwnedParentBreakWound(AEmitter* wound) {
+	m_OwnedParentBreakWound.reset(wound);
+	m_ParentBreakWound = wound;
+}
+
+void Attachable::ResolveFaithfulLinks() {
+	MOSRotating::ResolveFaithfulLinks();
+	if (m_OwnedBreakWound) m_OwnedBreakWound->ResolveFaithfulLinks();
+	if (m_OwnedParentBreakWound) m_OwnedParentBreakWound->ResolveFaithfulLinks();
+	if (m_PersistedBreakWoundUID > 0) {
+		m_BreakWound = dynamic_cast<AEmitter*>(g_MovableMan.FindObjectByUniqueID(m_PersistedBreakWoundUID));
+		if (m_BreakWound) m_PersistedBreakWoundUID = 0;
+	}
+	if (m_PersistedParentBreakWoundUID > 0) {
+		m_ParentBreakWound = dynamic_cast<AEmitter*>(g_MovableMan.FindObjectByUniqueID(m_PersistedParentBreakWoundUID));
+		if (m_ParentBreakWound) m_PersistedParentBreakWoundUID = 0;
+	}
 }
 
 int Attachable::Save(Writer& writer) const {
@@ -336,6 +399,8 @@ bool Attachable::CanCollideWithTerrain() const {
 void Attachable::AdoptPersistedUniqueID() {
 	const long provisionalID = GetUniqueID();
 	MOSRotating::AdoptPersistedUniqueID();
+	if (m_OwnedBreakWound) m_OwnedBreakWound->AdoptPersistedUniqueID();
+	if (m_OwnedParentBreakWound) m_OwnedParentBreakWound->AdoptPersistedUniqueID();
 	if (m_HasPersistedParentOffset) {
 		m_ParentOffset = m_PersistedParentOffset;
 		m_HasPersistedParentOffset = false;
@@ -354,11 +419,16 @@ void Attachable::AdoptPersistedUniqueID() {
 			}
 		}
 	}
+	if (!m_PersistedAttachableRuntime.empty()) {
+		if (!LoadAttachableRuntime(m_PersistedAttachableRuntime)) throw std::runtime_error("could not restore Attachable runtime checkpoint");
+		m_PersistedAttachableRuntime.clear();
+	}
 }
 
 void Attachable::DiscardPersistedSnapshotState() {
 	MOSRotating::DiscardPersistedSnapshotState();
 	m_HasPersistedParentOffset = false;
+	m_PersistedAttachableRuntime.clear();
 }
 
 bool Attachable::CollideAtPoint(HitData& hd) {
@@ -699,4 +769,25 @@ void Attachable::AddOrRemovePieSlicesAndListenersFromPieMenu(PieMenu* pieMenuToM
 	for (AEmitter* wound: m_Wounds) {
 		wound->AddOrRemovePieSlicesAndListenersFromPieMenu(pieMenuToModify, addToPieMenu);
 	}
+}
+
+std::string Attachable::SaveAttachableRuntime() const {
+	CheckpointWriter archive("AttachableRuntime1");
+	archive(m_ParentOffset, m_DrawAfterParent, m_DrawnNormallyByParent, m_DeleteWhenRemovedFromParent, m_GibWhenRemovedFromParent, m_ApplyTransferredForcesAtOffset, m_GibWithParentChance);
+	archive(m_ParentGibBlastStrengthMultiplier, m_IsWound, m_JointStrength, m_JointStiffness, m_JointOffset, m_JointPos, m_DamageCount);
+	archive(m_InheritsHFlipped, m_InheritsRotAngle, m_InheritedRotAngleOffset, m_MountedRotAngleOffset, m_InheritsFrame, m_InheritsVelWhenDetached, m_InheritsAngularVelWhenDetached);
+	archive(m_AtomSubgroupID, m_CollidesWithTerrainWhileAttached, m_IgnoresParticlesWhileAttached, m_PrevParentOffset, m_PrevJointOffset, m_PrevRotAngleOffset, m_PreUpdateHasRunThisFrame);
+	return archive.Text();
+}
+
+bool Attachable::LoadAttachableRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "AttachableRuntime1", validateOnly);
+		archive(m_ParentOffset, m_DrawAfterParent, m_DrawnNormallyByParent, m_DeleteWhenRemovedFromParent, m_GibWhenRemovedFromParent, m_ApplyTransferredForcesAtOffset, m_GibWithParentChance);
+		archive(m_ParentGibBlastStrengthMultiplier, m_IsWound, m_JointStrength, m_JointStiffness, m_JointOffset, m_JointPos, m_DamageCount);
+		archive(m_InheritsHFlipped, m_InheritsRotAngle, m_InheritedRotAngleOffset, m_MountedRotAngleOffset, m_InheritsFrame, m_InheritsVelWhenDetached, m_InheritsAngularVelWhenDetached);
+		archive(m_AtomSubgroupID, m_CollidesWithTerrainWhileAttached, m_IgnoresParticlesWhileAttached, m_PrevParentOffset, m_PrevJointOffset, m_PrevRotAngleOffset, m_PreUpdateHasRunThisFrame);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }
