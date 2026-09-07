@@ -240,6 +240,10 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		std::string m_PersistedArmRuntime;
+		std::string SaveArmRuntime() const;
+		bool LoadArmRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Struct for storing data about each target in the Arm's queue of HandTargets.
 		struct HandTarget {
 		friend struct ContractAudit;

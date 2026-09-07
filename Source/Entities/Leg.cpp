@@ -1,4 +1,6 @@
 #include "Leg.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include <bit>
@@ -17,6 +19,7 @@ Leg::~Leg() {
 }
 
 void Leg::Clear() {
+	m_PersistedLegRuntime.clear();
 	m_Foot = nullptr;
 
 	m_ContractedOffset.Reset();
@@ -78,11 +81,17 @@ int Leg::Create(const Leg& reference) {
 	m_WillIdle = reference.m_WillIdle;
 	m_MoveSpeed = reference.m_MoveSpeed;
 
+	m_PersistedLegRuntime = reference.m_PersistedLegRuntime;
+	if (IsFaithfulClone() && m_PersistedLegRuntime.empty()) m_PersistedLegRuntime = reference.SaveLegRuntime();
 	return 0;
 }
 
 int Leg::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Attachable::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_LegRuntime", {
+		m_PersistedLegRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadLegRuntime(m_PersistedLegRuntime, true)) reader.ReportError("invalid Leg runtime checkpoint");
+	});
 
 	MatchProperty("Foot", { SetFoot(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchProperty("ContractedOffset", {
@@ -110,6 +119,7 @@ void Leg::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("IdleOffset", m_IdleOffset);
 	writer.NewPropertyWithValue("WillIdle", m_WillIdle);
 	writer.NewPropertyWithValue("MoveSpeed", m_MoveSpeed);
+	writer.NewPropertyWithValue("SpecialBehaviour_LegRuntime", base64_encode(m_PersistedLegRuntime.empty() ? SaveLegRuntime() : m_PersistedLegRuntime, true));
 }
 
 int Leg::Save(Writer& writer) const {
@@ -289,4 +299,34 @@ void Leg::UpdateFootFrameAndRotation() {
 			m_Foot->SetRotAngle(m_Rotation.GetRadAngle() + c_HalfPI * GetFlipFactor());
 		}
 	}
+}
+
+void Leg::AdoptPersistedUniqueID() {
+	Attachable::AdoptPersistedUniqueID();
+	if (!m_PersistedLegRuntime.empty()) {
+		if (!LoadLegRuntime(m_PersistedLegRuntime)) throw std::runtime_error("could not restore Leg runtime checkpoint");
+		m_PersistedLegRuntime.clear();
+	}
+}
+
+void Leg::DiscardPersistedSnapshotState() {
+	Attachable::DiscardPersistedSnapshotState();
+	m_PersistedLegRuntime.clear();
+}
+
+std::string Leg::SaveLegRuntime() const {
+	CheckpointWriter archive("LegRuntime1");
+	archive(m_ContractedOffset, m_ExtendedOffset, m_MinExtension, m_MaxExtension, m_NormalizedExtension, m_TargetPosition, m_IdleOffset);
+	archive(m_AnkleOffset, m_WillIdle, m_MoveSpeed);
+	return archive.Text();
+}
+
+bool Leg::LoadLegRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "LegRuntime1", validateOnly);
+		archive(m_ContractedOffset, m_ExtendedOffset, m_MinExtension, m_MaxExtension, m_NormalizedExtension, m_TargetPosition, m_IdleOffset);
+		archive(m_AnkleOffset, m_WillIdle, m_MoveSpeed);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

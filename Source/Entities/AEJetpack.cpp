@@ -1,4 +1,6 @@
 #include "AEJetpack.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include "Actor.h"
 #include "Controller.h"
@@ -16,6 +18,7 @@ AEJetpack::~AEJetpack() {
 }
 
 void AEJetpack::Clear() {
+	m_PersistedAEJetpackRuntime.clear();
 	m_JetpackType = JetpackType::Standard;
 	m_JetTimeTotal = 0.0F;
 	m_JetTimeLeft = 0.0F;
@@ -54,11 +57,17 @@ int AEJetpack::Create(const AEJetpack& reference) {
 	if (IsFaithfulClone()) {
 		m_JetThrustBonusMultiplier = reference.m_JetThrustBonusMultiplier;
 	}
+	m_PersistedAEJetpackRuntime = reference.m_PersistedAEJetpackRuntime;
+	if (IsFaithfulClone() && m_PersistedAEJetpackRuntime.empty()) m_PersistedAEJetpackRuntime = reference.SaveAEJetpackRuntime();
 	return 0;
 }
 
 int AEJetpack::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return AEmitter::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_AEJetpackRuntime", {
+		m_PersistedAEJetpackRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadAEJetpackRuntime(m_PersistedAEJetpackRuntime, true)) reader.ReportError("invalid AEJetpack runtime checkpoint");
+	});
 
 	MatchProperty("JetpackType", {
 		std::string jetpackType;
@@ -92,6 +101,7 @@ int AEJetpack::ReadProperty(const std::string_view& propName, Reader& reader) {
 void AEJetpack::SaveSnapshotConfiguration(Writer& writer) const {
 	AEmitter::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("AdjustsThrottleForWeight", m_AdjustsThrottleForWeight);
+	writer.NewPropertyWithValue("SpecialBehaviour_AEJetpackRuntime", base64_encode(m_PersistedAEJetpackRuntime.empty() ? SaveAEJetpackRuntime() : m_PersistedAEJetpackRuntime, true));
 }
 
 int AEJetpack::Save(Writer& writer) const {
@@ -228,4 +238,34 @@ void AEJetpack::Recharge(Actor& parentActor) {
 		parentActor.SetMovementState(Actor::STAND);
 	}
 	m_JetTimeLeft += g_TimerMan.GetDeltaTimeMS() * m_JetReplenishRate;
+}
+
+void AEJetpack::AdoptPersistedUniqueID() {
+	AEmitter::AdoptPersistedUniqueID();
+	if (!m_PersistedAEJetpackRuntime.empty()) {
+		if (!LoadAEJetpackRuntime(m_PersistedAEJetpackRuntime)) throw std::runtime_error("could not restore AEJetpack runtime checkpoint");
+		m_PersistedAEJetpackRuntime.clear();
+	}
+}
+
+void AEJetpack::DiscardPersistedSnapshotState() {
+	AEmitter::DiscardPersistedSnapshotState();
+	m_PersistedAEJetpackRuntime.clear();
+}
+
+std::string AEJetpack::SaveAEJetpackRuntime() const {
+	CheckpointWriter archive("AEJetpackRuntime1");
+	archive(m_JetpackType, m_JetTimeTotal, m_JetTimeLeft, m_JetThrustBonusMultiplier, m_JetReplenishRate, m_MinimumFuelRatio, m_JetAngleRange);
+	archive(m_CanAdjustAngleWhileFiring, m_AdjustsThrottleForWeight);
+	return archive.Text();
+}
+
+bool AEJetpack::LoadAEJetpackRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "AEJetpackRuntime1", validateOnly);
+		archive(m_JetpackType, m_JetTimeTotal, m_JetTimeLeft, m_JetThrustBonusMultiplier, m_JetReplenishRate, m_MinimumFuelRatio, m_JetAngleRange);
+		archive(m_CanAdjustAngleWhileFiring, m_AdjustsThrottleForWeight);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }
