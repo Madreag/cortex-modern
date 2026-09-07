@@ -37,6 +37,8 @@ void Arm::Clear() {
 	m_HandMovementDelayTimer.Reset();
 	m_HandMovementDelayTimer.SetSimTimeLimitMS(0);
 	m_PersistedHandMovementDelayTimerAnchor = {};
+	m_PersistedHandCurrentOffset.Reset();
+	m_HasPersistedHandCurrentOffset = false;
 	m_PersistedHandPos.Reset();
 	m_PersistedHandPrevPos.Reset();
 	m_HasPersistedHandPos = false;
@@ -85,6 +87,8 @@ int Arm::Create(const Arm& reference) {
 	m_HandMovementDelayTimer = reference.m_HandMovementDelayTimer;
 	m_HandHasReachedCurrentTarget = reference.m_HandHasReachedCurrentTarget;
 	m_PersistedHandMovementDelayTimerAnchor = reference.m_PersistedHandMovementDelayTimerAnchor;
+	m_PersistedHandCurrentOffset = reference.m_PersistedHandCurrentOffset;
+	m_HasPersistedHandCurrentOffset = reference.m_HasPersistedHandCurrentOffset;
 	m_PersistedHandPos = reference.m_PersistedHandPos;
 	m_PersistedHandPrevPos = reference.m_PersistedHandPrevPos;
 	m_HasPersistedHandPos = reference.m_HasPersistedHandPos;
@@ -124,7 +128,11 @@ int Arm::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("GripStrength", { reader >> m_GripStrength; });
 	MatchProperty("ThrowStrength", { reader >> m_ThrowStrength; });
 	MatchProperty("HeldDevice", { SetHeldDevice(dynamic_cast<HeldDevice*>(g_PresetMan.ReadReflectedPreset(reader))); });
-	MatchProperty("HandCurrentOffset", { reader >> m_HandCurrentOffset; });
+	MatchProperty("HandCurrentOffset", {
+		reader >> m_HandCurrentOffset;
+		m_PersistedHandCurrentOffset = m_HandCurrentOffset;
+		m_HasPersistedHandCurrentOffset = true;
+	});
 	MatchProperty("HandPosition", {
 		reader >> m_PersistedHandPos;
 		m_HasPersistedHandPos = true;
@@ -464,6 +472,10 @@ void Arm::AddHandTargetFromSave(const std::string& packed) {
 void Arm::AdoptPersistedUniqueID() {
 	Attachable::AdoptPersistedUniqueID();
 	m_PersistedHandMovementDelayTimerAnchor.Apply(m_HandMovementDelayTimer);
+	if (m_HasPersistedHandCurrentOffset) {
+		m_HandCurrentOffset = m_PersistedHandCurrentOffset;
+		m_HasPersistedHandCurrentOffset = false;
+	}
 	if (m_HasPersistedHandPos) {
 		m_HandPos = m_PersistedHandPos;
 		m_HandPrevPos = m_PersistedHandPrevPos;
@@ -474,6 +486,7 @@ void Arm::AdoptPersistedUniqueID() {
 void Arm::DiscardPersistedSnapshotState() {
 	Attachable::DiscardPersistedSnapshotState();
 	m_PersistedHandMovementDelayTimerAnchor.pending = false;
+	m_HasPersistedHandCurrentOffset = false;
 	m_HasPersistedHandPos = false;
 	m_FaithfulSupportedDeviceUID = 0;
 }
