@@ -9,6 +9,7 @@ namespace RTE {
 	/// The supporting object for a lua script that can be turned on and off by the player, and run independent of Activities.
 	class GlobalScript : public Entity {
 		friend struct EntityLuaBindings;
+		friend class LuaStateWrapper;
 
 	public:
 		EntityAllocation(GlobalScript);
@@ -71,6 +72,9 @@ namespace RTE {
 		/// Reloads the Lua script specified by this GlobalScript. This will also update the original preset in the PresetMan with the update scripts so future objects spawned will use the new scripts.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int ReloadScripts() override;
+
+		/// Binds this native instance before restoring its Lua fields or starting a new script.
+		int BindLuaObject();
 
 		/// Starts this GlobalScript by running the appropriate Lua function.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.

@@ -1,4 +1,5 @@
 #include "GAScripted.h"
+#include "ActivityMan.h"
 
 #include "SceneMan.h"
 #include "PresetMan.h"
@@ -46,6 +47,7 @@ void GAScripted::Clear() {
 	m_LuaClassName.clear();
 	m_RequiredAreas.clear();
 	m_PieSlicesToAdd.clear();
+	m_HasSavedGlobalScripts = false;
 }
 
 int GAScripted::Create() {
@@ -76,6 +78,10 @@ int GAScripted::Create(const GAScripted& reference) {
 
 	m_ScriptPath = reference.m_ScriptPath;
 	m_LuaClassName = reference.m_LuaClassName;
+	m_HasSavedGlobalScripts = reference.m_HasSavedGlobalScripts;
+	for (const GlobalScript* script: reference.m_GlobalScriptsList) {
+		m_GlobalScriptsList.push_back(dynamic_cast<GlobalScript*>(script->Clone()));
+	}
 	for (const std::string& referenceRequiredArea: reference.m_RequiredAreas) {
 		m_RequiredAreas.emplace(referenceRequiredArea);
 	}
@@ -95,6 +101,12 @@ int GAScripted::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("LuaClassName", {
 		reader >> m_LuaClassName;
 	});
+	MatchProperty("SavedGlobalScripts", { reader >> m_HasSavedGlobalScripts; });
+	MatchProperty("AddSavedGlobalScript", {
+		auto script = std::make_unique<GlobalScript>();
+		reader >> *script;
+		m_GlobalScriptsList.push_back(script.release());
+	});
 	MatchProperty("AddPieSlice", {
 		m_PieSlicesToAdd.emplace_back(std::unique_ptr<PieSlice>(dynamic_cast<PieSlice*>(g_PresetMan.ReadReflectedPreset(reader))));
 	});
@@ -112,6 +124,10 @@ int GAScripted::Save(Writer& writer) const {
 
 	writer.NewPropertyWithValue("ScriptPath", m_ScriptPath);
 	writer.NewPropertyWithValue("LuaClassName", m_LuaClassName);
+	writer.NewPropertyWithValue("SavedGlobalScripts", true);
+	for (const GlobalScript* script: m_GlobalScriptsList) {
+		writer.NewPropertyWithValue("AddSavedGlobalScript", script);
+	}
 
 	for (const std::unique_ptr<PieSlice>& pieSliceToAdd: m_PieSlicesToAdd) {
 		writer.NewPropertyWithValue("AddPieSlice", pieSliceToAdd.get());
@@ -246,6 +262,14 @@ int GAScripted::Start() {
 	// Call the create function
 	if ((error = RunLuaFunction("StartActivity", {}, {initialActivityState == ActivityState::NotStarted ? "true" : "false"}, {})) < 0) {
 		return error;
+	}
+
+	if (g_MovableMan.IsRestoringSnapshot() && g_ActivityMan.HasFullScriptGraphToRestore() && m_HasSavedGlobalScripts) {
+		// Their Lua continuations will be restored once all native objects are in place.
+		for (GlobalScript* script: m_GlobalScriptsList) {
+			if ((error = script->BindLuaObject()) < 0) return error;
+		}
+		return 0;
 	}
 
 	// Clear active global scripts

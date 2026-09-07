@@ -139,6 +139,9 @@ namespace RTE {
 		/// @return Whether or not the saved game was successfully staged.
 		bool LoadGameToRestart(const std::string& fileName);
 
+		/// Whether the staged save carries complete VM continuation state.
+		bool HasFullScriptGraphToRestore() const { return !m_PendingScriptGraphs.empty() && m_PendingScriptGraphs.front().starts_with("SG3;"); }
+
 		/// Checks load results and preservation of an already staged game.
 		bool RunLoadSelfTest(const std::string& fileName, bool expectLoaded);
 
@@ -235,6 +238,9 @@ namespace RTE {
 		bool m_RestartRestoresSnapshot = false; //!< The staged restart places the loaded save verbatim at its saved sim time.
 		long long m_PendingSnapshotSimUpdateCount = -1; //!< The loaded save's sim update count, -1 when the file carries none.
 		long long m_PendingSnapshotSimTimeTicks = 0; //!< The loaded save's sim time ticks.
+		long m_PendingSnapshotUniqueIDCounter = -1;
+		int m_PendingSnapshotLuaStateCursor = -1;
+		std::vector<std::string> m_PendingScriptGraphs; //!< The loaded save's script graphs by Lua state index, laid in once the restart placed the world.
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 

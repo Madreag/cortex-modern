@@ -19,6 +19,7 @@ namespace RTE {
 	class GAScripted : public GameActivity {
 
 		friend class LuaMan;
+		friend class LuaStateWrapper;
 		friend class ActivityMan;
 
 		/// Public member variable, method and friend function declarations
@@ -87,6 +88,9 @@ namespace RTE {
 		/// @return A string with the friendly-formatted Lua type name of this object.
 		const std::string& GetLuaClassName() const { return m_LuaClassName; }
 
+		/// The native global scripts owned by this activity, in checkpoint order.
+		const std::vector<GlobalScript*>& GetGlobalScripts() const { return m_GlobalScriptsList; }
+
 		/// Tells if a particular Scene supports this specific Activity on it.
 		/// Usually that means certain Area:s need to be defined in the Scene.
 		/// @param pScene The Scene to check if it supports this Activiy. Ownership IS NOT TRANSFERRED!
@@ -151,6 +155,7 @@ namespace RTE {
 		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GAScripted is running.
 		// The list of global scripts allowed to run during this activity
 		std::vector<GlobalScript*> m_GlobalScriptsList;
+		bool m_HasSavedGlobalScripts = false;
 
 		std::unordered_map<std::string, std::unique_ptr<LuabindObjectWrapper>> m_ScriptFunctions; //!< A map of LuabindObjectWrappers that hold Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
 
