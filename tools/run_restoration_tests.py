@@ -22,7 +22,7 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_states=None, hold_path_callbacks_until=None, hold_path_results_until=None):
+def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_states=None, hold_path_callbacks_until=None, hold_path_results_until=None, global_script=None):
     trace = out / "trace.json"
     dump = Path(str(trace) + ".simdump.txt")
     args = ["-net-replay", recording, "-tick-hashes", "-max-ticks", ticks, "-out", trace]
@@ -43,6 +43,17 @@ def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_s
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(script, target)
         (target.parent.parent / "Index.ini").write_text("DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n")
+    if global_script:
+        module = Path(run.cwd) / "Userdata/UserScenes.rte"
+        target = module / "ScriptState" / global_script.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(global_script, target)
+        (module / "Index.ini").write_text("DataModule\n\tModuleName = User Scenes\n\tIgnoreMissingItems = 1\n"
+            "\tAddGlobalScript = GlobalScript\n\t\tPresetName = Checkpoint Global\n"
+            f"\t\tScriptPath = UserScenes.rte/ScriptState/{global_script.name}\n\t\tLuaClassName = CheckpointGlobalScript\n")
+        settings = Path(run.cwd) / "Userdata/Settings.ini"
+        with settings.open("a") as stream:
+            stream.write("\n\tEnableGlobalScript = UserScenes.rte/Checkpoint Global\n")
     try:
         record = run.start().finish()
     finally:
@@ -59,6 +70,9 @@ def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_s
         "trace_valid": strict_compare(trace, trace, ticks)[0],
     }
     detail = {"errors": errors, "exe_sha256": record["exe_sha256"]}
+    if global_script:
+        checks["global_started"] = "[global-callback] start=1 actor=" in log
+        checks["global_deactivated"] = "[global-callback] deactivated calls=70" in log
     if capture:
         checks["probe"] = f"FIDELITY PASS: 30 ticks byte-identical after the restore, hash and full dump (capture {capture})" in log
     if script:
@@ -74,6 +88,7 @@ def main():
     parser.add_argument("--recording", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--script", type=Path)
+    parser.add_argument("--global-script", type=Path, help="CheckpointGlobalScript fixture to enable in the private runtime")
     parser.add_argument("--ticks", type=int, default=521)
     parser.add_argument("--captures", type=int, nargs="+", default=[50, 150, 250, 400])
     parser.add_argument("--modes", nargs="+", choices=["memory", "file", "launch"], default=["memory", "file"])
@@ -87,6 +102,8 @@ def main():
     root = options.out / (datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8])
     root.mkdir(parents=True, exist_ok=False)
     provenance = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=options.repo, text=True).strip(), "recording": {"path": str(options.recording.resolve()), "sha256": sha256(options.recording)}, "script": {"path": str(options.script.resolve()), "sha256": sha256(options.script)} if options.script else None}
+    if options.global_script:
+        provenance["global_script"] = {"path": str(options.global_script.resolve()), "sha256": sha256(options.global_script)}
     patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=options.repo)
     (root / "source.patch").write_bytes(patch)
     provenance["source_patch_sha256"] = hashlib.sha256(patch).hexdigest()
@@ -103,7 +120,7 @@ def main():
     cases = [(None, None)] + [(m, c) for m in options.modes for c in options.captures]
     for mode, capture in cases:
         label = f"{mode}_{capture}" if mode else "reference"
-        result = run_case(options.repo, options.recording, options.script, root / label, options.ticks, capture, mode, options.lua_states, options.hold_path_callbacks_until, options.hold_path_results_until)
+        result = run_case(options.repo, options.recording, options.script, root / label, options.ticks, capture, mode, options.lua_states, options.hold_path_callbacks_until, options.hold_path_results_until, options.global_script)
         if mode:
             reference = results["reference"]
             same, comparison = strict_compare(reference["trace"], result["trace"], options.ticks)
