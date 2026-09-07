@@ -68,6 +68,12 @@ namespace RTE {
 		/// @param state The engine state to restore.
 		void SetEngineState(const std::mt19937& state) { m_RNG = state; }
 
+		/// Captures the portable engine state, seed and draw count.
+		std::string SerializeCheckpoint() const;
+
+		/// Restores a checkpoint without changing the generator on invalid input.
+		bool RestoreCheckpoint(std::string_view text);
+
 		/// Gets the number of raw 32-bit draws consumed since construction.
 		/// @return The draw count.
 		uint64_t GetDrawCount() const { return m_DrawCount; }

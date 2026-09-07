@@ -5,6 +5,9 @@
 #include "System.h"
 
 #include <string_view>
+#include <algorithm>
+#include <array>
+#include <locale>
 
 namespace RTE {
 
@@ -18,6 +21,86 @@ namespace RTE {
 	thread_local RandomGenerator* t_simRNGOverride = nullptr;
 
 	void (*g_RNGDrawHook)(uint64_t drawCount) = nullptr;
+
+	namespace {
+		struct MTCheckpointSeed {
+			using result_type = uint32_t;
+			std::array<uint32_t, std::mt19937::state_size> words;
+
+			template <typename Iterator>
+			void generate(Iterator begin, Iterator end) const {
+				std::copy_n(words.begin(), std::distance(begin, end), begin);
+			}
+		};
+	}
+
+	std::string RandomGenerator::SerializeCheckpoint() const {
+		auto engine = m_RNG;
+		std::ostringstream out;
+		out.imbue(std::locale::classic());
+		out << "MT1 " << m_Seed << ' ' << m_DrawCount;
+		for (size_t i = 0; i < std::mt19937::state_size; ++i) {
+			out << ' ' << static_cast<uint32_t>(engine());
+		}
+		return out.str();
+	}
+
+	bool RandomGenerator::RestoreCheckpoint(std::string_view text) {
+		std::istringstream in{std::string(text)};
+		in.imbue(std::locale::classic());
+		std::string version;
+		uint64_t seed, drawCount;
+		if (!(in >> version >> seed >> drawCount) || version != "MT1") {
+			return false;
+		}
+		MTCheckpointSeed state;
+		for (auto& word: state.words) {
+			uint64_t value;
+			if (!(in >> value) || value > UINT32_MAX) {
+				return false;
+			}
+			word = static_cast<uint32_t>(value);
+		}
+		in >> std::ws;
+		if (!in.eof()) {
+			return false;
+		}
+		const auto expected = state.words;
+		for (auto& word: state.words) {
+			word ^= word >> 18;
+			word ^= (word << 15) & 0xefc60000U;
+			uint32_t value = word;
+			for (int i = 0; i < 5; ++i) {
+				word = value ^ ((word << 7) & 0x9d2c5680U);
+			}
+			value = word;
+			for (int i = 0; i < 3; ++i) {
+				word = value ^ (word >> 11);
+			}
+		}
+		// Reverse one transition so standard seed-sequence initialization resumes at the saved output.
+		constexpr int count = std::mt19937::state_size;
+		const auto untwist = [](uint32_t value) {
+			const uint32_t lowBit = value >> 31;
+			return ((value ^ (lowBit ? 0x9908b0dfU : 0U)) << 1) | lowBit;
+		};
+		for (int i = count - 1; i >= 0; --i) {
+			const uint32_t high = untwist(state.words[i] ^ state.words[(i + 397) % count]);
+			const uint32_t low = untwist(state.words[(i + count - 1) % count] ^ state.words[(i + 396) % count]);
+			state.words[i] = (high & 0x80000000U) | (low & 0x7fffffffU);
+		}
+		std::mt19937 candidate(state);
+		for (uint32_t word: expected) {
+			if (candidate() != word) {
+				return false;
+			}
+		}
+		candidate.seed(state);
+		m_RNG = candidate;
+		m_Seed = seed;
+		m_DrawCount = drawCount;
+		return true;
+	}
 
 	void SeedRNG() {
 		// Use a constant seed for determinism.
