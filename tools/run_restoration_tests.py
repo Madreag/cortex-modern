@@ -43,9 +43,9 @@ def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_s
     finally:
         run.close()
     log = (out / "stdout.log").read_text(encoding="utf-8-sig", errors="replace")
-    console = Path(str(trace) + ".console.txt")
-    if console.exists():
-        log += "\n" + console.read_text(encoding="utf-8-sig", errors="replace")
+    for console in (Path(str(trace) + ".console.txt"), out / "runtime/Userdata/CheckpointErrors.txt"):
+        if console.exists():
+            log += "\n" + console.read_text(encoding="utf-8-sig", errors="replace")
     errors = re.findall(r"^.*(?:FIDELITY FAIL|RESTORE MISMATCH|\[rbprobe\] FAIL|ERROR:|RTE Assert|RTE Abort|stack traceback|checkpoint (?:table|vector|timer|sound|closure|shared|coroutine|wrapped|iterator)).*$", log, re.M)
     checks = {
         "process": record["exit_code"] == 0 and not record["timed_out"],
