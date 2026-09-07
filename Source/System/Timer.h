@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// A precise timer for FPS sync etc.
 	class Timer {
+		friend struct ContractAudit;
+
 
 	public:
 #pragma region Creation
@@ -290,6 +292,8 @@ namespace RTE {
 
 	/// A saved Timer start anchor in absolute sim ticks, applied when a snapshot resident adopts its saved state.
 	struct PersistedTimerAnchor {
+		friend struct ContractAudit;
+
 		int64_t startTicks = 0;
 		bool pending = false;
 

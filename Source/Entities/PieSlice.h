@@ -56,6 +56,8 @@ namespace RTE {
 
 	/// An individual PieSlice in a PieMenu.
 	class PieSlice : public Entity {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(PieSlice);

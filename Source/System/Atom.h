@@ -59,6 +59,8 @@ namespace RTE {
 
 	/// A point (pixel) that tests for collisions with a BITMAP's drawn pixels, ie not the mask color. Owned and operated by other objects.
 	class Atom : public Serializable {
+		friend struct ContractAudit;
+
 
 	public:
 		SerializableClassNameGetter;

@@ -15,6 +15,8 @@ namespace RTE {
 	/// A movable object with mass that is graphically represented by a
 	/// BITMAP.
 	class MOSprite : public MovableObject {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

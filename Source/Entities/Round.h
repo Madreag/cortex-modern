@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// A round containing a number of projectile particles and one shell.
 	class Round : public Entity {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(Round);

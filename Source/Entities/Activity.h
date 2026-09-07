@@ -12,6 +12,8 @@ namespace RTE {
 
 	/// Base class for all Activities, including game modes and editors.
 	class Activity : public Entity {
+		friend struct ContractAudit;
+
 
 	public:
 		SerializableOverrideMethods;

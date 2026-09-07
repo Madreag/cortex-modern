@@ -6,6 +6,8 @@ namespace RTE {
 
 	/// A thrown device that explodes after its trigger delay is completed after its activation.
 	class TDExplosive : public ThrownDevice {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(TDExplosive);

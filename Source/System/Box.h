@@ -10,6 +10,8 @@ namespace RTE {
 
 	/// A useful 2D axis-aligned rectangle class.
 	class Box : public Serializable {
+		friend struct ContractAudit;
+
 
 	public:
 		SerializableClassNameGetter;

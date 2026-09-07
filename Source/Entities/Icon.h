@@ -7,6 +7,8 @@ namespace RTE {
 
 	/// Represents an Icon in the interface that can be loaded and stored from different data modules etc.
 	class Icon : public Entity {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(Icon);

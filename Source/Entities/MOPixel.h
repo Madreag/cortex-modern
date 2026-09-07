@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// A movable object with mass that is graphically represented by a single pixel.
 	class MOPixel : public MovableObject {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(MOPixel);

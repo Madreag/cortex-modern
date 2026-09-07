@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// A detachable Leg that will be controlled by LimbPaths.
 	class Leg : public Attachable {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(Leg);

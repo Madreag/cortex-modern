@@ -9,6 +9,8 @@ namespace RTE {
 
 	/// A group of Atoms that move and interact with the terrain in unison.
 	class AtomGroup : public Entity {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(AtomGroup);

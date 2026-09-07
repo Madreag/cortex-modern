@@ -26,6 +26,8 @@ namespace RTE {
 
 	/// A sprite movable object that is autonomous.
 	class Actor : public MOSRotating {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 
 		/// Public member variable, method and friend function declarations

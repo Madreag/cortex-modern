@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// An Attachable Turret pod that can hold HeldDevices.
 	class Turret : public Attachable {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(Turret);

@@ -23,6 +23,8 @@ namespace RTE {
 
 	/// A humanoid actor.
 	class AHuman : public Actor {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 
 		enum UpperBodyState {
@@ -654,6 +656,8 @@ namespace RTE {
 		/// An equip call the AI made this tick: run after the parallel AI pass, or under lockstep sent as a
 		/// game command so every peer performs it at the committed tick.
 		struct DeferredEquip {
+		friend struct ContractAudit;
+
 			enum Op : uint8_t {
 				Firearm = 0,
 				DeviceInGroup = 1,

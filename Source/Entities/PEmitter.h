@@ -13,6 +13,8 @@ namespace RTE {
 
 	/// A particle MO that creates and emits particle MOs.
 	class PEmitter : public MOSParticle {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

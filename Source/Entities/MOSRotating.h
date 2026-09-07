@@ -21,6 +21,8 @@ namespace RTE {
 
 	/// A sprite movable object that can rotate.
 	class MOSRotating : public MOSprite {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

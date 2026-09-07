@@ -9,6 +9,8 @@ namespace RTE {
 
 	/// A sliding or swinging door.
 	class ADoor : public Actor {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(ADoor);

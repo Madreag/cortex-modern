@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// Something to bundle the properties of Gib piece together.
 	class Gib : public Serializable {
+		friend struct ContractAudit;
+
 		friend class GibEditor;
 		friend struct EntityLuaBindings;
 

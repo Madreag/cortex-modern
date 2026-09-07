@@ -37,6 +37,8 @@ namespace RTE {
 
 	/// A struct to keep all data about a an alarming event for the AI Actors.
 	struct AlarmEvent {
+		friend struct ContractAudit;
+
 		AlarmEvent() {
 			m_ScenePos.Reset();
 			m_Team = Activity::NoTeam;
@@ -55,6 +57,8 @@ namespace RTE {
 
 	/// The singleton manager of all movable objects in the RTE.
 	class MovableMan : public Singleton<MovableMan>, public Serializable {
+		friend struct ContractAudit;
+
 		friend class SettingsMan;
 		friend struct ManagerLuaBindings;
 

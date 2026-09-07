@@ -13,6 +13,8 @@ namespace RTE {
 
 	/// A firearm device that fires projectile MO's and discharges shell MO's.
 	class HDFirearm : public HeldDevice {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

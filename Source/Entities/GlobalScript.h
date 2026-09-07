@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// The supporting object for a lua script that can be turned on and off by the player, and run independent of Activities.
 	class GlobalScript : public Entity {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 		friend class LuaStateWrapper;
 
