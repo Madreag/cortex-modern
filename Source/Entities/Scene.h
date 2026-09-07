@@ -102,6 +102,9 @@ namespace RTE {
 			/// default settings or values.
 			void Reset() override { Destroy(true); }
 
+			/// Writes the complete area with its name encoded for a checkpoint.
+			int SaveSnapshot(Writer& writer) const;
+
 			/// Adds a Box to this' area coverage.
 			/// @param newBox The Box to add. A copy will be made and added.
 			/// @return Whether the Box was successfully added or not.
@@ -512,6 +515,24 @@ namespace RTE {
 		/// NOT transferred!
 		/// @return Whether the specified area was previously defined in this scene.
 		bool SetArea(Area& newArea);
+
+		struct AreaState {
+			std::vector<std::unique_ptr<Area>> areas;
+			std::vector<std::string> navigableAreas;
+			bool navigableAreasUpToDate = false;
+		};
+
+		/// Gets the ordered areas owned by this scene.
+		const std::list<Area*>& GetAreas() const { return m_AreaList; }
+
+		/// Copies the area state for a checkpoint.
+		void CaptureAreas(AreaState& state) const;
+
+		/// Restores a copy of the captured area state.
+		void RestoreAreas(const AreaState& state);
+
+		/// Exchanges the live areas with a set-aside world.
+		void SwapAreas(AreaState& state);
 
 		/// Checks for the existence of a specific Area identified by a name.
 		/// This won't throw any errors to the console if the Area isn't found.
