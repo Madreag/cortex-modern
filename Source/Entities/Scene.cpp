@@ -360,6 +360,7 @@ Vector Scene::Area::GetRandomPoint() const {
 }
 
 void Scene::Clear() {
+	BlockUntilAllPathingRequestsComplete();
 	m_Location.Reset();
 	m_LocationOffset.Reset();
 	m_MetagamePlayable = false; // Let scenes be non-metagame playable by default, they need AI building plans anyway
@@ -1766,6 +1767,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 }
 
 void Scene::Destroy(bool notInherited) {
+	BlockUntilAllPathingRequestsComplete();
 	delete m_pTerrain;
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -2737,10 +2739,8 @@ void Scene::ResetPathFinding() {
 }
 
 void Scene::BlockUntilAllPathingRequestsComplete() {
-	for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
-		while (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {
-			std::this_thread::yield();
-		}
+	for (const auto& pathFinder: m_pPathFinders) {
+		if (pathFinder) pathFinder->WaitForPathingRequests();
 	}
 }
 

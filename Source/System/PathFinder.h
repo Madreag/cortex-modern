@@ -120,6 +120,9 @@ namespace RTE {
 		/// @return How many pathfinding requests are currently active.
 		int GetCurrentPathingRequests() const { return m_CurrentPathingRequests.load(); }
 
+		/// Waits until submitted path requests and their callbacks have finished.
+		void WaitForPathingRequests() const;
+
 		/// Recalculates all the costs between all the PathNodes by tracing lines in the material layer and summing all the material strengths for each encountered pixel. Also resets the pather itself.
 		void RecalculateAllCosts();
 
@@ -188,11 +191,14 @@ namespace RTE {
 		int m_GridHeight; //!< The height of the pathing grid, in PathNodes.
 		bool m_WrapsX; //!< Whether the pathing grid wraps on the X axis.
 		bool m_WrapsY; //!< Whether the pathing grid wraps on the Y axis.
-		std::atomic<int> m_CurrentPathingRequests; //!< The number of active async pathing requests.
+		std::atomic<int> m_CurrentPathingRequests{0}; //!< The number of queued or running path requests.
 
 		/// Gets the pather for this thread. Lazily-initialized for each new thread that needs a pather.
 		/// @return The pather for this thread.
 		MicroPather* GetPather();
+
+		/// Calculates a path within an already registered request.
+		int CalculatePathImpl(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength);
 
 #pragma region Path Cost Updates
 		/// Helper function for getting the strongest material we need to path though between PathNodes.
