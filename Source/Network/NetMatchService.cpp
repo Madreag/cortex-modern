@@ -500,6 +500,7 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get());
+		m_Coordinator->DeferRecoveryStopsToTickBoundary();
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
 		m_PendingSessionEvents.clear();

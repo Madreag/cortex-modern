@@ -348,6 +348,50 @@ namespace RTE {
 			return false;
 		}
 
+		bool TestRecoveryStopsAtCompletedTick(std::string* error) {
+			for (uint16_t delay: {0, 3}) {
+				for (bool rejoin: {false, true}) {
+					LoopbackTransport hostTransport, clientTransport;
+					NetLockstepCoordinator host, client;
+					const uint16_t port = 43920 + delay + (rejoin ? 10 : 0);
+					if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client,
+					    MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable),
+					    MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable), error)) return false;
+					host.DeferRecoveryStopsToTickBoundary();
+					client.DeferRecoveryStopsToTickBoundary();
+					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) return false;
+					if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(101, 1)}, {}, error)) return false;
+					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, error)) return false;
+					if (rejoin) {
+						host.RequestResync("player rejoined");
+					} else {
+						std::array<uint8_t, 32> first{}, second{};
+						second[0] = 1;
+						if (!host.SubmitLocalChecksum(delay, first, error) || !client.SubmitLocalChecksum(delay, second, error)) return false;
+					}
+					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.HasPendingRecoveryStop(); }, error)) return false;
+					if (!host.IsRunning() || !client.IsRunning()) {
+						*error = "recovery stopped input before the authoritative tick completed";
+						return false;
+					}
+					if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error) || !client.QueueLocalInput(1, {MakeFrame(101, 2)}, {}, error)) return false;
+					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 2 && client.GetStats().framesAccepted == 2; }, error)) return false;
+					if (client.FinishSimulationTick(delay + 1) || !host.FinishSimulationTick(delay + 1) || !host.IsFailed()) {
+						*error = "the host did not own the recovery boundary";
+						return false;
+					}
+					if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return client.IsFailed(); }, error)) return false;
+					const std::string reason = rejoin ? "ResyncRequested:" : "Desync:";
+					if (!host.GetStats().timeoutReason.starts_with(reason) || !client.GetStats().timeoutReason.starts_with(reason)) {
+						*error = "recovery lost its reason";
+						return false;
+					}
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS recovery_stops_at_completed_tick D=0,3 desync/rejoin" << std::endl;
+			return true;
+		}
+
 		bool TestCoordinatorDelayedHappyPath(std::string* error) {
 			const uint16_t port = 43001;
 			const uint64_t sessionId = 0x7000000000000001ULL;
@@ -867,6 +911,7 @@ namespace RTE {
 		    !TestCanonicalHeader(&error) ||
 		    !TestDecodeFailures(&error) ||
 		    !TestSemanticFailures(&error) ||
+		    !TestRecoveryStopsAtCompletedTick(&error) ||
 		    !TestCoordinatorDelayedHappyPath(&error) ||
 		    !TestCoordinatorPerSenderDelay(&error) ||
 		    !TestCoordinatorPerSenderDelayMismatch(&error) ||

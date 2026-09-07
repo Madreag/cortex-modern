@@ -1742,6 +1742,145 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 }
 
 /// </summary>
+static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
+	const std::string error = ScenarioRunner::GetControllerReplayError();
+	if (error.find("Desync") != std::string::npos) {
+		if (TerrainDumpArmed()) {
+			DumpTerrainNow("desync");
+			DumpSimStateNow("desync");
+		}
+		const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+		SceneMan::FlushTerrainEvents(base + ".desync.terrainevents.txt");
+	}
+	if (ScenarioRunner::IsActive()) {
+		std::cerr << "[scenario] controller replay failed: " << error << std::endl;
+		System::SetQuit(true);
+	} else if (!s_netReplayInPath.empty()) {
+		// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
+		s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		using Outcome = ScenarioRunner::LockstepReplayOutcome;
+		Outcome outcome = ScenarioRunner::GetLockstepReplayOutcome();
+		if (outcome == Outcome::Playing || outcome == Outcome::None) {
+			outcome = Outcome::SimFailure;
+			ScenarioRunner::SetLockstepReplayOutcome(outcome);
+		}
+		if (outcome != Outcome::Completed) {
+			std::cerr << "[net-replay] playback stopped: " << ScenarioRunner::ReplayOutcomeName(outcome) << ": " << error << std::endl;
+			s_netReplayExitCode = outcome == Outcome::Truncated ? 2 : (outcome == Outcome::Corrupt ? 3 : 4);
+		}
+		g_ActivityMan.EndActivity();
+		ScenarioRunner::ClearControllerReplayError();
+		System::SetQuit(true);
+	} else {
+		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+		const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
+		const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
+			(error.find("Complete:") != std::string::npos ||
+			 error.find("MissingFrameTimeout") != std::string::npos ||
+			 error.find("PeerDisconnected") != std::string::npos);
+		if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
+			const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
+			if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
+				s_menuMpTraceError = error;
+				std::cerr << "[menu-mp] trace stopped: " << error << std::endl;
+			}
+			g_ActivityMan.EndActivity();
+			ScenarioRunner::ClearControllerReplayError();
+			System::SetQuit(true);
+		} else if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
+			g_NetMatchService.Complete("e2e complete");
+			g_ActivityMan.EndActivity();
+			ScenarioRunner::ClearControllerReplayError();
+			System::SetQuit(true);
+		} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+			// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
+			// If our activity is not over, they left mid-match rather than finishing it.
+			const Activity* skewActivity = g_ActivityMan.GetActivity();
+			const std::string result = (skewActivity && skewActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+			g_NetMatchService.FinishMatch(result);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			returnToMenuAfterNetworkEnd = true;
+		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
+		           g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
+		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+			// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
+			// snapshots its state, every peer reloads the identical file, the match plays on.
+			++s_netMatchResyncs;
+			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
+			std::cout << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot" << std::endl;
+			ScenarioRunner::ClearControllerReplayError();
+			std::string resyncError;
+			bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			if (resyncOk) {
+				std::string launchPreset;
+				const auto resyncWaitStart = std::chrono::steady_clock::now();
+				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
+					if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
+						resyncError = g_NetMatchService.GetErrorText();
+						resyncOk = false;
+						break;
+					}
+					if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count() > 60) {
+						resyncError = "timed out waiting for the resync round";
+						resyncOk = false;
+						break;
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+			}
+			if (resyncOk) {
+				resyncOk = StageResyncedMatchActivity(&resyncError);
+			}
+			if (resyncOk) {
+				g_TimerMan.PauseSim(true);
+				if (!g_ActivityMan.RestartActivity()) {
+					resyncError = "resync activity restart failed";
+					resyncOk = false;
+				}
+			}
+			if (resyncOk) {
+				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
+				if (s_netMatchServiceE2E) {
+					// Round accounting restarts from the restored sim count.
+					s_netMatchServiceE2EStartTick = UINT64_MAX;
+					s_netMatchServiceE2ERunningTicks = 0;
+				}
+			} else {
+				std::cerr << "[net-match] resync failed: " << resyncError << std::endl;
+				g_ConsoleMan.PrintString("NETWORK: Resync failed: " + resyncError);
+				g_NetMatchService.ReportRuntimeError("resync failed: " + resyncError);
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				if (s_netMatchServiceE2E) {
+					s_netMatchServiceE2EError = "resync failed: " + resyncError;
+					s_netMatchServiceE2EExitCode = 1;
+					System::SetQuit(true);
+				} else {
+					returnToMenuAfterNetworkEnd = true;
+				}
+			}
+		} else {
+			std::cerr << "[net-match] controller sync failed: " << error << std::endl;
+			g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
+			g_ConsoleMan.SetEnabled(true);
+			g_NetMatchService.ReportRuntimeError(error);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				s_netMatchServiceE2EError = error;
+				s_netMatchServiceE2EExitCode = 1;
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
+			}
+		}
+	}
+}
+
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
@@ -2056,142 +2195,7 @@ void RunGameLoop() {
 				g_MovableMan.Update();
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
-				const std::string error = ScenarioRunner::GetControllerReplayError();
-				if (error.find("Desync") != std::string::npos) {
-					if (TerrainDumpArmed()) {
-						DumpTerrainNow("desync");
-						DumpSimStateNow("desync");
-					}
-					const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
-					SceneMan::FlushTerrainEvents(base + ".desync.terrainevents.txt");
-				}
-				if (ScenarioRunner::IsActive()) {
-					std::cerr << "[scenario] controller replay failed: " << error << std::endl;
-					System::SetQuit(true);
-				} else if (!s_netReplayInPath.empty()) {
-					// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
-					s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-					using Outcome = ScenarioRunner::LockstepReplayOutcome;
-					Outcome outcome = ScenarioRunner::GetLockstepReplayOutcome();
-					if (outcome == Outcome::Playing || outcome == Outcome::None) {
-						outcome = Outcome::SimFailure;
-						ScenarioRunner::SetLockstepReplayOutcome(outcome);
-					}
-					if (outcome != Outcome::Completed) {
-						std::cerr << "[net-replay] playback stopped: " << ScenarioRunner::ReplayOutcomeName(outcome) << ": " << error << std::endl;
-						s_netReplayExitCode = outcome == Outcome::Truncated ? 2 : (outcome == Outcome::Corrupt ? 3 : 4);
-					}
-					g_ActivityMan.EndActivity();
-					ScenarioRunner::ClearControllerReplayError();
-					System::SetQuit(true);
-				} else {
-					const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
-					const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
-						(error.find("Complete:") != std::string::npos ||
-						 error.find("MissingFrameTimeout") != std::string::npos ||
-						 error.find("PeerDisconnected") != std::string::npos);
-					if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
-						const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
-						if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
-							s_menuMpTraceError = error;
-							std::cerr << "[menu-mp] trace stopped: " << error << std::endl;
-						}
-						g_ActivityMan.EndActivity();
-						ScenarioRunner::ClearControllerReplayError();
-						System::SetQuit(true);
-					} else if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
-						g_NetMatchService.Complete("e2e complete");
-						g_ActivityMan.EndActivity();
-						ScenarioRunner::ClearControllerReplayError();
-						System::SetQuit(true);
-					} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
-						// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
-						// If our activity is not over, they left mid-match rather than finishing it.
-						const Activity* skewActivity = g_ActivityMan.GetActivity();
-						const std::string result = (skewActivity && skewActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
-						g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
-						g_NetMatchService.FinishMatch(result);
-						g_ActivityMan.EndActivity();
-						g_ActivityMan.SetInActivity(false);
-						ScenarioRunner::ClearControllerReplayError();
-						returnToMenuAfterNetworkEnd = true;
-					} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
-					           g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
-					           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
-						// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
-						// snapshots its state, every peer reloads the identical file, the match plays on.
-						++s_netMatchResyncs;
-						g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
-						std::cout << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot" << std::endl;
-						ScenarioRunner::ClearControllerReplayError();
-						std::string resyncError;
-						bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
-						if (resyncOk) {
-							std::string launchPreset;
-							const auto resyncWaitStart = std::chrono::steady_clock::now();
-							while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
-								if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
-									resyncError = g_NetMatchService.GetErrorText();
-									resyncOk = false;
-									break;
-								}
-								if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count() > 60) {
-									resyncError = "timed out waiting for the resync round";
-									resyncOk = false;
-									break;
-								}
-								std::this_thread::sleep_for(std::chrono::milliseconds(5));
-							}
-						}
-						if (resyncOk) {
-							resyncOk = StageResyncedMatchActivity(&resyncError);
-						}
-						if (resyncOk) {
-							g_TimerMan.PauseSim(true);
-							if (!g_ActivityMan.RestartActivity()) {
-								resyncError = "resync activity restart failed";
-								resyncOk = false;
-							}
-						}
-						if (resyncOk) {
-							std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
-							if (s_netMatchServiceE2E) {
-								// Round accounting restarts from the restored sim count.
-								s_netMatchServiceE2EStartTick = UINT64_MAX;
-								s_netMatchServiceE2ERunningTicks = 0;
-							}
-						} else {
-							std::cerr << "[net-match] resync failed: " << resyncError << std::endl;
-							g_ConsoleMan.PrintString("NETWORK: Resync failed: " + resyncError);
-							g_NetMatchService.ReportRuntimeError("resync failed: " + resyncError);
-							g_ActivityMan.EndActivity();
-							g_ActivityMan.SetInActivity(false);
-							if (s_netMatchServiceE2E) {
-								s_netMatchServiceE2EError = "resync failed: " + resyncError;
-								s_netMatchServiceE2EExitCode = 1;
-								System::SetQuit(true);
-							} else {
-								returnToMenuAfterNetworkEnd = true;
-							}
-						}
-					} else {
-						std::cerr << "[net-match] controller sync failed: " << error << std::endl;
-						g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
-						g_ConsoleMan.SetEnabled(true);
-						g_NetMatchService.ReportRuntimeError(error);
-						g_ActivityMan.EndActivity();
-						g_ActivityMan.SetInActivity(false);
-						ScenarioRunner::ClearControllerReplayError();
-						if (s_netMatchServiceE2E) {
-							s_netMatchServiceE2EError = error;
-							s_netMatchServiceE2EExitCode = 1;
-							System::SetQuit(true);
-						} else {
-							returnToMenuAfterNetworkEnd = true;
-						}
-					}
-				}
+				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
 				g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 				break;
 			}
@@ -2257,6 +2261,12 @@ void RunGameLoop() {
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
 				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+			}
+
+			if (ScenarioRunner::FinishLockstepSimulationTick(simTick)) {
+				ScenarioRunner::SetControllerReplayError(ScenarioRunner::GetLockstepStopReason());
+				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
+				break;
 			}
 
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
