@@ -695,6 +695,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	RefreshLanGamesList();
 	if (!lobby) {
+		if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250) {
+			m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250);
+		}
+		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, 250);
 		return;
 	}
 
@@ -749,6 +753,19 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
+	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
+	const int extraHeight = errorHeight - 24;
+	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
+		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
+		m_MultiplayerLobbyPanel->Resize(300, 250 + extraHeight);
+	}
+	if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250 + extraHeight) {
+		m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250 + extraHeight);
+	}
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 192 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 192 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, 250 + extraHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
@@ -816,7 +833,7 @@ std::string MainMenuGUI::AutomationMultiplayerStatus() const {
 }
 
 std::string MainMenuGUI::AutomationMultiplayerError() const {
-	return g_NetMatchService.GetErrorText();
+	return m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby ? m_MultiplayerErrorLabel->GetText() : m_MultiplayerLandingStatusLabel->GetText();
 }
 
 std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {

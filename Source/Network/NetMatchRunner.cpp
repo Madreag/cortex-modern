@@ -359,6 +359,9 @@ namespace RTE {
 		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();
 		snapshot.remoteReady = m_Lobby.IsRemoteReady();
+		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {
+			snapshot.errorText = "A player could not join: " + session.BuildRejectText();
+		}
 
 		const uint8_t localId = LocalLockstepPeerId(session);
 		const std::map<uint8_t, NetPeerId> remoteTransports = BuildRemoteTransportMap(session);
