@@ -111,6 +111,10 @@ function Create(self)
 	self.checkpoint = { count = 0 };
 	self.checkpoint.self = self.checkpoint;
 	self.checkpoint.alias = self.checkpoint;
+	self.checkpoint.globals = getfenv(0);
+	self.checkpoint.globalKey = {};
+	rawset(self.checkpoint.globals, self.checkpoint.globalKey, self.checkpoint);
+	rawset(self.checkpoint.globals, self.UniqueID, 0);
 	self.checkpoint.engineState = math._CheckpointState;
 	math._CheckpointState[self.UniqueID] = 0;
 	self.checkpoint.vector = Vector(1, 2);
@@ -144,6 +148,8 @@ end
 function Update(self)
 	local state = self.checkpoint;
 	assert(state == state.self and state == state.alias, "checkpoint table identity");
+	assert(state.globals == getfenv(0) and rawget(state.globals, state.globalKey) == state, "checkpoint global table identity");
+	assert(rawget(state.globals, self.UniqueID) == self.testUpdate, "checkpoint global numeric key state");
 	assert(state.vector == state.vectorAlias and state.vector.shared == state, "checkpoint vector identity");
 	assert(state.timer == state.timerAlias, "checkpoint timer identity");
 	assert(state.sound == state.soundAlias and state.sound:HasAnySounds(), "checkpoint sound identity");
@@ -170,6 +176,7 @@ function Update(self)
 	state.vector.X = state.vector.X + 1;
 	assert(state.vectorAlias.X == count + 1, "checkpoint vector mutation");
 	self.testUpdate = count;
+	rawset(state.globals, self.UniqueID, count);
 	state.engineState[self.UniqueID] = count;
 	state.owned:SetNumberValue("CheckpointCount", count);
 	state.ownedPos.X = count + 10;
