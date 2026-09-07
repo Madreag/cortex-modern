@@ -265,6 +265,8 @@ namespace RTE {
 		Timer m_HandMovementDelayTimer; //!< A Timer for making the hand wait at its current HandTarget.
 		bool m_HandHasReachedCurrentTarget; //!< A flag for whether or not the hand has reached its current target. The target is either the front of the HandTarget queue, or the appropriate target to move to if the queue is empty.
 		PersistedTimerAnchor m_PersistedHandMovementDelayTimerAnchor;
+		Vector m_PersistedHandCurrentOffset;
+		bool m_HasPersistedHandCurrentOffset;
 		Vector m_PersistedHandPos; //!< Saved hand position, applied on snapshot adopt.
 		Vector m_PersistedHandPrevPos; //!< Saved previous hand position, applied on snapshot adopt.
 		bool m_HasPersistedHandPos;
