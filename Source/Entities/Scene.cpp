@@ -763,7 +763,7 @@ int Scene::LoadData(bool placeObjects, bool initPathfinding, bool placeUnits) {
 
 		// TODO: CLEAN AIR IN AN AFTER EACH OBJECT PLACED, becuase the items refuse to be placed in a hollowness otherwise?
 		// Clear the air out of objects placed
-		m_pTerrain->CleanAir();
+		if (!g_MovableMan.IsRestoringSnapshot()) m_pTerrain->CleanAir();
 	}
 
 	/////////////////////////////////
