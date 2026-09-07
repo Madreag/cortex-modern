@@ -143,6 +143,28 @@ function Create(self)
 	self.checkpoint.vectorAlias = self.checkpoint.vector;
 	self.checkpoint.timer = Timer();
 	self.checkpoint.timerAlias = self.checkpoint.timer;
+	self.checkpoint.box = Box(Vector(3, 5), 7, 11);
+	self.checkpoint.box.Width = -7;
+	self.checkpoint.box.shared = self.checkpoint;
+	self.checkpoint.boxAlias = self.checkpoint.box;
+	self.checkpoint.emptyArea = Area();
+	self.checkpoint.area = Area("Checkpoint Area " .. self.UniqueID .. "\nSecond line");
+	self.checkpoint.area:AddBox(Box(Vector(30, 40), 10, 20));
+	self.checkpoint.area:AddBox(Box(Vector(80, 90), 5, 7));
+	self.checkpoint.area.shared = self.checkpoint;
+	self.checkpoint.aBox = self.checkpoint.area:GetBoxInside(Vector(31, 41));
+	self.checkpoint.firstBox = self.checkpoint.area.FirstBox;
+	self.checkpoint.firstBox.shared = self.checkpoint;
+	SceneMan.Scene:SetArea(self.checkpoint.area);
+	self.checkpoint.sceneArea = SceneMan.Scene:GetArea(self.checkpoint.area.Name);
+	self.checkpoint.sceneBox = self.checkpoint.sceneArea:GetBoxInside(Vector(31, 41));
+	self.checkpoint.aBox.Width = -10;
+	self.checkpoint.sceneBox.Width = -10;
+	do
+		local owner = Area("Checkpoint hidden owner");
+		owner:AddBox(Box(Vector(4, 6), 13, 17));
+		self.checkpoint.onlyBox = owner:GetBoxInside(Vector(5, 7));
+	end
 	self.checkpoint.sound = CreateSoundContainer("Funds Changed", "Base.rte");
 	self.checkpoint.sound.PresetName = "Checkpoint Sound";
 	self.checkpoint.soundAlias = self.checkpoint.sound;
@@ -202,6 +224,18 @@ function Update(self)
 	assert(rawget(state.globals, self.UniqueID) == self.testUpdate, "checkpoint global numeric key state");
 	assert(state.vector == state.vectorAlias and state.vector.shared == state, "checkpoint vector identity");
 	assert(state.timer == state.timerAlias, "checkpoint timer identity");
+	assert(state.box == state.boxAlias and state.box.shared == state, "checkpoint box identity");
+	assert(state.box.Width == -7 - self.testUpdate and state.box.Height == 11, "checkpoint box state");
+	assert(state.emptyArea.Name == "" and state.emptyArea:HasNoArea(), "checkpoint empty area");
+	assert(state.onlyBox.Width == 13 and state.onlyBox.Height == 17, "checkpoint hidden box owner");
+	assert(state.area.shared == state and state.firstBox.shared == state, "checkpoint area fields");
+	assert(state.aBox.Width == -10 - self.testUpdate and state.firstBox.Width == state.aBox.Width, "checkpoint area box aliases");
+	assert(state.area.FirstBox.Width == state.aBox.Width, "checkpoint borrowed area box");
+	local boxes = 0;
+	for box in state.area.Boxes do boxes = boxes + 1; if boxes == 2 then assert(box.Width == 5 and box.Height == 7, "checkpoint area box order"); end end
+	assert(boxes == 2, "checkpoint area box count");
+	assert(state.sceneBox.Width == -10 - 2 * self.testUpdate and state.sceneArea.FirstBox.Width == state.sceneBox.Width, "checkpoint scene box state " .. state.sceneBox.Width .. "/" .. state.sceneArea.FirstBox.Width .. " expected " .. (-10 - 2 * self.testUpdate));
+	assert(SceneMan.Scene:GetArea(state.area.Name).FirstBox.Width == state.sceneBox.Width, "checkpoint scene area reference");
 	assert(state.sound == state.soundAlias and state.sound:HasAnySounds() and state.sound.PresetName == "Checkpoint Sound", "checkpoint sound identity");
 	assert(state.wrap == state.wrapAlias, "checkpoint closure identity");
 	assert(state.engineState == math._CheckpointState and state.engineState[self.UniqueID] == self.testUpdate, "checkpoint engine table state");
@@ -243,6 +277,9 @@ function Update(self)
 	state.vector.X = state.vector.X + 1;
 	assert(state.vectorAlias.X == count + 1, "checkpoint vector mutation");
 	self.testUpdate = count;
+	state.box.Width = -7 - count;
+	state.aBox.Width = -10 - count;
+	state.sceneBox.Width = -10 - 2 * count;
 	rawset(state.globals, self.UniqueID, count);
 	state.engineState[self.UniqueID] = count;
 	state.owned:SetNumberValue("CheckpointCount", count);
