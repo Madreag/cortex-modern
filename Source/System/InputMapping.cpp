@@ -1,4 +1,5 @@
 #include "InputMapping.h"
+#include "CheckpointArchive.h"
 
 using namespace RTE;
 
@@ -63,4 +64,19 @@ int InputMapping::Save(Writer& writer) const {
 	}
 
 	return 0;
+}
+
+std::string InputMapping::SaveCheckpoint() const {
+    CheckpointWriter archive("InputMapping1");
+    archive(m_PresetDescription, m_KeyMap, m_MouseButtonMap, m_DirectionMapped, m_JoyButtonMap, m_AxisMap, m_DirectionMap);
+    return archive.Text();
+}
+
+bool InputMapping::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "InputMapping1", validateOnly);
+        archive(m_PresetDescription, m_KeyMap, m_MouseButtonMap, m_DirectionMapped, m_JoyButtonMap, m_AxisMap, m_DirectionMap);
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
 }

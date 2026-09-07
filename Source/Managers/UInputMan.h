@@ -33,6 +33,7 @@ namespace RTE {
 	class UInputMan : public Singleton<UInputMan> {
 		friend class SettingsMan;
 
+		friend struct ContractAudit;
 	public:
 		/// Enumeration for the mouse cursor actions in menus.
 		enum MenuCursorButtons {
@@ -69,6 +70,10 @@ namespace RTE {
 		/// Updates the state of this UInputMan. Supposed to be done every frame.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Update();
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		bool RunCheckpointSelfTest();
+
 
 		/// Resets the changed states for keyboard and mouse events.
 		void EndFrame();
@@ -496,6 +501,9 @@ namespace RTE {
 		};
 
 		struct Keyboard {
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 			SDL_KeyboardID id{0};
 			std::array<bool, SDL_SCANCODE_COUNT> keyStates{};
 			std::array<bool, SDL_SCANCODE_COUNT> changedKeyStates{};
@@ -505,6 +513,9 @@ namespace RTE {
 		std::unordered_map<SDL_KeyboardID, Keyboard> m_KeyboardStates; //!< Keyboard state when multi keyboard support is enabled.
 
 		struct Mouse {
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 			SDL_MouseID id{0};
 			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> state{};
 			std::array<bool, MouseButtons::MAX_MOUSE_BUTTONS> change{};

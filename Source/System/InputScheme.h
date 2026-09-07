@@ -22,9 +22,13 @@ namespace RTE {
 	/// A complete input configuration scheme description for a single player.
 	class InputScheme : public Serializable {
 
+		friend struct ContractAudit;
 	public:
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 
 		/// Enumeration for different input scheme presets.
 		enum InputPreset {
