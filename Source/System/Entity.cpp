@@ -1,4 +1,5 @@
 #include "Entity.h"
+#include "CheckpointArchive.h"
 #include "RTETools.h"
 #include "PresetMan.h"
 #include "DataModule.h"
@@ -8,6 +9,24 @@
 #include <vector>
 
 namespace RTE {
+	std::string Entity::SaveCheckpoint() const {
+		CheckpointWriter archive("Entity1");
+		archive(m_PresetName, m_CopiedFromPresetName, m_PresetDescription, m_FormattedReaderPosition, m_IsOriginalPreset, m_DefinedInModule, m_RandomWeight);
+		archive(std::set<std::string>(m_Groups.begin(), m_Groups.end()));
+		return archive.Text();
+	}
+
+	bool Entity::LoadCheckpoint(std::string_view text, bool validateOnly) {
+		try {
+			CheckpointReader archive(text, "Entity1", validateOnly);
+			archive(m_PresetName, m_CopiedFromPresetName, m_PresetDescription, m_FormattedReaderPosition, m_IsOriginalPreset, m_DefinedInModule, m_RandomWeight);
+			std::set<std::string> groups;
+			archive.Value(groups);
+			archive.OnCommit([this, groups = std::move(groups)] { m_Groups.clear(); m_Groups.insert(groups.begin(), groups.end()); });
+			archive.Finish();
+			return true;
+		} catch (const std::exception&) { return false; }
+	}
 
 	Entity::ClassInfo Entity::m_sClass("Entity");
 	Entity::ClassInfo* Entity::ClassInfo::s_ClassHead = 0;

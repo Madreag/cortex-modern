@@ -1,4 +1,5 @@
 #include "LimbPath.h"
+#include "CheckpointArchive.h"
 #include "MovableObject.h"
 
 #include "PresetMan.h"
@@ -10,6 +11,36 @@
 #include <charconv>
 
 using namespace RTE;
+
+std::string LimbPath::SaveCheckpoint() const {
+	CheckpointWriter archive("LimbPath1");
+	archive(Entity::SaveCheckpoint());
+	archive(m_Start, m_StartSegCount, m_FootCollisionsDisabledSegment, m_SegProgress, m_TravelSpeed, m_SegmentEndedThreshold, m_BaseTravelSpeedMultiplier, m_CurrentTravelSpeedMultiplier, m_BaseScaleMultiplier, m_CurrentScaleMultiplier, m_PushForce, m_JointPos, m_JointVel, m_Rotation, m_RotationOffset, m_PositionOffset, m_TimeLeft, m_PathTimer, m_SegTimer, m_TotalLength, m_RegularLength, m_SegmentDone, m_Ended, m_HFlipped);
+	archive(m_Segments, static_cast<size_t>(std::distance(m_Segments.cbegin(), std::deque<Vector>::const_iterator(m_CurrentSegment))));
+	return archive.Text();
+}
+
+bool LimbPath::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "LimbPath1", validateOnly);
+		std::string identity;
+		archive.Value(identity);
+		if (!Entity::LoadCheckpoint(identity, true)) return false;
+		archive.OnCommit([this, identity] { Entity::LoadCheckpoint(identity); });
+		archive(m_Start, m_StartSegCount, m_FootCollisionsDisabledSegment, m_SegProgress, m_TravelSpeed, m_SegmentEndedThreshold, m_BaseTravelSpeedMultiplier, m_CurrentTravelSpeedMultiplier, m_BaseScaleMultiplier, m_CurrentScaleMultiplier, m_PushForce, m_JointPos, m_JointVel, m_Rotation, m_RotationOffset, m_PositionOffset, m_TimeLeft, m_PathTimer, m_SegTimer, m_TotalLength, m_RegularLength, m_SegmentDone, m_Ended, m_HFlipped);
+		std::deque<Vector> segments;
+		size_t currentSegment;
+		archive.Value(segments);
+		archive.Value(currentSegment);
+		if (currentSegment > segments.size()) return false;
+		archive.OnCommit([this, segments = std::move(segments), currentSegment]() mutable {
+			m_Segments = std::move(segments);
+			m_CurrentSegment = m_Segments.begin() + currentSegment;
+		});
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
 
 ConcreteClassInfo(LimbPath, Entity, 20);
 

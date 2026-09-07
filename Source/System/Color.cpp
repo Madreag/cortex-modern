@@ -1,9 +1,25 @@
 #include "Color.h"
+#include "CheckpointArchive.h"
 #include "allegro/color.h"
 
 using namespace RTE;
 
 const std::string Color::c_ClassName = "Color";
+
+std::string Color::SaveCheckpoint() const {
+	CheckpointWriter writer("Color1");
+	writer(m_R, m_G, m_B, m_Index);
+	return writer.Text();
+}
+
+bool Color::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "Color1", validateOnly);
+		reader(m_R, m_G, m_B, m_Index);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
 
 int Color::Create() {
 	if (Serializable::Create()) {

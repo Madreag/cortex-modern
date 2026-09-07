@@ -1,7 +1,23 @@
 #include "Matrix.h"
+#include "CheckpointArchive.h"
 #include "RTETools.h"
 
 using namespace RTE;
+
+std::string Matrix::SaveCheckpoint() const {
+	CheckpointWriter archive("Matrix1");
+	archive(m_Rotation, m_Flipped, m_Elements, m_ElementsUpdated);
+	return archive.Text();
+}
+
+bool Matrix::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "Matrix1", validateOnly);
+		archive(m_Rotation, m_Flipped, m_Elements, m_ElementsUpdated);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
 
 const std::string Matrix::c_ClassName = "Matrix";
 

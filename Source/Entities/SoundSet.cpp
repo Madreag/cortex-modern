@@ -1,4 +1,5 @@
 #include "SoundSet.h"
+#include "Base64/base64.h"
 #include "AudioMan.h"
 #include "RTETools.h"
 #include "RTEError.h"
@@ -87,6 +88,7 @@ int SoundSet::Save(Writer& writer) const {
 		writer << soundData.MinimumAudibleDistance;
 		writer.NewProperty("AttenuationStartDistance");
 		writer << soundData.AttenuationStartDistance;
+		if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", base64_encode(soundData.SoundFile.SaveCheckpoint(), true));
 
 		writer.ObjectEnd();
 	}
@@ -146,6 +148,8 @@ SoundData SoundSet::ReadAndGetSoundData(Reader& reader) {
 			reader >> soundData.MinimumAudibleDistance;
 		} else if (soundSubPropertyName == "AttenuationStartDistance") {
 			reader >> soundData.AttenuationStartDistance;
+		} else if (soundSubPropertyName == "SpecialBehaviour_ContentCheckpoint") {
+			if (!soundData.SoundFile.LoadCheckpoint(base64_decode(reader.ReadPropValue()))) reader.ReportError("invalid sound file checkpoint");
 		}
 	}
 

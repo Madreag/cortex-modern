@@ -22,6 +22,8 @@ namespace RTE {
 
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 

@@ -22,6 +22,8 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		/// Concrete allocation and cloning definitions
 		EntityAllocation(LimbPath);
 		SerializableOverrideMethods;

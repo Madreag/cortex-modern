@@ -75,6 +75,8 @@ namespace RTE {
 		friend class DataModule;
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableOverrideMethods;
 
 #pragma region ClassInfo
