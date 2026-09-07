@@ -1,4 +1,6 @@
 #include "Magazine.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 #include "PresetMan.h"
 #include "AEmitter.h"
 
@@ -15,6 +17,7 @@ Magazine::~Magazine() {
 }
 
 void Magazine::Clear() {
+	m_PersistedMagazineRuntime.clear();
 	m_RoundCount = 0;
 	m_FullCapacity = 0;
 	m_RTTRatio = 0;
@@ -70,11 +73,17 @@ int Magazine::Create(const Magazine& reference) {
 	m_AIAimPenetration = reference.m_AIAimPenetration;
 	m_AIAimVel = reference.m_AIAimVel;
 
+	m_PersistedMagazineRuntime = reference.m_PersistedMagazineRuntime;
+	if (IsFaithfulClone() && m_PersistedMagazineRuntime.empty()) m_PersistedMagazineRuntime = reference.SaveMagazineRuntime();
 	return 0;
 }
 
 int Magazine::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Attachable::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_MagazineRuntime", {
+		m_PersistedMagazineRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadMagazineRuntime(m_PersistedMagazineRuntime, true)) reader.ReportError("invalid Magazine runtime checkpoint");
+	});
 
 	MatchProperty("RoundCount", {
 		reader >> m_RoundCount;
@@ -99,6 +108,7 @@ void Magazine::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AIBlastRadius", m_AIBlastRadius);
 	writer.NewPropertyWithValue("SpecialBehaviour_AIAimVel", m_AIAimVel);
 	writer.NewPropertyWithValue("SpecialBehaviour_AIAimPenetration", m_AIAimPenetration);
+	writer.NewPropertyWithValue("SpecialBehaviour_MagazineRuntime", base64_encode(m_PersistedMagazineRuntime.empty() ? SaveMagazineRuntime() : m_PersistedMagazineRuntime, true));
 }
 
 int Magazine::Save(Writer& writer) const {
@@ -213,4 +223,34 @@ void Magazine::Draw(BITMAP* pTargetBitmap,
                     DrawMode mode,
                     bool onlyPhysical) const {
 	Attachable::Draw(pTargetBitmap, targetPos, mode, onlyPhysical);
+}
+
+void Magazine::AdoptPersistedUniqueID() {
+	Attachable::AdoptPersistedUniqueID();
+	if (!m_PersistedMagazineRuntime.empty()) {
+		if (!LoadMagazineRuntime(m_PersistedMagazineRuntime)) throw std::runtime_error("could not restore Magazine runtime checkpoint");
+		m_PersistedMagazineRuntime.clear();
+	}
+}
+
+void Magazine::DiscardPersistedSnapshotState() {
+	Attachable::DiscardPersistedSnapshotState();
+	m_PersistedMagazineRuntime.clear();
+}
+
+std::string Magazine::SaveMagazineRuntime() const {
+	CheckpointWriter archive("MagazineRuntime1");
+	archive(m_RoundCount, m_FullCapacity, m_RTTRatio, m_Discardable, m_AIAimVel, m_AIAimMaxDistance, m_AIAimPenetration);
+	archive(m_AIBlastRadius);
+	return archive.Text();
+}
+
+bool Magazine::LoadMagazineRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "MagazineRuntime1", validateOnly);
+		archive(m_RoundCount, m_FullCapacity, m_RTTRatio, m_Discardable, m_AIAimVel, m_AIAimMaxDistance, m_AIAimPenetration);
+		archive(m_AIBlastRadius);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }
