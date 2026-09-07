@@ -52,6 +52,8 @@ int GlobalScript::ReadProperty(const std::string_view& propName, Reader& reader)
 
 	MatchProperty("ScriptPath", { m_ScriptPath = CorrectBackslashesInPath(reader.ReadPropValue()); });
 	MatchProperty("LuaClassName", { reader >> m_LuaClassName; });
+	MatchProperty("IsActive", { reader >> m_IsActive; });
+	MatchProperty("HasStarted", { reader >> m_HasStarted; });
 	MatchProperty("LateUpdate", { reader >> m_LateUpdate; });
 	MatchProperty("AddPieSlice", { m_PieSlicesToAdd.emplace_back(std::unique_ptr<PieSlice>(dynamic_cast<PieSlice*>(g_PresetMan.ReadReflectedPreset(reader)))); });
 
@@ -64,6 +66,8 @@ int GlobalScript::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("ScriptPath", m_ScriptPath);
 	writer.NewPropertyWithValue("LuaClassName", m_LuaClassName);
 	writer.NewPropertyWithValue("LateUpdate", m_LateUpdate);
+	writer.NewPropertyWithValue("IsActive", m_IsActive);
+	writer.NewPropertyWithValue("HasStarted", m_HasStarted);
 
 	for (const std::unique_ptr<PieSlice>& pieSliceToAdd: m_PieSlicesToAdd) {
 		writer.NewPropertyWithValue("AddPieSlice", pieSliceToAdd.get());
@@ -79,6 +83,12 @@ const std::vector<std::unique_ptr<PieSlice>>& GlobalScript::GetPieSlicesToAdd() 
 	}
 
 	return m_PieSlicesToAdd;
+}
+
+int GlobalScript::BindLuaObject() {
+	if (m_LuaClassName.empty()) return 0;
+	g_LuaMan.GetMasterScriptState().SetTempEntity(this);
+	return g_LuaMan.GetMasterScriptState().RunScriptString(m_LuaClassName + " = ToGlobalScript(LuaMan.TempEntity);");
 }
 
 int GlobalScript::ReloadScripts() {
@@ -106,7 +116,8 @@ int GlobalScript::Start() {
 		g_ConsoleMan.PrintString("DEBUG: Start Global Script: " + GetPresetName());
 	}
 
-	int error = ReloadScripts();
+	int error = BindLuaObject();
+	if (error == 0) error = ReloadScripts();
 	if (error == 0) {
 		error = g_LuaMan.GetMasterScriptState().RunScriptString("if " + m_LuaClassName + ".StartScript then " + m_LuaClassName + ":StartScript(); end");
 		m_HasStarted = true;
