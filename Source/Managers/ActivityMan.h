@@ -142,6 +142,9 @@ namespace RTE {
 		/// Checks load results and preservation of an already staged game.
 		bool RunLoadSelfTest(const std::string& fileName, bool expectLoaded);
 
+		/// Checks scene and object changes made by a script's save callback.
+		bool RunSaveCallbacksSelfTest();
+
 		/// Deletes a saved game file this process wrote for itself.
 		void RemoveSavedGame(const std::string& fileName) const;
 

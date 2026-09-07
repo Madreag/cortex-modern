@@ -108,9 +108,6 @@ int GAScripted::ReadProperty(const std::string_view& propName, Reader& reader) {
 }
 
 int GAScripted::Save(Writer& writer) const {
-	// Hmm. We should probably be calling this prior to the writer Save, instead of const-casting.
-	const_cast<GAScripted*>(this)->RunLuaFunction("OnSave");
-
 	GameActivity::Save(writer);
 
 	writer.NewPropertyWithValue("ScriptPath", m_ScriptPath);

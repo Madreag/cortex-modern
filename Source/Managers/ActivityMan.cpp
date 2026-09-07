@@ -1,4 +1,5 @@
 #include "ActivityMan.h"
+#include "LuaMan.h"
 
 #include <filesystem>
 #include "Activity.h"
@@ -123,7 +124,20 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 	const auto saveStart = std::chrono::steady_clock::now();
 
-	// Get BITMAPS so save into our zip, do this async so we can copy the scene info at the same time
+	if (activity->RunLuaFunction("OnSave") < 0) return false;
+	std::list<SceneObject*> saveObjects;
+	g_MovableMan.GetAllActors(false, saveObjects);
+	g_MovableMan.GetAllItems(false, saveObjects);
+	g_MovableMan.GetAllParticles(false, saveObjects);
+	std::vector<long> callbackObjects;
+	for (SceneObject* object: saveObjects) {
+		if (const auto* movable = dynamic_cast<MovableObject*>(object)) callbackObjects.push_back(movable->GetUniqueID());
+	}
+	for (long uid: callbackObjects) {
+		if (MovableObject* object = g_MovableMan.FindObjectByUniqueID(uid)) object->OnSave();
+	}
+
+	// Copy the layers in parallel with serialization, after all save callbacks.
 	auto copyBitmaps = g_ThreadMan.GetBackgroundThreadPool().submit([scene]() {
 		return scene->GetCopiedSceneLayerBitmaps();
 	});
@@ -172,18 +186,12 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	writer->NewPropertyWithValue("Activity", activity);
 
 	// Pull all stuff from MovableMan into the Scene for saving, so existing Actors/ADoors are saved, without transferring ownership, so the game can continue.
-	// This is done after the activity is saved, in case the activity wants to add anything to the scene while saving.
 	// TODO- copying may be faster, and lets us move all this actual writing into async
 	struct BorrowedSceneObjects {
 		Scene& scene;
 		~BorrowedSceneObjects() { scene.ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, false); }
 	} borrowedObjects{*modifiableScene};
 	modifiableScene->RetrieveSceneObjects(false);
-	for (SceneObject* objectToSave: *modifiableScene->GetPlacedObjects(Scene::PlacedObjectSets::PLACEONLOAD)) {
-		if (MovableObject* objectToSaveAsMovableObject = dynamic_cast<MovableObject*>(objectToSave)) {
-			objectToSaveAsMovableObject->OnSave();
-		}
-	}
 
 	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
 	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
@@ -390,6 +398,57 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 		RTEError::ShowMessageBox(message);
 		return false;
 	}
+}
+
+bool ActivityMan::RunSaveCallbacksSelfTest() {
+	auto* activity = dynamic_cast<GAScripted*>(GetActivity());
+	if (!activity) return false;
+	const std::string activityClass = activity->GetLuaClassName();
+	LuaStateWrapper& scriptState = g_LuaMan.GetMasterScriptState();
+	if (scriptState.RunScriptFile("UserScenes.rte/mod_save_callbacks.lua", true, false) < 0 ||
+	    scriptState.RunScriptString(activityClass + ".OnSave = SaveActivity") < 0) return false;
+	activity->RefreshActivityFunctions();
+	std::list<SceneObject*> actors;
+	g_MovableMan.GetAllActors(false, actors);
+	if (actors.empty()) return false;
+	const size_t initialActors = actors.size();
+	auto* actor = dynamic_cast<Actor*>(actors.front());
+	if (!actor || actor->LoadScript(g_PresetMan.GetFullModulePath("UserScenes.rte/mod_save_callbacks.lua")) < 0) return false;
+	const long actorUID = actor->GetUniqueID();
+	const int x = static_cast<int>(actor->GetPos().GetX()), y = static_cast<int>(actor->GetPos().GetY());
+	rectfill(g_SceneMan.GetTerrain()->GetBitmap(), x - 30, y - 30, x + 30, y + 30, 30);
+	if (!SaveCurrentGame("save_callbacks") || !WaitForSaveGameTask()) return false;
+	const Vector acceleration = g_SceneMan.GetScene()->GetGlobalAcc();
+	const auto expectedImages = g_SceneMan.GetScene()->GetCopiedSceneLayerBitmaps();
+	actors.clear();
+	g_MovableMan.GetAllActors(false, actors);
+	const size_t expectedActors = actors.size();
+	const bool callback = actor->GetNumberValue("save_callback_count") == 1 && acceleration == Vector(1, 23) &&
+	                      g_SceneMan.GetScene()->HasArea("Save callback area") && expectedActors == initialActors + 1;
+	const bool loaded = LoadAndLaunchGame("save_callbacks");
+	bool images = loaded;
+	if (loaded) {
+		const auto actualImages = g_SceneMan.GetScene()->GetCopiedSceneLayerBitmaps();
+		images = actualImages.size() == expectedImages.size();
+		for (size_t i = 0; images && i < actualImages.size(); ++i) {
+			const BITMAP* expected = expectedImages[i].bitmap.get();
+			const BITMAP* actual = actualImages[i].bitmap.get();
+			images = expected->w == actual->w && expected->h == actual->h;
+			for (int row = 0; images && row < actual->h; ++row) images = std::memcmp(expected->line[row], actual->line[row], actual->w) == 0;
+		}
+	}
+	actors.clear();
+	g_MovableMan.GetAllActors(false, actors);
+	const auto* restoredActor = g_MovableMan.FindObjectByUniqueID(actorUID);
+	const bool scene = loaded && g_SceneMan.GetScene()->GetGlobalAcc() == acceleration && g_SceneMan.GetScene()->HasArea("Save callback area") &&
+	                   g_SceneMan.GetScene()->HasArea("Activity save callback area");
+	const bool objects = loaded && actors.size() == expectedActors && restoredActor && restoredActor->GetNumberValue("save_callback_count") == 1;
+	const bool activityState = loaded && GetActivity()->GetTeamFunds(Activity::TeamOne) == 357 &&
+	                           scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 1)") == 0;
+	const bool passed = callback && loaded && images && scene && objects && activityState;
+	std::cout << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
+	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << std::endl;
+	return passed;
 }
 
 bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded) {

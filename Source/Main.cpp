@@ -137,6 +137,8 @@ static std::string s_loadSelfTestName;
 static bool s_loadSelfTestExpected = false;
 static bool s_loadSelfTestPassed = false;
 static bool s_saveCatalogSelfTest = false;
+static bool s_saveCallbacksSelfTest = false;
+static bool s_saveCallbacksSelfTestPassed = false;
 static bool s_purgeSelfTest = false;
 static bool s_purgeSelfTestPassed = false;
 
@@ -362,6 +364,7 @@ int ShutDown(int exitCode) {
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	if (!s_loadSelfTestName.empty() && !s_loadSelfTestPassed) exitCode = EXIT_FAILURE;
+	if (s_saveCallbacksSelfTest && !s_saveCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_purgeSelfTest && !s_purgeSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_saveIoSelfTest) {
 		const bool saved = s_saveIoSelfTestQueued && g_ActivityMan.WaitForSaveGameTask();
@@ -420,6 +423,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-bitmap-save-selftest") {
 			s_bitmapSaveSelfTest = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-save-callback-selftest") {
+			s_saveCallbacksSelfTest = true;
 			++i;
 			continue;
 		}
@@ -2254,6 +2262,12 @@ void RunGameLoop() {
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
 				s_bitmapSaveSelfTestResult = g_FrameMan.RunBitmapSaveSelfTest() ? 0 : 1;
 				System::SetQuit(true);
+				break;
+			}
+			if (s_saveCallbacksSelfTest && simTick > 0) {
+				s_saveCallbacksSelfTestPassed = g_ActivityMan.RunSaveCallbacksSelfTest();
+				System::SetQuit(true);
+				g_ActivityMan.EndActivity();
 				break;
 			}
 			if (s_purgeSelfTest && simTick > 0) {
