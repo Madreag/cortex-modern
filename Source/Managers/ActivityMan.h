@@ -148,6 +148,9 @@ namespace RTE {
 		/// Checks scene and object changes made by a script's save callback.
 		bool RunSaveCallbacksSelfTest();
 
+		/// Checks native global callbacks and their checkpoint continuations.
+		bool RunGlobalCallbacksSelfTest();
+
 		/// Deletes a saved game file this process wrote for itself.
 		void RemoveSavedGame(const std::string& fileName) const;
 
