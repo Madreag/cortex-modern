@@ -155,6 +155,14 @@ void TitleScreen::CreateIntroSequenceSlides() {
 	}
 }
 
+void TitleScreen::SkipIntro() {
+	m_FinishedPlayingIntro = true;
+	m_FadeAmount = 0;
+	g_MusicMan.PlayInterruptingMusic(dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Main Menu Music")));
+	g_AudioMan.SetMusicMuffledState(false);
+	SetTitleTransitionState(TitleTransition::MainMenu);
+}
+
 void TitleScreen::Update() {
 	if (m_SectionSwitch) {
 		m_SectionTimer.Reset();

@@ -820,10 +820,6 @@ void ProcessMenuScript() {
 	if (!g_MenuMan.IsMainMenuInteractive()) {
 		if (!introSkipped) {
 			g_MenuMan.SkipTitleIntroForAutomation();
-		} else if (g_ActivityMan.ActivitySetToRestart()) {
-			// A match is launching; the scroll-out animation doesn't complete under the automation's forced
-			// title state, so force the transition straight to the game start.
-			g_MenuMan.SkipTitleTransitionForAutomation();
 		}
 		return;
 	}

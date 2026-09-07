@@ -400,10 +400,8 @@ bool MainMenuGUI::RollCredits() {
 }
 
 MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
-	m_UpdateResult = MainMenuUpdateResult::NoEvent;
-
 	if (g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) {
-		return m_UpdateResult;
+		return MainMenuUpdateResult::NoEvent;
 	}
 
 	bool backToMainMenu = false;
@@ -463,7 +461,9 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 	if (m_UpdateResult == MainMenuUpdateResult::ActivityStarted || m_UpdateResult == MainMenuUpdateResult::ActivityResumed) {
 		m_MainMenuButtons[MenuButton::ResumeButton]->SetVisible(false);
 	}
-	return m_UpdateResult;
+	const MainMenuUpdateResult result = m_UpdateResult;
+	m_UpdateResult = MainMenuUpdateResult::NoEvent;
+	return result;
 }
 
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
