@@ -11,6 +11,7 @@
 #include "ThreadMan.h"
 #include "MetaMan.h"
 #include "ContentFile.h"
+#include "Base64/base64.h"
 #include "SLTerrain.h"
 #include "PathFinder.h"
 #include "MovableObject.h"
@@ -66,7 +67,13 @@ void Scene::Area::Clear() {
 }
 
 int Scene::Area::Create(const Area& reference) {
-	for (Box* box: reference.m_BoxList) m_BoxList.push_back(new Box(*box));
+	for (const Box* box: reference.m_BoxList) {
+		Box* copy = new Box;
+		copy->m_Corner = box->m_Corner;
+		copy->m_Width = box->m_Width;
+		copy->m_Height = box->m_Height;
+		m_BoxList.push_back(copy);
+	}
 
 	m_Name = reference.m_Name;
 
@@ -88,6 +95,11 @@ int Scene::Area::ReadProperty(const std::string_view& propName, Reader& reader) 
 	              reader >> *box;
 	              m_BoxList.push_back(box););
 	MatchProperty("Name", { reader >> m_Name; });
+	MatchProperty("SnapshotName", {
+		std::string encoded;
+		reader >> encoded;
+		m_Name = encoded == "~" ? "" : base64_decode(encoded);
+	});
 
 	EndPropertyList;
 }
@@ -102,6 +114,15 @@ int Scene::Area::Save(Writer& writer) const {
 	writer.NewProperty("Name");
 	writer << m_Name;
 
+	return 0;
+}
+
+int Scene::Area::SaveSnapshot(Writer& writer) const {
+	Serializable::Save(writer);
+	for (const Box* box: m_BoxList) {
+		writer.NewPropertyWithValue("AddBox", *box);
+	}
+	writer.NewPropertyWithValue("SnapshotName", m_Name.empty() ? "~" : base64_encode(m_Name, true));
 	return 0;
 }
 
@@ -1193,7 +1214,12 @@ int Scene::Save(Writer& writer) const {
 		// Only write the area if it has any boxes/area at all
 		if (doFullGameSave || !(*area).HasNoArea()) {
 			writer.NewProperty("AddArea");
-			writer << *area;
+			if (doFullGameSave) {
+				area->SaveSnapshot(writer);
+				writer.ObjectEnd();
+			} else {
+				writer << *area;
+			}
 		}
 	}
 	writer.NewProperty("GlobalAcceleration");
@@ -2160,6 +2186,41 @@ int Scene::GetResidentBrainCount() const {
 			count++;
 	}
 	return count;
+}
+
+void Scene::CaptureAreas(AreaState& state) const {
+	std::shared_lock<std::shared_mutex> guard(g_sceneAreaMutex);
+	state.areas.clear();
+	for (const Area* area: m_AreaList) {
+		state.areas.push_back(std::make_unique<Area>(*area));
+	}
+	state.navigableAreas = m_NavigableAreas;
+	state.navigableAreasUpToDate = m_NavigableAreasUpToDate;
+}
+
+void Scene::RestoreAreas(const AreaState& state) {
+	AreaState copy;
+	for (const auto& area: state.areas) {
+		copy.areas.push_back(std::make_unique<Area>(*area));
+	}
+	copy.navigableAreas = state.navigableAreas;
+	copy.navigableAreasUpToDate = false;
+	SwapAreas(copy);
+}
+
+void Scene::SwapAreas(AreaState& state) {
+	std::unique_lock<std::shared_mutex> guard(g_sceneAreaMutex);
+	std::vector<std::unique_ptr<Area>> previous;
+	for (Area* area: m_AreaList) {
+		previous.emplace_back(area);
+	}
+	m_AreaList.clear();
+	for (auto& area: state.areas) {
+		m_AreaList.push_back(area.release());
+	}
+	state.areas = std::move(previous);
+	m_NavigableAreas.swap(state.navigableAreas);
+	std::swap(m_NavigableAreasUpToDate, state.navigableAreasUpToDate);
 }
 
 bool Scene::SetArea(Area& newArea) {
