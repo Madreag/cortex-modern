@@ -234,6 +234,22 @@ function Create(self)
 	self.checkpoint.waypointIterator = self.checkpoint.bareHuman.SceneWaypoints;
 	assert(self.checkpoint.waypointIterator().X == 11, "checkpoint owned iterator first");
 	self.checkpoint.bareHuman:ClearAIWaypoints();
+	self.checkpoint.gib = self.checkpoint.owned.Gibs();
+	assert(self.checkpoint.gib, "checkpoint gib present");
+	self.checkpoint.gibAlias = self.checkpoint.gib;
+	self.checkpoint.gib.Offset = Vector(7, -9);
+	self.checkpoint.gibOffset = self.checkpoint.gib.Offset;
+	self.checkpoint.gibPreset = self.checkpoint.gib.ParticlePreset;
+	self.checkpoint.gibPresetName = self.checkpoint.gibPreset.PresetName;
+	self.checkpoint.gib.Count = 3;
+	self.checkpoint.gib.Spread = 0.75;
+	self.checkpoint.gib.MinVelocity = 5.5;
+	self.checkpoint.gib.MaxVelocity = 1.5;
+	self.checkpoint.gib.LifeVariation = 0.375;
+	self.checkpoint.gib.InheritsVel = 0.25;
+	self.checkpoint.gib.InheritsAngularVel = 0.875;
+	self.checkpoint.gib.IgnoresTeamHits = true;
+	self.checkpoint.gib.SpreadMode = Gib.SpreadSpiral;
 	self.checkpoint.limb = self.checkpoint.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK);
 	self.checkpoint.limbAlias = self.checkpoint.limb;
 	self.checkpoint.crabLimb = self.checkpoint.bareCrab:GetLimbPath(0, 0, Actor.WALK);
@@ -328,6 +344,12 @@ function Update(self)
 	for _, group in ipairs(state.ownedGroups) do assert(not state.owned:IsInGroup(group), "checkpoint removed group"); end
 	assert(state.bareHuman.Health == 37 and state.bareHuman.Pos.X == 13 and state.bareHuman.Pos.Y == 17, "checkpoint bare human");
 	assert(state.bareCrab.Health == 53 and state.bareCrab.Pos.X == 19 and state.bareCrab.Pos.Y == 23, "checkpoint bare crab");
+	assert(rawequal(state.gib, state.gibAlias) and state.gib.Count == 3 + self.testUpdate % 2, "checkpoint gib alias");
+	assert(state.gibOffset.X == 7 + self.testUpdate and state.owned.Gibs().Offset.X == state.gibOffset.X, "checkpoint gib offset reference");
+	assert(state.gib.ParticlePreset.PresetName == state.gibPresetName and state.gibPreset.PresetName == state.gibPresetName, "checkpoint gib preset reference");
+	assert(state.gib.Spread == 0.75 and state.gib.LifeVariation == 0.375 and state.gib.InheritsVel == 0.25 and state.gib.InheritsAngularVel == 0.875, "checkpoint gib configuration");
+	assert(state.gib.MinVelocity == 1.5 and state.gib.MaxVelocity == 5.5 + self.testUpdate / 16, "checkpoint gib velocity bounds");
+	assert(state.gib.IgnoresTeamHits and state.gib.SpreadMode == Gib.SpreadSpiral, "checkpoint gib flags");
 	assert(state.limb == state.limbAlias and state.limb.StartOffset.X == 17 + self.testUpdate, "checkpoint limb alias");
 	assert(state.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK).PushForce == 310 + self.testUpdate, "checkpoint limb owner");
 	assert(state.limb.BaseTravelSpeedMultiplier == 1.25 and state.limb.TravelSpeed == 2.5, "checkpoint limb configuration");
@@ -369,6 +391,9 @@ function Update(self)
 	state.vector.X = state.vector.X + 1;
 	assert(state.vectorAlias.X == count + 1, "checkpoint vector mutation");
 	self.testUpdate = count;
+	state.gibOffset.X = 7 + count;
+	state.gib.Count = 3 + count % 2;
+	state.gib.MinVelocity = 5.5 + count / 16;
 	state.limb.StartOffset = Vector(17 + count, 29);
 	state.limb.PushForce = 310 + count;
 	state.limbSegment.X = 37 + count;
