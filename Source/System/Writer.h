@@ -53,6 +53,18 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Writing Operations
+		/// Carries runtime identity and state through nested objects in a checkpoint.
+		class SnapshotScope {
+			Writer& m_Writer;
+			bool m_Previous;
+		public:
+			explicit SnapshotScope(Writer& writer, bool enabled = true) : m_Writer(writer), m_Previous(writer.m_Snapshot) { writer.m_Snapshot |= enabled; }
+			~SnapshotScope() { m_Writer.m_Snapshot = m_Previous; }
+			SnapshotScope(const SnapshotScope&) = delete;
+			SnapshotScope& operator=(const SnapshotScope&) = delete;
+		};
+		bool IsSnapshot() const { return m_Snapshot; }
+
 		/// Used to specify the start of an object to be written.
 		/// @param className The class name of the object about to be written.
 		void ObjectStart(const std::string& className) {
@@ -197,6 +209,7 @@ namespace RTE {
 		std::string m_FolderPath; //!< Only the path to the folder that we are writing a file in, excluding the filename.
 		std::string m_FileName; //!< Only the name of the currently read file, excluding the path.
 		int m_IndentCount; //!< Indentation counter.
+		bool m_Snapshot = false;
 
 	private:
 		/// Writes a float in shortest round-trip form, locale-independent and allocation-free.
