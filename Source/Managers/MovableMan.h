@@ -110,6 +110,7 @@ namespace RTE {
 		/// Clears out all MovableObject:s out of this. Effectively empties the world
 		/// of anything moving, without resetting all of this' settings.
 		void PurgeAllMOs();
+		bool RunPurgeSelfTest();
 
 		/// An in-memory world snapshot for rollback: faithful clones of every resident MO, kept in list order.
 		struct WorldSnapshot {
@@ -751,6 +752,7 @@ namespace RTE {
 		MovableObject* SpeculativeView(MovableObject* found);
 		MovableObject* TakeShadow(MovableObject* mo, int kind);
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
+		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
 		std::deque<MovableObject*> m_AddedItems;
 		std::deque<MovableObject*> m_AddedParticles;

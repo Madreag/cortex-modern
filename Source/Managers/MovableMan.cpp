@@ -1178,21 +1178,6 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	CompleteQueuedMOIDDrawings();
 	if (!m_Actors.empty() || !m_Items.empty() || !m_Particles.empty() || !m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
-		for (Actor* actor: m_AddedActors) {
-			actor->DestroyScriptState();
-			delete actor;
-		}
-		for (MovableObject* item: m_AddedItems) {
-			item->DestroyScriptState();
-			delete item;
-		}
-		for (MovableObject* particle: m_AddedParticles) {
-			particle->DestroyScriptState();
-			delete particle;
-		}
-		m_AddedActors.clear();
-		m_AddedItems.clear();
-		m_AddedParticles.clear();
 		PurgeAllMOs();
 	}
 	{
@@ -1307,18 +1292,6 @@ void MovableMan::ReinstateWorld(WorldSetAside& in) {
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
 		discardState(state);
 	}
-	for (Actor* actor: m_AddedActors) {
-		delete actor;
-	}
-	for (MovableObject* item: m_AddedItems) {
-		delete item;
-	}
-	for (MovableObject* particle: m_AddedParticles) {
-		delete particle;
-	}
-	m_AddedActors.clear();
-	m_AddedItems.clear();
-	m_AddedParticles.clear();
 	PurgeAllMOs();
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
@@ -1646,37 +1619,93 @@ std::string MovableMan::DescribeTeamRosters() const {
 	return out;
 }
 
+bool MovableMan::RunPurgeSelfTest() {
+	if (m_Actors.empty()) return false;
+	auto report = std::make_unique<MOPixel>();
+	if (report->Create() < 0) return false;
+	const auto* actorPreset = g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte");
+	const auto* itemPreset = g_PresetMan.GetEntityPreset("HDFirearm", "Old Stock Battle Rifle", "Base.rte");
+	if (!actorPreset || !itemPreset) return false;
+	auto actor = std::unique_ptr<Actor>(dynamic_cast<Actor*>(actorPreset->Clone()));
+	auto item = std::unique_ptr<HeldDevice>(dynamic_cast<HeldDevice*>(itemPreset->Clone()));
+	auto particle = std::make_unique<MOPixel>();
+	if (!actor || !item || particle->Create() < 0) return false;
+	MovableObject* objects[] = {m_Actors.front(), actor.get(), item.get(), particle.get()};
+	std::vector<long> ids;
+	for (size_t i = 0; i < std::size(objects); ++i) {
+		MovableObject* object = objects[i];
+		object->SetNumberValue("purge_report", report->GetUniqueID());
+		object->SetNumberValue("purge_kind", i);
+		if (object->LoadScript(g_PresetMan.GetFullModulePath("UserScenes.rte/mod_purge.lua")) < 0 ||
+		    object->RunScriptedFunctionInAppropriateScripts("OnSave") < 0) return false;
+		ids.push_back(object->GetUniqueID());
+	}
+	AddActor(actor.release());
+	AddItem(item.release());
+	AddParticle(particle.release());
+	PurgeAllMOs();
+	const bool callbacks = report->GetNumberValue("purge_callbacks") == std::size(objects);
+	bool removed = true, spawned = true;
+	for (size_t i = 0; i < ids.size(); ++i) {
+		removed &= FindObjectByUniqueID(ids[i]) == nullptr;
+		const long spawnedUID = static_cast<long>(report->GetNumberValue("purge_spawn_" + std::to_string(i)));
+		spawned &= spawnedUID > 0 && FindObjectByUniqueID(spawnedUID) == nullptr;
+	}
+	const bool empty = m_Actors.empty() && m_Items.empty() && m_Particles.empty() &&
+	                   m_AddedActors.empty() && m_AddedItems.empty() && m_AddedParticles.empty();
+	const bool retained = FindObjectByUniqueID(report->GetUniqueID()) == report.get();
+	const bool passed = callbacks && removed && spawned && empty && retained;
+	std::cout << "[purge-selftest] " << (passed ? "PASS" : "FAIL") << " callbacks=" << callbacks << " removed=" << removed
+	          << " spawned=" << spawned << " empty=" << empty << " retained=" << retained << std::endl;
+	return passed;
+}
+
 void MovableMan::PurgeAllMOs() {
 	if (m_Speculation.active) {
 		ReportSpeculationViolation("purging", nullptr);
 		return;
 	}
-	for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
-		(*itr)->DestroyScriptState();
-	}
-	for (std::deque<MovableObject*>::iterator itr = m_Items.begin(); itr != m_Items.end(); ++itr) {
-		(*itr)->DestroyScriptState();
-	}
-	for (std::deque<MovableObject*>::iterator itr = m_Particles.begin(); itr != m_Particles.end(); ++itr) {
-		(*itr)->DestroyScriptState();
-	}
+	if (m_PurgingAllMOs) return;
+	m_PurgingAllMOs = true;
+	struct FinishPurge {
+		bool& active;
+		~FinishPurge() { active = false; }
+	} finishPurge{m_PurgingAllMOs};
 
-	for (std::deque<Actor*>::iterator itr = m_Actors.begin(); itr != m_Actors.end(); ++itr) {
-		delete (*itr);
+	// Keep other objects alive while Destroy callbacks run. A callback can transfer
+	// ownership or add objects, so iterate stable identities and drain new roots too.
+	std::unordered_set<long> visited;
+	for (;;) {
+		std::vector<long> callbacks;
+		const auto collect = [&visited, &callbacks](const auto& objects) {
+			for (const MovableObject* object: objects) {
+				if (visited.insert(object->GetUniqueID()).second) callbacks.push_back(object->GetUniqueID());
+			}
+		};
+		collect(m_Actors);
+		collect(m_Items);
+		collect(m_Particles);
+		collect(m_AddedActors);
+		collect(m_AddedItems);
+		collect(m_AddedParticles);
+		if (callbacks.empty()) break;
+		for (long uid: callbacks) {
+			if (MovableObject* object = FindObjectByUniqueID(uid); object && ValidMO(object)) object->DestroyScriptState();
+		}
 	}
-	for (std::deque<MovableObject*>::iterator itr = m_Items.begin(); itr != m_Items.end(); ++itr) {
-		delete (*itr);
-	}
-	for (std::deque<MovableObject*>::iterator itr = m_Particles.begin(); itr != m_Particles.end(); ++itr) {
-		delete (*itr);
-	}
-
-	m_Actors.clear();
-	m_Items.clear();
-	m_Particles.clear();
-	m_AddedActors.clear();
-	m_AddedItems.clear();
-	m_AddedParticles.clear();
+	const auto deleteObjects = [](auto& objects) {
+		while (!objects.empty()) {
+			auto* object = objects.front();
+			objects.pop_front();
+			delete object;
+		}
+	};
+	deleteObjects(m_Actors);
+	deleteObjects(m_Items);
+	deleteObjects(m_Particles);
+	deleteObjects(m_AddedActors);
+	deleteObjects(m_AddedItems);
+	deleteObjects(m_AddedParticles);
 	m_ValidActors.clear();
 	m_ValidItems.clear();
 	m_ValidParticles.clear();
