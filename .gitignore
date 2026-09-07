@@ -109,3 +109,6 @@ LogConsole.txt
 Console.dump.log
 Console.input.log
 imgui.ini
+
+# Local verification reports and isolated game runtimes
+/reviews/

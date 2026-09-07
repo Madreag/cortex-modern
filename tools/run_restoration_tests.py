@@ -76,13 +76,13 @@ def main():
     options = parser.parse_args()
     if any(c < 1 or c + 31 >= options.ticks for c in options.captures):
         parser.error("every capture and window must finish before the continuation dump")
+    changed = subprocess.check_output(["git", "ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd=options.repo).decode().split("\0")
     root = options.out / (datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8])
     root.mkdir(parents=True, exist_ok=False)
     provenance = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=options.repo, text=True).strip(), "recording": {"path": str(options.recording.resolve()), "sha256": sha256(options.recording)}, "script": {"path": str(options.script.resolve()), "sha256": sha256(options.script)} if options.script else None}
     patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=options.repo)
     (root / "source.patch").write_bytes(patch)
     provenance["source_patch_sha256"] = hashlib.sha256(patch).hexdigest()
-    changed = subprocess.check_output(["git", "ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd=options.repo).decode().split("\0")
     provenance["changed_files"] = {}
     for name in sorted(set(changed) - {""}):
         source = options.repo / name
