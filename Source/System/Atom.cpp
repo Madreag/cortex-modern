@@ -1,4 +1,5 @@
 #include "Atom.h"
+#include "CheckpointArchive.h"
 
 #include "SLTerrain.h"
 #include "MovableMan.h"
@@ -65,6 +66,10 @@ void Atom::Destroy() {
 }
 
 void Atom::Clear() {
+	m_CheckpointLinkIDs.fill(0);
+	m_HasCheckpointLinks = false;
+	m_LastTrailPoints.clear();
+	m_TrailPoints.clear();
 	m_Offset.Reset();
 	m_OriginalOffset.Reset();
 	m_Normal.Reset();
@@ -148,6 +153,9 @@ int Atom::Create(const Atom& reference) {
 	m_IgnoreMOIDsByGroup = 0;
 
 	if (MovableObject::IsFaithfulClone()) {
+		m_LastHit = reference.m_LastHit;
+		m_CheckpointLinkIDs = reference.CaptureCheckpointLinkIDs();
+		m_HasCheckpointLinks = true;
 		m_StepWasTaken = reference.m_StepWasTaken;
 		m_StepRatio = reference.m_StepRatio;
 		m_SegTraj = reference.m_SegTraj;
@@ -177,6 +185,65 @@ int Atom::Create(const Atom& reference) {
 		m_SubStepped = reference.m_SubStepped;
 	}
 	return 0;
+}
+
+std::array<long, 5> Atom::CaptureCheckpointLinkIDs() const {
+	if (m_HasCheckpointLinks) return m_CheckpointLinkIDs;
+	// The last collision may have destroyed its other body. Never dereference a
+	// scratch pointer until the registry confirms that it still names a live MO.
+	const auto liveID = [](const MovableObject* object) {
+		return object && g_MovableMan.IsKnownObject(object) ? object->GetUniqueID() : 0L;
+	};
+	return {m_OwnerMO ? m_OwnerMO->GetUniqueID() : 0L,
+	    liveID(m_LastHit.Body[0]), liveID(m_LastHit.Body[1]),
+	    liveID(m_LastHit.RootBody[0]), liveID(m_LastHit.RootBody[1])};
+}
+
+std::string Atom::SaveCheckpoint() const {
+	CheckpointWriter writer("Atom1");
+	VisitCheckpoint(writer, *this);
+	writer(m_Material ? static_cast<int>(m_Material->GetIndex()) : -1,
+	    CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
+	for (const Material* material: m_LastHit.HitMaterial) writer(material ? static_cast<int>(material->GetIndex()) : -1);
+	return writer.Text();
+}
+
+bool Atom::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "Atom1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		int materialIndex;
+		std::array<long, 5> links;
+		bool usesGroupIgnoreList;
+		std::array<int, 2> hitMaterials;
+		reader.Value(materialIndex);
+		reader.Value(links);
+		reader.Value(usesGroupIgnoreList);
+		reader.Value(hitMaterials);
+		const auto validMaterial = [](int index) { return index >= -1 && index < c_PaletteEntriesNumber; };
+		if (!validMaterial(materialIndex) || !validMaterial(hitMaterials[0]) || !validMaterial(hitMaterials[1])) return false;
+		for (long uid: links) if (uid < 0) return false;
+		reader.OnCommit([this, materialIndex, links, usesGroupIgnoreList, hitMaterials] {
+			m_Material = materialIndex < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex));
+			m_CheckpointLinkIDs = links;
+			m_HasCheckpointLinks = true;
+			if (!usesGroupIgnoreList) m_IgnoreMOIDsByGroup = nullptr;
+			for (int index = 0; index < 2; ++index) m_LastHit.HitMaterial[index] = hitMaterials[index] < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(hitMaterials[index]));
+		});
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+void Atom::ResolveCheckpointLinks() {
+	if (!m_HasCheckpointLinks) return;
+	m_OwnerMO = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[0]);
+	for (int index = 0; index < 2; ++index) {
+		m_LastHit.Body[index] = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[1 + index]);
+		m_LastHit.RootBody[index] = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[3 + index]);
+	}
+	m_CheckpointLinkIDs.fill(0);
+	m_HasCheckpointLinks = false;
 }
 
 int Atom::ReadProperty(const std::string_view& propName, Reader& reader) {

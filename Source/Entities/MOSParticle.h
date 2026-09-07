@@ -15,6 +15,7 @@ namespace RTE {
 		EntityAllocation(MOSParticle);
 		ClassInfoGetters;
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 
 #pragma region Creation
 		/// Constructor method used to instantiate a MOSParticle object in system memory. Create() should be called before using the object.
@@ -75,6 +76,7 @@ namespace RTE {
 		long long GetAtomResidue() const;
 
 		void AdoptPersistedUniqueID() override;
+		void ResolveFaithfulLinks() override;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
@@ -123,6 +125,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		Atom* m_Atom; //!< The Atom that will be the physical representation of this MOSParticle.
+		std::string m_PersistedAtomCheckpoint;
 		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
 		bool m_HasPersistedAtomResidue = false;
 

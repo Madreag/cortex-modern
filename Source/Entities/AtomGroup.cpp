@@ -1,4 +1,6 @@
 #include "AtomGroup.h"
+#include "CheckpointArchive.h"
+#include "MovableMan.h"
 
 #include <algorithm>
 #include "MovableObject.h"
@@ -38,6 +40,8 @@ const std::unordered_map<std::string, AtomGroup::AreaDistributionType> AtomGroup
     {"Square", AtomGroup::AreaDistributionType::Square}};
 
 void AtomGroup::Clear() {
+	m_CheckpointOwnerID = 0;
+	m_HasCheckpointOwner = false;
 	m_Atoms.clear();
 	m_SubGroups.clear();
 	m_OwnerMOSR = nullptr;
@@ -84,14 +88,17 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 	m_AreaDistributionType = reference.m_AreaDistributionType;
 	m_AreaDistributionSurfaceAreaMultiplier = reference.m_AreaDistributionSurfaceAreaMultiplier;
 
+	for (const Atom* atom: m_Atoms) delete atom;
 	m_Atoms.clear();
 	m_SubGroups.clear();
+	std::unordered_map<const Atom*, Atom*> copiedAtoms;
 
 	for (const Atom* atom: reference.m_Atoms) {
 		if (!onlyCopyOwnerAtoms || atom->GetSubID() == 0) {
 			Atom* atomCopy = new Atom(*atom);
 			atomCopy->SetIgnoreMOIDsByGroup(&m_IgnoreMOIDs);
 			m_Atoms.push_back(atomCopy);
+			copiedAtoms.emplace(atom, atomCopy);
 
 			long subgroupID = atomCopy->GetSubID();
 			if (subgroupID != 0) {
@@ -115,6 +122,14 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 	}
 
 	if (MovableObject::IsFaithfulClone()) {
+		m_Material = reference.m_Material;
+		m_CheckpointOwnerID = reference.m_HasCheckpointOwner ? reference.m_CheckpointOwnerID : (reference.m_OwnerMOSR ? reference.m_OwnerMOSR->GetUniqueID() : 0);
+		m_HasCheckpointOwner = true;
+		m_SubGroups.clear();
+		for (const auto& [id, atoms]: reference.m_SubGroups) {
+			auto& copies = m_SubGroups[id];
+			for (const Atom* atom: atoms) if (auto copy = copiedAtoms.find(atom); copy != copiedAtoms.end()) copies.push_back(copy->second);
+		}
 		m_AutoGenerate = reference.m_AutoGenerate;
 		m_StoredOwnerMass = reference.m_StoredOwnerMass;
 		m_LimbPos = reference.m_LimbPos;
@@ -135,6 +150,79 @@ int AtomGroup::Create(MOSRotating* ownerMOSRotating, Material const* material, i
 	GenerateAtomGroup(m_OwnerMOSR);
 
 	return 0;
+}
+
+std::string AtomGroup::SaveCheckpoint() const {
+	CheckpointWriter writer("AtomGroup1");
+	VisitCheckpoint(writer, *this);
+	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), m_Material ? static_cast<int>(m_Material->GetIndex()) : -1,
+	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
+	std::vector<std::string> atoms;
+	std::unordered_map<const Atom*, size_t> indices;
+	atoms.reserve(m_Atoms.size());
+	for (const Atom* atom: m_Atoms) {
+		indices.emplace(atom, atoms.size());
+		atoms.push_back(atom->SaveCheckpoint());
+	}
+	std::map<long, std::vector<size_t>> subgroups;
+	for (const auto& [id, group]: m_SubGroups) {
+		auto& saved = subgroups[id];
+		for (const Atom* atom: group) saved.push_back(indices.at(atom));
+	}
+	writer(atoms, subgroups);
+	return writer.Text();
+}
+
+bool AtomGroup::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "AtomGroup1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		std::set<std::string> groups;
+		int materialIndex;
+		long ownerID;
+		std::vector<std::string> savedAtoms;
+		std::map<long, std::vector<size_t>> savedSubgroups;
+		reader.Value(groups); reader.Value(materialIndex); reader.Value(ownerID);
+		reader.Value(savedAtoms); reader.Value(savedSubgroups);
+		if (materialIndex < -1 || materialIndex >= c_PaletteEntriesNumber || ownerID < 0) return false;
+		Atom validator;
+		for (const std::string& atom: savedAtoms) if (!validator.LoadCheckpoint(atom, true)) return false;
+		for (const auto& [id, indices]: savedSubgroups) for (size_t index: indices) if (index >= savedAtoms.size()) return false;
+		std::vector<std::unique_ptr<Atom>> candidates;
+		std::vector<Atom*> atoms;
+		std::unordered_map<long, std::vector<Atom*>> subgroups;
+		if (!validateOnly) {
+			candidates.reserve(savedAtoms.size()); atoms.reserve(savedAtoms.size());
+			for (const std::string& saved: savedAtoms) {
+				auto atom = std::unique_ptr<Atom>(new Atom);
+				atom->SetIgnoreMOIDsByGroup(&m_IgnoreMOIDs);
+				if (!atom->LoadCheckpoint(saved)) return false;
+				atoms.push_back(atom.get()); candidates.push_back(std::move(atom));
+			}
+			for (const auto& [id, indices]: savedSubgroups) {
+				auto& group = subgroups[id];
+				for (size_t index: indices) group.push_back(atoms[index]);
+			}
+		}
+		reader.OnCommit([this, materialIndex, ownerID, &groups, &candidates, &atoms, &subgroups] {
+			for (Atom* atom: m_Atoms) delete atom;
+			m_Atoms.swap(atoms); m_SubGroups.swap(subgroups);
+			for (auto& atom: candidates) atom.release();
+			m_Groups.clear(); m_Groups.insert(groups.begin(), groups.end());
+			m_Material = materialIndex < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex));
+			m_CheckpointOwnerID = ownerID; m_HasCheckpointOwner = true;
+		});
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+void AtomGroup::ResolveCheckpointLinks() {
+	if (m_HasCheckpointOwner) {
+		m_OwnerMOSR = dynamic_cast<MOSRotating*>(g_MovableMan.FindObjectByUniqueID(m_CheckpointOwnerID));
+		m_CheckpointOwnerID = 0; m_HasCheckpointOwner = false;
+	}
+	for (Atom* atom: m_Atoms) atom->ResolveCheckpointLinks();
 }
 
 int AtomGroup::ReadProperty(const std::string_view& propName, Reader& reader) {

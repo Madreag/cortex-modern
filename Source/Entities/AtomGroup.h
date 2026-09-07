@@ -16,6 +16,9 @@ namespace RTE {
 		EntityAllocation(AtomGroup);
 		SerializableOverrideMethods;
 		ClassInfoGetters;
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		void ResolveCheckpointLinks();
 
 #pragma region Creation
 		/// Constructor method used to instantiate an AtomGroup object in system memory. Create() should be called before using the object.
@@ -369,6 +372,18 @@ namespace RTE {
 		AreaDistributionType m_AreaDistributionType; //!< How this AtomGroup will distribute energy when it collides with something.
 
 		float m_AreaDistributionSurfaceAreaMultiplier; //!< A multiplier for the AtomGroup's surface area, which affects how much it digs into terrain. 0.5 would halve the surface area so it would dig into terrain twice as much, 2.0 would make it dig into terrain half as much.
+
+	private:
+		long m_CheckpointOwnerID = 0;
+		bool m_HasCheckpointOwner = false;
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_PresetName, self.m_CopiedFromPresetName, self.m_PresetDescription, self.m_FormattedReaderPosition,
+			    self.m_DefinedInModule, self.m_IsOriginalPreset, self.m_RandomWeight,
+			    self.m_StoredOwnerMass, self.m_AutoGenerate, self.m_Resolution, self.m_Depth,
+			    self.m_JointOffset, self.m_LimbPos, self.m_MomentOfInertia, self.m_IgnoreMOIDs,
+			    self.m_AreaDistributionType, self.m_AreaDistributionSurfaceAreaMultiplier);
+		}
 
 	private:
 #pragma region Create Breakdown

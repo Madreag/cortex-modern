@@ -91,6 +91,7 @@ namespace RTE {
 		float GetLethalSharpness() const { return m_LethalSharpness; }
 
 		void AdoptPersistedUniqueID() override;
+		void ResolveFaithfulLinks() override;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Also commits the trail so a settle bakes the full, frame-timing-free trail.
@@ -189,6 +190,7 @@ namespace RTE {
 		Color m_Color; //!< Color representation of this MOPixel.
 
 		float m_LethalRange; //!< After this distance in meters, the MO has a chance to no longer hit MOs, and its Lifetime decreases. Defaults to the length of a player's screen.
+		std::string m_PersistedAtomCheckpoint;
 		long long m_PersistedAtomResidue = 0; //!< Saved travel residue, applied on snapshot adopt.
 		bool m_HasPersistedAtomResidue = false;
 		float m_PersistedLethalRange = 0.0F; //!< Saved live lethal range, applied on snapshot adopt.
