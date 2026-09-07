@@ -151,11 +151,10 @@ static std::string ResyncSaveName() {
 			isHost = m_IsHost;
 		}
 		if (isHost) {
-			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName())) {
+			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
-			g_ActivityMan.WaitForSaveGameTask();
 			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + ResyncSaveName() + ".ccsave";
 			std::ifstream in(savePath, std::ios::binary);
 			if (!in) {

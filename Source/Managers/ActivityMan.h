@@ -41,7 +41,7 @@ namespace RTE {
 
 		/// Gets the async save game task.
 		/// @return The savegame task.
-		std::future<void>& GetSaveGameTask() { return m_SaveGameTask; }
+		const std::shared_future<bool>& GetSaveGameTask() const { return m_SaveGameTask; }
 
 		/// Indicates whether the game is currently running or not (not editing, over or paused).
 		/// @return Whether the game is running or not.
@@ -125,7 +125,7 @@ namespace RTE {
 
 		/// Saves the currently running Scene and Activity to a savegame file. Note this only works for GAScripted activities.
 		/// @param fileName Path to the file.
-		/// @return Whether the game was successfully saved.
+		/// @return Whether the save was queued. WaitForSaveGameTask returns its result.
 		bool SaveCurrentGame(const std::string& fileName);
 
 		/// Loads a saved game, and launches its Scene and Activity.
@@ -143,11 +143,8 @@ namespace RTE {
 		void RemoveSavedGame(const std::string& fileName) const;
 
 		/// Waits for the task that saves the game to complete.
-		void WaitForSaveGameTask() const {
-			if (m_SaveGameTask.valid()) {
-				m_SaveGameTask.wait();
-			}
-		}
+		/// @return Whether the save completed successfully, or no save was pending.
+		bool WaitForSaveGameTask() const;
 
 		/// Returns whether a save is currently in progress.
 		/// @return Whether or not a save is currently in progress.
@@ -233,7 +230,7 @@ namespace RTE {
 		long long m_PendingSnapshotSimUpdateCount = -1; //!< The loaded save's sim update count, -1 when the file carries none.
 		long long m_PendingSnapshotSimTimeTicks = 0; //!< The loaded save's sim time ticks.
 
-		std::future<void> m_SaveGameTask; //!< The current save game task.
+		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 
 		bool m_InActivity; //!< Whether we are currently in game (as in, not in the main menu or any other out-of-game menus), regardless of its state.
 		bool m_ActivityNeedsRestart; //!< Whether the current Activity needs to be restarted.
