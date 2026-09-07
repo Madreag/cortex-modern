@@ -250,6 +250,36 @@ function Create(self)
 	self.checkpoint.gib.InheritsAngularVel = 0.875;
 	self.checkpoint.gib.IgnoresTeamHits = true;
 	self.checkpoint.gib.SpreadMode = Gib.SpreadSpiral;
+	do
+		local owner = CreateAHuman("Green Dummy", "Base.rte");
+		self.checkpoint.customGib = owner.Gibs();
+		self.checkpoint.customGibParticle = CreateAHuman("Green Dummy", "Base.rte");
+		self.checkpoint.customGibParticle.GlobalAccScalar = 0.375;
+		self.checkpoint.customGib.ParticlePreset = self.checkpoint.customGibParticle;
+		self.checkpoint.customGib.shared = self.checkpoint;
+		self.Gibs().ParticlePreset = self.checkpoint.customGibParticle;
+		self.Gibs().Count = 0;
+	end
+	do
+		local owner = CreateAHuman("Green Dummy", "Base.rte");
+		self.checkpoint.bareGib = owner.Gibs();
+		self.checkpoint.bareGibParticle = AHuman();
+		self.checkpoint.bareGibParticle.GlobalAccScalar = 0.625;
+		self.checkpoint.bareGib.ParticlePreset = self.checkpoint.bareGibParticle;
+		self.checkpoint.bareGib.Count = 0;
+	end
+	self.checkpoint.gibSpawnSource = CreateHDFirearm("Old Stock Battle Rifle", "Base.rte");
+	self.checkpoint.gibSpawnParticle = CreateMOSRotating("Gib Panel Dark Small A", "Base.rte");
+	self.checkpoint.gibSpawnParticle:SetNumberValue("CheckpointGibParticle", self.UniqueID);
+	self.checkpoint.gibSpawnParticle.PinStrength = 10000;
+	self.checkpoint.gibSpawnParticle.GlobalAccScalar = 0.125;
+	for gib in self.checkpoint.gibSpawnSource.Gibs do gib.Count = 0; end
+	local spawnGib = self.checkpoint.gibSpawnSource.Gibs();
+	spawnGib.ParticlePreset = self.checkpoint.gibSpawnParticle;
+	spawnGib.Count = 2;
+	spawnGib.LifeVariation = 0;
+	spawnGib.MinVelocity = 0.5;
+	spawnGib.MaxVelocity = 0.5;
 	self.checkpoint.limb = self.checkpoint.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK);
 	self.checkpoint.limbAlias = self.checkpoint.limb;
 	self.checkpoint.crabLimb = self.checkpoint.bareCrab:GetLimbPath(0, 0, Actor.WALK);
@@ -350,6 +380,12 @@ function Update(self)
 	assert(state.gib.Spread == 0.75 and state.gib.LifeVariation == 0.375 and state.gib.InheritsVel == 0.25 and state.gib.InheritsAngularVel == 0.875, "checkpoint gib configuration");
 	assert(state.gib.MinVelocity == 1.5 and state.gib.MaxVelocity == 5.5 + self.testUpdate / 16, "checkpoint gib velocity bounds");
 	assert(state.gib.IgnoresTeamHits and state.gib.SpreadMode == Gib.SpreadSpiral, "checkpoint gib flags");
+	local customParticle = ToMovableObject(state.customGib.ParticlePreset);
+	assert(state.customGib.shared == state and customParticle.UniqueID == state.customGibParticle.UniqueID, "checkpoint custom gib target");
+	assert(customParticle.GlobalAccScalar == 0.375 + self.testUpdate / 16, "checkpoint custom gib target state");
+	local worldParticle = ToMovableObject(self.Gibs().ParticlePreset);
+	assert(worldParticle and worldParticle.UniqueID == state.customGibParticle.UniqueID and worldParticle.GlobalAccScalar == customParticle.GlobalAccScalar, "checkpoint world gib target");
+	assert(ToMovableObject(state.bareGib.ParticlePreset).GlobalAccScalar == 0.625 + self.testUpdate / 32, "checkpoint bare gib target");
 	assert(state.limb == state.limbAlias and state.limb.StartOffset.X == 17 + self.testUpdate, "checkpoint limb alias");
 	assert(state.owned:GetLimbPath(AHuman.FGROUND, Actor.WALK).PushForce == 310 + self.testUpdate, "checkpoint limb owner");
 	assert(state.limb.BaseTravelSpeedMultiplier == 1.25 and state.limb.TravelSpeed == 2.5, "checkpoint limb configuration");
@@ -394,6 +430,9 @@ function Update(self)
 	state.gibOffset.X = 7 + count;
 	state.gib.Count = 3 + count % 2;
 	state.gib.MinVelocity = 5.5 + count / 16;
+	state.customGibParticle.GlobalAccScalar = 0.375 + count / 16;
+	state.bareGibParticle.GlobalAccScalar = 0.625 + count / 32;
+	state.gibSpawnParticle.GlobalAccScalar = 0.125 + count / 64;
 	state.limb.StartOffset = Vector(17 + count, 29);
 	state.limb.PushForce = 310 + count;
 	state.limbSegment.X = 37 + count;
@@ -434,6 +473,16 @@ function Update(self)
 	end
 	if self.Team == 0 and self:IsInGroup("Brains") then
 		if count == 61 or count == 311 or count == 401 then
+			local gibSource = state.gibSpawnSource:Clone();
+			ToMOSRotating(gibSource):GibThis();
+			local spawnedGibs = 0;
+			for particle in MovableMan.AddedParticles do
+				if particle:GetNumberValue("CheckpointGibParticle") == self.UniqueID then
+					assert(particle.GlobalAccScalar == state.gibSpawnParticle.GlobalAccScalar, "checkpoint spawned gib state");
+					spawnedGibs = spawnedGibs + 1;
+				end
+			end
+			assert(spawnedGibs == 2, "checkpoint gib spawn count");
 			local child = CreateHDFirearm("Old Stock Battle Rifle", "Base.rte");
 			child:SetNumberValue("CheckpointSpawnChild", 1);
 			child.PinStrength = 10000;
