@@ -24,11 +24,33 @@
 
 #include <luabind/luabind.hpp>
 #include <luabind/function.hpp>
+#include <stdexcept>
 
 namespace luabind {
 
+    namespace {
+        char main_thread_tag;
+    }
+
+    lua_State* detail::get_main_thread(lua_State* L)
+    {
+        lua_pushlightuserdata(L, &main_thread_tag);
+        lua_rawget(L, LUA_REGISTRYINDEX);
+        lua_State* main = static_cast<lua_State*>(lua_touserdata(L, -1));
+        lua_pop(L, 1);
+        if (!main) throw std::runtime_error("luabind::open() has not registered the main thread");
+        return main;
+    }
+
     void open(lua_State* L)
     {
+        const bool is_main = lua_pushthread(L) == 1;
+        lua_pop(L, 1);
+        if (!is_main) throw std::runtime_error("luabind::open() requires the main lua_State");
+        lua_pushlightuserdata(L, &main_thread_tag);
+        lua_pushlightuserdata(L, L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
+
         // get the global class registry, or create one if it doesn't exist
         // (it's global within a lua state)
         detail::class_registry* r = 0;
@@ -65,4 +87,3 @@ namespace luabind {
     }
 
 } // namespace luabind
-

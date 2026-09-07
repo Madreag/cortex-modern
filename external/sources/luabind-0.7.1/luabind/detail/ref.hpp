@@ -46,6 +46,7 @@ namespace detail
 
 	int LUABIND_API ref(lua_State *L);
 	void LUABIND_API unref(lua_State *L, int ref);
+	lua_State* LUABIND_API get_main_thread(lua_State* L);
 
 	inline void getref(lua_State* L, int r)
 	{
@@ -85,8 +86,8 @@ namespace detail
 		void set(lua_State* L_)
 		{
 			reset();
-			L = L_;
-			m_ref = ref(L);
+			L = get_main_thread(L_);
+			m_ref = ref(L_);
 		}
 
 		void replace(lua_State* L_)
@@ -125,4 +126,3 @@ namespace detail
 }}
 
 #endif // LUABIND_REF_HPP_INCLUDED
-

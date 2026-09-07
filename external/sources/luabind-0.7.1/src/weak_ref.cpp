@@ -26,6 +26,7 @@
 
 #include <luabind/config.hpp>
 #include <luabind/weak_ref.hpp>
+#include <luabind/detail/ref.hpp>
 #include <cassert>
 
 namespace luabind {
@@ -94,7 +95,7 @@ namespace luabind {
     {
         impl(lua_State* s, int index)
             : count(0)
-            , state(s)
+            , state(detail::get_main_thread(s))
             , ref(0)
         {
             lua_pushvalue(s, index);
@@ -200,4 +201,3 @@ namespace luabind {
     }
     
 } // namespace luabind
-
