@@ -1750,6 +1750,12 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 }
 
 /// </summary>
+static bool IsFirstE2ERematchReady() {
+	const Activity* activity = g_ActivityMan.GetActivity();
+	return s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
+	       activity && activity->IsOver() && s_netMatchServiceE2ERunningTicks >= 100;
+}
+
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
@@ -2272,9 +2278,13 @@ void RunGameLoop() {
 			}
 
 			if (ScenarioRunner::FinishLockstepSimulationTick(simTick)) {
-				ScenarioRunner::SetControllerReplayError(ScenarioRunner::GetLockstepStopReason());
-				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
-				break;
+				const std::string reason = ScenarioRunner::GetLockstepStopReason();
+				// A completed first round still takes the shared rematch transition below.
+				if (!reason.starts_with("Complete:") || !IsFirstE2ERematchReady()) {
+					ScenarioRunner::SetControllerReplayError(reason);
+					HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
+					break;
+				}
 			}
 
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
@@ -2413,8 +2423,7 @@ void RunGameLoop() {
 				}
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
-				if (ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
-				    activityState == Activity::Over && s_netMatchServiceE2ERunningTicks >= 100) {
+				if (IsFirstE2ERematchReady()) {
 					s_netMatchServiceE2ERematches = 1;
 					const std::string result = BuildNetMatchResultText();
 					std::cout << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby" << std::endl;

@@ -240,8 +240,8 @@ namespace RTE {
 		/// Ends the round on every peer so the match reconvenes and reloads the host's snapshot
 		/// (a rejoin or an operator-forced heal). Host-initiated.
 		void RequestResync(const std::string& message = "resync requested");
-		/// Keeps input flowing until the authoritative peer can stop at a completed simulation tick.
-		void DeferRecoveryStopsToTickBoundary() { m_DeferRecoveryStops = true; }
+		/// Keeps recovery and completion aligned with applied simulation ticks, while input may be prefetched.
+		void DeferStopsToTickBoundary() { m_DeferStops = true; }
 		bool HasPendingRecoveryStop() const { return m_PendingRecoveryStop.has_value(); }
 		bool FinishSimulationTick(uint64_t completedTick);
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
@@ -312,8 +312,10 @@ namespace RTE {
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
-		bool m_DeferRecoveryStops = false;
+		bool m_DeferStops = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
+		std::optional<NetLockstepStop> m_PendingCompleteStop;
+		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_LastStallFrame = UINT64_MAX;
