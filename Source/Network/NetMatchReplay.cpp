@@ -173,6 +173,12 @@ namespace RTE {
 			Close();
 			return false;
 		}
+		// The recorded MatchConfig layout is unchanged from lobby version 2.
+		if (configBytes.size() >= NetLobbyProtocol::c_HeaderBytes && configBytes[4] == 2 && configBytes[5] == 0 &&
+		    configBytes[8] == static_cast<uint8_t>(NetLobbyMessageType::MatchConfig) && configBytes[9] == 0) {
+			configBytes[4] = static_cast<uint8_t>(NetLobbyProtocol::c_Version);
+			configBytes[5] = static_cast<uint8_t>(NetLobbyProtocol::c_Version >> 8);
+		}
 		const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(configBytes);
 		const NetLobbyMatchConfig* configMessage = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
 		if (!configMessage) {
