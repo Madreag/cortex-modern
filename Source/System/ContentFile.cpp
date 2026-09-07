@@ -1,4 +1,6 @@
 #include "ContentFile.h"
+#include "CheckpointArchive.h"
+#include "Base64/base64.h"
 
 #include "AudioMan.h"
 #include "PresetMan.h"
@@ -19,6 +21,22 @@
 #include <thread>
 
 using namespace RTE;
+
+std::string ContentFile::SaveCheckpoint() const {
+	CheckpointWriter archive("ContentFile1");
+	archive(m_DataPath, m_DataPathExtension, m_DataPathWithoutExtension, m_DataPathIsImageFile, m_ImageFileInfo, m_FormattedReaderPosition, m_DataPathAndReaderPosition, m_DataModuleID, m_IsMemoryPNG);
+	return archive.Text();
+}
+
+bool ContentFile::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ContentFile1", validateOnly);
+		archive(m_DataPath, m_DataPathExtension, m_DataPathWithoutExtension, m_DataPathIsImageFile, m_ImageFileInfo, m_FormattedReaderPosition, m_DataPathAndReaderPosition, m_DataModuleID, m_IsMemoryPNG);
+		archive.OnCommit([this] { if (!m_DataPath.empty()) s_PathHashes[GetHash()] = m_DataPath; });
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
 
 const std::string ContentFile::c_ClassName = "ContentFile";
 
@@ -47,10 +65,7 @@ int ContentFile::Create(const char* filePath) {
 }
 
 int ContentFile::Create(const ContentFile& reference) {
-	m_DataPath = reference.m_DataPath;
-	m_DataPathExtension = reference.m_DataPathExtension;
-	m_DataPathWithoutExtension = reference.m_DataPathWithoutExtension;
-	m_DataModuleID = reference.m_DataModuleID;
+	*this = reference;
 
 	return 0;
 }
@@ -84,6 +99,9 @@ int ContentFile::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchForwards("FilePath")
 	MatchProperty("Path", { SetDataPath(reader.ReadPropValue()); });
 	MatchProperty("IsMemoryPNG", { reader >> m_IsMemoryPNG; });
+	MatchProperty("SpecialBehaviour_ContentCheckpoint", {
+		if (!LoadCheckpoint(base64_decode(reader.ReadPropValue()))) reader.ReportError("invalid content file checkpoint");
+	});
 
 	EndPropertyList;
 }
@@ -95,6 +113,7 @@ int ContentFile::Save(Writer& writer) const {
 		writer.NewPropertyWithValue("FilePath", m_DataPath);
 	}
 	writer.NewPropertyWithValue("IsMemoryPNG", m_IsMemoryPNG);
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", base64_encode(SaveCheckpoint(), true));
 
 	return 0;
 }

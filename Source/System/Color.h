@@ -11,6 +11,8 @@ namespace RTE {
 	public:
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 #pragma region Creation
 		/// Constructor method used to instantiate a Color object.
