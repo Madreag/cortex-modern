@@ -257,6 +257,12 @@ namespace RTE {
 		/// @return A string reference with the instance name of this Entity.
 		const std::string& GetPresetName() const { return m_PresetName; }
 
+		/// Gets the preset this instance was copied from, including after a cosmetic rename.
+		const Entity* GetPresetForCopy() const;
+
+		/// Writes the live name, description and groups for a full checkpoint.
+		void SaveSnapshotIdentity(Writer& writer) const;
+
 		/// Sets the name of this Entity's data Preset.
 		/// @param newName A string reference with the instance name of this Entity.
 		/// @param calledFromLua Whether this method was called from Lua, in which case this change is cosmetic only and shouldn't affect scripts.
@@ -375,6 +381,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< Type description of this Entity.
 
 		std::string m_PresetName; //!< The name of the Preset data this was cloned from, if any.
+		std::string m_CopiedFromPresetName; //!< The source preset's name before a cosmetic rename.
 		std::string m_PresetDescription; //!< The description of the preset in user friendly plain text that will show up in menus etc.
 		std::string m_FormattedReaderPosition; //!< A string containing the file path and the line we were read from. Formatted to be used for logging.
 
