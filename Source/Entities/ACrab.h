@@ -96,7 +96,7 @@ namespace RTE {
 		std::vector<long long> GetRBGFootResidue() const;
 
 		/// Packed traversal state of every limb path, side-major, for full-game saves.
-		std::vector<std::string> GetLimbPathStates() const;
+		std::vector<std::string> GetLimbPathStates(bool forHashing = false) const;
 
 		/// Packed raw limb positions of the four foot groups, for full-game saves.
 		std::string GetLimbGroupPositions() const;

@@ -108,7 +108,7 @@ namespace RTE {
 		float GetSegProgress() const { return m_SegProgress; }
 
 		/// Packs the runtime traversal state into one saveable token string, for full-game saves.
-		std::string PackTraversalState() const;
+		std::string PackTraversalState(bool forHashing = false) const;
 
 		/// Applies a packed traversal-state string.
 		void ApplyTraversalState(const std::string& state);

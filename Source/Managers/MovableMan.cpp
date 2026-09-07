@@ -845,7 +845,7 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				// Snapshot forensics: the walk paths, the foot groups and the identity the MO-hit layer sees.
 				auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
 				uint64_t pathHash = 1469598103934665603ULL;
-				for (const std::string& state: human->GetLimbPathStates()) {
+				for (const std::string& state: human->GetLimbPathStates(true)) {
 					for (unsigned char c: state) {
 						pathHash = fnv(pathHash, c);
 					}

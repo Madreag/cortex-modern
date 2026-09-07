@@ -293,7 +293,7 @@ int AHuman::Create(const AHuman& reference) {
 	return 0;
 }
 
-std::vector<std::string> AHuman::GetLimbPathStates() const {
+std::vector<std::string> AHuman::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
 		return m_PersistedLimbPathStates;
 	}
@@ -301,7 +301,7 @@ std::vector<std::string> AHuman::GetLimbPathStates() const {
 	states.reserve(2 * MOVEMENTSTATECOUNT);
 	for (int layer = 0; layer < 2; ++layer) {
 		for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
-			states.push_back(m_Paths[layer][movementState].PackTraversalState());
+			states.push_back(m_Paths[layer][movementState].PackTraversalState(forHashing));
 		}
 	}
 	return states;

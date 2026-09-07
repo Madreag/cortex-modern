@@ -209,7 +209,7 @@ std::string ACRocket::GetLimbGroupInertia() const {
 	return std::string(buffer, cursor);
 }
 
-std::vector<std::string> ACRocket::GetLimbPathStates() const {
+std::vector<std::string> ACRocket::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
 		return m_PersistedLimbPathStates;
 	}
@@ -217,7 +217,7 @@ std::vector<std::string> ACRocket::GetLimbPathStates() const {
 	states.reserve(2 * GearStateCount);
 	for (int side = 0; side < 2; ++side) {
 		for (int gearState = 0; gearState < GearStateCount; ++gearState) {
-			states.push_back(m_Paths[side][gearState].PackTraversalState());
+			states.push_back(m_Paths[side][gearState].PackTraversalState(forHashing));
 		}
 	}
 	return states;

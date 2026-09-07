@@ -361,7 +361,7 @@ static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_l
 	}
 }
 
-std::vector<std::string> ACrab::GetLimbPathStates() const {
+std::vector<std::string> ACrab::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
 		return m_PersistedLimbPathStates;
 	}
@@ -370,7 +370,7 @@ std::vector<std::string> ACrab::GetLimbPathStates() const {
 	for (int side = 0; side < SIDECOUNT; ++side) {
 		for (int layer = 0; layer < LAYERCOUNT; ++layer) {
 			for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
-				states.push_back(m_Paths[side][layer][movementState].PackTraversalState());
+				states.push_back(m_Paths[side][layer][movementState].PackTraversalState(forHashing));
 			}
 		}
 	}

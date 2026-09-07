@@ -25,7 +25,7 @@ void LimbPath::Clear() {
 	m_Start.Reset();
 	m_StartSegCount = 0;
 	m_Segments.clear();
-	//    m_CurrentSegment = 0;
+	m_CurrentSegment = m_Segments.end();
 	m_FootCollisionsDisabledSegment = -1;
 	m_SegProgress = 0.0;
 	for (int i = 0; i < SPEEDCOUNT; ++i) {
@@ -126,23 +126,23 @@ int LimbPath::Create(const LimbPath& reference) {
 
 	if (MovableObject::IsFaithfulClone()) {
 		ApplyTraversalState(reference.PackTraversalState());
-		m_JointPos = reference.m_JointPos;
-		m_JointVel = reference.m_JointVel;
-		m_Rotation = reference.m_Rotation;
-		m_RotationOffset = reference.m_RotationOffset;
-		m_PositionOffset = reference.m_PositionOffset;
 	}
 	return 0;
 }
 
-std::string LimbPath::PackTraversalState() const {
-	char buffer[192];
-	char* cursor = buffer;
-	const auto appendValue = [&cursor, &buffer](auto value) {
-		if (cursor != buffer) {
-			*cursor++ = ' ';
-		}
-		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+std::string LimbPath::PackTraversalState(bool forHashing) const {
+	std::string state = "LP2";
+	state.reserve(512 + 24 * m_Segments.size());
+	const auto appendValue = [&state](auto value) {
+		char buffer[64];
+		const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+		RTEAssert(result.ec == std::errc(), "Could not write limb path checkpoint");
+		state.push_back(' ');
+		state.append(buffer, result.ptr);
+	};
+	const auto appendVector = [&appendValue](const Vector& value) {
+		appendValue(value.m_X);
+		appendValue(value.m_Y);
 	};
 	appendValue(static_cast<long long>(std::distance(m_Segments.begin(), static_cast<std::deque<Vector>::const_iterator>(m_CurrentSegment))));
 	appendValue(m_SegProgress);
@@ -152,17 +152,62 @@ std::string LimbPath::PackTraversalState() const {
 	appendValue(m_Ended ? 1 : 0);
 	appendValue(m_HFlipped ? 1 : 0);
 	appendValue(m_SegmentDone ? 1 : 0);
-	return std::string(buffer, cursor);
+	appendVector(m_Start);
+	appendValue(m_StartSegCount);
+	appendValue(m_FootCollisionsDisabledSegment);
+	appendValue(m_TravelSpeed);
+	appendValue(m_SegmentEndedThreshold);
+	appendValue(m_BaseTravelSpeedMultiplier);
+	appendValue(m_CurrentTravelSpeedMultiplier);
+	appendVector(m_BaseScaleMultiplier);
+	appendVector(m_CurrentScaleMultiplier);
+	appendValue(m_PushForce);
+	appendVector(m_JointPos);
+	appendVector(m_JointVel);
+	appendValue(m_Rotation.m_Rotation);
+	appendValue(m_Rotation.m_Flipped[0] ? 1 : 0);
+	appendValue(m_Rotation.m_Flipped[1] ? 1 : 0);
+	for (const auto& row: m_Rotation.m_Elements) {
+		for (float value: row) {
+			appendValue(value);
+		}
+	}
+	appendValue(m_Rotation.m_ElementsUpdated ? 1 : 0);
+	appendVector(m_RotationOffset);
+	appendVector(m_PositionOffset);
+	for (const Timer* timer: {&m_PathTimer, &m_SegTimer}) {
+		// Real-time anchors do not affect limb motion.
+		appendValue(forHashing ? int64_t{0} : timer->GetStartRealTimeMS());
+		appendValue(timer->GetRealTimeLimitTicks());
+		appendValue(timer->GetSimTimeLimitTicks());
+	}
+	appendValue(m_TotalLength);
+	appendValue(m_RegularLength);
+	appendValue(m_Segments.size());
+	for (const Vector& segment: m_Segments) {
+		appendVector(segment);
+	}
+	return state;
 }
 
 void LimbPath::ApplyTraversalState(const std::string& state) {
 	const char* cursor = state.data();
 	const char* end = state.data() + state.size();
+	const bool full = state.compare(0, 4, "LP2 ") == 0;
+	if (full) {
+		cursor += 4;
+	}
 	const auto readValue = [&cursor, end](auto& value) {
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = std::from_chars(cursor, end, value).ptr;
+		const auto result = std::from_chars(cursor, end, value);
+		RTEAssert(result.ec == std::errc(), "Invalid limb path checkpoint");
+		cursor = result.ptr;
+	};
+	const auto readVector = [&readValue](Vector& value) {
+		readValue(value.m_X);
+		readValue(value.m_Y);
 	};
 	long long segmentIndex = 0;
 	long long pathTimerStart = 0;
@@ -178,6 +223,53 @@ void LimbPath::ApplyTraversalState(const std::string& state) {
 	readValue(ended);
 	readValue(hFlipped);
 	readValue(segmentDone);
+	if (full) {
+		readVector(m_Start);
+		readValue(m_StartSegCount);
+		readValue(m_FootCollisionsDisabledSegment);
+		readValue(m_TravelSpeed);
+		readValue(m_SegmentEndedThreshold);
+		readValue(m_BaseTravelSpeedMultiplier);
+		readValue(m_CurrentTravelSpeedMultiplier);
+		readVector(m_BaseScaleMultiplier);
+		readVector(m_CurrentScaleMultiplier);
+		readValue(m_PushForce);
+		readVector(m_JointPos);
+		readVector(m_JointVel);
+		readValue(m_Rotation.m_Rotation);
+		int flippedX, flippedY, elementsUpdated;
+		readValue(flippedX);
+		readValue(flippedY);
+		for (auto& row: m_Rotation.m_Elements) {
+			for (float& value: row) {
+				readValue(value);
+			}
+		}
+		readValue(elementsUpdated);
+		m_Rotation.m_Flipped[0] = flippedX != 0;
+		m_Rotation.m_Flipped[1] = flippedY != 0;
+		m_Rotation.m_ElementsUpdated = elementsUpdated != 0;
+		readVector(m_RotationOffset);
+		readVector(m_PositionOffset);
+		for (Timer* timer: {&m_PathTimer, &m_SegTimer}) {
+			int64_t realStart, realLimit, simLimit;
+			readValue(realStart);
+			readValue(realLimit);
+			readValue(simLimit);
+			timer->SetStartRealTimeTicks(realStart);
+			timer->SetRealTimeLimitTicks(realLimit);
+			timer->SetSimTimeLimitTicks(simLimit);
+		}
+		readValue(m_TotalLength);
+		readValue(m_RegularLength);
+		size_t count;
+		readValue(count);
+		RTEAssert(count <= state.size() / 4, "Invalid limb path segment count");
+		m_Segments.resize(count);
+		for (Vector& segment: m_Segments) {
+			readVector(segment);
+		}
+	}
 	segmentIndex = std::clamp<long long>(segmentIndex, 0, static_cast<long long>(m_Segments.size()));
 	m_CurrentSegment = m_Segments.begin() + segmentIndex;
 	m_PathTimer.SetStartSimTimeTicks(pathTimerStart);
@@ -717,4 +809,3 @@ void LimbPath::Draw(BITMAP* pTargetBitmap,
 		prevPoint += *itr;
 	}
 }
-
