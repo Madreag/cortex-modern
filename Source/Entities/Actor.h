@@ -81,6 +81,9 @@ namespace RTE {
 		EntityAllocation(Actor);
 		AddScriptFunctionNames(MOSRotating, "ThreadedUpdateAI", "UpdateAI", "OnControllerInputModeChange");
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 		/// Constructor method used to instantiate a Actor object in system
