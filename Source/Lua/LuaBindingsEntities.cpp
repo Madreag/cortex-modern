@@ -74,7 +74,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, ACrab) {
 	    .def("IsWithinRange", &ACrab::IsWithinRange)
 	    .def("Look", &ACrab::Look)
 	    .def("LookForMOs", &ACrab::LookForMOs)
-	    .def("GetLimbPath", &ACrab::GetLimbPath)
+	    .def("GetLimbPath", &ACrab::GetLimbPath, luabind::return_internal_reference(_1))
 	    .def("GetLimbPathTravelSpeed", &ACrab::GetLimbPathTravelSpeed)
 	    .def("SetLimbPathTravelSpeed", &ACrab::SetLimbPathTravelSpeed)
 	    .def("GetLimbPathPushForce", &ACrab::GetLimbPathPushForce)
@@ -459,7 +459,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, AHuman) {
 	    .def("Look", &AHuman::Look)
 	    .def("LookForGold", &AHuman::LookForGold)
 	    .def("LookForMOs", &AHuman::LookForMOs)
-	    .def("GetLimbPath", &AHuman::GetLimbPath)
+	    .def("GetLimbPath", &AHuman::GetLimbPath, luabind::return_internal_reference(_1))
 	    .def("GetLimbPathTravelSpeed", &AHuman::GetLimbPathTravelSpeed)
 	    .def("SetLimbPathTravelSpeed", &AHuman::SetLimbPathTravelSpeed)
 	    .def("GetLimbPathPushForce", &AHuman::GetLimbPathPushForce)
@@ -741,13 +741,13 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Leg) {
 LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, LimbPath) {
 	return luabind::class_<LimbPath>("LimbPath")
 
-	    .property("StartOffset", &LimbPath::GetStartOffset, &LimbPath::SetStartOffset)
+	    .property("StartOffset", &LimbPath::GetStartOffset, &LimbPath::SetStartOffset, luabind::return_internal_reference(_1))
 	    .property("SegmentCount", &LimbPath::GetSegCount)
 	    .property("BaseTravelSpeedMultiplier", &LimbPath::GetBaseTravelSpeedMultiplier, &LimbPath::SetBaseTravelSpeedMultiplier)
 	    .property("TravelSpeed", &LimbPath::GetTravelSpeed, &LimbPath::SetTravelSpeed)
 	    .property("PushForce", &LimbPath::GetPushForce, &LimbPath::SetPushForce)
 
-	    .def("GetSegment", &LimbPath::GetSegment);
+	    .def("GetSegment", &LimbPath::GetSegment, luabind::return_internal_reference(_1));
 }
 
 LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Magazine) {
