@@ -64,9 +64,11 @@ int GAScripted::Create() {
 		return -1;
 	}
 
-	// If the GAScripted has a OnSave() function, we assume it can be saved by default
-	ReloadScripts();
-	m_AllowsUserSaving = HasSaveFunction();
+	// Reading a staged checkpoint must not run scripts in the still-active world's VM.
+	if (!g_MovableMan.IsRestoringSnapshot()) {
+		ReloadScripts();
+		m_AllowsUserSaving = HasSaveFunction();
+	}
 
 	return 0;
 }
@@ -254,6 +256,14 @@ int GAScripted::Start() {
 		return error;
 	}
 
+	if (g_MovableMan.IsRestoringSnapshot() && g_ActivityMan.HasFullScriptGraphToRestore() && m_HasSavedGlobalScripts) {
+		// Their Lua continuations will be restored once all native objects are in place.
+		for (GlobalScript* script: m_GlobalScriptsList) {
+			if ((error = script->BindLuaObject()) < 0) return error;
+		}
+		return 0;
+	}
+
 	// Run the file that specifies the Lua functions for this' operating logic
 	if ((error = ReloadScripts()) < 0) {
 		return error;
@@ -262,14 +272,6 @@ int GAScripted::Start() {
 	// Call the create function
 	if ((error = RunLuaFunction("StartActivity", {}, {initialActivityState == ActivityState::NotStarted ? "true" : "false"}, {})) < 0) {
 		return error;
-	}
-
-	if (g_MovableMan.IsRestoringSnapshot() && g_ActivityMan.HasFullScriptGraphToRestore() && m_HasSavedGlobalScripts) {
-		// Their Lua continuations will be restored once all native objects are in place.
-		for (GlobalScript* script: m_GlobalScriptsList) {
-			if ((error = script->BindLuaObject()) < 0) return error;
-		}
-		return 0;
 	}
 
 	// Clear active global scripts

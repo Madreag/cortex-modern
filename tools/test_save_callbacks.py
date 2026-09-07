@@ -12,11 +12,14 @@ from run_sim_test import make_run
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--recording", type=Path, required=True)
+    setup = parser.add_mutually_exclusive_group(required=True)
+    setup.add_argument("--recording", type=Path)
+    setup.add_argument("--scenario")
     parser.add_argument("--out", type=Path, required=True)
     options = parser.parse_args()
     out = options.out.resolve()
-    run = make_run(options.repo, ["-net-replay", options.recording, "-num-lua-states", 4, "-max-ticks", 3,
+    scenario = ["-net-replay", options.recording] if options.recording else ["-scenario", options.scenario, "-seed", 42]
+    run = make_run(options.repo, [*scenario, "-num-lua-states", 4, "-max-ticks", 3,
                                  "-tick-hashes", "-out", out / "trace.json", "-save-callback-selftest"], out, 90)
     directory = Path(run.cwd) / "Userdata/UserSavedGames.rte"
     directory.mkdir()
