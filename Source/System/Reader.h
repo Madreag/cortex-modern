@@ -132,6 +132,9 @@ namespace RTE {
 		/// Makes an error message box pop up for the user that tells them something went wrong with the reading, and where.
 		/// @param errorDesc The message describing what's wrong.
 		void ReportError(const std::string& errorDesc) const;
+
+		/// Lets callers recover from parse errors instead of terminating the process.
+		void SetThrowOnError(bool enabled) { m_ThrowOnError = enabled; }
 #pragma endregion
 
 #pragma region Operator Overloads
@@ -249,6 +252,7 @@ namespace RTE {
 		bool m_OverwriteExisting; //!< Whether object instances read from this should overwrite any already existing ones with the same names.
 		bool m_SkipIncludes; //!< Indicates whether reader should skip included files.
 		bool m_CanFail; //!< Whether it's ok for the Reader to fail reading a file and fail silently instead of aborting.
+		bool m_ThrowOnError = false;
 		bool m_NonModulePath; //!< Whether this Reader is reading from path that is not a DataModule and should just read it as provided.
 
 		std::stack<int> m_BlockCommentOpenTagLines; //<! Stores lines on which block comment open tags are encountered. Used for error reporting when a file stream ends with an open block comment.

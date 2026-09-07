@@ -139,6 +139,9 @@ namespace RTE {
 		/// @return Whether or not the saved game was successfully staged.
 		bool LoadGameToRestart(const std::string& fileName);
 
+		/// Checks load results and preservation of an already staged game.
+		bool RunLoadSelfTest(const std::string& fileName, bool expectLoaded);
+
 		/// Deletes a saved game file this process wrote for itself.
 		void RemoveSavedGame(const std::string& fileName) const;
 

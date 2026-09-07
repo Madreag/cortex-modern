@@ -279,6 +279,10 @@ void RTEError::SetExceptionHandlers() {
 }
 
 void RTEError::ShowMessageBox(const std::string& message) {
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		std::fprintf(stderr, "RTE Warning (headless): %s\n", message.c_str());
+		return;
+	}
 	if (!IsOnAppMainThread()) {
 		std::fprintf(stderr, "RTE Warning (from worker thread): %s\n", message.c_str());
 		return;

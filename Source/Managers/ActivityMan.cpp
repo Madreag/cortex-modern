@@ -294,118 +294,155 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Scene>& outScene, std::unique_ptr<GAScripted>& outActivity, std::string& outOriginalScenePresetName, bool& outPlaceObjects, bool& outPlaceUnits) {
 	WaitForSaveGameTask();
-	std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
+	const std::string modulePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
+	const std::string filePath = modulePath + "/" + fileName;
+	try {
+		struct Archive {
+			unzFile file;
+			~Archive() { if (file) unzClose(file); }
+		} archive{unzOpen((filePath + ".ccsave").c_str())};
+		if (!archive.file) throw std::runtime_error("could not open the save archive");
+		const auto readEntry = [&](const std::string& name, std::string& data, bool required = true) {
+			const int found = unzLocateFile(archive.file, name.c_str(), NULL);
+			if (!required && found == UNZ_END_OF_LIST_OF_FILE) return false;
+			if (found != UNZ_OK) throw std::runtime_error("missing or unreadable " + name);
+			unz_file_info64 info{};
+			if (unzGetCurrentFileInfo64(archive.file, &info, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK ||
+			    info.uncompressed_size > data.max_size() || unzOpenCurrentFile(archive.file) != UNZ_OK) {
+				throw std::runtime_error("could not open " + name);
+			}
+			struct Entry {
+				unzFile file;
+				~Entry() { if (file) unzCloseCurrentFile(file); }
+			} entry{archive.file};
+			data.clear();
+			std::array<char, 65536> chunk;
+			int count;
+			while ((count = unzReadCurrentFile(archive.file, chunk.data(), chunk.size())) > 0) {
+				if (data.size() + count > info.uncompressed_size) throw std::runtime_error("incorrect size for " + name);
+				data.append(chunk.data(), count);
+			}
+			const int closed = unzCloseCurrentFile(archive.file);
+			entry.file = nullptr;
+			if (count < 0 || closed != UNZ_OK || data.size() != info.uncompressed_size) {
+				throw std::runtime_error("incomplete or corrupt " + name);
+			}
+			return true;
+		};
+		std::string text;
+		readEntry("Save.ini", text);
+		if (text.empty() || text.find('\0') != std::string::npos) throw std::runtime_error("empty or invalid Save.ini");
 
-	// load zip sav file
-	std::string saveFilePath = filePath + ".ccsave";
-	unzFile zippedSaveFile = unzOpen(saveFilePath.c_str());
-	if (!zippedSaveFile) {
-		RTEError::ShowMessageBox("Game loading failed! Make sure you have a saved game called \"" + fileName + "\"");
-		return false;
-	}
-
-	unz_file_info info;
-	char* buffer = nullptr;
-
-	auto unzipFileIntoBuffer = [&](const std::string& fullFileName) {
-		// These need to use NULL instead of nullptr to compile on Linux/OSX?
-		if (unzLocateFile(zippedSaveFile, fullFileName.c_str(), NULL) == UNZ_END_OF_LIST_OF_FILE) {
-			return false;
+		using Image = std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)>;
+		std::vector<std::pair<std::string, Image>> images;
+		for (int layer = 0; layer < 3 + Activity::MaxTeamCount; ++layer) {
+			const std::string name = layer == 0 ? "Save Mat.png" : layer == 1 ? "Save FG.png" : layer == 2 ? "Save BG.png" : std::format("Save UST{}.png", layer - 3);
+			std::string bytes;
+			if (!readEntry(name, bytes, layer < 3)) continue;
+			std::unique_ptr<SDL_IOStream, decltype(&SDL_CloseIO)> stream(SDL_IOFromConstMem(bytes.data(), bytes.size()), SDL_CloseIO);
+			Image image(stream ? IMG_LoadPNG_IO(stream.get()) : nullptr, SDL_DestroySurface);
+			if (!image || image->w <= 0 || image->h <= 0) throw std::runtime_error("invalid image " + name);
+			std::unique_ptr<SDL_Palette, decltype(&SDL_DestroyPalette)> palette(ContentFile::DefaultPaletteToSDL(), SDL_DestroyPalette);
+			if (!palette) throw std::runtime_error("could not allocate image palette");
+			if (image->format != SDL_PIXELFORMAT_INDEX8) {
+				image.reset(SDL_ConvertSurfaceAndColorspace(image.get(), SDL_PIXELFORMAT_INDEX8, palette.get(), SDL_COLORSPACE_UNKNOWN, 0));
+				if (!image) throw std::runtime_error("could not convert " + name);
+			} else if (!SDL_SetSurfacePalette(image.get(), palette.get())) {
+				throw std::runtime_error("could not set palette for " + name);
+			}
+			if (layer > 0 && layer < 3 && (image->w != images.front().second->w || image->h != images.front().second->h)) {
+				throw std::runtime_error("terrain image dimensions do not match");
+			}
+			images.emplace_back(name, std::move(image));
 		}
 
-		unzOpenCurrentFile(zippedSaveFile);
-		unzGetCurrentFileInfo(zippedSaveFile, &info, nullptr, 0, nullptr, 0, nullptr, 0);
-
-		buffer = (char*)malloc(info.uncompressed_size + 1); // add one so we can add a pretend null terminator on the end
-		if (!buffer) {
-			// If this ever hits I've lost all faith in modern OSes, but alas when one is writing C, one must dance along
-			RTEError::ShowMessageBox("Catastrophic failure! Failed to allocate memory for savegame");
-			return false;
+		ContentFile::MemoryPNGScope stagedImages;
+		for (auto& [name, image]: images) {
+			if (!stagedImages.Add(modulePath + "/" + name, image.get())) throw std::runtime_error("could not stage " + name);
+			image.release();
+		}
+		Reader reader(std::make_unique<std::istringstream>(text), filePath + "/Save.ini", true, nullptr, true);
+		reader.SetThrowOnError(true);
+		reader.SetSkipIncludes(true);
+		auto scene = std::make_unique<Scene>();
+		auto activity = std::make_unique<GAScripted>();
+		std::string originalScenePresetName = fileName;
+		bool placeObjects = true, placeUnits = true, hasActivity = false, hasScene = false;
+		long long simUpdateCount = -1, simTimeTicks = 0;
+		while (reader.NextProperty()) {
+			const std::string propName = reader.ReadPropName();
+			if (propName == "Activity") {
+				if (hasActivity || static_cast<Serializable*>(activity.get())->Create(reader) < 0) throw std::runtime_error("invalid Activity");
+				hasActivity = true;
+			} else if (propName == "OriginalScenePresetName") {
+				reader >> originalScenePresetName;
+			} else if (propName == "SimUpdateCount") {
+				reader >> simUpdateCount;
+			} else if (propName == "SimTimeTicks") {
+				reader >> simTimeTicks;
+			} else if (propName == "PlaceObjectsIfSceneIsRestarted") {
+				reader >> placeObjects;
+			} else if (propName == "PlaceUnitsIfSceneIsRestarted") {
+				reader >> placeUnits;
+			} else if (propName == "Scene") {
+				if (hasScene || static_cast<Serializable*>(scene.get())->Create(reader) < 0) throw std::runtime_error("invalid Scene");
+				hasScene = true;
+			} else {
+				reader.ReadPropValue();
+			}
+		}
+		if (!hasActivity || !hasScene || !scene->GetTerrain()) throw std::runtime_error("missing Activity, Scene or terrain");
+		const auto checkLayer = [&](SceneLayer* layer, const std::string& name) {
+			if (!layer || layer->GetContentFile().GetDataPath() != modulePath + "/" + name ||
+			    std::none_of(images.begin(), images.end(), [&](const auto& image) { return image.first == name; })) {
+				throw std::runtime_error("missing or invalid layer " + name);
+			}
+		};
+		checkLayer(scene->GetTerrain(), "Save Mat.png");
+		checkLayer(scene->GetTerrain()->GetFGSceneLayer(), "Save FG.png");
+		checkLayer(scene->GetTerrain()->GetBGSceneLayer(), "Save BG.png");
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
+			if (auto* unseen = scene->GetUnseenLayer(team)) checkLayer(unseen, std::format("Save UST{}.png", team));
 		}
 
-		unzReadCurrentFile(zippedSaveFile, buffer, info.uncompressed_size);
-		unzCloseCurrentFile(zippedSaveFile);
-
+		outScene = std::move(scene);
+		outActivity = std::move(activity);
+		outOriginalScenePresetName = std::move(originalScenePresetName);
+		outPlaceObjects = placeObjects;
+		outPlaceUnits = placeUnits;
+		m_PendingSnapshotSimUpdateCount = simUpdateCount;
+		m_PendingSnapshotSimTimeTicks = simTimeTicks;
+		stagedImages.Commit();
 		return true;
-	};
-
-	auto loadMemPng = [](void* buffer, size_t size) {
-		SDL_IOStream* stream = SDL_IOFromConstMem(buffer, size);
-		SDL_Surface* image = stream ? IMG_LoadPNG_IO(stream) : nullptr;
-		SDL_CloseIO(stream);
-
-		int bitDepth = SDL_GetPixelFormatDetails(image->format)->bits_per_pixel;
-		SDL_Palette* palette = ContentFile::DefaultPaletteToSDL();
-		if (bitDepth != 8) {
-			SDL_Surface* newImage = SDL_ConvertSurfaceAndColorspace(image, SDL_PIXELFORMAT_INDEX8, palette, SDL_COLORSPACE_UNKNOWN, 0);
-			SDL_DestroySurface(image);
-			image = newImage;
-		} else {
-			SDL_SetSurfacePalette(image, palette);
-		}
-		SDL_DestroyPalette(palette);
-
-		free(buffer);
-		return image;
-	};
-
-	// Manually load all our bitmaps into our cache so the activity skips looking for the file and just gets it directly from us
-	if (unzipFileIntoBuffer("Save Mat.png")) {
-		ContentFile::ManuallyLoadDataPNG(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png", loadMemPng(buffer, info.uncompressed_size));
-	}
-
-	if (unzipFileIntoBuffer("Save FG.png")) {
-		ContentFile::ManuallyLoadDataPNG(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save FG.png", loadMemPng(buffer, info.uncompressed_size));
-	}
-
-	if (unzipFileIntoBuffer("Save BG.png")) {
-		ContentFile::ManuallyLoadDataPNG(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save BG.png", loadMemPng(buffer, info.uncompressed_size));
-	}
-
-	for (int i = 0; i < Activity::MaxTeamCount; ++i) {
-		if (unzipFileIntoBuffer(std::format("Save UST{}.png", i))) {
-			ContentFile::ManuallyLoadDataPNG(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + std::format("/Save UST{}.png", i), loadMemPng(buffer, info.uncompressed_size));
-		}
-	}
-
-	if (!unzipFileIntoBuffer("Save.ini")) {
-		RTEError::ShowMessageBox("Game loading failed! This save looks invalid or corrupted.");
+	} catch (const std::exception& error) {
+		const std::string message = "Could not load game \"" + fileName + "\": " + error.what();
+		g_ConsoleMan.PrintString("ERROR: " + message);
+		RTEError::ShowMessageBox(message);
 		return false;
 	}
+}
 
-	buffer[info.uncompressed_size] = 0; // null terminate
-
-	Reader reader(std::make_unique<std::istringstream>(buffer), filePath + "/Save.ini", true, nullptr, false);
-
-	outScene = std::make_unique<Scene>();
-	outActivity = std::make_unique<GAScripted>();
-
-	outOriginalScenePresetName = fileName;
-	outPlaceObjects = true;
-	outPlaceUnits = true;
-	while (reader.NextProperty()) {
-		std::string propName = reader.ReadPropName();
-		if (propName == "Activity") {
-			reader >> outActivity.get();
-		} else if (propName == "OriginalScenePresetName") {
-			reader >> outOriginalScenePresetName;
-		} else if (propName == "SimUpdateCount") {
-			reader >> m_PendingSnapshotSimUpdateCount;
-		} else if (propName == "SimTimeTicks") {
-			reader >> m_PendingSnapshotSimTimeTicks;
-		} else if (propName == "PlaceObjectsIfSceneIsRestarted") {
-			reader >> outPlaceObjects;
-		} else if (propName == "PlaceUnitsIfSceneIsRestarted") {
-			reader >> outPlaceUnits;
-		} else if (propName == "Scene") {
-			reader >> outScene.get();
-		}
-	}
-
-	free(buffer);
-
-	unzClose(zippedSaveFile);
-	return true;
+bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded) {
+	if (!LoadGameToRestart("load_seed")) return false;
+	const Scene* stagedScene = m_PendingLoadedScene.get();
+	const Activity* stagedActivity = m_StartActivity.get();
+	const Activity* runningActivity = m_Activity.get();
+	const auto stagedTick = m_PendingSnapshotSimUpdateCount;
+	const auto stagedTime = m_PendingSnapshotSimTimeTicks;
+	const auto liveUID = MovableObject::GetUniqueIDCounter();
+	ContentFile material((g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png").c_str());
+	const int firstPixel = getpixel(material.GetAsBitmap(), 0, 0);
+	const bool loaded = LoadGameToRestart(fileName);
+	const bool preserved = loaded || (m_PendingLoadedScene.get() == stagedScene && m_StartActivity.get() == stagedActivity &&
+		m_Activity.get() == runningActivity && m_PendingSnapshotSimUpdateCount == stagedTick && m_PendingSnapshotSimTimeTicks == stagedTime &&
+		MovableObject::GetUniqueIDCounter() == liveUID &&
+		getpixel(material.GetAsBitmap(), 0, 0) == firstPixel && m_RestartRestoresSnapshot && m_ActivityNeedsRestart);
+	const bool restarted = RestartActivity();
+	const bool terrain = restarted && getpixel(g_SceneMan.GetTerrain()->GetBitmap(), 0, 0) == (expectLoaded ? 28 : firstPixel);
+	const bool passed = loaded == expectLoaded && preserved && restarted && terrain;
+	std::cout << "[load-selftest] " << (passed ? "PASS" : "FAIL") << " loaded=" << loaded << " preserved=" << preserved
+	          << " restarted=" << restarted << " terrain=" << terrain << std::endl;
+	return passed;
 }
 
 bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
@@ -428,13 +465,13 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	bool placeObjectsIfSceneIsRestarted = true;
 	bool placeUnitsIfSceneIsRestarted = true;
 	const auto readStart = std::chrono::steady_clock::now();
-	// A snapshot is read and later placed verbatim: no attach normalizes what the file says.
-	m_PendingSnapshotSimUpdateCount = -1;
-	m_PendingSnapshotSimTimeTicks = 0;
+	const long uidCounter = MovableObject::GetUniqueIDCounter();
+	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
 	const bool read = ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted);
-	g_MovableMan.SetRestoringSnapshot(false);
+	g_MovableMan.SetRestoringSnapshot(wasRestoring);
 	if (!read) {
+		MovableObject::PinUniqueIDCounter(uidCounter);
 		return false;
 	}
 	m_RestartRestoresSnapshot = true;
