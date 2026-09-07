@@ -53,6 +53,11 @@ int TDExplosive::ReadProperty(const std::string_view& propName, Reader& reader) 
 	EndPropertyList;
 }
 
+void TDExplosive::SaveSnapshotConfiguration(Writer& writer) const {
+	ThrownDevice::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("IsAnimatedManually", m_IsAnimatedManually);
+}
+
 int TDExplosive::Save(Writer& writer) const {
 	ThrownDevice::Save(writer);
 	writer.NewProperty("IsAnimatedManually");

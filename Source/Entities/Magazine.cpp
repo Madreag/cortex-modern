@@ -81,12 +81,24 @@ int Magazine::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_FullCapacity = m_RoundCount;
 	});
 	MatchProperty("RTTRatio", { reader >> m_RTTRatio; });
+	MatchProperty("SpecialBehaviour_FullCapacity", { reader >> m_FullCapacity; });
+	MatchProperty("SpecialBehaviour_AIAimVel", { reader >> m_AIAimVel; });
+	MatchProperty("SpecialBehaviour_AIAimPenetration", { reader >> m_AIAimPenetration; });
 	MatchProperty("RegularRound", { m_pRegularRound = dynamic_cast<const Round*>(g_PresetMan.GetEntityPreset(reader)); });
 	MatchProperty("TracerRound", { m_pTracerRound = dynamic_cast<const Round*>(g_PresetMan.GetEntityPreset(reader)); });
 	MatchProperty("Discardable", { reader >> m_Discardable; });
 	MatchProperty("AIBlastRadius", { reader >> m_AIBlastRadius; });
 
 	EndPropertyList;
+}
+
+void Magazine::SaveSnapshotConfiguration(Writer& writer) const {
+	Attachable::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("RTTRatio", m_RTTRatio);
+	writer.NewPropertyWithValue("Discardable", m_Discardable);
+	writer.NewPropertyWithValue("AIBlastRadius", m_AIBlastRadius);
+	writer.NewPropertyWithValue("SpecialBehaviour_AIAimVel", m_AIAimVel);
+	writer.NewPropertyWithValue("SpecialBehaviour_AIAimPenetration", m_AIAimPenetration);
 }
 
 int Magazine::Save(Writer& writer) const {

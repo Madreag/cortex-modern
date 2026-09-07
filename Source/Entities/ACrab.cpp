@@ -557,6 +557,14 @@ int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+void ACrab::SaveSnapshotConfiguration(Writer& writer) const {
+	Actor::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("AimRangeUpperLimit", m_AimRangeUpperLimit);
+	writer.NewPropertyWithValue("AimRangeLowerLimit", m_AimRangeLowerLimit);
+	writer.NewPropertyWithValue("LockMouseAimInput", m_LockMouseAimInput);
+	writer.NewPropertyWithValue("StrideSound", m_StrideSound);
+}
+
 int ACrab::Save(Writer& writer) const {
 	Actor::Save(writer);
 

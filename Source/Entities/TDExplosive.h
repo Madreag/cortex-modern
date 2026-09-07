@@ -12,6 +12,7 @@ namespace RTE {
 	public:
 		EntityAllocation(TDExplosive);
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 #pragma region Creation

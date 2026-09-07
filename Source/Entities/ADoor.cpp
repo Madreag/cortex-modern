@@ -159,6 +159,7 @@ int ADoor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("ClosedByDefault", { reader >> m_ClosedByDefault; });
 	MatchProperty("ResetDefaultDelay", { reader >> m_ResetToDefaultStateDelay; });
 	MatchProperty("SensorInterval", { reader >> m_SensorInterval; });
+	MatchProperty("SpecialBehaviour_ClearSensors", { bool clear; reader >> clear; if (clear) m_Sensors.clear(); });
 	MatchProperty("AddSensor", {
 		ADSensor sensor;
 		reader >> sensor;
@@ -172,6 +173,26 @@ int ADoor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("DoorMoveEndSound", { m_DoorMoveEndSound.reset(dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader))); });
 
 	EndPropertyList;
+}
+
+void ADoor::SaveSnapshotConfiguration(Writer& writer) const {
+	Actor::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearSensors", true);
+	for (const ADSensor& sensor: m_Sensors) writer.NewPropertyWithValue("AddSensor", sensor);
+	writer.NewPropertyWithValue("OpenOffset", m_OpenOffset);
+	writer.NewPropertyWithValue("ClosedOffset", m_ClosedOffset);
+	writer.NewPropertyWithValue("OpenAngle", Matrix(m_OpenAngle));
+	writer.NewPropertyWithValue("ClosedAngle", Matrix(m_ClosedAngle));
+	writer.NewPropertyWithValue("DoorMoveTime", m_DoorMoveTime);
+	writer.NewPropertyWithValue("ClosedByDefault", m_ClosedByDefault);
+	writer.NewPropertyWithValue("ResetDefaultDelay", m_ResetToDefaultStateDelay);
+	writer.NewPropertyWithValue("SensorInterval", m_SensorInterval);
+	writer.NewPropertyWithValue("DrawMaterialLayerWhenOpen", m_DrawMaterialLayerWhenOpen);
+	writer.NewPropertyWithValue("DrawMaterialLayerWhenClosed", m_DrawMaterialLayerWhenClosed);
+	writer.NewPropertyWithValue("DoorMoveStartSound", m_DoorMoveStartSound.get());
+	writer.NewPropertyWithValue("DoorMoveSound", m_DoorMoveSound.get());
+	writer.NewPropertyWithValue("DoorDirectionChangeSound", m_DoorDirectionChangeSound.get());
+	writer.NewPropertyWithValue("DoorMoveEndSound", m_DoorMoveEndSound.get());
 }
 
 int ADoor::Save(Writer& writer) const {

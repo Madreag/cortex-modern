@@ -70,6 +70,17 @@ int ThrownDevice::ReadProperty(const std::string_view& propName, Reader& reader)
 	EndPropertyList;
 }
 
+void ThrownDevice::SaveSnapshotConfiguration(Writer& writer) const {
+	HeldDevice::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("ActivationSound", *m_ActivationSound);
+	writer.NewPropertyWithValue("StartThrowOffset", m_StartThrowOffset);
+	writer.NewPropertyWithValue("EndThrowOffset", m_EndThrowOffset);
+	writer.NewPropertyWithValue("MinThrowVel", m_MinThrowVel);
+	writer.NewPropertyWithValue("MaxThrowVel", m_MaxThrowVel);
+	writer.NewPropertyWithValue("TriggerDelay", m_TriggerDelay);
+	writer.NewPropertyWithValue("ActivatesWhenReleased", m_ActivatesWhenReleased);
+}
+
 int ThrownDevice::Save(Writer& writer) const {
 	HeldDevice::Save(writer);
 

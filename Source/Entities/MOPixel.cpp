@@ -162,6 +162,14 @@ void MOPixel::DiscardPersistedSnapshotState() {
 	m_HasPersistedLethalSharpness = false;
 }
 
+void MOPixel::SaveSnapshotConfiguration(Writer& writer) const {
+	MovableObject::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("Color", m_Color);
+	writer.NewPropertyWithValue("MinLethalRange", m_MinLethalRange);
+	writer.NewPropertyWithValue("MaxLethalRange", m_MaxLethalRange);
+	writer.NewPropertyWithValue("Staininess", m_Staininess);
+}
+
 int MOPixel::Save(Writer& writer) const {
 	MovableObject::Save(writer);
 

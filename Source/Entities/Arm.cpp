@@ -161,6 +161,16 @@ int Arm::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+void Arm::SaveSnapshotConfiguration(Writer& writer) const {
+	Attachable::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("MaxLength", m_MaxLength);
+	writer.NewPropertyWithValue("MoveSpeed", m_MoveSpeed);
+	writer.NewPropertyWithValue("HandIdleOffset", m_HandIdleOffset);
+	writer.NewPropertyWithValue("HandSprite", m_HandSpriteFile);
+	writer.NewPropertyWithValue("GripStrength", m_GripStrength);
+	writer.NewPropertyWithValue("ThrowStrength", m_ThrowStrength);
+}
+
 int Arm::Save(Writer& writer) const {
 	Attachable::Save(writer);
 

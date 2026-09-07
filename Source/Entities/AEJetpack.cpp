@@ -89,6 +89,11 @@ int AEJetpack::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+void AEJetpack::SaveSnapshotConfiguration(Writer& writer) const {
+	AEmitter::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("AdjustsThrottleForWeight", m_AdjustsThrottleForWeight);
+}
+
 int AEJetpack::Save(Writer& writer) const {
 	AEmitter::Save(writer);
 

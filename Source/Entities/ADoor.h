@@ -15,6 +15,7 @@ namespace RTE {
 	public:
 		EntityAllocation(ADoor);
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 		enum DoorState {

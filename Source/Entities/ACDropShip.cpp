@@ -123,6 +123,15 @@ int ACDropShip::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+void ACDropShip::SaveSnapshotConfiguration(Writer& writer) const {
+	ACraft::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("HatchDoorSwingRange", m_HatchSwingRange);
+	writer.NewPropertyWithValue("AutoStabilize", m_AutoStabilize);
+	writer.NewPropertyWithValue("MaxEngineAngle", m_MaxEngineAngle);
+	writer.NewPropertyWithValue("LateralControlSpeed", m_LateralControlSpeed);
+	writer.NewPropertyWithValue("HoverHeightModifier", m_HoverHeightModifier);
+}
+
 int ACDropShip::Save(Writer& writer) const {
 	ACraft::Save(writer);
 

@@ -14,6 +14,7 @@ namespace RTE {
 	public:
 		EntityAllocation(Turret);
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 #pragma region Creation

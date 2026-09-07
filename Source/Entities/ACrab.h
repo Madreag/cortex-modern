@@ -40,6 +40,7 @@ namespace RTE {
 		EntityAllocation(ACrab);
 		AddScriptFunctionNames(Actor, "OnStride");
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 		DefaultPieMenuNameGetter(HasObjectInGroup("Turrets") ? "Default Turret Pie Menu" : "Default Crab Pie Menu");
 

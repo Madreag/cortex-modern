@@ -23,6 +23,7 @@ namespace RTE {
 		/// Public member variable, method and friend function declarations
 	public:
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 		DefaultPieMenuNameGetter("Default Craft Pie Menu");
 

@@ -54,6 +54,11 @@ int Turret::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+void Turret::SaveSnapshotConfiguration(Writer& writer) const {
+	Attachable::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("MountedDeviceRotationOffset", m_MountedDeviceRotationOffset);
+}
+
 int Turret::Save(Writer& writer) const {
 	Attachable::Save(writer);
 
