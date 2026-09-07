@@ -243,6 +243,13 @@ namespace RTE {
 		/// Sets the AEmitter that represents the wound added to this Attachable's parent when this Attachable gets detached from its parent. OWNERSHIP IS NOT TRANSFERRED!
 		/// @param breakWound The AEmitter to use for the parent's breakwound.
 		void SetParentBreakWound(AEmitter* breakWound) { m_ParentBreakWound = breakWound; }
+
+		/// Takes ownership of the private copies made by the Lua setters.
+		void SetOwnedBreakWound(AEmitter* wound);
+		void SetOwnedParentBreakWound(AEmitter* wound);
+		AEmitter* GetOwnedBreakWound() const { return m_OwnedBreakWound.get(); }
+		AEmitter* GetOwnedParentBreakWound() const { return m_OwnedParentBreakWound.get(); }
+		void ResolveFaithfulLinks() override;
 #pragma endregion
 
 #pragma region Inherited Value Getters and Setters
@@ -477,6 +484,10 @@ namespace RTE {
 		float m_DamageCount; //!< The number of damage points that this Attachable has accumulated since the last time CollectDamage() was called.
 		const AEmitter* m_BreakWound; //!< The wound this Attachable will receive when it breaks from its parent.
 		const AEmitter* m_ParentBreakWound; //!< The wound this Attachable's parent will receive when the Attachable breaks from its parent.
+		std::unique_ptr<AEmitter> m_OwnedBreakWound;
+		std::unique_ptr<AEmitter> m_OwnedParentBreakWound;
+		long m_PersistedBreakWoundUID = 0;
+		long m_PersistedParentBreakWoundUID = 0;
 
 		int m_InheritsHFlipped; //!< Whether this Attachable should inherit its parent's HFlipped. Defaults to 1 (normal inheritance).
 		bool m_InheritsRotAngle; //!< Whether this Attachable should inherit its parent's RotAngle. Defaults to true.
@@ -504,6 +515,10 @@ namespace RTE {
 		virtual void SetParent(MOSRotating* newParent);
 
 	private:
+		std::string m_PersistedAttachableRuntime;
+		std::string SaveAttachableRuntime() const;
+		bool LoadAttachableRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Updates the position of this Attachable based on its parent offset and joint offset. Used during update and when something sets these offsets through setters.
 		void UpdatePositionAndJointPositionBasedOnOffsets();
 
