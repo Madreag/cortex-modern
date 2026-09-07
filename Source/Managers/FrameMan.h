@@ -292,9 +292,9 @@ namespace RTE {
 		/// @return 0 for success, anything below 0 is a sign of failure.
 		int SaveBitmapToPNG(BITMAP* bitmap, const char* nameBase) { return SaveBitmap(SingleBitmap, nameBase, bitmap); }
 
-		/// Dumps a bitmap of the screen backbuffer to a 8bpp PNG file.
+		/// Queues the screen backbuffer to be saved as a PNG file.
 		/// @param nameBase The filename of the file to save to, WITHOUT EXTENSION.
-		/// @return 0 for success, anything below 0 is a sign of failure.
+		/// @return 0 when queued, below 0 on failure. Save errors are reported in the console.
 		int SaveScreenToPNG(const char* nameBase) { return SaveBitmap(ScreenDump, nameBase); }
 
 		/// Dumps a bitmap of everything on the scene to a PNG file.
