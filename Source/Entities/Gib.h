@@ -25,6 +25,7 @@ namespace RTE {
 #pragma region Creation
 		/// Constructor method used to instantiate a Gib object in system memory. Create() should be called before using the object.
 		Gib();
+		Gib(const Gib& reference) { Clear(); Create(reference); }
 
 		/// Creates a Gib to be identical to another, by deep copy.
 		/// @param reference A reference to the Gib to deep copy.
@@ -47,7 +48,10 @@ namespace RTE {
 
 		/// Sets the reference particle to be used as a Gib. Ownership is NOT transferred!
 		/// @param newParticlePreset A pointer to the new particle to be used as a Gib.
-		void SetParticlePreset(const MovableObject* newParticlePreset) { m_GibParticle = newParticlePreset; }
+		void SetParticlePreset(const MovableObject* newParticlePreset) { m_GibParticle = newParticlePreset; m_PersistedParticleUniqueID = 0; }
+
+		/// Resolves the saved particle reference against the restored world.
+		void ResolveParticlePreset();
 
 		/// Gets the spawn offset of this Gib from the parent's position.
 		/// @return The offset in pixels from the parent's position where this Gib gets spawned.
@@ -105,6 +109,7 @@ namespace RTE {
 
 	protected:
 		const MovableObject* m_GibParticle; //!< The pointer to the preset instance that copies of will be created as this Gib. Not Owned.
+		long m_PersistedParticleUniqueID; //!< Runtime particle reference awaiting restoration.
 		Vector m_Offset; //!< Offset spawn position from owner/parent's position.
 		unsigned int m_Count; //!< The number of copies of the GibParticle that will be spawned.
 		float m_Spread; //!< The angle spread of the spawned GibParticle objects to each side of the parent's angle in radians.
