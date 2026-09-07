@@ -207,53 +207,21 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		zipWriteInFileInZip(zippedSaveFile, mainStreamView.data(), mainStreamView.size());
 		zipCloseFileInZip(zippedSaveFile);
 
-		std::vector<SDL_IOStream*> pngStreams;
-		pngStreams.resize(sceneLayerInfos->size());
+		std::vector<std::vector<unsigned char>> pngData(sceneLayerInfos->size());
+		std::for_each(std::execution::par, sceneLayerInfos->begin(), sceneLayerInfos->end(), [&](const SceneLayerInfo& layerInfo) {
+			const size_t index = &layerInfo - sceneLayerInfos->data();
+			ContentFile::EncodeIndexedPNG(layerInfo.bitmap.get(), pngData[index]);
+		});
 
-		// Generates PNGs (this is thread-safe)
-		std::for_each(std::execution::par_unseq,
-		              sceneLayerInfos->begin(), sceneLayerInfos->end(),
-		              [&](const SceneLayerInfo& layerInfo) {
-			              // Save png into a memory buffer
-			              SDL_IOStream* stream = SDL_IOFromDynamicMem();
-			              SDL_Surface* image = SDL_CreateSurfaceFrom(layerInfo.bitmap->w, layerInfo.bitmap->h, SDL_PIXELFORMAT_INDEX8, layerInfo.bitmap->dat, layerInfo.bitmap->w);
-
-			              SDL_Palette* palette = ContentFile::DefaultPaletteToSDL();
-			              SDL_SetSurfacePalette(image, palette);
-						  SDL_SetSurfaceColorKey(image, false, 0);
-
-			              bool result = IMG_SavePNG_IO(image, stream, false);
-			              SDL_FlushIO(stream);
-
-			              SDL_DestroyPalette(palette);
-			              SDL_DestroySurface(image);
-
-			              if (!result) {
-				              g_ConsoleMan.PrintString("ERROR: Failed to save scenelayers to PNG!");
-				              return;
-			              }
-
-						  size_t i = &layerInfo - &(*sceneLayerInfos->begin());
-			              pngStreams[i] = stream;
-		              });
-
-		// Actually save to the zip (this bit isn't thread-safe)
-		for (int i = 0; i < pngStreams.size(); ++i) {
-			SDL_IOStream* stream = pngStreams[i];
-			
-			// Actually get the memory
-			void* buffer = SDL_GetPointerProperty(SDL_GetIOProperties(stream), SDL_PROP_IOSTREAM_DYNAMIC_MEMORY_POINTER, nullptr);
-			size_t size = static_cast<size_t>(SDL_GetIOSize(stream));
-			if (!stream || size < 0) {
+		for (size_t i = 0; i < pngData.size(); ++i) {
+			const auto& png = pngData[i];
+			if (png.empty()) {
 				g_ConsoleMan.PrintString("ERROR: Failed to save scenelayers to PNG!");
 				continue;
 			}
-
 			zipOpenNewFileInZip(zippedSaveFile, ("Save " + (*sceneLayerInfos)[i].name + ".png").c_str(), &zfi, nullptr, 0, nullptr, 0, nullptr, HACK_MZ_COMPRESS_METHOD_STORE, HACK_MZ_COMPRESS_LEVEL_FAST);
-			zipWriteInFileInZip(zippedSaveFile, static_cast<const char*>(buffer), size);
+			zipWriteInFileInZip(zippedSaveFile, png.data(), png.size());
 			zipCloseFileInZip(zippedSaveFile);
-
-			SDL_CloseIO(stream);
 		}
 
 		zipClose(zippedSaveFile, fileName.c_str());

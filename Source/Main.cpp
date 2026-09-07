@@ -124,6 +124,8 @@ using namespace RTE;
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
 static std::string s_menuMpTraceError;
+static bool s_bitmapSaveSelfTest = false;
+static int s_bitmapSaveSelfTestResult = -1;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -344,6 +346,7 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	LocalPrediction::Clear();
@@ -393,6 +396,11 @@ void HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+		if (currentArg == "-bitmap-save-selftest") {
+			s_bitmapSaveSelfTest = true;
+			++i;
+			continue;
 		}
 
 		// Scenario direct-launch + determinism flags (-scenario, -seed, -max-ticks, ...).
@@ -2192,6 +2200,12 @@ void RunGameLoop() {
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
 				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+			}
+
+			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
+				s_bitmapSaveSelfTestResult = g_FrameMan.RunBitmapSaveSelfTest() ? 0 : 1;
+				System::SetQuit(true);
+				break;
 			}
 
 			// Scenario direct-launch: quit when the activity reaches OVER or the -max-ticks cap hits,

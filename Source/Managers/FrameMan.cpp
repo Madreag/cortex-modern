@@ -34,6 +34,8 @@
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
+#include <fstream>
+#include <iostream>
 
 using namespace RTE;
 
@@ -511,7 +513,7 @@ bool FrameMan::LoadPalette(const std::string& palettePath) {
 
 int FrameMan::SaveBitmap(SaveBitmapMode modeToSave, const std::string& nameBase, BITMAP* bitmapToSave) {
 	if ((modeToSave == WorldDump || modeToSave == ScenePreviewDump) && !g_ActivityMan.ActivityRunning()) {
-		return 0;
+		return -1;
 	}
 	if (nameBase.empty() || nameBase.size() <= 0) {
 		return -1;
@@ -570,36 +572,37 @@ int FrameMan::SaveBitmap(SaveBitmapMode modeToSave, const std::string& nameBase,
 			if (!m_WorldDumpBuffer || (m_WorldDumpBuffer->w != g_SceneMan.GetSceneWidth() || m_WorldDumpBuffer->h != g_SceneMan.GetSceneHeight())) {
 				m_WorldDumpBuffer = std::unique_ptr<BITMAP, BitmapDeleter>(create_bitmap_ex(c_BPP, g_SceneMan.GetSceneWidth(), g_SceneMan.GetSceneHeight()));
 			}
+			if (!m_WorldDumpBuffer) break;
 			if (modeToSave == ScenePreviewDump) {
 				DrawWorldDump(true);
 
-				BITMAP* scenePreviewDumpBuffer = create_bitmap_ex(c_BPP, c_ScenePreviewWidth, c_ScenePreviewHeight);
-				blit(m_ScenePreviewDumpGradient.get(), scenePreviewDumpBuffer, 0, 0, 0, 0, scenePreviewDumpBuffer->w, scenePreviewDumpBuffer->h);
-				masked_stretch_blit(m_WorldDumpBuffer.get(), scenePreviewDumpBuffer, 0, 0, m_WorldDumpBuffer->w, m_WorldDumpBuffer->h, 0, 0, scenePreviewDumpBuffer->w, scenePreviewDumpBuffer->h);
+				std::unique_ptr<BITMAP, BitmapDeleter> scenePreviewDumpBuffer(create_bitmap_ex(c_BPP, c_ScenePreviewWidth, c_ScenePreviewHeight));
+				if (!scenePreviewDumpBuffer) break;
+				blit(m_ScenePreviewDumpGradient.get(), scenePreviewDumpBuffer.get(), 0, 0, 0, 0, scenePreviewDumpBuffer->w, scenePreviewDumpBuffer->h);
+				masked_stretch_blit(m_WorldDumpBuffer.get(), scenePreviewDumpBuffer.get(), 0, 0, m_WorldDumpBuffer->w, m_WorldDumpBuffer->h, 0, 0, scenePreviewDumpBuffer->w, scenePreviewDumpBuffer->h);
 
-				if (SaveIndexedPNG(fullFileName.c_str(), scenePreviewDumpBuffer) == 0) {
+				if (SaveIndexedPNG(fullFileName.c_str(), scenePreviewDumpBuffer.get()) == 0) {
 					g_ConsoleMan.PrintString("SYSTEM: Scene Preview was dumped to: " + fullFileName);
 					saveSuccess = true;
 				}
-				destroy_bitmap(scenePreviewDumpBuffer);
 			} else {
 				DrawWorldDump();
 
-				BITMAP* depthConvertBitmap = create_bitmap_ex(24, m_WorldDumpBuffer->w, m_WorldDumpBuffer->h);
-				blit(m_WorldDumpBuffer.get(), depthConvertBitmap, 0, 0, 0, 0, m_WorldDumpBuffer->w, m_WorldDumpBuffer->h);
-				SDL_Surface* saveSurface = SDL_CreateSurfaceFrom(
+				std::unique_ptr<BITMAP, BitmapDeleter> depthConvertBitmap(create_bitmap_ex(24, m_WorldDumpBuffer->w, m_WorldDumpBuffer->h));
+				if (!depthConvertBitmap) break;
+				blit(m_WorldDumpBuffer.get(), depthConvertBitmap.get(), 0, 0, 0, 0, m_WorldDumpBuffer->w, m_WorldDumpBuffer->h);
+				const int pitch = depthConvertBitmap->h > 1 ? static_cast<int>(depthConvertBitmap->line[1] - depthConvertBitmap->line[0]) : depthConvertBitmap->w * 3;
+				std::unique_ptr<SDL_Surface, SurfaceDeleter> saveSurface(SDL_CreateSurfaceFrom(
 				    depthConvertBitmap->w,
 				    depthConvertBitmap->h,
 				    SDL_PIXELFORMAT_RGB24,
-				    depthConvertBitmap->dat,
-				    3);
+				    depthConvertBitmap->line[0],
+				    pitch));
 
-				if (IMG_SavePNG(saveSurface, fullFileName.c_str()) == 0) {
+				if (saveSurface && IMG_SavePNG(saveSurface.get(), fullFileName.c_str())) {
 					g_ConsoleMan.PrintString("SYSTEM: World was dumped to: " + fullFileName);
 					saveSuccess = true;
 				}
-				destroy_bitmap(depthConvertBitmap);
-				SDL_DestroySurface(saveSurface);
 			}
 			break;
 		default:
@@ -633,19 +636,99 @@ void FrameMan::SaveScreenToBitmap() {
 }
 
 int FrameMan::SaveIndexedPNG(const char* fileName, BITMAP* bitmapToSave) const {
-	set_palette(m_DefaultPalette);
-	SDL_Surface* surface = SDL_CreateSurfaceFrom(bitmapToSave->w,
-	                                             bitmapToSave->h,
-	                                             SDL_PIXELFORMAT_INDEX8,
-	                                             bitmapToSave->dat,
-	                                             bitmap_color_depth(bitmapToSave) / 8);
-	SDL_Palette* pal = ContentFile::DefaultPaletteToSDL();
-	SDL_SetSurfacePalette(surface, pal);
-	int saveResult = IMG_SavePNG(surface, fileName);
-	SDL_DestroyPalette(pal);
-	SDL_DestroySurface(surface);
+	if (!bitmapToSave) return -1;
+	std::unique_ptr<BITMAP, BitmapDeleter> indexed;
+	if (bitmap_color_depth(bitmapToSave) != 8) {
+		set_palette(m_DefaultPalette);
+		indexed.reset(create_bitmap_ex(8, bitmapToSave->w, bitmapToSave->h));
+		if (!indexed) return -1;
+		blit(bitmapToSave, indexed.get(), 0, 0, 0, 0, bitmapToSave->w, bitmapToSave->h);
+		bitmapToSave = indexed.get();
+	}
+	std::vector<unsigned char> png;
+	if (!ContentFile::EncodeIndexedPNG(bitmapToSave, png)) return -1;
+	std::ofstream output(fileName, std::ios::binary);
+	output.write(reinterpret_cast<const char*>(png.data()), png.size());
+	output.close();
+	return output.good() ? 0 : -1;
+}
 
-	return saveResult;
+bool FrameMan::RunBitmapSaveSelfTest() {
+	bool pass = true;
+	const auto check = [&](const std::string& name, bool result) {
+		std::cout << "[bitmap-save-selftest] " << name << ": " << (result ? "PASS" : "FAIL") << std::endl;
+		pass = pass && result;
+	};
+	const auto writePixels = [&](const std::string& name, BITMAP* bitmap) {
+		std::ofstream out(System::GetScreenshotDirectory() + name + ".ppm", std::ios::binary);
+		out << "P6\n" << bitmap->w << " " << bitmap->h << "\n255\n";
+		const int depth = bitmap_color_depth(bitmap);
+		for (int y = 0; y < bitmap->h; ++y) {
+			for (int x = 0; x < bitmap->w; ++x) {
+				const int color = getpixel(bitmap, x, y);
+				const RGB rgb = depth == 8 ? m_DefaultPalette[color] : RGB{
+				    static_cast<unsigned char>(getr_depth(depth, color)), static_cast<unsigned char>(getg_depth(depth, color)),
+				    static_cast<unsigned char>(getb_depth(depth, color)), 0};
+				out.put(static_cast<char>(rgb.r));
+				out.put(static_cast<char>(rgb.g));
+				out.put(static_cast<char>(rgb.b));
+			}
+		}
+		check(name + " source pixels", out.good());
+	};
+	for (int depth: {8, 24, 32}) {
+		for (int height: {1, 7}) {
+			const std::string name = "bitmap_indexed_" + std::to_string(depth) + "_" + std::to_string(height);
+			std::unique_ptr<BITMAP, BitmapDeleter> parent(create_bitmap_ex(depth, 19, height + 2));
+			std::unique_ptr<BITMAP, BitmapDeleter> bitmap(parent ? create_sub_bitmap(parent.get(), 3, 1, 13, height) : nullptr);
+			if (!bitmap) {
+				check(name + " allocation", false);
+				continue;
+			}
+			for (int y = 0; y < height; ++y) {
+				for (int x = 0; x < bitmap->w; ++x) {
+					const int index = 20 + (x * 7 + y * 13) % 200;
+					const RGB& rgb = m_DefaultPalette[index];
+					putpixel(bitmap.get(), x, y, depth == 8 ? index : makecol_depth(depth, rgb.r, rgb.g, rgb.b));
+				}
+			}
+			writePixels(name, bitmap.get());
+			const std::string file = System::GetScreenshotDirectory() + name + ".png";
+			check(name + " save", SaveIndexedPNG(file.c_str(), bitmap.get()) == 0);
+			const std::string missing = System::GetScreenshotDirectory() + "missing/" + name + ".png";
+			check(name + " failed save", SaveIndexedPNG(missing.c_str(), bitmap.get()) < 0);
+		}
+	}
+	check("world save", SaveWorldToPNG("bitmap_world") == 0);
+	if (m_WorldDumpBuffer) writePixels("bitmap_world", m_WorldDumpBuffer.get());
+	else check("world source pixels", false);
+	check("preview save", SaveWorldPreviewToPNG("bitmap_preview") == 0);
+	check("world failed save", SaveWorldToPNG("missing/bitmap_world") < 0);
+	check("preview failed save", SaveWorldPreviewToPNG("missing/bitmap_preview") < 0);
+	BITMAP* materials = g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap();
+	for (int x = 0; x < 256; ++x) putpixel(materials, x, 0, x);
+	const bool saved = g_ActivityMan.SaveCurrentGame("bitmap_indices");
+	g_ActivityMan.WaitForSaveGameTask();
+	check("material save", saved);
+	if (saved && g_ActivityMan.LoadAndLaunchGame("bitmap_indices")) {
+		materials = g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap();
+		bool exact = true;
+		for (int x = 0; x < 256; ++x) {
+			const int restored = getpixel(materials, x, 0);
+			if (restored != x) {
+				std::cout << "[bitmap-save-selftest] material " << x << " restored " << restored << std::endl;
+				exact = false;
+			}
+		}
+		check("material load indices", exact);
+	} else {
+		check("material load", false);
+	}
+	g_ActivityMan.EndActivity();
+	check("world outside activity", SaveWorldToPNG("outside_world") < 0);
+	check("preview outside activity", SaveWorldPreviewToPNG("outside_preview") < 0);
+	std::cout << "[bitmap-save-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
+	return pass;
 }
 
 int FrameMan::SharedDrawLine(BITMAP* bitmap, const Vector& start, const Vector& end, int color, int altColor, int skip, int skipStart, bool shortestWrap, bool drawDot, BITMAP* dot) const {
