@@ -60,6 +60,18 @@ void ContentFile::FreeAllLoaded() {
 	}
 }
 
+void ContentFile::FreeAllLoadedSounds() {
+	for (const auto& [soundPath, sound]: s_LoadedSamples) {
+		if (sound) {
+			const FMOD_RESULT result = sound->release();
+			if (result != FMOD_OK) {
+				g_ConsoleMan.PrintString("ERROR: Could not release sound " + soundPath + ": " + FMOD_ErrorString(result));
+			}
+		}
+	}
+	s_LoadedSamples.clear();
+}
+
 int ContentFile::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Serializable::ReadProperty(propName, reader));
 
