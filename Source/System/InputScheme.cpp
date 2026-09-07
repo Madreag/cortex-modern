@@ -1,4 +1,5 @@
 #include "InputScheme.h"
+#include "CheckpointArchive.h"
 #include "UInputMan.h"
 #include <SDL3/SDL.h>
 
@@ -553,4 +554,24 @@ bool InputScheme::CaptureDeviceMapping(bool mouse, bool keyboard) {
 		}
 	}
 	return deviceMapped;
+}
+
+std::string InputScheme::SaveCheckpoint() const {
+    CheckpointWriter archive("InputScheme1");
+    archive(m_ActiveDevice, std::bit_cast<std::array<uint32_t, 2>>(m_DeviceID), m_SchemePreset,
+        m_JoystickDeadzoneType, m_JoystickDeadzone, m_DigitalAimSpeed, m_InputMappings);
+    return archive.Text();
+}
+
+bool InputScheme::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "InputScheme1", validateOnly);
+        archive(m_ActiveDevice);
+        std::array<uint32_t, 2> device{};
+        archive.Value(device);
+        archive(m_SchemePreset, m_JoystickDeadzoneType, m_JoystickDeadzone, m_DigitalAimSpeed, m_InputMappings);
+        archive.OnCommit([this, device] { m_DeviceID = std::bit_cast<DeviceID>(device); });
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
 }

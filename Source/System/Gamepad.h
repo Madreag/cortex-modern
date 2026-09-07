@@ -1,12 +1,17 @@
 #pragma once
 
 #include "Vector.h"
+#include <string>
+#include <string_view>
 #include <SDL3/SDL_gamepad.h>
 
 namespace RTE {
 
 	/// Structure for storing SDL_Gamepad or SDL_Joystick states.
 	struct Gamepad {
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 		int m_DeviceIndex = -1; //!< The internal device index.
 		SDL_JoystickID m_JoystickID = -1; //!< The joystick ID for event handling.
 		std::vector<int> m_Axis; //!< Array of analog axis states.

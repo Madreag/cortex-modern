@@ -7,9 +7,13 @@ namespace RTE {
 	/// A map between an input element and specific input device elements.
 	class InputMapping : public Serializable {
 
+		friend struct ContractAudit;
 	public:
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 
 #pragma region Creation
 		/// Constructor method used to instantiate an InputMapping object in system memory. Create() should be called before using the object.

@@ -1,4 +1,6 @@
 #include "UInputMan.h"
+#include "CheckpointArchive.h"
+#include <iostream>
 #include "InputScript.h"
 #include <iostream>
 #include "TimerMan.h"
@@ -1468,4 +1470,171 @@ void UInputMan::HandleGamepadHotPlug(SDL_JoystickID joystickID) {
 		s_ChangedJoystickStates[controllerIndex] = Gamepad(controllerIndex, joystickID, numAxis, numButtons);
 		m_NumJoysticks++;
 	}
+}
+
+std::string Gamepad::SaveCheckpoint() const {
+    CheckpointWriter archive("Gamepad1");
+    archive(m_DeviceIndex, m_JoystickID, m_Axis, m_DigitalAxis, m_Buttons, m_ButtonsPressedSinceSim, m_ButtonsReleasedSinceSim);
+    return archive.Text();
+}
+
+bool Gamepad::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "Gamepad1", validateOnly);
+        Gamepad candidate;
+        archive.Value(candidate.m_DeviceIndex);
+        archive.Value(candidate.m_JoystickID);
+        archive.Value(candidate.m_Axis);
+        archive.Value(candidate.m_DigitalAxis);
+        archive.Value(candidate.m_Buttons);
+        archive.Value(candidate.m_ButtonsPressedSinceSim);
+        archive.Value(candidate.m_ButtonsReleasedSinceSim);
+        if (candidate.m_Axis.size() != candidate.m_DigitalAxis.size() ||
+            candidate.m_Buttons.size() != candidate.m_ButtonsPressedSinceSim.size() ||
+            candidate.m_Buttons.size() != candidate.m_ButtonsReleasedSinceSim.size()) return false;
+        archive.OnCommit([this, candidate = std::move(candidate)]() mutable { *this = std::move(candidate); });
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+std::string UInputMan::Keyboard::SaveCheckpoint() const {
+    CheckpointWriter archive("UInputMan::Keyboard1");
+    archive(id, keyStates, changedKeyStates, pressedSinceSim, releasedSinceSim);
+    return archive.Text();
+}
+
+bool UInputMan::Keyboard::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "UInputMan::Keyboard1", validateOnly);
+        archive(id, keyStates, changedKeyStates, pressedSinceSim, releasedSinceSim);
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+std::string UInputMan::Mouse::SaveCheckpoint() const {
+    CheckpointWriter archive("UInputMan::Mouse1");
+    archive(id, state, change, pressedSinceSim, releasedSinceSim, position, relativeMotion, analogAim, wheelChange, relativeMode);
+    return archive.Text();
+}
+
+bool UInputMan::Mouse::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "UInputMan::Mouse1", validateOnly);
+        archive(id, state, change, pressedSinceSim, releasedSinceSim, position, relativeMotion, analogAim, wheelChange, relativeMode);
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+std::string UInputMan::SaveCheckpoint() const {
+    CheckpointWriter archive("UInputMan1");
+    archive(m_KeyboardStates, m_MouseStates, s_PrevJoystickStates, s_ChangedJoystickStates,
+        m_SkipHandlingSpecialInput, m_NumJoysticks, m_TextInput, m_OverrideInput, m_ControlScheme,
+        m_MouseSensitivity, m_TrapMousePos, m_MouseTrapRadius,
+        m_PlayerScreenMouseBounds.x, m_PlayerScreenMouseBounds.y, m_PlayerScreenMouseBounds.w, m_PlayerScreenMouseBounds.h,
+        m_LastDeviceWhichControlledGUICursor, m_ForceDisableMultiMouseKeyboard, m_EnableMultiMouseKeyboard,
+        m_PlayerMouseKeyboardKnown, m_DisableKeyboard, m_DisableMouseMoving, m_PrepareToEnableMouseMoving);
+    return archive.Text();
+}
+
+bool UInputMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "UInputMan1", validateOnly);
+        std::unordered_map<SDL_KeyboardID, Keyboard> keyboards;
+        std::unordered_map<SDL_MouseID, Mouse> mice;
+        std::vector<Gamepad> previous, changed;
+        archive.Value(keyboards); archive.Value(mice);
+        archive.Value(previous); archive.Value(changed);
+        if (!keyboards.contains(0) || !mice.contains(0) || previous.size() != changed.size()) return false;
+        for (size_t index = 0; index < previous.size(); ++index) {
+            if (previous[index].m_JoystickID != changed[index].m_JoystickID ||
+                previous[index].m_Axis.size() != changed[index].m_Axis.size() ||
+                previous[index].m_Buttons.size() != changed[index].m_Buttons.size()) return false;
+        }
+        archive.OnCommit([this, keyboards = std::move(keyboards), mice = std::move(mice), previous = std::move(previous), changed = std::move(changed)]() mutable {
+            m_KeyboardStates = std::move(keyboards); m_MouseStates = std::move(mice);
+            s_PrevJoystickStates = std::move(previous); s_ChangedJoystickStates = std::move(changed);
+        });
+        archive(m_SkipHandlingSpecialInput, m_NumJoysticks, m_TextInput, m_OverrideInput, m_ControlScheme,
+        m_MouseSensitivity, m_TrapMousePos, m_MouseTrapRadius,
+        m_PlayerScreenMouseBounds.x, m_PlayerScreenMouseBounds.y, m_PlayerScreenMouseBounds.w, m_PlayerScreenMouseBounds.h,
+        m_LastDeviceWhichControlledGUICursor, m_ForceDisableMultiMouseKeyboard, m_EnableMultiMouseKeyboard,
+        m_PlayerMouseKeyboardKnown, m_DisableKeyboard, m_DisableMouseMoving, m_PrepareToEnableMouseMoving);
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+bool UInputMan::RunCheckpointSelfTest() {
+    const std::string original = SaveCheckpoint();
+    bool passed = true;
+    int checked = 0;
+    const auto check = [&](const char* name, bool valid) {
+        ++checked; passed = valid && passed;
+        std::cout << "[input-checkpoint-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+    };
+    try {
+        Keyboard keyboard;
+        keyboard.keyStates[SDL_SCANCODE_SPACE] = true;
+        keyboard.changedKeyStates[SDL_SCANCODE_SPACE] = true;
+        keyboard.pressedSinceSim[SDL_SCANCODE_SPACE] = true;
+        keyboard.releasedSinceSim[SDL_SCANCODE_A] = true;
+        m_KeyboardStates[0] = keyboard;
+        Mouse mouse;
+        mouse.state[0] = mouse.change[0] = mouse.pressedSinceSim[0] = true;
+        mouse.releasedSinceSim[1] = true;
+        mouse.position = Vector(147.25F, 285.5F);
+        mouse.relativeMotion = Vector(-13.5F, 7.25F);
+        mouse.analogAim = Vector(0.375F, -0.625F);
+        mouse.wheelChange = 3.5F;
+        m_MouseStates[0] = mouse;
+        m_TextInput = "checkpoint input text";
+        m_MouseSensitivity = 1.375F;
+        m_DisableKeyboard = false;
+        m_ControlScheme[0].SetKeyMapping(0, SDL_SCANCODE_Q);
+        m_ControlScheme[0].SetDigitalAimSpeed(0.375F);
+        auto* scheme = &m_ControlScheme[0];
+        auto* mapping = &(*scheme->GetInputMappings())[0];
+        Gamepad gamepad(7, 400000001U, 3, 4);
+        gamepad.m_Axis[1] = 12345;
+        gamepad.m_DigitalAxis[1] = 1;
+        gamepad.m_Buttons[2] = gamepad.m_ButtonsPressedSinceSim[2] = true;
+        gamepad.m_ButtonsReleasedSinceSim[3] = true;
+        s_PrevJoystickStates = {gamepad}; s_ChangedJoystickStates = {gamepad};
+        const std::string captured = SaveCheckpoint();
+        Gamepad invalidGamepad = gamepad;
+        invalidGamepad.m_ButtonsPressedSinceSim.clear();
+        const auto validGamepad = gamepad.SaveCheckpoint();
+        check("inconsistent_gamepad_atomic", !gamepad.LoadCheckpoint(invalidGamepad.SaveCheckpoint()) && gamepad.SaveCheckpoint() == validGamepad);
+        check("capture_has_keyboard_edges", KeyHeldScancode(SDL_SCANCODE_SPACE) && keyboard.pressedSinceSim[SDL_SCANCODE_SPACE]);
+        check("capture_has_mouse_and_text", MouseWheelMoved() == 3 && m_MouseStates.at(0).wheelChange == 3.5F && GetTextInput() == "checkpoint input text");
+        EndSimUpdate(); EndFrame();
+        m_KeyboardStates[0].keyStates.fill(false);
+        m_MouseStates[0] = Mouse{};
+        m_TextInput = "later";
+        m_MouseSensitivity = 0.25F;
+        m_ControlScheme[0].SetKeyMapping(0, SDL_SCANCODE_W);
+        m_ControlScheme[0].SetDigitalAimSpeed(1.5F);
+        s_PrevJoystickStates.clear(); s_ChangedJoystickStates.clear();
+        const std::string perturbed = SaveCheckpoint();
+        check("perturbation_detected", !KeyHeldScancode(SDL_SCANCODE_SPACE) && MouseWheelMoved() == 0 && perturbed != captured);
+        check("truncated_atomic", !LoadCheckpoint(captured.substr(0, captured.size() - 3)) && SaveCheckpoint() == perturbed);
+        check("trailing_atomic", !LoadCheckpoint(captured + "tail") && SaveCheckpoint() == perturbed);
+        check("validate_only", LoadCheckpoint(captured, true) && SaveCheckpoint() == perturbed);
+        check("restore", LoadCheckpoint(captured));
+        check("canonical", SaveCheckpoint() == captured);
+        check("keyboard_edges", KeyHeldScancode(SDL_SCANCODE_SPACE) && m_KeyboardStates.at(0).pressedSinceSim[SDL_SCANCODE_SPACE] && m_KeyboardStates.at(0).releasedSinceSim[SDL_SCANCODE_A]);
+        check("mouse_edges_and_values", m_MouseStates.at(0).pressedSinceSim[0] && m_MouseStates.at(0).releasedSinceSim[1] && MouseWheelMoved() == 3 && m_MouseStates.at(0).wheelChange == 3.5F && m_MouseStates.at(0).position == mouse.position && m_MouseStates.at(0).analogAim == mouse.analogAim);
+        check("text_and_sensitivity", GetTextInput() == "checkpoint input text" && GetMouseSensitivity() == 1.375F);
+        check("mapping_values_and_identity", &m_ControlScheme[0] == scheme && &(*scheme->GetInputMappings())[0] == mapping && scheme->GetKeyMapping(0) == SDL_SCANCODE_Q && scheme->GetDigitalAimSpeed() == 0.375F);
+        check("joystick_edges", s_PrevJoystickStates.size() == 1 && s_PrevJoystickStates[0].m_Axis[1] == 12345 && s_PrevJoystickStates[0].m_ButtonsPressedSinceSim[2] && s_ChangedJoystickStates[0].m_ButtonsReleasedSinceSim[3]);
+    } catch (const std::exception& error) {
+        std::cout << "[input-checkpoint-selftest] exception=" << error.what() << std::endl;
+        passed = false;
+    }
+    passed = LoadCheckpoint(original) && passed;
+    std::cout << "[input-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << "complete checked=" << checked << std::endl;
+    return passed;
 }
