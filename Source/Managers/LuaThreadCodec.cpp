@@ -488,6 +488,27 @@ namespace {
 } // namespace
 
 namespace RTE::LuaThreadCodec {
+	void VisitUserdata(lua_State* state, void (*visitor)(void*, size_t, const void*, void*), void* context) {
+		auto visit = [&](GCobj* object) {
+			if (object->gch.gct == ~LJ_TUDATA) {
+				GCudata* data = gco2ud(object);
+				visitor(uddata(data), data->len, tabref(data->metatable), context);
+			}
+		};
+		global_State* global = G(state);
+		for (GCobj* object = gcref(global->gc.root); object; object = gcnext(object)) {
+			if (!(object->gch.marked & LJ_GC_FINALIZED)) visit(object);
+		}
+		// Queued finalizers have the finalized bit set, but their native payload is still alive.
+		if (GCobj* last = gcref(global->gc.mmudata)) {
+			GCobj* object = last;
+			do {
+				object = gcnext(object);
+				visit(object);
+			} while (object != last);
+		}
+	}
+
 	void Register(lua_State* state) {
 		lua_pushcfunction(state, GmatchPosition);
 		lua_setglobal(state, "_ScriptGraphGmatchPosition");
