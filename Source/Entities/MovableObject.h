@@ -1378,7 +1378,7 @@ namespace RTE {
 		bool m_PostEffectEnabled;
 
 		// This object's unique persistent ID
-		long m_UniqueID;
+		long m_UniqueID = 0;
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
 		long m_PersistedUniqueID;
