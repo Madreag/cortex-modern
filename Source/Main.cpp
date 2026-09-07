@@ -342,6 +342,24 @@ void DestroyManagers() {
 #endif
 }
 
+int ShutDown(int exitCode) {
+	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
+	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
+	LocalPrediction::Clear();
+	if (s_rbProbeOriginals.held) {
+		g_MovableMan.ReinstateWorld(s_rbProbeOriginals);
+		exitCode = EXIT_FAILURE;
+	}
+	s_rbProbeWorld.Clear();
+	g_ConsoleMan.SaveAllText("LogConsole.txt");
+	DestroyManagers();
+	allegro_exit();
+	SDL_Quit();
+	std::cout.flush();
+	std::cerr.flush();
+	return exitCode;
+}
+
 /// <summary>
 /// Command-line argument handling.
 /// </summary>
@@ -3320,9 +3338,7 @@ int main(int argc, char** argv) {
 
 	if (s_netMatchServiceE2E) {
 		const int exitCode = RunNetMatchServiceE2E();
-		std::cout.flush();
-		std::cerr.flush();
-		std::_Exit(exitCode);
+		return ShutDown(exitCode);
 	}
 
 	if (!s_netReplayVerifyPath.empty()) {
@@ -3372,9 +3388,7 @@ int main(int argc, char** argv) {
 	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();
-		std::cout.flush();
-		std::cerr.flush();
-		std::_Exit(exitCode);
+		return ShutDown(exitCode);
 	}
 
 	int scenarioExitCode = 0;
@@ -3485,30 +3499,7 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
-	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
-
-	if (ScenarioRunner::IsActive()) {
-		// Scenario mode: the JSON report was flushed before RunGameLoop returned. Skip
-		// DestroyManagers — it races FMOD's async update thread on freed Sound userdata when actors
-		// tear down faster than the normal quit flow. The OS reclaims everything on process exit.
-		g_ConsoleMan.SaveAllText("LogConsole.txt");
-		std::_Exit(scenarioExitCode);
-	}
-	if (g_NetMatchService.WasEverStarted()) {
-		// A multiplayer session hits the same FMOD async-thread teardown race; the MP path has no
-		// campaign/meta state to flush, so close the net session and take the scenario-mode fast exit.
-		g_NetMatchService.Destroy();
-		g_ConsoleMan.SaveAllText("LogConsole.txt");
-		std::_Exit(EXIT_SUCCESS);
-	}
-
-	DestroyManagers();
-
-	allegro_exit();
-	SDL_Quit();
-
-	return EXIT_SUCCESS;
+	return ShutDown(scenarioExitCode);
 }
 
 #ifdef _WIN32
