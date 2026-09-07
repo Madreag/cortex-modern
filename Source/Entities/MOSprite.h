@@ -19,6 +19,9 @@ namespace RTE {
 		/// Public member variable, method and friend function declarations
 	public:
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 		/// Constructor method used to instantiate a MOSprite object in system

@@ -416,6 +416,18 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	});
 	MatchProperty("PrevVelocity", { reader >> m_PrevVel; });
 	MatchProperty("SpecialBehaviour_AirResistanceRaw", { reader >> m_AirResistance; });
+	MatchProperty("SpecialBehaviour_EffectStartStrengthRaw", { reader >> m_EffectStartStrength; });
+	MatchProperty("SpecialBehaviour_EffectStopStrengthRaw", { reader >> m_EffectStopStrength; });
+	MatchProperty("SpecialBehaviour_EffectStopTimeRaw", { reader >> m_EffectStopTime; });
+	MatchProperty("SpecialBehaviour_ScreenEffect", {
+		m_ScreenEffectFile.Reset();
+		reader >> m_ScreenEffectFile;
+		m_pScreenEffect = m_ScreenEffectFile.GetAsBitmap();
+		m_ScreenEffectHash = m_ScreenEffectFile.GetHash();
+	});
+	MatchProperty("SpecialBehaviour_ToSettle", { reader >> m_ToSettle; });
+	MatchProperty("SpecialBehaviour_ToDelete", { reader >> m_ToDelete; });
+	MatchProperty("SpecialBehaviour_SimUpdatesSinceLastScriptedUpdate", { reader >> m_SimUpdatesSinceLastScriptedUpdate; });
 	MatchProperty("SpecialBehaviour_ApplyWoundDamageOnCollision", { reader >> m_ApplyWoundDamageOnCollision; });
 	MatchProperty("SpecialBehaviour_ApplyWoundBurstDamageOnCollision", { reader >> m_ApplyWoundBurstDamageOnCollision; });
 	MatchProperty("Velocity", { reader >> m_Vel; });
@@ -539,6 +551,41 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 	}
 	// Artificially end reading this property since we got all we needed
 	reader.NextProperty();
+}
+
+void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
+	writer.NewPropertyWithValue("Mass", m_Mass);
+	writer.NewPropertyWithValue("Scale", m_Scale);
+	writer.NewPropertyWithValue("RestThreshold", m_RestThreshold);
+	writer.NewPropertyWithValue("Sharpness", m_Sharpness);
+	writer.NewPropertyWithValue("HitsMOs", m_HitsMOs);
+	writer.NewPropertyWithValue("GetsHitByMOs", m_GetsHitByMOs);
+	writer.NewPropertyWithValue("IgnoresAtomGroupHits", m_IgnoresAtomGroupHits);
+	writer.NewPropertyWithValue("IgnoresAGHitsWhenSlowerThan", m_IgnoresAGHitsWhenSlowerThan);
+	writer.NewPropertyWithValue("MissionCritical", m_MissionCritical);
+	writer.NewPropertyWithValue("CanBeSquished", m_CanBeSquished);
+	writer.NewPropertyWithValue("RemoveOrphanTerrainRadius", m_RemoveOrphanTerrainRadius);
+	writer.NewPropertyWithValue("RemoveOrphanTerrainMaxArea", m_RemoveOrphanTerrainMaxArea);
+	writer.NewPropertyWithValue("RemoveOrphanTerrainRate", m_RemoveOrphanTerrainRate);
+	writer.NewPropertyWithValue("DamageOnCollision", m_DamageOnCollision);
+	writer.NewPropertyWithValue("DamageOnPenetration", m_DamageOnPenetration);
+	writer.NewPropertyWithValue("WoundDamageMultiplier", m_WoundDamageMultiplier);
+	writer.NewPropertyWithValue("SpecialBehaviour_ToSettle", m_ToSettle);
+	writer.NewPropertyWithValue("SpecialBehaviour_ToDelete", m_ToDelete);
+	writer.NewPropertyWithValue("SimUpdatesBetweenScriptedUpdates", m_SimUpdatesBetweenScriptedUpdates);
+	writer.NewPropertyWithValue("SpecialBehaviour_SimUpdatesSinceLastScriptedUpdate", m_SimUpdatesSinceLastScriptedUpdate);
+	writer.NewPropertyWithValue("ForceIntoMasterLuaState", m_ForceIntoMasterLuaState);
+	writer.NewPropertyWithValue("SpecialBehaviour_ScreenEffect", m_ScreenEffectFile);
+	writer.NewPropertyWithValue("PostEffectEnabled", m_PostEffectEnabled);
+	writer.NewPropertyWithValue("EffectStartTime", m_EffectStartTime);
+	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopTimeRaw", m_EffectStopTime);
+	writer.NewPropertyWithValue("SpecialBehaviour_EffectStartStrengthRaw", m_EffectStartStrength);
+	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopStrengthRaw", m_EffectStopStrength);
+	writer.NewPropertyWithValue("EffectAlwaysShows", m_EffectAlwaysShows);
+	writer.NewPropertyWithValue("EffectRotAngle", m_EffectRotAngle);
+	writer.NewPropertyWithValue("InheritEffectRotAngle", m_InheritEffectRotAngle);
+	writer.NewPropertyWithValue("RandomizeEffectRotAngle", m_RandomizeEffectRotAngle);
+	writer.NewPropertyWithValue("RandomizeEffectRotAngleEveryFrame", m_RandomizeEffectRotAngleEveryFrame);
 }
 
 int MovableObject::Save(Writer& writer) const {

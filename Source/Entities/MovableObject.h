@@ -39,6 +39,9 @@ namespace RTE {
 	public:
 		ScriptFunctionNames("Create", "Destroy", "Update", "ThreadedUpdate", "SyncedUpdate", "OnScriptDisable", "OnScriptEnable", "OnCollideWithTerrain", "OnCollideWithMO", "WhilePieMenuOpen", "OnSave", "OnMessage", "OnGlobalMessage");
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		virtual void SaveSnapshotConfiguration(Writer& writer) const;
 		ClassInfoGetters;
 
 		enum MOType {

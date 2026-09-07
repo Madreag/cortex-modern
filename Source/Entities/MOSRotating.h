@@ -31,6 +31,9 @@ namespace RTE {
 		// Concrete allocation and cloning definitions
 		EntityAllocation(MOSRotating);
 		SerializableOverrideMethods;
+
+		/// Saves the live properties that can differ from this object's preset.
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 		/// Constructor method used to instantiate a MOSRotating object in system

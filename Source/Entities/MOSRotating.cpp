@@ -421,6 +421,10 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		}
 		reader >> m_GibSound;
 	});
+	MatchProperty("SpecialBehaviour_GibSound", {
+		delete m_GibSound;
+		m_GibSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
 	MatchProperty("EffectOnGib", { reader >> m_EffectOnGib; });
 	MatchProperty("LoudnessOnGib", { reader >> m_LoudnessOnGib; });
 	MatchProperty("DamageMultiplier", {
@@ -429,6 +433,21 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 	});
 
 	EndPropertyList;
+}
+
+void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
+	MOSprite::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("OrientToVel", m_OrientToVel);
+	writer.NewPropertyWithValue("GibImpulseLimit", m_GibImpulseLimit);
+	writer.NewPropertyWithValue("GibWoundLimit", m_GibWoundLimit);
+	writer.NewPropertyWithValue("GibBlastStrength", m_GibBlastStrength);
+	writer.NewPropertyWithValue("GibScreenShakeAmount", m_GibScreenShakeAmount);
+	writer.NewPropertyWithValue("WoundCountAffectsImpulseLimitRatio", m_WoundCountAffectsImpulseLimitRatio);
+	writer.NewPropertyWithValue("DetachAttachablesBeforeGibbingFromWounds", m_DetachAttachablesBeforeGibbingFromWounds);
+	writer.NewPropertyWithValue("GibAtEndOfLifetime", m_GibAtEndOfLifetime);
+	writer.NewPropertyWithValue("SpecialBehaviour_GibSound", m_GibSound);
+	writer.NewPropertyWithValue("EffectOnGib", m_EffectOnGib);
+	writer.NewPropertyWithValue("LoudnessOnGib", m_LoudnessOnGib);
 }
 
 int MOSRotating::Save(Writer& writer) const {
