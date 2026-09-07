@@ -32,7 +32,7 @@ if compiler.get_argument_syntax() == 'gcc'
   luaman_cpp_args += ['-fpermissive']
 elif compiler.get_argument_syntax() == 'msvc'
   luaman_cpp_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-permissive', '-bigobj']
-  defaults_override = ['cpp_std=v'+get_option('cpp_std')] # override standard to use vc++, removing permissive- flag
+  defaults_override = ['cpp_std=v'+get_option('cpp_std'), 'cpp_eh=s'] # LuaJIT errors can unwind through its C API.
   message(defaults_override)
 else
 error('Unsupported compiler')
