@@ -168,6 +168,34 @@ function Create(self)
 	self.checkpoint.sound = CreateSoundContainer("Funds Changed", "Base.rte");
 	self.checkpoint.sound.PresetName = "Checkpoint Sound";
 	self.checkpoint.soundAlias = self.checkpoint.sound;
+	self.checkpoint.soundSet = SoundSet();
+	self.checkpoint.soundSet.SoundSelectionCycleMode = SoundSet.FORWARDS;
+	self.checkpoint.soundSetAlias = self.checkpoint.soundSet;
+	do
+		local leaf = SoundSet();
+		leaf.SoundSelectionCycleMode = SoundSet.ALL;
+		local branch = SoundSet();
+		branch:AddSoundSet(leaf);
+		self.checkpoint.soundSet:AddSoundSet(branch);
+	end
+	self.checkpoint.aSoundSubset = self.checkpoint.soundSet.SubSoundSets();
+	self.checkpoint.aSoundLeaf = self.checkpoint.aSoundSubset.SubSoundSets();
+	self.checkpoint.aSoundLeaf.shared = self.checkpoint;
+	do
+		local owner = SoundSet();
+		local child = SoundSet();
+		child.SoundSelectionCycleMode = SoundSet.ALL;
+		owner:AddSoundSet(child);
+		self.checkpoint.onlySoundSubset = owner.SubSoundSets();
+	end
+	do
+		local owner = CreateSoundContainer("Funds Changed", "Base.rte");
+		self.checkpoint.onlySoundTop = owner:GetTopLevelSoundSet();
+		self.checkpoint.onlySoundTop.SoundSelectionCycleMode = SoundSet.FORWARDS;
+	end
+	self.checkpoint.aSoundTop = self.checkpoint.sound:GetTopLevelSoundSet();
+	self.checkpoint.aSoundTop.SoundSelectionCycleMode = SoundSet.FORWARDS;
+	self.checkpoint.aSoundTop.shared = self.checkpoint;
 	self.checkpoint.owned = CreateAHuman("Green Dummy", "Base.rte");
 	self.checkpoint.owned.PresetName = "Checkpoint Human";
 	self.checkpoint.owned.Description = "A renamed checkpoint actor\nWith two lines";
@@ -259,6 +287,14 @@ function Update(self)
 	assert(state.sceneBox.Width == -10 - 2 * self.testUpdate and state.sceneArea.FirstBox.Width == state.sceneBox.Width, "checkpoint scene box state " .. state.sceneBox.Width .. "/" .. state.sceneArea.FirstBox.Width .. " expected " .. (-10 - 2 * self.testUpdate));
 	assert(SceneMan.Scene:GetArea(state.area.Name).FirstBox.Width == state.sceneBox.Width, "checkpoint scene area reference");
 	assert(state.sound == state.soundAlias and state.sound:HasAnySounds() and state.sound.PresetName == "Checkpoint Sound", "checkpoint sound identity");
+	assert(state.soundSet == state.soundSetAlias and state.soundSet.SoundSelectionCycleMode == SoundSet.FORWARDS, "checkpoint owned sound set");
+	assert(state.aSoundTop.SoundSelectionCycleMode == SoundSet.FORWARDS and state.aSoundTop.shared == state, "checkpoint sound set owner");
+	assert(state.sound:GetTopLevelSoundSet().SoundSelectionCycleMode == state.aSoundTop.SoundSelectionCycleMode, "checkpoint sound set reference");
+	assert(state.aSoundTop:SelectNextSounds(), "checkpoint sound selection");
+	assert(state.aSoundLeaf.SoundSelectionCycleMode == SoundSet.ALL and state.aSoundLeaf.shared == state, "checkpoint nested sound set");
+	assert(state.onlySoundSubset.SoundSelectionCycleMode == SoundSet.ALL, "checkpoint sound subset lifetime");
+	assert(state.soundSet.SubSoundSets().SubSoundSets().SoundSelectionCycleMode == SoundSet.ALL, "checkpoint sound set hierarchy");
+	assert(state.onlySoundTop.SoundSelectionCycleMode == SoundSet.FORWARDS and state.onlySoundTop:SelectNextSounds(), "checkpoint sound set lifetime");
 	assert(state.wrap == state.wrapAlias, "checkpoint closure identity");
 	assert(state.engineState == math._CheckpointState and state.engineState[self.UniqueID] == self.testUpdate, "checkpoint engine table state");
 	assert(state.owned == state.ownedAlias and state.owned.shared == state, "checkpoint owned object identity");
