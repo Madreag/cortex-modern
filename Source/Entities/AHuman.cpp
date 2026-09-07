@@ -293,6 +293,15 @@ int AHuman::Create(const AHuman& reference) {
 	return 0;
 }
 
+int AHuman::GetLimbPathIndex(const LimbPath* path) const {
+	for (int index = 0; index < 2 * MOVEMENTSTATECOUNT; ++index) {
+		if (&m_Paths[index / MOVEMENTSTATECOUNT][index % MOVEMENTSTATECOUNT] == path) {
+			return index;
+		}
+	}
+	return -1;
+}
+
 std::vector<std::string> AHuman::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
 		return m_PersistedLimbPathStates;

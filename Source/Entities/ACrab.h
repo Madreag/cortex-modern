@@ -98,6 +98,12 @@ namespace RTE {
 		/// Packed traversal state of every limb path, side-major, for full-game saves.
 		std::vector<std::string> GetLimbPathStates(bool forHashing = false) const;
 
+		/// Gets the stable index of an owned limb path, or -1 when absent.
+		int GetLimbPathIndex(const LimbPath* path) const;
+
+		/// Gets an owned limb path by its checkpoint index.
+		LimbPath* GetLimbPathByIndex(int index) { return index >= 0 && index < SIDECOUNT * LAYERCOUNT * MOVEMENTSTATECOUNT ? &m_Paths[index / (LAYERCOUNT * MOVEMENTSTATECOUNT)][(index / MOVEMENTSTATECOUNT) % LAYERCOUNT][index % MOVEMENTSTATECOUNT] : nullptr; }
+
 		/// Packed raw limb positions of the four foot groups, for full-game saves.
 		std::string GetLimbGroupPositions() const;
 

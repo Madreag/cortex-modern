@@ -361,6 +361,15 @@ static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_l
 	}
 }
 
+int ACrab::GetLimbPathIndex(const LimbPath* path) const {
+	for (int index = 0; index < SIDECOUNT * LAYERCOUNT * MOVEMENTSTATECOUNT; ++index) {
+		if (&m_Paths[index / (LAYERCOUNT * MOVEMENTSTATECOUNT)][(index / MOVEMENTSTATECOUNT) % LAYERCOUNT][index % MOVEMENTSTATECOUNT] == path) {
+			return index;
+		}
+	}
+	return -1;
+}
+
 std::vector<std::string> ACrab::GetLimbPathStates(bool forHashing) const {
 	if (!m_PersistedLimbPathStates.empty()) {
 		return m_PersistedLimbPathStates;
