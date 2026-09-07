@@ -106,6 +106,10 @@ int PEmitter::Create(const PEmitter& reference) {
 
 int PEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSParticle::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ClearEmissions", {
+		bool clear; reader >> clear;
+		if (clear) { for (Emission* emission: m_EmissionList) delete emission; m_EmissionList.clear(); }
+	});
 
 	MatchProperty("AddEmission", {
 		Emission* emission = new Emission();
@@ -170,6 +174,33 @@ int PEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SpecialBehaviour_AvgImpulse", { reader >> m_AvgImpulse; });
 
 	EndPropertyList;
+}
+
+void PEmitter::SaveSnapshotConfiguration(Writer& writer) const {
+	MOSParticle::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearEmissions", true);
+	for (const Emission* emission: m_EmissionList) writer.NewPropertyWithValue("AddEmission", *emission);
+	writer.NewPropertyWithValue("EmissionSound", m_EmissionSound);
+	writer.NewPropertyWithValue("BurstSound", m_BurstSound);
+	writer.NewPropertyWithValue("EndSound", m_EndSound);
+	writer.NewPropertyWithValue("EmissionEnabled", m_EmitEnabled);
+	writer.NewPropertyWithValue("EmissionCount", m_EmitCount);
+	writer.NewPropertyWithValue("EmissionCountLimit", m_EmitCountLimit);
+	writer.NewPropertyWithValue("EmissionsIgnoreThis", m_EmissionsIgnoreThis);
+	writer.NewPropertyWithValue("NegativeThrottleMultiplier", m_NegativeThrottleMultiplier);
+	writer.NewPropertyWithValue("PositiveThrottleMultiplier", m_PositiveThrottleMultiplier);
+	writer.NewPropertyWithValue("Throttle", m_Throttle);
+	writer.NewPropertyWithValue("BurstScale", m_BurstScale);
+	writer.NewPropertyWithValue("BurstSpacing", m_BurstSpacing);
+	writer.NewPropertyWithValue("BurstTriggered", m_BurstTriggered);
+	writer.NewPropertyWithValue("PlayBurstSound", m_PlayBurstSound);
+	writer.NewPropertyWithValue("EmissionAngle", m_EmitAngle);
+	writer.NewPropertyWithValue("EmissionOffset", m_EmissionOffset);
+	writer.NewPropertyWithValue("FlashScale", m_FlashScale);
+	writer.NewPropertyWithValue("FlashOnlyOnBurst", m_FlashOnlyOnBurst);
+	writer.NewPropertyWithValue("SustainBurstSound", m_SustainBurstSound);
+	writer.NewPropertyWithValue("BurstSoundFollowsEmitter", m_BurstSoundFollowsEmitter);
+	writer.NewPropertyWithValue("LoudnessOnEmit", m_LoudnessOnEmit);
 }
 
 int PEmitter::Save(Writer& writer) const {

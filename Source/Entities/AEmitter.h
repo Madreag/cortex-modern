@@ -24,6 +24,7 @@ namespace RTE {
 		// Concrete allocation and cloning definitions
 		EntityAllocation(AEmitter);
 		SerializableOverrideMethods;
+		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
 
 		/// Constructor method used to instantiate a AEmitter object in system

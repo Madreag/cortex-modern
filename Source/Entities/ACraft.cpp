@@ -12,6 +12,7 @@
 #include "HDFirearm.h"
 #include "Controller.h"
 #include "SceneMan.h"
+#include "PresetMan.h"
 #include "Scene.h"
 #include "SettingsMan.h"
 #include "FrameMan.h"
@@ -301,17 +302,18 @@ int ACraft::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 	MatchProperty("HatchDelay", { reader >> m_HatchDelay; });
 	MatchProperty("HatchOpenSound", {
-		m_HatchOpenSound = new SoundContainer;
-		reader >> m_HatchOpenSound;
+		delete m_HatchOpenSound;
+		m_HatchOpenSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("HatchCloseSound", {
-		m_HatchCloseSound = new SoundContainer;
-		reader >> m_HatchCloseSound;
+		delete m_HatchCloseSound;
+		m_HatchCloseSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("CrashSound", {
-		m_CrashSound = new SoundContainer;
-		reader >> m_CrashSound;
+		delete m_CrashSound;
+		m_CrashSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
+	MatchProperty("SpecialBehaviour_ClearExits", { bool clear; reader >> clear; if (clear) m_Exits.clear(); });
 	MatchProperty("AddExit",
 	              {
 		              Exit exit;
@@ -392,6 +394,23 @@ void ACraft::DiscardPersistedSnapshotState() {
 	Actor::DiscardPersistedSnapshotState();
 	m_PersistedHatchTimerAnchor.pending = false;
 	m_PersistedExitTimerAnchor.pending = false;
+}
+
+void ACraft::SaveSnapshotConfiguration(Writer& writer) const {
+	Actor::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearExits", true);
+	for (const Exit& exit: m_Exits) writer.NewPropertyWithValue("AddExit", exit);
+	writer.NewPropertyWithValue("HatchDelay", m_HatchDelay);
+	writer.NewPropertyWithValue("HatchOpenSound", m_HatchOpenSound);
+	writer.NewPropertyWithValue("HatchCloseSound", m_HatchCloseSound);
+	writer.NewPropertyWithValue("DeliveryDelayMultiplier", m_DeliveryDelayMultiplier);
+	writer.NewPropertyWithValue("ExitInterval", m_ExitInterval);
+	writer.NewPropertyWithValue("CanLand", m_LandingCraft);
+	writer.NewPropertyWithValue("CrashSound", m_CrashSound);
+	writer.NewPropertyWithValue("CanEnterOrbit", m_CanEnterOrbit);
+	writer.NewPropertyWithValue("MaxPassengers", m_MaxPassengers);
+	writer.NewPropertyWithValue("ScuttleIfFlippedTime", m_ScuttleIfFlippedTime);
+	writer.NewPropertyWithValue("ScuttleOnDeath", m_ScuttleOnDeath);
 }
 
 int ACraft::Save(Writer& writer) const {

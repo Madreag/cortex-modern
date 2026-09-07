@@ -288,6 +288,7 @@ void ACRocket::DiscardPersistedSnapshotState() {
 
 int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return ACraft::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_MaxGimbalAngleRaw", { reader >> m_MaxGimbalAngle; });
 
 	MatchForwards("RLeg") MatchProperty("RightLeg", { SetRightLeg(dynamic_cast<Leg*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchForwards("LLeg") MatchProperty("LeftLeg", { SetLeftLeg(dynamic_cast<Leg*>(g_PresetMan.ReadReflectedPreset(reader))); });
@@ -342,6 +343,11 @@ int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 
 	EndPropertyList;
+}
+
+void ACRocket::SaveSnapshotConfiguration(Writer& writer) const {
+	ACraft::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_MaxGimbalAngleRaw", m_MaxGimbalAngle);
 }
 
 int ACRocket::Save(Writer& writer) const {

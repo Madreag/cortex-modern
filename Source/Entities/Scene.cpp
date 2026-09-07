@@ -1489,13 +1489,10 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("PositiveThrottleMultiplier", aemitterToSave->GetPositiveThrottleMultiplier());
 			writer.NewPropertyWithValue("Throttle", aemitterToSave->GetThrottle());
 			writer.NewPropertyWithValue("BurstScale", aemitterToSave->GetBurstScale());
-			writer.NewPropertyWithValue("BurstDamage", aemitterToSave->GetBurstDamage());
-			writer.NewPropertyWithValue("EmitterDamageMultiplier", aemitterToSave->GetEmitterDamageMultiplier());
 			writer.NewPropertyWithValue("BurstSpacing", aemitterToSave->GetBurstSpacing());
 			writer.NewPropertyWithValue("BurstTriggered", aemitterToSave->IsSetToBurst());
 			writer.NewPropertyWithValue("EmissionAngle", aemitterToSave->GetEmitAngleMatrix());
 			writer.NewPropertyWithValue("EmissionOffset", aemitterToSave->GetEmitOffset());
-			writer.NewPropertyWithValue("EmissionDamage", aemitterToSave->GetEmitDamage());
 			WriteHardcodedAttachableOrNone("Flash", aemitterToSave->GetFlash());
 		}
 
@@ -1575,6 +1572,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 		if (const Magazine* magazineToSave = dynamic_cast<const Magazine*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("RoundCount", magazineToSave->GetRoundCount());
+			writer.NewPropertyWithValue("SpecialBehaviour_FullCapacity", magazineToSave->GetCapacity());
 		}
 	}
 

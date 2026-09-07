@@ -103,6 +103,15 @@ int Leg::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+void Leg::SaveSnapshotConfiguration(Writer& writer) const {
+	Attachable::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("ContractedOffset", m_ContractedOffset);
+	writer.NewPropertyWithValue("ExtendedOffset", m_ExtendedOffset);
+	writer.NewPropertyWithValue("IdleOffset", m_IdleOffset);
+	writer.NewPropertyWithValue("WillIdle", m_WillIdle);
+	writer.NewPropertyWithValue("MoveSpeed", m_MoveSpeed);
+}
+
 int Leg::Save(Writer& writer) const {
 	Attachable::Save(writer);
 
