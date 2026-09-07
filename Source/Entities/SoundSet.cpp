@@ -20,6 +20,17 @@ SoundSet::~SoundSet() {
 	Destroy();
 }
 
+SoundSet& SoundSet::operator=(const SoundSet& reference) {
+	if (this != &reference) {
+		SoundSet copy(reference);
+		std::swap(m_SoundSelectionCycleMode, copy.m_SoundSelectionCycleMode);
+		std::swap(m_CurrentSelection, copy.m_CurrentSelection);
+		m_SoundData.swap(copy.m_SoundData);
+		m_SubSoundSets.swap(copy.m_SubSoundSets);
+	}
+	return *this;
+}
+
 void SoundSet::Clear() {
 	m_SoundSelectionCycleMode = SoundSelectionCycleMode::RANDOM;
 	m_CurrentSelection = {false, -1};
@@ -52,6 +63,8 @@ int SoundSet::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> soundSetToAdd;
 		AddSoundSet(soundSetToAdd);
 	});
+	MatchProperty("SpecialBehaviour_CurrentSelectionIsSet", { reader >> m_CurrentSelection.first; });
+	MatchProperty("SpecialBehaviour_CurrentSelectionIndex", { reader >> m_CurrentSelection.second; });
 
 	EndPropertyList;
 }
@@ -81,6 +94,8 @@ int SoundSet::Save(Writer& writer) const {
 	for (const SoundSet* subSoundSet: m_SubSoundSets) {
 		writer.NewPropertyWithValue("AddSoundSet", *subSoundSet);
 	}
+	writer.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIsSet", m_CurrentSelection.first);
+	writer.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIndex", m_CurrentSelection.second);
 
 	return 0;
 }

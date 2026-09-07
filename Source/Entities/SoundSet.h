@@ -33,6 +33,10 @@ namespace RTE {
 		/// Constructor method used to instantiate a SoundSet object in system memory. Create() should be called before using the object.
 		SoundSet();
 
+		/// Copies a sound set and its owned subsets.
+		SoundSet(const SoundSet& reference) { Clear(); Create(reference); }
+		SoundSet& operator=(const SoundSet& reference);
+
 		/// Creates a SoundSet to be identical to another, by deep copy.
 		/// @param reference A reference to the SoundSet to deep copy.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -45,6 +49,7 @@ namespace RTE {
 
 		/// Destroys and resets (through Clear()) the SoundSet object.
 		void Destroy();
+		void Reset() override { Destroy(); }
 #pragma endregion
 
 #pragma region INI Handling

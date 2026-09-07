@@ -56,6 +56,7 @@ CLASSES = {
     "Timer": SYSTEM,
     "PieMenu": ENTITIES,
     "PieSlice": ENTITIES,
+    "SoundSet": ENTITIES,
 }
 CLASSIFICATIONS = {
     "copied",
