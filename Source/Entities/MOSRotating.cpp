@@ -1629,6 +1629,7 @@ MovableObject* MOSRotating::FindPartByUniqueID(long uid) {
 
 void MOSRotating::ResolveFaithfulLinks() {
 	MOSprite::ResolveFaithfulLinks();
+	for (Gib* gib: m_Gibs) gib->ResolveParticlePreset();
 	if (!m_FaithfulAttachableOrder.empty()) {
 		std::unordered_map<long, size_t> rank;
 		for (size_t i = 0; i < m_FaithfulAttachableOrder.size(); ++i) {

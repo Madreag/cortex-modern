@@ -1,6 +1,7 @@
 #include "Gib.h"
 #include "PresetMan.h"
 #include "MovableObject.h"
+#include "MovableMan.h"
 
 using namespace RTE;
 
@@ -16,6 +17,7 @@ Gib::~Gib() {
 
 void Gib::Clear() {
 	m_GibParticle = nullptr;
+	m_PersistedParticleUniqueID = 0;
 	m_Offset.Reset();
 	m_Count = 1;
 	m_Spread = 0.1F;
@@ -30,6 +32,11 @@ void Gib::Clear() {
 
 int Gib::Create(const Gib& reference) {
 	m_GibParticle = reference.m_GibParticle;
+	m_PersistedParticleUniqueID = reference.m_PersistedParticleUniqueID;
+	if (MovableObject::IsFaithfulClone() && m_GibParticle && !m_GibParticle->IsOriginalPreset()) {
+		m_PersistedParticleUniqueID = m_GibParticle->GetUniqueID();
+		m_GibParticle = nullptr;
+	}
 	m_Offset = reference.m_Offset;
 	m_Count = reference.m_Count;
 	m_Spread = reference.m_Spread;
@@ -50,8 +57,10 @@ int Gib::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("GibParticle", {
 		m_GibParticle = dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset(reader));
 		RTEAssert(m_GibParticle, "Stream suggests allocating an unallocable type in Gib::Create!");
+		m_PersistedParticleUniqueID = 0;
 	});
-	MatchProperty("SpecialBehaviour_ClearParticle", { bool clear; reader >> clear; if (clear) m_GibParticle = nullptr; });
+	MatchProperty("SpecialBehaviour_ParticleUniqueID", { reader >> m_PersistedParticleUniqueID; m_GibParticle = nullptr; });
+	MatchProperty("SpecialBehaviour_ClearParticle", { bool clear; reader >> clear; if (clear) SetParticlePreset(nullptr); });
 	MatchProperty("Offset", { reader >> m_Offset; });
 	MatchProperty("Count", { reader >> m_Count; });
 	MatchProperty("Spread", { reader >> m_Spread; });
@@ -69,7 +78,10 @@ int Gib::ReadProperty(const std::string_view& propName, Reader& reader) {
 int Gib::Save(Writer& writer) const {
 	Serializable::Save(writer);
 
-	if (m_GibParticle) {
+	const long particleID = m_GibParticle && !m_GibParticle->IsOriginalPreset() ? m_GibParticle->GetUniqueID() : m_PersistedParticleUniqueID;
+	if (particleID > 0) {
+		writer.NewPropertyWithValue("SpecialBehaviour_ParticleUniqueID", particleID);
+	} else if (m_GibParticle && m_GibParticle->IsOriginalPreset()) {
 		writer.NewProperty("GibParticle");
 		writer.ObjectStart(m_GibParticle->GetClassName());
 		const Entity* preset = m_GibParticle->GetPresetForCopy();
@@ -90,4 +102,12 @@ int Gib::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("SpreadMode", m_SpreadMode);
 
 	return 0;
+}
+
+void Gib::ResolveParticlePreset() {
+	if (m_PersistedParticleUniqueID > 0) {
+		if (const MovableObject* particle = g_MovableMan.FindObjectByUniqueID(m_PersistedParticleUniqueID)) {
+			SetParticlePreset(particle);
+		}
+	}
 }
