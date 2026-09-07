@@ -144,8 +144,21 @@ function Create(self)
 	self.checkpoint.timer = Timer();
 	self.checkpoint.timerAlias = self.checkpoint.timer;
 	self.checkpoint.sound = CreateSoundContainer("Funds Changed", "Base.rte");
+	self.checkpoint.sound.PresetName = "Checkpoint Sound";
 	self.checkpoint.soundAlias = self.checkpoint.sound;
 	self.checkpoint.owned = CreateAHuman("Green Dummy", "Base.rte");
+	self.checkpoint.owned.PresetName = "Checkpoint Human";
+	self.checkpoint.owned.Description = "A renamed checkpoint actor\nWith two lines";
+	self.checkpoint.ownedGroups = {};
+	for group in self.checkpoint.owned.Groups do self.checkpoint.ownedGroups[#self.checkpoint.ownedGroups + 1] = group; end
+	for _, group in ipairs(self.checkpoint.ownedGroups) do self.checkpoint.owned:RemoveFromGroup(group); end
+	self.checkpoint.owned:AddToGroup("Checkpoint Group");
+	self.checkpoint.bareHuman = AHuman();
+	self.checkpoint.bareCrab = ACrab();
+	self.checkpoint.bareHuman.Health = 37;
+	self.checkpoint.bareCrab.Health = 53;
+	self.checkpoint.bareHuman.Pos = Vector(13, 17);
+	self.checkpoint.bareCrab.Pos = Vector(19, 23);
 	self.checkpoint.owned.Pos = Vector(10, 20);
 	self.checkpoint.owned.GlobalAccScalar = 0.25;
 	self.checkpoint.owned.GibImpulseLimit = 1000;
@@ -189,10 +202,15 @@ function Update(self)
 	assert(rawget(state.globals, self.UniqueID) == self.testUpdate, "checkpoint global numeric key state");
 	assert(state.vector == state.vectorAlias and state.vector.shared == state, "checkpoint vector identity");
 	assert(state.timer == state.timerAlias, "checkpoint timer identity");
-	assert(state.sound == state.soundAlias and state.sound:HasAnySounds(), "checkpoint sound identity");
+	assert(state.sound == state.soundAlias and state.sound:HasAnySounds() and state.sound.PresetName == "Checkpoint Sound", "checkpoint sound identity");
 	assert(state.wrap == state.wrapAlias, "checkpoint closure identity");
 	assert(state.engineState == math._CheckpointState and state.engineState[self.UniqueID] == self.testUpdate, "checkpoint engine table state");
 	assert(state.owned == state.ownedAlias and state.owned.shared == state, "checkpoint owned object identity");
+	assert(state.owned.PresetName == "Checkpoint Human" and state.owned.Description == "A renamed checkpoint actor\nWith two lines", "checkpoint renamed actor");
+	assert(state.owned:IsInGroup("Checkpoint Group"), "checkpoint added group");
+	for _, group in ipairs(state.ownedGroups) do assert(not state.owned:IsInGroup(group), "checkpoint removed group"); end
+	assert(state.bareHuman.Health == 37 and state.bareHuman.Pos.X == 13 and state.bareHuman.Pos.Y == 17, "checkpoint bare human");
+	assert(state.bareCrab.Health == 53 and state.bareCrab.Pos.X == 19 and state.bareCrab.Pos.Y == 23, "checkpoint bare crab");
 	assert(state.owned.UniqueID == state.ownedUID and not MovableMan:IsActor(state.owned), "checkpoint owned object lifetime");
 	assert(state.owned:GetNumberValue("CheckpointCount") == self.testUpdate, "checkpoint owned object state");
 	assert(state.ownedPos.X == self.testUpdate + 10, "checkpoint owned field alias");
