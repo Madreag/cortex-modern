@@ -118,10 +118,17 @@ local function verifyConfiguration(owned, values)
 end
 
 function Create(self)
+	if self:NumberValueExists("CheckpointSpawnChild") then
+		local stamp = 0;
+		for uid in pairs(math._CheckpointState) do stamp = stamp + uid; end
+		self:SetNumberValue("CheckpointSpawnVM", stamp);
+		self.Pos = Vector(80 + self.UniqueID % 97, 30 + stamp % 31);
+		return;
+	end
 	self.testCarried = self:GetNumberValue("TestUpdates");
 	self.testCreate = (self.testCreate or 0) + 1;
 	self.testUpdate = 0;
-	self.checkpoint = { count = 0 };
+	self.checkpoint = { count = 0, spawned = {} };
 	self.checkpoint.self = self.checkpoint;
 	self.checkpoint.alias = self.checkpoint;
 	self.checkpoint.globals = getfenv(0);
@@ -170,9 +177,11 @@ function Create(self)
 end
 
 function Update(self)
+	if self:NumberValueExists("CheckpointSpawnChild") then return; end
 	local state = self.checkpoint;
 	assert(state == state.self and state == state.alias, "checkpoint table identity");
 	assert(state.globals == getfenv(0) and rawget(state.globals, state.globalKey) == state, "checkpoint global table identity");
+	assert(rawget(state.globals, "_ScriptGraphCallbacks") == nil, "checkpoint callback capture escaped");
 	assert(rawget(state.globals, self.UniqueID) == self.testUpdate, "checkpoint global numeric key state");
 	assert(state.vector == state.vectorAlias and state.vector.shared == state, "checkpoint vector identity");
 	assert(state.timer == state.timerAlias, "checkpoint timer identity");
@@ -196,6 +205,12 @@ function Update(self)
 	local registeredDevice = MovableMan:FindObjectByUniqueID(state.device.UniqueID);
 	assert(registeredDevice and registeredDevice.PinStrength == 10000 + self.testUpdate, "checkpoint device registry");
 	local count = state.step();
+	if count == 20 then
+		local script = rawget(state.globals, "Userdata/UserScenes.rte/ScriptState/mod_checkpoint.lua");
+		assert(type(script) == "table", "checkpoint script function table");
+		script.Create = function() error("checkpoint cached Create rebound to global replacement"); end;
+		script.Update = function() error("checkpoint cached Update rebound to global replacement"); end;
+	end
 	assert(count == self.testUpdate + 1 and state.peek() == count, "checkpoint shared upvalue");
 	local ok, job = coroutine.resume(state.job);
 	assert(ok and job == count * 3, "checkpoint coroutine continuation");
@@ -225,6 +240,20 @@ function Update(self)
 		MovableMan:AddMO(state.deviceOwner);
 		state.deviceOwner = nil;
 		state.deviceResident = true;
+	end
+	if self.Team == 0 and self:IsInGroup("Brains") then
+		if count == 61 or count == 311 or count == 401 then
+			local child = CreateHDFirearm("Old Stock Battle Rifle", "Base.rte");
+			child:SetNumberValue("CheckpointSpawnChild", 1);
+			child.PinStrength = 10000;
+			assert(child:AddScript("UserScenes.rte/ScriptState/mod_checkpoint.lua"), "checkpoint child script load");
+			state.spawned[#state.spawned + 1] = child;
+			MovableMan:AddItem(child);
+			self:SetNumberValue("TestSpawnedUID", child.UniqueID);
+		end
+		local stamp = 0;
+		for _, child in ipairs(state.spawned) do stamp = stamp + child:GetNumberValue("CheckpointSpawnVM"); end
+		self:SetNumberValue("TestSpawnedVM", stamp);
 	end
 	self:SetNumberValue("TestUpdates", count);
 	self:SetNumberValue("TestCheckpointState", count + job + wrapped + state.vector.X + #word);
