@@ -180,6 +180,16 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 				std::fclose(recordFile);
 			}
 		}
+		wchar_t dumpPath[MAX_PATH];
+		const DWORD dumpPathLength = GetEnvironmentVariableW(L"CC_TEST_CRASH_DUMP", dumpPath, MAX_PATH);
+		if (dumpPathLength > 0 && dumpPathLength < MAX_PATH) {
+			HANDLE dumpFile = CreateFileW(dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (dumpFile != INVALID_HANDLE_VALUE) {
+				MINIDUMP_EXCEPTION_INFORMATION exceptionInfo{GetCurrentThreadId(), exceptPtr, FALSE};
+				MiniDumpWriteDump(processHandle, GetCurrentProcessId(), dumpFile, MiniDumpWithFullMemory, &exceptionInfo, nullptr, nullptr);
+				CloseHandle(dumpFile);
+			}
+		}
 	}
 
 	// A call through a corrupted pointer faults outside every module; the return addresses still on the stack name the caller.
