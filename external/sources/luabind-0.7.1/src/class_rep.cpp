@@ -418,6 +418,11 @@ int luabind::detail::class_rep::constructor_dispatcher(lua_State* L)
 {
 	class_rep* crep = static_cast<class_rep*>(lua_touserdata(L, 1));
 	construct_rep* rep = &crep->m_constructor;
+	if (rep->overloads.empty())
+	{
+		lua_pushfstring(L, "'%s' has no Lua constructor", crep->name());
+		return lua_error(L);
+	}
 
 	bool ambiguous = false;
 	int match_index = -1;
@@ -1644,4 +1649,3 @@ const class_rep::property_map& luabind::detail::class_rep::properties() const
 {
 	return m_getters;
 }
-
