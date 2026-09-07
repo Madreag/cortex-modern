@@ -10,6 +10,8 @@ namespace RTE {
 
 	/// A detachable arm that can hold HeldDevices.
 	class Arm : public Attachable {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(Arm);
@@ -239,6 +241,8 @@ namespace RTE {
 	private:
 		/// Struct for storing data about each target in the Arm's queue of HandTargets.
 		struct HandTarget {
+		friend struct ContractAudit;
+
 			/// Constructor method used to instantiate a HandTarget object in system memory.
 			HandTarget(const std::string_view& description, const Vector& targetOffset, float delayAtTarget, bool hFlippedWhenTargetWasCreated) :
 			    Description(description), TargetOffset(targetOffset), DelayAtTarget(delayAtTarget), HFlippedWhenTargetWasCreated(hFlippedWhenTargetWasCreated) {}

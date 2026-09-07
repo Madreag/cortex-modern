@@ -13,6 +13,8 @@ namespace RTE {
 
 	/// Something to bundle the properties of an emission together.
 	class Emission : public Entity {
+		friend struct ContractAudit;
+
 		friend class AEmitter;
 		friend class PEmitter;
 

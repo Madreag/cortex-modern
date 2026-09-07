@@ -10,6 +10,8 @@ namespace RTE {
 
 	/// Represents a material and holds all the relevant data.
 	class Material : public Entity {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(Material);

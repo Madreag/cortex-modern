@@ -14,6 +14,8 @@ namespace RTE {
 
 	/// An attachable MO that creates and emits particle MO's.
 	class AEmitter : public Attachable {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

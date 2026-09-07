@@ -70,6 +70,8 @@ namespace RTE {
 
 	/// The base class that specifies certain common creation/destruction patterns and simple reflection support for virtually all RTE classes.
 	class Entity : public Serializable {
+		friend struct ContractAudit;
+
 		friend class DataModule;
 
 	public:

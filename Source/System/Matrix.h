@@ -7,6 +7,8 @@ namespace RTE {
 
 	/// A 2x2 matrix to rotate 2D Vectors with.
 	class Matrix : public Serializable {
+		friend struct ContractAudit;
+
 
 	public:
 		SerializableClassNameGetter;

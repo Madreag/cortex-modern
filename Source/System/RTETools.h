@@ -22,6 +22,8 @@ namespace RTE {
 	extern void (*g_RNGDrawHook)(uint64_t drawCount);
 
 	class RandomGenerator {
+		friend struct ContractAudit;
+
 		std::mt19937 m_RNG; //!< The random number generator used for all random functions.
 		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
 		uint64_t m_DrawCount = 0; //!< Raw 32-bit draws consumed since construction; observational only.

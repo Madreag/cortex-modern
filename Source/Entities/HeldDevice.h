@@ -29,6 +29,8 @@ namespace RTE {
 	/// An articulated device that can be weilded by an Actor.
 	/// 01/31/2007 Made concrete so Shields can be jsut HeldDevice:s
 	class HeldDevice : public Attachable {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// A small animated sprite that plays its animation and changes the animation and playback speed when it collides with other things.
 	class MOSParticle : public MOSprite {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(MOSParticle);

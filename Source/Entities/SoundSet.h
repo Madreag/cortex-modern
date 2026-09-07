@@ -8,6 +8,8 @@ namespace RTE {
 
 	/// Self-contained struct defining an individual sound in a SoundSet.
 	struct SoundData {
+		friend struct ContractAudit;
+
 		ContentFile SoundFile;
 		FMOD::Sound* SoundObject;
 		Vector Offset = Vector();
@@ -17,6 +19,8 @@ namespace RTE {
 
 	/// A set of sounds, and their selection data.
 	class SoundSet : public Serializable {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 
 	public:

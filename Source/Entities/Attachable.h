@@ -9,6 +9,8 @@ namespace RTE {
 
 	/// An articulated, detachable part of an Actor's body.
 	class Attachable : public MOSRotating {
+		friend struct ContractAudit;
+
 		friend class MOSRotating;
 
 	public:

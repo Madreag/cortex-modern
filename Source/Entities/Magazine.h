@@ -13,6 +13,8 @@ namespace RTE {
 	/// An Attachable ammo magazine that can hold rounds that can be fired
 	/// by HDFirearm:s.
 	class Magazine : public Attachable {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

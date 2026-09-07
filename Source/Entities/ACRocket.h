@@ -18,6 +18,8 @@ namespace RTE {
 	/// means of steering.
 	/// 12/13/2006 ARocket changed names to ACRocket, parent changed to ACraft
 	class ACRocket : public ACraft {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 
 		enum LandingGearState {

@@ -86,6 +86,7 @@
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
+#include "ContractAudit.h"
 
 #include "RenderTarget.h"
 #include "tracy/Tracy.hpp"
@@ -133,6 +134,9 @@ static std::string s_saveIoSelfTestName;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
+static std::string s_contractAuditOperation;
+static long long s_contractAuditTick = 50;
+static bool s_contractAuditFinished = false;
 static std::string s_loadSelfTestName;
 static bool s_loadSelfTestExpected = false;
 static bool s_loadSelfTestPassed = false;
@@ -363,6 +367,7 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	if (!s_loadSelfTestName.empty() && !s_loadSelfTestPassed) exitCode = EXIT_FAILURE;
@@ -447,6 +452,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-save-catalog-selftest") {
 			s_saveCatalogSelfTest = true;
 			++i;
+			continue;
+		}
+		if (currentArg == "-contract-audit" && i + 1 < argCount) {
+			s_contractAuditOperation = argValue[i + 1];
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-contract-audit-tick" && i + 1 < argCount) {
+			s_contractAuditTick = std::stoll(argValue[i + 1]);
+			i += 2;
 			continue;
 		}
 		if ((currentArg == "-load-io-selftest" || currentArg == "-load-io-success-selftest") && i + 1 < argCount) {
@@ -2320,6 +2335,75 @@ void RunGameLoop() {
 			}
 			if (s_saveCatalogSelfTest && simTick > 0) {
 				SaveLoadMenuGUI::RunCatalogSelfTest();
+				System::SetQuit(true);
+				g_ActivityMan.EndActivity();
+				break;
+			}
+			if (!s_contractAuditOperation.empty() && simTick >= s_contractAuditTick) {
+				const std::string base = ScenarioRunner::GetArgs().outPath + ".contract";
+				const auto observe = [&](const std::string& suffix) {
+					for (int index = 0; index <= static_cast<int>(g_LuaMan.GetThreadedScriptStates().size()); ++index) {
+						g_LuaMan.GetStateByIndex(index).RunScriptString("if _ContractAuditCheck then _ContractAuditCheck('" + suffix + "') end");
+					}
+					auto state = ContractAudit::Observe(base + "." + suffix + ".gaps.txt");
+					ContractAudit::Write(ContractAudit::Identity(), base + "." + suffix + ".identity.txt");
+					ContractAudit::Write(state, base + "." + suffix + ".state.txt");
+					std::vector<std::string> graphs, problems;
+					const bool graph = g_MovableMan.SerializeScriptGraphs(graphs, problems);
+					for (const std::string& problem: problems) std::cout << "[contract-audit] graph-problem=" << suffix << " " << problem << std::endl;
+					for (size_t index = 0; index < graphs.size(); ++index) {
+						std::ofstream out(base + "." + suffix + ".lua" + std::to_string(index), std::ios::binary);
+						out << graphs[index];
+					}
+					std::ofstream deep(base + "." + suffix + ".simstate.txt");
+					g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), deep);
+					std::cout << "[contract-audit] observation=" << suffix << " fields=" << state.size() << " graph=" << graph << " problems=" << problems.size() << std::endl;
+					return state;
+				};
+				const auto before = observe("before");
+				bool prepared = true, applied = false;
+				if (s_contractAuditOperation == "observe") {
+					applied = true;
+				} else if (s_contractAuditOperation == "memory") {
+					MovableMan::WorldSnapshot snapshot;
+					prepared = g_MovableMan.CaptureWorld(snapshot);
+					const auto captured = observe("captured");
+					ContractAudit::Compare(before, captured, base + ".capture.diff.txt");
+					if (prepared) applied = g_MovableMan.RestoreWorld(snapshot);
+				} else if (s_contractAuditOperation == "hold") {
+					MovableMan::WorldSetAside held;
+					prepared = g_MovableMan.SetAsideWorld(held);
+					if (prepared) applied = g_MovableMan.ReinstateWorld(held);
+				} else if (s_contractAuditOperation == "preview") {
+					const auto count = LocalPrediction::GetPreviewCount();
+					LocalPrediction::SetCommandLineOverride(1);
+					LocalPrediction::SetDepthOverride(6);
+					LocalPrediction::Clear();
+					LocalPrediction::RunPreview();
+					LocalPrediction::Clear();
+					applied = LocalPrediction::GetPreviewCount() > count;
+				} else if (s_contractAuditOperation.starts_with("load:")) {
+					prepared = g_ActivityMan.LoadGameToRestart(s_contractAuditOperation.substr(5));
+					const auto staged = observe("staged");
+					ContractAudit::Compare(before, staged, base + ".staging.diff.txt");
+					if (prepared) applied = g_ActivityMan.RestartActivity();
+				} else {
+					prepared = g_ActivityMan.SaveCurrentGame("contract_audit") && g_ActivityMan.WaitForSaveGameTask();
+					const auto saved = observe("saved");
+					ContractAudit::Compare(before, saved, base + ".save.diff.txt");
+					if (prepared && s_contractAuditOperation == "file") {
+						for (int draw = 0; draw < 73; ++draw) g_SimRNG.RandomNum<uint32_t>();
+						applied = g_ActivityMan.LoadAndLaunchGame("contract_audit");
+					} else if (prepared && s_contractAuditOperation == "stage") {
+						applied = g_ActivityMan.LoadGameToRestart("contract_audit");
+					} else {
+						applied = prepared;
+					}
+				}
+				const auto after = observe("after");
+				const size_t differences = ContractAudit::Compare(before, after, base + ".diff.txt");
+				std::cout << "[contract-audit] complete operation=" << s_contractAuditOperation << " prepared=" << prepared << " applied=" << applied << " differences=" << differences << std::endl;
+				s_contractAuditFinished = true;
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
 				break;

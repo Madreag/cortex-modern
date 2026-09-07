@@ -28,6 +28,8 @@ namespace RTE {
 
 	/// Contains everything that defines a complete scene.
 	class Scene : public Entity {
+		friend struct ContractAudit;
+
 
 		friend struct EntityLuaBindings;
 
@@ -47,6 +49,8 @@ namespace RTE {
 		/// Something to bundle the properties of scene areas together
 		class Area :
 		    public Serializable {
+		friend struct ContractAudit;
+
 
 			friend class Scene;
 			friend class AreaEditorGUI;

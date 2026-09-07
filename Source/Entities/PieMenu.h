@@ -15,6 +15,8 @@ namespace RTE {
 
 	/// A PieMenu for managing interactions with objects and Actors.
 	class PieMenu : public Entity {
+		friend struct ContractAudit;
+
 
 		friend class PieSlice;
 

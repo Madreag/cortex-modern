@@ -6,6 +6,8 @@ namespace RTE {
 
 	/// A device that is carried and thrown by Actors.
 	class ThrownDevice : public HeldDevice {
+		friend struct ContractAudit;
+
 
 	public:
 		EntityAllocation(ThrownDevice);

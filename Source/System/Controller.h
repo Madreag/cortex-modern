@@ -83,6 +83,8 @@ namespace RTE {
 
 	/// A class controlling MovableObjects through either player input, networking, scripting, AI, etc.
 	class Controller {
+		friend struct ContractAudit;
+
 
 	public:
 		Vector m_AnalogMove; //!< Analog values for movement.

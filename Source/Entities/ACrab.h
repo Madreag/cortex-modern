@@ -18,6 +18,8 @@ namespace RTE {
 
 	/// A crab-like actor with four legs.
 	class ACrab : public Actor {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 
 		enum Side {

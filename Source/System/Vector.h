@@ -14,6 +14,8 @@ namespace RTE {
 
 	/// A useful 2D float vector.
 	class Vector : public Serializable {
+		friend struct ContractAudit;
+
 
 	public:
 		SerializableClassNameGetter;

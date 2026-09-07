@@ -31,6 +31,8 @@ namespace RTE {
 
 	/// A movable object with mass.
 	class MovableObject : public SceneObject {
+		friend struct ContractAudit;
+
 
 		friend class Atom;
 		friend struct EntityLuaBindings;
@@ -1329,6 +1331,8 @@ namespace RTE {
 		bool m_ForceIntoMasterLuaState; //!< This is awful, and only exists for automovers because they mangle global state all over the place. TODO - change automovers to use messages.
 
 		struct LuaFunction {
+		friend struct ContractAudit;
+
 			bool m_ScriptIsEnabled; //!< Whether this function is in an enabled script.
 			std::unique_ptr<LuabindObjectWrapper> m_LuaFunction; //!< The lua function itself.
 		};

@@ -48,6 +48,8 @@ namespace RTE {
 
 	/// The singleton manager of all terrain and backgrounds in the RTE.
 	class SceneMan : public Singleton<SceneMan>, public Serializable {
+		friend struct ContractAudit;
+
 		friend class SettingsMan;
 
 		/// Public member variable, method and friend function declarations

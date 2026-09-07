@@ -17,6 +17,8 @@ namespace RTE {
 
 	/// Scripted activity
 	class GAScripted : public GameActivity {
+		friend struct ContractAudit;
+
 
 		friend class LuaMan;
 		friend class LuaStateWrapper;

@@ -17,6 +17,8 @@ namespace RTE {
 	/// (GetSimTickCount / GetSimUpdateCount / GetSimTimeMS / GetDeltaTime*). The Real family
 	/// (GetAbsoluteTime / GetRealTickCount) is wall-clock and drifts with host frame rate.
 	class TimerMan : public Singleton<TimerMan> {
+		friend struct ContractAudit;
+
 
 	public:
 #pragma region Creation

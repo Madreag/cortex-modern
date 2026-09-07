@@ -29,11 +29,15 @@ namespace RTE {
 
 	/// Base class for all GameActivity:s, including game modes and editors.
 	class GameActivity : public Activity {
+		friend struct ContractAudit;
+
 
 		friend struct ActivityLuaBindings;
 
 		// Keeps track of everything about a delivery in transit after purchase has been made with the menu
 		struct Delivery {
+		friend struct ContractAudit;
+
 			// OWNED by this until the delivery is made!
 			ACraft* pCraft;
 			// Which player ordered this delivery
@@ -306,6 +310,8 @@ namespace RTE {
 
 		/// One committed purchase: everything QueuePurchaseDelivery needs to build and queue the delivery.
 		struct PurchaseOrder {
+		friend struct ContractAudit;
+
 			std::list<const SceneObject*> purchases; //!< Item presets to clone into the craft; not owned.
 			int team = Teams::NoTeam;
 			int passengerAIMode = Actor::AIMODE_SENTRY;
@@ -494,6 +500,8 @@ namespace RTE {
 
 		/// A struct to keep all data about a mission objective.
 		struct ObjectivePoint {
+		friend struct ContractAudit;
+
 			ObjectivePoint() {
 				m_Description.clear();
 				m_ScenePos.Reset();

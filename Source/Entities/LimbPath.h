@@ -17,6 +17,8 @@ namespace RTE {
 	/// A set of Vector:s making up a motion path for a AtomGroup's limb. The
 	/// path is continuous.
 	class LimbPath : public Entity {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

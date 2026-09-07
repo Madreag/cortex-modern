@@ -14,6 +14,8 @@ namespace RTE {
 	/// A hovering craft, with two engines on each attached on each end which
 	/// tilt independently of the body to achieve steering.
 	class ACDropShip : public ACraft {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

@@ -15,6 +15,8 @@ namespace RTE {
 	/// The base class shared by Both TerrainObject:s and MovableObject:s, ie
 	/// anything that can be places in a scene.
 	class SceneObject : public Entity {
+		friend struct ContractAudit;
+
 
 		/// Public member variable, method and friend function declarations
 	public:

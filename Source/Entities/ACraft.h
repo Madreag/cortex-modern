@@ -16,6 +16,8 @@ namespace RTE {
 
 	/// A flying Actor which carries other things and can drop them.
 	class ACraft : public Actor {
+		friend struct ContractAudit;
+
 		friend struct EntityLuaBindings;
 
 		/// Public member variable, method and friend function declarations
@@ -40,6 +42,8 @@ namespace RTE {
 		/// Something to bundle the properties of ACraft exits together.
 		class Exit :
 		    public Serializable {
+		friend struct ContractAudit;
+
 
 			friend class ACraft;
 

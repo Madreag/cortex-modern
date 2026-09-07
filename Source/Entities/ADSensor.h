@@ -9,6 +9,8 @@ namespace RTE {
 
 	/// The ray-casting sensor which triggers the door opening or closing, depending on the team of the Actor that broke the ray.
 	class ADSensor : public Serializable {
+		friend struct ContractAudit;
+
 
 	public:
 		SerializableClassNameGetter;
