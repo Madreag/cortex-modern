@@ -101,6 +101,7 @@ namespace RTE {
 		static const std::string& GetControllerReplayError();
 
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator);
+		static bool FinishLockstepSimulationTick(uint64_t completedTick);
 
 		/// Enable the "waiting for peer" overlay drawn while the lockstep wait is stalled. Interactive
 		/// matches only — automated runs keep their output clean and have no visible window.

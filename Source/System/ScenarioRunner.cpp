@@ -514,6 +514,10 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning();
 	}
 
+	bool ScenarioRunner::FinishLockstepSimulationTick(uint64_t completedTick) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->FinishSimulationTick(completedTick);
+	}
+
 	bool ScenarioRunner::HasLockstepCoordinator() {
 		return s_LockstepCoordinator != nullptr;
 	}

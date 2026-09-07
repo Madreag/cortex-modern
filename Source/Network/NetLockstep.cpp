@@ -1150,6 +1150,8 @@ namespace RTE {
 		m_RemotePeerIds = std::move(remotePeerIds);
 		m_RemoteTransports = std::move(remoteTransports);
 		m_RelayHost = config.relayToOtherPeers;
+		m_DeferRecoveryStops = false;
+		m_PendingRecoveryStop.reset();
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
@@ -1204,6 +1206,8 @@ namespace RTE {
 		m_RemotePeerIds.clear();
 		m_RemoteTransports.clear();
 		m_RelayHost = false;
+		m_DeferRecoveryStops = false;
+		m_PendingRecoveryStop.reset();
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
@@ -1361,7 +1365,7 @@ namespace RTE {
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
 			if (localIt->second != hash) {
-				Fail(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame) + " (" + DescribePeer(peerId) + ")");
+				ScheduleRecoveryStop(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame) + " (" + DescribePeer(peerId) + ")");
 				return;
 			}
 		}
@@ -1430,6 +1434,10 @@ namespace RTE {
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		if (m_DeferRecoveryStops) {
+			ScheduleRecoveryStop(NetLockstepStopReason::ResyncRequested, m_Stats.nextFrame, message);
+			return;
+		}
 		if (m_Transport) {
 			NetLockstepStop stop;
 			stop.senderPeerId = m_Config.localPeerId;
@@ -1441,6 +1449,28 @@ namespace RTE {
 		}
 		m_State = NetLockstepState::Failed;
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::ResyncRequested)) + ":" + message;
+	}
+
+	void NetLockstepCoordinator::ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message) {
+		if (!m_DeferRecoveryStops) {
+			Fail(reason, frame, message);
+			return;
+		}
+		if (m_PendingRecoveryStop || !IsRunning()) return;
+		m_PendingRecoveryStop = NetLockstepStop{m_Config.localPeerId, reason, frame, message};
+		if (m_Config.localPeerId != m_Config.matchConfig.hostPeerId) {
+			// A client requests the stop while continuing to supply the host's current tick.
+			std::string ignored;
+			(void)SendPacket({*m_PendingRecoveryStop}, NetTransportLane::ControlReliable, &ignored);
+		}
+	}
+
+	bool NetLockstepCoordinator::FinishSimulationTick(uint64_t completedTick) {
+		if (!m_DeferRecoveryStops || !m_PendingRecoveryStop || !IsRunning() || m_Config.localPeerId != m_Config.matchConfig.hostPeerId) return false;
+		const NetLockstepStop stop = *m_PendingRecoveryStop;
+		m_PendingRecoveryStop.reset();
+		Fail(stop.reason, completedTick + 1, stop.message);
+		return true;
 	}
 
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
@@ -1870,6 +1900,12 @@ namespace RTE {
 	void NetLockstepCoordinator::HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport) {
 		if (!SenderOwnsTransport(stop.senderPeerId, fromTransport)) {
 			std::cout << "[lockstep] dropped a stop claiming peer " << static_cast<int>(stop.senderPeerId) << " from the wrong transport" << std::endl;
+			return;
+		}
+		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
+		if (m_DeferRecoveryStops && stop.senderPeerId != m_Config.matchConfig.hostPeerId &&
+		    (stop.reason == NetLockstepStopReason::Desync || stop.reason == NetLockstepStopReason::ResyncRequested)) {
+			ScheduleRecoveryStop(stop.reason, stop.frame, stop.message);
 			return;
 		}
 		if (stop.reason == NetLockstepStopReason::PeerLeft) {
