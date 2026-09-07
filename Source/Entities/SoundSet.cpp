@@ -79,10 +79,7 @@ int SoundSet::Save(Writer& writer) const {
 	}
 
 	for (const SoundSet* subSoundSet: m_SubSoundSets) {
-		writer.NewProperty("AddSoundSet");
-		writer.ObjectStart("SoundSet");
-		writer << *subSoundSet;
-		writer.ObjectEnd();
+		writer.NewPropertyWithValue("AddSoundSet", *subSoundSet);
 	}
 
 	return 0;
