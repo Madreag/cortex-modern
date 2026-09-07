@@ -135,6 +135,7 @@ namespace RTE {
 		} else if (const Entity* preset = GetPresetForCopy()) {
 			writer.NewPropertyWithValue("CopyOf", preset->GetModuleAndPresetName());
 		}
+		if (writer.IsSnapshot()) SaveSnapshotIdentity(writer);
 
 		// TODO: Make proper save system that knows not to save redundant data!
 		/*

@@ -96,7 +96,14 @@ int Emission::Save(Writer& writer) const {
 	Serializable::Save(writer);
 
 	writer.NewProperty("EmittedParticle");
-	writer << m_pEmission;
+	if (writer.IsSnapshot() && m_pEmission) {
+		writer.ObjectStart(m_pEmission->GetClassName());
+		const Entity* preset = m_pEmission->GetPresetForCopy();
+		writer.NewPropertyWithValue("CopyOf", preset ? preset->GetModuleAndPresetName() : m_pEmission->GetModuleAndPresetName());
+		writer.ObjectEnd();
+	} else {
+		writer << m_pEmission;
+	}
 	writer.NewProperty("ParticlesPerMinute");
 	writer << m_PPM;
 	writer.NewProperty("BurstSize");

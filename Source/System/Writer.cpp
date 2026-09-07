@@ -12,6 +12,7 @@ void Writer::Clear() {
 	m_FolderPath.clear();
 	m_FileName.clear();
 	m_IndentCount = 0;
+	m_Snapshot = false;
 }
 
 Writer::Writer(const std::string& fileName, bool append, bool createDir) {

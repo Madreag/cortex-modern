@@ -1230,6 +1230,7 @@ int Scene::Save(Writer& writer) const {
 }
 
 void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) const {
+	Writer::SnapshotScope snapshotScope(writer, saveFullData);
 	auto WriteHardcodedAttachableOrNone = [this, &writer, &saveFullData](const std::string& propertyName, const Attachable* harcodedAttachable) {
 		if (harcodedAttachable) {
 			writer.NewProperty(propertyName);

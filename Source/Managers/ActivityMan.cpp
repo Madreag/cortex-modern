@@ -185,6 +185,7 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 	// Block the main thread for a bit to let the Writer access the relevant data.
 	auto writer = std::make_shared<Writer>(std::move(iniStream));
+	Writer::SnapshotScope snapshotScope(*writer);
 	writer->NewPropertyWithValue("Activity", activity);
 
 	// Pull all stuff from MovableMan into the Scene for saving, so existing Actors/ADoors are saved, without transferring ownership, so the game can continue.
