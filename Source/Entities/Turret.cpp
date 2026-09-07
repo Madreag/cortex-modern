@@ -35,11 +35,11 @@ int Turret::Create(const Turret& reference) {
 }
 
 void Turret::Destroy(bool notInherited) {
-	if (!notInherited) {
-		Attachable::Destroy();
-	}
 	for (const HeldDevice* mountedDevice: m_MountedDevices) {
 		m_HardcodedAttachableUniqueIDsAndRemovers.erase(mountedDevice->GetUniqueID());
+	}
+	if (!notInherited) {
+		Attachable::Destroy();
 	}
 	Clear();
 }
