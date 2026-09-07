@@ -222,6 +222,39 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestReadyRequiresAcceptedConnection(std::string* error) {
+			ScriptedHostTransport transport;
+			NetSession host;
+			const NetSessionConfig config = MakeConfig(42207, 1501, "Host");
+			if (!host.StartHost(transport, config, error)) return false;
+			NetMessage ready;
+			ready.payload = NetReadyState{0, true, config.localIdentity.deterministicConfigHash, config.localIdentity.moduleManifestHash};
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode(ready, bytes)) return false;
+			transport.Push({NetTransportEventType::PeerConnected, 300, NetTransportLane::ControlReliable, {}, ""});
+			transport.Push({NetTransportEventType::PacketReceived, 300, NetTransportLane::ControlReliable, bytes, ""});
+			host.Tick(0);
+			if (host.GetState() != NetSessionState::Listening || host.GetReadyPeerCount() != 0 ||
+			    !host.HasReject() || host.GetRejectReason() != NetRejectReason::HostNotAccepting) {
+				*error = "Ready bypassed the connection handshake";
+				return false;
+			}
+			transport.Push({NetTransportEventType::PacketReceived, 300, NetTransportLane::ControlReliable, bytes, ""});
+			host.Tick(10);
+			if (host.GetState() != NetSessionState::Listening || host.GetReadyPeerCount() != 0) {
+				*error = "late Ready revived a rejected connection";
+				return false;
+			}
+			transport.Push({NetTransportEventType::LocalTransportFault, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "pump failed"});
+			transport.Push({NetTransportEventType::PeerConnected, 301, NetTransportLane::ControlReliable, {}, ""});
+			host.Tick(20);
+			if (!host.IsFailed()) {
+				*error = "a connection event cleared the local transport failure";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestRejectCase(const std::string& name, const std::function<void(NetSessionConfig&)>& mutateClient, NetRejectReason expectedReason, const std::string& expectedKey, std::string* error) {
 			static uint16_t nextPort = 42100;
 			const uint16_t port = nextPort++;
@@ -449,11 +482,17 @@ namespace RTE {
 				return false;
 			}
 			host.Tick(10);
-			if (!host.IsRejected() || host.GetRejectReason() != NetRejectReason::MalformedMessage || host.GetStats().malformedMessages != 1) {
+			if (host.GetState() != NetSessionState::Listening || !host.HasReject() ||
+			    host.GetRejectReason() != NetRejectReason::MalformedMessage || host.GetStats().malformedMessages != 1) {
 				*error = "malformed handshake did not produce MalformedMessage";
 				return false;
 			}
-			return true;
+			LoopbackTransport replacementTransport;
+			NetSession replacement;
+			if (!replacement.StartClient(replacementTransport, "loopback", MakeConfig(port, 902, "Replacement"), error)) return false;
+			return DrivePair(hostTransport, replacementTransport, host, replacement, [&] {
+				return host.IsReady() && replacement.IsReady() && host.GetReadyPeerCount() == 1;
+			}, error);
 		}
 
 		bool TestTimeout(std::string* error) {
@@ -469,17 +508,23 @@ namespace RTE {
 			}
 			for (uint64_t now = 0; now <= 200; now += 10) {
 				host.Tick(now);
-				if (host.IsRejected() || host.IsFailed()) {
+				if (host.GetStats().timeouts > 0) {
 					break;
 				}
 				hostTransport.AdvanceTimeMs(10);
 				rawClient.AdvanceTimeMs(10);
 			}
-			if ((!host.IsRejected() && !host.IsFailed()) || host.GetRejectReason() != NetRejectReason::Timeout || host.GetStats().timeouts != 1) {
+			if (host.GetState() != NetSessionState::Listening || !host.HasReject() ||
+			    host.GetRejectReason() != NetRejectReason::Timeout || host.GetStats().timeouts != 1) {
 				*error = "timeout path did not record Timeout";
 				return false;
 			}
-			return true;
+			LoopbackTransport replacementTransport;
+			NetSession replacement;
+			if (!replacement.StartClient(replacementTransport, "loopback", MakeConfig(port, 1002, "Replacement"), error)) return false;
+			return DrivePair(hostTransport, replacementTransport, host, replacement, [&] {
+				return host.IsReady() && replacement.IsReady() && host.GetReadyPeerCount() == 1;
+			}, error);
 		}
 
 		bool TestLatencyAndCleanDisconnect(std::string* error) {
@@ -500,10 +545,21 @@ namespace RTE {
 				return false;
 			}
 			client.Close("done");
-			if (!DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsClosed() && client.IsClosed(); }, error, 1000)) {
+			if (!DrivePair(hostTransport, clientTransport, host, client, [&] { return host.GetState() == NetSessionState::Listening && client.IsClosed(); }, error, 1000)) {
 				return false;
 			}
-			return true;
+			const uint64_t sessionId = host.GetSessionId();
+			if (!client.StartClient(clientTransport, "loopback", MakeConfig(port, 1201, "Replacement"), error) ||
+			    !DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error, 2000)) {
+				return false;
+			}
+			if (client.GetLocalPeerId() != 1 || client.GetSessionId() != sessionId || host.GetReadyPeerCount() != 1 ||
+			    host.GetReadyPeers().front().displayName != "Replacement") {
+				*error = "replacement did not reuse the vacant seat in the same session";
+				return false;
+			}
+			host.Close("host ended lobby");
+			return DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsClosed() && client.IsClosed(); }, error, 1000);
 		}
 	}
 
@@ -516,6 +572,7 @@ namespace RTE {
 		std::string error;
 		if (!TestHappyPath(&error)) return fail(error);
 		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
+		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
 		if (!TestDuplicateNonce(&error)) return fail(error);
