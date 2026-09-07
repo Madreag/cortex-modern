@@ -428,6 +428,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedHeldDeviceRuntime;
+		std::string SaveHeldDeviceRuntime() const;
+		bool LoadHeldDeviceRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this HeldDevice, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

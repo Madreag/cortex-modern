@@ -1,4 +1,6 @@
 #include "HeldDevice.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 #include "RTETools.h"
 
 #include "CameraMan.h"
@@ -28,6 +30,7 @@ HeldDevice::~HeldDevice() {
 }
 
 void HeldDevice::Clear() {
+	m_PersistedHeldDeviceRuntime.clear();
 	m_HeldDeviceType = WEAPON;
 	m_Activated = false;
 	m_HotkeyActivated.fill(false);
@@ -150,11 +153,17 @@ int HeldDevice::Create(const HeldDevice& reference) {
 	m_GetsHitByMOsWhenHeld = reference.m_GetsHitByMOsWhenHeld;
 	m_VisualRecoilMultiplier = reference.m_VisualRecoilMultiplier;
 
+	m_PersistedHeldDeviceRuntime = reference.m_PersistedHeldDeviceRuntime;
+	if (IsFaithfulClone() && m_PersistedHeldDeviceRuntime.empty()) m_PersistedHeldDeviceRuntime = reference.SaveHeldDeviceRuntime();
 	return 0;
 }
 
 int HeldDevice::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Attachable::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_HeldDeviceRuntime", {
+		m_PersistedHeldDeviceRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadHeldDeviceRuntime(m_PersistedHeldDeviceRuntime, true)) reader.ReportError("invalid HeldDevice runtime checkpoint");
+	});
 
 	MatchProperty("HeldDeviceType", { reader >> m_HeldDeviceType; });
 	MatchProperty("OneHanded", { reader >> m_OneHanded; });
@@ -216,11 +225,16 @@ int HeldDevice::ReadProperty(const std::string_view& propName, Reader& reader) {
 void HeldDevice::AdoptPersistedUniqueID() {
 	Attachable::AdoptPersistedUniqueID();
 	m_PersistedActivationTimerAnchor.Apply(m_ActivationTimer);
+	if (!m_PersistedHeldDeviceRuntime.empty()) {
+		if (!LoadHeldDeviceRuntime(m_PersistedHeldDeviceRuntime)) throw std::runtime_error("could not restore HeldDevice runtime checkpoint");
+		m_PersistedHeldDeviceRuntime.clear();
+	}
 }
 
 void HeldDevice::DiscardPersistedSnapshotState() {
 	Attachable::DiscardPersistedSnapshotState();
 	m_PersistedActivationTimerAnchor.pending = false;
+	m_PersistedHeldDeviceRuntime.clear();
 }
 
 void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
@@ -248,6 +262,7 @@ void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
 	for (const std::string& preset: pickupableBy) {
 		writer.NewPropertyWithValue("SpecialBehaviour_PickupableByPreset", preset);
 	}
+	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", base64_encode(m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime, true));
 }
 
 int HeldDevice::Save(Writer& writer) const {
@@ -545,4 +560,25 @@ void HeldDevice::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 			}
 		}
 	}
+}
+
+std::string HeldDevice::SaveHeldDeviceRuntime() const {
+	CheckpointWriter archive("HeldDeviceRuntime1");
+	archive(m_HeldDeviceType, m_Activated, m_HotkeyActivated, m_ActivationTimer, m_HotkeyActivationTimer, m_OneHanded, m_DualWieldable);
+	archive(m_StanceOffset, m_SharpStanceOffset, m_SupportOffset, m_UseSupportOffsetWhileReloading, m_SharpAim, m_MaxSharpLength, m_Supportable);
+	archive(m_Supported, m_SupportAvailable, m_IsUnPickupable, m_SeenByPlayer, m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
+	archive(m_IsExplosiveWeapon, m_GetsHitByMOsWhenHeld, m_VisualRecoilMultiplier);
+	return archive.Text();
+}
+
+bool HeldDevice::LoadHeldDeviceRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "HeldDeviceRuntime1", validateOnly);
+		archive(m_HeldDeviceType, m_Activated, m_HotkeyActivated, m_ActivationTimer, m_HotkeyActivationTimer, m_OneHanded, m_DualWieldable);
+		archive(m_StanceOffset, m_SharpStanceOffset, m_SupportOffset, m_UseSupportOffsetWhileReloading, m_SharpAim, m_MaxSharpLength, m_Supportable);
+		archive(m_Supported, m_SupportAvailable, m_IsUnPickupable, m_SeenByPlayer, m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
+		archive(m_IsExplosiveWeapon, m_GetsHitByMOsWhenHeld, m_VisualRecoilMultiplier);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

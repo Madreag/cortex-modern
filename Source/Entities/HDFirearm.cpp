@@ -1,4 +1,6 @@
 #include "HDFirearm.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include "ActivityMan.h"
 #include "CameraMan.h"
@@ -25,6 +27,7 @@ HDFirearm::~HDFirearm() {
 }
 
 void HDFirearm::Clear() {
+	m_PersistedHDFirearmRuntime.clear();
 	m_pMagazineReference = 0;
 	m_pMagazine = 0;
 
@@ -177,11 +180,17 @@ int HDFirearm::Create(const HDFirearm& reference) {
 		m_AIBulletLifeTime = reference.m_AIBulletLifeTime;
 		m_AIBulletAccScalar = reference.m_AIBulletAccScalar;
 	}
+	m_PersistedHDFirearmRuntime = reference.m_PersistedHDFirearmRuntime;
+	if (IsFaithfulClone() && m_PersistedHDFirearmRuntime.empty()) m_PersistedHDFirearmRuntime = reference.SaveHDFirearmRuntime();
 	return 0;
 }
 
 int HDFirearm::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return HeldDevice::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_HDFirearmRuntime", {
+		m_PersistedHDFirearmRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadHDFirearmRuntime(m_PersistedHDFirearmRuntime, true)) reader.ReportError("invalid HDFirearm runtime checkpoint");
+	});
 
 	MatchProperty("Magazine", { SetMagazine(dynamic_cast<Magazine*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchProperty("Flash", { SetFlash(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });
@@ -324,12 +333,17 @@ void HDFirearm::AdoptPersistedUniqueID() {
 	HeldDevice::AdoptPersistedUniqueID();
 	m_PersistedLastFireTimerAnchor.Apply(m_LastFireTmr);
 	m_PersistedReloadTimerAnchor.Apply(m_ReloadTmr);
+	if (!m_PersistedHDFirearmRuntime.empty()) {
+		if (!LoadHDFirearmRuntime(m_PersistedHDFirearmRuntime)) throw std::runtime_error("could not restore HDFirearm runtime checkpoint");
+		m_PersistedHDFirearmRuntime.clear();
+	}
 }
 
 void HDFirearm::DiscardPersistedSnapshotState() {
 	HeldDevice::DiscardPersistedSnapshotState();
 	m_PersistedLastFireTimerAnchor.pending = false;
 	m_PersistedReloadTimerAnchor.pending = false;
+	m_PersistedHDFirearmRuntime.clear();
 }
 
 void HDFirearm::SaveSnapshotConfiguration(Writer& writer) const {
@@ -367,6 +381,7 @@ void HDFirearm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_EmptySound", m_EmptySound);
 	writer.NewPropertyWithValue("SpecialBehaviour_ReloadStartSound", m_ReloadStartSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_ReloadEndSound", m_ReloadEndSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_HDFirearmRuntime", base64_encode(m_PersistedHDFirearmRuntime.empty() ? SaveHDFirearmRuntime() : m_PersistedHDFirearmRuntime, true));
 }
 
 int HDFirearm::Save(Writer& writer) const {
@@ -1199,4 +1214,29 @@ std::string HDFirearm::DescribeFireGate() const {
 	              static_cast<long long>(m_LastFireTmr.GetStartSimTimeMS()), static_cast<long long>(m_ActivationTimer.GetStartSimTimeMS()),
 	              (m_PreFireSound && m_PreFireSound->IsBeingPlayed()) ? 1 : 0, m_FireFrame ? 1 : 0, m_FiredLastFrame ? 1 : 0);
 	return std::string(buffer);
+}
+
+std::string HDFirearm::SaveHDFirearmRuntime() const {
+	CheckpointWriter archive("HDFirearmRuntime1");
+	archive(m_ReloadEndOffset, m_HasPlayedEndReloadSound, m_RateOfFire, m_ActivationDelay, m_DeactivationDelay, m_Reloading, m_DoneReloading);
+	archive(m_BaseReloadTime, m_FullAuto, m_FireIgnoresThis, m_Reloadable, m_OneHandedReloadTimeMultiplier, m_DualReloadable, m_ReloadAngle);
+	archive(m_OneHandedReloadAngle, m_LastFireTmr, m_ReloadTmr, m_MuzzleOff, m_EjectOff, m_MagOff, m_ShakeRange);
+	archive(m_SharpShakeRange, m_NoSupportFactor, m_ParticleSpreadRange, m_ShellEjectAngle, m_ShellSpreadRange, m_ShellAngVelRange, m_ShellVelVariation);
+	archive(m_RecoilScreenShakeAmount, m_AIFireVel, m_AIBulletLifeTime, m_AIBulletAccScalar, m_FiredOnce, m_FireFrame, m_FiredLastFrame);
+	archive(m_AlreadyClicked, m_RoundsFired, m_IsAnimatedManually, m_LegacyCompatibilityRoundsAlwaysFireUnflipped);
+	return archive.Text();
+}
+
+bool HDFirearm::LoadHDFirearmRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "HDFirearmRuntime1", validateOnly);
+		archive(m_ReloadEndOffset, m_HasPlayedEndReloadSound, m_RateOfFire, m_ActivationDelay, m_DeactivationDelay, m_Reloading, m_DoneReloading);
+		archive(m_BaseReloadTime, m_FullAuto, m_FireIgnoresThis, m_Reloadable, m_OneHandedReloadTimeMultiplier, m_DualReloadable, m_ReloadAngle);
+		archive(m_OneHandedReloadAngle, m_LastFireTmr, m_ReloadTmr, m_MuzzleOff, m_EjectOff, m_MagOff, m_ShakeRange);
+		archive(m_SharpShakeRange, m_NoSupportFactor, m_ParticleSpreadRange, m_ShellEjectAngle, m_ShellSpreadRange, m_ShellAngVelRange, m_ShellVelVariation);
+		archive(m_RecoilScreenShakeAmount, m_AIFireVel, m_AIBulletLifeTime, m_AIBulletAccScalar, m_FiredOnce, m_FireFrame, m_FiredLastFrame);
+		archive(m_AlreadyClicked, m_RoundsFired, m_IsAnimatedManually, m_LegacyCompatibilityRoundsAlwaysFireUnflipped);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

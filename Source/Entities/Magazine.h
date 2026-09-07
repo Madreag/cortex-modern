@@ -18,6 +18,8 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		void DiscardPersistedSnapshotState() override;
+		void AdoptPersistedUniqueID() override;
 		// Concrete allocation and cloning definitions
 		EntityAllocation(Magazine);
 		SerializableOverrideMethods;
@@ -156,6 +158,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedMagazineRuntime;
+		std::string SaveMagazineRuntime() const;
+		bool LoadMagazineRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this Magazine, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

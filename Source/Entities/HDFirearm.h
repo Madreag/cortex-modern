@@ -636,6 +636,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedHDFirearmRuntime;
+		std::string SaveHDFirearmRuntime() const;
+		bool LoadHDFirearmRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Ensures the reload Timer's time limit is set accordingly, based on whether the HDFirearm has support available.
 		void CorrectReloadTimerForSupportAvailable() { m_ReloadTmr.SetSimTimeLimitMS(static_cast<double>(static_cast<float>(m_BaseReloadTime) * (m_SupportAvailable ? 1.0F : m_OneHandedReloadTimeMultiplier))); }
 
