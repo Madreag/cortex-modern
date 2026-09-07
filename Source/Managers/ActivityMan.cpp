@@ -19,6 +19,8 @@
 #include "SaveGameArchive.h"
 
 #include "GAScripted.h"
+#include "GlobalScript.h"
+#include "ACraft.h"
 #include "SLTerrain.h"
 
 #include "EditorActivity.h"
@@ -451,6 +453,64 @@ bool ActivityMan::RunSaveCallbacksSelfTest() {
 	const bool passed = callback && loaded && images && scene && objects && activityState && repeated;
 	std::cout << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
 	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated << std::endl;
+	return passed;
+}
+
+bool ActivityMan::RunGlobalCallbacksSelfTest() {
+	const auto findScript = [this]() -> GlobalScript* {
+		if (auto* activity = dynamic_cast<GAScripted*>(GetActivity())) {
+			for (GlobalScript* script: activity->GetGlobalScripts()) {
+				if (script->GetPresetName() == "Checkpoint Global") return script;
+			}
+		}
+		return nullptr;
+	};
+	GlobalScript* script = findScript();
+	const auto* craftPreset = g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte");
+	const auto* scriptPreset = g_PresetMan.GetEntityPreset("GlobalScript", "Checkpoint Global", "UserScenes.rte");
+	if (!script || !craftPreset || !scriptPreset) return false;
+	auto* craft = dynamic_cast<ACraft*>(craftPreset->Clone());
+	craft->SetPos(Vector(500, 100));
+	craft->SetTeam(Activity::TeamOne);
+	craft->SetPinStrength(10000);
+	g_MovableMan.AddActor(craft);
+	const long craftUID = craft->GetUniqueID();
+	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
+	state.SetTempEntity(craft);
+	if (state.RunScriptString("CheckpointGlobalScript.expectedCraft = ToACraft(LuaMan.TempEntity); CheckpointGlobalScript:ResetEvents()") < 0) return false;
+	{
+		std::unique_ptr<GlobalScript> unstarted(dynamic_cast<GlobalScript*>(scriptPreset->Clone()));
+		std::unique_ptr<ACraft> unregistered(dynamic_cast<ACraft*>(craftPreset->Clone()));
+		unstarted->HandleCraftEnteringOrbit(craft);
+		script->HandleCraftEnteringOrbit(nullptr);
+		script->HandleCraftEnteringOrbit(unregistered.get());
+		script->SetActive(false);
+		script->Pause(true);
+		script->HandleCraftEnteringOrbit(craft);
+		script->SetActive(true);
+	}
+	const bool guards = state.RunScriptString("CheckpointGlobalScript:VerifyEvents(0)") == 0;
+	state.RunScriptString("CheckpointGlobalScript:ResetEvents()");
+	const auto dispatch = [&](int expected) {
+		GlobalScript* current = findScript();
+		auto* currentCraft = dynamic_cast<ACraft*>(g_MovableMan.FindObjectByUniqueID(craftUID));
+		if (!current || !currentCraft) return false;
+		const bool pause = current->Pause(true) == 0 && current->Pause(false) == 0;
+		GetActivity()->HandleCraftEnteringOrbit(currentCraft);
+		const bool ended = current->End() == 0;
+		return state.RunScriptString("CheckpointGlobalScript:VerifyEvents(" + std::to_string(expected) + ")") == 0 && pause && ended;
+	};
+	const bool initial = dispatch(1111);
+	std::vector<std::string> graphs, problems;
+	const bool captured = g_MovableMan.SerializeScriptGraphs(graphs, problems);
+	const bool saved = SaveCurrentGame("global_callbacks") && WaitForSaveGameTask();
+	const bool advanced = dispatch(2222);
+	std::string error;
+	const bool memory = captured && advanced && g_MovableMan.RestoreScriptGraphs(graphs, &error) && dispatch(2222);
+	const bool file = saved && LoadAndLaunchGame("global_callbacks") && dispatch(2222);
+	const bool passed = guards && initial && memory && file;
+	std::cout << "[global-callback-selftest] " << (passed ? "PASS" : "FAIL") << " guards=" << guards << " initial=" << initial
+	          << " memory=" << memory << " file=" << file << " error=" << error << std::endl;
 	return passed;
 }
 
