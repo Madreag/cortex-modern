@@ -883,6 +883,9 @@
     <ClCompile Include="Source\Managers\LuaMan.cpp">
       <Filter>Managers</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Managers\LuaThreadCodec.cpp">
+      <Filter>Managers</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Managers\MetaMan.cpp">
       <Filter>Managers</Filter>
     </ClCompile>

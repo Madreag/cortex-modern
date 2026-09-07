@@ -1062,6 +1062,10 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <LanguageStandard Condition="'$(VisualStudioVersion)'=='16.0'">stdcpp17</LanguageStandard>
     </ClCompile>
+    <ClCompile Include="Source\Managers\LuaThreadCodec.cpp">
+      <ConformanceMode>false</ConformanceMode>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="Source\Entities\Activity.cpp" />
     <ClCompile Include="Source\Entities\ADSensor.cpp" />
     <ClCompile Include="Source\Entities\Emission.cpp" />
