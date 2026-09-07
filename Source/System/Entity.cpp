@@ -2,6 +2,10 @@
 #include "RTETools.h"
 #include "PresetMan.h"
 #include "DataModule.h"
+#include "Base64/base64.h"
+
+#include <algorithm>
+#include <vector>
 
 namespace RTE {
 
@@ -18,6 +22,7 @@ namespace RTE {
 
 	void Entity::Clear() {
 		m_PresetName = "None";
+		m_CopiedFromPresetName.clear();
 		m_IsOriginalPreset = false;
 		m_DefinedInModule = -1;
 		m_PresetDescription.clear();
@@ -31,6 +36,7 @@ namespace RTE {
 
 	int Entity::Create(const Entity& reference) {
 		m_PresetName = reference.m_PresetName;
+		m_CopiedFromPresetName = reference.m_IsOriginalPreset ? reference.m_PresetName : reference.m_CopiedFromPresetName;
 		// Note how m_IsOriginalPreset is NOT assigned, automatically indicating that the copy is not an original Preset!
 		m_DefinedInModule = reference.m_DefinedInModule;
 		m_PresetDescription = reference.m_PresetDescription;
@@ -86,6 +92,20 @@ namespace RTE {
 				m_PresetDescription = descriptionValue;
 			}
 		});
+		MatchProperty("SpecialBehaviour_PresetName", {
+			const std::string value = reader.ReadPropValue();
+			m_PresetName = value == "~" ? "" : base64_decode(value);
+		});
+		MatchProperty("SpecialBehaviour_Description", {
+			const std::string value = reader.ReadPropValue();
+			m_PresetDescription = value == "~" ? "" : base64_decode(value);
+		});
+		MatchProperty("SpecialBehaviour_ModuleID", { reader >> m_DefinedInModule; });
+		MatchProperty("SpecialBehaviour_ClearGroups", {
+			bool clear;
+			reader >> clear;
+			if (clear) { m_Groups.clear(); }
+		});
 		MatchProperty("RandomWeight", {
 			reader >> m_RandomWeight;
 			m_RandomWeight = Limit(m_RandomWeight, 100, 0);
@@ -112,8 +132,8 @@ namespace RTE {
 				writer.NewPropertyWithValue("Description", m_PresetDescription);
 			}
 			// Only write out a copy reference if there is one
-		} else if (!m_PresetName.empty() && m_PresetName != "None") {
-			writer.NewPropertyWithValue("CopyOf", GetModuleAndPresetName());
+		} else if (const Entity* preset = GetPresetForCopy()) {
+			writer.NewPropertyWithValue("CopyOf", preset->GetModuleAndPresetName());
 		}
 
 		// TODO: Make proper save system that knows not to save redundant data!
@@ -140,6 +160,23 @@ namespace RTE {
 
 	const Entity* Entity::GetPreset() const {
 		return g_PresetMan.GetEntityPreset(GetClassName(), GetPresetName(), m_DefinedInModule);
+	}
+
+	const Entity* Entity::GetPresetForCopy() const {
+		const std::string& name = m_IsOriginalPreset || m_CopiedFromPresetName.empty() ? m_PresetName : m_CopiedFromPresetName;
+		return name.empty() || name == "None" ? nullptr : g_PresetMan.GetEntityPreset(GetClassName(), name, m_DefinedInModule);
+	}
+
+	void Entity::SaveSnapshotIdentity(Writer& writer) const {
+		writer.NewPropertyWithValue("SpecialBehaviour_PresetName", m_PresetName.empty() ? "~" : base64_encode(m_PresetName, true));
+		writer.NewPropertyWithValue("SpecialBehaviour_Description", m_PresetDescription.empty() ? "~" : base64_encode(m_PresetDescription, true));
+		writer.NewPropertyWithValue("SpecialBehaviour_ModuleID", m_DefinedInModule);
+		writer.NewPropertyWithValue("SpecialBehaviour_ClearGroups", true);
+		std::vector<std::string> groups(m_Groups.begin(), m_Groups.end());
+		std::sort(groups.begin(), groups.end());
+		for (const std::string& group: groups) {
+			writer.NewPropertyWithValue("AddToGroup", group);
+		}
 	}
 
 	std::string Entity::GetModuleAndPresetName() const {

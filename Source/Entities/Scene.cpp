@@ -1213,15 +1213,14 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	};
 
 	writer.ObjectStart(sceneObjectToSave->GetClassName());
-	const bool presetBacked = !(sceneObjectToSave->GetPresetName().empty() || sceneObjectToSave->GetPresetName() == "None");
+	const Entity* sourcePreset = sceneObjectToSave->GetPresetForCopy();
+	const bool presetBacked = sourcePreset != nullptr;
 	if (presetBacked) {
-		writer.NewPropertyWithValue("CopyOf", sceneObjectToSave->GetModuleAndPresetName());
+		writer.NewPropertyWithValue("CopyOf", sourcePreset->GetModuleAndPresetName());
 	}
 
 	if (saveFullData) {
-		for (const std::string& group: *sceneObjectToSave->GetGroups()) {
-			writer.NewPropertyWithValue("AddToGroup", group);
-		}
+		sceneObjectToSave->SaveSnapshotIdentity(writer);
 	}
 
 	writer.NewPropertyWithValue("Position", sceneObjectToSave->GetPos());
@@ -1243,7 +1242,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		// the same objects the first pass saw.
 		writer.NewPropertyWithValue("UniqueID", movableObjectToSave->GetUniqueID());
 		// The scripts added or disabled since the preset made it; CopyOf already loads the preset's own.
-		const MovableObject* presetObject = presetBacked ? dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset(movableObjectToSave->GetClassName(), movableObjectToSave->GetPresetName(), movableObjectToSave->GetModuleID())) : nullptr;
+		const MovableObject* presetObject = dynamic_cast<const MovableObject*>(sourcePreset);
 		for (const std::string& scriptPath: movableObjectToSave->GetAllLoadedScripts()) {
 			if (!presetObject || !presetObject->HasScript(scriptPath)) {
 				writer.NewPropertyWithValue("ScriptPath", scriptPath);
