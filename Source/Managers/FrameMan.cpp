@@ -1,4 +1,5 @@
 #include "FrameMan.h"
+#include "CheckpointArchive.h"
 
 #include "SDL3/SDL_surface.h"
 #include "WindowMan.h"
@@ -22,8 +23,11 @@
 #include "RenderTarget.h"
 
 #include "GUI.h"
+#include "GUICheckpoint.h"
 #include "AllegroBitmap.h"
 #include "AllegroScreen.h"
+#include "AllegroTools.h"
+#include "allegro/internal/aintern.h"
 
 #include "GLCheck.h"
 #include "glad/gl.h"
@@ -36,6 +40,8 @@
 #include <array>
 #include <fstream>
 #include <iostream>
+#include <cstring>
+#include <map>
 
 using namespace RTE;
 
@@ -80,6 +86,16 @@ void FrameMan::Clear() {
 	m_BackBuffer32.reset();
 	m_OverlayBitmap32.reset();
 	m_PaletteFile = ContentFile("Base.rte/palette.bmp");
+	std::memset(m_Palette, 0, sizeof(m_Palette));
+	std::memset(m_DefaultPalette, 0, sizeof(m_DefaultPalette));
+	std::memset(&m_RGBTable, 0, sizeof(m_RGBTable));
+	for (auto& table: m_ColorTables) {
+		for (auto& [key, entry]: table) if (color_map == &entry.first) color_map = nullptr;
+		table.clear();
+	}
+	if (color_map == m_CheckpointColorTable.get()) color_map = nullptr;
+	m_CheckpointColorTable.reset();
+	m_CurrentAlpha = 255;
 	m_BlackColor = 245;
 	m_AlmostBlackColor = 245;
 	m_ColorTablePruneTimer.Reset();
@@ -190,11 +206,11 @@ void FrameMan::Destroy() {
 	for (const GUIScreen* guiScreen: m_GUIScreens) {
 		delete guiScreen;
 	}
-	for (const GUIFont* guiFont: m_LargeFonts) {
-		delete guiFont;
+	for (GUIFont* guiFont: m_LargeFonts) {
+		if (guiFont) { guiFont->Destroy(); delete guiFont; }
 	}
-	for (const GUIFont* guiFont: m_SmallFonts) {
-		delete guiFont;
+	for (GUIFont* guiFont: m_SmallFonts) {
+		if (guiFont) { guiFont->Destroy(); delete guiFont; }
 	}
 	Clear();
 }
@@ -214,7 +230,7 @@ void FrameMan::Update() {
 				for (const auto& [tableKey, tableData]: colorTableMap) {
 					long long lastAccessTime = tableData.second;
 					// Mark tables that haven't been accessed in the last minute for deletion. Avoid marking the transparency table presets, those will have lastAccessTime set to -1.
-					if (lastAccessTime != -1 && (currentTime - lastAccessTime > 60)) {
+					if (&tableData.first != color_map && lastAccessTime != -1 && (currentTime - lastAccessTime > 60)) {
 						markedForDelete.emplace_back(tableKey);
 					}
 				}
@@ -1176,4 +1192,204 @@ void FrameMan::DrawWorldDump(bool drawForScenePreview) const {
 			}
 		}
 	}
+}
+
+namespace {
+	const std::vector<std::pair<std::string, BLENDER_FUNC>>& CheckpointBlenders() {
+		static const std::vector<std::pair<std::string, BLENDER_FUNC>> functions = {
+			{"", nullptr}, {"black", _blender_black}, {"true_alpha", RTE::TrueAlphaBlender},
+#define CHECKPOINT_BLENDER(name) {#name, _blender_##name}
+#ifdef ALLEGRO_COLOR16
+			CHECKPOINT_BLENDER(trans15), CHECKPOINT_BLENDER(add15), CHECKPOINT_BLENDER(burn15), CHECKPOINT_BLENDER(color15),
+			CHECKPOINT_BLENDER(difference15), CHECKPOINT_BLENDER(dissolve15), CHECKPOINT_BLENDER(dodge15), CHECKPOINT_BLENDER(hue15),
+			CHECKPOINT_BLENDER(invert15), CHECKPOINT_BLENDER(luminance15), CHECKPOINT_BLENDER(multiply15), CHECKPOINT_BLENDER(saturation15), CHECKPOINT_BLENDER(screen15),
+			CHECKPOINT_BLENDER(trans16), CHECKPOINT_BLENDER(add16), CHECKPOINT_BLENDER(burn16), CHECKPOINT_BLENDER(color16),
+			CHECKPOINT_BLENDER(difference16), CHECKPOINT_BLENDER(dissolve16), CHECKPOINT_BLENDER(dodge16), CHECKPOINT_BLENDER(hue16),
+			CHECKPOINT_BLENDER(invert16), CHECKPOINT_BLENDER(luminance16), CHECKPOINT_BLENDER(multiply16), CHECKPOINT_BLENDER(saturation16), CHECKPOINT_BLENDER(screen16),
+#endif
+#if defined(ALLEGRO_COLOR24) || defined(ALLEGRO_COLOR32)
+			CHECKPOINT_BLENDER(trans24), CHECKPOINT_BLENDER(add24), CHECKPOINT_BLENDER(burn24), CHECKPOINT_BLENDER(color24),
+			CHECKPOINT_BLENDER(difference24), CHECKPOINT_BLENDER(dissolve24), CHECKPOINT_BLENDER(dodge24), CHECKPOINT_BLENDER(hue24),
+			CHECKPOINT_BLENDER(invert24), CHECKPOINT_BLENDER(luminance24), CHECKPOINT_BLENDER(multiply24), CHECKPOINT_BLENDER(saturation24), CHECKPOINT_BLENDER(screen24),
+#endif
+			CHECKPOINT_BLENDER(alpha15), CHECKPOINT_BLENDER(alpha16), CHECKPOINT_BLENDER(alpha24), CHECKPOINT_BLENDER(alpha32), CHECKPOINT_BLENDER(write_alpha)
+#undef CHECKPOINT_BLENDER
+		};
+		return functions;
+	}
+	std::string CheckpointBlenderName(BLENDER_FUNC function) {
+		for (const auto& [name, value]: CheckpointBlenders()) if (value == function) return name;
+		throw std::runtime_error("unregistered native color blender");
+	}
+	BLENDER_FUNC CheckpointBlenderFunction(const std::string& name) {
+		for (const auto& [candidate, value]: CheckpointBlenders()) if (name == candidate) return value;
+		throw std::runtime_error("invalid color blender checkpoint");
+	}
+}
+
+std::string FrameMan::SavePaletteCheckpoint() const {
+	static_assert(sizeof(RGB) == 4);
+	CheckpointWriter writer("FramePalette1");
+	auto bytes = [](const auto& value) { return std::string(reinterpret_cast<const char*>(&value), sizeof(value)); };
+	PALETTE current; get_palette(current);
+	writer(m_PaletteFile, bytes(m_Palette), bytes(m_DefaultPalette), bytes(current), bytes(m_RGBTable), m_BlackColor, m_AlmostBlackColor, m_CurrentAlpha, m_ColorTablePruneTimer);
+	int selectedMode = color_map ? -2 : -1;
+	std::array<int, 4> selectedKey{};
+	for (size_t mode = 0; mode < m_ColorTables.size(); ++mode) {
+		std::map<std::array<int, 4>, std::pair<std::string, long long>> entries;
+		for (const auto& [key, value]: m_ColorTables[mode]) {
+			entries.emplace(key, std::make_pair(bytes(value.first), value.second));
+			if (color_map == &value.first) { selectedMode = mode; selectedKey = key; }
+		}
+		writer(entries);
+	}
+	writer(selectedMode, selectedKey, selectedMode == -2 ? bytes(*color_map) : std::string{});
+	for (const auto function: {_blender_func15, _blender_func16, _blender_func24, _blender_func32, _blender_func15x, _blender_func16x, _blender_func24x}) writer(CheckpointBlenderName(function));
+	writer(_blender_col_15, _blender_col_16, _blender_col_24, _blender_col_32, _blender_alpha);
+	return writer.Text();
+}
+
+bool FrameMan::LoadPaletteCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		struct State {
+			std::string file, palette, defaultPalette, currentPalette, rgb;
+			int black, almostBlack, alpha, selectedMode;
+			Timer prune;
+			std::array<std::unordered_map<std::array<int, 4>, std::pair<COLOR_MAP, long long>>, DrawBlendMode::BlendModeCount> tables;
+			std::array<int, 4> selectedKey;
+			std::unique_ptr<COLOR_MAP> external;
+			std::array<BLENDER_FUNC, 7> blenders;
+			std::array<int, 5> blendValues;
+		};
+		auto state = std::make_shared<State>();
+		CheckpointReader reader(text, "FramePalette1", validateOnly);
+		reader.Value(state->file);
+		if (!m_PaletteFile.LoadCheckpoint(state->file, true)) return false;
+		auto bytes = [&](std::string& value, size_t size) { reader.Value(value); if (value.size() != size) throw std::runtime_error("invalid palette byte count"); };
+		bytes(state->palette, sizeof(PALETTE)); bytes(state->defaultPalette, sizeof(PALETTE)); bytes(state->currentPalette, sizeof(PALETTE)); bytes(state->rgb, sizeof(RGB_MAP));
+		reader.Value(state->black); reader.Value(state->almostBlack); reader.Value(state->alpha); reader.Value(state->prune);
+		for (auto& target: state->tables) {
+			std::map<std::array<int, 4>, std::pair<std::string, long long>> records; reader.Value(records);
+			for (const auto& [key, value]: records) {
+				if (value.first.size() != sizeof(COLOR_MAP)) throw std::runtime_error("invalid color table byte count");
+				if (!validateOnly) { auto& entry = target[key]; std::memcpy(&entry.first, value.first.data(), sizeof(COLOR_MAP)); entry.second = value.second; }
+				else target.try_emplace(key);
+			}
+		}
+		reader.Value(state->selectedMode); reader.Value(state->selectedKey);
+		std::string external; reader.Value(external);
+		if (state->selectedMode < -2 || state->selectedMode >= DrawBlendMode::BlendModeCount || (state->selectedMode == -2 ? external.size() != sizeof(COLOR_MAP) : !external.empty()) ||
+		    (state->selectedMode >= 0 && !state->tables[state->selectedMode].contains(state->selectedKey))) throw std::runtime_error("invalid active color table reference");
+		if (state->selectedMode == -2 && !validateOnly) { state->external = std::make_unique<COLOR_MAP>(); std::memcpy(state->external.get(), external.data(), sizeof(COLOR_MAP)); }
+		for (auto& function: state->blenders) { std::string name; reader.Value(name); function = CheckpointBlenderFunction(name); }
+		reader.Value(state->blendValues);
+		reader.OnCommit([this, state] {
+			if (!m_PaletteFile.LoadCheckpoint(state->file)) throw std::runtime_error("could not restore palette file");
+			std::memcpy(m_Palette, state->palette.data(), sizeof(PALETTE)); std::memcpy(m_DefaultPalette, state->defaultPalette.data(), sizeof(PALETTE));
+			PALETTE current; std::memcpy(current, state->currentPalette.data(), sizeof(PALETTE)); set_palette(current);
+			std::memcpy(&m_RGBTable, state->rgb.data(), sizeof(RGB_MAP));
+			m_BlackColor = state->black; m_AlmostBlackColor = state->almostBlack; m_CurrentAlpha = state->alpha; m_ColorTablePruneTimer = state->prune;
+			m_ColorTables.swap(state->tables); m_CheckpointColorTable.swap(state->external);
+			color_map = state->selectedMode == -1 ? nullptr : state->selectedMode == -2 ? m_CheckpointColorTable.get() : &m_ColorTables[state->selectedMode].at(state->selectedKey).first;
+			_blender_func15 = state->blenders[0]; _blender_func16 = state->blenders[1]; _blender_func24 = state->blenders[2]; _blender_func32 = state->blenders[3];
+			_blender_func15x = state->blenders[4]; _blender_func16x = state->blenders[5]; _blender_func24x = state->blenders[6];
+			_blender_col_15 = state->blendValues[0]; _blender_col_16 = state->blendValues[1]; _blender_col_24 = state->blendValues[2]; _blender_col_32 = state->blendValues[3]; _blender_alpha = state->blendValues[4];
+		});
+		reader.Finish();
+		return true;
+	} catch (const std::exception& error) { std::cerr << "[palette-checkpoint] " << error.what() << std::endl; return false; }
+}
+
+bool FrameMan::RunPaletteCheckpointSelfTest() {
+	const auto original = SavePaletteCheckpoint();
+	struct Restore { FrameMan& manager; const std::string& value; ~Restore() { manager.LoadPaletteCheckpoint(value, false); } } restore{*this, original};
+	bool passed = true;
+	auto check = [&](bool value, const char* name) { passed = value && passed; std::cout << "[palette-checkpoint-selftest] " << (value ? "PASS " : "FAIL ") << name << std::endl; };
+	PALETTE current; get_palette(current);
+	current[17] = {11, 23, 37, 0}; set_palette(current);
+	m_Palette[19] = {41, 53, 61, 0}; m_DefaultPalette[21] = {17, 29, 43, 0};
+	m_BlackColor = 31; m_AlmostBlackColor = 37; m_CurrentAlpha = 151; m_RGBTable.data[7][11][13] = 179;
+	m_ColorTablePruneTimer.SetSimTimeLimitTicks(791); m_ColorTablePruneTimer.SetRealTimeLimitTicks(919);
+	const std::array<int, 4> key{20, 30, 40, 50};
+	auto& table = m_ColorTables[DrawBlendMode::BlendScreen][key];
+	for (int first = 0; first < 256; ++first) for (int second = 0; second < 256; ++second) table.first.data[first][second] = (first * 13 + second * 7) & 255;
+	table.second = 1234567; color_map = &table.first;
+	set_screen_blender(37, 59, 83, 107);
+	const auto checkpoint = SavePaletteCheckpoint();
+	const auto blend = _blender_func24(makecol24(91, 123, 177), makecol24(33, 71, 119), _blender_alpha);
+	check(LoadPaletteCheckpoint(checkpoint, true), "validate_palette_and_tables");
+	set_palette(black_palette); m_Palette[19] = {}; m_DefaultPalette[21] = {}; m_RGBTable.data[7][11][13] = 0;
+	m_BlackColor = m_AlmostBlackColor = 0; m_CurrentAlpha = 255; table.first.data[17][31] = 0; table.second = -1; set_trans_blender(199, 181, 163, 145);
+	check(LoadPaletteCheckpoint(checkpoint, false) && SavePaletteCheckpoint() == checkpoint, "all_palette_state_restored");
+	RGB observed; get_color(17, &observed);
+	check(observed.r == 11 && observed.g == 23 && observed.b == 37 && m_Palette[19].r == 41 && m_DefaultPalette[21].g == 29 && m_RGBTable.data[7][11][13] == 179, "palette_arrays_and_rgb_observation");
+	check(color_map == &m_ColorTables[DrawBlendMode::BlendScreen].at(key).first && color_map->data[17][31] == ((17 * 13 + 31 * 7) & 255) && m_CurrentAlpha == 151, "active_table_alias_and_alpha");
+	check(_blender_func24(makecol24(91, 123, 177), makecol24(33, 71, 119), _blender_alpha) == blend && _blender_alpha == 107, "blender_continuation");
+	check(!LoadPaletteCheckpoint(checkpoint + "x", false) && SavePaletteCheckpoint() == checkpoint, "trailing_palette_rejection_atomic");
+	check(!LoadPaletteCheckpoint(checkpoint.substr(0, checkpoint.size() - 1), false) && SavePaletteCheckpoint() == checkpoint, "truncated_palette_rejection_atomic");
+	COLOR_MAP external{}; external.data[29][43] = 137; color_map = &external; SetTrueAlphaBlender();
+	const auto externalState = SavePaletteCheckpoint(); external.data[29][43] = 0; color_map = nullptr; set_alpha_blender();
+	check(LoadPaletteCheckpoint(externalState, false) && color_map && color_map->data[29][43] == 137 && _blender_func32 == TrueAlphaBlender && SavePaletteCheckpoint() == externalState, "external_table_and_true_alpha_owner");
+	check(LoadPaletteCheckpoint(original, false) && SavePaletteCheckpoint() == original, "original_palette_restored");
+	return passed;
+}
+
+std::string FrameMan::SaveCheckpoint() const {
+	CheckpointWriter writer("FrameMan3");
+	writer(m_HSplit, m_VSplit);
+	VisitCheckpoint(writer, *this);
+	for (const auto* font: m_SmallFonts) writer(font ? GUICheckpoint::SaveFont(*font) : std::string{});
+	for (const auto* font: m_LargeFonts) writer(font ? GUICheckpoint::SaveFont(*font) : std::string{});
+	writer(SavePaletteCheckpoint());
+	return writer.Text();
+}
+
+bool FrameMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		const bool legacy = text.starts_with("9 FrameMan1 ");
+		const bool version2 = text.starts_with("9 FrameMan2 ");
+		CheckpointReader reader(text, legacy ? "FrameMan1" : version2 ? "FrameMan2" : "FrameMan3", validateOnly);
+		bool hsplit, vsplit;
+		reader.Value(hsplit); reader.Value(vsplit);
+		reader.OnCommit([this, hsplit, vsplit] { if (m_HSplit != hsplit || m_VSplit != vsplit) ResetSplitScreens(hsplit, vsplit); });
+		VisitCheckpoint(reader, *this);
+		if (!legacy) {
+			std::array<std::string, 4> fonts;
+			reader.Value(fonts);
+			for (const auto& state: fonts) if (!state.empty()) {
+				GUIFont validator("");
+				if (!GUICheckpoint::LoadFont(validator, state, true)) return false;
+			}
+			if (!validateOnly) {
+				struct FontDeleter { void operator()(GUIFont* font) const { if (font) { font->Destroy(); delete font; } } };
+				using OwnedFont = std::unique_ptr<GUIFont, FontDeleter>;
+				auto replacements = std::make_shared<std::array<OwnedFont, 4>>();
+				auto screens = std::make_shared<std::array<std::unique_ptr<AllegroScreen>, 2>>();
+				for (size_t index = 0; index < fonts.size(); ++index) if (!fonts[index].empty()) {
+					const size_t depth = index % 2;
+					if (!m_GUIScreens[depth] && !(*screens)[depth]) (*screens)[depth] = std::make_unique<AllegroScreen>(depth ? m_BackBuffer32.get() : m_BackBuffer8.get());
+					auto& font = (*replacements)[index];
+					font.reset(new GUIFont(""));
+					font->m_Screen = m_GUIScreens[depth] ? m_GUIScreens[depth] : (*screens)[depth].get();
+					if (!GUICheckpoint::LoadFont(*font, fonts[index], false)) return false;
+				}
+				reader.OnCommit([this, replacements, screens] {
+					for (size_t depth = 0; depth < screens->size(); ++depth) if ((*screens)[depth]) m_GUIScreens[depth] = (*screens)[depth].release();
+					for (size_t index = 0; index < replacements->size(); ++index) {
+						auto*& target = index < 2 ? m_SmallFonts[index] : m_LargeFonts[index - 2];
+						auto& candidate = (*replacements)[index];
+						if (target && candidate) std::swap(*target, *candidate);
+						else { FontDeleter{}(target); target = candidate.release(); }
+					}
+				});
+			}
+		}
+		if (!legacy && !version2) {
+			std::string palette; reader.Value(palette);
+			if (!LoadPaletteCheckpoint(palette, true)) return false;
+			reader.OnCommit([this, palette] { if (!LoadPaletteCheckpoint(palette, false)) throw std::runtime_error("could not restore palette checkpoint"); });
+		}
+		reader.Finish();
+		return true;
+	} catch (const std::exception& error) { std::cerr << "[frame-checkpoint] " << error.what() << std::endl; return false; }
 }
