@@ -523,7 +523,9 @@ namespace RTE {
 					if (PeerState* superseded = FindPeer(commit.supersededConnection)) {
 						superseded->state = NetSessionState::Closed;
 					}
-					m_Transport->Disconnect(commit.supersededConnection, "seat reclaimed by a newer connection");
+					if (m_Transport) {
+						m_Transport->Disconnect(commit.supersededConnection, "seat reclaimed by a newer connection");
+					}
 				}
 				RefreshHostState();
 			}
