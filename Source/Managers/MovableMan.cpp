@@ -1436,6 +1436,12 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	}
 	out.luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	out.scriptRegistrations.clear();
+	// A throw before the world is held must not leave a pointer into this frame published.
+	struct Publication {
+		MovableMan& man;
+		WorldSetAside& world;
+		~Publication() { if (!world.held) man.ForgetHeldWorld(world); }
+	} publication{*this, out};
 	const auto stashState = [this, &out](LuaStateWrapper& state) {
 		state.RunScriptString("_ScriptGraph.stashObjects()");
 		for (const MovableObject* mo: SortedRegisteredMOs(state, true)) {
