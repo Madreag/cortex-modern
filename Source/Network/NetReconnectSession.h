@@ -57,6 +57,18 @@ namespace RTE {
 		bool reclaim = false;
 	};
 
+	/// A seat's live admission status, for §11's persistent roster indication and the reports.
+	struct NetH4SeatStatus {
+		uint16_t stableSeat = 0;
+		uint8_t lockstepPeerId = 0;
+		bool committed = false;
+		bool closed = false;
+		bool dropped = false;    //!< Committed, but its holder's transport is gone.
+		bool reclaiming = false; //!< A reclaim transaction for it is in flight.
+
+		bool operator==(const NetH4SeatStatus&) const = default;
+	};
+
 	struct NetReconnectHostStats {
 		uint32_t newJoins = 0;
 		uint32_t ticketOffersSent = 0;
@@ -143,6 +155,8 @@ namespace RTE {
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
 		bool IsSeatClosed(uint16_t stableSeat) const;
+		/// Every seat's admission status, in stable-seat order.
+		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
 
 	private:
 		struct SeatState {

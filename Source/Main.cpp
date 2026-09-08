@@ -530,6 +530,17 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (currentArg == "-net-no-reconnect-admission") {
+			NetMatchService::SetAdmissionEnabled(false);
+			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-reconnect-ticket") {
+			NetMatchService::SetTicketStorePath(argValue[++i]);
+			continue;
+		}
+
 		if (currentArg == "-net-exit-after-ready") {
 			s_netExitAfterReady = true;
 			++i;

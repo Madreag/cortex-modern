@@ -3,6 +3,9 @@
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
+#include "NetReconnectSession.h"
+#include "NetReconnectTicketStore.h"
+#include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
 #include "Singleton.h"
 
@@ -46,6 +49,14 @@ namespace RTE {
 		NetMatchService() = default;
 		~NetMatchService();
 
+		/// Turns the H4 admission plane off for a run. It is on by default; this exists so a two-peer
+		/// gate can be bisected against the pre-admission handshake without a rebuild.
+		static void SetAdmissionEnabled(bool enabled) { s_AdmissionEnabled = enabled; }
+		static bool IsAdmissionEnabled() { return s_AdmissionEnabled; }
+		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
+		/// recovery-record path instead of racing over the default one.
+		static void SetTicketStorePath(std::string path);
+
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
 
 		/// Reconvenes a completed match's still-connected session in the lobby for a rematch.
@@ -78,6 +89,16 @@ namespace RTE {
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
 		void PumpSessionEvents();
+		/// The reconnect UX state machine (§11): auto-retry, the stored-ticket offer and the roster's
+		/// dropped/reclaiming marks. Game-thread only.
+		NetReconnectUx& GetReconnectUx() { return m_ReconnectUx; }
+		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
+		/// Re-enters the match this process was dropped from, using the stored recovery record.
+		bool BeginTicketRejoin(std::string* error = nullptr);
+		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
+		/// say exactly why it cannot. Read-only and safe to call repeatedly.
+		void ScanStoredTicket();
+
 		NetMatchServiceState GetState() const;
 		bool WasEverStarted() const { return m_EverStarted.load(); }
 		NetLobbySnapshot GetLobbySnapshot() const;
@@ -97,6 +118,20 @@ namespace RTE {
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		void JoinWorkerIfDone();
+		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
+		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
+		void AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest);
+		/// The drop-frame ownership census. Called by the reconnect host, and only ever from inside
+		/// PumpSessionEvents on the game thread - g_MovableMan is not safe to walk from anywhere else.
+		static std::vector<NetH4LedgerActor> CollectDropOwnership(void* context);
+		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
+		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
+		void RunCleanLeave();
+		/// Ends the hosted session: tells every peer with the one reason that permits deleting a
+		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
+		void EndAdmissionSession();
+		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
+		void DriveReconnectUx(uint64_t nowMs);
 
 		mutable std::mutex m_Mutex;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
@@ -113,6 +148,17 @@ namespace RTE {
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
+		// The admission plane lives on the service, not on a session or a match round, so a seat and its
+		// ledger survive resync, rejoin and rematch exactly as the registry does (§3).
+		NetReconnectHost m_ReconnectHost;
+		NetReconnectClient m_ReconnectClient;
+		NetReconnectTicketStore m_TicketStore;
+		NetReconnectUx m_ReconnectUx;
+		bool m_AdmissionAttached = false;
+		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
+		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
+		static bool s_AdmissionEnabled;
+		static std::string s_TicketStorePath;
 
 		std::unique_ptr<GnsTransport> m_Transport;
 		std::unique_ptr<NetSession> m_Session;
