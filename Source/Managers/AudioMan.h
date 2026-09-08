@@ -42,6 +42,15 @@ namespace RTE {
 		bool RunCheckpointPlaybackContinuationSelfTest() const;
 		/// Drops finished logical voices at a tick boundary; liveness itself is a function of simulation time.
 		void RetireFinishedSimulationSounds();
+		/// Notes that a SoundContainer holds sound calls an AI hook made and the drain must visit it.
+		void NotePendingSoundOps(SoundContainer* container);
+		void ClearPendingSoundOps(SoundContainer* container);
+		/// The containers with pending calls, in checkpoint-identity order so the drain is the same everywhere.
+		std::vector<SoundContainer*> TakePendingSoundOpContainers();
+		/// Numbers a deferred sound call inside its tick, so every peer derives the same playback key.
+		uint64_t NextDeferredSoundOpOrdinal();
+		/// The live SoundContainer a checkpoint identity names, or none.
+		SoundContainer* FindSimulationSoundContainer(uint64_t identity) const { return FindCheckpointSoundContainer(identity); }
 		void VisitSharedSimulationSounds(const std::function<void(const SoundContainer&)>& visitor) const;
 		float GetLocalSoundAudibility(const SoundContainer* container) const;
 		bool RunLogicalPlaybackSelfTest();
@@ -432,6 +441,10 @@ namespace RTE {
 		uint64_t m_NextSoundContainerIdentity = 0;
 		mutable std::mutex m_LogicalSoundsMutex;
 		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
+		mutable std::mutex m_PendingSoundOpsMutex;
+		std::map<uint64_t, SoundContainer*> m_PendingSoundOpContainers;
+		uint64_t m_DeferredSoundOpTick = 0;
+		uint64_t m_DeferredSoundOpOrdinal = 0;
 		struct CommittedAudibility {
 			uint64_t frame = 0;
 			float value = 0.0F;

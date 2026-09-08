@@ -5,6 +5,8 @@
 #include "MovableObject.h"
 
 #include "SoundSet.h"
+#include "Actor.h"
+#include "Controller.h"
 #include "SettingsMan.h"
 #include "ConsoleMan.h"
 #include "ScenarioRunner.h"
@@ -49,8 +51,14 @@ SoundContainer::~SoundContainer() {
 
 void SoundContainer::Clear() {
 	g_AudioMan.UnregisterLogicalSound(this);
+	g_AudioMan.ClearPendingSoundOps(this);
 	m_LogicalPlayback = {};
-	m_LocalControls = {};
+	m_Pending = {};
+	m_PendingOps.clear();
+	m_PendingPlays = 0;
+	m_PendingStopped = false;
+	m_PendingPositionWritten = false;
+	m_PendingAliasBaseline = Vector();
 	if (m_CheckpointRegistered) {
 		g_AudioMan.DisownSoundContainerPlayingChannels(this);
 		g_AudioMan.UnregisterCheckpointSoundContainer(this, m_CheckpointIdentity);
@@ -62,6 +70,7 @@ void SoundContainer::Clear() {
 	}
 	m_TopLevelSoundSet = std::make_shared<SoundSet>();
 	m_TopLevelSoundSet->Destroy();
+	m_TopLevelSoundSet->SetOwnerContainer(this);
 
 	m_PlayingChannels.clear();
 	m_SoundOverlapMode = SoundOverlapMode::OVERLAP;
@@ -92,6 +101,7 @@ int SoundContainer::Create(const SoundContainer& reference) {
 	Entity::Create(reference);
 
 	m_TopLevelSoundSet->Create(*reference.m_TopLevelSoundSet);
+	m_TopLevelSoundSet->SetOwnerContainer(this);
 
 	m_PlayingChannels.clear();
 	m_SoundOverlapMode = reference.m_SoundOverlapMode;
@@ -143,12 +153,14 @@ int SoundContainer::ReadProperty(const std::string_view& propName, Reader& reade
 		reader >> topLevelSoundSet;
 		m_TopLevelSoundSet->Destroy();
 		m_TopLevelSoundSet->Create(topLevelSoundSet);
+		m_TopLevelSoundSet->SetOwnerContainer(this);
 	});
 	MatchProperty("AddSound", { m_TopLevelSoundSet->AddSoundData(SoundSet::ReadAndGetSoundData(reader)); });
 	MatchProperty("AddSoundSet", {
 		SoundSet soundSetToAdd;
 		reader >> soundSetToAdd;
 		m_TopLevelSoundSet->AddSoundSet(soundSetToAdd);
+		m_TopLevelSoundSet->SetOwnerContainer(this);
 	});
 	MatchForwards("SoundSelectionCycleMode") MatchProperty("CycleMode", { m_TopLevelSoundSet->SetSoundSelectionCycleMode(SoundSet::ReadSoundSelectionCycleMode(reader)); });
 	MatchProperty("SoundOverlapMode", {
@@ -284,6 +296,7 @@ float SoundContainer::GetLength(LengthOfSoundType type) const {
 
 void SoundContainer::SetTopLevelSoundSet(const SoundSet& newTopLevelSoundSet) {
 	*m_TopLevelSoundSet = newTopLevelSoundSet;
+	m_TopLevelSoundSet->SetOwnerContainer(this);
 	m_SoundPropertiesUpToDate = false;
 }
 
@@ -309,18 +322,25 @@ const SoundData* SoundContainer::GetSoundDataForSound(const FMOD::Sound* sound) 
 }
 
 void SoundContainer::SetCustomPanValue(float customPanValue) {
-	CurrentCustomPanValue() = std::clamp(customPanValue, -1.0f, 1.0f);
-	if (IsBeingPlayed()) {
+	customPanValue = std::clamp(customPanValue, -1.0f, 1.0f);
+	const bool deferred = DeferProperty(PendingOp::CustomPan, customPanValue);
+	CurrentCustomPanValue() = customPanValue;
+	if (!deferred && IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsCustomPanValue(this);
 	}
 }
 
 void SoundContainer::SetPosition(const Vector& newPosition) {
-	if (!std::as_const(*this).CurrentImmobile() && newPosition != std::as_const(*this).CurrentPos()) {
+	if (std::as_const(*this).CurrentImmobile() || newPosition == std::as_const(*this).CurrentPos()) {
+		return;
+	}
+	if (DeferProperty(PendingOp::Position, newPosition.m_X, newPosition.m_Y)) {
 		CurrentPos() = newPosition;
-		if (IsBeingPlayed()) {
-			g_AudioMan.ChangeSoundContainerPlayingChannelsPosition(this);
-		}
+		return;
+	}
+	m_Pos = newPosition;
+	if (IsBeingPlayed()) {
+		g_AudioMan.ChangeSoundContainerPlayingChannelsPosition(this);
 	}
 }
 
@@ -334,16 +354,22 @@ float SoundContainer::GetAudibleVolume() const {
 
 void SoundContainer::SetVolume(float newVolume) {
 	newVolume = std::clamp(newVolume, 0.0F, 10.0F);
-	if (IsBeingPlayed()) {
+	const bool deferred = DeferProperty(PendingOp::Volume, newVolume);
+	if (!deferred && IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsVolume(this, newVolume);
 	}
 	CurrentVolume() = newVolume;
 }
 
 void SoundContainer::SetPitch(float newPitch) {
+	newPitch = std::clamp(newPitch, 0.125F, 8.0F);
+	if (DeferProperty(PendingOp::Pitch, newPitch)) {
+		CurrentPitch() = newPitch;
+		return;
+	}
 	const bool logical = UsesLogicalPlayback();
 	if (logical) FoldLogicalVoices();
-	CurrentPitch() = std::clamp(newPitch, 0.125F, 8.0F);
+	CurrentPitch() = newPitch;
 	if (logical) {
 		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.pitch = std::as_const(*this).CurrentPitch();
 	}
@@ -354,6 +380,10 @@ void SoundContainer::SetPitch(float newPitch) {
 
 void SoundContainer::SetPaused(bool paused) {
 	if (paused == std::as_const(*this).CurrentPaused()) return;
+	if (DeferProperty(PendingOp::Paused, 0.0F, 0.0F, paused ? 1 : 0)) {
+		CurrentPaused() = paused;
+		return;
+	}
 	if (UsesLogicalPlayback()) {
 		FoldLogicalVoices();
 		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.paused = paused;
@@ -364,6 +394,8 @@ void SoundContainer::SetPaused(bool paused) {
 
 bool SoundContainer::Play(int player) {
 	if (HasAnySounds()) {
+		std::unique_lock<std::recursive_mutex> pending(m_PendingMutex, std::defer_lock);
+		if (Deferring()) pending.lock();
 		CurrentWasFadedOut() = false;
 		if (IsBeingPlayed()) {
 			const SoundOverlapMode overlapMode = std::as_const(*this).CurrentSoundOverlapMode();
@@ -373,29 +405,273 @@ bool SoundContainer::Play(int player) {
 				return false;
 			}
 		}
+		if (pending.owns_lock()) {
+			PendingOp op;
+			op.op = PendingOp::Play;
+			op.player = player;
+			QueuePendingOp(std::move(op));
+			++m_PendingPlays;
+			return true;
+		}
 		return g_AudioMan.PlaySoundContainer(this, player);
 	}
 	return false;
 }
 
 bool SoundContainer::Stop(int player) {
-	return (HasAnySounds() && IsBeingPlayed()) ? g_AudioMan.StopSoundContainerPlayingChannels(this, player) : false;
+	if (!HasAnySounds()) return false;
+	if (Deferring()) {
+		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+		if (!IsBeingPlayed()) return false;
+		PendingOp op;
+		op.op = PendingOp::Stop;
+		op.player = player;
+		QueuePendingOp(std::move(op));
+		m_PendingStopped = true;
+		m_PendingPlays = 0;
+		return true;
+	}
+	return IsBeingPlayed() ? g_AudioMan.StopSoundContainerPlayingChannels(this, player) : false;
 }
 
 bool SoundContainer::IsBeingPlayed() const {
+	if (Deferring()) {
+		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+		if (m_PendingPlays > 0) return true;
+		if (m_PendingStopped) return false;
+	}
 	if (UsesLogicalPlayback()) return HasLiveLogicalVoices();
 	for (int identity: m_PlayingChannels) if (g_AudioMan.OwnsVoice(identity, this)) return true;
 	return false;
 }
 
 bool SoundContainer::Restart(int player) {
-	return (HasAnySounds() && IsBeingPlayed()) ? g_AudioMan.StopSoundContainerPlayingChannels(this, player) && g_AudioMan.PlaySoundContainer(this, player) : false;
+	if (!HasAnySounds()) return false;
+	if (Deferring()) {
+		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+		if (!IsBeingPlayed()) return false;
+		PendingOp op;
+		op.op = PendingOp::Restart;
+		op.player = player;
+		QueuePendingOp(std::move(op));
+		m_PendingStopped = true;
+		m_PendingPlays = 1;
+		return true;
+	}
+	return IsBeingPlayed() ? g_AudioMan.StopSoundContainerPlayingChannels(this, player) && g_AudioMan.PlaySoundContainer(this, player) : false;
 }
 
 void SoundContainer::FadeOut(int fadeOutTime) {
+	if (Deferring()) {
+		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+		if (std::as_const(*this).CurrentWasFadedOut() || !IsBeingPlayed()) return;
+		CurrentWasFadedOut() = true;
+		PendingOp op;
+		op.op = PendingOp::FadeOut;
+		op.value = fadeOutTime;
+		QueuePendingOp(std::move(op));
+		return;
+	}
 	if (!std::as_const(*this).CurrentWasFadedOut() && IsBeingPlayed()) {
 		CurrentWasFadedOut() = true;
 		return g_AudioMan.FadeOutSoundContainerPlayingChannels(this, fadeOutTime);
+	}
+}
+
+const Vector& SoundContainer::GetScriptPosition() const {
+	if (!Deferring()) return m_Pos;
+	// The AI hook holds this pass's own position: a write through it is a decision, folded into a
+	// deferred write at the next read and at the drain, never landing on shared state early.
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	SoundContainer* self = const_cast<SoundContainer*>(this);
+	if (!(m_Pending.written & LocalPos)) {
+		self->m_Pending.m_Pos = m_Pos;
+		self->m_Pending.written |= LocalPos;
+		self->m_PendingAliasBaseline = m_Pos;
+		self->NotePending();
+	}
+	self->ReconcileAliasPosition();
+	return m_Pending.m_Pos;
+}
+
+void SoundContainer::ReconcileAliasPosition() {
+	if (!(m_Pending.written & LocalPos)) return;
+	if (m_Pending.m_Pos != m_PendingAliasBaseline) {
+		m_PendingAliasBaseline = m_Pending.m_Pos;
+		m_PendingPositionWritten = true;
+		PendingOp op;
+		op.op = PendingOp::SetProperty;
+		op.property = PendingOp::PositionAlias;
+		op.x = m_Pending.m_Pos.m_X;
+		op.y = m_Pending.m_Pos.m_Y;
+		QueuePendingOp(std::move(op));
+	} else if (!m_PendingPositionWritten) {
+		// A mere read must not freeze this pass's view of a position the simulation moved.
+		m_Pending.m_Pos = m_Pos;
+		m_PendingAliasBaseline = m_Pos;
+	}
+}
+
+bool SoundContainer::DeferProperty(PendingOp::Property property, float x, float y, int32_t value) {
+	if (!Deferring()) return false;
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	if (property == PendingOp::Position) {
+		ReconcileAliasPosition();
+		m_PendingPositionWritten = true;
+		m_PendingAliasBaseline = Vector(x, y);
+	}
+	PendingOp op;
+	op.op = PendingOp::SetProperty;
+	op.property = property;
+	op.x = x;
+	op.y = y;
+	op.value = value;
+	QueuePendingOp(std::move(op));
+	return true;
+}
+
+void SoundContainer::QueuePendingOp(PendingOp op) {
+	op.actorUID = g_CurrentAIActor ? static_cast<int64_t>(g_CurrentAIActor->GetUniqueID()) : 0;
+	op.team = g_CurrentAIActor ? g_CurrentAIActor->GetTeam() : -1;
+	m_PendingOps.push_back(std::move(op));
+	NotePending();
+}
+
+void SoundContainer::NotePending() {
+	g_AudioMan.NotePendingSoundOps(this);
+}
+
+bool SoundContainer::QueuePendingSelectSounds(std::vector<uint16_t> soundSetPath) {
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	PendingOp op;
+	op.op = PendingOp::SelectSounds;
+	op.soundSetPath = std::move(soundSetPath);
+	QueuePendingOp(std::move(op));
+	return true;
+}
+
+static bool FindSoundSetPathIn(const SoundSet& parent, const SoundSet& target, std::vector<uint16_t>& path) {
+	if (&parent == &target) return true;
+	const std::vector<SoundSet*>& subSoundSets = const_cast<SoundSet&>(parent).GetSubSoundSets();
+	for (size_t index = 0; index < subSoundSets.size(); ++index) {
+		path.push_back(static_cast<uint16_t>(index));
+		if (FindSoundSetPathIn(*subSoundSets[index], target, path)) return true;
+		path.pop_back();
+	}
+	return false;
+}
+
+bool SoundContainer::FindSoundSetPath(const SoundSet& soundSet, std::vector<uint16_t>& path) const {
+	path.clear();
+	return FindSoundSetPathIn(*m_TopLevelSoundSet, soundSet, path);
+}
+
+std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	ReconcileAliasPosition();
+	std::vector<PendingOp> taken;
+	taken.swap(m_PendingOps);
+	// The position Lua holds outlives the pass that took it, exactly as the shared one does, so the
+	// container keeps being drained: that is where a write made through a retained alias is found.
+	const bool aliasHeld = (m_Pending.written & LocalPos) != 0;
+	const Vector aliasPosition = m_Pending.m_Pos;
+	m_Pending = {};
+	if (aliasHeld) {
+		m_Pending.m_Pos = aliasPosition;
+		m_Pending.written = LocalPos;
+	} else {
+		g_AudioMan.ClearPendingSoundOps(this);
+	}
+	m_PendingPlays = 0;
+	m_PendingStopped = false;
+	m_PendingPositionWritten = false;
+	m_PendingAliasBaseline = aliasHeld ? aliasPosition : Vector();
+	return taken;
+}
+
+bool SoundContainer::ApplyPendingSoundOp(const PendingOp& op) {
+	switch (op.op) {
+		case PendingOp::Play:
+			return Play(op.player);
+		case PendingOp::Stop:
+			return Stop(op.player);
+		case PendingOp::Restart:
+			return Restart(op.player);
+		case PendingOp::FadeOut:
+			FadeOut(op.value);
+			return true;
+		case PendingOp::SelectSounds: {
+			SoundSet* soundSet = m_TopLevelSoundSet.get();
+			for (uint16_t index: op.soundSetPath) {
+				if (!soundSet || index >= soundSet->GetSubSoundSets().size()) return false;
+				soundSet = soundSet->GetSubSoundSets()[index];
+			}
+			return soundSet && soundSet->SelectNextSounds();
+		}
+		case PendingOp::SetProperty:
+			return ApplyPendingProperty(op);
+		default:
+			return false;
+	}
+}
+
+bool SoundContainer::ApplyPendingProperty(const PendingOp& op) {
+	switch (op.property) {
+		case PendingOp::Volume:
+			SetVolume(op.x);
+			return true;
+		case PendingOp::Pitch:
+			SetPitch(op.x);
+			return true;
+		case PendingOp::PitchVariation:
+			SetPitchVariation(op.x);
+			return true;
+		case PendingOp::Loops:
+			SetLoopSetting(op.value);
+			return true;
+		case PendingOp::Priority:
+			SetPriority(op.value);
+			return true;
+		case PendingOp::Immobile:
+			SetImmobile(op.value != 0);
+			return true;
+		case PendingOp::BusRoute:
+			SetBusRouting(static_cast<BusRouting>(op.value));
+			return true;
+		case PendingOp::OverlapMode:
+			SetSoundOverlapMode(static_cast<SoundOverlapMode>(op.value));
+			return true;
+		case PendingOp::AttenuationStart:
+			SetAttenuationStartDistance(op.x);
+			return true;
+		case PendingOp::CustomPan:
+			SetCustomPanValue(op.x);
+			return true;
+		case PendingOp::PanningStrength:
+			SetPanningStrengthMultiplier(op.x);
+			return true;
+		case PendingOp::GlobalPitch:
+			SetAffectedByGlobalPitch(op.value != 0);
+			return true;
+		case PendingOp::Paused:
+			SetPaused(op.value != 0);
+			return true;
+		case PendingOp::Position:
+			SetPosition(Vector(op.x, op.y));
+			return true;
+		case PendingOp::PositionAlias:
+			// A write through the alias never went through the setter, so it kept neither the
+			// immobile guard nor the repositioning of playing channels.
+			m_Pos = Vector(op.x, op.y);
+			return true;
+		case PendingOp::MusicPreEntry:
+			SetMusicPreEntryTime(op.x);
+			return true;
+		case PendingOp::MusicExit:
+			SetMusicExitTime(op.x);
+			return true;
+		default:
+			return false;
 	}
 }
 
@@ -419,30 +695,6 @@ void SoundContainer::FoldLogicalVoices() {
 	const long long now = g_TimerMan.GetSimTimeTicks();
 	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
 	for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.Fold(now, ticksPerSecond);
-}
-
-std::string SoundContainer::LocalControls::SaveCheckpoint() const {
-	CheckpointWriter writer("LocalSoundControls1");
-	const_cast<LocalControls*>(this)->Fields(writer);
-	return writer.Text();
-}
-
-bool SoundContainer::LocalControls::LoadCheckpoint(std::string_view text, bool validateOnly) {
-	try {
-		LocalControls candidate;
-		CheckpointReader reader(text, "LocalSoundControls1");
-		candidate.Fields(reader);
-		reader.Finish();
-		const auto finite = [](float value) { return std::isfinite(value); };
-		const bool valid = candidate.written < (1u << LocalControlCount) && candidate.m_SoundOverlapMode >= OVERLAP && candidate.m_SoundOverlapMode <= IGNORE_PLAY &&
-		    candidate.m_BusRouting >= SFX && candidate.m_BusRouting <= MUSIC && finite(candidate.m_AttenuationStartDistance) && finite(candidate.m_CustomPanValue) &&
-		    finite(candidate.m_PanningStrengthMultiplier) && candidate.m_Loops >= -1 && candidate.m_Priority >= 0 && candidate.m_Priority <= 256 &&
-		    finite(candidate.m_Pos.m_X) && finite(candidate.m_Pos.m_Y) && finite(candidate.m_Pitch) && finite(candidate.m_PitchVariation) && finite(candidate.m_Volume) &&
-		    finite(candidate.m_MusicPreEntryTime) && finite(candidate.m_MusicExitTime);
-		if (!valid) return false;
-		if (!validateOnly) *this = candidate;
-		return true;
-	} catch (const std::exception&) { return false; }
 }
 
 FMOD_RESULT SoundContainer::UpdateSoundProperties() {
@@ -485,10 +737,10 @@ void SoundContainer::ReidentifyCheckpoint(uint64_t identity) {
 }
 
 std::string SoundContainer::SaveCheckpoint() const {
-	CheckpointWriter archive("SoundContainer2");
+	CheckpointWriter archive("SoundContainer3");
 	archive(Entity::SaveCheckpoint(), m_CheckpointIdentity, std::set<int>(m_PlayingChannels.begin(), m_PlayingChannels.end()));
 	archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
-	archive(m_LogicalPlayback, m_LocalControls);
+	archive(m_LogicalPlayback);
 	return archive.Text();
 }
 
@@ -508,8 +760,22 @@ bool SoundContainer::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			m_PlayingChannels.clear(); m_PlayingChannels.insert(playing.begin(), playing.end());
 		});
 		archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
-		if (version == "SoundContainer2") archive(m_LogicalPlayback, m_LocalControls);
-		else archive.OnCommit([this] { m_LogicalPlayback = {}; m_LocalControls = {}; });
+		if (version == "SoundContainer3") {
+			archive(m_LogicalPlayback);
+		} else if (version == "SoundContainer2") {
+			// The old shape carried a second cohort and the transient AI-pass controls; only the
+			// shared cohort was ever simulation state.
+			std::string shared, discardedCohort, discardedControls;
+			archive.Value(shared);
+			archive.Value(discardedCohort);
+			archive.Value(discardedControls);
+			if (!m_LogicalPlayback.LoadCheckpoint(shared, true)) return false;
+			archive.OnCommit([this, shared] {
+				if (!m_LogicalPlayback.LoadCheckpoint(shared)) throw std::runtime_error("could not apply sound playback checkpoint");
+			});
+		} else {
+			archive.OnCommit([this] { m_LogicalPlayback = {}; });
+		}
 		archive.Finish();
 		if (!validateOnly) g_AudioMan.RefreshLogicalSound(this);
 		return true;
@@ -527,9 +793,10 @@ void SoundContainer::SwapCheckpoint(SoundContainer& other) noexcept {
 	swap(m_RandomWeight, other.m_RandomWeight);
 	swap(m_Groups, other.m_Groups);
 	swap(m_CheckpointIdentity, other.m_CheckpointIdentity);
-	swap(m_LocalControls, other.m_LocalControls);
 	swap(m_LogicalPlayback, other.m_LogicalPlayback);
 	swap(m_TopLevelSoundSet, other.m_TopLevelSoundSet);
+	m_TopLevelSoundSet->SetOwnerContainer(this);
+	other.m_TopLevelSoundSet->SetOwnerContainer(&other);
 	swap(m_PlayingChannels, other.m_PlayingChannels);
 	swap(m_SoundOverlapMode, other.m_SoundOverlapMode);
 	swap(m_BusRouting, other.m_BusRouting);
