@@ -192,6 +192,8 @@ SCHEMAS["BuyMenuGUI1"] = [*fields("enabled focus focus_change category speed lis
     "selected_loadout purchase_made delivery_width enforce_max_passengers enforce_max_mass only_owned"),
     *fields("allowed always_allowed prohibited owned", NUMBER_MAP)]
 SCHEMAS["BuyMenuGUI2"] = [("initialized", "n"), *SCHEMAS["BuyMenuGUI1"], ("tail", "tail")]
+# BuyMenuGUI3 keys the per-module expansion flags by module name; they ride in the tail like version 2's.
+SCHEMAS["BuyMenuGUI3"] = SCHEMAS["BuyMenuGUI2"]
 SCHEMAS["Entity1"] = [*fields("preset_name copied_from description reader_position", "s"), *fields("original module random_weight"), ("groups", STRINGS)]
 SCHEMAS["Matrix1"] = [("angle", "n"), ("flipped", array(2)), ("elements", array(2, array(2))), ("elements_current", "n")]
 SCHEMAS["ContentFile1"] = [*fields("path extension stem", "s"), ("is_image", "n"), ("image_info", array(3)),
