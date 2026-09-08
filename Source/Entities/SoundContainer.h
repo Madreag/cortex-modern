@@ -86,6 +86,7 @@ namespace RTE {
 			Property property = Volume;
 			int64_t actorUID = 0; //!< The actor whose AI pass made the call; only its peer may issue it.
 			int32_t team = 0;
+			int32_t sequence = 0; //!< This actor's call number on this container, so the drain order is the same however the AI threads interleave.
 			int32_t player = -1;
 			int32_t value = 0; //!< Fade time, loop count, priority, bus, overlap mode or a boolean.
 			float x = 0.0F;
@@ -191,8 +192,8 @@ namespace RTE {
 		/// Sets the SoundOverlapMode of this SoundContainer, which is used to determine how it should behave when it's told to play while already playing.
 		/// @param newSoundOverlapMode The new SoundOverlapMode this SoundContainer should use.
 		void SetSoundOverlapMode(SoundOverlapMode newSoundOverlapMode) {
-			DeferProperty(PendingOp::OverlapMode, 0.0F, 0.0F, newSoundOverlapMode);
-			CurrentSoundOverlapMode() = newSoundOverlapMode;
+			if (DeferProperty(PendingOp::OverlapMode, 0.0F, 0.0F, newSoundOverlapMode)) return;
+			m_SoundOverlapMode = newSoundOverlapMode;
 		}
 #pragma endregion
 
@@ -205,8 +206,8 @@ namespace RTE {
 		/// Sets the bus this sound routes to.
 		/// @param newBusRoute The new bus for this sound to route to.
 		void SetBusRouting(BusRouting newBusRoute) {
-			DeferProperty(PendingOp::BusRoute, 0.0F, 0.0F, newBusRoute);
-			CurrentBusRouting() = newBusRoute;
+			if (DeferProperty(PendingOp::BusRoute, 0.0F, 0.0F, newBusRoute)) return;
+			m_BusRouting = newBusRoute;
 		}
 
 		/// Gets whether the sounds in this SoundContainer should be considered immobile, i.e. always play at the listener's position.
@@ -216,9 +217,9 @@ namespace RTE {
 		/// Sets whether the sounds in this SoundContainer should be considered immobile, i.e. always play at the listener's position. Does not affect currently playing sounds.
 		/// @param immobile The new immobile setting.
 		void SetImmobile(bool immobile) {
-			DeferProperty(PendingOp::Immobile, 0.0F, 0.0F, immobile ? 1 : 0);
-			CurrentImmobile() = immobile;
-			CurrentSoundPropertiesUpToDate() = false;
+			if (DeferProperty(PendingOp::Immobile, 0.0F, 0.0F, immobile ? 1 : 0)) return;
+			m_Immobile = immobile;
+			m_SoundPropertiesUpToDate = false;
 		}
 
 		/// Gets the attenuation start distance of this SoundContainer.
@@ -229,9 +230,9 @@ namespace RTE {
 		/// @param attenuationStartDistance The new attenuation start distance.
 		void SetAttenuationStartDistance(float attenuationStartDistance) {
 			attenuationStartDistance = (attenuationStartDistance < 0) ? c_DefaultAttenuationStartDistance : attenuationStartDistance;
-			DeferProperty(PendingOp::AttenuationStart, attenuationStartDistance);
-			CurrentAttenuationStartDistance() = attenuationStartDistance;
-			CurrentSoundPropertiesUpToDate() = false;
+			if (DeferProperty(PendingOp::AttenuationStart, attenuationStartDistance)) return;
+			m_AttenuationStartDistance = attenuationStartDistance;
+			m_SoundPropertiesUpToDate = false;
 		}
 
 		/// Gets the custom pan value of this SoundContainer.
@@ -249,9 +250,9 @@ namespace RTE {
 		/// Sets the panning strength multiplier of this SoundContainer.
 		/// @param panningStrengthMultiplier The new panning strength multiplier.
 		void SetPanningStrengthMultiplier(float panningStrengthMultiplier) {
-			DeferProperty(PendingOp::PanningStrength, panningStrengthMultiplier);
-			CurrentPanningStrengthMultiplier() = panningStrengthMultiplier;
-			CurrentSoundPropertiesUpToDate() = false;
+			if (DeferProperty(PendingOp::PanningStrength, panningStrengthMultiplier)) return;
+			m_PanningStrengthMultiplier = panningStrengthMultiplier;
+			m_SoundPropertiesUpToDate = false;
 		}
 
 		/// Gets the looping setting of this SoundContainer.
@@ -262,9 +263,9 @@ namespace RTE {
 		/// 0 means the sound is set to only play once. -1 means it loops indefinitely.
 		/// @param loops The new loop count.
 		void SetLoopSetting(int loops) {
-			DeferProperty(PendingOp::Loops, 0.0F, 0.0F, loops);
-			CurrentLoops() = loops;
-			CurrentSoundPropertiesUpToDate() = false;
+			if (DeferProperty(PendingOp::Loops, 0.0F, 0.0F, loops)) return;
+			m_Loops = loops;
+			m_SoundPropertiesUpToDate = false;
 		}
 
 		/// Gets whether the sounds in this SoundContainer have all had all their properties set appropriately. Used to account for issues with ordering in INI loading.
@@ -279,8 +280,8 @@ namespace RTE {
 		/// @param priority The new priority. See AudioMan::PRIORITY_* enumeration.
 		void SetPriority(int priority) {
 			priority = std::clamp(priority, 0, 256);
-			DeferProperty(PendingOp::Priority, 0.0F, 0.0F, priority);
-			CurrentPriority() = priority;
+			if (DeferProperty(PendingOp::Priority, 0.0F, 0.0F, priority)) return;
+			m_Priority = priority;
 		}
 
 		/// Gets whether the sounds in this SoundContainer are affected by global pitch changes or not.
@@ -290,8 +291,8 @@ namespace RTE {
 		/// Sets whether the sounds in this SoundContainer are affected by global pitch changes or not. Does not affect currently playing sounds.
 		/// @param affectedByGlobalPitch The new affected by global pitch setting.
 		void SetAffectedByGlobalPitch(bool affectedByGlobalPitch) {
-			DeferProperty(PendingOp::GlobalPitch, 0.0F, 0.0F, affectedByGlobalPitch ? 1 : 0);
-			CurrentAffectedByGlobalPitch() = affectedByGlobalPitch;
+			if (DeferProperty(PendingOp::GlobalPitch, 0.0F, 0.0F, affectedByGlobalPitch ? 1 : 0)) return;
+			m_AffectedByGlobalPitch = affectedByGlobalPitch;
 		}
 
 		/// Gets the position at which this SoundContainer's sound will be played. Note that its individual sounds can be offset from this.
@@ -333,8 +334,8 @@ namespace RTE {
 		/// Sets the pitch variation the sounds in this SoundContainer are played at.
 		/// @param newValue The pitch variation the sounds in this SoundContainer are played at.
 		void SetPitchVariation(float newValue) {
-			DeferProperty(PendingOp::PitchVariation, newValue);
-			CurrentPitchVariation() = newValue;
+			if (DeferProperty(PendingOp::PitchVariation, newValue)) return;
+			m_PitchVariation = newValue;
 		}
 
 		/// Gets whether this SoundContainer's channels are paused or not.
@@ -352,8 +353,8 @@ namespace RTE {
 		/// Sets the music pre-entry time for this SoundContainer.
 		/// @param newValue The new MusicPreEntryTime for this SoundContainer in MS.
 		void SetMusicPreEntryTime(float newValue) {
-			DeferProperty(PendingOp::MusicPreEntry, newValue);
-			CurrentMusicPreEntryTime() = newValue;
+			if (DeferProperty(PendingOp::MusicPreEntry, newValue)) return;
+			m_MusicPreEntryTime = newValue;
 		}
 
 		/// Gets the music post-exit time for this SoundContainer.
@@ -363,8 +364,8 @@ namespace RTE {
 		/// Sets the music post-exit time for this SoundContainer.
 		/// @param newValue The new MusicExitTime for this SoundContainer in MS.
 		void SetMusicExitTime(float newValue) {
-			DeferProperty(PendingOp::MusicExit, newValue);
-			CurrentMusicExitTime() = newValue;
+			if (DeferProperty(PendingOp::MusicExit, newValue)) return;
+			m_MusicExitTime = newValue;
 		}
 #pragma endregion
 
@@ -487,6 +488,7 @@ namespace RTE {
 		/// Whether a mutation made here is the AI's decision rather than the simulation's action.
 		static bool Deferring() { return SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation; }
 		bool DeferProperty(PendingOp::Property property, float x = 0.0F, float y = 0.0F, int32_t value = 0);
+		void ApplyPendingControl(PendingOp::Property property, float x, float y, int32_t value);
 		void QueuePendingOp(PendingOp op);
 		void ReconcileAliasPosition();
 		/// Takes over a write Lua made through a position the shared scope handed out, if the AI made it.
