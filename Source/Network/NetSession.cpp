@@ -1003,6 +1003,7 @@ namespace RTE {
 				{"seats_closed_by_leave", stats.seatsClosedByLeave},
 				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
 				{"reseats_issued", stats.reseatsIssued},
+				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
