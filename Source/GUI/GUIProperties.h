@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A class containing properties for controls and skins.
 	class GUIProperties {
+		friend class GUICheckpoint;
 
 	public:
 		/// Constructor method used to instantiate a GUIProperties object in

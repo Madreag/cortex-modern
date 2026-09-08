@@ -12,6 +12,8 @@ GUITextPanel::GUITextPanel(GUIManager* Manager) :
 	m_CursorIndex = 0;
 	m_CursorColor = 0;
 	m_BlinkTimer.Reset();
+	m_Focus = false;
+	m_StartSelection = m_EndSelection = m_SelectionX = m_SelectionWidth = 0;
 
 	m_FontColor = 0;
 	m_FontSelectColor = 0;
@@ -49,6 +51,8 @@ GUITextPanel::GUITextPanel() :
 	m_CursorColor = 0;
 	m_FontColor = 0;
 	m_BlinkTimer.Reset();
+	m_Focus = false;
+	m_StartSelection = m_EndSelection = m_SelectionX = m_SelectionWidth = 0;
 }
 
 void GUITextPanel::Create(int X, int Y, int Width, int Height) {

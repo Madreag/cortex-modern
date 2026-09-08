@@ -11,6 +11,8 @@ GUIControl::GUIControl() {
 	m_ControlChildren.clear();
 	m_ControlParent = nullptr;
 	m_IsContainer = false;
+	m_MinWidth = m_MinHeight = m_DefWidth = m_DefHeight = 0;
+	m_ControlManager = nullptr;
 }
 
 void GUIControl::Create(const std::string& Name, int X, int Y, int Width, int Height) {

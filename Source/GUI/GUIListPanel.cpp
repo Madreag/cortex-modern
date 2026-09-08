@@ -9,6 +9,9 @@ using namespace RTE;
 
 GUIListPanel::GUIListPanel(GUIManager* Manager) :
     GUIPanel(Manager) {
+	m_HorzScroll = nullptr;
+	m_VertScroll = nullptr;
+	m_Skin = nullptr;
 	m_BaseBitmap = nullptr;
 	m_DrawBitmap = nullptr;
 	m_FrameBitmap = nullptr;
@@ -39,6 +42,9 @@ GUIListPanel::GUIListPanel(GUIManager* Manager) :
 
 GUIListPanel::GUIListPanel() :
     GUIPanel() {
+	m_HorzScroll = nullptr;
+	m_VertScroll = nullptr;
+	m_Skin = nullptr;
 	m_BaseBitmap = nullptr;
 	m_DrawBitmap = nullptr;
 	m_FrameBitmap = nullptr;

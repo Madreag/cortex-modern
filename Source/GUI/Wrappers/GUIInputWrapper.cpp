@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "CheckpointArchive.h"
 #include "GUIInputWrapper.h"
 #include "SDL3/SDL.h"
 #include "WindowMan.h"
@@ -9,6 +10,26 @@
 #include <iostream>
 
 using namespace RTE;
+
+std::string GUIInputWrapper::SaveCheckpoint() const {
+	CheckpointWriter writer("GUIInputWrapper1");
+	writer(GUIInput::SaveCheckpoint(), m_KeyHoldDuration, *m_KeyTimer, *m_CursorAccelTimer);
+	return writer.Text();
+}
+
+bool GUIInputWrapper::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	if (text.starts_with("9 GUIInput1 ")) return GUIInput::LoadCheckpoint(text, validateOnly);
+	try {
+		CheckpointReader reader(text, "GUIInputWrapper1", validateOnly);
+		std::string base;
+		reader.Value(base);
+		if (!GUIInput::LoadCheckpoint(base, true)) return false;
+		reader(m_KeyHoldDuration, *m_KeyTimer, *m_CursorAccelTimer);
+		reader.OnCommit([this, base = std::move(base)] { GUIInput::LoadCheckpoint(base); });
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
 
 GUIInputWrapper::GUIInputWrapper(int whichPlayer, bool keyJoyMouseCursor) :
 	GUIInput(whichPlayer, keyJoyMouseCursor),

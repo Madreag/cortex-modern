@@ -8,6 +8,7 @@ namespace RTE {
 
 	/// A base class inherited by all controls.
 	class GUIControl {
+		friend class GUICheckpoint;
 
 	public:
 		// Anchor points

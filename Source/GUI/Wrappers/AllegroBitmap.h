@@ -7,6 +7,7 @@ namespace RTE {
 
 	/// Wrapper class to convert raw Allegro BITMAPs to GUI library bitmaps.
 	class AllegroBitmap : public GUIBitmap {
+		friend class GUICheckpoint;
 
 	public:
 #pragma region Creation

@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// Skin class used for the controls to get skin details.
 	class GUISkin {
+		friend class GUICheckpoint;
 
 	public:
 		/// Constructor method used to instantiate a GUISkin object in system

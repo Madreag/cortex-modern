@@ -12,6 +12,7 @@ GUIFont::GUIFont(const std::string& Name) :
 	m_CurrentColor(m_MainColor),
 	m_CurrentBitmap(nullptr),
 	m_Name(Name), // Color index of the main font color
+	m_Characters{},
 	m_CharIndexCap(256),
 	m_Kerning(0),
 	m_Leading(0) {

@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A progressbar control class.
 	class GUIProgressBar : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Progressbar Notifications

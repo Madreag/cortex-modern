@@ -9,6 +9,7 @@ namespace RTE {
 
 	/// A ComboBox control class.
 	class GUIComboBox : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
 	public:
@@ -186,6 +187,7 @@ namespace RTE {
 
 	/// A ComboBoxButton control class.
 	class GUIComboBoxButton : public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Signals

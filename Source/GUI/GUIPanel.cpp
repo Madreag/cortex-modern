@@ -33,6 +33,7 @@ void GUIPanel::Clear() {
 
 	m_Manager = nullptr;
 	m_ValidRegion = false;
+	SetRect(&m_Rect, 0, 0, 0, 0);
 	m_SignalTarget = this;
 	m_ZPos = 0;
 

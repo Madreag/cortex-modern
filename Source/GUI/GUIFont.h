@@ -4,6 +4,8 @@ namespace RTE {
 
 	/// A class to handle the drawing of text.
 	class GUIFont {
+		friend class GUICheckpoint;
+		friend class FrameMan;
 
 	public:
 		// Horizontal Text Alignment,

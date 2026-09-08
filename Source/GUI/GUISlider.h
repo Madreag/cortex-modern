@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A slider control class.
 	class GUISlider : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Slider orientation

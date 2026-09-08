@@ -117,6 +117,8 @@ void GUIPropertyPage::Create(GUIProperties* Props) {
 }
 
 void GUIPropertyPage::Destroy() {
+	for (auto* panel: m_TextPanelList) delete panel;
+	m_TextPanelList.clear();
 	// Free the drawing bitmap
 	if (m_DrawBitmap) {
 		m_DrawBitmap->Destroy();

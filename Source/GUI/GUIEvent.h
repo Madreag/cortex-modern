@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A class to hold event information.
 	class GUIEvent {
+		friend class GUICheckpoint;
 
 	public:
 		// Event Types

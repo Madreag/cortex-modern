@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A collection box control class that contains child controls.
 	class GUICollectionBox : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// CollectionBox Notifications

@@ -7,6 +7,7 @@ namespace RTE {
 
 	/// A property page control class.
 	class GUIPropertyPage : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// PropertyPage Notifications

@@ -11,6 +11,8 @@ GUITab::GUITab(GUIManager* Manager, GUIControlManager* ControlManager) :
 	m_Mouseover(false),
 	m_Text("") {
 
+	m_Image = nullptr;
+	for (auto& rect: m_ImageRects) SetRect(&rect, 0, 0, 0, 0);
 	m_ControlID = "TAB";
 	m_ControlManager = ControlManager;
 	m_Font = nullptr;

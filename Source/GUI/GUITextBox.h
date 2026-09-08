@@ -6,6 +6,7 @@ namespace RTE {
 
 	/// A TextBox control class.
 	class GUITextBox : public GUIControl, public GUITextPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Notifications

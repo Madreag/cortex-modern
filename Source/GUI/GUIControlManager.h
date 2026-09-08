@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 #include "GUIWriter.h"
 #include "GUIReader.h"
 
@@ -7,9 +9,13 @@ namespace RTE {
 
 	/// A class used to manage the GUI as a whole and provide the interface between the GUI and the rest of the system.
 	class GUIControlManager {
+		friend class GUICheckpoint;
 		friend class GUIControl;
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 		// Cursor types
 		enum {
 			Pointer,

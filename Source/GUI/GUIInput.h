@@ -1,11 +1,19 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 namespace RTE {
 
 	/// An interface class inherited by the different types of input methods.
 	class GUIInput {
 
 	public:
+
+		static std::string SaveSharedCheckpoint();
+		static bool LoadSharedCheckpoint(std::string_view text, bool validateOnly = false);
+		virtual std::string SaveCheckpoint() const;
+		virtual bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		// Mouse & Key events
 		enum {
 			None,
@@ -127,6 +135,16 @@ namespace RTE {
 
 		/// Disables receiving text input events.
 		virtual void StopTextInput();
+
+	private:
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_KeyboardBuffer, self.m_ScanCodeState, self.m_TextInput, self.m_HasTextInput,
+				self.m_TextInputActive, self.m_MouseButtonsEvents, self.m_MouseButtonsStates, self.m_MouseX,
+				self.m_MouseY, self.m_LastFrameMouseX, self.m_LastFrameMouseY, self.m_Player,
+				self.m_MouseWheelChange, self.m_MouseOffsetX, self.m_MouseOffsetY, self.m_Modifier,
+				self.m_KeyJoyMouseCursor);
+		}
 
 	protected:
 		enum Constants {
