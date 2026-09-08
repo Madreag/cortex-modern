@@ -18,6 +18,10 @@ GUIScrollPanel::GUIScrollPanel(GUIManager* Manager) :
 	m_RebuildSize = true;
 	m_RebuildKnob = true;
 	m_ValueResolution = 1;
+	m_Orientation = Horizontal;
+	m_Minimum = m_Value = m_KnobPosition = m_KnobLength = m_GrabbedPos = m_GrabbedSide = 0;
+	m_Maximum = 100;
+	m_PageSize = 1;
 }
 
 GUIScrollPanel::GUIScrollPanel() :
@@ -33,6 +37,10 @@ GUIScrollPanel::GUIScrollPanel() :
 	m_RebuildSize = true;
 	m_RebuildKnob = true;
 	m_ValueResolution = 1;
+	m_Orientation = Horizontal;
+	m_Minimum = m_Value = m_KnobPosition = m_KnobLength = m_GrabbedPos = m_GrabbedSide = 0;
+	m_Maximum = 100;
+	m_PageSize = 1;
 }
 
 void GUIScrollPanel::Create(int X, int Y, int Width, int Height) {

@@ -7,6 +7,7 @@ namespace RTE {
 
 	/// A rectangle 'window' in the GUI that recieves mouse and keyboard events.
 	class GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Mouse buttons

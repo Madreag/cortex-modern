@@ -14,6 +14,8 @@ namespace RTE {
 	class GUIInputWrapper : public GUIInput {
 
 	public:
+		std::string SaveCheckpoint() const override;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 #pragma region Creation
 		/// Constructor method used to instantiate a GUIInputWrapper object in system memory.
 		/// @param whichPlayer Which player this GUIInputWrapper will handle input for. -1 means no specific player and will default to player 1.

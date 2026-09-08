@@ -6,6 +6,7 @@ namespace RTE {
 
 	/// A button control class.
 	class GUIButton : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Button Notifications

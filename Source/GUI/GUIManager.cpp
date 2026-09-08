@@ -39,6 +39,8 @@ void GUIManager::Clear() {
 
 	m_HoverTrack = false;
 	m_HoverPanel = nullptr;
+	m_HoverTime = 0;
+	SetRect(&m_DoubleClickRect, 0, 0, 0, 0);
 
 	// Double click times
 	m_LastMouseDown[0] = -99999.0F;

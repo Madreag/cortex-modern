@@ -6,6 +6,7 @@ namespace RTE {
 
 	/// The main manager that handles all the panels and inputs.
 	class GUIManager {
+		friend class GUICheckpoint;
 
 	public:
 		/// Constructor method used to instantiate a GUIManager object in system

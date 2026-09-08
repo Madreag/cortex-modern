@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A tab control class.
 	class GUITab : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Tab Notifications

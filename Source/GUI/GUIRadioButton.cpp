@@ -11,6 +11,8 @@ GUIRadioButton::GUIRadioButton(GUIManager* Manager, GUIControlManager* ControlMa
 	m_Mouseover(false),
 	m_Text("") {
 
+	m_Image = nullptr;
+	for (auto& rect: m_ImageRects) SetRect(&rect, 0, 0, 0, 0);
 	m_ControlID = "RADIOBUTTON";
 	m_ControlManager = ControlManager;
 	m_Font = 0;

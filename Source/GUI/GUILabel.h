@@ -8,6 +8,7 @@ namespace RTE {
 
 	/// A label control class.
 	class GUILabel : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Label Notifications

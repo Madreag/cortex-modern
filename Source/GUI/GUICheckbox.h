@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A checkbox control class.
 	class GUICheckbox : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Check types

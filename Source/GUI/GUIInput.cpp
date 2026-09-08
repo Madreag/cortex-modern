@@ -1,4 +1,7 @@
+#include "CheckpointArchive.h"
 #include "GUI.h"
+#include "WindowMan.h"
+#include "SDL3/SDL.h"
 
 using namespace RTE;
 
@@ -158,4 +161,57 @@ void GUIInput::StopTextInput() {
 	if (m_TextInputActive < 0) {
 		m_TextInputActive = 0;
 	}
+}
+
+std::string GUIInput::SaveCheckpoint() const {
+	CheckpointWriter writer("GUIInput1");
+	VisitCheckpoint(writer, *this);
+	return writer.Text();
+}
+
+bool GUIInput::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "GUIInput1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) {
+		return false;
+	}
+}
+
+std::string GUIInput::SaveSharedCheckpoint() {
+	CheckpointWriter writer("GUISharedInput2");
+	writer(m_OverrideInput, m_NetworkMouseButtonsEvents, m_NetworkMouseButtonsStates,
+		m_PrevNetworkMouseButtonsStates, m_NetworkMouseX, m_NetworkMouseY);
+	SDL_Rect area{};
+	int cursor = 0;
+	auto* window = g_WindowMan.GetWindow();
+	if (window && !SDL_GetTextInputArea(window, &area, &cursor)) throw std::runtime_error("could not read GUI text input area");
+	writer(window && SDL_TextInputActive(window), area.x, area.y, area.w, area.h, cursor);
+	return writer.Text();
+}
+
+bool GUIInput::LoadSharedCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		const bool legacy = text.starts_with("15 GUISharedInput1 ");
+		CheckpointReader reader(text, legacy ? "GUISharedInput1" : "GUISharedInput2", validateOnly);
+		reader(m_OverrideInput, m_NetworkMouseButtonsEvents, m_NetworkMouseButtonsStates,
+			m_PrevNetworkMouseButtonsStates, m_NetworkMouseX, m_NetworkMouseY);
+		if (!legacy) {
+			bool active;
+			SDL_Rect area{};
+			int cursor;
+			reader.Value(active); reader.Value(area.x); reader.Value(area.y); reader.Value(area.w); reader.Value(area.h); reader.Value(cursor);
+			if (area.w < 0 || area.h < 0) return false;
+			reader.OnCommit([active, area, cursor] {
+				if (auto* window = g_WindowMan.GetWindow()) {
+					if (!SDL_SetTextInputArea(window, &area, cursor) || !(active ? SDL_StartTextInput(window) : SDL_StopTextInput(window)))
+						throw std::runtime_error("could not restore GUI text input state");
+				} else if (active) throw std::runtime_error("a GUI text input window is missing");
+			});
+		}
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

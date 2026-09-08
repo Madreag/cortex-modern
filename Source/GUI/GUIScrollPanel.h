@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A scrollbar panel class used for controls requiring a scrollbar.
 	class GUIScrollPanel : public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Scroll panel orientation

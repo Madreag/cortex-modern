@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A radiobutton control class.
 	class GUIRadioButton : public GUIControl, public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// RadioButton Notifications

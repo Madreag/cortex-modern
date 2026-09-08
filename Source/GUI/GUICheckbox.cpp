@@ -5,6 +5,8 @@ using namespace RTE;
 
 GUICheckbox::GUICheckbox(GUIManager* Manager, GUIControlManager* ControlManager) :
     GUIControl(), GUIPanel(Manager) {
+	m_Image = nullptr;
+	for (auto& rect: m_ImageRects) SetRect(&rect, 0, 0, 0, 0);
 	m_ControlID = "CHECKBOX";
 	m_Image = nullptr;
 	m_ControlManager = ControlManager;

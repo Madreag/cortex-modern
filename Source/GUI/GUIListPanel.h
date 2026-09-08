@@ -9,6 +9,7 @@ namespace RTE {
 
 	/// A listbox panel class used for controls requiring a listbox.
 	class GUIListPanel : public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Signals

@@ -4,6 +4,7 @@ namespace RTE {
 
 	/// A text panel class.
 	class GUITextPanel : public GUIPanel {
+		friend class GUICheckpoint;
 
 	public:
 		// Text panel signals
