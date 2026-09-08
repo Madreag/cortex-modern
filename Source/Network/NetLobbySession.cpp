@@ -300,6 +300,8 @@ namespace RTE {
 				{"start_packets_sent", m_Stats.startPacketsSent},
 				{"start_packets_received", m_Stats.startPacketsReceived},
 				{"timeouts", m_Stats.timeouts},
+				{"unbound_connection_faults", m_Stats.unboundConnectionFaults},
+				{"unbound_disconnects", m_Stats.unboundDisconnects},
 			}},
 		};
 		return report.dump();
@@ -339,6 +341,12 @@ namespace RTE {
 
 	bool NetLobbySession::IsKnownRemote(uint8_t peerId) const {
 		return m_RemoteTransports.find(peerId) != m_RemoteTransports.end();
+	}
+
+	bool NetLobbySession::IsCommittedTransport(NetPeerId transportPeerId) const {
+		return transportPeerId != c_InvalidNetPeerId && std::any_of(m_RemoteTransports.begin(), m_RemoteTransports.end(), [transportPeerId](const auto& entry) {
+			return entry.second == transportPeerId;
+		});
 	}
 
 	void NetLobbySession::RemoveRemote(NetPeerId transportPeerId) {
@@ -559,6 +567,12 @@ namespace RTE {
 				break;
 			case NetTransportEventType::PeerDisconnected:
 				if (m_Config.host) {
+					// A joiner this round never bound is not part of it; only a committed remote leaving
+					// changes the round.
+					if (!IsCommittedTransport(event.peerId)) {
+						++m_Stats.unboundDisconnects;
+						break;
+					}
 					RemoveRemote(event.peerId);
 				} else {
 					Fail(event.reason.empty() ? "peer disconnected" : event.reason);
@@ -567,6 +581,12 @@ namespace RTE {
 			case NetTransportEventType::ConnectionFailed:
 			case NetTransportEventType::TransportError:
 				if (m_Config.host) {
+					// The transport reports these with no attributable peer, so an unbound joiner's
+					// fault must never reach a committed remote's connection or abort the round.
+					if (!IsCommittedTransport(event.peerId)) {
+						++m_Stats.unboundConnectionFaults;
+						break;
+					}
 					RejectRemote(event.peerId, event.reason.empty() ? "connection failed" : event.reason);
 					break;
 				}
