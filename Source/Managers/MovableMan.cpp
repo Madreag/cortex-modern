@@ -271,6 +271,21 @@ static bool IsLockstepLocalActor(const Actor* actor) {
 	return ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
 }
 
+std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCensus() const {
+	// Only the settled list: an actor still in m_AddedActors has not been agreed on by every peer yet,
+	// and a ledger entry naming one would reseat something a returning peer never held.
+	std::vector<LockstepActorOwner> census;
+	census.reserve(m_Actors.size());
+	for (const Actor* actor: m_Actors) {
+		if (!actor) {
+			continue;
+		}
+		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
+		census.push_back({actorID, actor->GetTeam(), ScenarioRunner::GetLockstepActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled())});
+	}
+	return census;
+}
+
 static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::deque<Actor*>& actors, bool localOwned) {
 	std::vector<ControllerFrame> frames;
 	frames.reserve(actors.size());
@@ -364,7 +379,14 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		// Only a peer that controls a team may issue economy commands for it — ANY of a shared
 		// co-op team's human peers counts; every peer resolves this identically.
 		const int32_t commandTeam = NetGameCommandTeam(command.payload);
-		if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
+		if (std::holds_alternative<NetGameReseat>(command.payload)) {
+			// A reseat is system-authored: the host hands a returning holder back its own team, which
+			// the host itself need not control, so the team gate cannot vet it.
+			if (command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
+				continue;
+			}
+		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;
 		}
@@ -557,6 +579,19 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 			ScenarioRunner::SetLockstepControlOverride(switchControl->actorUID, switchControl->newOwnerPeerId);
 			std::cout << "[net-match] control of actor " << switchControl->actorUID << " -> peer " << static_cast<int>(switchControl->newOwnerPeerId) << std::endl;
+		} else if (const NetGameReseat* reseat = std::get_if<NetGameReseat>(&command.payload)) {
+			// Like SwitchControl, the override lands even for an actor that is already gone so every
+			// peer's map stays identical; a live actor that left the team is not reseated.
+			int reseated = 0;
+			for (const int64_t actorUID: reseat->actorUIDs) {
+				const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUID)));
+				if (actor && actor->GetTeam() != reseat->team) {
+					continue;
+				}
+				ScenarioRunner::SetLockstepControlOverride(actorUID, reseat->newOwnerPeerId);
+				++reseated;
+			}
+			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
 		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
 			AHuman* human = dynamic_cast<AHuman*>(actor);

@@ -2,6 +2,7 @@
 
 #include "NetIdentity.h"
 #include "NetProtocol.h"
+#include "NetReconnectSession.h"
 #include "NetTransport.h"
 
 #include <cstdint>
@@ -50,6 +51,12 @@ namespace RTE {
 		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
 		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
+		uint32_t unauthenticatedConnectionsRefused = 0; //!< Host: connections refused because the half-open bound was already full.
+		uint32_t fencedPackets = 0; //!< Host: packets from a superseded incarnation of a seat, dropped for it.
+		uint32_t fencedDisconnects = 0; //!< Host: a dead incarnation timing out, which must not evict the seat.
+		uint32_t admissionMessages = 0; //!< H4 admission messages handed to the reconnect plane.
+		uint32_t oldWireRejectionsSent = 0; //!< Host: explicit rejections stamped at the peer's own header version (§10).
+		uint32_t oldWireDisconnects = 0; //!< Host: old-wire peers whose version we cannot answer in, disconnected with the reason text.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -62,6 +69,10 @@ namespace RTE {
 
 	class NetSession {
 	public:
+		// Twice the peer cap, so a full lobby plus a reconnect attempt per seat all fit while an
+		// unauthenticated connection still cannot make the host track an unbounded number of them.
+		static constexpr uint32_t c_MaxUnauthenticatedPeers = 8;
+
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
 		void Tick(uint64_t nowMs, bool pollTransport = true);
@@ -73,6 +84,18 @@ namespace RTE {
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void Close(const std::string& reason);
+		/// Ends the hosted session for every peer with the one reason that lets a client delete its
+		/// recovery record. Sent from the same place the seat registry is cleared, and nowhere else.
+		void EndHostedSession(const std::string& reason);
+
+		/// Attaches the H4 admission plane. Without one the session behaves exactly as it did before
+		/// reconnect existed: an admission message is an unexpected handshake message.
+		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
+		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
+		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
+		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
+		/// The frame a seat drop is recorded against; the match runner keeps it current.
+		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
 		NetSessionRole GetRole() const { return m_Role; }
 		NetSessionState GetState() const { return m_State; }
@@ -90,6 +113,8 @@ namespace RTE {
 		bool HasReject() const { return m_HasReject; }
 		const std::string& GetRejectSummary() const { return m_RejectSummary; }
 		const NetSessionStats& GetStats() const { return m_Stats; }
+		/// The number of connections the host is tracking that have not yet passed a ClientHello.
+		uint32_t GetUnauthenticatedPeerCount() const;
 
 		/// Builds a one-line human-readable reject/failure reason from the recorded mismatch,
 		/// e.g. "deterministic config hash does not match (deterministic_config_hash: 4d31cc89.. vs 77ab01ff..)".
@@ -124,11 +149,15 @@ namespace RTE {
 		void MaybeSendHeartbeats();
 		void ProcessEvent(const NetTransportEvent& event);
 		void ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes);
-		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError);
+		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes);
+		/// Host: answers a peer whose header version we do not speak, explicitly when the envelope
+		/// allows it and otherwise with a documented best-effort disconnect (§10).
+		void RejectOldWirePeer(NetPeerId peerId, const std::vector<uint8_t>& bytes);
 		void HandleHostMessage(NetPeerId peerId, const NetMessage& message);
 		void HandleClientMessage(NetPeerId peerId, const NetMessage& message);
 		void CheckTimeouts();
 		void RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
+		void RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void SetRejected(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void SetFailed(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
@@ -142,6 +171,13 @@ namespace RTE {
 		NetHostHello BuildHostHello(uint8_t assignedPeerId) const;
 		NetJoinAccepted BuildJoinAccepted(uint8_t assignedPeerId) const;
 		NetReadyState BuildReadyState(bool ready) const;
+		/// @return Whether the payload was an admission message the reconnect plane took.
+		bool RouteAdmissionMessage(NetPeerId peerId, const NetPayload& payload);
+		void FlushReconnectOutbound();
+		/// Client: turns a committed admission transaction into Ready on the seat's own peer id, and a
+		/// settled-but-uncommitted one into a legible session failure.
+		void CompleteClientAdmission();
+
 		NetIdentityMismatch ValidateClientHello(const NetClientHello& hello) const;
 		NetIdentityMismatch ValidateHostHello(const NetHostHello& hello) const;
 
@@ -169,6 +205,9 @@ namespace RTE {
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
 		NetSessionStats m_Stats;
+		NetReconnectHost* m_ReconnectHost = nullptr;
+		NetReconnectClient* m_ReconnectClient = nullptr;
+		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
 	};
 

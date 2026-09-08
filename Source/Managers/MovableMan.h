@@ -447,6 +447,17 @@ namespace RTE {
 		/// @return The number of actors.
 		long GetActorCount() const { return m_Actors.size(); }
 
+		/// One live actor and the lockstep peer controlling it, with no sim state attached.
+		struct LockstepActorOwner {
+			int64_t actorUID = 0;
+			int32_t team = 0;
+			uint8_t ownerPeerId = 0;
+		};
+
+		/// Every settled live actor with the lockstep peer that controls it right now. Sim thread only:
+		/// the reconnect ledger records a dropped seat's share of this at the frame it dropped.
+		std::vector<LockstepActorOwner> BuildLockstepOwnershipCensus() const;
+
 		/// Gets the number of particles (MOPixel:s) currently held.
 		/// @return The number of particles.
 		long GetParticleCount() const { return m_Particles.size(); }

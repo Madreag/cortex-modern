@@ -3,8 +3,10 @@
 #include "LoopbackTransport.h"
 #include "NetProtocol.h"
 
+#include <array>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -35,6 +37,28 @@ namespace RTE {
 			payload.sessionIdentityHash = MakeHash(97);
 			payload.hasUserdataModules = false;
 			return payload;
+		}
+
+		template <size_t N>
+		std::array<uint8_t, N> MakeBytes(uint8_t seed) {
+			std::array<uint8_t, N> bytes{};
+			for (size_t i = 0; i < bytes.size(); ++i) {
+				bytes[i] = static_cast<uint8_t>(seed + static_cast<uint8_t>(i));
+			}
+			return bytes;
+		}
+
+		NetH4Identity MakeH4Identity() {
+			NetH4Identity identity;
+			identity.controllerFrameVersion = 5;
+			identity.controllerFrameEncodedSize = 80;
+			identity.gameVersion = "7.0.0";
+			identity.buildId = "stage2-h4a";
+			identity.deterministicConfigHash = MakeHash(1);
+			identity.moduleManifestHash = MakeHash(33);
+			identity.sessionRulesHash = MakeHash(65);
+			identity.sessionIdentityHash = MakeHash(97);
+			return identity;
 		}
 
 		bool ExpectDecodeError(const std::vector<uint8_t>& bytes, NetProtocolErrorCode code, std::string* error) {
@@ -157,6 +181,212 @@ namespace RTE {
 			}
 			if (bytes[24] != 0x88U || bytes[25] != 0x77U || bytes[31] != 0x11U) {
 				*error = "canonical payload is not little-endian";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestH4RoundTrips(std::string* error) {
+			NetH4NewJoin newJoin;
+			newJoin.txId = MakeBytes<16>(0x10);
+			newJoin.identity = MakeH4Identity();
+			newJoin.displayName = "Player";
+
+			NetH4Reclaim reclaim;
+			reclaim.txId = MakeBytes<16>(0x20);
+			reclaim.epoch = MakeBytes<16>(0x30);
+			reclaim.stableSeat = 2;
+			reclaim.holderGeneration = 7;
+			reclaim.identity = MakeH4Identity();
+			reclaim.displayName = "Player";
+
+			// Every fixed-width admission message, with the size the wire schema fixes for it.
+			const std::vector<std::pair<NetMessage, size_t>> messages = {
+				{{21, 0, NetH4TicketOffer{c_NetH4Version, MakeBytes<16>(0x40), MakeBytes<16>(0x50), 3, 1, MakeBytes<32>(0x60), 0xAABBCCDDEEFF0011ULL, 20000}}, 84},
+				{{22, 0, NetH4TicketStoredAck{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, true}}, 28},
+				{{23, 0, NetH4JoinCommitted{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, 1, 2}}, 32},
+				{{25, 0, NetH4Challenge{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<32>(0x70), 10000}}, 54},
+				{{26, 0, NetH4Proof{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<16>(0x30), 2, 7, MakeBytes<16>(0x80), MakeBytes<32>(0x90)}}, 88},
+				{{27, 0, NetH4LeaveRequest{c_NetH4Version, MakeBytes<16>(0xA0), MakeBytes<16>(0x30), 2, 7}}, 40},
+				{{28, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}}, 28},
+			};
+			for (const auto& [message, payloadBytes] : messages) {
+				if (!RoundTrip(message, error)) {
+					return false;
+				}
+				std::vector<uint8_t> bytes;
+				if (!EncodeMessage(message, bytes, error)) {
+					return false;
+				}
+				if (bytes.size() - NetProtocol::c_HeaderBytes != payloadBytes) {
+					*error = std::string(NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload))) +
+					         " encoded " + std::to_string(bytes.size() - NetProtocol::c_HeaderBytes) + " payload bytes, not " + std::to_string(payloadBytes);
+					return false;
+				}
+			}
+			if (!RoundTrip({20, 0, newJoin}, error) || !RoundTrip({24, 0, reclaim}, error)) {
+				return false;
+			}
+
+			// The worst-case admission message must fit the size the host refuses above, with headroom
+			// for the Phase-B fields.
+			NetH4Reclaim widest = reclaim;
+			widest.identity.gameVersion.assign(NetProtocol::c_MaxShortTextBytes, 'v');
+			widest.identity.buildId.assign(NetProtocol::c_MaxShortTextBytes, 'b');
+			widest.displayName.assign(NetProtocol::c_MaxDisplayNameBytes, 'n');
+			std::vector<uint8_t> widestBytes;
+			if (!EncodeMessage({29, 0, widest}, widestBytes, error)) {
+				return false;
+			}
+			// The cap is sized against this number, so pin it rather than only bounding it.
+			if (widestBytes.size() - NetProtocol::c_HeaderBytes != 498U) {
+				*error = "worst-case Reclaim payload is " + std::to_string(widestBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 498";
+				return false;
+			}
+			if (widestBytes.size() - NetProtocol::c_HeaderBytes > NetProtocol::c_MaxH4PayloadBytes) {
+				*error = "worst-case Reclaim exceeds the admission size cap";
+				return false;
+			}
+			if (!RoundTrip({29, 0, widest}, error)) {
+				return false;
+			}
+			return true;
+		}
+
+		bool TestH4CanonicalBytes(std::string* error) {
+			std::vector<uint8_t> bytes;
+			if (!EncodeMessage({0x01020304U, 0, NetH4Challenge{c_NetH4Version, MakeBytes<16>(0x10), MakeBytes<32>(0x20), 10000}}, bytes, error)) {
+				return false;
+			}
+			std::vector<uint8_t> expected = {
+				0x43, 0x43, 0x4E, 0x32,
+				0x01, 0x00,
+				0x18, 0x00,
+				0x10, 0x00,
+				0x00, 0x00,
+				0x04, 0x03, 0x02, 0x01,
+				0x36, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00,
+				0x01, 0x00,
+			};
+			for (uint8_t i = 0; i < 16; ++i) {
+				expected.push_back(static_cast<uint8_t>(0x10 + i));
+			}
+			for (uint8_t i = 0; i < 32; ++i) {
+				expected.push_back(static_cast<uint8_t>(0x20 + i));
+			}
+			expected.insert(expected.end(), {0x10, 0x27, 0x00, 0x00});
+			if (bytes != expected) {
+				*error = "canonical Challenge bytes differed (size " + std::to_string(bytes.size()) + ")";
+				return false;
+			}
+
+			if (!EncodeMessage({7, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}}, bytes, error)) {
+				return false;
+			}
+			std::vector<uint8_t> expectedAck = {
+				0x43, 0x43, 0x4E, 0x32,
+				0x01, 0x00,
+				0x18, 0x00,
+				0x13, 0x00,
+				0x00, 0x00,
+				0x07, 0x00, 0x00, 0x00,
+				0x1C, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00,
+				0x01, 0x00,
+			};
+			for (uint8_t i = 0; i < 16; ++i) {
+				expectedAck.push_back(static_cast<uint8_t>(0xA0 + i));
+			}
+			expectedAck.insert(expectedAck.end(), {0x02, 0x00, 0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00});
+			if (bytes != expectedAck) {
+				*error = "canonical LeaveAck bytes differed (size " + std::to_string(bytes.size()) + ")";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestH4DecodeFailures(std::string* error) {
+			std::vector<uint8_t> bytes;
+			if (!EncodeMessage({1, 0, NetH4Challenge{c_NetH4Version, MakeBytes<16>(0x10), MakeBytes<32>(0x20), 10000}}, bytes, error)) {
+				return false;
+			}
+			std::vector<uint8_t> mutated = bytes;
+			mutated[NetProtocol::c_HeaderBytes] = 0x02U;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::UnsupportedVersion, error)) {
+				return false;
+			}
+
+			// An oversized admission message is refused on the header, before any field is parsed.
+			mutated.assign(NetProtocol::c_HeaderBytes + NetProtocol::c_MaxH4PayloadBytes + 1U, 0);
+			mutated[0] = 0x43; mutated[1] = 0x43; mutated[2] = 0x4E; mutated[3] = 0x32;
+			mutated[4] = 0x01;
+			mutated[6] = 0x18;
+			mutated[8] = static_cast<uint8_t>(NetMessageType::Reclaim);
+			mutated[16] = static_cast<uint8_t>((NetProtocol::c_MaxH4PayloadBytes + 1U) & 0xFFU);
+			mutated[17] = static_cast<uint8_t>(((NetProtocol::c_MaxH4PayloadBytes + 1U) >> 8) & 0xFFU);
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::PayloadTooLarge, error)) {
+				return false;
+			}
+
+			NetH4Reclaim reclaim;
+			reclaim.txId = MakeBytes<16>(0x20);
+			reclaim.epoch = MakeBytes<16>(0x30);
+			reclaim.stableSeat = 2;
+			reclaim.holderGeneration = 7;
+			reclaim.identity = MakeH4Identity();
+			if (!EncodeMessage({2, 0, reclaim}, bytes, error)) {
+				return false;
+			}
+			// Generation 0 names an unheld seat, so no message may claim it.
+			mutated = bytes;
+			for (size_t i = 0; i < 4; ++i) {
+				mutated[NetProtocol::c_HeaderBytes + 36U + i] = 0;
+			}
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+			mutated = bytes;
+			mutated.resize(NetProtocol::c_HeaderBytes + 20U);
+			mutated[16] = 20U;
+			mutated[17] = 0;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::TruncatedPayload, error)) {
+				return false;
+			}
+
+			if (!EncodeMessage({3, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}}, bytes, error)) {
+				return false;
+			}
+			mutated = bytes;
+			mutated[NetProtocol::c_HeaderBytes + 24U] = 2U;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+			mutated = bytes;
+			mutated[NetProtocol::c_HeaderBytes + 25U] = 1U;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::ReservedFieldNonZero, error)) {
+				return false;
+			}
+
+			if (!EncodeMessage({4, 0, NetH4JoinCommitted{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, 1, 2}}, bytes, error)) {
+				return false;
+			}
+			mutated = bytes;
+			for (size_t i = 0; i < 4; ++i) {
+				mutated[NetProtocol::c_HeaderBytes + 24U + i] = 0;
+			}
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+
+			NetProtocolError encodeError;
+			std::vector<uint8_t> ignored;
+			NetH4NewJoin longName;
+			longName.txId = MakeBytes<16>(0x10);
+			longName.identity = MakeH4Identity();
+			longName.displayName.assign(NetProtocol::c_MaxDisplayNameBytes + 1U, 'a');
+			if (NetProtocol::Encode({5, 0, longName}, ignored, &encodeError) || encodeError.code != NetProtocolErrorCode::StringTooLong) {
+				*error = "overlong H4 display name was accepted";
 				return false;
 			}
 			return true;
@@ -421,6 +651,15 @@ namespace RTE {
 			return fail(error);
 		}
 		if (!TestDecodeFailures(&error)) {
+			return fail(error);
+		}
+		if (!TestH4RoundTrips(&error)) {
+			return fail(error);
+		}
+		if (!TestH4CanonicalBytes(&error)) {
+			return fail(error);
+		}
+		if (!TestH4DecodeFailures(&error)) {
 			return fail(error);
 		}
 		if (!TestLoopback(&error)) {
