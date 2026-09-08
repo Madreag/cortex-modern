@@ -9,6 +9,7 @@
 #include "GAScripted.h"
 #include "BuyMenuGUI.h"
 #include "InventoryMenuGUI.h"
+#include "ObjectPickerGUI.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "GLResourceMan.h"
@@ -1686,6 +1687,35 @@ bool GUICheckpoint::RunSelfTest() {
 			check("failed_checkpoint_clone_pool_cleanup", pools() == poolBefore);
 			source.GetBuyGUI(0)->m_PendingCheckpoint.clear();
 			check("failed_checkpoint_clone_original_unchanged", source.SaveCheckpoint() == sourceBefore);
+		}
+		{
+			// A save written where a module was missing or extra is still that game's menu state.
+			const int moduleCount = g_PresetMan.GetTotalModuleCount();
+			BuyMenuGUI menu;
+			ObjectPickerGUI picker;
+			const auto moduleFlags = [](int count, int expandedModule) {
+				std::vector<bool> flags(count > 0 ? count : 0, false);
+				if (expandedModule >= 0 && expandedModule < count) flags[expandedModule] = true;
+				return flags;
+			};
+			const auto oldBuyMenuRecord = [&](int count) {
+				CheckpointWriter writer("BuyMenuGUI2");
+				writer(menu.m_CheckpointInitialized);
+				BuyMenuGUI::VisitCheckpoint(writer, menu);
+				writer(GUICheckpoint::SaveEntityReference(menu.m_pSelectedCraft), moduleFlags(count, 0), size_t{0}, false);
+				return writer.Text();
+			};
+			check("buy_menu_record_from_fewer_modules", menu.LoadCheckpoint(oldBuyMenuRecord(moduleCount - 1), true));
+			check("buy_menu_record_from_more_modules", menu.LoadCheckpoint(oldBuyMenuRecord(moduleCount + 2), true));
+			picker.m_ExpandedModules = moduleFlags(moduleCount - 1, 1);
+			check("object_picker_record_from_fewer_modules", picker.LoadCheckpoint(picker.SaveCheckpoint()));
+			const bool sized = picker.m_ExpandedModules.size() == static_cast<size_t>(moduleCount);
+			check("object_picker_module_flags_sized", sized);
+			check("object_picker_module_flags_kept", sized && moduleCount > 2 && picker.m_ExpandedModules[1] && !picker.m_ExpandedModules[moduleCount - 1]);
+			picker.m_PendingCheckpoint.clear();
+			const std::vector<bool> chosen = moduleFlags(moduleCount, moduleCount - 1);
+			picker.m_ExpandedModules = chosen;
+			check("object_picker_module_flags_round_trip", picker.LoadCheckpoint(picker.SaveCheckpoint()) && picker.m_ExpandedModules == chosen);
 		}
 	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint-selftest] exception=" << exception.what() << std::endl; passed = false; }
 	if (!GUIInput::LoadSharedCheckpoint(oldSharedInput)) passed = false;
