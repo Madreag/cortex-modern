@@ -85,6 +85,7 @@ namespace RTE {
 				2,
 				"SimBaseline",
 				"unique-id-split",
+				0x5EED0000C0FFEE01ULL,
 			};
 			if (!RoundTrip({start}, error)) {
 				return false;
@@ -93,6 +94,7 @@ namespace RTE {
 			NetLockstepFrame frame;
 			frame.senderPeerId = 2;
 			frame.targetFrame = 32;
+			frame.roundId = 0x5EED0000C0FFEE01ULL;
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
 			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}};
 			if (!RoundTrip({frame}, error)) {
@@ -115,7 +117,7 @@ namespace RTE {
 			for (size_t i = 0; i < checksumHash.size(); ++i) {
 				checksumHash[i] = static_cast<uint8_t>(i * 7 + 3);
 			}
-			if (!RoundTrip({NetLockstepChecksum{1, 99, checksumHash}}, error)) {
+			if (!RoundTrip({NetLockstepChecksum{1, 99, checksumHash, 0x5EED0000C0FFEE01ULL}}, error)) {
 				return false;
 			}
 			return true;
@@ -132,7 +134,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x0A, 0x00,
+				0x0B, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -491,6 +493,159 @@ namespace RTE {
 			    report.find("\"frames_accepted\":5") == std::string::npos ||
 			    report.find("\"timeouts\":0") == std::string::npos) {
 				*error = "happy-path report is missing deterministic stats";
+				return false;
+			}
+			return true;
+		}
+
+		// A resync restarts lockstep while a peer is still reloading: the host's start reaches a
+		// transport nobody is polling for it, and the host's first frames then arrive before the
+		// peer ever sees a start. The frames must wait for the retransmitted start, not fail the round.
+		bool TestCoordinatorFrameBeforeStart(std::string* error) {
+			const uint16_t port = 43011;
+			const uint64_t sessionId = 0x7000000000000011ULL;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!hostTransport.StartHost(port, error) || !clientTransport.Connect("loopback", port, error)) {
+				return false;
+			}
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 2, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 2, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x9A5E000000000007ULL;
+			hostConfig.remoteTransportPeerId = 1;
+			clientConfig.remoteTransportPeerId = 1;
+			// The missing-frame grace must outlast the start retransmit cycle, as a real match's does.
+			hostConfig.timeoutMs = 2000;
+			clientConfig.timeoutMs = 2000;
+			// One clock for the whole scenario; a wait that spans two drives must not see time go backwards.
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 10, now += 10) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				*error = "condition not reached; host=" + host.BuildReportJson() + " client=" + client.BuildReportJson();
+				return false;
+			};
+			if (!host.Start(hostTransport, hostConfig, error)) {
+				return false;
+			}
+			// The client is between rounds: its transport drains the host's start into the void.
+			clientTransport.AdvanceTimeMs(10);
+			if (clientTransport.PollEvents().empty()) {
+				*error = "the host start did not reach the client transport";
+				return false;
+			}
+			if (!client.Start(clientTransport, clientConfig, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning(); }, 100)) {
+				return false;
+			}
+			for (uint64_t producedFrame = 0; producedFrame < 3; ++producedFrame) {
+				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			if (!drive([&] { return client.GetStats().preStartFramesBuffered == 3; }, 100)) {
+				return false;
+			}
+			if (client.IsFailed() || client.IsRunning()) {
+				*error = "frames that outran the start were not held (" + client.BuildReportJson() + ")";
+				return false;
+			}
+			if (!drive([&] { return client.IsRunning(); }, 1000)) {
+				return false;
+			}
+			for (uint64_t producedFrame = 0; producedFrame < 3; ++producedFrame) {
+				if (!client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			if (!drive([&] {
+					DrainReady(host, hostReady);
+					DrainReady(client, clientReady);
+					return hostReady.size() == 3 && clientReady.size() == 3;
+				}, 1000)) {
+				return false;
+			}
+			if (host.GetStats().startRetransmits == 0 || client.GetStats().startRetransmits == 0 || client.GetRoundId() != hostConfig.roundId) {
+				*error = "the missed start was not repeated (" + host.BuildReportJson() + " / " + client.BuildReportJson() + ")";
+				return false;
+			}
+			if (hostReady != std::vector<uint64_t>{2, 3, 4} || clientReady != std::vector<uint64_t>{2, 3, 4}) {
+				*error = "held frames did not commit after the start";
+				return false;
+			}
+			return true;
+		}
+
+		// A frame or checksum tagged with another round is a straggler from before a resync: ignored, never applied or failed on.
+		bool TestCoordinatorIgnoresStaleRound(std::string* error) {
+			const uint16_t port = 43012;
+			const uint64_t sessionId = 0x7000000000000012ULL;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 2, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x9A5E000000000008ULL;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig,
+			                          MakeCoordinatorConfig(2, 1, sessionId, 2, NetTransportLane::ControlReliable), error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			if (client.GetRoundId() != hostConfig.roundId) {
+				*error = "client did not adopt the host's round";
+				return false;
+			}
+			NetLockstepFrame stale;
+			stale.senderPeerId = 1;
+			stale.targetFrame = 2;
+			stale.roundId = 0x9A5E000000000001ULL;
+			stale.frames = {MakeFrame(100, 1)};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({stale}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			NetLockstepChecksum staleChecksum;
+			staleChecksum.senderPeerId = 1;
+			staleChecksum.frame = 2;
+			staleChecksum.roundId = 0x9A5E000000000001ULL;
+			if (!EncodePacket({staleChecksum}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return client.GetStats().staleRoundPackets == 2; }, error)) {
+				return false;
+			}
+			if (client.IsFailed() || client.GetStats().remoteControllerFramesReceived != 0) {
+				*error = "a stale-round packet was applied or failed the round";
+				return false;
+			}
+			for (uint64_t producedFrame = 0; producedFrame < 3; ++producedFrame) {
+				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
+				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					DrainReady(host, hostReady);
+					DrainReady(client, clientReady);
+					return hostReady.size() == 3 && clientReady.size() == 3;
+				}, error)) {
 				return false;
 			}
 			return true;
@@ -951,6 +1106,8 @@ namespace RTE {
 		    !TestRecoveryStopsAtCompletedTick(&error) ||
 		    !TestCompletionDrainsAppliedTicks(&error) ||
 		    !TestCoordinatorDelayedHappyPath(&error) ||
+		    !TestCoordinatorFrameBeforeStart(&error) ||
+		    !TestCoordinatorIgnoresStaleRound(&error) ||
 		    !TestCoordinatorPerSenderDelay(&error) ||
 		    !TestCoordinatorPerSenderDelayMismatch(&error) ||
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||

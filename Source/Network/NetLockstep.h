@@ -73,6 +73,7 @@ namespace RTE {
 		uint8_t peerCount = 0;
 		std::string scenario;
 		std::string ownershipPolicy;
+		uint64_t roundId = 0; //!< The host's tag for this lockstep round; a client adopts it from the host's start.
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -82,6 +83,7 @@ namespace RTE {
 		uint64_t targetFrame = 0;
 		std::vector<ControllerFrame> frames;
 		std::vector<NetGameCommand> commands;
+		uint64_t roundId = 0;
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -108,6 +110,7 @@ namespace RTE {
 		uint8_t senderPeerId = 0;
 		uint64_t frame = 0;
 		std::array<uint8_t, 32> hash{};
+		uint64_t roundId = 0;
 
 		bool operator==(const NetLockstepChecksum&) const = default;
 	};
@@ -150,6 +153,7 @@ namespace RTE {
 		std::string scenario = "lockstep";
 		std::string ownershipPolicy = "unique-id-split";
 		NetMatchConfig matchConfig;
+		uint64_t roundId = 0; //!< Host: a fresh nonzero tag per round. Client: 0, adopted from the host's start.
 	};
 
 	struct NetLockstepReadyFrame {
@@ -173,6 +177,9 @@ namespace RTE {
 		uint32_t framePacketsReceived = 0;
 		uint32_t ignoredSessionPackets = 0;
 		uint32_t ignoredAdmissionFaults = 0; //!< Unbound-transport faults/garbage dropped without touching the running match.
+		uint32_t staleRoundPackets = 0; //!< Packets tagged with another lockstep round, ignored.
+		uint32_t startRetransmits = 0; //!< Starts re-sent while waiting, or on a peer's repeated start.
+		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
 		uint64_t localControllerFramesSent = 0;
 		uint64_t remoteControllerFramesReceived = 0;
 		uint64_t remoteControllerFramesAccepted = 0;
@@ -188,9 +195,11 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 10;
+		static constexpr uint16_t c_Version = 11;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
+		// Version 11 adds the round tag to starts, frames and checksums.
 		static constexpr uint16_t c_MinVersion = 8;
+		static constexpr uint16_t c_RoundVersion = 11;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -257,6 +266,8 @@ namespace RTE {
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
+		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
+		uint64_t GetRoundId() const { return m_RoundId; }
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
 		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
@@ -283,8 +294,11 @@ namespace RTE {
 		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
-		void HandleStart(const NetLockstepStart& start, NetPeerId fromTransport);
+		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport);
+		bool SendStart(std::string* error);
+		/// Delivers the frames and checksums a peer sent before its start reached us.
+		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport);
 		/// Whether a packet's claimed sender owns the transport it arrived on. Only the relay host
@@ -323,6 +337,10 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
+		uint64_t m_RoundId = 0;
+		uint64_t m_LastStartSentMs = UINT64_MAX;
+		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
+		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;

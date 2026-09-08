@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <random>
 #include <thread>
 #include <utility>
 
@@ -315,6 +316,14 @@ namespace RTE {
 		lockstepConfig.scenario = config.scenario;
 		lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(m_MatchConfig.ownershipPolicy);
 		lockstepConfig.matchConfig = m_MatchConfig;
+		// The host tags each round so a late packet from the previous round cannot join this one.
+		if (config.host) {
+			std::random_device entropy;
+			do {
+				lockstepConfig.roundId = (static_cast<uint64_t>(entropy()) << 32) ^ static_cast<uint64_t>(entropy()) ^
+				                         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+			} while (lockstepConfig.roundId == 0);
+		}
 		if (!coordinator.Start(transport, lockstepConfig, error)) {
 			SetFailed(error ? *error : "lockstep start failed");
 			return false;
