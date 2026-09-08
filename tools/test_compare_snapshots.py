@@ -392,7 +392,7 @@ class RuntimeProjectionTests(unittest.TestCase):
     def test_new_movable_and_audio_payload_fields_remain_strict(self):
         for version, fields in (("MovableObjectRuntime1", ("ever_added", "updated", "screen_effect_hash", "mass", "already_hit_by")),
                 ("AudioRuntime1", ("voices", "events", "master_volume", "next_sound_container")),
-                ("AudioVoice1", ("owner", "path", "position", "loops")),
+                ("AudioVoice1", ("owner", "path", "loops")),
                 ("SoundContainer1", ("identity", "playing_channels", "paused", "pitch"))):
             value = dict(version=version, **dict.fromkeys(fields, 1))
             for key in fields:
@@ -508,6 +508,55 @@ class RuntimeProjectionTests(unittest.TestCase):
         for changed in (b"4 text 1 2 3 4 5 2 ", b"4 text 1 2 3 4 5 -1 "):
             with self.assertRaises(ValueError):
                 runtime.decode(record("PrimitiveMan1", b"1 " + sized(image) + b"0 1 " + sized(text.replace(b"4 text 1 2 3 4 5 1 ", changed))))
+
+    def test_listener_derived_audio_and_palette_scratch_are_local(self):
+        """Only what FMOD derives from this peer's listener, and the live blend state, may differ."""
+        voice = dict(version="AudioVoice1", owner=1, path=1, position=1, loops=1)
+        self.assert_field(voice, ("position",), True)
+        for key in ("owner", "path", "loops"):
+            with self.subTest(key=key):
+                self.assert_field(voice, (key,), False)
+        runtime_state = dict(version="AudioRuntime2", player_positions=1, listeners=1, audibility=1,
+            samples=1, voices=1, groups=1, events=1, minimum_distances=1, next_voice=1, next_sound_container=1)
+        for key in ("player_positions", "listeners"):
+            with self.subTest(key=key):
+                self.assert_field(runtime_state, (key,), True)
+        for key in ("audibility", "samples", "voices", "groups", "events", "minimum_distances",
+                "next_voice", "next_sound_container"):
+            with self.subTest(key=key):
+                self.assert_field(runtime_state, (key,), False)
+        palette = dict(version="FramePalette1", selected_key=1, alpha=1, selected_mode=1, blend_values=1, black=1)
+        for key in ("selected_key", "alpha"):
+            with self.subTest(key=key):
+                self.assert_field(palette, (key,), True)
+        for key in ("selected_mode", "blend_values", "black"):
+            with self.subTest(key=key):
+                self.assert_field(palette, (key,), False)
+
+    def test_voice_control_and_lowpass_are_local_but_group_buses_are_not(self):
+        """The same AudioControl1 payload is local under audio.voices and strict under audio.groups."""
+        effect = dict(version="AudioEffect1", type=36, index=0, active=1, wet_dry=1,
+            parameters=[dict(version="AudioParameter1", index=1, type=0, integer=0, number=22000, boolean=0),
+                        dict(version="AudioParameter1", index=2, type=0, integer=0, number=707, boolean=0)])
+        control = dict(version="AudioControl1", volume=1, level=1, pitch=1, low_pass=1,
+            direct_occlusion=1, position=1, effects=[effect])
+        audio = dict(version="AudioRuntime2", voices=[dict(version="AudioVoice1", control=control)],
+            groups=[copy.deepcopy(control)])
+        for key in ("volume", "level"):
+            with self.subTest(key=key, owner="voices"):
+                self.assert_field(audio, ("voices", 0, "control", key), True)
+            with self.subTest(key=key, owner="groups"):
+                self.assert_field(audio, ("groups", 0, key), False)
+        with self.subTest(key="lowpass", owner="voices"):
+            self.assert_field(audio, ("voices", 0, "control", "effects", 0, "parameters", 0, "number"), True)
+        with self.subTest(key="lowpass", owner="groups"):
+            self.assert_field(audio, ("groups", 0, "effects", 0, "parameters", 0, "number"), False)
+        for path in (("voices", 0, "control", "effects", 0, "parameters", 1, "number"),
+                ("voices", 0, "control", "effects", 0, "parameters", 0, "index"),
+                ("voices", 0, "control", "pitch"), ("voices", 0, "control", "direct_occlusion"),
+                ("voices", 0, "control", "position"), ("voices", 0, "control", "effects", 0, "type")):
+            with self.subTest(path=path):
+                self.assert_field(audio, path, False)
 
     def test_sprite_pool_frames_and_pie_bitmaps_remain_strict(self):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
