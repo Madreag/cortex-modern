@@ -360,6 +360,18 @@ namespace RTE {
 			Send(connection, *cached);
 			return;
 		}
+		// A retransmitted Reclaim is the SAME attempt, not a second one. P3's ladder retransmits every
+		// 250 ms while P16 admits one attempt per second, so charging a retransmit to the rate limit
+		// denies a client that is merely doing what the ladder says. The answer is already in flight on
+		// ControlReliable - the ladder covers a peer restart, not packet loss - so this drops the
+		// duplicate rather than re-answering it: re-sending the challenge would tell an attacker the
+		// seat is known BEFORE the uniform denial fires, which is the oracle §5 exists to remove.
+		if (std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [connection, &message](const PendingReclaim& pending) {
+			    return pending.connection == connection && pending.txId == message.txId;
+		    })) {
+			++m_Stats.reclaimRetransmitsDropped;
+			return;
+		}
 		if (!m_Admission.BeginAttempt(connection, nowMs)) {
 			DenyUniformly(connection, message.txId, NetH4DenialReason::RateLimited, nowMs);
 			return;
@@ -400,8 +412,20 @@ namespace RTE {
 		const auto pending = std::find_if(m_PendingReclaims.begin(), m_PendingReclaims.end(), [connection, &message](const PendingReclaim& reclaim) {
 			return reclaim.connection == connection && reclaim.txId == message.txId;
 		});
+		// P1: a Proof retransmitted because JoinCommitted was lost must replay the cached success, never
+		// read as an auth failure. The pending record is gone the moment the reclaim commits, so past
+		// that point the key is rebuilt from the seat's own recorded identity - the same thing a
+		// re-presented TicketStoredAck does.
 		if (pending != m_PendingReclaims.end()) {
 			if (const NetPayload* cached = FindCached(message.txId, pending->key, nowMs)) {
+				Send(connection, *cached);
+				return;
+			}
+		} else if (const SeatState* committedSeat = FindSeat(message.stableSeat);
+		           committedSeat != nullptr && committedSeat->committed && !committedSeat->closed &&
+		           committedSeat->holderGeneration == message.holderGeneration) {
+			const NetH4TxKey key = MakeKey(NetMessageType::Reclaim, message.stableSeat, message.holderGeneration, committedSeat->identity);
+			if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
 				Send(connection, *cached);
 				return;
 			}

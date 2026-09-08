@@ -2229,6 +2229,126 @@ namespace RTE {
 			return 0;
 		}
 
+		// A2 limit 4: a reclaiming peer sits in the session's pre-Ready state until it commits, so the
+		// whole ladder has to fit the host's timeout. Budget: each of the two steps (Reclaim->Challenge,
+		// Proof->JoinCommitted) retransmits at P3's 250 ms up to 8 times = 2 000 ms, so the transaction
+		// gives up at 4 000 ms - 1 000 ms inside the 5 000 ms production timeoutMs, and the client's own
+		// retransmits keep refreshing the host's lastReceiveMs the whole way.
+		int TestReclaimLadderFitsHandshakeTimeout() {
+			static_assert(NetReconnectHost::c_RetransmitIntervalMs * NetReconnectHost::c_MaxRetransmits == 2000,
+			              "P3's ladder is 250 ms x 8");
+			static_assert(2 * NetReconnectHost::c_RetransmitIntervalMs * NetReconnectHost::c_MaxRetransmits < 5000,
+			              "two reclaim steps must fit inside the 5 000 ms session timeout");
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42133;
+			LoopbackTransport hostTransport;
+			LoopbackTransport firstTransport;
+			NetSession host;
+			NetSession first;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("ladder"));
+			NetReconnectClient firstClient;
+			uint64_t unixNow = 1700000000000ULL;
+			firstClient.Configure(&store, MakeIdentity(), "Player");
+			firstClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			firstClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			first.SetReconnectClient(&firstClient);
+			if (!host.StartHost(hostTransport, MakeSessionConfig(port, 101, "Host"), &error) ||
+			    !first.StartClient(firstTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the first holder: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+			}
+			if (firstClient.GetState() != NetH4ClientState::Joined || !store.HasRecord()) {
+				return Fail("the first holder never committed a seat to reclaim");
+			}
+			firstTransport.Stop();
+			for (const uint64_t settleUntil = nowMs + 200; nowMs <= settleUntil; nowMs += 10) {
+				host.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+			}
+
+			// The returner runs its whole ladder at 200 ms of latency - the top of the target band, so
+			// every step really spends part of its budget rather than settling inside one tick.
+			LoopbackTransport returnerTransport;
+			LoopbackTransportConfig lag;
+			lag.latencyMs = 200;
+			returnerTransport.SetFaultConfig(lag);
+			hostTransport.SetFaultConfig(lag);
+			NetSession returner;
+			NetReconnectClient returnerClient;
+			returnerClient.Configure(&store, MakeIdentity(), "Player");
+			returnerClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			returnerClient.SetHostContext("loopback", MakeHash(5));
+			returner.SetReconnectClient(&returnerClient);
+			admission.SetLiveMatch(true);
+			if (!returner.StartClient(returnerTransport, "loopback", MakeSessionConfig(port, 303, "Player"), &error)) {
+				return Fail("the returner could not connect: " + error);
+			}
+			const uint64_t reclaimStartMs = nowMs;
+			uint64_t committedAtMs = 0;
+			for (const uint64_t deadline = reclaimStartMs + 8000; nowMs <= deadline; nowMs += 10) {
+				host.Tick(nowMs);
+				returner.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				returnerTransport.AdvanceTimeMs(10);
+				if (committedAtMs == 0 && returnerClient.GetState() == NetH4ClientState::Joined) {
+					committedAtMs = nowMs;
+				}
+			}
+			if (committedAtMs == 0) {
+				return Fail("the reclaim never committed inside the ladder");
+			}
+			const uint64_t elapsedMs = committedAtMs - reclaimStartMs;
+			if (elapsedMs > 2 * NetReconnectHost::c_RetransmitIntervalMs * NetReconnectHost::c_MaxRetransmits) {
+				return Fail("the reclaim outran its two-step P3 budget: " + std::to_string(elapsedMs) + " ms");
+			}
+			if (elapsedMs >= MakeSessionConfig(port, 0, "Host").timeoutMs) {
+				return Fail("the reclaim did not fit inside the session timeout");
+			}
+			if (host.GetStats().timeouts != 0) {
+				return Fail("the host timed a peer out during the reclaim ladder");
+			}
+			if (!returner.IsReady() || returner.GetLocalPeerId() != MakeSeatTable()[0].peerId) {
+				return Fail(std::string("the returner did not end up Ready on the seat's own peer id: state=") +
+				            NetSession::StateName(returner.GetState()) + " peer=" + std::to_string(returner.GetLocalPeerId()) +
+				            " expected=" + std::to_string(MakeSeatTable()[0].peerId) + " reject=" + returner.BuildRejectText() +
+				            " client=" + NetReconnectClientStateName(returnerClient.GetState()));
+			}
+			if (admission.GetStats().reclaimsAccepted != 1) {
+				return Fail("the host recorded no accepted reclaim");
+			}
+			if (!returnerClient.UsedStoredTicket()) {
+				return Fail("the returner did not reclaim from the stored record");
+			}
+			// The seam this case exists for: P3 retransmits every 250 ms while P16 admits one attempt a
+			// second, so a legitimate ladder must not be charged to the rate limit or answered with a
+			// denial. The lag is what makes the ladder actually retransmit.
+			if (admission.GetStats().reclaimRetransmitsDropped == 0 && returnerClient.GetStats().retransmits == 0) {
+				return Fail("the ladder never retransmitted, so this did not exercise the P3/P16 seam");
+			}
+			if (admission.GetStats().denialsScheduled != 0) {
+				return Fail("a legitimate retransmit was denied: " + std::to_string(admission.GetStats().denialsScheduled) + " denials");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2284,6 +2404,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAdmissionGatesReady(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReclaimLadderFitsHandshakeTimeout(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

@@ -81,6 +81,7 @@ namespace RTE {
 		uint32_t seatsClosedByLeave = 0;
 		uint32_t ledgerDropsRecorded = 0;
 		uint32_t reseatsIssued = 0;
+		uint32_t reclaimRetransmitsDropped = 0;
 	};
 
 	/// The host's §4/§6/§7 state machine: it runs the admission transaction, fences a superseded
