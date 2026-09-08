@@ -12,6 +12,7 @@ namespace RTE {
 
 	/// Collection of scrolling layers that compose the terrain of the Scene.
 	class SLTerrain : public SceneLayer {
+		friend struct TerrainLayerSnapshot;
 
 	public:
 		EntityAllocation(SLTerrain);

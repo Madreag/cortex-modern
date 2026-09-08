@@ -356,6 +356,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedPEmitterRuntime;
+		std::string SavePEmitterRuntime() const;
+		bool LoadPEmitterRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this PEmitter, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

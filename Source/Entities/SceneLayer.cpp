@@ -40,6 +40,7 @@ void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Clear() {
 	m_LastClearColor = ColorKeys::g_InvalidColor;
 	m_Drawings.clear();
 	m_MainBitmapOwned = false;
+	m_MainBitmapUpdated = false;
 	m_DrawMasked = true;
 	m_WrapX = true;
 	m_WrapY = true;

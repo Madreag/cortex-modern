@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "Singleton.h"
 #include "Timer.h"
 #include "Vector.h"
@@ -15,6 +18,9 @@ namespace RTE {
 		friend class SettingsMan;
 
 	public:
+
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 #pragma region Creation
 		/// Constructor method used to instantiate a CameraMan object in system memory. Create() should be called before using the object.
 		CameraMan();
@@ -179,9 +185,16 @@ namespace RTE {
 #pragma endregion
 
 	private:
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_ScreenShakeStrength, self.m_ScreenShakeDecay, self.m_MaxScreenShakeTime, self.m_DefaultShakePerUnitOfGibEnergy,
+				self.m_DefaultShakePerUnitOfRecoilEnergy, self.m_DefaultShakeFromRecoilMaximum, self.m_Screens);
+		}
 		/// A screen. Each player should have one of these.
 		/// TODO: This is a struct right now, as it has been torn verbatim out of SceneMan. In future it should be a proper class with methods, instead of CameraMan handling everything.
 		struct Screen {
+			std::string SaveCheckpoint() const;
+			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 			int ScreenTeam = 0; //!< The team associated with this Screen.
 
 			Vector Offset; //!< The position of the upper left corner of the view.

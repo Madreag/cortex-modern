@@ -40,6 +40,7 @@
 #include "SceneObject.h"
 #include "SoundContainer.h"
 #include "SoundSet.h"
+#include "GUISound.h"
 #include "TDExplosive.h"
 #include "ThrownDevice.h"
 #include "Turret.h"
@@ -58,8 +59,14 @@
 #include "Vector.h"
 #include "LuaMan.h"
 #include "TerrainLayerSnapshot.h"
+#include "PathFinder.h"
+#include "UInputMan.h"
+#include "FrameMan.h"
+#include "PostProcessMan.h"
+#include "PrimitiveMan.h"
 #include <bit>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <set>
@@ -773,7 +780,6 @@ Field(path + ".GameActivity.m_BannerRepeats", object.m_BannerRepeats);
 Field(path + ".GameActivity.m_ReadyToStart", object.m_ReadyToStart);
 Field(path + ".GameActivity.m_PurchaseOverride", object.m_PurchaseOverride);
 Field(path + ".GameActivity.m_Deliveries", object.m_Deliveries);
-Field(path + ".GameActivity.m_RollbackDeliveries", object.m_RollbackDeliveries);
 Field(path + ".GameActivity.m_LandingZoneArea", object.m_LandingZoneArea);
 Field(path + ".GameActivity.m_BrainLZWidth", object.m_BrainLZWidth);
 Field(path + ".GameActivity.m_Objectives", object.m_Objectives);
@@ -1355,6 +1361,26 @@ Field(path + ".Round.m_AILifeTime", object.m_AILifeTime);
 Field(path + ".Round.m_AIFireVel", object.m_AIFireVel);
 Field(path + ".Round.m_AIPenetration", object.m_AIPenetration);
 }
+void Visit(const PathFinder& object, const std::string& path) {
+Field(path + ".node_dimension", object.m_NodeDimension);
+Field(path + ".offset", object.m_Offset);
+Field(path + ".width", object.m_GridWidth);
+Field(path + ".height", object.m_GridHeight);
+Field(path + ".wrap_x", object.m_WrapsX);
+Field(path + ".wrap_y", object.m_WrapsY);
+Field(path + ".requests", object.m_CurrentPathingRequests.load());
+Field(path + ".node_count", object.m_NodeGrid.size());
+for (size_t index = 0; index < object.m_NodeGrid.size(); ++index) {
+    const auto& node = object.m_NodeGrid[index];
+    const std::string base = path + ".node[" + std::to_string(index) + "]";
+    Field(base + ".position", node.Pos);
+    Field(base + ".navigable", node.m_Navigable);
+    for (size_t direction = 0; direction < node.AdjacentNodes.size(); ++direction) {
+        Field(base + ".neighbor[" + std::to_string(direction) + "]", node.AdjacentNodes[direction] ? static_cast<int64_t>(node.AdjacentNodes[direction] - object.m_NodeGrid.data()) : int64_t{-1});
+        Field(base + ".material[" + std::to_string(direction) + "]", node.AdjacentNodeBlockingMaterials[direction] ? static_cast<int>(node.AdjacentNodeBlockingMaterials[direction]->GetIndex()) : -1);
+    }
+}
+}
 void Visit(const Scene& object, const std::string& path) {
 Visit(static_cast<const Entity&>(object), path);
 Field(path + ".Scene.m_Location", object.m_Location);
@@ -1473,24 +1499,219 @@ Field(path + ".Vector.m_X", object.m_X);
 Field(path + ".Vector.m_Y", object.m_Y);
 }
 
+void Visit(const InputMapping& object, const std::string& path) {
+Field(path + ".description", object.m_PresetDescription);
+Field(path + ".key", object.m_KeyMap);
+Field(path + ".mouse_button", object.m_MouseButtonMap);
+Field(path + ".direction_mapped", object.m_DirectionMapped);
+Field(path + ".joystick_button", object.m_JoyButtonMap);
+Field(path + ".axis", object.m_AxisMap);
+Field(path + ".direction", object.m_DirectionMap);
+}
+void Visit(const InputScheme& object, const std::string& path) {
+Field(path + ".device", object.m_ActiveDevice);
+Field(path + ".device_id", std::bit_cast<std::array<uint32_t, 2>>(object.m_DeviceID));
+Field(path + ".preset", object.m_SchemePreset);
+Field(path + ".deadzone_type", object.m_JoystickDeadzoneType);
+Field(path + ".deadzone", object.m_JoystickDeadzone);
+Field(path + ".digital_aim_speed", object.m_DigitalAimSpeed);
+Field(path + ".mappings", object.m_InputMappings);
+}
+void Visit(const UInputMan::Keyboard& object, const std::string& path) {
+Field(path + ".id", object.id);
+Field(path + ".held", object.keyStates);
+Field(path + ".changed", object.changedKeyStates);
+Field(path + ".pressed_since_sim", object.pressedSinceSim);
+Field(path + ".released_since_sim", object.releasedSinceSim);
+}
+void Visit(const UInputMan::Mouse& object, const std::string& path) {
+Field(path + ".id", object.id);
+Field(path + ".held", object.state);
+Field(path + ".changed", object.change);
+Field(path + ".pressed_since_sim", object.pressedSinceSim);
+Field(path + ".released_since_sim", object.releasedSinceSim);
+Field(path + ".position", object.position);
+Field(path + ".relative_motion", object.relativeMotion);
+Field(path + ".analog_aim", object.analogAim);
+Field(path + ".wheel_change", object.wheelChange);
+Field(path + ".relative_mode", object.relativeMode);
+}
+void Visit(const Gamepad& object, const std::string& path) {
+Field(path + ".device_index", object.m_DeviceIndex);
+Field(path + ".joystick_id", object.m_JoystickID);
+Field(path + ".axis", object.m_Axis);
+Field(path + ".digital_axis", object.m_DigitalAxis);
+Field(path + ".buttons", object.m_Buttons);
+Field(path + ".pressed_since_sim", object.m_ButtonsPressedSinceSim);
+Field(path + ".released_since_sim", object.m_ButtonsReleasedSinceSim);
+}
+void Visit(const UInputMan& object, const std::string& path) {
+Field(path + ".keyboards", object.m_KeyboardStates);
+Field(path + ".mice", object.m_MouseStates);
+Field(path + ".joysticks", object.s_PrevJoystickStates);
+Field(path + ".changed_joysticks", object.s_ChangedJoystickStates);
+Field(path + ".skip_special", object.m_SkipHandlingSpecialInput);
+Field(path + ".joystick_count", object.m_NumJoysticks);
+Field(path + ".text", object.m_TextInput);
+Field(path + ".override", object.m_OverrideInput);
+Field(path + ".schemes", object.m_ControlScheme);
+Field(path + ".device_icons", object.m_DeviceIcons);
+Field(path + ".mouse_sensitivity", object.m_MouseSensitivity);
+Field(path + ".trap_mouse", object.m_TrapMousePos);
+Field(path + ".trap_radius", object.m_MouseTrapRadius);
+Field(path + ".bounds_x", object.m_PlayerScreenMouseBounds.x);
+Field(path + ".bounds_y", object.m_PlayerScreenMouseBounds.y);
+Field(path + ".bounds_width", object.m_PlayerScreenMouseBounds.w);
+Field(path + ".bounds_height", object.m_PlayerScreenMouseBounds.h);
+Field(path + ".last_cursor_device", object.m_LastDeviceWhichControlledGUICursor);
+Field(path + ".force_disable_multi", object.m_ForceDisableMultiMouseKeyboard);
+Field(path + ".enable_multi", object.m_EnableMultiMouseKeyboard);
+Field(path + ".player_devices_known", object.m_PlayerMouseKeyboardKnown);
+Field(path + ".disable_keyboard", object.m_DisableKeyboard);
+Field(path + ".disable_mouse_motion", object.m_DisableMouseMoving);
+Field(path + ".prepare_mouse_motion", object.m_PrepareToEnableMouseMoving);
+Field(path + ".unused_event_queue_size", object.m_EventQueue.size());
+}
+
+static uint64_t HashBytes(const void* storage, size_t size) {
+    uint64_t hash = 1469598103934665603ULL;
+    const auto* bytes = static_cast<const unsigned char*>(storage);
+    for (size_t index = 0; index < size; ++index) hash = (hash ^ bytes[index]) * 1099511628211ULL;
+    return hash;
+}
+void Visit(const BITMAP& bitmap, const std::string& path) {
+    Field(path + ".width", bitmap.w); Field(path + ".height", bitmap.h);
+    const int depth = bitmap_color_depth(const_cast<BITMAP*>(&bitmap));
+    Field(path + ".depth", depth);
+    Field(path + ".clip", bitmap.clip); Field(path + ".clip_left", bitmap.cl); Field(path + ".clip_top", bitmap.ct);
+    Field(path + ".clip_right", bitmap.cr); Field(path + ".clip_bottom", bitmap.cb);
+    uint64_t hash = 1469598103934665603ULL;
+    const size_t bytesPerRow = static_cast<size_t>(bitmap.w) * ((depth + 7) / 8);
+    for (int y = 0; y < bitmap.h; ++y) {
+        for (size_t x = 0; x < bytesPerRow; ++x) hash = (hash ^ bitmap.line[y][x]) * 1099511628211ULL;
+    }
+    Field(path + ".pixels", hash);
+}
+void Visit(const PostEffect& effect, const std::string& path) {
+    Field(path + ".bitmap", effect.m_Bitmap); Field(path + ".bitmap_hash", effect.m_BitmapHash);
+    Field(path + ".angle", effect.m_Angle); Field(path + ".strength", effect.m_Strength);
+    Field(path + ".position", effect.m_Pos); Field(path + ".attached_moid", effect.m_AttachedToMOID);
+}
+void Visit(const IntRect& rect, const std::string& path) {
+    Field(path + ".left", rect.m_Left); Field(path + ".right", rect.m_Right);
+    Field(path + ".top", rect.m_Top); Field(path + ".bottom", rect.m_Bottom);
+}
+void Visit(const PostProcessMan& object, const std::string& path) {
+    Field(path + ".screen_effects", object.m_PostScreenEffects); Field(path + ".scene_effects", object.m_PostSceneEffects);
+    Field(path + ".screen_glow_boxes", object.m_PostScreenGlowBoxes); Field(path + ".glow_areas", object.m_GlowAreas);
+    Field(path + ".player_effects", object.m_ScreenRelativeEffects);
+    Field(path + ".yellow", object.m_YellowGlow); Field(path + ".red", object.m_RedGlow); Field(path + ".blue", object.m_BlueGlow);
+    Field(path + ".yellow_hash", object.m_YellowGlowHash); Field(path + ".red_hash", object.m_RedGlowHash); Field(path + ".blue_hash", object.m_BlueGlowHash);
+    Field(path + ".temporary_bitmaps", object.m_TempEffectBitmaps);
+    Field(path + ".registration_suppressed", object.s_RegistrationSuppressed);
+}
+void Visit(const FrameMan& object, const std::string& path) {
+    Field(path + ".horizontal_split", object.m_HSplit); Field(path + ".vertical_split", object.m_VSplit);
+    Field(path + ".two_player_vertical", object.m_TwoPlayerVSplit); Field(path + ".palette_file", object.m_PaletteFile);
+    Field(path + ".palette", HashBytes(object.m_Palette, sizeof(object.m_Palette)));
+    Field(path + ".default_palette", HashBytes(object.m_DefaultPalette, sizeof(object.m_DefaultPalette)));
+    PALETTE current; get_palette(current); Field(path + ".current_palette", HashBytes(current, sizeof(current)));
+    Field(path + ".rgb_table", HashBytes(&object.m_RGBTable, sizeof(object.m_RGBTable)));
+    Field(path + ".black", object.m_BlackColor); Field(path + ".almost_black", object.m_AlmostBlackColor);
+    std::string active = color_map ? "external" : "null";
+    for (size_t mode = 0; mode < object.m_ColorTables.size(); ++mode) {
+        const auto& entries = object.m_ColorTables[mode];
+        Field(path + ".table_count[" + std::to_string(mode) + "]", entries.size());
+        for (const auto& [key, value]: entries) {
+            const std::string name = path + ".table[" + std::to_string(mode) + ":" + Value(key, path + ".table_key") + "]";
+            Field(name + ".pixels", HashBytes(&value.first, sizeof(value.first))); Field(name + ".last_use", value.second);
+            if (color_map == &value.first) active = name;
+        }
+    }
+    Field(path + ".active_table", active);
+    if (color_map) Field(path + ".active_table_pixels", HashBytes(color_map, sizeof(*color_map)));
+    Field(path + ".table_prune_timer", object.m_ColorTablePruneTimer); Field(path + ".alpha", object.m_CurrentAlpha);
+    Field(path + ".screen_text", object.m_ScreenText); Field(path + ".text_centered", object.m_TextCentered);
+    Field(path + ".text_duration", object.m_TextDuration); Field(path + ".text_timer", object.m_TextDurationTimer);
+    Field(path + ".text_blink", object.m_TextBlinking); Field(path + ".text_blink_timer", object.m_TextBlinkTimer);
+    Field(path + ".hud_disabled", object.m_HUDDisabled); Field(path + ".flash_color", object.m_FlashScreenColor);
+    Field(path + ".flashed_last_frame", object.m_FlashedLastFrame); Field(path + ".flash_timer", object.m_FlashTimer);
+    Field(path + ".player_width", object.m_PlayerScreenWidth); Field(path + ".player_height", object.m_PlayerScreenHeight);
+    Field(path + ".small_fonts", object.m_SmallFonts); Field(path + ".large_fonts", object.m_LargeFonts);
+    Field(path + ".backbuffer8", object.m_BackBuffer8); Field(path + ".backbuffer32", object.m_BackBuffer32);
+    Field(path + ".overlay32", object.m_OverlayBitmap32); Field(path + ".player_screen8", object.m_PlayerScreen8);
+}
+
 static void Write(const State& state, const std::string& path) {
     std::ofstream out(path, std::ios::binary);
     for (const auto& [key, value]: state) out << key << " = " << value << "\n";
 }
 static size_t Compare(const State& before, const State& after, const std::string& path) {
     std::ofstream out(path, std::ios::binary);
-    std::set<std::string> keys;
-    for (const auto& [key, value]: before) keys.insert(key);
-    for (const auto& [key, value]: after) keys.insert(key);
     size_t count = 0;
-    for (const auto& key: keys) {
-        const auto a = before.find(key), b = after.find(key);
-        if (a != before.end() && b != after.end() && a->second == b->second) continue;
+    auto a = before.begin(), b = after.begin();
+    while (a != before.end() || b != after.end()) {
+        const bool hasA = a != before.end() && (b == after.end() || a->first <= b->first);
+        const bool hasB = b != after.end() && (a == before.end() || b->first <= a->first);
+        if (hasA && hasB && a->second == b->second) { ++a; ++b; continue; }
         ++count;
-        out << key << "\n  before " << (a == before.end() ? "<absent>" : a->second)
-            << "\n  after  " << (b == after.end() ? "<absent>" : b->second) << "\n";
+        out << (hasA ? a->first : b->first) << "\n  before " << (hasA ? a->second : "<absent>")
+            << "\n  after  " << (hasB ? b->second : "<absent>") << "\n";
+        if (hasA) ++a;
+        if (hasB) ++b;
     }
     return count;
+}
+void Visit(const GraphicalPrimitive& object, const std::string& path) {
+    Field(path + ".type", object.GetPrimitiveType());
+    Field(path + ".start", object.m_StartPos); Field(path + ".end", object.m_EndPos);
+    Field(path + ".radius_squared", object.m_DrawRadiusSquared); Field(path + ".color", object.m_Color);
+    Field(path + ".player", object.m_Player); Field(path + ".blend_mode", object.m_BlendMode);
+    Field(path + ".blend_channels", object.m_ColorChannelBlendAmounts); Field(path + ".depth", object.m_Depth);
+    Field(path + ".image_owners", object.m_ImageOwners); Field(path + ".vertex_owners", object.m_VertexOwners);
+    if (auto value = dynamic_cast<const LinePrimitive*>(&object)) Field(path + ".thickness", value->m_Thickness);
+    if (auto value = dynamic_cast<const ArcPrimitive*>(&object)) {
+        Field(path + ".start_angle", value->m_StartAngle); Field(path + ".end_angle", value->m_EndAngle);
+        Field(path + ".radius", value->m_Radius); Field(path + ".thickness", value->m_Thickness);
+    }
+    if (auto value = dynamic_cast<const SplinePrimitive*>(&object)) {
+        Field(path + ".guide_a", value->m_GuidePointAPos); Field(path + ".guide_b", value->m_GuidePointBPos);
+    }
+    if (auto value = dynamic_cast<const RoundedBoxPrimitive*>(&object)) Field(path + ".corner_radius", value->m_CornerRadius);
+    if (auto value = dynamic_cast<const RoundedBoxFillPrimitive*>(&object)) Field(path + ".corner_radius", value->m_CornerRadius);
+    if (auto value = dynamic_cast<const CirclePrimitive*>(&object)) Field(path + ".radius", value->m_Radius);
+    if (auto value = dynamic_cast<const CircleFillPrimitive*>(&object)) Field(path + ".radius", value->m_Radius);
+    if (auto value = dynamic_cast<const EllipsePrimitive*>(&object)) {
+        Field(path + ".horizontal_radius", value->m_HorizRadius); Field(path + ".vertical_radius", value->m_VertRadius);
+    }
+    if (auto value = dynamic_cast<const EllipseFillPrimitive*>(&object)) {
+        Field(path + ".horizontal_radius", value->m_HorizRadius); Field(path + ".vertical_radius", value->m_VertRadius);
+    }
+    if (auto value = dynamic_cast<const TrianglePrimitive*>(&object)) {
+        Field(path + ".point_a", value->m_PointAPos); Field(path + ".point_b", value->m_PointBPos); Field(path + ".point_c", value->m_PointCPos);
+    }
+    if (auto value = dynamic_cast<const TriangleFillPrimitive*>(&object)) {
+        Field(path + ".point_a", value->m_PointAPos); Field(path + ".point_b", value->m_PointBPos); Field(path + ".point_c", value->m_PointCPos);
+    }
+    if (auto value = dynamic_cast<const PolygonPrimitive*>(&object)) Field(path + ".vertices", value->m_Vertices);
+    if (auto value = dynamic_cast<const PolygonFillPrimitive*>(&object)) Field(path + ".vertices", value->m_Vertices);
+    if (auto value = dynamic_cast<const TextPrimitive*>(&object)) {
+        Field(path + ".text", value->m_Text); Field(path + ".small", value->m_IsSmall); Field(path + ".alignment", value->m_Alignment);
+        Field(path + ".rotation", value->m_RotAngle); Field(path + ".bitmap", value->m_TextBitmap); Field(path + ".target_alignment", value->m_TargetPosAlignment);
+    }
+    if (auto value = dynamic_cast<const BitmapPrimitive*>(&object)) {
+        Field(path + ".bitmap", value->m_Bitmap); Field(path + ".rotation", value->m_RotAngle); Field(path + ".scale", value->m_Scale);
+        std::vector<std::string> cacheReferences;
+        if (value->m_Bitmap) for (size_t slot = 0; slot < ContentFile::s_LoadedBitmaps.size(); ++slot) {
+            for (const auto& [name, bitmap]: ContentFile::s_LoadedBitmaps[slot]) {
+                if (bitmap == value->m_Bitmap) cacheReferences.push_back(std::to_string(slot) + ":" + name);
+            }
+        }
+        std::sort(cacheReferences.begin(), cacheReferences.end());
+        Field(path + ".bitmap_cache_references", cacheReferences);
+        Field(path + ".flip_h", value->m_HFlipped); Field(path + ".flip_v", value->m_VFlipped);
+        Field(path + ".sprite_owner", value->m_SpriteOwner); Field(path + ".sprite_frame", value->m_SpriteFrame); Field(path + ".icon_bitmap", value->m_IconBitmap);
+    }
 }
 static State Observe(const std::string& gapPath) {
     ContractAudit audit;
@@ -1510,7 +1731,28 @@ static State Observe(const std::string& gapPath) {
         if (object && uid > 0 && object->GetUniqueID() == uid) audit.VisitEntity(*object, "mo[" + std::to_string(uid) + "]");
     }
     if (const Activity* activity = g_ActivityMan.GetActivity()) audit.VisitEntity(*activity, "activity");
+    if (const Activity* activity = g_ActivityMan.GetCheckpointStartActivity()) audit.VisitEntity(*activity, "start_activity");
     if (const Scene* scene = g_SceneMan.GetScene()) audit.Visit(*scene, "scene");
+    // RemoveOrphans clears its fixed-size scratch pixels before every search; observe the
+    // manager-owned allocation separately so a successful scene transaction cannot lose it.
+    BITMAP* const orphanSearch = g_SceneMan.m_pOrphanSearchBitmap;
+    audit.Field("scene_manager.orphan_search.present", orphanSearch != nullptr);
+    if (orphanSearch) {
+        audit.Field("scene_manager.orphan_search.depth", bitmap_color_depth(orphanSearch));
+        audit.Field("scene_manager.orphan_search.width", orphanSearch->w);
+        audit.Field("scene_manager.orphan_search.height", orphanSearch->h);
+    }
+    audit.Visit(g_UInputMan, "input");
+    audit.Visit(g_FrameMan, "frame");
+    audit.Visit(g_PostProcessMan, "postprocess");
+    size_t primitiveCount = 0;
+    while (const auto* primitive = g_PrimitiveMan.GetCheckpointPrimitive(primitiveCount)) {
+        audit.Field("primitives.queue[" + std::to_string(primitiveCount++) + "]", primitive);
+    }
+    audit.Field("primitives.count", primitiveCount);
+    g_GUISound.VisitCheckpointSounds([&audit](size_t index, const SoundContainer& sound) {
+        audit.Visit(sound, "gui_sounds[" + std::to_string(index) + "]");
+    });
     audit.Field("rng.sim", g_SimRNG.SerializeCheckpoint());
     audit.Field("rng.render", g_RenderRNG.SerializeCheckpoint());
     audit.Field("clock.sim_count", g_TimerMan.GetSimUpdateCount());
@@ -1521,6 +1763,8 @@ static State Observe(const std::string& gapPath) {
     audit.Field("clock.dt", g_TimerMan.GetDeltaTimeSecs());
     audit.Field("allocator.uid", MovableObject::GetUniqueIDCounter());
     audit.Field("allocator.lua_cursor", g_LuaMan.GetScriptStateCursor());
+    audit.Field("checkpoint.restoring", g_MovableMan.IsRestoringSnapshot());
+    audit.Field("checkpoint.pending_graph", g_ActivityMan.HasFullScriptGraphToRestore());
     audit.Field("world.actors", g_MovableMan.m_Actors);
     audit.Field("world.items", g_MovableMan.m_Items);
     audit.Field("world.particles", g_MovableMan.m_Particles);
@@ -1551,14 +1795,180 @@ static State Observe(const std::string& gapPath) {
     for (const auto& gap: audit.gaps) gapsOut << gap << "\n";
     return std::move(audit.values);
 }
+// Read-only staged-candidate transaction observer. These values are compared within
+// one process before/after a rejected replacement; native identities remain exact.
+static State ObservePendingCheckpoint(const std::string& gapPath) {
+    ContractAudit audit;
+    const auto& pending = g_ActivityMan.m_PendingCheckpoint;
+    audit.Field("pending.scene", pending.scene.get());
+    audit.Field("pending.activity", pending.activity.get());
+    audit.Field("pending.start_activity", pending.startActivity.get());
+    audit.Field("pending.has_start_activity", pending.hasStartActivity);
+    audit.Field("pending.restart_preset", pending.restartPreset);
+    audit.Field("pending.restart_objects", pending.restartObjects);
+    audit.Field("pending.restart_units", pending.restartUnits);
+    audit.Field("pending.sim_count", pending.simUpdateCount);
+    audit.Field("pending.sim_time", pending.simTimeTicks);
+    audit.Field("pending.uid_counter", pending.uniqueIDCounter);
+    audit.Field("pending.lua_cursor", pending.luaStateCursor);
+    audit.Field("pending.join_quarantine", pending.joinQuarantine);
+    audit.Field("pending.runtime_globals", pending.runtimeGlobals);
+    audit.Field("pending.world_structure", pending.worldStructure);
+    audit.Field("pending.scene_runtime", pending.sceneRuntime);
+    audit.Field("pending.script_graphs", pending.scriptGraphs);
+    audit.Field("pending.sound_registrations", pending.soundRegistrations);
+    audit.Field("manager.restores_snapshot", g_ActivityMan.m_RestartRestoresSnapshot);
+    audit.Field("manager.needs_restart", g_ActivityMan.m_ActivityNeedsRestart);
+    audit.Field("manager.needs_resume", g_ActivityMan.m_ActivityNeedsResume);
+    audit.Field("manager.start_resumed", g_ActivityMan.m_StartActivityResumed);
+    const auto identity = [&](const std::string& path, const void* pointer) {
+        audit.Field("identity." + path, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pointer)));
+    };
+    identity("scene", pending.scene.get()); identity("activity", pending.activity.get());
+    identity("start_activity", pending.startActivity.get()); identity("image_scope", pending.images.get());
+    identity("live_activity", g_ActivityMan.m_Activity.get()); identity("configured_start", g_ActivityMan.m_StartActivity.get());
+    std::set<const Entity*> walked;
+    std::function<void(const Entity*, const std::string&)> native = [&](const Entity* entity, const std::string& path) {
+        if (!entity) return;
+        identity(path, entity);
+        if (!walked.insert(entity).second) return;
+        audit.VisitEntity(*entity, path);
+        if (const auto* rotating = dynamic_cast<const MOSRotating*>(entity)) {
+            size_t index = 0;
+            for (const auto* child: rotating->GetAttachables()) native(child, path + ".attachable[" + std::to_string(index++) + "]");
+            index = 0;
+            for (const auto* child: rotating->GetWoundList()) native(child, path + ".wound[" + std::to_string(index++) + "]");
+        }
+        if (const auto* actor = dynamic_cast<const Actor*>(entity)) {
+            size_t index = 0;
+            for (const auto* child: *actor->GetInventory()) native(child, path + ".inventory[" + std::to_string(index++) + "]");
+        }
+        if (const auto* craft = dynamic_cast<const ACraft*>(entity)) {
+            size_t index = 0;
+            for (const auto* child: craft->GetCollectedInventory()) native(child, path + ".collected[" + std::to_string(index++) + "]");
+        }
+    };
+    if (pending.scene) {
+        native(pending.scene.get(), "candidate.scene");
+        for (int set = 0; set < Scene::PLACEDSETSCOUNT; ++set) {
+            size_t index = 0;
+            for (const auto* entity: *pending.scene->GetPlacedObjects(set)) {
+                native(entity, "candidate.placed[" + std::to_string(set) + "][" + std::to_string(index++) + "]");
+            }
+        }
+        for (size_t index = 0; index < Players::MaxPlayerCount; ++index) {
+            native(pending.scene->m_ResidentBrains[index], "candidate.brain[" + std::to_string(index) + "]");
+        }
+    }
+    native(pending.activity.get(), "candidate.activity");
+    native(pending.startActivity.get(), "candidate.start_activity");
+    for (const auto& [owner, sounds]: pending.soundRegistrations) {
+        size_t index = 0;
+        for (const auto* sound: sounds) native(sound, "candidate.sound[" + std::to_string(owner) + "][" + std::to_string(index++) + "]");
+    }
+    const auto surface = [&](const std::string& path, const SDL_Surface* image) {
+        identity(path, image);
+        audit.Field(path + ".present", image != nullptr);
+        if (!image) return;
+        audit.Field(path + ".format", image->format); audit.Field(path + ".width", image->w);
+        audit.Field(path + ".height", image->h); audit.Field(path + ".pitch", image->pitch);
+        const auto* format = SDL_GetPixelFormatDetails(image->format);
+        uint64_t hash = 1469598103934665603ULL;
+        if (format && image->pixels) {
+            const size_t rowBytes = static_cast<size_t>(image->w) * format->bytes_per_pixel;
+            for (int y = 0; y < image->h; ++y) {
+                const auto* row = static_cast<const uint8_t*>(image->pixels) + static_cast<size_t>(y) * image->pitch;
+                for (size_t x = 0; x < rowBytes; ++x) hash = (hash ^ row[x]) * 1099511628211ULL;
+            }
+        } else audit.gaps.insert(path + " missing surface pixels/format");
+        audit.Field(path + ".pixels", hash);
+    };
+    if (pending.images) {
+        audit.Field("pending.images.active", pending.images->m_Active);
+        audit.Field("pending.images.committed", pending.images->m_Committed);
+        audit.Field("pending.images.count", pending.images->m_Entries.size());
+        size_t index = 0;
+        for (const auto& entry: pending.images->m_Entries) {
+            const std::string path = "pending.images[" + std::to_string(index++) + "]";
+            audit.Field(path + ".path", entry.path);
+            audit.Field(path + ".previous_bitmap", entry.previousBitmap);
+            identity(path + ".previous_bitmap", entry.previousBitmap);
+            surface(path + ".previous_image", entry.previousImage);
+        }
+    }
+    audit.Field("cache.bitmaps", ContentFile::s_LoadedBitmaps);
+    for (size_t slot = 0; slot < ContentFile::s_LoadedBitmaps.size(); ++slot) {
+        for (const auto& [path, bitmap]: ContentFile::s_LoadedBitmaps[slot]) identity("cache.bitmap[" + std::to_string(slot) + "][" + path + "]", bitmap);
+    }
+    for (const auto& [path, image]: ContentFile::s_MemoryPNGs) surface("cache.memory_png[" + path + "]", image);
+    std::ofstream gapsOut(gapPath, std::ios::binary);
+    for (const auto& gap: audit.gaps) gapsOut << gap << "\n";
+    return std::move(audit.values);
+}
+// End staged-candidate transaction observer.
+
 static State Identity() {
     State state;
     state["activity"] = std::to_string(reinterpret_cast<uintptr_t>(g_ActivityMan.GetActivity()));
     state["scene"] = std::to_string(reinterpret_cast<uintptr_t>(g_SceneMan.GetScene()));
+    state["scene_manager.orphan_search"] = std::to_string(reinterpret_cast<uintptr_t>(g_SceneMan.m_pOrphanSearchBitmap));
     state["lua"] = g_MovableMan.DescribeLuaIdentity();
     std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
-    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) state["uid:" + std::to_string(uid)] = std::to_string(reinterpret_cast<uintptr_t>(object));
+    std::map<const MovableObject*, long> addresses;
+    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) {
+        state["uid:" + std::to_string(uid)] = std::to_string(reinterpret_cast<uintptr_t>(object));
+        if (object) addresses.emplace(object, uid);
+    }
+    const auto borrowed = [&](const std::string& name, const MovableObject* target, long capturedUID) {
+        const auto found = addresses.find(target);
+        state[name] = "address:" + std::to_string(reinterpret_cast<uintptr_t>(target)) +
+            " registered_uid:" + std::to_string(found != addresses.end() ? found->second : 0) +
+            " captured_uid:" + std::to_string(capturedUID);
+    };
+    for (const auto& [uid, object]: g_MovableMan.m_KnownObjects) {
+        if (!object) continue;
+        const std::string prefix = "borrowed[" + std::to_string(uid) + "]";
+        borrowed(prefix + ".ignore", object->m_pMOToNotHit, object->m_MOToNotHitUID);
+        if (const auto* actor = dynamic_cast<const Actor*>(object)) {
+            borrowed(prefix + ".move_target", actor->m_pMOMoveTarget, actor->m_FaithfulMOMoveTargetUID);
+            size_t index = 0;
+            for (const auto& [position, target]: actor->m_Waypoints) {
+                borrowed(prefix + ".waypoint[" + std::to_string(index) + "]", target,
+                    index < actor->m_FaithfulWaypointUIDs.size() ? actor->m_FaithfulWaypointUIDs[index] : 0);
+                ++index;
+            }
+        }
+    }
     return state;
+}
+static void SetInputFixture(bool perturbed) {
+    // Audit-only synthetic device state; this never sends input to SDL or the desktop.
+    auto& input = g_UInputMan;
+    UInputMan::Keyboard keyboard;
+    keyboard.keyStates[SDL_SCANCODE_SPACE] = !perturbed;
+    keyboard.changedKeyStates[SDL_SCANCODE_SPACE] = !perturbed;
+    keyboard.pressedSinceSim[SDL_SCANCODE_SPACE] = !perturbed;
+    keyboard.releasedSinceSim[SDL_SCANCODE_A] = !perturbed;
+    input.m_KeyboardStates[0] = keyboard;
+    UInputMan::Mouse mouse;
+    mouse.position = perturbed ? Vector(-812.5F, 913.75F) : Vector(147.25F, 285.5F);
+    mouse.relativeMotion = Vector(perturbed ? 31.25F : -13.5F, 7.25F);
+    mouse.analogAim = Vector(perturbed ? -0.875F : 0.375F, -0.625F);
+    mouse.wheelChange = perturbed ? -7.25F : 3.5F;
+    mouse.state[0] = mouse.change[0] = mouse.pressedSinceSim[0] = !perturbed;
+    mouse.releasedSinceSim[1] = !perturbed;
+    input.m_MouseStates[0] = mouse;
+    input.m_TextInput = perturbed ? "input fixture advanced" : "input fixture captured";
+    input.m_MouseSensitivity = perturbed ? 0.25F : 1.375F;
+    input.m_ControlScheme[0].SetKeyMapping(0, perturbed ? SDL_SCANCODE_W : SDL_SCANCODE_Q);
+    input.m_ControlScheme[0].SetDigitalAimSpeed(perturbed ? 1.5F : 0.375F);
+    Gamepad gamepad(0, 400000001U, 3, 4);
+    gamepad.m_Axis[1] = perturbed ? -23456 : 12345;
+    gamepad.m_DigitalAxis[1] = perturbed ? -1 : 1;
+    gamepad.m_Buttons[2] = gamepad.m_ButtonsPressedSinceSim[2] = !perturbed;
+    gamepad.m_ButtonsReleasedSinceSim[3] = !perturbed;
+    input.s_PrevJoystickStates[0] = gamepad;
+    input.s_ChangedJoystickStates[0] = gamepad;
 }
 };
 inline std::string ContractAudit::EntityValue(const Entity* entity, const std::string& path) {

@@ -1,3 +1,4 @@
+#include "CheckpointArchive.h"
 #include "TimerMan.h"
 
 #include "Constants.h"
@@ -136,4 +137,22 @@ void TimerMan::Update() {
 	}
 
 	m_SimSpeed = std::min(maxPossibleSimSpeed, GetTimeScale());
+}
+
+std::string TimerMan::SaveCheckpoint() const {
+	CheckpointWriter writer("TimerMan1");
+	VisitCheckpoint(writer, *this);
+	return writer.Text();
+}
+
+bool TimerMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "TimerMan1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		reader.Finish();
+		if (!validateOnly) m_StartTime = std::chrono::steady_clock::now() - std::chrono::microseconds(m_RealTimeTicks);
+		return true;
+	} catch (const std::exception&) {
+		return false;
+	}
 }

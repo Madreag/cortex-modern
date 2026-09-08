@@ -32,6 +32,7 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		void ResolveFaithfulLinks() override;
 		// Concrete allocation and cloning definitions
 		EntityAllocation(ACRocket);
 		SerializableOverrideMethods;
@@ -210,6 +211,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedACRocketRuntime;
+		std::string SaveACRocketRuntime() const;
+		bool LoadACRocketRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this ACRocket, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

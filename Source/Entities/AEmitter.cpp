@@ -1,4 +1,6 @@
 #include "AEmitter.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include <bit>
 #include "SceneMan.h"
@@ -21,6 +23,7 @@ AEmitter::~AEmitter() {
 }
 
 void AEmitter::Clear() {
+	m_PersistedAEmitterRuntime.clear();
 	m_EmissionList.clear();
 	m_EmissionSound = nullptr;
 	m_BurstSound = nullptr;
@@ -116,11 +119,17 @@ int AEmitter::Create(const AEmitter& reference) {
 		m_AvgBurstImpulse = reference.m_AvgBurstImpulse;
 		m_AvgImpulse = reference.m_AvgImpulse;
 	}
+	m_PersistedAEmitterRuntime = reference.m_PersistedAEmitterRuntime;
+	if (IsFaithfulClone() && m_PersistedAEmitterRuntime.empty()) m_PersistedAEmitterRuntime = reference.SaveAEmitterRuntime();
 	return 0;
 }
 
 int AEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Attachable::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_AEmitterRuntime", {
+		m_PersistedAEmitterRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadAEmitterRuntime(m_PersistedAEmitterRuntime, true)) reader.ReportError("invalid AEmitter runtime checkpoint");
+	});
 	MatchProperty("SpecialBehaviour_ClearEmissions", {
 		bool clear; reader >> clear;
 		if (clear) { for (Emission* emission: m_EmissionList) delete emission; m_EmissionList.clear(); }
@@ -128,7 +137,7 @@ int AEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 	MatchProperty("AddEmission", {
 		Emission* emission = new Emission();
-		reader >> *emission;
+		emission->Entity::Create(reader);
 		m_EmissionList.push_back(emission);
 	});
 	MatchProperty("EmissionSound", {
@@ -257,6 +266,10 @@ void AEmitter::AdoptPersistedUniqueID() {
 		}
 		m_PersistedEmissionTimers.clear();
 	}
+	if (!m_PersistedAEmitterRuntime.empty()) {
+		if (!LoadAEmitterRuntime(m_PersistedAEmitterRuntime)) throw std::runtime_error("could not restore AEmitter runtime checkpoint");
+		m_PersistedAEmitterRuntime.clear();
+	}
 }
 
 void AEmitter::DiscardPersistedSnapshotState() {
@@ -265,6 +278,7 @@ void AEmitter::DiscardPersistedSnapshotState() {
 	m_PersistedLastEmitTimerAnchor.pending = false;
 	m_PersistedEmissionAccumulators.clear();
 	m_PersistedEmissionTimers.clear();
+	m_PersistedAEmitterRuntime.clear();
 }
 
 void AEmitter::SaveSnapshotConfiguration(Writer& writer) const {
@@ -295,6 +309,7 @@ void AEmitter::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SustainBurstSound", m_SustainBurstSound);
 	writer.NewPropertyWithValue("BurstSoundFollowsEmitter", m_BurstSoundFollowsEmitter);
 	writer.NewPropertyWithValue("LoudnessOnEmit", m_LoudnessOnEmit);
+	writer.NewPropertyWithValue("SpecialBehaviour_AEmitterRuntime", base64_encode(m_PersistedAEmitterRuntime.empty() ? SaveAEmitterRuntime() : m_PersistedAEmitterRuntime, true));
 }
 
 int AEmitter::Save(Writer& writer) const {
@@ -742,4 +757,25 @@ void AEmitter::Draw(BITMAP* pTargetBitmap,
 	if (m_pFlash && m_pFlash->IsDrawnAfterParent() &&
 	    !onlyPhysical && mode == g_DrawColor && m_EmitEnabled && (!m_FlashOnlyOnBurst || m_BurstTriggered))
 		m_pFlash->Draw(pTargetBitmap, targetPos, mode, onlyPhysical);
+}
+
+std::string AEmitter::SaveAEmitterRuntime() const {
+	CheckpointWriter archive("AEmitterRuntime1");
+	archive(m_EmitEnabled, m_WasEmitting, m_EmitCount, m_EmitCountLimit, m_NegativeThrottleMultiplier, m_PositiveThrottleMultiplier, m_Throttle);
+	archive(m_EmissionsIgnoreThis, m_BurstScale, m_BurstDamage, m_EmitterDamageMultiplier, m_BurstTriggered, m_BurstSpacing, m_BurstTimer);
+	archive(m_PlayBurstSound, m_EmitAngle, m_EmissionOffset, m_EmitDamage, m_LastEmitTmr, m_FlashScale, m_AvgBurstImpulse);
+	archive(m_AvgImpulse, m_LoudnessOnEmit, m_FlashOnlyOnBurst, m_SustainBurstSound, m_BurstSoundFollowsEmitter);
+	return archive.Text();
+}
+
+bool AEmitter::LoadAEmitterRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "AEmitterRuntime1", validateOnly);
+		archive(m_EmitEnabled, m_WasEmitting, m_EmitCount, m_EmitCountLimit, m_NegativeThrottleMultiplier, m_PositiveThrottleMultiplier, m_Throttle);
+		archive(m_EmissionsIgnoreThis, m_BurstScale, m_BurstDamage, m_EmitterDamageMultiplier, m_BurstTriggered, m_BurstSpacing, m_BurstTimer);
+		archive(m_PlayBurstSound, m_EmitAngle, m_EmissionOffset, m_EmitDamage, m_LastEmitTmr, m_FlashScale, m_AvgBurstImpulse);
+		archive(m_AvgImpulse, m_LoudnessOnEmit, m_FlashOnlyOnBurst, m_SustainBurstSound, m_BurstSoundFollowsEmitter);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

@@ -37,6 +37,7 @@ namespace RTE {
 
 		friend class MovableObjectReference;
 		friend class Atom;
+		friend class LuaStateWrapper;
 		friend struct EntityLuaBindings;
 
 		/// Public member variable, method and friend function declarations
@@ -115,11 +116,14 @@ namespace RTE {
 		/// @return Whether or not the object's scripts have been successfully initialized.
 		bool ObjectScriptsInitialized() const { return !m_ScriptObjectName.empty() && m_ScriptObjectName != "ERROR"; }
 
-		/// Whether a saved script state waits to be restored when the scripts initialize.
-		bool HasPersistedScriptState() const { return !m_PersistedScriptState.empty(); }
+		/// Whether the saved script graph lays this object's fields in, so the scripts initialize without Create.
+		bool ScriptStateRestorePending() const { return m_ScriptStateRestored || !m_PersistedScriptState.empty(); }
 
-		/// Serializes this object's script fields for a save; empty when it has none.
-		std::string SerializeScriptState() const;
+		/// The Lua state index the save recorded for this object, -1 when none.
+		int GetPersistedLuaStateIndex() const { return m_PersistedLuaStateIndex; }
+
+		/// Reloads this object's scripts into another state before they run, so a restore lands them where the save had them.
+		void MoveScriptsToState(LuaStateWrapper& state);
 
 		/// Checks if this MO has any scripts on it.
 		/// @return Whether or not this MO has any scripts on it.
@@ -1070,12 +1074,19 @@ namespace RTE {
 		/// A faithful clone copies live sim state and keeps identity; rollback snapshots use it, gameplay spawns never do.
 		static bool IsFaithfulClone() { return s_FaithfulCloneDepth > 0; }
 		static bool FaithfulCloneRegisters() { return s_FaithfulCloneRegisters; }
+		struct ScriptLoadDeferralScope {
+			ScriptLoadDeferralScope() { ++s_ScriptLoadDeferralDepth; }
+			~ScriptLoadDeferralScope() { --s_ScriptLoadDeferralDepth; }
+		};
+
 		struct FaithfulCloneScope {
-			explicit FaithfulCloneScope(bool registerWithMovableMan) {
+			explicit FaithfulCloneScope(bool registerWithMovableMan) : previousRegisters(s_FaithfulCloneRegisters) {
 				++s_FaithfulCloneDepth;
 				s_FaithfulCloneRegisters = registerWithMovableMan;
 			}
-			~FaithfulCloneScope() { --s_FaithfulCloneDepth; }
+			~FaithfulCloneScope() { --s_FaithfulCloneDepth; s_FaithfulCloneRegisters = previousRegisters; }
+		private:
+			bool previousRegisters;
 		};
 
 		/// Drops every pending snapshot stash on a normal (spawn-normalized) world add, so
@@ -1191,6 +1202,7 @@ namespace RTE {
 		/// Used to get the Lua state that handles our scripts.
 		/// @return Our lua state. Can potentially be nullptr if we're not setup yet.
 		LuaStateWrapper* GetLuaState() { return m_ThreadedLuaState; }
+		const LuaStateWrapper* GetLuaState() const { return m_ThreadedLuaState; }
 
 		/// Method to be run when the game is saved via ActivityMan::SaveCurrentGame. Not currently used in metagame or editor saving.
 		virtual void OnSave() { RunScriptedFunctionInAppropriateScripts("OnSave"); }
@@ -1387,8 +1399,12 @@ namespace RTE {
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
 		long m_PersistedUniqueID;
-		std::string m_PersistedScriptState; //!< Saved script fields, restored in place of Create when the scripts initialize.
+		std::string m_PersistedMovableObjectRuntime;
+		bool m_ScriptStateRestored; //!< The saved script graph carries this object's fields, so the scripts initialize without Create.
+		std::string m_PersistedScriptState; //!< Per-object script fields from older saves.
+		int m_PersistedLuaStateIndex; //!< The Lua state index the save recorded for this object, -1 when none.
 		long m_FaithfulMOToNotHitUID = 0; //!< Snapshot link for m_pMOToNotHit, resolved after a restore.
+		inline static thread_local int s_ScriptLoadDeferralDepth = 0;
 		static int s_FaithfulCloneDepth;
 		static bool s_FaithfulCloneRegisters;
 		int64_t m_PersistedRestTimerStart;
@@ -1427,6 +1443,9 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string SaveMovableObjectRuntime() const;
+		bool LoadMovableObjectRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this MovableObject, effectively resetting the members of this abstraction level only.
 		void Clear();
 

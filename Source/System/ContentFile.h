@@ -21,6 +21,8 @@ namespace RTE {
 		friend struct MusicCheckpoint;
 		friend struct GUISoundCheckpoint;
 		friend class AudioMan;
+		friend class Material;
+		friend class GUICheckpoint;
 		friend struct ContractAudit;
 
 
@@ -131,6 +133,7 @@ namespace RTE {
 #pragma region Data Handling
 		/// Keeps replacement save images temporary until their scene has parsed successfully.
 		class MemoryPNGScope {
+			friend struct ContractAudit;
 		public:
 			MemoryPNGScope() = default;
 			~MemoryPNGScope();
@@ -138,6 +141,8 @@ namespace RTE {
 			MemoryPNGScope& operator=(const MemoryPNGScope&) = delete;
 			/// Takes ownership of the image on success.
 			bool Add(const std::string& filePath, SDL_Surface* image);
+			/// Temporarily exposes these images while constructing a staged scene.
+			void SetActive(bool active);
 			void Commit() { m_Committed = true; }
 		private:
 			struct Entry {
@@ -146,6 +151,7 @@ namespace RTE {
 				BITMAP* previousBitmap;
 			};
 			std::vector<Entry> m_Entries;
+			bool m_Active = true;
 			bool m_Committed = false;
 		};
 

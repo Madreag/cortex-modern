@@ -2,6 +2,8 @@
 
 #include "Singleton.h"
 #include "Activity.h"
+#include "ContentFile.h"
+#include "SoundContainerRegistry.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -129,6 +131,10 @@ namespace RTE {
 		/// @param fileName Path to the file.
 		/// @return Whether the save was queued. WaitForSaveGameTask returns its result.
 		bool SaveCurrentGame(const std::string& fileName);
+		std::string CaptureRuntimeGlobals() const;
+		bool RestoreRuntimeGlobals(std::string_view text, bool validateOnly = false);
+		bool PrepareCheckpointMaterials(std::string_view runtimeGlobals);
+		bool PrepareCheckpointPrimitives(std::string_view runtimeGlobals);
 
 		/// Loads a saved game, and launches its Scene and Activity.
 		/// @param fileName Path to the file.
@@ -142,7 +148,7 @@ namespace RTE {
 		bool LoadGameToRestart(const std::string& fileName);
 
 		/// Whether the staged save carries complete VM continuation state.
-		bool HasFullScriptGraphToRestore() const { return !m_PendingScriptGraphs.empty() && m_PendingScriptGraphs.front().starts_with("SG3;"); }
+		bool HasFullScriptGraphToRestore() const { return !m_PendingCheckpoint.scriptGraphs.empty() && m_PendingCheckpoint.scriptGraphs.front().starts_with("SG3;"); }
 
 		/// Checks load results and preservation of an already staged game.
 		bool RunLoadSelfTest(const std::string& fileName, bool expectLoaded);
@@ -170,7 +176,8 @@ namespace RTE {
 
 		/// Gets the Activity that will be used in the next restart. Ownership is NOT transferred!
 		/// @return The Activity to put into effect next time ResetActivity is called.
-		Activity* GetStartActivity() const { return m_StartActivity.get(); }
+		Activity* GetStartActivity() const { return m_RestartRestoresSnapshot && m_PendingCheckpoint.activity ? m_PendingCheckpoint.activity.get() : m_StartActivity.get(); }
+		Activity* GetCheckpointStartActivity() const { return m_StartActivity.get(); }
 
 		/// Sets a new Activity to copy for next restart. You have to use RestartActivity to get it going. Ownership IS transferred!
 		/// @param newActivity The new Activity to put into effect next time ResetActivity is called.
@@ -211,6 +218,9 @@ namespace RTE {
 		/// Completely restarts whatever Activity was last started.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		bool RestartActivity();
+		/// Transfers the active native owner during a checkpoint transaction; no lifecycle callbacks run.
+		void SwapCheckpointActivity(std::unique_ptr<Activity>& activity) { m_Activity.swap(activity); }
+		void SwapCheckpointStartActivity(std::unique_ptr<Activity>& activity) { m_StartActivity.swap(activity); }
 
 		/// Forces the current game's end.
 		void EndActivity() const;
@@ -226,9 +236,10 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		struct PendingCheckpoint;
 		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
 		/// stage-for-restart load paths.
-		bool ReadSavedGame(const std::string& fileName, std::unique_ptr<Scene>& outScene, std::unique_ptr<GAScripted>& outActivity, std::string& outOriginalScenePresetName, bool& outPlaceObjects, bool& outPlaceUnits);
+		bool ReadSavedGame(const std::string& fileName, PendingCheckpoint& out);
 
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
 		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
@@ -236,16 +247,27 @@ namespace RTE {
 		std::unique_ptr<Activity> m_Activity; //!< The currently active Activity.
 		std::unique_ptr<Activity> m_StartActivity; //!< The starting condition of the next Activity to be (re)started.
 		bool m_StartActivityResumed = false; //!< The staged Activity is a loaded save resuming mid-state, not a fresh start.
-		std::unique_ptr<Scene> m_PendingLoadedScene; //!< A loaded save's Scene, kept alive until its deferred restart clones it.
-		std::string m_LoadedSceneRestartPreset;
-		bool m_LoadedSceneRestartObjects = true;
-		bool m_LoadedSceneRestartUnits = true;
-		bool m_RestartRestoresSnapshot = false; //!< The staged restart places the loaded save verbatim at its saved sim time.
-		long long m_PendingSnapshotSimUpdateCount = -1; //!< The loaded save's sim update count, -1 when the file carries none.
-		long long m_PendingSnapshotSimTimeTicks = 0; //!< The loaded save's sim time ticks.
-		long m_PendingSnapshotUniqueIDCounter = -1;
-		int m_PendingSnapshotLuaStateCursor = -1;
-		std::vector<std::string> m_PendingScriptGraphs; //!< The loaded save's script graphs by Lua state index, laid in once the restart placed the world.
+		struct PendingCheckpoint {
+			CheckpointSoundRegistry soundRegistrations;
+			PendingCheckpoint();
+			~PendingCheckpoint();
+			PendingCheckpoint(PendingCheckpoint&&) noexcept;
+			PendingCheckpoint& operator=(PendingCheckpoint&&) noexcept;
+			std::unique_ptr<ContentFile::MemoryPNGScope> images;
+			std::unique_ptr<Scene> scene;
+			std::unique_ptr<Activity> activity, startActivity;
+			bool hasStartActivity = false;
+			std::string restartPreset;
+			bool restartObjects = true, restartUnits = true;
+			long long simUpdateCount = -1, simTimeTicks = 0;
+			long uniqueIDCounter = -1;
+			int luaStateCursor = -1;
+			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
+			std::string runtimeGlobals, worldStructure, sceneRuntime;
+			std::vector<std::string> scriptGraphs;
+		};
+		PendingCheckpoint m_PendingCheckpoint;
+		bool m_RestartRestoresSnapshot = false;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 
@@ -260,6 +282,7 @@ namespace RTE {
 		std::string_view m_EditorToLaunch; //!< The name of the editor Activity to launch directly into.
 
 		/// Clears all the member variables of this ActivityMan, effectively resetting the members of this abstraction level only.
+		bool RestartActivityCandidate();
 		void Clear();
 
 		// Disallow the use of some implicit methods.

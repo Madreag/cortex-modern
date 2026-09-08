@@ -1,4 +1,7 @@
 #include "ACDropShip.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
+#include "NativeCheckpoint.h"
 #include "AtomGroup.h"
 #include "Controller.h"
 #include "Matrix.h"
@@ -20,6 +23,8 @@ ACDropShip::~ACDropShip() {
 }
 
 void ACDropShip::Clear() {
+	m_PersistedACDropShipRuntime.clear();
+	m_PersistedBodyGroupCheckpoint.clear();
 	m_pBodyAG = 0;
 	m_pRThruster = 0;
 	m_pLThruster = 0;
@@ -42,6 +47,7 @@ int ACDropShip::Create() {
 
 	// Save the AtomGroup read in by MOSRotating, as we are going to make it
 	// into a composite group, and want to have the base body stored for reference.
+	delete m_pBodyAG;
 	m_pBodyAG = dynamic_cast<AtomGroup*>(m_pAtomGroup->Clone());
 
 	return 0;
@@ -88,8 +94,9 @@ int ACDropShip::Create(const ACDropShip& reference) {
 		SetLeftHatch(dynamic_cast<Attachable*>(reference.m_pLHatch->Clone()));
 	}
 
-	m_pBodyAG = dynamic_cast<AtomGroup*>(reference.m_pBodyAG->Clone());
-	m_pBodyAG->SetOwner(this);
+	m_PersistedBodyGroupCheckpoint = reference.m_PersistedBodyGroupCheckpoint;
+	m_pBodyAG = reference.m_pBodyAG ? dynamic_cast<AtomGroup*>(reference.m_pBodyAG->Clone()) : nullptr;
+	if (m_pBodyAG) m_pBodyAG->SetOwner(this);
 	m_HatchSwingRange = reference.m_HatchSwingRange;
 	m_HatchOpeness = reference.m_HatchOpeness;
 
@@ -101,11 +108,18 @@ int ACDropShip::Create(const ACDropShip& reference) {
 
 	m_HoverHeightModifier = reference.m_HoverHeightModifier;
 
+	m_PersistedACDropShipRuntime = reference.m_PersistedACDropShipRuntime;
+	if (IsFaithfulClone() && m_PersistedACDropShipRuntime.empty()) m_PersistedACDropShipRuntime = reference.SaveACDropShipRuntime();
 	return 0;
 }
 
 int ACDropShip::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return ACraft::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ACDropShipRuntime", {
+		m_PersistedACDropShipRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadACDropShipRuntime(m_PersistedACDropShipRuntime, true)) reader.ReportError("invalid ACDropShip runtime checkpoint");
+	});
+	MatchProperty("SpecialBehaviour_BodyGroupCheckpoint", { ReadOwnedCheckpoint<AtomGroup>(reader, m_PersistedBodyGroupCheckpoint); });
 
 	MatchForwards("RThruster") MatchForwards("RightThruster") MatchProperty("RightEngine", { SetRightThruster(dynamic_cast<AEmitter*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchForwards("LThruster") MatchForwards("LeftThruster") MatchProperty("LeftEngine", { SetLeftThruster(dynamic_cast<AEmitter*>(g_PresetMan.ReadReflectedPreset(reader))); });
@@ -125,11 +139,33 @@ int ACDropShip::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void ACDropShip::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_BodyGroupCheckpoint", base64_encode(m_PersistedBodyGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pBodyAG) : m_PersistedBodyGroupCheckpoint, true));
 	writer.NewPropertyWithValue("HatchDoorSwingRange", m_HatchSwingRange);
 	writer.NewPropertyWithValue("AutoStabilize", m_AutoStabilize);
 	writer.NewPropertyWithValue("MaxEngineAngle", m_MaxEngineAngle);
 	writer.NewPropertyWithValue("LateralControlSpeed", m_LateralControlSpeed);
 	writer.NewPropertyWithValue("HoverHeightModifier", m_HoverHeightModifier);
+	writer.NewPropertyWithValue("SpecialBehaviour_ACDropShipRuntime", base64_encode(m_PersistedACDropShipRuntime.empty() ? SaveACDropShipRuntime() : m_PersistedACDropShipRuntime, true));
+}
+
+void ACDropShip::AdoptPersistedUniqueID() {
+	ACraft::AdoptPersistedUniqueID();
+	RestoreOwnedCheckpoint(m_pBodyAG, m_PersistedBodyGroupCheckpoint);
+	if (!m_PersistedACDropShipRuntime.empty()) {
+		if (!LoadACDropShipRuntime(m_PersistedACDropShipRuntime)) throw std::runtime_error("could not restore ACDropShip runtime checkpoint");
+		m_PersistedACDropShipRuntime.clear();
+	}
+}
+
+void ACDropShip::ResolveFaithfulLinks() {
+	ACraft::ResolveFaithfulLinks();
+	if (m_pBodyAG) m_pBodyAG->ResolveCheckpointLinks();
+}
+
+void ACDropShip::DiscardPersistedSnapshotState() {
+	ACraft::DiscardPersistedSnapshotState();
+	m_PersistedBodyGroupCheckpoint.clear();
+	m_PersistedACDropShipRuntime.clear();
 }
 
 int ACDropShip::Save(Writer& writer) const {
@@ -579,4 +615,19 @@ void ACDropShip::SetLeftHatch(Attachable* newHatch) {
 		}
 		m_pLHatch->SetInheritsRotAngle(false);
 	}
+}
+
+std::string ACDropShip::SaveACDropShipRuntime() const {
+	CheckpointWriter archive("ACDropShipRuntime1");
+	archive(m_HatchSwingRange, m_HatchOpeness, m_LateralControl, m_LateralControlSpeed, m_AutoStabilize, m_MaxEngineAngle, m_HoverHeightModifier);
+	return archive.Text();
+}
+
+bool ACDropShip::LoadACDropShipRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ACDropShipRuntime1", validateOnly);
+		archive(m_HatchSwingRange, m_HatchOpeness, m_LateralControl, m_LateralControlSpeed, m_AutoStabilize, m_MaxEngineAngle, m_HoverHeightModifier);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

@@ -36,6 +36,7 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		void ResolveFaithfulLinks() override;
 		// Concrete allocation and cloning definitions
 		EntityAllocation(ACrab);
 		AddScriptFunctionNames(Actor, "OnStride");
@@ -405,6 +406,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedACrabRuntime;
+		std::string SaveACrabRuntime() const;
+		bool LoadACrabRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this ACrab, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

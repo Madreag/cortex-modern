@@ -1,4 +1,7 @@
 #include "Material.h"
+#include "CheckpointArchive.h"
+#include "MovableObject.h"
+#include "Base64/base64.h"
 #include "Constants.h"
 
 using namespace RTE;
@@ -30,6 +33,7 @@ void Material::Clear() {
 
 int Material::Create(const Material& reference) {
 	Entity::Create(reference);
+	if (MovableObject::IsFaithfulClone()) Entity::LoadCheckpoint(reference.Entity::SaveCheckpoint());
 
 	m_Index = reference.m_Index;
 	m_Priority = reference.m_Priority;
@@ -57,6 +61,9 @@ int Material::Create(const Material& reference) {
 
 int Material::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Entity::ReadProperty(propName, reader));
+    MatchProperty("SpecialBehaviour_MaterialCheckpoint", {
+        if (!LoadCheckpoint(base64_decode(reader.ReadPropValue()))) reader.ReportError("invalid Material checkpoint");
+    });
 
 	MatchProperty("Index", {
 		// TODO: Check for index collisions here
@@ -121,5 +128,77 @@ int Material::Save(Writer& writer) const {
 		writer.NewPropertyWithValue("FGTextureFile", m_FGTextureFile);
 		writer.NewPropertyWithValue("BGTextureFile", m_BGTextureFile);
 	}
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialCheckpoint", base64_encode(SaveCheckpoint(), true));
 	return 0;
+}
+
+void Material::SwapCheckpoint(Material& other) noexcept {
+    using std::swap;
+    swap(m_PresetName, other.m_PresetName); swap(m_CopiedFromPresetName, other.m_CopiedFromPresetName);
+    swap(m_PresetDescription, other.m_PresetDescription); swap(m_FormattedReaderPosition, other.m_FormattedReaderPosition);
+    swap(m_IsOriginalPreset, other.m_IsOriginalPreset); swap(m_DefinedInModule, other.m_DefinedInModule);
+    swap(m_Groups, other.m_Groups); swap(m_RandomWeight, other.m_RandomWeight);
+    swap(m_Index, other.m_Index); swap(m_Priority, other.m_Priority); swap(m_Piling, other.m_Piling);
+    swap(m_Integrity, other.m_Integrity); swap(m_Restitution, other.m_Restitution);
+    swap(m_Friction, other.m_Friction); swap(m_Stickiness, other.m_Stickiness);
+    swap(m_VolumeDensity, other.m_VolumeDensity); swap(m_PixelDensity, other.m_PixelDensity);
+    swap(m_GibImpulseLimitPerLiter, other.m_GibImpulseLimitPerLiter); swap(m_GibWoundLimitPerLiter, other.m_GibWoundLimitPerLiter);
+    swap(m_SettleMaterialIndex, other.m_SettleMaterialIndex); swap(m_SpawnMaterialIndex, other.m_SpawnMaterialIndex);
+    swap(m_IsScrap, other.m_IsScrap); swap(m_UseOwnColor, other.m_UseOwnColor);
+    m_Color.SwapCheckpoint(other.m_Color);
+    const auto swapFile = [](ContentFile& left, ContentFile& right) {
+        using std::swap;
+        swap(left.m_DataPath, right.m_DataPath); swap(left.m_DataPathExtension, right.m_DataPathExtension);
+        swap(left.m_DataPathWithoutExtension, right.m_DataPathWithoutExtension); swap(left.m_DataPathIsImageFile, right.m_DataPathIsImageFile);
+        swap(left.m_ImageFileInfo, right.m_ImageFileInfo); swap(left.m_FormattedReaderPosition, right.m_FormattedReaderPosition);
+        swap(left.m_DataPathAndReaderPosition, right.m_DataPathAndReaderPosition); swap(left.m_DataModuleID, right.m_DataModuleID);
+        swap(left.m_IsMemoryPNG, right.m_IsMemoryPNG);
+    };
+    swapFile(m_FGTextureFile, other.m_FGTextureFile); swapFile(m_BGTextureFile, other.m_BGTextureFile);
+    swap(m_TerrainFGTexture, other.m_TerrainFGTexture); swap(m_TerrainBGTexture, other.m_TerrainBGTexture);
+}
+
+std::string Material::SaveCheckpoint() const {
+    CheckpointWriter archive("Material1");
+    archive(Entity::SaveCheckpoint());
+    VisitCheckpoint(archive, *this);
+    const auto textureKey = [](const BITMAP* bitmap) {
+        if (!bitmap) return std::string{};
+        std::string result;
+        for (const auto& [path, cached]: ContentFile::s_LoadedBitmaps[ContentFile::BitDepths::Eight]) if (cached == bitmap && (result.empty() || path < result)) result = path;
+        if (result.empty()) throw std::runtime_error("material texture is not owned by the content cache");
+        return result;
+    };
+    archive(textureKey(m_TerrainFGTexture), textureKey(m_TerrainBGTexture));
+    return archive.Text();
+}
+
+bool Material::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "Material1", validateOnly);
+        std::string identity;
+        archive.Value(identity);
+        if (!Entity::LoadCheckpoint(identity, true)) return false;
+        archive.OnCommit([this, identity] { Entity::LoadCheckpoint(identity); });
+        VisitCheckpoint(archive, *this);
+        std::string foreground, background;
+        archive.Value(foreground); archive.Value(background);
+        // Texture pointers are borrowed cache aliases, independent of ContentFile metadata.
+        // Resolve every dependency before applying any field to the destination Material.
+        const auto texture = [](const std::string& path) -> BITMAP* {
+            if (path.empty()) return nullptr;
+            const auto& cache = ContentFile::s_LoadedBitmaps[ContentFile::BitDepths::Eight];
+            const auto found = cache.find(path);
+            if (found == cache.end() || !found->second) throw std::runtime_error("missing cached material texture");
+            return found->second;
+        };
+        BITMAP* foregroundBitmap = texture(foreground);
+        BITMAP* backgroundBitmap = texture(background);
+        archive.OnCommit([this, foregroundBitmap, backgroundBitmap] {
+            m_TerrainFGTexture = foregroundBitmap;
+            m_TerrainBGTexture = backgroundBitmap;
+        });
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
 }

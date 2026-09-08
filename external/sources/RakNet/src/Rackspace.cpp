@@ -14,6 +14,7 @@
 #include "Rackspace.h"
 #include "RakString.h"
 #include "TCPInterface.h"
+#include <cstdlib>
 
 using namespace RakNet;
 

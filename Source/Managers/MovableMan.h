@@ -1,4 +1,10 @@
 #pragma once
+#include "TerrainLayerSnapshot.h"
+#include "SoundContainerRegistry.h"
+#include "MusicMan.h"
+
+#include <string>
+#include <string_view>
 
 /// Header file for the MovableMan class.
 /// @author Daniel Tabar
@@ -8,6 +14,8 @@
 #include "Serializable.h"
 #include "Singleton.h"
 #include "Activity.h"
+#include "Scene.h"
+#include "SpatialPartitionGrid.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -21,8 +29,10 @@
 #define g_MovableMan MovableMan::Instance()
 
 namespace RTE {
+	struct PrimitiveQueuesSetAside;
 
 	struct ControllerFrame;
+	struct LuaPathCallbackContext;
 	class MovableObject;
 	class Actor;
 	class LuaStateWrapper;
@@ -64,6 +74,7 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
@@ -118,20 +129,43 @@ namespace RTE {
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
 
+		class ConstructionRegistryScope {
+		public:
+			ConstructionRegistryScope();
+			~ConstructionRegistryScope();
+			ConstructionRegistryScope(const ConstructionRegistryScope&) = delete;
+			ConstructionRegistryScope& operator=(const ConstructionRegistryScope&) = delete;
+			CheckpointSoundRegistry GetStagedSoundRegistrations() const;
+		private:
+			std::map<long, MovableObject*> m_Original;
+			CheckpointSoundRegistry m_OriginalSounds;
+			uint64_t m_SoundCursor;
+			std::array<size_t, 4> m_QueueSizes{};
+			std::string m_Structure;
+			long m_Counter;
+			int m_Cursor;
+		};
+
 		/// An in-memory world snapshot for rollback: faithful clones of every resident MO, kept in list order.
 		struct WorldSnapshot {
+			std::unique_ptr<Activity> activity;
+			std::unique_ptr<Activity> startActivity;
+			std::string sceneRuntime;
+			TerrainLayerSnapshot terrain;
+			std::string runtimeGlobals;
+			std::string frameState;
+			Scene::AreaState sceneAreas;
 			std::vector<Actor*> actors;
 			std::vector<MovableObject*> items;
 			std::vector<MovableObject*> particles;
+			std::vector<Actor*> addedActors;
+			std::vector<MovableObject*> addedItems;
+			std::vector<MovableObject*> addedParticles;
+			std::string structure;
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
-			/// The Lua fields each scripted resident held at the capture, in its state.
-			struct LuaFields {
-				LuaStateWrapper* state = nullptr;
-				long uid = 0;
-				int ref = -1;
-			};
-			std::vector<LuaFields> luaFields;
+			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph at the capture, by state index.
 			long uniqueIDCounter = 0;
+			int luaStateCursor = 0;
 			WorldSnapshot() = default;
 			WorldSnapshot(const WorldSnapshot&) = delete;
 			WorldSnapshot& operator=(const WorldSnapshot&) = delete;
@@ -139,15 +173,32 @@ namespace RTE {
 			void Clear();
 		};
 
-		/// Captures every resident MO as an off-world faithful clone. Only valid between ticks, after the add queues drained.
-		bool CaptureWorld(WorldSnapshot& out) const;
+		/// Captures resident and pending MOs as off-world faithful clones at a completed tick boundary.
+		bool CaptureWorld(WorldSnapshot& out);
 
 		/// Replaces the resident MOs with registered faithful clones of a snapshot. Only valid between ticks.
 		/// A world that was not set aside first is purged.
 		bool RestoreWorld(const WorldSnapshot& in);
+		/// Ordered resident/pending membership, alarm values, rosters and collision indices.
+		std::string SaveWorldStructure() const;
+		bool LoadWorldStructure(std::string_view text, bool validateOnly = false);
+		void RedrawRestoredMOIDs();
 
 		/// The live residents moved out of the world untouched, so a probe can run on a restored copy and hand the originals back.
 		struct WorldSetAside {
+			std::shared_ptr<PrimitiveQueuesSetAside> primitiveQueues;
+			std::shared_ptr<MusicMan::CheckpointOwners> musicOwners;
+			CheckpointSoundRegistry soundRegistrations;
+			std::unique_ptr<Activity> activity;
+			std::unique_ptr<Activity> startActivity;
+			std::string sceneRuntime;
+			std::unique_ptr<Scene::RuntimeOwners> sceneOwners;
+			TerrainLayerSnapshot terrain;
+			std::string runtimeGlobals;
+			std::string frameState;
+			std::vector<MovableObject*> pendingLinks;
+			std::shared_ptr<LuaPathCallbackContext> pathCallbacks;
+			Scene::AreaState sceneAreas;
 			std::deque<Actor*> actors;
 			std::deque<MovableObject*> items;
 			std::deque<MovableObject*> particles;
@@ -160,14 +211,46 @@ namespace RTE {
 			bool sortRoster[Activity::MaxTeamCount] = {};
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 			std::map<long int, MovableObject*> knownObjects;
+			std::vector<MovableObject*> moidIndex;
+			std::unordered_map<const Actor*, int> contiguousActorIDs;
+			std::unordered_set<const MovableObject*> validActors;
+			std::unordered_set<const MovableObject*> validItems;
+			std::unordered_set<const MovableObject*> validParticles;
+			std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
+			SpatialPartitionGrid moidGrid;
+			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph as the originals left it.
+			std::vector<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
+			std::vector<std::pair<LuaStateWrapper*, long>> scriptObjects;
+			long uniqueIDCounter = 0;
+			int luaStateCursor = 0;
 			bool held = false;
 		};
-		/// Moves every resident and queued add out of the world without touching them; the world is empty afterwards.
-		void SetAsideWorld(WorldSetAside& out);
+		/// Moves every resident and queued add out of the world; returns false without moving them if capture fails.
+		bool SetAsideWorld(WorldSetAside& out, bool holdActivity = true);
 		/// Destroys the current residents (a probe's re-run) and puts the set-aside originals back, identities and script state intact.
-		void ReinstateWorld(WorldSetAside& in);
+		bool ReinstateWorld(WorldSetAside& in);
+		/// Retires a held world after its replacement is fully usable, without running old Destroy callbacks.
+		void DiscardWorld(WorldSetAside& in);
+		bool HasWorldSetAside() const { return m_HasWorldSetAside; }
+		bool ValidateScriptGraphs(const std::vector<std::string>& graphs, std::string* error);
 		/// One line per Lua state listing every registered object's unique id and the identity of its Lua object; identity oracles compare it.
 		std::string DescribeLuaIdentity() const;
+
+		/// Every Lua state's script graph, by state index; false with the reasons when a state could not be carried faithfully.
+		bool SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const;
+
+		/// The last script graph failure a set-aside recorded, empty when none.
+		const std::string& GetScriptGraphFailure() const { return m_ScriptGraphFailure; }
+
+		/// A copy of every object known by unique id.
+		std::vector<MovableObject*> SnapshotKnownObjects();
+
+		/// Lays the saved script graphs onto the live world: each root's scripts go to the saved state and start without Create,
+		/// then the graph fills the fields and the script-made globals; false with the reasons when anything did not restore.
+		bool RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld = false);
+
+		/// Whether the pointer is an object this manager knows by unique id, so it can be read safely.
+		bool IsKnownObject(const MovableObject* object);
 
 		struct AddQueueMark {
 			size_t actors = 0;
@@ -581,6 +664,8 @@ namespace RTE {
 		/// Empties the lockstep join quarantine — a restore's objects were residents at the
 		/// captured tick, not mid-tick joiners.
 		void ClearLockstepJoinQuarantine();
+		const std::vector<std::pair<uint64_t, long int>>& GetLockstepJoinQuarantine() const { return m_LockstepJoinQuarantine; }
+		void RestoreLockstepJoinQuarantine(std::vector<std::pair<uint64_t, long int>> quarantine) { m_LockstepJoinQuarantine = std::move(quarantine); }
 
 		/// While set, the Add paths place snapshot residents verbatim (no spawn normalization, no
 		/// join quarantine) and each object adopts its saved identity. Only a rollback restore
@@ -589,6 +674,8 @@ namespace RTE {
 
 		/// Applies each restored actor's saved controller mode, after the activity's AI setup.
 		void ReapplyPersistedControllerModes();
+		/// Resolve restored references once every native and Lua-owned object has adopted its identity.
+		void ResolvePendingSnapshotLinks();
 		bool IsRestoringSnapshot() const { return m_RestoringSnapshot; }
 
 		/// Draws this MovableMan's all MO's current material representations to a BITMAP of choice.
@@ -730,7 +817,8 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
-		std::vector<std::pair<LuaStateWrapper*, long>> m_RestoredScriptObjects; //!< The restored clones standing in for set-aside originals' script objects.
+		bool m_HasWorldSetAside = false;
+		bool RestoreWorldCandidate(const WorldSnapshot& in);
 		struct Speculation {
 			struct Shadow {
 				MovableObject* object = nullptr;
@@ -828,9 +916,11 @@ namespace RTE {
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;
+		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
 
 		/// Private member variable and method declarations
 	private:
+
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_SplashRatio, self.m_MaxDroppedItems, self.m_SettlingEnabled, self.m_MOSubtractionEnabled,
 				self.m_SimUpdateFrameNumber);

@@ -125,16 +125,20 @@ int PieSlice::ReadProperty(const std::string_view& propName, Reader& reader) {
 int PieSlice::Save(Writer& writer) const {
 	Entity::Save(writer);
 
-	if (m_Type != PieSliceType::NoType) {
+	if (writer.IsSnapshot() || m_Type != PieSliceType::NoType) {
 		writer.NewPropertyWithValue("Type", static_cast<int>(m_Type));
 	}
-	if (m_Direction != Directions::Any) {
+	if (writer.IsSnapshot() || m_Direction != Directions::Any) {
 		writer.NewPropertyWithValue("Direction", static_cast<int>(m_Direction));
 	}
-	if (!m_Enabled) {
+	if (writer.IsSnapshot() || !m_Enabled) {
 		writer.NewPropertyWithValue("Enabled", m_Enabled);
 	}
 	writer.NewPropertyWithValue("Icon", m_Icon.get());
+	if (writer.IsSnapshot()) {
+		writer.NewPropertyWithValue("CanBeMiddleSlice", m_CanBeMiddleSlice);
+		writer.NewPropertyWithValue("DrawFlippedToMatchAbsoluteAngle", m_DrawFlippedToMatchAbsoluteAngle);
+	}
 	if (m_LuabindFunctionObject && !m_FunctionName.empty()) {
 		writer.NewPropertyWithValue("ScriptPath", m_LuabindFunctionObject->GetFilePath());
 		writer.NewPropertyWithValue("FunctionName", m_FunctionName);

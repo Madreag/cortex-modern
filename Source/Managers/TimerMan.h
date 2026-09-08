@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "Singleton.h"
 
 #include <deque>
@@ -21,6 +24,9 @@ namespace RTE {
 
 
 	public:
+
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 #pragma region Creation
 		/// Constructor method used to instantiate a TimerMan object in system memory. Initialize() should be called before using this object.
 		TimerMan() {
@@ -261,6 +267,15 @@ namespace RTE {
 		long long m_PaceResetCalls; //!< Number of ResetTime calls (pace forensics).
 
 	private:
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_TicksPerSecond, self.m_RealTimeTicks, self.m_SimTimeTicks, self.m_SimUpdateCount,
+				self.m_SimAccumulator, self.m_DeltaTime, self.m_DeltaTimeS, self.m_DeltaBuffer,
+				self.m_SimUpdatesSinceDrawn, self.m_DrawnSimUpdate, self.m_SimSpeed, self.m_TimeScale,
+				self.m_SimPaused, self.m_SimTimeFrozen, self.m_FreeRunSim, self.m_PaceAccruedTicks,
+				self.m_PaceTrimmedTicks, self.m_PaceWallSeenTicks, self.m_PaceCapLostTicks, self.m_PacePausedLostTicks,
+				self.m_PaceUpdateCalls, self.m_PaceResetCalls);
+		}
 		/// Clears all the member variables of this TimerMan, effectively resetting the members of this abstraction level only.
 		void Clear();
 

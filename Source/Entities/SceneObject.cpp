@@ -190,21 +190,14 @@ int SceneObject::ReadProperty(const std::string_view& propName, Reader& reader) 
 
 int SceneObject::Save(Writer& writer) const {
 	Entity::Save(writer);
-	// TODO: Make proper save system that knows not to save redundant data!
-	/*
-	    writer.NewProperty("Position");
-	    writer << m_Pos;
-	    writer.NewProperty("GoldValue");
-	    writer << m_OzValue;
-	    writer.NewProperty("Buyable");
-	    writer << m_Buyable;
-	    writer.NewProperty("BuyableMode");
-	    writer << static_cast<int>(m_BuyableMode);
-	    writer.NewProperty("Team");
-	    writer << m_Team;
-	    writer.NewProperty("PlacedByPlayer");
-	    writer << m_PlacedByPlayer;
-	*/
+	if (writer.IsSnapshot()) {
+		writer.NewPropertyWithValue("Position", m_Pos);
+		writer.NewPropertyWithValue("GoldValue", m_OzValue);
+		writer.NewPropertyWithValue("Buyable", m_Buyable);
+		writer.NewPropertyWithValue("BuyableMode", static_cast<int>(m_BuyableMode));
+		writer.NewPropertyWithValue("Team", m_Team);
+		writer.NewPropertyWithValue("PlacedByPlayer", m_PlacedByPlayer);
+	}
 	return 0;
 }
 

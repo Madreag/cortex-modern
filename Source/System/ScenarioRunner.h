@@ -4,6 +4,7 @@
 #include "NetLockstep.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -53,6 +54,7 @@ namespace RTE {
 			bool        selftestBrainKillCommand = false; // -net-match-e2e-brain-kill-command: host delivers + scuttles a craft onto the enemy brain.
 			bool        selftestStall = false; // -net-match-e2e-stall: this peer stops producing frames for 8s at tick 300 (stall-grace test).
 			bool        selftestJoinRejection = false; // -net-match-e2e-join-rejection: stop the harness after recording a refused join.
+			bool        scriptGraphSelfTest = false; // -script-graph-selftest: run the script graph's contract tests in the master state and exit.
 			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
@@ -61,6 +63,9 @@ namespace RTE {
 			bool        selftestBrainSpawnCommand = false; // -net-match-e2e-brain-spawn-command: this peer spawns a second brain for its team at tick 40.
 			bool        selftestPauseCommand = false; // -net-match-e2e-pause-command: host pauses at tick 250 and unpauses at 430.
 			bool        selftestSnapshot = false; // -net-match-e2e-snapshot: save the full game at tick 300 (both peers save the same synced frame).
+			uint64_t    contractAuditContinueThrough = 0; // Diagnostic-only: keep running after the audit operation to this complete tick.
+			long long   contractAuditSeedMarker = 0; // Diagnostic fixture value placed in all Lua roots before a seed is saved.
+			bool        contractAuditContinuationPerturb = false; // Positive control: one extra simulation RNG draw after the observed operation.
 		};
 
 		/// True if `-scenario` was supplied on the command line.
@@ -75,6 +80,14 @@ namespace RTE {
 		/// Parse a single CLI flag starting at startIndex. Returns the number of argv items
 		/// consumed (0 / 1 / 2). Sets active = true when `-scenario` is seen.
 		static int ParseArgs(int argCount, char** argValue, int startIndex);
+
+		/// Diagnostic-only ordinary-load and staged-candidate transactions. Calls the production
+		/// entry points directly; the observer records both the live world and pending candidate.
+		/// A handled operation reports preparation/application separately. It never repairs state.
+		static bool RunContractAuditLoad(const std::string& operation, const std::function<void(const std::string&)>& observe,
+		                                bool& prepared, bool& applied);
+		static void SetContractAuditSeedMarker();
+		static void PerturbContractAuditContinuation();
 
 		/// Build the full preset name from the `-scenario` arg (prefixes with "Determinism ").
 		/// Returns "Determinism SimBaseline" for arg "SimBaseline", or the raw string if already prefixed.

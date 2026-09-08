@@ -1,4 +1,5 @@
 #include "Atom.h"
+#include "Base64/base64.h"
 #include "CheckpointArchive.h"
 
 #include "SLTerrain.h"
@@ -66,6 +67,8 @@ void Atom::Destroy() {
 }
 
 void Atom::Clear() {
+    m_CheckpointMaterialReferences.fill({});
+    m_HasCheckpointMaterials = false;
 	m_CheckpointLinkIDs.fill(0);
 	m_HasCheckpointLinks = false;
 	m_LastTrailPoints.clear();
@@ -154,6 +157,8 @@ int Atom::Create(const Atom& reference) {
 
 	if (MovableObject::IsFaithfulClone()) {
 		m_LastHit = reference.m_LastHit;
+        m_CheckpointMaterialReferences = reference.CaptureCheckpointMaterialReferences();
+        m_HasCheckpointMaterials = true;
 		m_CheckpointLinkIDs = reference.CaptureCheckpointLinkIDs();
 		m_HasCheckpointLinks = true;
 		m_StepWasTaken = reference.m_StepWasTaken;
@@ -199,43 +204,56 @@ std::array<long, 5> Atom::CaptureCheckpointLinkIDs() const {
 	    liveID(m_LastHit.RootBody[0]), liveID(m_LastHit.RootBody[1])};
 }
 
+std::array<std::string, 3> Atom::CaptureCheckpointMaterialReferences() const {
+    if (m_HasCheckpointMaterials) return m_CheckpointMaterialReferences;
+    return {g_SceneMan.SaveMaterialReference(m_Material), g_SceneMan.SaveMaterialReference(m_LastHit.HitMaterial[0]), g_SceneMan.SaveMaterialReference(m_LastHit.HitMaterial[1])};
+}
+
 std::string Atom::SaveCheckpoint() const {
-	CheckpointWriter writer("Atom1");
-	VisitCheckpoint(writer, *this);
-	writer(m_Material ? static_cast<int>(m_Material->GetIndex()) : -1,
-	    CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
-	for (const Material* material: m_LastHit.HitMaterial) writer(material ? static_cast<int>(material->GetIndex()) : -1);
-	return writer.Text();
+    CheckpointWriter writer("Atom2");
+    VisitCheckpoint(writer, *this);
+    writer(CaptureCheckpointMaterialReferences(), CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
+    return writer.Text();
 }
 
 bool Atom::LoadCheckpoint(std::string_view text, bool validateOnly) {
-	try {
-		CheckpointReader reader(text, "Atom1", validateOnly);
-		VisitCheckpoint(reader, *this);
-		int materialIndex;
-		std::array<long, 5> links;
-		bool usesGroupIgnoreList;
-		std::array<int, 2> hitMaterials;
-		reader.Value(materialIndex);
-		reader.Value(links);
-		reader.Value(usesGroupIgnoreList);
-		reader.Value(hitMaterials);
-		const auto validMaterial = [](int index) { return index >= -1 && index < c_PaletteEntriesNumber; };
-		if (!validMaterial(materialIndex) || !validMaterial(hitMaterials[0]) || !validMaterial(hitMaterials[1])) return false;
-		for (long uid: links) if (uid < 0) return false;
-		reader.OnCommit([this, materialIndex, links, usesGroupIgnoreList, hitMaterials] {
-			m_Material = materialIndex < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex));
-			m_CheckpointLinkIDs = links;
-			m_HasCheckpointLinks = true;
-			if (!usesGroupIgnoreList) m_IgnoreMOIDsByGroup = nullptr;
-			for (int index = 0; index < 2; ++index) m_LastHit.HitMaterial[index] = hitMaterials[index] < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(hitMaterials[index]));
-		});
-		reader.Finish();
-		return true;
-	} catch (const std::exception&) { return false; }
+    try {
+        const bool legacy = text.starts_with("5 Atom1 ");
+        CheckpointReader reader(text, legacy ? "Atom1" : "Atom2", validateOnly);
+        VisitCheckpoint(reader, *this);
+        std::array<std::string, 3> materials;
+        std::array<long, 5> links;
+        bool usesGroupIgnoreList;
+        if (legacy) {
+            std::array<int, 3> indices;
+            reader.Value(indices[0]); reader.Value(links); reader.Value(usesGroupIgnoreList);
+            reader.Value(indices[1]); reader.Value(indices[2]);
+            for (size_t index = 0; index < indices.size(); ++index) {
+                if (indices[index] < -1 || indices[index] >= c_PaletteEntriesNumber) return false;
+                materials[index] = g_SceneMan.SaveMaterialReference(indices[index] < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(indices[index])));
+            }
+        } else {
+            reader.Value(materials); reader.Value(links); reader.Value(usesGroupIgnoreList);
+            for (const auto& material: materials) if (!SceneMan::ValidateMaterialReference(material)) return false;
+        }
+        for (long uid: links) if (uid < 0) return false;
+        reader.OnCommit([this, materials, links, usesGroupIgnoreList] {
+            m_CheckpointMaterialReferences = materials; m_HasCheckpointMaterials = true;
+            m_CheckpointLinkIDs = links; m_HasCheckpointLinks = true;
+            if (!usesGroupIgnoreList) m_IgnoreMOIDsByGroup = nullptr;
+        });
+        reader.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
 }
 
 void Atom::ResolveCheckpointLinks() {
+    if (m_HasCheckpointMaterials) {
+        std::array<const Material*, 3> materials;
+        for (size_t index = 0; index < materials.size(); ++index) materials[index] = g_SceneMan.ResolveMaterialReference(m_CheckpointMaterialReferences[index]);
+        m_Material = materials[0]; m_LastHit.HitMaterial[0] = materials[1]; m_LastHit.HitMaterial[1] = materials[2];
+        m_CheckpointMaterialReferences.fill({}); m_HasCheckpointMaterials = false;
+    }
 	if (!m_HasCheckpointLinks) return;
 	m_OwnerMO = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[0]);
 	for (int index = 0; index < 2; ++index) {
@@ -251,7 +269,15 @@ int Atom::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 	MatchProperty("Offset", { reader >> m_Offset; });
 	MatchProperty("OriginalOffset", { reader >> m_OriginalOffset; });
+    MatchProperty("SpecialBehaviour_MaterialReference", {
+        const std::string material = base64_decode(reader.ReadPropValue());
+        if (!SceneMan::ValidateMaterialReference(material)) reader.ReportError("invalid Atom material checkpoint reference");
+        m_CheckpointMaterialReferences = CaptureCheckpointMaterialReferences();
+        m_CheckpointMaterialReferences[0] = material; m_HasCheckpointMaterials = true;
+        if (const Material* found = g_SceneMan.ResolveMaterialReference(material, true)) m_Material = found;
+    });
 	MatchProperty("Material", {
+        m_CheckpointMaterialReferences.fill({}); m_HasCheckpointMaterials = false;
 		Material mat;
 		mat.Reset();
 		reader >> mat;
@@ -272,7 +298,8 @@ int Atom::Save(Writer& writer) const {
 
 	writer.NewPropertyWithValue("Offset", m_Offset);
 	writer.NewPropertyWithValue("OriginalOffset", m_OriginalOffset);
-	writer.NewPropertyWithValue("Material", m_Material);
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", base64_encode(CaptureCheckpointMaterialReferences()[0], true));
+    else writer.NewPropertyWithValue("Material", m_Material);
 	writer.NewPropertyWithValue("TrailColor", m_TrailColor);
 	writer.NewPropertyWithValue("TrailLength", m_TrailLength);
 	writer.NewPropertyWithValue("TrailLengthVariation", m_TrailLengthVariation);

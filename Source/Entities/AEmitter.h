@@ -455,6 +455,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedAEmitterRuntime;
+		std::string SaveAEmitterRuntime() const;
+		bool LoadAEmitterRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this AEmitter, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

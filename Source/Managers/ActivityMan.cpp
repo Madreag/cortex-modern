@@ -1,5 +1,9 @@
 #include "ActivityMan.h"
+#include "GUIInput.h"
+#include "GUISound.h"
+#include "CheckpointArchive.h"
 #include "LuaMan.h"
+#include "Base64/base64.h"
 
 #include <filesystem>
 #include "Activity.h"
@@ -13,6 +17,7 @@
 #include "FrameMan.h"
 #include "PerformanceMan.h"
 #include "PostProcessMan.h"
+#include "PrimitiveMan.h"
 #include "MetaMan.h"
 #include "ThreadMan.h"
 #include "System.h"
@@ -47,6 +52,8 @@
 
 #include <array>
 #include <chrono>
+#include <charconv>
+#include <map>
 #include <cstdlib>
 #include <execution>
 #include <iostream>
@@ -54,6 +61,11 @@
 #include <stdexcept>
 
 using namespace RTE;
+
+ActivityMan::PendingCheckpoint::PendingCheckpoint() = default;
+ActivityMan::PendingCheckpoint::~PendingCheckpoint() = default;
+ActivityMan::PendingCheckpoint::PendingCheckpoint(PendingCheckpoint&&) noexcept = default;
+ActivityMan::PendingCheckpoint& ActivityMan::PendingCheckpoint::operator=(PendingCheckpoint&&) noexcept = default;
 
 ActivityMan::ActivityMan() {
 	Clear();
@@ -68,6 +80,10 @@ void ActivityMan::Clear() {
 	m_DefaultActivityName = "Tutorial Mission";
 	m_Activity = nullptr;
 	m_StartActivity = nullptr;
+	PendingCheckpoint discarded = std::move(m_PendingCheckpoint);
+	m_PendingCheckpoint = PendingCheckpoint{};
+	m_RestartRestoresSnapshot = false;
+	m_StartActivityResumed = false;
 	m_SaveGameTask = std::shared_future<bool>();
 	m_InActivity = false;
 	m_ActivityNeedsRestart = false;
@@ -138,6 +154,11 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	for (long uid: callbackObjects) {
 		if (MovableObject* object = g_MovableMan.FindObjectByUniqueID(uid)) object->OnSave();
 	}
+	g_MovableMan.CompleteQueuedMOIDDrawings();
+	AudioMan::CheckpointRegistryScope captureSounds;
+	const std::string runtimeGlobals = CaptureRuntimeGlobals();
+	const std::string worldStructure = g_MovableMan.SaveWorldStructure();
+	const std::string sceneRuntime = scene->SaveRuntimeCheckpoint();
 
 	// Copy the layers in parallel with serialization, after all save callbacks.
 	auto copyBitmaps = g_ThreadMan.GetBackgroundThreadPool().submit([scene]() {
@@ -187,6 +208,11 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	auto writer = std::make_shared<Writer>(std::move(iniStream));
 	Writer::SnapshotScope snapshotScope(*writer);
 	writer->NewPropertyWithValue("Activity", activity);
+	writer->NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
+	if (m_StartActivity) writer->NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
+	writer->NewPropertyWithValue("RuntimeGlobals", base64_encode(runtimeGlobals, true));
+	writer->NewPropertyWithValue("WorldStructure", base64_encode(worldStructure, true));
+	writer->NewPropertyWithValue("SceneRuntime", base64_encode(sceneRuntime, true));
 
 	// Pull all stuff from MovableMan into the Scene for saving, so existing Actors/ADoors are saved, without transferring ownership, so the game can continue.
 	// TODO- copying may be faster, and lets us move all this actual writing into async
@@ -199,6 +225,25 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
 	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
 	writer->NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
+	writer->NewPropertyWithValue("UniqueIDCounter", MovableObject::GetUniqueIDCounter());
+	writer->NewPropertyWithValue("LuaStateCursor", g_LuaMan.GetScriptStateCursor());
+	for (const auto& [tick, uid]: g_MovableMan.GetLockstepJoinQuarantine()) {
+		writer->NewPropertyWithValue("LockstepJoinQuarantine", std::to_string(tick) + "|" + std::to_string(uid));
+	}
+	{
+		std::vector<std::string> graphs;
+		std::vector<std::string> luaProblems;
+		if (!g_MovableMan.SerializeScriptGraphs(graphs, luaProblems)) {
+			for (const std::string& problem: luaProblems) {
+				g_ConsoleMan.PrintString("ERROR: the save cannot carry a script value: " + problem);
+				std::cout << "[scriptgraph] save refused: " << problem << std::endl;
+			}
+			return false;
+		}
+		for (size_t index = 0; index < graphs.size(); ++index) {
+			writer->NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
+		}
+	}
 	writer->NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", g_SceneMan.GetPlaceObjectsOnLoad());
 	writer->NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", g_SceneMan.GetPlaceUnitsOnLoad());
 	writer->NewPropertyWithValue("Scene", modifiableScene.get());
@@ -304,7 +349,7 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	return true;
 }
 
-bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Scene>& outScene, std::unique_ptr<GAScripted>& outActivity, std::string& outOriginalScenePresetName, bool& outPlaceObjects, bool& outPlaceUnits) {
+bool ActivityMan::ReadSavedGame(const std::string& fileName, PendingCheckpoint& out) {
 	WaitForSaveGameTask();
 	const std::string modulePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	const std::string filePath = modulePath + "/" + fileName;
@@ -337,30 +382,85 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 			images.emplace_back(name, std::move(image));
 		}
 
-		ContentFile::MemoryPNGScope stagedImages;
+		auto stagedImages = std::make_unique<ContentFile::MemoryPNGScope>();
 		for (auto& [name, image]: images) {
-			if (!stagedImages.Add(modulePath + "/" + name, image.get())) throw std::runtime_error("could not stage " + name);
+			if (!stagedImages->Add(modulePath + "/" + name, image.get())) throw std::runtime_error("could not stage " + name);
 			image.release();
 		}
 		Reader reader(std::make_unique<std::istringstream>(text), filePath + "/Save.ini", true, nullptr, true);
+		reader.SetCheckpoint(true);
 		reader.SetThrowOnError(true);
 		reader.SetSkipIncludes(true);
 		auto scene = std::make_unique<Scene>();
 		auto activity = std::make_unique<GAScripted>();
+		std::unique_ptr<Activity> startActivity;
+		bool hasStartActivity = false, startActivityDeclared = false;
 		std::string originalScenePresetName = fileName;
 		bool placeObjects = true, placeUnits = true, hasActivity = false, hasScene = false;
 		long long simUpdateCount = -1, simTimeTicks = 0;
+		long uniqueIDCounter = -1;
+		int luaStateCursor = -1;
+		std::vector<std::pair<uint64_t, long int>> joinQuarantine;
+		std::map<size_t, std::string> graphs;
+		std::string runtimeGlobals, worldStructure, sceneRuntime;
 		while (reader.NextProperty()) {
 			const std::string propName = reader.ReadPropName();
 			if (propName == "Activity") {
 				if (hasActivity || static_cast<Serializable*>(activity.get())->Create(reader) < 0) throw std::runtime_error("invalid Activity");
 				hasActivity = true;
+			} else if (propName == "HasCheckpointStartActivity") {
+				if (startActivityDeclared) throw std::runtime_error("duplicate start activity declaration");
+				reader >> hasStartActivity;
+				startActivityDeclared = true;
+			} else if (propName == "CheckpointStartActivity") {
+				if (startActivity) throw std::runtime_error("duplicate start activity");
+				std::unique_ptr<Entity> value(g_PresetMan.ReadReflectedPreset(reader));
+				if (!dynamic_cast<Activity*>(value.get())) throw std::runtime_error("invalid start activity");
+				startActivity.reset(static_cast<Activity*>(value.release()));
 			} else if (propName == "OriginalScenePresetName") {
 				reader >> originalScenePresetName;
 			} else if (propName == "SimUpdateCount") {
 				reader >> simUpdateCount;
+			} else if (propName == "WorldStructure") {
+				worldStructure = base64_decode(reader.ReadPropValue());
+				if (!g_MovableMan.LoadWorldStructure(worldStructure, true)) throw std::runtime_error("invalid world structure");
+			} else if (propName == "RuntimeGlobals") {
+				runtimeGlobals = base64_decode(reader.ReadPropValue());
+				if (!RestoreRuntimeGlobals(runtimeGlobals, true)) throw std::runtime_error("invalid runtime globals");
+			} else if (propName == "SceneRuntime") {
+				sceneRuntime = base64_decode(reader.ReadPropValue());
 			} else if (propName == "SimTimeTicks") {
 				reader >> simTimeTicks;
+			} else if (propName == "UniqueIDCounter") {
+				reader >> uniqueIDCounter;
+				// Temporary reader/graph clones must never borrow an incoming object's saved ID.
+				MovableObject::PinUniqueIDCounter(std::max(MovableObject::GetUniqueIDCounter(), uniqueIDCounter));
+			} else if (propName == "LuaStateCursor") {
+				reader >> luaStateCursor;
+			} else if (propName == "LockstepJoinQuarantine") {
+				const std::string entry = reader.ReadPropValue();
+				const size_t bar = entry.find('|');
+				uint64_t tick = 0;
+				long uid = 0;
+				if (bar == std::string::npos) throw std::runtime_error("invalid join quarantine");
+				const auto parsedTick = std::from_chars(entry.data(), entry.data() + bar, tick);
+				const auto parsedUID = std::from_chars(entry.data() + bar + 1, entry.data() + entry.size(), uid);
+				if (parsedTick.ec != std::errc() || parsedTick.ptr != entry.data() + bar || parsedUID.ec != std::errc() || parsedUID.ptr != entry.data() + entry.size() || uid <= 0) {
+					throw std::runtime_error("invalid join quarantine");
+				}
+				joinQuarantine.emplace_back(tick, uid);
+			} else if (propName == "LuaStateGraph") {
+				std::string entry;
+				reader >> entry;
+				const size_t bar = entry.find('|');
+				size_t index = 0;
+				if (bar != std::string::npos) {
+					const auto parsed = std::from_chars(entry.data(), entry.data() + bar, index);
+					if (parsed.ec != std::errc() || parsed.ptr != entry.data() + bar) throw std::runtime_error("invalid script state index");
+				}
+				if (!graphs.emplace(index, base64_decode(bar == std::string::npos ? entry : entry.substr(bar + 1))).second) {
+					throw std::runtime_error("duplicate script state index");
+				}
 			} else if (propName == "PlaceObjectsIfSceneIsRestarted") {
 				reader >> placeObjects;
 			} else if (propName == "PlaceUnitsIfSceneIsRestarted") {
@@ -372,7 +472,9 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 				reader.ReadPropValue();
 			}
 		}
+		if ((startActivityDeclared && hasStartActivity != (startActivity != nullptr)) || (!startActivityDeclared && startActivity)) throw std::runtime_error("incomplete start activity checkpoint");
 		if (!hasActivity || !hasScene || !scene->GetTerrain()) throw std::runtime_error("missing Activity, Scene or terrain");
+		if (!sceneRuntime.empty() && !scene->LoadRuntimeCheckpoint(sceneRuntime, true)) throw std::runtime_error("invalid scene runtime");
 		const auto checkLayer = [&](SceneLayer* layer, const std::string& name) {
 			if (!layer || layer->GetContentFile().GetDataPath() != modulePath + "/" + name ||
 			    std::none_of(images.begin(), images.end(), [&](const auto& image) { return image.first == name; })) {
@@ -385,15 +487,34 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, std::unique_ptr<Sce
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 			if (auto* unseen = scene->GetUnseenLayer(team)) checkLayer(unseen, std::format("Save UST{}.png", team));
 		}
+		if (!graphs.empty() && graphs.rbegin()->first != graphs.size() - 1) throw std::runtime_error("missing script state index");
+		std::vector<std::string> scriptGraphs;
+		for (auto& [index, graph]: graphs) scriptGraphs.emplace_back(std::move(graph));
+		if (scriptGraphs.size() > g_LuaMan.GetThreadedScriptStates().size() + 1) throw std::runtime_error("unsupported script state count");
+		std::vector<std::string> graphProblems;
+		for (size_t index = 0; index < scriptGraphs.size(); ++index) {
+			if (!scriptGraphs[index].empty()) g_LuaMan.GetStateByIndex(static_cast<int>(index)).ValidateScriptGraph(scriptGraphs[index], graphProblems);
+		}
+		if (!graphProblems.empty()) throw std::runtime_error(graphProblems.front());
 
-		outScene = std::move(scene);
-		outActivity = std::move(activity);
-		outOriginalScenePresetName = std::move(originalScenePresetName);
-		outPlaceObjects = placeObjects;
-		outPlaceUnits = placeUnits;
-		m_PendingSnapshotSimUpdateCount = simUpdateCount;
-		m_PendingSnapshotSimTimeTicks = simTimeTicks;
-		stagedImages.Commit();
+		out.scene = std::move(scene);
+		out.activity = std::move(activity);
+		out.startActivity = std::move(startActivity);
+		out.hasStartActivity = startActivityDeclared;
+		out.restartPreset = std::move(originalScenePresetName);
+		out.restartObjects = placeObjects;
+		out.restartUnits = placeUnits;
+		out.simUpdateCount = simUpdateCount;
+		out.simTimeTicks = simTimeTicks;
+		out.uniqueIDCounter = uniqueIDCounter;
+		out.luaStateCursor = luaStateCursor;
+		out.joinQuarantine = std::move(joinQuarantine);
+		out.scriptGraphs = std::move(scriptGraphs);
+		out.runtimeGlobals = std::move(runtimeGlobals);
+		out.worldStructure = std::move(worldStructure);
+		out.sceneRuntime = std::move(sceneRuntime);
+		stagedImages->SetActive(false);
+		out.images = std::move(stagedImages);
 		return true;
 	} catch (const std::exception& error) {
 		const std::string message = "Could not load game \"" + fileName + "\": " + error.what();
@@ -517,18 +638,25 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 
 bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded) {
 	if (!LoadGameToRestart("load_seed")) return false;
-	const Scene* stagedScene = m_PendingLoadedScene.get();
-	const Activity* stagedActivity = m_StartActivity.get();
+	const Scene* stagedScene = m_PendingCheckpoint.scene.get();
+	const Activity* stagedActivity = m_PendingCheckpoint.activity.get();
+	const Activity* configuredStart = m_StartActivity.get();
+	m_PendingCheckpoint.images->SetActive(true);
 	const Activity* runningActivity = m_Activity.get();
-	const auto stagedTick = m_PendingSnapshotSimUpdateCount;
-	const auto stagedTime = m_PendingSnapshotSimTimeTicks;
+	const auto stagedTick = m_PendingCheckpoint.simUpdateCount;
+	const auto stagedTime = m_PendingCheckpoint.simTimeTicks;
+	const auto stagedUID = m_PendingCheckpoint.uniqueIDCounter;
+	const auto stagedCursor = m_PendingCheckpoint.luaStateCursor;
+	const auto stagedGraphs = m_PendingCheckpoint.scriptGraphs;
 	const auto liveUID = MovableObject::GetUniqueIDCounter();
+	const auto liveCursor = g_LuaMan.GetScriptStateCursor();
 	ContentFile material((g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png").c_str());
 	const int firstPixel = getpixel(material.GetAsBitmap(), 0, 0);
 	const bool loaded = LoadGameToRestart(fileName);
-	const bool preserved = loaded || (m_PendingLoadedScene.get() == stagedScene && m_StartActivity.get() == stagedActivity &&
-		m_Activity.get() == runningActivity && m_PendingSnapshotSimUpdateCount == stagedTick && m_PendingSnapshotSimTimeTicks == stagedTime &&
-		MovableObject::GetUniqueIDCounter() == liveUID &&
+	const bool preserved = loaded || (m_PendingCheckpoint.scene.get() == stagedScene && m_PendingCheckpoint.activity.get() == stagedActivity && m_StartActivity.get() == configuredStart &&
+		m_Activity.get() == runningActivity && m_PendingCheckpoint.simUpdateCount == stagedTick && m_PendingCheckpoint.simTimeTicks == stagedTime &&
+		m_PendingCheckpoint.uniqueIDCounter == stagedUID && m_PendingCheckpoint.luaStateCursor == stagedCursor && m_PendingCheckpoint.scriptGraphs == stagedGraphs &&
+		MovableObject::GetUniqueIDCounter() == liveUID && g_LuaMan.GetScriptStateCursor() == liveCursor &&
 		getpixel(material.GetAsBitmap(), 0, 0) == firstPixel && m_RestartRestoresSnapshot && m_ActivityNeedsRestart);
 	const bool restarted = RestartActivity();
 	const bool terrain = restarted && getpixel(g_SceneMan.GetTerrain()->GetBitmap(), 0, 0) == (expectLoaded ? 28 : firstPixel);
@@ -539,7 +667,14 @@ bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded
 }
 
 bool ActivityMan::LoadAndLaunchGame(const std::string& fileName) {
+	PendingCheckpoint previous = std::move(m_PendingCheckpoint);
+	const bool previousRestore = m_RestartRestoresSnapshot, previousRestart = m_ActivityNeedsRestart;
+	m_PendingCheckpoint = PendingCheckpoint{};
 	if (!LoadGameToRestart(fileName) || !RestartActivity()) {
+		PendingCheckpoint rejected = std::move(m_PendingCheckpoint);
+		m_PendingCheckpoint = std::move(previous);
+		m_RestartRestoresSnapshot = previousRestore;
+		m_ActivityNeedsRestart = previousRestart;
 		return false;
 	}
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" loaded!");
@@ -552,36 +687,34 @@ void ActivityMan::RemoveSavedGame(const std::string& fileName) const {
 }
 
 bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
-	std::unique_ptr<Scene> scene;
-	std::unique_ptr<GAScripted> activity;
-	std::string originalScenePresetName;
-	bool placeObjectsIfSceneIsRestarted = true;
-	bool placeUnitsIfSceneIsRestarted = true;
+	MovableMan::ConstructionRegistryScope registryScope;
+	MovableObject::ScriptLoadDeferralScope scriptScope;
+	struct RestoreConstructionGlobals {
+		RandomGenerator sim = g_SimRNG;
+		RandomGenerator render = g_RenderRNG;
+		bool restoring = g_MovableMan.IsRestoringSnapshot();
+		~RestoreConstructionGlobals() { g_SimRNG = sim; g_RenderRNG = render; g_MovableMan.SetRestoringSnapshot(restoring); }
+	} constructionGlobals;
+	PendingCheckpoint candidate;
 	const auto readStart = std::chrono::steady_clock::now();
 	const long uidCounter = MovableObject::GetUniqueIDCounter();
+	const int luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
-	const bool read = ReadSavedGame(fileName, scene, activity, originalScenePresetName, placeObjectsIfSceneIsRestarted, placeUnitsIfSceneIsRestarted);
+	const bool read = ReadSavedGame(fileName, candidate);
 	g_MovableMan.SetRestoringSnapshot(wasRestoring);
 	if (!read) {
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		g_LuaMan.SetScriptStateCursor(luaStateCursor);
 		return false;
 	}
 	m_RestartRestoresSnapshot = true;
 	std::cout << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count() << std::endl;
 
-	scene->SetPresetName(originalScenePresetName);
-	m_LoadedSceneRestartPreset = originalScenePresetName;
-	m_LoadedSceneRestartObjects = placeObjectsIfSceneIsRestarted;
-	m_LoadedSceneRestartUnits = placeUnitsIfSceneIsRestarted;
-	// The deferred restart clones the scene later, so it must outlive this call.
-	m_PendingLoadedScene = std::move(scene);
-	g_SceneMan.SetSceneToLoad(m_PendingLoadedScene.get(), true, true);
-	// The caller adjusts the staged activity (per-peer players, deterministic config) before restarting.
-	SetStartActivity(dynamic_cast<GAScripted*>(activity->Clone()));
-	// A loaded save resumes mid-state: the restart must keep it, or the scripts re-run their
-	// spawn-time setup on top of the loaded world.
-	m_StartActivityResumed = true;
+	candidate.scene->SetPresetName(candidate.restartPreset);
+	candidate.soundRegistrations = registryScope.GetStagedSoundRegistrations();
+	PendingCheckpoint previous = std::move(m_PendingCheckpoint);
+	m_PendingCheckpoint = std::move(candidate);
 	SetRestartActivity(true);
 
 	g_ConsoleMan.PrintString("SYSTEM: Game \"" + fileName + "\" staged for restart!");
@@ -653,12 +786,13 @@ int ActivityMan::StartActivity(Activity* activity) {
 
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
+	g_LuaMan.ResetPathCallbacks(true);
 
 	m_StartActivity.reset(activity);
 	m_StartActivityResumed = false;
 	m_Activity.reset(dynamic_cast<Activity*>(m_StartActivity->Clone()));
 
-	g_MusicMan.ResetMusicState();
+	if (!g_MovableMan.IsRestoringSnapshot()) g_MusicMan.ResetMusicState();
 
 	m_Activity->SetupPlayers();
 	int error = m_Activity->Start();
@@ -674,16 +808,15 @@ int ActivityMan::StartActivity(Activity* activity) {
 	// Close the console in case it was open by the player or because of a previous Activity error.
 	g_ConsoleMan.SetEnabled(false);
 
-	m_ActivityNeedsResume = true;
+	m_ActivityNeedsResume = !g_MovableMan.IsRestoringSnapshot();
 	m_InActivity = true;
 
-	g_PostProcessMan.ClearScenePostEffects();
-	g_FrameMan.ClearScreenText();
-
-	// Reset the mouse input to the center
-	g_UInputMan.SetMouseValueMagnitude(0, g_UInputMan.MouseUsedByPlayer());
-
-	g_AudioMan.PauseIngameSounds(false);
+	if (!g_MovableMan.IsRestoringSnapshot()) {
+		g_PostProcessMan.ClearScenePostEffects();
+		g_FrameMan.ClearScreenText();
+		g_UInputMan.SetMouseValueMagnitude(0, g_UInputMan.MouseUsedByPlayer());
+		g_AudioMan.PauseIngameSounds(false);
+	}
 
 	g_PerformanceMan.ResetPerformanceTimings();
 
@@ -751,19 +884,24 @@ void ActivityMan::ResumeActivity() {
 	}
 }
 
-bool ActivityMan::RestartActivity() {
+bool ActivityMan::RestartActivityCandidate() {
 	m_ActivityNeedsRestart = false;
 	const auto restartStart = std::chrono::steady_clock::now();
 	g_ConsoleMan.PrintString("SYSTEM: Activity was reset!");
 
-	g_AudioMan.StopAll();
+	if (!m_RestartRestoresSnapshot) g_AudioMan.StopAll();
 	g_MovableMan.PurgeAllMOs();
+	if (m_RestartRestoresSnapshot && !m_PendingCheckpoint.scriptGraphs.empty()) {
+		for (size_t index = 0; index < m_PendingCheckpoint.scriptGraphs.size(); ++index) {
+			if (!m_PendingCheckpoint.scriptGraphs[index].empty()) g_LuaMan.GetStateByIndex(static_cast<int>(index)).ReleaseScriptOwnedObjects();
+		}
+	}
 	// Have to reset TimerMan before creating anything else because all timers are reset against it.
 	g_TimerMan.ResetTime();
 	const bool restoresSnapshot = m_RestartRestoresSnapshot;
 	m_RestartRestoresSnapshot = false;
-	if (restoresSnapshot && m_PendingSnapshotSimUpdateCount >= 0) {
-		g_TimerMan.RewindSimTo(m_PendingSnapshotSimUpdateCount, m_PendingSnapshotSimTimeTicks);
+	if (restoresSnapshot && m_PendingCheckpoint.simUpdateCount >= 0) {
+		g_TimerMan.RewindSimTo(m_PendingCheckpoint.simUpdateCount, m_PendingCheckpoint.simTimeTicks);
 	}
 	g_MovableMan.SetRestoringSnapshot(restoresSnapshot);
 
@@ -783,18 +921,57 @@ bool ActivityMan::RestartActivity() {
 	} else {
 		activityStarted = StartActivity(m_DefaultActivityType, m_DefaultActivityName);
 	}
+	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.sceneRuntime.empty() && (!g_SceneMan.GetScene() || !g_SceneMan.GetScene()->LoadRuntimeCheckpoint(m_PendingCheckpoint.sceneRuntime))) {
+		g_ConsoleMan.PrintString("ERROR: the saved scene runtime did not restore"); activityStarted = -1;
+	}
+	if (restoresSnapshot && activityStarted >= 0 && !m_Activity->ApplyPendingCheckpoint()) {
+		g_ConsoleMan.PrintString("ERROR: the saved activity runtime state did not restore");
+		activityStarted = -1;
+	}
+	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.worldStructure.empty() && !g_MovableMan.LoadWorldStructure(m_PendingCheckpoint.worldStructure)) {
+		g_ConsoleMan.PrintString("ERROR: the saved world membership did not restore"); activityStarted = -1;
+	}
+	if (restoresSnapshot && activityStarted >= 0 && !PrepareCheckpointPrimitives(m_PendingCheckpoint.runtimeGlobals)) {
+		g_ConsoleMan.PrintString("ERROR: the saved drawing primitives did not restore"); activityStarted = -1;
+	}
+	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.scriptGraphs.empty()) {
+		g_MovableMan.RestoreLockstepJoinQuarantine(m_PendingCheckpoint.joinQuarantine);
+		std::string error;
+		if (!g_MovableMan.RestoreScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
+			g_ConsoleMan.PrintString("ERROR: the saved script state did not restore: " + error);
+			std::cout << "[scriptgraph] restore failed: " << error << std::endl;
+			activityStarted = -1;
+		}
+	}
 	g_MovableMan.SetRestoringSnapshot(false);
 	if (restoresSnapshot) {
-		g_SceneMan.SetSceneToLoad(m_LoadedSceneRestartPreset, m_LoadedSceneRestartObjects, m_LoadedSceneRestartUnits);
-		m_PendingLoadedScene.reset();
-		m_LoadedSceneRestartPreset.clear();
+		g_SceneMan.SetSceneToLoad(m_PendingCheckpoint.restartPreset, m_PendingCheckpoint.restartObjects, m_PendingCheckpoint.restartUnits);
+
 	}
-	g_TimerMan.PauseSim(false);
+	if (restoresSnapshot && activityStarted >= 0) {
+		g_MovableMan.ResolvePendingSnapshotLinks();
+		g_MovableMan.RedrawRestoredMOIDs();
+		g_MovableMan.ReapplyPersistedControllerModes();
+		if (!m_Activity->ResolveCheckpointReferences() || !g_PrimitiveMan.ResolveCheckpointReferences()) {
+			g_ConsoleMan.PrintString("ERROR: the saved runtime references or globals did not restore");
+			activityStarted = -1;
+		}
+
+		if (m_PendingCheckpoint.uniqueIDCounter >= 0) {
+			MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
+		}
+		if (m_PendingCheckpoint.luaStateCursor >= 0) {
+			g_LuaMan.SetScriptStateCursor(m_PendingCheckpoint.luaStateCursor);
+		}
+	}
+	if (!restoresSnapshot) g_TimerMan.PauseSim(false);
+
 	std::cout << "[snapbench] restart_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count() << std::endl;
 	if (activityStarted >= 0) {
 		m_InActivity = true;
 		return true;
 	} else {
+		if (restoresSnapshot) return false;
 		m_InActivity = false;
 		PauseActivity();
 		g_ConsoleMan.SetEnabled(true);
@@ -833,4 +1010,182 @@ void ActivityMan::RenderUpdate() {
 	if (m_Activity) {
 		m_Activity->RenderUpdate();
 	}
+}
+
+std::string ActivityMan::CaptureRuntimeGlobals() const {
+	CheckpointWriter writer("RuntimeGlobals9");
+	writer(g_SimRNG.SerializeCheckpoint(), g_RenderRNG.SerializeCheckpoint(), g_TimerMan,
+		g_MovableMan, g_SceneMan, g_CameraMan, g_FrameMan);
+	writer(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
+		m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
+	writer(GUIInput::SaveSharedCheckpoint());
+	writer(g_UInputMan.SaveCheckpoint());
+	writer(g_PostProcessMan.SaveCheckpoint());
+	writer(g_PrimitiveMan.SaveCheckpoint());
+	writer(g_GUISound.SaveCheckpoint());
+	writer(g_MusicMan.SaveCheckpoint());
+	writer(g_AudioMan.SaveCheckpoint());
+	return writer.Text();
+}
+
+bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly) {
+	try {
+		const bool legacy = text.starts_with("15 RuntimeGlobals1 ");
+		const bool version2 = text.starts_with("15 RuntimeGlobals2 ");
+		const bool version3 = text.starts_with("15 RuntimeGlobals3 ");
+		const bool version4 = text.starts_with("15 RuntimeGlobals4 ");
+		const bool version5 = text.starts_with("15 RuntimeGlobals5 ");
+		const bool version6 = text.starts_with("15 RuntimeGlobals6 ");
+		const bool version7 = text.starts_with("15 RuntimeGlobals7 ");
+		const bool version8 = text.starts_with("15 RuntimeGlobals8 ");
+		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : "RuntimeGlobals9", validateOnly);
+		std::string simState, renderState;
+		reader.Value(simState); reader.Value(renderState);
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		if (!sim.RestoreCheckpoint(simState) || !render.RestoreCheckpoint(renderState)) return false;
+		const auto component = [&reader](auto& object, const char* name) {
+			std::string state; reader.Value(state);
+			if (!object.LoadCheckpoint(state, true)) throw std::runtime_error(std::string("invalid ") + name + " checkpoint");
+			reader.OnCommit([&object, state, name] { if (!object.LoadCheckpoint(state)) throw std::runtime_error(std::string("could not apply ") + name + " checkpoint"); });
+		};
+		component(g_TimerMan, "TimerMan"); component(g_MovableMan, "MovableMan");
+		component(g_SceneMan, "SceneMan"); component(g_CameraMan, "CameraMan");
+		if (!legacy) component(g_FrameMan, "FrameMan");
+		if (!legacy && !version2) reader(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
+			m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
+		if (!legacy && !version2 && !version3) {
+			std::string input; reader.Value(input);
+			if (!GUIInput::LoadSharedCheckpoint(input, true)) throw std::runtime_error("invalid shared GUI input checkpoint");
+			reader.OnCommit([input] { if (!GUIInput::LoadSharedCheckpoint(input)) throw std::runtime_error("could not restore GUI input checkpoint"); });
+		}
+		reader.OnCommit([sim, render] { g_SimRNG = sim; g_RenderRNG = render; });
+		if (!legacy && !version2 && !version3 && !version4 && !version5) component(g_UInputMan, "UInputMan");
+		if (!legacy && !version2 && !version3 && !version4 && !version5) component(g_PostProcessMan, "PostProcessMan");
+		if (!legacy && !version2 && !version3 && !version4 && !version5 && !version6) component(g_PrimitiveMan, "PrimitiveMan");
+		if (!legacy && !version2 && !version3 && !version4) {
+			const bool hasMusic = !version5 && !version6 && !version7;
+			const bool hasGUI = hasMusic && !version8;
+			std::string gui;
+			if (hasGUI) {
+				reader.Value(gui);
+				if (!g_GUISound.LoadCheckpoint(gui, true)) throw std::runtime_error("invalid GUISound checkpoint");
+			}
+			std::string music;
+			if (hasMusic) {
+				reader.Value(music);
+				if (!g_MusicMan.LoadCheckpoint(music, true)) throw std::runtime_error("invalid MusicMan checkpoint");
+			}
+			std::string audio; reader.Value(audio);
+			if (!g_AudioMan.LoadCheckpoint(audio, true)) throw std::runtime_error("invalid AudioMan checkpoint");
+			reader.OnCommit([audio, music, gui, hasMusic, hasGUI] {
+				const bool restored = hasGUI ? g_GUISound.LoadCheckpointWithAudio(gui, music, audio) :
+					hasMusic ? g_MusicMan.LoadCheckpointWithAudio(music, audio) : g_AudioMan.LoadCheckpoint(audio);
+				if (!restored) throw std::runtime_error("could not restore GUI/music/audio checkpoint");
+			});
+		}
+		reader.Finish();
+		return true;
+	} catch (const std::exception& error) {
+		std::cout << "[runtime-globals] " << (validateOnly ? "validation" : "apply") << " failed: " << error.what() << std::endl;
+		return false;
+	}
+}
+
+bool ActivityMan::PrepareCheckpointMaterials(std::string_view runtimeGlobals) {
+	if (runtimeGlobals.empty()) return true;
+	try {
+		std::string version;
+		for (int number = 1; number <= 9; ++number) {
+			const std::string candidate = "RuntimeGlobals" + std::to_string(number);
+			if (runtimeGlobals.starts_with("15 " + candidate + " ")) { version = candidate; break; }
+		}
+		if (version.empty()) return false;
+		CheckpointReader reader(runtimeGlobals, version, true);
+		std::string state;
+		// RNGs, TimerMan and MovableMan precede SceneMan in every supported version.
+		for (int field = 0; field < 5; ++field) reader.Value(state);
+		return g_SceneMan.PrepareCheckpointMaterials(state);
+	} catch (const std::exception&) { return false; }
+}
+
+bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
+	const bool version7 = runtimeGlobals.starts_with("15 RuntimeGlobals7 ");
+	const bool version8 = runtimeGlobals.starts_with("15 RuntimeGlobals8 ");
+	const bool version9 = runtimeGlobals.starts_with("15 RuntimeGlobals9 ");
+	if (!version7 && !version8 && !version9) return true;
+	try {
+		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : "RuntimeGlobals9", true);
+		std::string state;
+		for (int field = 0; field < 9; ++field) reader.Value(state); // RNGs, five managers and two default-activity names.
+		bool flag;
+		for (int field = 0; field < 6; ++field) reader.Value(flag);
+		for (int field = 0; field < 4; ++field) reader.Value(state); // Shared input, UInput, postprocessing and primitives.
+		return g_PrimitiveMan.LoadCheckpoint(state, false, false);
+	} catch (const std::exception&) { return false; }
+}
+
+bool ActivityMan::RestartActivity() {
+	if (!m_RestartRestoresSnapshot) return RestartActivityCandidate();
+	std::string error;
+	if (!m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene || !g_MovableMan.ValidateScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
+		g_ConsoleMan.PrintString("ERROR: the saved script state is invalid: " + error);
+		m_ActivityNeedsRestart = false;
+		return false;
+	}
+	const std::string oldGlobals = CaptureRuntimeGlobals();
+	const std::string oldFrame = g_FrameMan.SaveCheckpoint();
+	std::unique_ptr<ContentFile::MemoryPNGScope> committedImages;
+	MovableMan::WorldSetAside originalWorld;
+	if (!g_MovableMan.SetAsideWorld(originalWorld, false)) { m_ActivityNeedsRestart = false; return false; }
+	SceneMan::SceneSetAside originalScene;
+	g_SceneMan.SetAsideScene(originalScene);
+	auto originalActivity = std::move(m_Activity);
+	auto originalStart = std::move(m_StartActivity);
+	bool restored = false;
+	try {
+		Entity::CheckpointCloneScope checkpointClones(true);
+		if (!PrepareCheckpointMaterials(m_PendingCheckpoint.runtimeGlobals)) throw std::runtime_error("could not prepare saved Material owners");
+		g_AudioMan.ActivateCheckpointSoundRegistrations(m_PendingCheckpoint.soundRegistrations);
+		if (m_PendingCheckpoint.images) m_PendingCheckpoint.images->SetActive(true);
+		g_SceneMan.SetSceneToLoad(m_PendingCheckpoint.scene.get(), true, true);
+		m_StartActivity.reset(dynamic_cast<Activity*>(m_PendingCheckpoint.activity->Clone()));
+		m_StartActivityResumed = true;
+		restored = RestartActivityCandidate();
+		if (restored && m_PendingCheckpoint.hasStartActivity) {
+			g_MovableMan.SetRestoringSnapshot(true);
+			m_StartActivity.reset(m_PendingCheckpoint.startActivity ? static_cast<Activity*>(m_PendingCheckpoint.startActivity->Clone()) : nullptr);
+			if (m_StartActivity) restored = m_StartActivity->ApplyPendingCheckpoint() && m_StartActivity->PrepareCheckpointUI() && m_StartActivity->ResolveCheckpointReferences();
+		}
+		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
+		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
+		if (restored && m_PendingCheckpoint.luaStateCursor >= 0) g_LuaMan.SetScriptStateCursor(m_PendingCheckpoint.luaStateCursor);
+	} catch (const std::exception& exception) {
+		g_ConsoleMan.PrintString(std::string("ERROR: the saved game could not be constructed: ") + exception.what());
+	}
+	g_MovableMan.SetRestoringSnapshot(false);
+	if (restored) {
+		g_MovableMan.DiscardWorld(originalWorld);
+		committedImages = std::move(m_PendingCheckpoint.images);
+		if (committedImages) committedImages->Commit();
+		PendingCheckpoint completed = std::move(m_PendingCheckpoint);
+		m_PendingCheckpoint = PendingCheckpoint{};
+		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ")) {
+			g_AudioMan.StopAll();
+			g_MusicMan.ResetMusicState();
+			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
+		}
+		return true;
+	}
+	auto rejectedActivity = std::move(m_Activity);
+	m_Activity = std::move(originalActivity);
+	m_StartActivity = std::move(originalStart);
+	g_SceneMan.ReinstateScene(originalScene);
+	const bool reinstated = g_MovableMan.ReinstateWorld(originalWorld);
+	if (m_PendingCheckpoint.images) m_PendingCheckpoint.images->SetActive(false);
+	m_RestartRestoresSnapshot = true;
+	g_FrameMan.LoadCheckpoint(oldFrame);
+	RestoreRuntimeGlobals(oldGlobals);
+	m_ActivityNeedsRestart = false;
+	if (!reinstated) g_ConsoleMan.PrintString("ERROR: the prior game's Lua state could not be reinstated");
+	return false;
 }

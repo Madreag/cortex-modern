@@ -1,4 +1,6 @@
 #include "Emission.h"
+#include "CheckpointArchive.h"
+#include "Base64/base64.h"
 #include "PresetMan.h"
 
 using namespace RTE;
@@ -38,6 +40,8 @@ return 0;
 */
 
 int Emission::Create(const Emission& reference) {
+	Entity::Create(reference);
+	if (MovableObject::IsFaithfulClone()) Entity::LoadCheckpoint(reference.Entity::SaveCheckpoint());
 	m_pEmission = reference.m_pEmission;
 	m_PPM = reference.m_PPM;
 	m_BurstSize = reference.m_BurstSize;
@@ -59,6 +63,10 @@ int Emission::Create(const Emission& reference) {
 
 int Emission::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Serializable::ReadProperty(propName, reader));
+
+	MatchProperty("SpecialBehaviour_EmissionCheckpoint", {
+		if (!LoadCheckpoint(base64_decode(reader.ReadPropValue()))) reader.ReportError("invalid emission checkpoint");
+	});
 
 	MatchProperty("EmittedParticle",
 	              {
@@ -130,6 +138,27 @@ int Emission::Save(Writer& writer) const {
 	writer << m_StopTimer.GetSimTimeLimitMS();
 	writer.NewProperty("ParticleCount");
 	writer << m_ParticleCount;
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_EmissionCheckpoint", base64_encode(SaveCheckpoint(), true));
 
 	return 0;
+}
+
+std::string Emission::SaveCheckpoint() const {
+	CheckpointWriter archive("Emission1");
+	archive(Entity::SaveCheckpoint());
+	archive(m_PPM, m_BurstSize, m_Accumulator, m_Spread, m_MinVelocity, m_MaxVelocity, m_LifeVariation, m_PushesEmitter, m_InheritsVel, m_InheritsAngularVel, m_StartTimer, m_StopTimer, m_Offset, m_ParticleCount);
+	return archive.Text();
+}
+
+bool Emission::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "Emission1", validateOnly);
+		std::string identity;
+		archive.Value(identity);
+		if (!Entity::LoadCheckpoint(identity, true)) return false;
+		archive.OnCommit([this, identity] { Entity::LoadCheckpoint(identity); });
+		archive(m_PPM, m_BurstSize, m_Accumulator, m_Spread, m_MinVelocity, m_MaxVelocity, m_LifeVariation, m_PushesEmitter, m_InheritsVel, m_InheritsAngularVel, m_StartTimer, m_StopTimer, m_Offset, m_ParticleCount);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

@@ -35,6 +35,9 @@ namespace RTE {
 		/// Anything below 0 is an error signal.
 		int Create(const Emission& reference);
 
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+
 		/// Resets the entire Serializable, including its inherited members, to their
 		/// default settings or values.
 		void Reset() override { Clear(); }

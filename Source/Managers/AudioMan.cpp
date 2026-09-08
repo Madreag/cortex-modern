@@ -1,4 +1,6 @@
 #include "AudioMan.h"
+#include <cstdlib>
+#include <cstring>
 #include "CheckpointArchive.h"
 #include "AudioCheckpoint.h"
 
@@ -18,7 +20,10 @@
 #include <iostream>
 
 #include <array>
+#include <chrono>
 #include <cstring>
+#include <sstream>
+#include <thread>
 
 using namespace RTE;
 
@@ -31,6 +36,7 @@ AudioMan::~AudioMan() {
 }
 
 void AudioMan::Clear() {
+	m_InaudibleTestOutputVerified = false;
 	m_AudioEnabled = false;
 	m_PlayingVoices.clear();
 	m_BackendVoiceIdentities.clear();
@@ -64,6 +70,13 @@ void AudioMan::Clear() {
 
 bool AudioMan::Initialize() {
 	FMOD_RESULT audioSystemSetupResult = FMOD::System_Create(&m_AudioSystem);
+	const char* testOutput = std::getenv("CC_TEST_AUDIO_NOSOUND");
+	const bool requireSilentTestOutput = testOutput && std::strcmp(testOutput, "1") == 0;
+	m_InaudibleTestOutputVerified = false;
+	if (requireSilentTestOutput) {
+		m_OutputSilenced = true;
+		audioSystemSetupResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->setOutput(FMOD_OUTPUTTYPE_NOSOUND) : audioSystemSetupResult;
+	}
 
 	FMOD_ADVANCEDSETTINGS audioSystemAdvancedSettings;
 	memset(&audioSystemAdvancedSettings, 0, sizeof(audioSystemAdvancedSettings));
@@ -82,6 +95,13 @@ bool AudioMan::Initialize() {
 #endif
 
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->init(c_MaxVirtualChannels * 2, flags, 0) : audioSystemSetupResult;
+	if (requireSilentTestOutput) {
+		FMOD_OUTPUTTYPE actualOutput = FMOD_OUTPUTTYPE_AUTODETECT;
+		const FMOD_RESULT outputResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->getOutput(&actualOutput) : audioSystemSetupResult;
+		m_InaudibleTestOutputVerified = outputResult == FMOD_OK && actualOutput == FMOD_OUTPUTTYPE_NOSOUND;
+		std::cout << "[audio-test-output] requested=NOSOUND verified=" << m_InaudibleTestOutputVerified << " output=" << static_cast<int>(actualOutput) << " result=" << static_cast<int>(outputResult) << std::endl;
+		if (!m_InaudibleTestOutputVerified) audioSystemSetupResult = outputResult == FMOD_OK ? FMOD_ERR_OUTPUT_INIT : outputResult;
+	}
 
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->getMasterChannelGroup(&m_MasterChannelGroup) : audioSystemSetupResult;
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->createChannelGroup("SFX", &m_SFXChannelGroup) : audioSystemSetupResult;
@@ -1001,6 +1021,8 @@ bool AudioMan::MakeVoiceSlotAvailable() {
 	return true;
 }
 namespace {
+	bool s_TraceAudioCheckpoints = false;
+
 	class PreservedGroupEffects {
 	public:
 		explicit PreservedGroupEffects(const std::array<FMOD::ChannelGroup*, 4>& groups) : m_Groups(groups) {}
@@ -1125,6 +1147,7 @@ std::string AudioMan::SaveCheckpoint() const {
 			if (voice.channel && voice.channel->getChannelGroup(&group) == FMOD_OK) bus = group == m_UIChannelGroup ? 1 : group == m_MusicChannelGroup ? 2 : 0;
 			state.voices.push_back(AudioCheckpoint::Voice::Capture(identity, voice.owner ? voice.owner->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus));
 		}
+		TraceCheckpointBoundary("save-captured");
 	}
 	return state.Save();
 }
@@ -1274,12 +1297,122 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		}
 		cleanup.committed = true;
 		originalEffects.Commit();
+		TraceCheckpointBoundary("load-committed");
 		return true;
 	} catch (const std::exception& error) {
 		g_ConsoleMan.PrintString(std::string("ERROR: Could not restore audio checkpoint: ") + error.what());
 		std::cout << "[audio-checkpoint] " << error.what() << std::endl;
 		return false;
 	}
+}
+
+void AudioMan::SetCheckpointTraceEnabled(bool enabled) {
+	s_TraceAudioCheckpoints = enabled;
+}
+
+void AudioMan::TraceCheckpointBoundary(const char* stage) const {
+	if (!s_TraceAudioCheckpoints || !m_AudioEnabled) return;
+	try {
+		std::ostringstream trace;
+		{
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			FMOD_OUTPUTTYPE output; int rate, buffers; unsigned int buffer;
+			AudioCheckpoint::Require(m_AudioSystem->getOutput(&output));
+			AudioCheckpoint::Require(m_AudioSystem->getSoftwareFormat(&rate, nullptr, nullptr));
+			AudioCheckpoint::Require(m_AudioSystem->getDSPBufferSize(&buffer, &buffers));
+			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			trace << "[audio-boundary] stage=" << stage << " monotonic_ns=" << now << " output=" << output
+			      << " rate=" << rate << " buffer=" << buffer << " buffers=" << buffers << '\n';
+			for (const auto& [identity, voice]: m_PlayingVoices) {
+				bool playing = false;
+				if (!voice.channel || voice.channel->isPlaying(&playing) != FMOD_OK || !playing) {
+					trace << "[audio-boundary-voice] stage=" << stage << " id=" << identity << " playing=0\n";
+					continue;
+				}
+				unsigned int position; unsigned long long clock, parent; float frequency, pitch; bool paused;
+				AudioCheckpoint::Require(voice.channel->getPosition(&position, FMOD_TIMEUNIT_PCM));
+				AudioCheckpoint::Require(voice.channel->getDSPClock(&clock, &parent));
+				AudioCheckpoint::Require(voice.channel->getFrequency(&frequency)); AudioCheckpoint::Require(voice.channel->getPitch(&pitch));
+				AudioCheckpoint::Require(voice.channel->getPaused(&paused));
+				trace << "[audio-boundary-voice] stage=" << stage << " id=" << identity << " owner=" << (voice.owner ? voice.owner->GetCheckpointIdentity() : 0)
+				      << " playing=1 pcm=" << position << " clock=" << clock << " parent_clock=" << parent
+				      << " frequency=" << frequency << " pitch=" << pitch << " paused=" << paused << '\n';
+			}
+		}
+		std::cout << trace.str() << std::flush;
+	} catch (const std::exception& error) {
+		std::cout << "[audio-boundary] stage=" << stage << " error=" << error.what() << std::endl;
+	}
+}
+
+bool AudioMan::PerturbCheckpointCursorForSelfTest() {
+	if (!m_AudioEnabled) return false;
+	AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+	for (const auto& [identity, voice]: m_PlayingVoices) {
+		bool playing = false; unsigned int before, length, after; FMOD::Sound* sound = nullptr;
+		if (!voice.channel || voice.channel->isPlaying(&playing) != FMOD_OK || !playing ||
+		    voice.channel->getCurrentSound(&sound) != FMOD_OK || !sound || sound->getLength(&length, FMOD_TIMEUNIT_PCM) != FMOD_OK ||
+		    voice.channel->getPosition(&before, FMOD_TIMEUNIT_PCM) != FMOD_OK || length < 2 || before >= length - 1) continue;
+		if (voice.channel->setPosition(before + 1, FMOD_TIMEUNIT_PCM) != FMOD_OK ||
+		    voice.channel->getPosition(&after, FMOD_TIMEUNIT_PCM) != FMOD_OK || after != before + 1) return false;
+		std::cout << "[audio-cursor-negative] id=" << identity << " before=" << before << " after=" << after << std::endl;
+		return true;
+	}
+	return false;
+}
+
+bool AudioMan::RunCheckpointPlaybackContinuationSelfTest() const {
+	if (!m_AudioEnabled) return false;
+	std::map<int, unsigned int> positions;
+	bool queryFailed = false;
+	{
+		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+		for (const auto& [identity, voice]: m_PlayingVoices) {
+			bool playing = false, paused = true; unsigned int position;
+			if (!voice.channel) continue;
+			if (voice.channel->isPlaying(&playing) != FMOD_OK || voice.channel->getPaused(&paused) != FMOD_OK) { queryFailed = true; continue; }
+			if (!playing || paused) continue;
+			if (voice.channel->getPosition(&position, FMOD_TIMEUNIT_PCM) != FMOD_OK) { queryFailed = true; continue; }
+			positions.emplace(identity, position);
+		}
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(40));
+	std::map<int, unsigned int> positionsBeforeUpdate;
+	{
+		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+		for (const auto& [identity, before]: positions) {
+			const auto voice = m_PlayingVoices.find(identity);
+			if (voice == m_PlayingVoices.end() || !voice->second.channel) continue;
+			unsigned int position;
+			if (voice->second.channel->getPosition(&position, FMOD_TIMEUNIT_PCM) == FMOD_OK) positionsBeforeUpdate.emplace(identity, position);
+			else queryFailed = true;
+		}
+	}
+	// FMOD updates the reported PCM cursor of a virtual (muted) voice when the
+	// regular backend update runs, although its DSP clock advances while sleeping.
+	const FMOD_RESULT updateResult = m_AudioSystem->update();
+	queryFailed = queryFailed || updateResult != FMOD_OK;
+	size_t advanced = 0, completed = 0;
+	{
+		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+		for (const auto& [identity, before]: positions) {
+			const auto voice = m_PlayingVoices.find(identity);
+			if (voice == m_PlayingVoices.end() || !voice->second.channel) {
+				++completed;
+				std::cout << "[audio-playback-progress] id=" << identity << " before=" << before << " completed=1" << std::endl;
+				continue;
+			}
+			unsigned int after;
+			if (voice->second.channel->getPosition(&after, FMOD_TIMEUNIT_PCM) != FMOD_OK) { queryFailed = true; continue; }
+			if (after != before) ++advanced;
+			std::cout << "[audio-playback-progress] id=" << identity << " before=" << before;
+			if (const auto observed = positionsBeforeUpdate.find(identity); observed != positionsBeforeUpdate.end()) std::cout << " before_update=" << observed->second;
+			std::cout << " after=" << after << std::endl;
+		}
+	}
+	const bool passed = !queryFailed && (advanced > 0 || completed > 0);
+	std::cout << "[audio-playback-continuation] " << (passed ? "PASS" : "FAIL") << " unpaused=" << positions.size() << " advanced=" << advanced << " completed=" << completed << " query_failed=" << queryFailed << " update_result=" << static_cast<int>(updateResult) << std::endl;
+	return passed;
 }
 
 std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const {

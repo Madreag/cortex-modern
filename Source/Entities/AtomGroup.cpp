@@ -1,4 +1,5 @@
 #include "AtomGroup.h"
+#include "Base64/base64.h"
 #include "CheckpointArchive.h"
 #include "MovableMan.h"
 
@@ -40,6 +41,7 @@ const std::unordered_map<std::string, AtomGroup::AreaDistributionType> AtomGroup
     {"Square", AtomGroup::AreaDistributionType::Square}};
 
 void AtomGroup::Clear() {
+	m_CheckpointMaterialReference.clear();
 	m_CheckpointOwnerID = 0;
 	m_HasCheckpointOwner = false;
 	m_Atoms.clear();
@@ -123,6 +125,7 @@ int AtomGroup::Create(const AtomGroup& reference, bool onlyCopyOwnerAtoms) {
 
 	if (MovableObject::IsFaithfulClone()) {
 		m_Material = reference.m_Material;
+		m_CheckpointMaterialReference = reference.m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(reference.m_Material) : reference.m_CheckpointMaterialReference;
 		m_CheckpointOwnerID = reference.m_HasCheckpointOwner ? reference.m_CheckpointOwnerID : (reference.m_OwnerMOSR ? reference.m_OwnerMOSR->GetUniqueID() : 0);
 		m_HasCheckpointOwner = true;
 		m_SubGroups.clear();
@@ -153,9 +156,9 @@ int AtomGroup::Create(MOSRotating* ownerMOSRotating, Material const* material, i
 }
 
 std::string AtomGroup::SaveCheckpoint() const {
-	CheckpointWriter writer("AtomGroup1");
+	CheckpointWriter writer("AtomGroup2");
 	VisitCheckpoint(writer, *this);
-	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), m_Material ? static_cast<int>(m_Material->GetIndex()) : -1,
+	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference,
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
 	std::vector<std::string> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
@@ -175,16 +178,26 @@ std::string AtomGroup::SaveCheckpoint() const {
 
 bool AtomGroup::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "AtomGroup1", validateOnly);
+		const bool legacy = text.starts_with("10 AtomGroup1 ");
+		CheckpointReader reader(text, legacy ? "AtomGroup1" : "AtomGroup2", validateOnly);
 		VisitCheckpoint(reader, *this);
 		std::set<std::string> groups;
-		int materialIndex;
+		std::string materialReference;
 		long ownerID;
 		std::vector<std::string> savedAtoms;
 		std::map<long, std::vector<size_t>> savedSubgroups;
-		reader.Value(groups); reader.Value(materialIndex); reader.Value(ownerID);
+		reader.Value(groups);
+        if (legacy) {
+            int materialIndex; reader.Value(materialIndex);
+            if (materialIndex < -1 || materialIndex >= c_PaletteEntriesNumber) return false;
+            materialReference = g_SceneMan.SaveMaterialReference(materialIndex < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex)));
+        } else {
+            reader.Value(materialReference);
+            if (!SceneMan::ValidateMaterialReference(materialReference)) return false;
+        }
+        reader.Value(ownerID);
 		reader.Value(savedAtoms); reader.Value(savedSubgroups);
-		if (materialIndex < -1 || materialIndex >= c_PaletteEntriesNumber || ownerID < 0) return false;
+		if (ownerID < 0) return false;
 		Atom validator;
 		for (const std::string& atom: savedAtoms) if (!validator.LoadCheckpoint(atom, true)) return false;
 		for (const auto& [id, indices]: savedSubgroups) for (size_t index: indices) if (index >= savedAtoms.size()) return false;
@@ -204,12 +217,12 @@ bool AtomGroup::LoadCheckpoint(std::string_view text, bool validateOnly) {
 				for (size_t index: indices) group.push_back(atoms[index]);
 			}
 		}
-		reader.OnCommit([this, materialIndex, ownerID, &groups, &candidates, &atoms, &subgroups] {
+		reader.OnCommit([this, materialReference, ownerID, &groups, &candidates, &atoms, &subgroups] {
 			for (Atom* atom: m_Atoms) delete atom;
 			m_Atoms.swap(atoms); m_SubGroups.swap(subgroups);
 			for (auto& atom: candidates) atom.release();
 			m_Groups.clear(); m_Groups.insert(groups.begin(), groups.end());
-			m_Material = materialIndex < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(materialIndex));
+			m_CheckpointMaterialReference = materialReference;
 			m_CheckpointOwnerID = ownerID; m_HasCheckpointOwner = true;
 		});
 		reader.Finish();
@@ -218,6 +231,10 @@ bool AtomGroup::LoadCheckpoint(std::string_view text, bool validateOnly) {
 }
 
 void AtomGroup::ResolveCheckpointLinks() {
+    if (!m_CheckpointMaterialReference.empty()) {
+        m_Material = g_SceneMan.ResolveMaterialReference(m_CheckpointMaterialReference);
+        m_CheckpointMaterialReference.clear();
+    }
 	if (m_HasCheckpointOwner) {
 		m_OwnerMOSR = dynamic_cast<MOSRotating*>(g_MovableMan.FindObjectByUniqueID(m_CheckpointOwnerID));
 		m_CheckpointOwnerID = 0; m_HasCheckpointOwner = false;
@@ -228,7 +245,13 @@ void AtomGroup::ResolveCheckpointLinks() {
 int AtomGroup::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Entity::ReadProperty(propName, reader));
 
+    MatchProperty("SpecialBehaviour_MaterialReference", {
+        m_CheckpointMaterialReference = base64_decode(reader.ReadPropValue());
+        if (!SceneMan::ValidateMaterialReference(m_CheckpointMaterialReference)) reader.ReportError("invalid AtomGroup material checkpoint reference");
+        if (const Material* found = g_SceneMan.ResolveMaterialReference(m_CheckpointMaterialReference, true)) m_Material = found;
+    });
 	MatchProperty("Material", {
+        m_CheckpointMaterialReference.clear();
 		Material mat;
 		mat.Reset();
 		reader >> mat;
@@ -270,8 +293,8 @@ int AtomGroup::ReadProperty(const std::string_view& propName, Reader& reader) {
 int AtomGroup::Save(Writer& writer) const {
 	Entity::Save(writer);
 
-	writer.NewProperty("Material");
-	writer << m_Material;
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", base64_encode(m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference, true));
+    else { writer.NewProperty("Material"); writer << m_Material; }
 	writer.NewProperty("AutoGenerate");
 	writer << m_AutoGenerate;
 	writer.NewProperty("Resolution");

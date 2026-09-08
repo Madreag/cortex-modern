@@ -67,6 +67,7 @@ namespace luabind { namespace detail
 		void set_object(void* p) { m_object = p; }
 
 		void add_dependency(lua_State* L, int index);
+		detail::lua_reference const& get_dependencies() const { return m_dependency_ref; }
 
 		static int garbage_collector(lua_State* L);
 
@@ -128,4 +129,3 @@ namespace luabind { namespace detail
 }}
 
 #endif // LUABIND_OBJECT_REP_HPP_INCLUDED
-

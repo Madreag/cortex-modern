@@ -1,5 +1,7 @@
 #include "ScenarioRunner.h"
 #include "Actor.h"
+#include "ActivityMan.h"
+#include "LuaMan.h"
 
 #include "Constants.h"
 #include "ConsoleMan.h"
@@ -10,6 +12,7 @@
 #include "MovableObject.h"
 #include "NetActorOwnership.h"
 #include "NetMatchReplay.h"
+#include "RTETools.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
@@ -180,6 +183,18 @@ namespace RTE {
 			s_Args.testScript = argValue[startIndex + 1];
 			return 2;
 		}
+		if (a == "-contract-audit-continue-through" && hasValue) {
+			s_Args.contractAuditContinueThrough = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
+		if (a == "-contract-audit-seed-marker" && hasValue) {
+			s_Args.contractAuditSeedMarker = std::strtoll(argValue[startIndex + 1], nullptr, 10);
+			return 2;
+		}
+		if (a == "-contract-audit-continuation-perturb") {
+			s_Args.contractAuditContinuationPerturb = true;
+			return 1;
+		}
 		if (a == "-out" && hasValue) {
 			s_Args.outPath = argValue[startIndex + 1];
 			return 2;
@@ -280,6 +295,10 @@ namespace RTE {
 			s_Args.selftestJoinRejection = true;
 			return 1;
 		}
+		if (a == "-script-graph-selftest") {
+			s_Args.scriptGraphSelfTest = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
@@ -325,6 +344,67 @@ namespace RTE {
 			return shorthand;
 		}
 		return "Determinism " + shorthand;
+	}
+
+	bool ScenarioRunner::RunContractAuditLoad(const std::string& operation,
+	    const std::function<void(const std::string&)>& observe, bool& prepared, bool& applied) {
+		const auto tickBefore = g_TimerMan.GetSimUpdateCount();
+		if (operation.starts_with("ordinary-load:")) {
+			prepared = true;
+			applied = g_ActivityMan.LoadAndLaunchGame(operation.substr(14));
+			std::cout << "[contract-audit-load] entry=LoadAndLaunchGame accepted=" << applied
+			          << " tick_before=" << tickBefore << " tick_after=" << g_TimerMan.GetSimUpdateCount() << std::endl;
+			return true;
+		}
+		const bool reference = operation.starts_with("stage-reference:");
+		const bool stageOnly = operation.starts_with("stage-reject:");
+		const bool ordinary = operation.starts_with("stage-ordinary-reject:");
+		if (!reference && !stageOnly && !ordinary) return false;
+		const std::string arguments = operation.substr(reference ? 16 : stageOnly ? 13 : 22);
+		const size_t separator = arguments.find(':');
+		if ((!reference && (separator == std::string::npos || separator == 0 || separator + 1 == arguments.size())) || arguments.empty()) {
+			prepared = applied = false;
+			std::cout << "[contract-audit-stage] invalid_operation=1" << std::endl;
+			return true;
+		}
+		const std::string validName = reference ? arguments : arguments.substr(0, separator);
+		prepared = g_ActivityMan.LoadGameToRestart(validName);
+		if (!prepared) {
+			applied = false;
+			std::cout << "[contract-audit-stage] valid_staged=0" << std::endl;
+			return true;
+		}
+		observe("staged_before");
+		bool replacementAccepted = false;
+		if (!reference) {
+			const std::string rejectedName = arguments.substr(separator + 1);
+			replacementAccepted = stageOnly ? g_ActivityMan.LoadGameToRestart(rejectedName) : g_ActivityMan.LoadAndLaunchGame(rejectedName);
+		}
+		observe("staged_after");
+		// A successful replacement is an unexpected negative control. Preserve its evidence
+		// rather than repairing the candidate or pretending that a refusal was exercised.
+		const bool retainedLaunched = !replacementAccepted && g_ActivityMan.RestartActivity();
+		applied = retainedLaunched;
+		std::cout << "[contract-audit-stage] valid_staged=1 replacement_attempted=" << !reference
+		          << " replacement_accepted=" << replacementAccepted << " retained_launched=" << retainedLaunched
+		          << " entry=" << (ordinary ? "LoadAndLaunchGame" : reference ? "reference" : "LoadGameToRestart")
+		          << " tick_before=" << tickBefore << " tick_after=" << g_TimerMan.GetSimUpdateCount() << std::endl;
+		return true;
+	}
+
+	void ScenarioRunner::SetContractAuditSeedMarker() {
+		if (!s_Args.contractAuditSeedMarker) return;
+		const std::string script = "_ContractAuditCandidateMarker = " + std::to_string(s_Args.contractAuditSeedMarker);
+		for (size_t index = 0; index <= g_LuaMan.GetThreadedScriptStates().size(); ++index) {
+			g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString(script);
+		}
+		std::cout << "[contract-audit-marker] seeded=" << s_Args.contractAuditSeedMarker << std::endl;
+	}
+
+	void ScenarioRunner::PerturbContractAuditContinuation() {
+		if (!s_Args.contractAuditContinuationPerturb) return;
+		g_SimRNG.RandomNum<uint32_t>();
+		std::cout << "[contract-audit-continuation] deliberate_rng_draw=1" << std::endl;
 	}
 
 	int ScenarioRunner::FinalizeAndGetExitCode() {

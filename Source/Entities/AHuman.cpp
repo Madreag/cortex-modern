@@ -1,4 +1,6 @@
 #include "AHuman.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include <charconv>
 
@@ -40,6 +42,7 @@ AHuman::~AHuman() {
 }
 
 void AHuman::Clear() {
+	m_PersistedAHumanRuntime.clear();
 	m_pHead = 0;
 	m_LookToAimRatio = 0.7F;
 	m_pJetpack = nullptr;
@@ -290,6 +293,8 @@ int AHuman::Create(const AHuman& reference) {
 			m_BackupBGFootGroup->SetOwner(this);
 		}
 	}
+	m_PersistedAHumanRuntime = reference.m_PersistedAHumanRuntime;
+	if (IsFaithfulClone() && m_PersistedAHumanRuntime.empty()) m_PersistedAHumanRuntime = reference.SaveAHumanRuntime();
 	return 0;
 }
 
@@ -473,6 +478,10 @@ void AHuman::AdoptPersistedUniqueID() {
 		m_WalkPathOffset = pathOffset;
 		m_PersistedWalkState.clear();
 	}
+	if (!m_PersistedAHumanRuntime.empty()) {
+		if (!LoadAHumanRuntime(m_PersistedAHumanRuntime)) throw std::runtime_error("could not restore AHuman runtime checkpoint");
+		m_PersistedAHumanRuntime.clear();
+	}
 }
 
 void AHuman::DiscardPersistedSnapshotState() {
@@ -486,10 +495,15 @@ void AHuman::DiscardPersistedSnapshotState() {
 	m_PersistedLimbGroupPositions.clear();
 	m_PersistedLimbGroupInertia.clear();
 	m_PersistedWalkState.clear();
+	m_PersistedAHumanRuntime.clear();
 }
 
 int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_AHumanRuntime", {
+		m_PersistedAHumanRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadAHumanRuntime(m_PersistedAHumanRuntime, true)) reader.ReportError("invalid AHuman runtime checkpoint");
+	});
 
 	MatchProperty("FGHandResidue", {
 		long long residueValue = 0;
@@ -603,8 +617,8 @@ int AHuman::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("MaxWalkPathCrouchShift", { reader >> m_MaxWalkPathCrouchShift; });
 	MatchProperty("StrideSound", {
-		m_StrideSound = new SoundContainer;
-		reader >> m_StrideSound;
+		delete m_StrideSound;
+		m_StrideSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("SpecialBehaviour_StrideSound", {
 		delete m_StrideSound;
@@ -646,6 +660,7 @@ void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
 	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
 	writer.NewPropertyWithValue("SpecialBehaviour_StrideSound", m_StrideSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", base64_encode(m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime, true));
 }
 
 int AHuman::Save(Writer& writer) const {
@@ -720,6 +735,8 @@ void AHuman::Destroy(bool notInherited) {
 	delete m_pBGHandGroup;
 	delete m_pFGFootGroup;
 	delete m_pBGFootGroup;
+	delete m_BackupFGFootGroup;
+	delete m_BackupBGFootGroup;
 
 	delete m_StrideSound;
 
@@ -3747,4 +3764,65 @@ int AHuman::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
 		}
 	}
 	return result;
+}
+
+void AHuman::ResolveFaithfulLinks() {
+	Actor::ResolveFaithfulLinks();
+	if (m_pFGHandGroup) m_pFGHandGroup->ResolveCheckpointLinks();
+	if (m_pBGHandGroup) m_pBGHandGroup->ResolveCheckpointLinks();
+	if (m_pFGFootGroup) m_pFGFootGroup->ResolveCheckpointLinks();
+	if (m_BackupFGFootGroup) m_BackupFGFootGroup->ResolveCheckpointLinks();
+	if (m_pBGFootGroup) m_pBGFootGroup->ResolveCheckpointLinks();
+	if (m_BackupBGFootGroup) m_BackupBGFootGroup->ResolveCheckpointLinks();
+}
+
+std::string AHuman::SaveAHumanRuntime() const {
+	CheckpointWriter archive("AHumanRuntime1");
+	archive(m_LookToAimRatio, m_CanActivateBGItem, m_TriggerPulled, m_WaitingToReloadOffhand, m_IconBlinkTimer, m_ArmsState, m_ProneState);
+	archive(m_ProneTimer, m_MaxWalkPathCrouchShift, m_CrouchAmount, m_CrouchAmountOverride, m_Paths, m_RotAngleTargets, m_Aiming);
+	archive(m_ArmClimbing, m_StrideFrame, m_StrideStart, m_StrideTimer, m_ThrowTmr, m_ThrowPrepTime, m_SharpAimRevertTimer);
+	archive(m_FGArmFlailScalar, m_BGArmFlailScalar, m_EquipHUDTimer, m_WalkAngle, m_WalkPathOffset, m_ArmSwingRate, m_DeviceArmSwayRate);
+	archive(CaptureOwnedCheckpoint(m_pFGHandGroup), CaptureOwnedCheckpoint(m_pBGHandGroup), CaptureOwnedCheckpoint(m_pFGFootGroup), CaptureOwnedCheckpoint(m_BackupFGFootGroup), CaptureOwnedCheckpoint(m_pBGFootGroup), CaptureOwnedCheckpoint(m_BackupBGFootGroup));
+	std::vector<std::string> equips;
+	for (const DeferredEquip& equip: m_PendingDeferredEquips) {
+		CheckpointWriter value("DeferredEquip1");
+		value(equip.op, equip.depositToFront, equip.group, equip.excludeGroup, equip.moduleName, equip.presetName);
+		equips.push_back(value.Text());
+	}
+	archive(equips);
+	return archive.Text();
+}
+
+bool AHuman::LoadAHumanRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "AHumanRuntime1", validateOnly);
+		archive(m_LookToAimRatio, m_CanActivateBGItem, m_TriggerPulled, m_WaitingToReloadOffhand, m_IconBlinkTimer, m_ArmsState, m_ProneState);
+		archive(m_ProneTimer, m_MaxWalkPathCrouchShift, m_CrouchAmount, m_CrouchAmountOverride, m_Paths, m_RotAngleTargets, m_Aiming);
+		archive(m_ArmClimbing, m_StrideFrame, m_StrideStart, m_StrideTimer, m_ThrowTmr, m_ThrowPrepTime, m_SharpAimRevertTimer);
+		archive(m_FGArmFlailScalar, m_BGArmFlailScalar, m_EquipHUDTimer, m_WalkAngle, m_WalkPathOffset, m_ArmSwingRate, m_DeviceArmSwayRate);
+		std::array<std::string, 6> groups;
+		archive.Value(groups);
+		for (const std::string& group: groups) if (!ValidateOwnedCheckpoint<AtomGroup>(group)) return false;
+		archive.OnCommit([this, groups = std::move(groups)]() mutable {
+			RestoreOwnedCheckpoint(m_pFGHandGroup, groups[0]);
+			RestoreOwnedCheckpoint(m_pBGHandGroup, groups[1]);
+			RestoreOwnedCheckpoint(m_pFGFootGroup, groups[2]);
+			RestoreOwnedCheckpoint(m_BackupFGFootGroup, groups[3]);
+			RestoreOwnedCheckpoint(m_pBGFootGroup, groups[4]);
+			RestoreOwnedCheckpoint(m_BackupBGFootGroup, groups[5]);
+		});
+		std::vector<std::string> savedEquips;
+		archive.Value(savedEquips);
+		std::vector<DeferredEquip> equips(savedEquips.size());
+		for (size_t index = 0; index < equips.size(); ++index) {
+			DeferredEquip& equip = equips[index];
+			CheckpointReader value(savedEquips[index], "DeferredEquip1");
+			value(equip.op, equip.depositToFront, equip.group, equip.excludeGroup, equip.moduleName, equip.presetName);
+			value.Finish();
+			if (equip.op > DeferredEquip::UnequipBGArm) return false;
+		}
+		archive.OnCommit([this, equips = std::move(equips)]() mutable { m_PendingDeferredEquips = std::move(equips); });
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

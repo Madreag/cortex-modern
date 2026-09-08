@@ -1,4 +1,6 @@
 #include "PEmitter.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include <bit>
 #include "SceneMan.h"
@@ -20,6 +22,7 @@ PEmitter::~PEmitter() {
 }
 
 void PEmitter::Clear() {
+	m_PersistedPEmitterRuntime.clear();
 	m_EmissionList.clear();
 	m_EmissionSound.Reset();
 	m_BurstSound.Reset();
@@ -101,11 +104,17 @@ int PEmitter::Create(const PEmitter& reference) {
 		m_AvgBurstImpulse = reference.m_AvgBurstImpulse;
 		m_AvgImpulse = reference.m_AvgImpulse;
 	}
+	m_PersistedPEmitterRuntime = reference.m_PersistedPEmitterRuntime;
+	if (IsFaithfulClone() && m_PersistedPEmitterRuntime.empty()) m_PersistedPEmitterRuntime = reference.SavePEmitterRuntime();
 	return 0;
 }
 
 int PEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSParticle::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_PEmitterRuntime", {
+		m_PersistedPEmitterRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadPEmitterRuntime(m_PersistedPEmitterRuntime, true)) reader.ReportError("invalid PEmitter runtime checkpoint");
+	});
 	MatchProperty("SpecialBehaviour_ClearEmissions", {
 		bool clear; reader >> clear;
 		if (clear) { for (Emission* emission: m_EmissionList) delete emission; m_EmissionList.clear(); }
@@ -113,7 +122,7 @@ int PEmitter::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 	MatchProperty("AddEmission", {
 		Emission* emission = new Emission();
-		reader >> *emission;
+		emission->Entity::Create(reader);
 		m_EmissionList.push_back(emission);
 	});
 	MatchProperty("EmissionSound", { reader >> m_EmissionSound; });
@@ -201,6 +210,7 @@ void PEmitter::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SustainBurstSound", m_SustainBurstSound);
 	writer.NewPropertyWithValue("BurstSoundFollowsEmitter", m_BurstSoundFollowsEmitter);
 	writer.NewPropertyWithValue("LoudnessOnEmit", m_LoudnessOnEmit);
+	writer.NewPropertyWithValue("SpecialBehaviour_PEmitterRuntime", base64_encode(m_PersistedPEmitterRuntime.empty() ? SavePEmitterRuntime() : m_PersistedPEmitterRuntime, true));
 }
 
 int PEmitter::Save(Writer& writer) const {
@@ -566,6 +576,10 @@ void PEmitter::AdoptPersistedUniqueID() {
 		}
 		m_PersistedEmissionTimers.clear();
 	}
+	if (!m_PersistedPEmitterRuntime.empty()) {
+		if (!LoadPEmitterRuntime(m_PersistedPEmitterRuntime)) throw std::runtime_error("could not restore PEmitter runtime checkpoint");
+		m_PersistedPEmitterRuntime.clear();
+	}
 }
 
 void PEmitter::DiscardPersistedSnapshotState() {
@@ -574,4 +588,26 @@ void PEmitter::DiscardPersistedSnapshotState() {
 	m_PersistedLastEmitTimerAnchor.pending = false;
 	m_PersistedEmissionAccumulators.clear();
 	m_PersistedEmissionTimers.clear();
+	m_PersistedPEmitterRuntime.clear();
+}
+
+std::string PEmitter::SavePEmitterRuntime() const {
+	CheckpointWriter archive("PEmitterRuntime1");
+	archive(m_EmitEnabled, m_WasEmitting, m_EmitCount, m_EmitCountLimit, m_NegativeThrottleMultiplier, m_PositiveThrottleMultiplier, m_Throttle);
+	archive(m_EmissionsIgnoreThis, m_BurstScale, m_BurstTriggered, m_BurstSpacing, m_BurstTimer, m_PlayBurstSound, m_EmitAngle);
+	archive(m_EmissionOffset, m_LastEmitTmr, m_FlashScale, m_AvgBurstImpulse, m_AvgImpulse, m_LoudnessOnEmit, m_FlashOnlyOnBurst);
+	archive(m_SustainBurstSound, m_BurstSoundFollowsEmitter);
+	return archive.Text();
+}
+
+bool PEmitter::LoadPEmitterRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "PEmitterRuntime1", validateOnly);
+		archive(m_EmitEnabled, m_WasEmitting, m_EmitCount, m_EmitCountLimit, m_NegativeThrottleMultiplier, m_PositiveThrottleMultiplier, m_Throttle);
+		archive(m_EmissionsIgnoreThis, m_BurstScale, m_BurstTriggered, m_BurstSpacing, m_BurstTimer, m_PlayBurstSound, m_EmitAngle);
+		archive(m_EmissionOffset, m_LastEmitTmr, m_FlashScale, m_AvgBurstImpulse, m_AvgImpulse, m_LoudnessOnEmit, m_FlashOnlyOnBurst);
+		archive(m_SustainBurstSound, m_BurstSoundFollowsEmitter);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

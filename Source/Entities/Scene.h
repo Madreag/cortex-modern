@@ -28,6 +28,7 @@ namespace RTE {
 
 	/// Contains everything that defines a complete scene.
 	class Scene : public Entity {
+		friend struct TerrainLayerSnapshot;
 		friend struct ContractAudit;
 
 
@@ -38,6 +39,9 @@ namespace RTE {
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 
+		/// Saves an object's live state, including its owned parts.
+		static void SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData);
+
 		// Available placed objects sets
 		enum PlacedObjectSets {
 			PLACEONLOAD = 0,
@@ -45,6 +49,17 @@ namespace RTE {
 			AIPLAN,
 			PLACEDSETSCOUNT
 		};
+
+		struct RuntimeOwners {
+			std::array<SceneObject*, Players::MaxPlayerCount> brains{};
+			std::array<std::list<SceneObject*>, PLACEDSETSCOUNT> placed;
+			std::list<SLBackground*> backgrounds;
+			std::list<Deployment*> deployments;
+			~RuntimeOwners();
+		};
+		void SwapRuntimeOwners(RuntimeOwners& state);
+		std::string SaveRuntimeCheckpoint() const;
+		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false, bool restoreOwners = true);
 
 		/// Something to bundle the properties of scene areas together
 		class Area :
@@ -62,6 +77,8 @@ namespace RTE {
 		public:
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
+			std::string SaveCheckpoint() const;
+			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 			/// Constructor method used to instantiate a Area object in system
 			/// memory. Create() should be called before using the object.
@@ -827,13 +844,6 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		/// Serializes the SceneObject via the Writer. Necessary because full serialization doesn't know how to deal with duplicate properties.
-		/// @param writer The Writer being used for serialization.
-		/// @param sceneObjectToSave The SceneObject to save.
-		/// @param isChildAttachable Convenience flag for whether or not this SceneObject is a child Attachable, and certain properties shouldn't be saved.
-		/// @param saveFullData Whether or not to save most data. Turned off for stuff like SceneEditor saves.
-		void SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) const;
-
 		/// Clears all the member variables of this Scene, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

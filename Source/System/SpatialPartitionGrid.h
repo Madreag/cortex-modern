@@ -37,6 +37,13 @@ namespace RTE {
 		/// @param reference A reference to the SpatialPartitionGrid to deep copy.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create(const SpatialPartitionGrid& reference);
+		void Swap(SpatialPartitionGrid& other) {
+			std::swap(m_Width, other.m_Width); std::swap(m_Height, other.m_Height); std::swap(m_CellSize, other.m_CellSize);
+			m_Cells.swap(other.m_Cells); m_PhysicsCells.swap(other.m_PhysicsCells); m_UsedCellIds.swap(other.m_UsedCellIds);
+		}
+		void EnsureDimensions(const SpatialPartitionGrid& reference) {
+			if (m_CellSize <= 0 && reference.m_CellSize > 0) Create(reference.m_Width * reference.m_CellSize, reference.m_Height * reference.m_CellSize, reference.m_CellSize);
+		}
 #pragma endregion
 
 #pragma region Grid Management

@@ -45,6 +45,27 @@ AI_GRAPH = graph((table(1, ((string("AI"), "#2;"), (string("shared"), "n10;"))),
 
 
 class SnapshotComparisonTests(unittest.TestCase):
+    def test_native_custom_maps_are_order_independent_and_value_complete(self):
+        first = "ScriptEntity = TDExplosive\n\tAddCustomValue = NumberValue\n\t\tB = 8\n\tAddCustomValue = NumberValue\n\t\tA = 13\n\tAddCustomValue = StringValue\n\t\tA = text = value\n"
+        second = "ScriptEntity = TDExplosive\n\tAddCustomValue = StringValue\n\t\tA = text = value\n\tAddCustomValue = NumberValue\n\t\tA = 13\n\tAddCustomValue = NumberValue\n\t\tB = 8\n"
+        for shared in (False, True):
+            normalize = lambda text: checker.runtime_projection(text, "", shared)[0]
+            self.assertEqual(normalize(first), normalize(second))
+            for changed in (second.replace("B = 8", "B = 9"), second.replace("A = text", "A = changed"), second.replace("B = 8", "C = 8")):
+                self.assertNotEqual(normalize(first), normalize(changed))
+
+    def test_native_custom_maps_reject_duplicate_and_malformed_entries(self):
+        entry = "\tAddCustomValue = NumberValue\n\t\tA = 13\n"
+        for text in (entry + entry, entry + entry.replace("13", "14"), "\tAddCustomValue = NumberValue\n", "\tAddCustomValue = NumberValue\n\tA = 13\n"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                checker.runtime_projection(text, "", False)
+
+    def test_native_custom_maps_stay_with_their_owners(self):
+        first = "SceneObject = TDExplosive\n\tAddCustomValue = NumberValue\n\t\tA = 13\nSceneObject = TDExplosive\n\tAddCustomValue = NumberValue\n\t\tA = 14\n"
+        second = first.replace("A = 13", "A = 99")
+        self.assertEqual(checker.runtime_projection(first, "", False)[0], first)
+        self.assertNotEqual(checker.runtime_projection(first, "", False), checker.runtime_projection(second, "", False))
+
     def compare(self, first, second, full=False, entries=None):
         with tempfile.TemporaryDirectory() as directory:
             paths = [Path(directory) / name for name in ("a.ccsave", "b.ccsave")]
@@ -220,6 +241,33 @@ class GraphIdentityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.compare(data, data)
 
+    def test_owner_reference_checkpoint_token_keeps_owner_and_payload(self):
+        owner = table(1, ())
+        value = "U2;Y#1;" + string("inventory") + "n0;f;" + string("InventoryMenuGUI") + string("7 Future1 1 ") + "Iz;"
+        first = graph((owner, value), globals=(("native", "#2;"),))
+        self.assertEqual(self.compare(first, first)["matched_nodes"], 2)
+        for changed in (value.replace("n0;", "n1;"), value.replace("f;", "t;"), value.replace("7 Future1 1", "7 Future1 2")):
+            second = graph((owner, changed), globals=(("native", "#2;"),))
+            with self.assertRaises(checker.GraphMismatch):
+                self.compare(first, second)
+        with self.assertRaises(ValueError):
+            checker.parse_graph(first[:-2])
+
+    def test_owned_primitive_binary_payload_is_validated_and_byte_exact(self):
+        sized = lambda data: str(len(data)).encode() + b" " + data + b" "
+        token = lambda data: b"s" + str(len(data)).encode() + b":" + data
+        primitive = b"19 GraphicalPrimitive1 16 " + b"0 " * 13 + b"1 \xff 0 0 0 0 0 0 "
+        checkpoint = b"15 PrimitiveValue1 0 0 1 " + sized(primitive)
+        def make(payload):
+            return b"SG3;r0;G1;s6:native#1;L0;E0;Rz;X0;N1;U1;o" + b"".join(token(value) for value in
+                (b"TextPrimitive", b"", b"", payload)) + b"Iz;"
+        first = make(checkpoint)
+        self.assertEqual(self.compare(first, first)["matched_nodes"], 1)
+        with self.assertRaises(checker.GraphMismatch):
+            self.compare(first, make(checkpoint.replace(b"\xff", b"\xfe")))
+        with self.assertRaises(ValueError):
+            self.compare(make(checkpoint[:-1]), make(checkpoint[:-1]))
+
 
 class RuntimeProjectionTests(unittest.TestCase):
     def assert_field(self, original, field_path, allowed, replacement=999, **kwargs):
@@ -328,6 +376,163 @@ class RuntimeProjectionTests(unittest.TestCase):
         first = b"7 Future1 1 2 3 "
         second = b"7 Future1 1 2 4 "
         self.assertNotEqual(runtime.project(runtime.decode(first), True), runtime.project(runtime.decode(second), True))
+
+    def test_gui_reference_kinds_preserve_scene_slot_identity(self):
+        good = b"10 GUIEntity2 1 2 0 2 4 13 TerrainObject 4 copy 8 Base.rte "
+        value = runtime.decode(good)
+        self.assertEqual(value["value"]["placed_index"], 4)
+        self.assert_field(value, ("value", "placed_index"), False)
+        self.assert_field(value, ("value", "placed_set"), False)
+        malformed = [good.replace(b"1 2 0", b"1 3 0"), good.replace(b"1 2 0", b"1 2 8"),
+            good.replace(b"0 2 4", b"0 3 4"), good.replace(b"0 2 4", b"0 2 -1")]
+        for data in malformed:
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                runtime.decode(data)
+
+    def test_new_movable_and_audio_payload_fields_remain_strict(self):
+        for version, fields in (("MovableObjectRuntime1", ("ever_added", "updated", "screen_effect_hash", "mass", "already_hit_by")),
+                ("AudioRuntime1", ("voices", "events", "master_volume", "next_sound_container")),
+                ("AudioVoice1", ("owner", "path", "position", "loops")),
+                ("SoundContainer1", ("identity", "playing_channels", "paused", "pitch"))):
+            value = dict(version=version, **dict.fromkeys(fields, 1))
+            for key in fields:
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), False)
+
+    def test_new_frame_fonts_and_text_input_remain_strict(self):
+        for version, keys in (("FrameMan2", ("fonts", "hud_disabled")),
+                ("GUIFont1", ("current_bitmap", "color_cache", "bitmap", "characters")),
+                ("GUISharedInput2", ("text_active", "text_width", "text_cursor", "events"))):
+            value = dict(version=version, **dict.fromkeys(keys, 1))
+            for key in keys:
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), False)
+
+    def test_text_input_parser_validates_new_fields(self):
+        base = b"15 GUISharedInput2 " + b"0 " * 45
+        good = base + b"1 2 3 40 50 6 "
+        self.assertEqual(runtime.decode(good)["text_width"], 40)
+        for suffix in (b"2 2 3 40 50 6 ", b"1 2 3 -1 50 6 ", b"1 2 3 40 -1 6 ", b"1 2 3 40 50 "):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                runtime.decode(base + suffix)
+
+    def test_bitmap_clipping_is_strict_and_malformed_images_are_rejected(self):
+        good = b"7 Bitmap2 2 1 8 2 ab -1 1 0 2 1 "
+        value = runtime.decode(good)
+        for key in ("clip", "left", "top", "right", "bottom", "width", "height"):
+            self.assert_field(value, (key,), False)
+        self.assert_field(value, ("pixels",), False, b"ac")
+        malformed = [good.replace(b"-1 1 0 2 1", b"-1 3 0 2 1"),
+            good.replace(b"-1 1 0 2 1", b"-1 1 -1 2 1"), good.replace(b"2 ab", b"1 ab"),
+            good.replace(b"2 1 8", b"2 0 8"), good.replace(b"2 1 8", b"2 1 7"), good[:-1]]
+        for data in malformed:
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                runtime.decode(data)
+        self.assertEqual(runtime.decode(b"7 Bitmap1 2 1 8 2 ab ")["pixels"], b"ab")
+        self.assertEqual(runtime.decode(b"7 Bitmap2 0 0 0 0  -1 0 0 0 0 ")["pixels"], b"")
+
+    def test_mouse_keeps_the_unused_zero_index_before_three_buttons(self):
+        tag = b"UInputMan::Mouse1"
+        good = str(len(tag)).encode() + b" " + tag + b" 17 " + b"0 1 0 1 " * 4 + b"0 " * 8
+        value = runtime.decode(good)
+        self.assertEqual(value["states"], [0, 1, 0, 1])
+        for key in ("states", "changed", "pressed", "released"):
+            for index in range(4):
+                self.assert_field(value, (key, index), False)
+        with self.assertRaises(ValueError):
+            runtime.decode(good[:-2])
+
+    def test_shared_bitmap_owner_and_pixels_remain_strict(self):
+        image = b"10 GUIBitmap1 1 8 2 1 -1 0 2 0 1 2 ab "
+        good = b"13 SharedBitmap1 4 path 0 " + str(len(image)).encode() + b" " + image + b" "
+        value = runtime.decode(good)
+        self.assert_field(value, ("path",), False, b"else")
+        self.assert_field(value, ("cache_slot",), False, 1)
+        self.assert_field(value, ("pixels", "value", "pixels"), False, b"ac")
+        for data in (good.replace(b"4 path 0", b"4 path -1"), good.replace(b"4 path 0", b"4 path 2"),
+                good.replace(b"4 path 0", b"0  0"), good[:-1]):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                runtime.decode(data)
+
+    def test_new_input_palette_material_and_postprocess_fields_remain_strict(self):
+        examples = (("UInputMan1", ("keyboards", "mice", "control_schemes", "text_input", "mouse_sensitivity")),
+            ("MovableMan2", ("borrowed_references", "sim_update_frame")),
+            ("FramePalette1", ("palette", "rgb_table", "selected_mode", "blenders", "caches")),
+            ("MaterialCatalog1", ("palette", "copies", "presets", "names")),
+            ("MaterialReference1", ("kind", "index")),
+            ("PostProcessMan2", ("bitmaps", "queues", "suppressed")),
+            ("PostProcessQueues1", ("effects", "glow_slots", "temps", "screen_glow_boxes")))
+        for version, keys in examples:
+            value = dict(version=version, **dict.fromkeys(keys, 1))
+            for key in keys:
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), False)
+
+    def test_all_graphical_primitive_types_parse_and_keep_their_fields(self):
+        suffixes = {1: b"42 ", 2: b"1 2 3 4 ", 3: b"1 2 3 4 ", 4: b"", 5: b"", 6: b"3 ", 7: b"3 ",
+            8: b"3 ", 9: b"3 ", 10: b"3 4 ", 11: b"3 4 ", 12: b"1 2 3 4 5 6 ", 13: b"1 2 3 4 5 6 ",
+            14: b"3 1 2 1 ", 15: b"3 1 2 1 ", 16: b"4 text 1 2 3 4 5 1 ",
+            17: b"1 0 1 2 3 0 1 16 10 GUIEntity2 0  "}
+        for kind, suffix in suffixes.items():
+            with self.subTest(kind=kind):
+                data = b"19 GraphicalPrimitive1 " + str(kind).encode() + b" " + b"0 " * 13 + suffix
+                value = runtime.decode(data)
+                self.assertEqual(value["type"], kind)
+                for key in value.keys() - {"version"}:
+                    self.assert_field(value, (key,), False)
+                for malformed in (data[:-1], data + b"0 "):
+                    with self.assertRaises(ValueError):
+                        runtime.decode(malformed)
+        with self.assertRaises(ValueError):
+            runtime.decode(b"19 GraphicalPrimitive1 18 " + b"0 " * 13)
+
+    def test_primitive_pool_aliases_and_invalid_references(self):
+        sized = lambda data: str(len(data)).encode() + b" " + data + b" "
+        record = lambda version, data: sized(version.encode()) + data
+        polygon = record("GraphicalPrimitive1", b"14 " + b"0 " * 13 + b"3 1 2 1 ")
+        pool = record("PrimitiveValue1", b"0 2 1 2 3 4 1 " + sized(polygon))
+        value = runtime.decode(pool)
+        self.assertEqual(value["primitives"][0]["vertices"], [1, 2, 1])
+        self.assert_field(value, ("primitives", 0, "vertices", 2), False, 2)
+        for changed in (b"3 1 3 1 ", b"3 1 -1 1 "):
+            with self.assertRaises(ValueError):
+                runtime.decode(pool.replace(b"3 1 2 1 ", changed))
+        with self.assertRaises(ValueError):
+            runtime.decode(record("PrimitiveValue1", b"0 0 0 "))
+        image = record("SharedBitmap1", b"0  -1 " + sized(b"10 GUIBitmap1 1 8 2 1 -1 0 2 0 1 2 ab "))
+        text = record("GraphicalPrimitive1", b"16 " + b"0 " * 13 + b"4 text 1 2 3 4 5 1 ")
+        pool = record("PrimitiveMan1", b"1 " + sized(image) + b"0 1 " + sized(text))
+        value = runtime.decode(pool)
+        self.assertEqual(value["primitives"][0]["target_alignment"], [4, 5])
+        self.assert_field(value, ("images", 0, "pixels", "value", "pixels"), False, b"ac")
+        for changed in (b"4 text 1 2 3 4 5 2 ", b"4 text 1 2 3 4 5 -1 "):
+            with self.assertRaises(ValueError):
+                runtime.decode(record("PrimitiveMan1", b"1 " + sized(image) + b"0 1 " + sized(text.replace(b"4 text 1 2 3 4 5 1 ", changed))))
+
+    def test_sprite_pool_frames_and_pie_bitmaps_remain_strict(self):
+        for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
+                ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
+                ("PieMenuRuntime1", ("quadrants", "center", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
+                ("RuntimeGlobals7", ("primitive", "input", "postprocess", "audio"))):
+            value = dict(version=version, **dict.fromkeys(keys, 1))
+            for key in keys:
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), False)
+
+    def test_music_runtime_preserves_all_owners_and_rejects_missing_targets(self):
+        data = b"9 MusicMan1 0 0  0  0  0  -2 0  0  -2 0 -1 " + b"0 " * 11
+        value = runtime.decode(data)
+        self.assertEqual(value["next_sound"], [-2, 0, -1])
+        for key in ("playing", "interrupting", "song", "previous", "current", "next_type", "current_type", "next_section", "next_sound", "paused_time", "return_to_dynamic"):
+            self.assert_field(value, (key,), False)
+        for changed in (data.replace(b"-2 0  0 ", b"-1 0  0 "), data.replace(b"-2 0 -1", b"-1 0 0"), data[:-2]):
+            with self.assertRaises(ValueError):
+                runtime.decode(changed)
+        set_value = b"9 MusicSet1 0 0 -1 0 0 "
+        self.assertEqual(runtime.decode(set_value)["selection"], [0, -1])
+        for changed in (set_value.replace(b"0 -1", b"0 0"), set_value.replace(b"0 -1", b"2 -1")):
+            with self.assertRaises(ValueError):
+                runtime.decode(changed)
 
 
 if __name__ == "__main__":

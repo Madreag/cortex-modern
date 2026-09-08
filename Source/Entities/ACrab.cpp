@@ -1,4 +1,6 @@
 #include "ACrab.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 
 #include <charconv>
 
@@ -36,6 +38,7 @@ ACrab::~ACrab() {
 }
 
 void ACrab::Clear() {
+	m_PersistedACrabRuntime.clear();
 	m_pTurret = 0;
 	m_pLFGLeg = 0;
 	m_pLBGLeg = 0;
@@ -274,6 +277,8 @@ int ACrab::Create(const ACrab& reference) {
 			m_BackupRBGFootGroup->SetOwner(this);
 		}
 	}
+	m_PersistedACrabRuntime = reference.m_PersistedACrabRuntime;
+	if (IsFaithfulClone() && m_PersistedACrabRuntime.empty()) m_PersistedACrabRuntime = reference.SaveACrabRuntime();
 	return 0;
 }
 
@@ -420,6 +425,10 @@ void ACrab::AdoptPersistedUniqueID() {
 	m_PersistedLimbGroupPositions.clear();
 	ApplyPackedLimbInertia(m_PersistedLimbGroupInertia, {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup});
 	m_PersistedLimbGroupInertia.clear();
+	if (!m_PersistedACrabRuntime.empty()) {
+		if (!LoadACrabRuntime(m_PersistedACrabRuntime)) throw std::runtime_error("could not restore ACrab runtime checkpoint");
+		m_PersistedACrabRuntime.clear();
+	}
 }
 
 void ACrab::DiscardPersistedSnapshotState() {
@@ -431,10 +440,15 @@ void ACrab::DiscardPersistedSnapshotState() {
 	m_PersistedLimbPathStates.clear();
 	m_PersistedLimbGroupPositions.clear();
 	m_PersistedLimbGroupInertia.clear();
+	m_PersistedACrabRuntime.clear();
 }
 
 int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ACrabRuntime", {
+		m_PersistedACrabRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadACrabRuntime(m_PersistedACrabRuntime, true)) reader.ReportError("invalid ACrab runtime checkpoint");
+	});
 
 	MatchProperty("LFGFootResidue", {
 		long long residueValue = 0;
@@ -541,8 +555,8 @@ int ACrab::ReadProperty(const std::string_view& propName, Reader& reader) {
 		m_BackupRBGFootGroup->RemoveAllAtoms();
 	});
 	MatchProperty("StrideSound", {
-		m_StrideSound = new SoundContainer;
-		reader >> m_StrideSound;
+		delete m_StrideSound;
+		m_StrideSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchForwards("LStandLimbPath") MatchProperty("LeftStandLimbPath", { reader >> m_Paths[LEFTSIDE][FGROUND][STAND]; });
 	MatchForwards("LWalkLimbPath") MatchProperty("LeftWalkLimbPath", { reader >> m_Paths[LEFTSIDE][FGROUND][WALK]; });
@@ -563,6 +577,7 @@ void ACrab::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AimRangeLowerLimit", m_AimRangeLowerLimit);
 	writer.NewPropertyWithValue("LockMouseAimInput", m_LockMouseAimInput);
 	writer.NewPropertyWithValue("StrideSound", m_StrideSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", base64_encode(m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime, true));
 }
 
 int ACrab::Save(Writer& writer) const {
@@ -619,6 +634,10 @@ void ACrab::Destroy(bool notInherited) {
 	delete m_pLBGFootGroup;
 	delete m_pRFGFootGroup;
 	delete m_pRBGFootGroup;
+	delete m_BackupLFGFootGroup;
+	delete m_BackupLBGFootGroup;
+	delete m_BackupRFGFootGroup;
+	delete m_BackupRBGFootGroup;
 
 	delete m_StrideSound;
 	//    for (deque<LimbPath *>::iterator itr = m_WalkPaths.begin();
@@ -1734,4 +1753,47 @@ int ACrab::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
 		}
 	}
 	return result;
+}
+
+void ACrab::ResolveFaithfulLinks() {
+	Actor::ResolveFaithfulLinks();
+	if (m_pLFGFootGroup) m_pLFGFootGroup->ResolveCheckpointLinks();
+	if (m_BackupLFGFootGroup) m_BackupLFGFootGroup->ResolveCheckpointLinks();
+	if (m_pLBGFootGroup) m_pLBGFootGroup->ResolveCheckpointLinks();
+	if (m_BackupLBGFootGroup) m_BackupLBGFootGroup->ResolveCheckpointLinks();
+	if (m_pRFGFootGroup) m_pRFGFootGroup->ResolveCheckpointLinks();
+	if (m_BackupRFGFootGroup) m_BackupRFGFootGroup->ResolveCheckpointLinks();
+	if (m_pRBGFootGroup) m_pRBGFootGroup->ResolveCheckpointLinks();
+	if (m_BackupRBGFootGroup) m_BackupRBGFootGroup->ResolveCheckpointLinks();
+}
+
+std::string ACrab::SaveACrabRuntime() const {
+	CheckpointWriter archive("ACrabRuntime1");
+	archive(m_IconBlinkTimer, m_StrideFrame, m_Paths, m_Aiming, m_StrideStart, m_StrideTimer, m_AimRangeUpperLimit);
+	archive(m_AimRangeLowerLimit, m_LockMouseAimInput);
+	archive(CaptureOwnedCheckpoint(m_pLFGFootGroup), CaptureOwnedCheckpoint(m_BackupLFGFootGroup), CaptureOwnedCheckpoint(m_pLBGFootGroup), CaptureOwnedCheckpoint(m_BackupLBGFootGroup), CaptureOwnedCheckpoint(m_pRFGFootGroup), CaptureOwnedCheckpoint(m_BackupRFGFootGroup), CaptureOwnedCheckpoint(m_pRBGFootGroup), CaptureOwnedCheckpoint(m_BackupRBGFootGroup));
+	return archive.Text();
+}
+
+bool ACrab::LoadACrabRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ACrabRuntime1", validateOnly);
+		archive(m_IconBlinkTimer, m_StrideFrame, m_Paths, m_Aiming, m_StrideStart, m_StrideTimer, m_AimRangeUpperLimit);
+		archive(m_AimRangeLowerLimit, m_LockMouseAimInput);
+		std::array<std::string, 8> groups;
+		archive.Value(groups);
+		for (const std::string& group: groups) if (!ValidateOwnedCheckpoint<AtomGroup>(group)) return false;
+		archive.OnCommit([this, groups = std::move(groups)]() mutable {
+			RestoreOwnedCheckpoint(m_pLFGFootGroup, groups[0]);
+			RestoreOwnedCheckpoint(m_BackupLFGFootGroup, groups[1]);
+			RestoreOwnedCheckpoint(m_pLBGFootGroup, groups[2]);
+			RestoreOwnedCheckpoint(m_BackupLBGFootGroup, groups[3]);
+			RestoreOwnedCheckpoint(m_pRFGFootGroup, groups[4]);
+			RestoreOwnedCheckpoint(m_BackupRFGFootGroup, groups[5]);
+			RestoreOwnedCheckpoint(m_pRBGFootGroup, groups[6]);
+			RestoreOwnedCheckpoint(m_BackupRBGFootGroup, groups[7]);
+		});
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

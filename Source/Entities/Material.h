@@ -15,6 +15,9 @@ namespace RTE {
 
 	public:
 		EntityAllocation(Material);
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		void SwapCheckpoint(Material& other) noexcept;
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 
@@ -164,6 +167,13 @@ namespace RTE {
 		BITMAP* m_TerrainBGTexture; //!< The background texture of this Material, used when building an SLTerrain. Not owned.
 
 	private:
+        template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+            archive(self.m_Index, self.m_Priority, self.m_Piling, self.m_Integrity, self.m_Restitution,
+                self.m_Friction, self.m_Stickiness, self.m_VolumeDensity, self.m_PixelDensity,
+                self.m_GibImpulseLimitPerLiter, self.m_GibWoundLimitPerLiter, self.m_SettleMaterialIndex,
+                self.m_SpawnMaterialIndex, self.m_IsScrap, self.m_Color, self.m_UseOwnColor,
+                self.m_FGTextureFile, self.m_BGTextureFile);
+        }
 		/// Clears all the member variables of this Material, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

@@ -1,3 +1,5 @@
+#include "CheckpointArchive.h"
+#include "Base64/base64.h"
 #include "Activity.h"
 
 #include "CameraMan.h"
@@ -32,6 +34,9 @@ Activity::~Activity() {
 }
 
 void Activity::Clear() {
+	m_PendingRuntimeCheckpoint.clear();
+	m_CheckpointActorIDs = {};
+	m_HasCheckpointActorIDs = false;
 	m_ActivityState = ActivityState::NotStarted;
 	m_Paused = false;
 	m_AllowsUserSaving = false;
@@ -134,6 +139,10 @@ int Activity::Create(const Activity& reference) {
 	}
 
 	m_SavedValues = reference.m_SavedValues;
+	m_PendingRuntimeCheckpoint = reference.m_PendingRuntimeCheckpoint;
+	m_CheckpointActorIDs = reference.m_CheckpointActorIDs;
+	m_HasCheckpointActorIDs = reference.m_HasCheckpointActorIDs;
+	if (MovableObject::IsFaithfulClone() && !Activity::LoadCheckpoint(reference.Activity::SaveCheckpoint())) return -1;
 
 	return 0;
 }
@@ -230,12 +239,14 @@ int Activity::ReadProperty(const std::string_view& propName, Reader& reader) {
 		}
 	});
 	MatchProperty("GenericSavedValues", { reader >> m_SavedValues; });
+	MatchProperty("SpecialBehaviour_RuntimeCheckpoint", { m_PendingRuntimeCheckpoint = base64_decode(reader.ReadPropValue()); });
 
 	EndPropertyList;
 }
 
 int Activity::Save(Writer& writer) const {
 	Entity::Save(writer);
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", base64_encode(m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint, true));
 
 	writer.NewProperty("Description");
 	writer << m_Description;
@@ -305,9 +316,11 @@ int Activity::Start() {
 	m_Paused = false;
 
 	// Reset the mouse moving so that it won't trap the mouse if the window isn't in focus (common after loading)
-	g_UInputMan.DisableMouseMoving(true);
-	g_UInputMan.DisableMouseMoving(false);
-	g_UInputMan.DisableKeys(false);
+	if (!g_MovableMan.IsRestoringSnapshot()) {
+		g_UInputMan.DisableMouseMoving(true);
+		g_UInputMan.DisableMouseMoving(false);
+		g_UInputMan.DisableKeys(false);
+	}
 
 	int error = g_SceneMan.LoadScene();
 	if (error < 0) {
@@ -350,7 +363,7 @@ int Activity::Start() {
 		}
 	}
 
-	g_UInputMan.CheckMultiMouseKeyboardEnabled(playerControlled);
+	if (!g_MovableMan.IsRestoringSnapshot()) g_UInputMan.CheckMultiMouseKeyboardEnabled(playerControlled);
 
 	return 0;
 }
@@ -961,4 +974,57 @@ void Activity::RestoreRollbackState(const RollbackState& in) {
 		m_Brain[player] = in.brainUID[player] ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(in.brainUID[player])) : nullptr;
 		m_BrainEvacuated[player] = in.brainEvacuated[player];
 	}
+}
+
+std::string Activity::SaveCheckpoint() const {
+	CheckpointWriter writer("Activity1");
+	VisitCheckpoint(writer, *this);
+	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		if (m_HasCheckpointActorIDs) { links[player] = m_CheckpointActorIDs[player]; continue; }
+		links[player] = {m_Brain[player] ? m_Brain[player]->GetUniqueID() : 0,
+			m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0,
+			m_PlayerController[player].GetControlledActor() ? m_PlayerController[player].GetControlledActor()->GetUniqueID() : 0};
+	}
+	writer(links);
+	return writer.Text();
+}
+
+bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "Activity1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		reader(m_CheckpointActorIDs);
+		reader.OnCommit([this] { m_HasCheckpointActorIDs = true; });
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) {
+		return false;
+	}
+}
+
+bool Activity::ApplyPendingCheckpoint() {
+	if (m_PendingRuntimeCheckpoint.empty()) return true;
+	if (!LoadCheckpoint(m_PendingRuntimeCheckpoint)) return false;
+	m_PendingRuntimeCheckpoint.clear();
+	return true;
+}
+
+bool Activity::ResolveCheckpointReferences() {
+	if (!m_HasCheckpointActorIDs) return true;
+	std::array<std::array<Actor*, 3>, Players::MaxPlayerCount> actors{};
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		for (int link = 0; link < 3; ++link) {
+			const long uid = m_CheckpointActorIDs[player][link];
+			actors[player][link] = uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid)) : nullptr;
+			if (uid && !actors[player][link]) return false;
+		}
+	}
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		m_Brain[player] = actors[player][0];
+		m_ControlledActor[player] = actors[player][1];
+		m_PlayerController[player].SetControlledActor(actors[player][2]);
+	}
+	m_HasCheckpointActorIDs = false;
+	return true;
 }

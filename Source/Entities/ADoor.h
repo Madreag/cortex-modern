@@ -13,6 +13,8 @@ namespace RTE {
 
 
 	public:
+		void DiscardPersistedSnapshotState() override;
+		void AdoptPersistedUniqueID() override;
 		EntityAllocation(ADoor);
 		SerializableOverrideMethods;
 		void SaveSnapshotConfiguration(Writer& writer) const override;
@@ -200,6 +202,10 @@ namespace RTE {
 		std::unique_ptr<SoundContainer> m_DoorMoveEndSound; //!< Sound played when the door stops moving and is at fully open/closed position.
 
 	private:
+		std::string m_PersistedADoorRuntime;
+		std::string SaveADoorRuntime() const;
+		bool LoadADoorRuntime(std::string_view text, bool validateOnly = false);
+
 #pragma region Update Breakdown
 		/// Iterates through the sensor list looking for actors and acts accordingly. Resets to the default state if none are found and past the delay timer. This is called from Update().
 		void UpdateSensors();

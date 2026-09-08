@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "Icon.h"
 #include "Controller.h"
 #include "GenericSavedData.h"
@@ -16,6 +19,13 @@ namespace RTE {
 
 
 	public:
+
+		virtual std::string SaveCheckpoint() const;
+		virtual bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		bool ApplyPendingCheckpoint();
+		virtual bool ResolveCheckpointReferences();
+		/// Initializes a cloned checkpoint's presentation without starting the activity or its scripts.
+		virtual bool PrepareCheckpointUI() { return true; }
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 
@@ -604,6 +614,9 @@ namespace RTE {
 #pragma endregion
 
 	protected:
+		std::string m_PendingRuntimeCheckpoint;
+		std::array<std::array<long, 3>, Players::MaxPlayerCount> m_CheckpointActorIDs{};
+		bool m_HasCheckpointActorIDs = false;
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
 		ActivityState m_ActivityState; //!< Current state of this Activity.
@@ -660,6 +673,18 @@ namespace RTE {
 		GenericSavedData m_SavedValues;
 
 	private:
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_ActivityState, self.m_Paused, self.m_AllowsUserSaving, self.m_IsTestActivity,
+				self.m_Description, self.m_SceneName, self.m_MaxPlayerSupport, self.m_MinTeamsRequired,
+				self.m_Difficulty, self.m_CraftOrbitAtTheEdge, self.m_InCampaignStage, self.m_PlayerCount,
+				self.m_IsActive, self.m_IsHuman, self.m_PlayerScreen, self.m_ViewState,
+				self.m_DeathTimer, self.m_TeamNames, self.m_TeamCount, self.m_TeamActive,
+				self.m_Team, self.m_TeamDeaths, self.m_TeamAISkillLevels, self.m_TeamFunds,
+				self.m_TeamFundsShare, self.m_FundsChanged, self.m_FundsContribution, self.m_HadBrain,
+				self.m_BrainEvacuated, self.m_PlayerController, self.m_MessageTimer, self.m_SavedValues.m_SavedEncodedStrings.m_Data,
+				self.m_SavedValues.m_SavedStrings.m_Data, self.m_SavedValues.m_SavedNumbers.m_Data);
+		}
 		/// Shared method to get the amount of human or AI controlled brains that are left in this Activity.
 		/// @param getForHuman Whether to get brain count for Human or for AI. True for Human.
 		/// @return How many human or AI controlled brains are left in this Activity.

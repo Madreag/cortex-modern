@@ -374,6 +374,7 @@ namespace RTE {
 		float m_AreaDistributionSurfaceAreaMultiplier; //!< A multiplier for the AtomGroup's surface area, which affects how much it digs into terrain. 0.5 would halve the surface area so it would dig into terrain twice as much, 2.0 would make it dig into terrain half as much.
 
 	private:
+		std::string m_CheckpointMaterialReference;
 		long m_CheckpointOwnerID = 0;
 		bool m_HasCheckpointOwner = false;
 

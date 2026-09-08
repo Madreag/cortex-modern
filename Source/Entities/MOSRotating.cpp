@@ -1,4 +1,7 @@
 #include "MOSRotating.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
+#include "BitmapCheckpoint.h"
 
 #include "CameraMan.h"
 #include "TimerMan.h"
@@ -50,6 +53,9 @@ MOSRotating::~MOSRotating() {
 }
 
 void MOSRotating::Clear() {
+	m_PersistedMOSRotatingRuntime.clear();
+	m_PersistedAtomGroupCheckpoint.clear();
+	m_PersistedDeepGroupCheckpoint.clear();
 	m_pAtomGroup = 0;
 	m_pDeepGroup = 0;
 	m_DeepCheck = false;
@@ -126,9 +132,11 @@ int MOSRotating::Create() {
 
 	if (!m_pFlipBitmap && m_aSprite[0]) {
 		m_pFlipBitmap = create_bitmap_ex(8, m_aSprite[0]->w, m_aSprite[0]->h);
+		clear_to_color(m_pFlipBitmap, g_MaskColor);
 	}
 	if (!m_pFlipBitmapS && m_aSprite[0]) {
 		m_pFlipBitmapS = create_bitmap_ex(c_MOIDLayerBitDepth, m_aSprite[0]->w, m_aSprite[0]->h);
+		clear_to_color(m_pFlipBitmapS, g_NoMOID);
 	}
 
 	/* Not anymore; points to shared static bitmaps
@@ -198,9 +206,11 @@ int MOSRotating::Create(ContentFile spriteFile,
 
 	if (!m_pFlipBitmap && m_aSprite[0]) {
 		m_pFlipBitmap = create_bitmap_ex(8, m_aSprite[0]->w, m_aSprite[0]->h);
+		clear_to_color(m_pFlipBitmap, g_MaskColor);
 	}
 	if (!m_pFlipBitmapS && m_aSprite[0]) {
 		m_pFlipBitmapS = create_bitmap_ex(c_MOIDLayerBitDepth, m_aSprite[0]->w, m_aSprite[0]->h);
+		clear_to_color(m_pFlipBitmapS, g_NoMOID);
 	}
 
 	return 0;
@@ -227,6 +237,8 @@ int MOSRotating::Create(const MOSRotating& reference) {
 			m_pDeepGroup->SetOwner(this);
 		}
 	}
+	m_PersistedAtomGroupCheckpoint = reference.m_PersistedAtomGroupCheckpoint;
+	m_PersistedDeepGroupCheckpoint = reference.m_PersistedDeepGroupCheckpoint;
 	m_PersistedAtomGroupResidue = reference.m_PersistedAtomGroupResidue;
 	m_PersistedAtomGroupOffsets = reference.m_PersistedAtomGroupOffsets;
 	m_PersistedAtomGroupSubIDs = reference.m_PersistedAtomGroupSubIDs;
@@ -290,9 +302,11 @@ int MOSRotating::Create(const MOSRotating& reference) {
 
 	if (!m_pFlipBitmap && m_aSprite[0]) {
 		m_pFlipBitmap = create_bitmap_ex(8, m_aSprite[0]->w, m_aSprite[0]->h);
+		clear_to_color(m_pFlipBitmap, g_MaskColor);
 	}
 	if (!m_pFlipBitmapS && m_aSprite[0]) {
 		m_pFlipBitmapS = create_bitmap_ex(c_MOIDLayerBitDepth, m_aSprite[0]->w, m_aSprite[0]->h);
+		clear_to_color(m_pFlipBitmapS, g_NoMOID);
 	}
 
 	if (IsFaithfulClone()) {
@@ -317,11 +331,19 @@ int MOSRotating::Create(const MOSRotating& reference) {
 		m_FaithfulRadiusAffectingAttachableUID = reference.m_FaithfulRadiusAffectingAttachableUID;
 		m_FaithfulAttachableOrder = reference.m_FaithfulAttachableOrder;
 	}
+	m_PersistedMOSRotatingRuntime = reference.m_PersistedMOSRotatingRuntime;
+	if (IsFaithfulClone() && m_PersistedMOSRotatingRuntime.empty()) m_PersistedMOSRotatingRuntime = reference.SaveMOSRotatingRuntime();
 	return 0;
 }
 
 int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSprite::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_MOSRotatingRuntime", {
+		m_PersistedMOSRotatingRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadMOSRotatingRuntime(m_PersistedMOSRotatingRuntime, true)) reader.ReportError("invalid MOSRotating runtime checkpoint");
+	});
+	MatchProperty("SpecialBehaviour_AtomGroupCheckpoint", { ReadOwnedCheckpoint<AtomGroup>(reader, m_PersistedAtomGroupCheckpoint); });
+	MatchProperty("SpecialBehaviour_DeepGroupCheckpoint", { ReadOwnedCheckpoint<AtomGroup>(reader, m_PersistedDeepGroupCheckpoint); });
 	MatchProperty("SpecialBehaviour_FarthestAttachableDistanceAndRadius", { reader >> m_FaithfulFarthestAttachableDistanceAndRadius; });
 	MatchProperty("RadiusAffectingAttachableUniqueID", { reader >> m_FaithfulRadiusAffectingAttachableUID; });
 	MatchProperty("SpecialBehaviour_DeepHardness", { reader >> m_DeepHardness; });
@@ -386,7 +408,11 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		for (auto attachableIterator = m_Attachables.begin(); attachableIterator != m_Attachables.end();) {
 			Attachable* attachable = *attachableIterator;
 			++attachableIterator;
-			delete RemoveAttachable(attachable);
+			if (g_MovableMan.IsRestoringSnapshot()) {
+				RemoveAndDeleteAttachable(attachable);
+			} else {
+				delete RemoveAttachable(attachable);
+			}
 		}
 	});
 	MatchForwards("AddAttachable") MatchForwards("AddAEmitter") MatchProperty("AddEmitter", {
@@ -444,6 +470,8 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 
 void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSprite::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_AtomGroupCheckpoint", base64_encode(m_PersistedAtomGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pAtomGroup) : m_PersistedAtomGroupCheckpoint, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_DeepGroupCheckpoint", base64_encode(m_PersistedDeepGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pDeepGroup) : m_PersistedDeepGroupCheckpoint, true));
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearGibs", true);
 	for (const Gib* gib: m_Gibs) writer.NewPropertyWithValue("AddGib", *gib);
 	writer.NewPropertyWithValue("OrientToVel", m_OrientToVel);
@@ -457,6 +485,7 @@ void MOSRotating::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_GibSound", m_GibSound);
 	writer.NewPropertyWithValue("EffectOnGib", m_EffectOnGib);
 	writer.NewPropertyWithValue("LoudnessOnGib", m_LoudnessOnGib);
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSRotatingRuntime", base64_encode(m_PersistedMOSRotatingRuntime.empty() ? SaveMOSRotatingRuntime() : m_PersistedMOSRotatingRuntime, true));
 }
 
 int MOSRotating::Save(Writer& writer) const {
@@ -1608,6 +1637,12 @@ void MOSRotating::AdoptPersistedUniqueID() {
 	for (AEmitter* wound: m_Wounds) {
 		wound->AdoptPersistedUniqueID();
 	}
+	RestoreOwnedCheckpoint(m_pAtomGroup, m_PersistedAtomGroupCheckpoint);
+	RestoreOwnedCheckpoint(m_pDeepGroup, m_PersistedDeepGroupCheckpoint);
+	if (!m_PersistedMOSRotatingRuntime.empty()) {
+		if (!LoadMOSRotatingRuntime(m_PersistedMOSRotatingRuntime)) throw std::runtime_error("could not restore MOSRotating runtime checkpoint");
+		m_PersistedMOSRotatingRuntime.clear();
+	}
 }
 
 MovableObject* MOSRotating::FindPartByUniqueID(long uid) {
@@ -1628,6 +1663,8 @@ MovableObject* MOSRotating::FindPartByUniqueID(long uid) {
 }
 
 void MOSRotating::ResolveFaithfulLinks() {
+	if (m_pAtomGroup) m_pAtomGroup->ResolveCheckpointLinks();
+	if (m_pDeepGroup) m_pDeepGroup->ResolveCheckpointLinks();
 	MOSprite::ResolveFaithfulLinks();
 	for (Gib* gib: m_Gibs) gib->ResolveParticlePreset();
 	if (!m_FaithfulAttachableOrder.empty()) {
@@ -1677,6 +1714,8 @@ void MOSRotating::CollectSubgroupIDTranslation(std::unordered_map<long, long>& s
 }
 
 void MOSRotating::DiscardPersistedSnapshotState() {
+	m_PersistedAtomGroupCheckpoint.clear();
+	m_PersistedDeepGroupCheckpoint.clear();
 	MOSprite::DiscardPersistedSnapshotState();
 	m_PersistedAtomGroupResidue.clear();
 	m_PersistedAtomGroupOffsets.clear();
@@ -1689,6 +1728,7 @@ void MOSRotating::DiscardPersistedSnapshotState() {
 	for (AEmitter* wound: m_Wounds) {
 		wound->DiscardPersistedSnapshotState();
 	}
+	m_PersistedMOSRotatingRuntime.clear();
 }
 
 void MOSRotating::Update() {
@@ -1886,6 +1926,16 @@ Attachable* MOSRotating::RemoveAttachable(Attachable* attachable, bool addToMova
 }
 
 void MOSRotating::RemoveAndDeleteAttachable(Attachable* attachable) {
+	if (g_MovableMan.IsRestoringSnapshot()) {
+		// Replacing a preset part while reading a checkpoint is construction, not
+		// an in-game detach. Delete that discarded copy without adding it to the
+		// world's pending particles or running its break/gib lifecycle.
+		attachable->SetDeleteWhenRemovedFromParent(false);
+		attachable->SetGibWhenRemovedFromParent(false);
+		attachable->SetToDelete(false);
+		delete RemoveAttachable(attachable, false, false);
+		return;
+	}
 	attachable->SetToDelete();
 	RemoveAttachable(attachable);
 }
@@ -2196,4 +2246,32 @@ bool MOSRotating::TransferForcesFromAttachable(Attachable* attachable) {
 		AddImpulseForce(impulses, attachable->GetApplyTransferredForcesAtOffset() ? attachable->GetParentOffset() * m_Rotation * c_MPP : Vector());
 	}
 	return intact;
+}
+
+std::string MOSRotating::SaveMOSRotatingRuntime() const {
+    CheckpointWriter archive("MOSRotatingRuntime2");
+	archive(m_DeepCheck, m_ForceDeepCheck, m_DeepHardness, m_TravelImpulse, m_SpriteCenter, m_OrientToVel, m_Recoiled);
+	archive(m_RecoilForce, m_RecoilOffset, m_EntryWoundBurstSoundPlayedThisFrame, m_ExitWoundBurstSoundPlayedThisFrame, m_FarthestAttachableDistanceAndRadius, m_AttachableAndWoundMass, m_GibImpulseLimit);
+	archive(m_GibWoundLimit, m_GibBlastStrength, m_GibScreenShakeAmount, m_WoundCountAffectsImpulseLimitRatio, m_DetachAttachablesBeforeGibbingFromWounds, m_GibAtEndOfLifetime, m_EffectOnGib);
+    archive(m_LoudnessOnGib, m_DamageMultiplier, m_NoSetDamageMultiplier, m_FlashWhiteTimer);
+    BitmapCheckpoint flip, silhouette; flip.Capture(m_pFlipBitmap); silhouette.Capture(m_pFlipBitmapS);
+    archive(flip, silhouette);
+	return archive.Text();
+}
+
+bool MOSRotating::LoadMOSRotatingRuntime(std::string_view text, bool validateOnly) {
+	try {
+        const bool legacy = text.starts_with("19 MOSRotatingRuntime1 ");
+        CheckpointReader archive(text, legacy ? "MOSRotatingRuntime1" : "MOSRotatingRuntime2", validateOnly);
+		archive(m_DeepCheck, m_ForceDeepCheck, m_DeepHardness, m_TravelImpulse, m_SpriteCenter, m_OrientToVel, m_Recoiled);
+		archive(m_RecoilForce, m_RecoilOffset, m_EntryWoundBurstSoundPlayedThisFrame, m_ExitWoundBurstSoundPlayedThisFrame, m_FarthestAttachableDistanceAndRadius, m_AttachableAndWoundMass, m_GibImpulseLimit);
+		archive(m_GibWoundLimit, m_GibBlastStrength, m_GibScreenShakeAmount, m_WoundCountAffectsImpulseLimitRatio, m_DetachAttachablesBeforeGibbingFromWounds, m_GibAtEndOfLifetime, m_EffectOnGib);
+        archive(m_LoudnessOnGib, m_DamageMultiplier, m_NoSetDamageMultiplier, m_FlashWhiteTimer);
+        if (!legacy) {
+            BitmapCheckpoint::StageOwned(archive, m_pFlipBitmap, validateOnly);
+            BitmapCheckpoint::StageOwned(archive, m_pFlipBitmapS, validateOnly);
+        }
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }
