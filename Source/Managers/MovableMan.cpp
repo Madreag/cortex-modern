@@ -1527,7 +1527,14 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	}
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
-	ForgetHeldWorld(in);
+	// discardState and PurgeAllMOs run below, so the record stays published until it is put back.
+	struct Withdraw {
+		MovableMan& man;
+		WorldSetAside& world;
+		bool done = false;
+		void Now() { if (!done) { man.ForgetHeldWorld(world); done = true; } }
+		~Withdraw() { Now(); }
+	} withdraw{*this, in};
 	// The re-run never happened: every scripted object of its world (nested ones included) drops its script object without Destroy, and the originals' slots come back.
 	const auto isOriginal = [&in](const MovableObject* mo) {
 		const auto known = in.knownObjects.find(mo->GetUniqueID());
@@ -1562,6 +1569,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 		g_SceneMan.GetScene()->SwapRuntimeOwners(*in.sceneOwners);
 		rejectedSceneOwners = std::move(in.sceneOwners);
 	}
+	withdraw.Now();
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		m_KnownObjects = std::move(in.knownObjects);
