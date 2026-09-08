@@ -21,7 +21,7 @@ from compare_snapshots import compare_graphs, parse_graph
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def compare_lua_observations(first, first_stage, second, second_stage):
+def compare_lua_observations(first, first_stage, second, second_stage, cross_process=False):
     """All five complete Lua graphs; no local-AI or presentation projection."""
     results = []
     for index in range(5):
@@ -31,11 +31,12 @@ def compare_lua_observations(first, first_stage, second, second_stage):
         try:
             a_bytes, b_bytes = a.read_bytes(), b.read_bytes()
             result.update(first_sha256=hashlib.sha256(a_bytes).hexdigest(), second_sha256=hashlib.sha256(b_bytes).hexdigest(),
-                          detail=compare_graphs(parse_graph(a_bytes), parse_graph(b_bytes), actor_uids=None), passed=True)
+                          detail=compare_graphs(parse_graph(a_bytes), parse_graph(b_bytes), actor_uids=None, cross_process=cross_process), passed=True)
         except Exception as error:
             result.update(passed=False, error=str(error))
         results.append(result)
-    return {'passed': all(item['passed'] for item in results), 'full_comparison': True, 'vms': results}
+    return {'passed': all(item['passed'] for item in results), 'full_comparison': True,
+            'cross_process': cross_process, 'vms': results}
 
 
 def compare_state_files(first, second, destination):
@@ -295,7 +296,8 @@ def main():
                 checks['reference_trace'] = equal
                 first_dump, second_dump = ref / 'trace.json.simdump.txt', out / 'trace.json.simdump.txt'
                 checks['reference_dump'] = first_dump.exists() and second_dump.exists() and digest(first_dump) == digest(second_dump)
-            graphs = compare_lua_observations(ref, 'continued', out, 'continued')
+            # The reference is a separate process, so its real-time anchors are its own unless a load restored them.
+            graphs = compare_lua_observations(ref, 'continued', out, 'continued', cross_process=True)
             (out / 'continuation-lua-comparison.json').write_text(json.dumps(graphs, indent=2))
             if not expected_fault: checks['reference_full_lua'] = graphs['passed']
             try:

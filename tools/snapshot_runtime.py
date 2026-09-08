@@ -223,6 +223,9 @@ SCHEMAS["AHumanRuntime1"] = [*fields("look_aim_ratio activate_background trigger
     *fields("stride_frame stride_start"), *fields("stride_timer throw_timer", TIMER), ("throw_prep_time", "n"), ("sharp_aim_revert_timer", TIMER),
     *fields("front_arm_flail back_arm_flail"), ("equip_hud_timer", TIMER), ("walk_angle", array(2, "o")), ("walk_offset", VECTOR),
     *fields("arm_swing_rate device_arm_sway"), ("owned_groups", array(6, "s")), ("deferred_equips", STRINGS)]
+SCHEMAS["ACrabRuntime1"] = [("icon_blink_timer", TIMER), ("stride_frame", "n"), ("paths", array(2, array(2, array(11, "o")))),
+    ("aiming", "n"), ("stride_start", array(2)), ("stride_timer", array(2, TIMER)),
+    *fields("aim_range_upper_limit aim_range_lower_limit lock_mouse_aim_input"), ("foot_groups", array(8, "s"))]
 SCHEMAS["MOSpriteRuntime1"] = [*fields("rotation previous_rotation", "o"), *fields("angular_velocity previous_angular_velocity frame_count"),
     ("sprite_offset", VECTOR), *fields("frame animation_mode animation_duration"), ("animation_timer", TIMER),
     *fields("animation_reversing flipped forced_flip sprite_radius sprite_diameter angular_oscillations settling_material_disabled sprite_modified")]
@@ -422,15 +425,15 @@ _LOCAL_FIELDS = {
 }
 
 
-def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None):
+def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False):
     """Return a structural value, projecting only the named local fields and timer anchors."""
     if masked is None:
         masked = []
     if isinstance(value, list):
-        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles) for index, item in enumerate(value)]
+        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process) for index, item in enumerate(value)]
     if not isinstance(value, dict):
         return value
-    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles) for key, item in value.items()}
+    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process) for key, item in value.items()}
     version = value.get("version")
 
     def mask(key):
@@ -438,11 +441,12 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             result[key] = "LOCAL"
             masked.append((*path, key))
 
+    # Timer::m_StartRealTime is a wall-clock reading (TimerMan.h), so two processes never agree on it.
+    if (shared or cross_process) and set(value) == {"sim_start", "sim_limit", "real_start", "real_limit"}:
+        mask("real_start")
     if shared:
         for key in _LOCAL_FIELDS.get(version, ()):
             mask(key)
-        if set(value) == {"sim_start", "sim_limit", "real_start", "real_limit"}:
-            mask("real_start")
         if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9"):
             mask("render_rng")
         if version == "Controller1":

@@ -352,8 +352,24 @@ class GraphMismatch(ValueError):
     pass
 
 
-def compare_graphs(first, second, actor_uids=None):
+def masked_timer_tokens(value):
+    """A Timer rides the graph as m<StartSimTime,SimTimeLimit,StartRealTime,RealTimeLimit>; the real anchor is per-process."""
+    if isinstance(value, tuple):
+        if value[:1] == ("m",):
+            sim_start, sim_limit, _, real_limit = value[1].split(",")
+            return "m", ",".join((sim_start, sim_limit, "LOCAL", real_limit))
+        return tuple(masked_timer_tokens(item) for item in value)
+    if isinstance(value, list):
+        return [masked_timer_tokens(item) for item in value]
+    if isinstance(value, dict):
+        return {key: masked_timer_tokens(item) for key, item in value.items()}
+    return value
+
+
+def compare_graphs(first, second, actor_uids=None, cross_process=False):
     """Require a bijection, including table keys, closures, upvalue cells and native aliases."""
+    if cross_process:
+        first, second = masked_timer_tokens(first), masked_timer_tokens(second)
     cuts = [local_ai_boundaries(graph, actor_uids) if actor_uids is not None else {} for graph in (first, second)]
 
     def mismatch(path, reason):
@@ -396,7 +412,7 @@ def compare_graphs(first, second, actor_uids=None):
                             native = node["ini"].decode()
                             if actor_uids is not None:
                                 native = native_projection(native)[0]
-                            node["ini"] = runtime_projection(native, "", actor_uids is not None)[0].encode()
+                            node["ini"] = runtime_projection(native, "", actor_uids is not None, cross_process)[0].encode()
                     work.append((left, right, path))
                 elif isinstance(a, dict):
                     if a.keys() != b.keys():
@@ -597,7 +613,25 @@ def canonical_custom_values(text):
     return "".join(output)
 
 
-def runtime_projection(text, name, shared):
+def masked_limb_path_state(value):
+    """LimbPath::PackTraversalState writes the two Timer real anchors at fixed offsets, before the trailing segments."""
+    body = value.split()[1:]
+    if not value.startswith("LP2 ") or len(body) < 46 or not body[45].lstrip("-").isdigit() or len(body) != 46 + 2 * int(body[45]):
+        return value
+    body[37] = body[40] = "LOCAL"
+    return " ".join(("LP2", *body))
+
+
+def runtime_payload(value):
+    """The decoded bytes of a SpecialBehaviour_* value that really is a versioned CheckpointArchive payload."""
+    try:
+        raw = decode_base64(value)
+    except Exception:
+        return None
+    return raw if re.match(rb"\d+ [A-Za-z0-9_]+ ", raw) else None
+
+
+def runtime_projection(text, name, shared, cross_process=False):
     text = canonical_custom_values(text)
     output, ancestry, projected = [], [], []
     for line in text.splitlines(keepends=True):
@@ -613,16 +647,20 @@ def runtime_projection(text, name, shared):
             native = any(key == f"SpecialBehaviour_{kind}Runtime" and owner[1] in owners for kind, owners in _NATIVE_RUNTIME_OWNERS.items())
             emission = key == "SpecialBehaviour_EmissionCheckpoint" and owner[1] == "Emission"
             sound = key == "SpecialBehaviour_SoundCheckpoint" and owner[1] == "SoundContainer"
-            if root or (key == "SpecialBehaviour_RuntimeCheckpoint" and activity) or controller or native or emission or sound:
+            # Anchors also hide in payloads no other comparison decodes, so reach every one of them here.
+            checkpoint = cross_process and key.startswith("SpecialBehaviour_") and runtime_payload(value.strip()) is not None
+            if root or (key == "SpecialBehaviour_RuntimeCheckpoint" and activity) or controller or native or emission or sound or checkpoint:
                 state = snapshot_runtime.decode(decode_base64(value.strip()))
                 masks = []
                 roles = inventory_reference_roles(text, state) if shared and activity else None
-                state = snapshot_runtime.project(state, shared, name.encode(), masked=masks, local_roles=roles)
+                state = snapshot_runtime.project(state, shared, name.encode(), masked=masks, local_roles=roles, cross_process=cross_process)
                 if shared and key == "SpecialBehaviour_MOSpriteRuntime" and owner == ("Flash", "Attachable") and len(ancestry) > 1 and ancestry[-2][1] == "HDFirearm":
                     state["frame"] = "LOCAL"
                     masks.append(("frame",))
                 line = tabs + match[2] + separator + repr(state) + (newline or "")
                 projected.extend(".".join(map(str, (key, *path))) for path in masks)
+            elif cross_process and key == "LimbPathState":
+                line = tabs + match[2] + separator + masked_limb_path_state(value.strip()) + (newline or "")
             ancestry.append((key, value.strip()))
         output.append(line)
     return "".join(output), projected
