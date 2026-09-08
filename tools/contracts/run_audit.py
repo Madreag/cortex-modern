@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import gzip
+import itertools
 import json
 import re
 import shutil
@@ -17,6 +18,7 @@ sys.path.insert(0, str(repo / 'tools'))
 from run_sim_test import make_run
 from compare_sim_traces import strict_compare
 from compare_snapshots import compare_graphs, parse_graph
+import cross_process_state
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -39,8 +41,10 @@ def compare_lua_observations(first, first_stage, second, second_stage, cross_pro
             'cross_process': cross_process, 'vms': results}
 
 
-def compare_state_files(first, second, destination):
+def compare_state_files(first, second, destination, cross_process=False):
     """Compare exact raw documents; native string values can contain newlines/NULs."""
+    if cross_process:
+        return compare_state_fields(first, second, destination)
     count = 0
     open_first = gzip.open if str(first).endswith('.gz') else open
     open_second = gzip.open if str(second).endswith('.gz') else open
@@ -62,6 +66,45 @@ def compare_state_files(first, second, destination):
     return {'equal': count == 0, 'changed_blocks': count, 'first_bytes': sizes[0], 'second_bytes': sizes[1],
             'first_sha256': hashes[0].hexdigest(), 'second_sha256': hashes[1].hexdigest(), 'artifact': str(destination),
             'classification': 'Exact unfiltered document comparison; differences are 64-KiB byte blocks, not a field count.'}
+
+
+def compare_state_fields(first, second, destination):
+    """The reference runs in another process, so project the named real-clock fields and keep the rest."""
+    open_first = gzip.open if str(first).endswith('.gz') else open
+    open_second = gzip.open if str(second).endswith('.gz') else open
+    hashes, sizes, counts = [hashlib.sha256(), hashlib.sha256()], [0, 0], [0, 0]
+    differences, projected_lines, projected = 0, 0, {}
+    with open_first(first, 'rb') as a_stream, open_second(second, 'rb') as b_stream, gzip.open(destination, 'wt', encoding='utf-8') as output:
+        for index, (a, b) in enumerate(itertools.zip_longest(a_stream, b_stream)):
+            for position, block in enumerate((a, b)):
+                if block is not None:
+                    hashes[position].update(block)
+                    sizes[position] += len(block)
+                    counts[position] += 1
+            if a == b: continue
+            record = {'line': index, 'reference': text_line(a), 'candidate': text_line(b)}
+            fields = [cross_process_state.field_of(value) if value is not None else None for value in (record['reference'], record['candidate'])]
+            record['field'] = fields[0]
+            reason = cross_process_state.real_clock_reason(fields[0]) if fields[0] is not None and fields[0] == fields[1] else None
+            if reason:
+                family = projected.setdefault(cross_process_state.family(fields[0]), {'count': 0, 'reason': reason})
+                family['count'] += 1
+                projected_lines += 1
+            else:
+                differences += 1
+            record.update(projected=bool(reason), reason=reason)
+            output.write(json.dumps(record) + '\n')
+    return {'equal': differences == 0 and counts[0] == counts[1], 'cross_process': True, 'changed_lines': differences,
+            'projected_lines': projected_lines, 'projected': projected, 'first_lines': counts[0], 'second_lines': counts[1],
+            'first_bytes': sizes[0], 'second_bytes': sizes[1], 'first_sha256': hashes[0].hexdigest(),
+            'second_sha256': hashes[1].hexdigest(), 'artifact': str(destination),
+            'classification': 'Line-exact document comparison. Every difference is retained in the artifact; only the fields named in '
+                              'cross_process_state.REAL_CLOCK_FIELDS are projected, counted per family with the writer that makes each per-process.'}
+
+
+def text_line(line):
+    return None if line is None else line.decode('utf-8', 'replace').removesuffix('\n')
+
 
 # A transition named here must apply; every load transaction answers to --expect-load instead, and
 # 'observe'/'stage' record an outcome of their own.
@@ -129,7 +172,8 @@ def main():
     exe_hash = digest(repo / 'Cortex Command.exe')
     inputs = {}
     harness_inputs = [Path(__file__), repo / 'tools/run_sim_test.py', repo / 'tools/win32_test_runner.py', repo / 'tools/compare_sim_traces.py',
-                      repo / 'tools/compare_snapshots.py', repo / 'tools/snapshot_runtime.py']
+                      repo / 'tools/compare_snapshots.py', repo / 'tools/snapshot_runtime.py',
+                      repo / 'tools/cross_process_state.py']
     for path in [options.replay, options.script, options.global_script, *options.snapshots, *harness_inputs]:
         if path:
             target = options.out / 'fixture_sources' / path.name
@@ -310,7 +354,7 @@ def main():
             if not expected_fault: checks['reference_full_lua'] = graphs['passed']
             try:
                 continuation['reference_raw'] = compare_state_files(ref / 'trace.json.contract.continued.state.txt.gz',
-                    out / 'trace.json.contract.continued.state.txt.gz', out / 'continuation-raw-differences.jsonl.gz')
+                    out / 'trace.json.contract.continued.state.txt.gz', out / 'continuation-raw-differences.jsonl.gz', cross_process=True)
             except Exception as error:
                 continuation['reference_raw'] = {'error': str(error)}
                 checks['reference_raw_available'] = False
