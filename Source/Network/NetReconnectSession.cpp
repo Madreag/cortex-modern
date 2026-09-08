@@ -218,10 +218,19 @@ namespace RTE {
 			HandleLeaveRequest(connection, *leave, nowMs);
 			return true;
 		}
-		// TicketOffer, Challenge, JoinCommitted and LeaveAck are the host's own replies; a client that
-		// sends one is talking out of turn.
+		if (const auto* applicant = std::get_if<NetH4Applicant>(&payload)) {
+			HandleApplicant(connection, *applicant, nowMs);
+			return true;
+		}
+		if (const auto* ack = std::get_if<NetH4SubstitutionAck>(&payload)) {
+			HandleSubstitutionAck(connection, *ack, nowMs);
+			return true;
+		}
+		// TicketOffer, Challenge, JoinCommitted, LeaveAck, ApplicantAck and SubstitutionOffer are the
+		// host's own replies; a client that sends one is talking out of turn.
 		return std::holds_alternative<NetH4TicketOffer>(payload) || std::holds_alternative<NetH4Challenge>(payload) ||
-		       std::holds_alternative<NetH4JoinCommitted>(payload) || std::holds_alternative<NetH4LeaveAck>(payload);
+		       std::holds_alternative<NetH4JoinCommitted>(payload) || std::holds_alternative<NetH4LeaveAck>(payload) ||
+		       std::holds_alternative<NetH4ApplicantAck>(payload) || std::holds_alternative<NetH4SubstitutionOffer>(payload);
 	}
 
 	void NetReconnectHost::HandleNewJoin(NetPeerId connection, const NetH4NewJoin& message, uint64_t nowMs) {
@@ -384,9 +393,11 @@ namespace RTE {
 			return;
 		}
 		SeatState* seat = FindSeat(message.stableSeat);
-		if (seat == nullptr || !seat->committed || seat->closed || seat->saturated ||
-		    seat->holderGeneration == 0 || seat->holderGeneration != message.holderGeneration ||
-		    m_Registry == nullptr || m_Registry->GetActiveGeneration(message.stableSeat) != message.holderGeneration) {
+		const bool superseded = seat != nullptr && m_Registry != nullptr && seat->retiredGeneration == message.holderGeneration &&
+		                        nowMs < seat->retiredUntilMs && m_Registry->HasRetiredGeneration(message.stableSeat, message.holderGeneration);
+		if (!superseded && (seat == nullptr || !seat->committed || seat->closed || seat->saturated ||
+		                    seat->holderGeneration == 0 || seat->holderGeneration != message.holderGeneration ||
+		                    m_Registry == nullptr || m_Registry->GetActiveGeneration(message.stableSeat) != message.holderGeneration)) {
 			ChallengeSyntheticallyAndDeny(connection, message.txId, NetH4DenialReason::UnknownSeat, nowMs);
 			return;
 		}
@@ -402,6 +413,7 @@ namespace RTE {
 		reclaim.holderGeneration = message.holderGeneration;
 		reclaim.key = key;
 		reclaim.openedAtMs = nowMs;
+		reclaim.superseded = superseded;
 		m_PendingReclaims.erase(std::remove_if(m_PendingReclaims.begin(), m_PendingReclaims.end(), [connection, &message](const PendingReclaim& pending) {
 			return pending.connection == connection && pending.txId == message.txId;
 		}), m_PendingReclaims.end());
@@ -449,6 +461,21 @@ namespace RTE {
 		transcript.holderGeneration = message.holderGeneration;
 		transcript.challenge = issued.challenge;
 		transcript.clientNonce = message.clientNonce;
+		if (pending != m_PendingReclaims.end() && pending->superseded) {
+			// Only a claimant that proved the retired credential hears this, so it tells nobody who does
+			// not already hold that credential that the seat ever existed.
+			const bool proved = m_Registry != nullptr && m_Registry->VerifyRetiredProof(message.stableSeat, message.holderGeneration, transcript, message.mac);
+			if (proved) {
+				++m_Stats.reassignedReclaimsRefused;
+				const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReassigned, "this seat was given to another player", "seat_reassigned", "", ""};
+				m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::SeatReassigned, nowMs, &refusal);
+				++m_Stats.denialsScheduled;
+			} else {
+				DenyUniformly(connection, message.txId, NetH4DenialReason::BadProof, nowMs);
+			}
+			m_PendingReclaims.erase(pending);
+			return;
+		}
 		SeatState* seat = FindSeat(message.stableSeat);
 		if (seat == nullptr || !seat->committed || seat->closed || m_Registry == nullptr ||
 		    !m_Registry->VerifySeatProof(message.stableSeat, message.holderGeneration, transcript, message.mac)) {
@@ -499,6 +526,9 @@ namespace RTE {
 			seat->committed = false;
 			seat->activeConnection = c_InvalidNetPeerId;
 			seat->dropped = false;
+			BumpSeatGeneration(*seat);
+			seat->retiredGeneration = 0;
+			seat->retiredUntilMs = 0;
 			m_Ledger.ClearSeat(message.stableSeat);
 			m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [&message](const Fence& fence) {
 				return fence.stableSeat == message.stableSeat;
@@ -529,6 +559,18 @@ namespace RTE {
 		seat.activeConnection = connection;
 		seat.dropped = false;
 		seat.holdExpired = false;
+		BumpSeatGeneration(seat);
+		// Returner wins: whoever commits first takes the seat, and a substitution that was still
+		// waiting for its ack is invalidated and removed here, not left to be discovered later.
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			if (m_Substitutions[index].stableSeat == seat.seat.stableSeat && m_Substitutions[index].connection != connection) {
+				AbandonSubstitution(index, NetH4DenialReason::SubstitutionSuperseded, "the seat's own player returned first", m_NowMs);
+				continue;
+			}
+			++index;
+		}
+		// The seat has a holder again, so nobody is waiting for it any more.
+		DisplaceApplicants(seat.seat.stableSeat, connection, m_NowMs);
 		// A transport that reclaims its own seat is live again, so it is no longer a fence.
 		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [connection](const Fence& fence) {
 			return fence.connection == connection;
@@ -565,9 +607,25 @@ namespace RTE {
 		seat.dropped = false;
 		seat.holdExpired = false;
 		seat.identity = {};
+		seat.retiredGeneration = 0;
+		seat.retiredUntilMs = 0;
+		BumpSeatGeneration(seat);
+		if (m_Registry != nullptr) {
+			m_Registry->ClearRetired(seat.seat.stableSeat);
+		}
 		m_Ledger.ClearSeat(seat.seat.stableSeat);
 		ReleaseProvisional(seat.seat.stableSeat);
 		const uint16_t stableSeat = seat.seat.stableSeat;
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			if (m_Substitutions[index].stableSeat == stableSeat) {
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the seat went back into the pool", m_NowMs);
+				continue;
+			}
+			++index;
+		}
+		m_Applicants.erase(std::remove_if(m_Applicants.begin(), m_Applicants.end(), [stableSeat](const Applicant& applicant) {
+			return applicant.stableSeat == stableSeat;
+		}), m_Applicants.end());
 		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [stableSeat](const Fence& fence) {
 			return fence.stableSeat == stableSeat;
 		}), m_Fences.end());
@@ -595,6 +653,357 @@ namespace RTE {
 		++m_Stats.reseatsIssued;
 	}
 
+
+	const char* NetH4ModerationResultName(NetH4ModerationResult result) {
+		switch (result) {
+			case NetH4ModerationResult::Ok: return "Ok";
+			case NetH4ModerationResult::NotHosting: return "NotHosting";
+			case NetH4ModerationResult::UnknownSeat: return "UnknownSeat";
+			case NetH4ModerationResult::SeatNotSubstitutable: return "SeatNotSubstitutable";
+			case NetH4ModerationResult::UnknownApplicant: return "UnknownApplicant";
+			case NetH4ModerationResult::SubstitutionInFlight: return "SubstitutionInFlight";
+			case NetH4ModerationResult::NoSubstitutionPending: return "NoSubstitutionPending";
+			case NetH4ModerationResult::ProviderUnavailable: return "ProviderUnavailable";
+		}
+		return "Unknown";
+	}
+
+	bool NetReconnectHost::IsSeatSubstitutable(const SeatState& seat) const {
+		// Moderation is a MATCH feature. A lobby seat goes back in the pool when its holder leaves, so
+		// anyone can simply take it and there is nothing for the host to decide.
+		if (!m_LiveMatch || seat.seat.cpu || seat.seat.local) {
+			return false;
+		}
+		// Either the holder dropped and has not come back, or it left cleanly and the seat sits empty.
+		return (seat.committed && seat.activeConnection == c_InvalidNetPeerId) || seat.closed;
+	}
+
+	void NetReconnectHost::BumpSeatGeneration(SeatState& seat) {
+		if (seat.seatGeneration != UINT32_MAX) {
+			++seat.seatGeneration;
+		}
+	}
+
+	NetH4TxKey NetReconnectHost::SubstitutionKey(uint16_t stableSeat, uint32_t holderGeneration) {
+		// The HOST draws a substitution transaction id (P1), so unlike a client-drawn one it is not
+		// attacker-chosen: holding it already proves the offer was received. The key therefore binds
+		// the seat and the generation - so a cached result can never be replayed onto another seat -
+		// and nothing else.
+		return MakeKey(NetMessageType::SubstitutionAck, stableSeat, holderGeneration, NetH4Identity{});
+	}
+
+	NetReconnectHost::Substitution* NetReconnectHost::FindSubstitutionBySeat(uint16_t stableSeat) {
+		const auto found = std::find_if(m_Substitutions.begin(), m_Substitutions.end(), [stableSeat](const Substitution& pending) {
+			return pending.stableSeat == stableSeat;
+		});
+		return found == m_Substitutions.end() ? nullptr : &*found;
+	}
+
+	NetReconnectHost::Substitution* NetReconnectHost::FindSubstitutionByConnection(NetPeerId connection) {
+		const auto found = std::find_if(m_Substitutions.begin(), m_Substitutions.end(), [connection](const Substitution& pending) {
+			return pending.connection == connection;
+		});
+		return found == m_Substitutions.end() ? nullptr : &*found;
+	}
+
+	NetReconnectHost::Applicant* NetReconnectHost::FindApplicant(NetPeerId connection, uint16_t stableSeat) {
+		const auto found = std::find_if(m_Applicants.begin(), m_Applicants.end(), [connection, stableSeat](const Applicant& applicant) {
+			return applicant.connection == connection && applicant.stableSeat == stableSeat;
+		});
+		return found == m_Applicants.end() ? nullptr : &*found;
+	}
+
+	bool NetReconnectHost::HasSubstitution(uint16_t stableSeat) const {
+		return std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [stableSeat](const Substitution& pending) {
+			return pending.stableSeat == stableSeat;
+		});
+	}
+
+	void NetReconnectHost::AbandonSubstitution(size_t index, NetH4DenialReason reason, const std::string& summary, uint64_t nowMs) {
+		Substitution& pending = m_Substitutions[index];
+		// The terminal result is cached before the record goes, so an ack already in flight replays
+		// this refusal instead of finding nothing and being told nothing.
+		const NetJoinRejected refusal{NetRejectReason::HostNotAccepting, summary, "substitution", NetH4DenialReasonName(reason), ""};
+		m_TxCache.Store(pending.txId, pending.key, refusal, nowMs);
+		if (pending.connection != c_InvalidNetPeerId) {
+			Send(pending.connection, refusal);
+		}
+		for (Applicant& applicant : m_Applicants) {
+			if (applicant.connection == pending.connection && applicant.stableSeat == pending.stableSeat) {
+				applicant.approved = false;
+			}
+		}
+		pending.credential.fill(0);
+		++m_Stats.substitutionsCancelled;
+		if (reason == NetH4DenialReason::SubstitutionSuperseded) {
+			++m_Stats.substitutionsSuperseded;
+		}
+		m_Substitutions.erase(m_Substitutions.begin() + static_cast<std::ptrdiff_t>(index));
+	}
+
+	void NetReconnectHost::DisplaceApplicants(uint16_t stableSeat, NetPeerId keepConnection, uint64_t nowMs) {
+		for (auto applicant = m_Applicants.begin(); applicant != m_Applicants.end();) {
+			if (applicant->stableSeat != stableSeat || applicant->connection == keepConnection) {
+				++applicant;
+				continue;
+			}
+			// The host acknowledged this applicant, so telling it the seat is taken says nothing it
+			// was not already told when the seat was offered to it as available.
+			Send(applicant->connection, NetJoinRejected{NetRejectReason::SessionFull, "the seat went to another player", "applicant", "", ""});
+			++m_Stats.applicantsDisplaced;
+			applicant = m_Applicants.erase(applicant);
+		}
+		(void)nowMs;
+	}
+
+	void NetReconnectHost::DropApplicantsFor(NetPeerId connection) {
+		m_Applicants.erase(std::remove_if(m_Applicants.begin(), m_Applicants.end(), [connection](const Applicant& applicant) {
+			return applicant.connection == connection;
+		}), m_Applicants.end());
+	}
+
+	void NetReconnectHost::HandleApplicant(NetPeerId connection, const NetH4Applicant& message, uint64_t nowMs) {
+		// P5: identity first, before the seat is looked at, so a mismatch never says whether the seat
+		// exists. An applicant is re-validated exactly like a NewJoin and a Reclaim.
+		if (!ValidateIdentity(connection, message.identity)) {
+			return;
+		}
+		const NetH4TxKey key = MakeKey(NetMessageType::Applicant, message.stableSeat, 0, message.identity);
+		if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
+			Send(connection, *cached);
+			return;
+		}
+		if (Applicant* existing = FindApplicant(connection, message.stableSeat); existing != nullptr && existing->txId == message.txId) {
+			// The ladder is retransmitting; the answer is the one already recorded, not a second slot.
+			Send(connection, NetH4ApplicantAck{c_NetH4Version, message.txId, message.stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)});
+			return;
+		}
+		if (!m_Admission.BeginAttempt(connection, nowMs)) {
+			++m_Stats.applicantsRefused;
+			DenyUniformly(connection, message.txId, NetH4DenialReason::RateLimited, nowMs);
+			return;
+		}
+		SeatState* seat = FindSeat(message.stableSeat);
+		if (seat == nullptr || !IsSeatSubstitutable(*seat)) {
+			++m_Stats.applicantsRefused;
+			DenyUniformly(connection, message.txId, NetH4DenialReason::SeatNotSubstitutable, nowMs);
+			return;
+		}
+		const size_t forSeat = static_cast<size_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [&message](const Applicant& applicant) {
+			return applicant.stableSeat == message.stableSeat;
+		}));
+		const size_t forConnection = static_cast<size_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [connection](const Applicant& applicant) {
+			return applicant.connection == connection;
+		}));
+		if (m_Applicants.size() >= c_MaxApplicants || forSeat >= c_MaxApplicantsPerSeat || forConnection >= c_MaxApplicantsPerConnection) {
+			++m_Stats.applicantsRefused;
+			DenyUniformly(connection, message.txId, NetH4DenialReason::ApplicantBoundReached, nowMs);
+			return;
+		}
+
+		Applicant applicant;
+		applicant.connection = connection;
+		applicant.stableSeat = message.stableSeat;
+		applicant.txId = message.txId;
+		applicant.identity = message.identity;
+		applicant.displayName = message.displayName;
+		applicant.appliedAtMs = nowMs;
+		applicant.key = key;
+		m_Applicants.push_back(applicant);
+		++m_Stats.applicantsRegistered;
+		const NetH4ApplicantAck ack{c_NetH4Version, message.txId, message.stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
+		m_TxCache.Store(message.txId, key, ack, nowMs);
+		Send(connection, ack);
+	}
+
+	std::vector<NetH4ModerationSeat> NetReconnectHost::GetModerationView() const {
+		std::vector<NetH4ModerationSeat> view;
+		view.reserve(m_Seats.size());
+		for (const SeatState& seat : m_Seats) {
+			NetH4ModerationSeat entry;
+			entry.stableSeat = seat.seat.stableSeat;
+			entry.lockstepPeerId = seat.seat.lockstepPeerId;
+			entry.team = seat.seat.team;
+			entry.committed = seat.committed;
+			entry.dropped = seat.committed && seat.activeConnection == c_InvalidNetPeerId;
+			entry.closed = seat.closed;
+			entry.heldForReclaim = seat.committed && !seat.closed && !seat.holdExpired;
+			entry.substitutable = IsSeatSubstitutable(seat);
+			entry.substituting = std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [&seat](const Substitution& pending) {
+				return pending.stableSeat == seat.seat.stableSeat;
+			});
+			entry.holderGeneration = seat.holderGeneration;
+			entry.seatGeneration = seat.seatGeneration;
+			for (const Applicant& applicant : m_Applicants) {
+				if (applicant.stableSeat != seat.seat.stableSeat) {
+					continue;
+				}
+				entry.applicants.push_back({applicant.connection, applicant.stableSeat, applicant.displayName,
+				                            applicant.appliedAtMs, applicant.appliedAtMs + c_ProvisionalExpiryMs, applicant.approved});
+			}
+			view.push_back(std::move(entry));
+		}
+		return view;
+	}
+
+	NetH4ModerationResult NetReconnectHost::WaitForSeat(uint16_t stableSeat) {
+		const SeatState* seat = FindSeat(stableSeat);
+		if (seat == nullptr) {
+			return NetH4ModerationResult::UnknownSeat;
+		}
+		// Waiting is what the plane already does; the verb exists so the host's choice is a decision it
+		// made rather than one it never got round to.
+		return IsSeatSubstitutable(*seat) ? NetH4ModerationResult::Ok : NetH4ModerationResult::SeatNotSubstitutable;
+	}
+
+	NetH4ModerationResult NetReconnectHost::SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection, uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (m_Registry == nullptr || !m_Registry->IsActive()) {
+			return NetH4ModerationResult::NotHosting;
+		}
+		SeatState* seat = FindSeat(stableSeat);
+		if (seat == nullptr) {
+			return NetH4ModerationResult::UnknownSeat;
+		}
+		if (!IsSeatSubstitutable(*seat)) {
+			return NetH4ModerationResult::SeatNotSubstitutable;
+		}
+		if (HasSubstitution(stableSeat)) {
+			return NetH4ModerationResult::SubstitutionInFlight;
+		}
+		Applicant* applicant = FindApplicant(applicantConnection, stableSeat);
+		if (applicant == nullptr) {
+			return NetH4ModerationResult::UnknownApplicant;
+		}
+		const uint32_t holderGeneration = m_Registry->PeekNextGeneration(stableSeat);
+		if (holderGeneration == 0) {
+			return NetH4ModerationResult::ProviderUnavailable;
+		}
+		// The credential is drawn here but NOT installed: the seat keeps whatever holder it has until
+		// this transaction commits, so a returner racing it still wins by committing first.
+		NetAuthBytes32 credential{};
+		NetAuthBytes32 challenge{};
+		NetAuthBytes16 txId{};
+		if (!GetNetAuthCrypto().RandomBytes(credential.data(), credential.size()) ||
+		    !NetH4DrawChallenge(challenge) || !NetH4DrawTxId(txId)) {
+			return NetH4ModerationResult::ProviderUnavailable;
+		}
+
+		Substitution pending;
+		pending.stableSeat = stableSeat;
+		pending.connection = applicantConnection;
+		pending.txId = txId;
+		pending.holderGeneration = holderGeneration;
+		pending.seatGeneration = seat->seatGeneration;
+		pending.supersededGeneration = seat->holderGeneration;
+		pending.credential = credential;
+		pending.challenge = challenge;
+		pending.identity = applicant->identity;
+		pending.displayName = applicant->displayName;
+		pending.openedAtMs = nowMs;
+		pending.lastSentMs = nowMs;
+		pending.key = SubstitutionKey(stableSeat, holderGeneration);
+		pending.offer = NetH4SubstitutionOffer{c_NetH4Version, txId, m_Registry->GetEpoch(), stableSeat, holderGeneration,
+		                                       credential, challenge, m_HostSessionId, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
+		applicant->approved = true;
+		m_Substitutions.push_back(pending);
+		++m_Stats.substitutionOffersSent;
+		Send(applicantConnection, pending.offer);
+		return NetH4ModerationResult::Ok;
+	}
+
+	NetH4ModerationResult NetReconnectHost::CancelSubstitution(uint16_t stableSeat, uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		for (size_t index = 0; index < m_Substitutions.size(); ++index) {
+			if (m_Substitutions[index].stableSeat == stableSeat) {
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the host withdrew this substitution", nowMs);
+				return NetH4ModerationResult::Ok;
+			}
+		}
+		return NetH4ModerationResult::NoSubstitutionPending;
+	}
+
+	void NetReconnectHost::HandleSubstitutionAck(NetPeerId connection, const NetH4SubstitutionAck& message, uint64_t nowMs) {
+		const NetH4TxKey key = SubstitutionKey(message.stableSeat, message.holderGeneration);
+		// A lost commit result, or an ack that arrives after the transaction ended, replays the
+		// terminal result it already earned - success or refusal.
+		if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
+			Send(connection, *cached);
+			return;
+		}
+		const auto pending = std::find_if(m_Substitutions.begin(), m_Substitutions.end(), [&message](const Substitution& entry) {
+			return entry.txId == message.txId;
+		});
+		if (pending == m_Substitutions.end() || pending->connection != connection ||
+		    pending->stableSeat != message.stableSeat || pending->holderGeneration != message.holderGeneration) {
+			++m_Stats.unknownTransactionDrops;
+			return;
+		}
+		const size_t index = static_cast<size_t>(pending - m_Substitutions.begin());
+		if (!message.stored) {
+			// Same rule as a first join: without a durable ticket the substitute could never prove this
+			// seat again, so the seat is not given to it.
+			++m_Stats.persistenceFailures;
+			AbandonSubstitution(index, NetH4DenialReason::ProviderUnavailable, "the reconnect ticket could not be stored", nowMs);
+			return;
+		}
+		NetH4Transcript transcript;
+		transcript.domain = NetH4ProofDomain::Substitution;
+		transcript.protocolVersion = NetProtocol::c_Version;
+		transcript.epoch = m_Registry != nullptr ? m_Registry->GetEpoch() : NetAuthBytes16{};
+		transcript.stableSeat = message.stableSeat;
+		transcript.holderGeneration = message.holderGeneration;
+		transcript.challenge = pending->challenge;
+		transcript.clientNonce = message.clientNonce;
+		if (m_Registry == nullptr || !m_Registry->IsActive() || !NetH4VerifyProof(pending->credential, transcript, message.mac)) {
+			// The record stays: a correct retransmit can still land inside its window, and a broken one
+			// simply expires. The refusal is the ordinary uniform one.
+			++m_Stats.substitutionAckFailures;
+			DenyUniformly(connection, message.txId, NetH4DenialReason::BadProof, nowMs);
+			return;
+		}
+		SeatState* seat = FindSeat(message.stableSeat);
+		// The compare-and-swap: anything that moved the seat since the approval - a returner committing,
+		// another drop, a leave - invalidates this transaction rather than overwriting the winner.
+		if (seat == nullptr || seat->seatGeneration != pending->seatGeneration || !IsSeatSubstitutable(*seat)) {
+			AbandonSubstitution(index, NetH4DenialReason::SubstitutionSuperseded, "the seat changed hands before this substitution committed", nowMs);
+			return;
+		}
+		// The outgoing credential is set aside BEFORE the new one is installed, so the player who just
+		// lost the seat can still be told why - and only if it proves it held that credential.
+		m_Registry->RetireCredentialForSubstitution(message.stableSeat);
+		if (!m_Registry->AdoptCredential(message.stableSeat, message.holderGeneration, pending->credential)) {
+			m_Registry->ClearRetired(message.stableSeat);
+			AbandonSubstitution(index, NetH4DenialReason::ProviderUnavailable, "the host could not install the substitution credential", nowMs);
+			return;
+		}
+		seat->identity = pending->identity;
+		seat->holderGeneration = message.holderGeneration;
+		seat->committed = true;
+		seat->closed = false;
+		seat->incarnation = 0;
+		seat->saturated = false;
+		if (pending->supersededGeneration != 0) {
+			seat->retiredGeneration = pending->supersededGeneration;
+			seat->retiredUntilMs = nowMs + c_ProvisionalExpiryMs;
+		}
+		if (!BindIncarnation(*seat, connection)) {
+			m_Registry->ClearRetired(message.stableSeat);
+			AbandonSubstitution(index, NetH4DenialReason::ProviderUnavailable, "the seat cannot bind another transport", nowMs);
+			return;
+		}
+		const NetH4JoinCommitted committed{c_NetH4Version, message.txId, seat->seat.stableSeat, seat->holderGeneration, seat->incarnation, seat->seat.peerId};
+		m_TxCache.Store(message.txId, key, committed, nowMs);
+		++m_Stats.substitutionsCommitted;
+		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, c_InvalidNetPeerId, false, true});
+		Send(connection, committed);
+		// §8: the substitute receives the ledgered ownership from resumed tick 1, through the same
+		// system-authored reseat a returning holder gets.
+		IssueReseat(*seat);
+		m_Substitutions.erase(m_Substitutions.begin() + static_cast<std::ptrdiff_t>(index));
+		DropApplicantsFor(connection);
+	}
+
 	bool NetReconnectHost::IsFenced(NetPeerId connection) const {
 		return std::any_of(m_Fences.begin(), m_Fences.end(), [connection](const Fence& fence) {
 			return fence.connection == connection;
@@ -612,6 +1021,17 @@ namespace RTE {
 			return NetH4DisconnectOutcome::Fenced;
 		}
 		m_Admission.DropConnection(connection);
+		DropApplicantsFor(connection);
+		// A substitute that disappears before its ack has not been given anything, so the approval is
+		// invalidated and removed. Unlike a first join there is no resume: the offer named this link.
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			if (m_Substitutions[index].connection == connection) {
+				m_Substitutions[index].connection = c_InvalidNetPeerId;
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the substitute disconnected before its ticket was stored", m_NowMs);
+				continue;
+			}
+			++index;
+		}
 		// A disconnect before the commit leaves no committed seat. The client may already hold the
 		// persisted ticket, so the transaction stays resumable for its window - only the link is gone.
 		for (Provisional& pending : m_Provisionals) {
@@ -634,6 +1054,7 @@ namespace RTE {
 				seat.dropped = true;
 				seat.droppedAtMs = m_NowMs;
 				seat.holdExpired = false;
+				BumpSeatGeneration(seat);
 				RecordDrop(seat, frame);
 				++m_Stats.seatsDropped;
 				return NetH4DisconnectOutcome::SeatDropped;
@@ -651,6 +1072,11 @@ namespace RTE {
 		m_Ledger.Clear();
 		m_Provisionals.clear();
 		m_PendingReclaims.clear();
+		m_Applicants.clear();
+		for (Substitution& pending : m_Substitutions) {
+			pending.credential.fill(0);
+		}
+		m_Substitutions.clear();
 		m_Fences.clear();
 		m_PendingReseats.clear();
 		m_Commits.clear();
@@ -663,6 +1089,9 @@ namespace RTE {
 			seat.saturated = false;
 			seat.dropped = false;
 			seat.holdExpired = false;
+			seat.retiredGeneration = 0;
+			seat.retiredUntilMs = 0;
+			BumpSeatGeneration(seat);
 		}
 	}
 
@@ -689,9 +1118,41 @@ namespace RTE {
 		m_PendingReclaims.erase(std::remove_if(m_PendingReclaims.begin(), m_PendingReclaims.end(), [nowMs](const PendingReclaim& pending) {
 			return nowMs >= pending.openedAtMs && nowMs - pending.openedAtMs > NetReconnectAdmission::c_ChallengeLifetimeMs;
 		}), m_PendingReclaims.end());
+		for (auto applicant = m_Applicants.begin(); applicant != m_Applicants.end();) {
+			if (nowMs >= applicant->appliedAtMs && nowMs - applicant->appliedAtMs > c_ProvisionalExpiryMs && !applicant->approved) {
+				++m_Stats.applicantsExpired;
+				applicant = m_Applicants.erase(applicant);
+				continue;
+			}
+			++applicant;
+		}
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			Substitution& pending = m_Substitutions[index];
+			if (nowMs >= pending.openedAtMs && nowMs - pending.openedAtMs > c_ProvisionalExpiryMs) {
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the substitution was not acknowledged in time", nowMs);
+				continue;
+			}
+			if (pending.connection != c_InvalidNetPeerId && pending.retransmits < c_MaxRetransmits &&
+			    nowMs >= pending.lastSentMs + c_RetransmitIntervalMs) {
+				pending.lastSentMs = nowMs;
+				++pending.retransmits;
+				++m_Stats.substitutionOfferRetransmits;
+				Send(pending.connection, pending.offer);
+			}
+			++index;
+		}
+		for (SeatState& seat : m_Seats) {
+			if (seat.retiredGeneration != 0 && nowMs >= seat.retiredUntilMs) {
+				if (m_Registry != nullptr) {
+					m_Registry->ClearRetired(seat.seat.stableSeat);
+				}
+				seat.retiredGeneration = 0;
+				seat.retiredUntilMs = 0;
+			}
+		}
 		for (const NetH4Denial& denial : m_Admission.ReleaseDueDenials(nowMs)) {
 			++m_Stats.denialsReleased;
-			Send(denial.connection, NetJoinRejected{NetRejectReason::HostNotAccepting, c_DenialText, "", "", ""});
+			Send(denial.connection, denial.precise ? denial.payload : NetPayload{NetJoinRejected{NetRejectReason::HostNotAccepting, c_DenialText, "", "", ""}});
 		}
 		// A dropped holder stops being worth waiting for at the same P2 horizon a provisional seat has;
 		// the seat stays reclaimable, it just no longer keeps a round alive on its own.
@@ -739,6 +1200,12 @@ namespace RTE {
 			status.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return pending.stableSeat == seat.seat.stableSeat;
 			});
+			status.substituting = std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [&seat](const Substitution& pending) {
+				return pending.stableSeat == seat.seat.stableSeat;
+			});
+			status.applicants = static_cast<uint16_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [&seat](const Applicant& applicant) {
+				return applicant.stableSeat == seat.seat.stableSeat;
+			}));
 			statuses.push_back(status);
 		}
 		return statuses;
@@ -800,6 +1267,9 @@ namespace RTE {
 			case NetH4ClientState::Left: return "Left";
 			case NetH4ClientState::Denied: return "Denied";
 			case NetH4ClientState::Failed: return "Failed";
+			case NetH4ClientState::Applying: return "Applying";
+			case NetH4ClientState::Applied: return "Applied";
+			case NetH4ClientState::Substituting: return "Substituting";
 		}
 		return "Unknown";
 	}
@@ -812,8 +1282,17 @@ namespace RTE {
 	}
 
 	bool NetReconnectClient::IsAdmissionPending() const {
+		// Applied waits for a human, which is why it is bounded by the same P2 window everything else
+		// on this plane is, rather than by the handshake ladder.
 		return m_State == NetH4ClientState::Joining || m_State == NetH4ClientState::Storing ||
-		       m_State == NetH4ClientState::Reclaiming || m_State == NetH4ClientState::Proving;
+		       m_State == NetH4ClientState::Reclaiming || m_State == NetH4ClientState::Proving ||
+		       m_State == NetH4ClientState::Applying || m_State == NetH4ClientState::Applied ||
+		       m_State == NetH4ClientState::Substituting;
+	}
+
+	void NetReconnectClient::SetApplyForSeat(bool enabled, uint16_t stableSeat) {
+		m_ApplyForSeat = enabled;
+		m_ApplySeat = stableSeat;
 	}
 
 	bool NetReconnectClient::BeginAdmission(uint64_t nowMs, std::string* error) {
@@ -823,6 +1302,10 @@ namespace RTE {
 		}
 		m_UsedStoredTicket = false;
 		m_FellBackToNewJoin = false;
+		if (m_ApplyForSeat) {
+			// A live match refuses an ordinary join, so a player the host has to approve asks instead.
+			return BeginApplication(m_ApplySeat, nowMs, error);
+		}
 		NetH4TicketRecord record;
 		m_LastLoad = m_Store->Load(UnixNowMs(), record, nullptr);
 		// A record for a different host names a different session's seat; only this host's reclaims.
@@ -834,7 +1317,14 @@ namespace RTE {
 		return BeginNewJoin(nowMs, error);
 	}
 
-	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs) {
+	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs, NetRejectReason reason) {
+		m_LastRejectReason = reason;
+		m_HasLastRejectReason = true;
+		if (reason == NetRejectReason::SeatReassigned) {
+			// The host gave this seat away. There is nothing left to retry, and a fresh join into a
+			// live match would only be refused again.
+			return false;
+		}
 		if (!m_UsedStoredTicket || m_FellBackToNewJoin || m_State == NetH4ClientState::Joined) {
 			return false;
 		}
@@ -883,6 +1373,22 @@ namespace RTE {
 		m_Error.clear();
 		m_WantsLinkClosed = false;
 		SendRequest(NetH4Reclaim{c_NetH4Version, m_TxId, record.epoch, record.stableSeat, record.holderGeneration, m_Identity, m_DisplayName}, nowMs);
+		return true;
+	}
+
+	bool NetReconnectClient::BeginApplication(uint16_t stableSeat, uint64_t nowMs, std::string* error) {
+		if (!NetH4DrawTxId(m_TxId)) {
+			Fail("no crypto provider to draw a transaction id");
+			if (error) *error = m_Error;
+			return false;
+		}
+		m_State = NetH4ClientState::Applying;
+		m_Error.clear();
+		m_WantsLinkClosed = false;
+		m_AppliedAtMs = nowMs;
+		m_ApplySeat = stableSeat;
+		++m_Stats.applicationsSent;
+		SendRequest(NetH4Applicant{c_NetH4Version, m_TxId, stableSeat, m_Identity, m_DisplayName}, nowMs);
 		return true;
 	}
 
@@ -970,6 +1476,78 @@ namespace RTE {
 			SendRequest(NetH4Proof{c_NetH4Version, m_TxId, m_Record.epoch, m_Record.stableSeat, m_Record.holderGeneration, nonce, mac}, nowMs);
 			return true;
 		}
+		if (const auto* ack = std::get_if<NetH4ApplicantAck>(&payload)) {
+			if (m_State != NetH4ClientState::Applying && m_State != NetH4ClientState::Applied) {
+				return true;
+			}
+			// On the list. Nothing else happens until a human decides, so the ladder stops here and the
+			// wait is bounded by the record's own lifetime rather than by retransmits.
+			m_HasPendingRequest = false;
+			m_State = NetH4ClientState::Applied;
+			m_AppliedAtMs = nowMs;
+			++m_Stats.applicationsAcknowledged;
+			return true;
+		}
+		if (const auto* offer = std::get_if<NetH4SubstitutionOffer>(&payload)) {
+			if (m_State != NetH4ClientState::Applying && m_State != NetH4ClientState::Applied && m_State != NetH4ClientState::Substituting) {
+				return true;
+			}
+			++m_Stats.substitutionOffersReceived;
+			NetH4TicketRecord record;
+			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+			record.epoch = offer->epoch;
+			record.stableSeat = offer->stableSeat;
+			record.holderGeneration = offer->holderGeneration;
+			record.credential = offer->credential;
+			record.hostSessionId = offer->hostSessionId;
+			record.hostAddress = m_Record.hostAddress;
+			record.issuedAtUnixMs = UnixNowMs();
+			record.matchConfigHash = m_Record.matchConfigHash;
+			std::string storeError;
+			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
+			NetAuthBytes16 nonce{};
+			NetAuthBytes32 mac{};
+			bool proved = false;
+			if (stored) {
+				m_Record = record;
+				m_HasRecord = true;
+				// The ack is not just "written": the mac proves this connection holds the credential it
+				// just persisted, so no other connection can commit the seat in its place.
+				NetH4Transcript transcript;
+				transcript.domain = NetH4ProofDomain::Substitution;
+				transcript.protocolVersion = NetProtocol::c_Version;
+				transcript.epoch = offer->epoch;
+				transcript.stableSeat = offer->stableSeat;
+				transcript.holderGeneration = offer->holderGeneration;
+				transcript.challenge = offer->challenge;
+				if (NetH4DrawNonce(nonce)) {
+					transcript.clientNonce = nonce;
+					proved = NetH4ComputeProof(record.credential, transcript, mac);
+				}
+				++m_Stats.ticketsStored;
+			} else {
+				++m_Stats.ticketStoreFailures;
+				m_Error = storeError.empty() ? "no ticket store" : storeError;
+			}
+			const NetH4SubstitutionAck ack{c_NetH4Version, offer->txId, offer->stableSeat, offer->holderGeneration, nonce, mac, stored && proved};
+			m_HasPendingRequest = false;
+			++m_Stats.substitutionAcksSent;
+			m_Outbound.push_back({c_InvalidNetPeerId, ack});
+			if (!stored || !proved) {
+				m_State = NetH4ClientState::Failed;
+				if (m_Error.empty()) {
+					m_Error = "no crypto provider to prove the substitution ticket";
+				}
+			} else {
+				m_State = NetH4ClientState::Substituting;
+				m_PendingRequest = ack;
+				m_HasPendingRequest = true;
+				m_RequestSentMs = nowMs;
+				m_RequestOpenedMs = nowMs;
+				m_Retransmits = 0;
+			}
+			return true;
+		}
 		if (const auto* committed = std::get_if<NetH4JoinCommitted>(&payload)) {
 			// A commit for some other seat is not ours, whatever transaction it names. The txId itself
 			// cannot gate this: a relaunched client resumes its stored ticket under a fresh one.
@@ -1000,7 +1578,8 @@ namespace RTE {
 		}
 		if (std::holds_alternative<NetH4NewJoin>(payload) || std::holds_alternative<NetH4TicketStoredAck>(payload) ||
 		    std::holds_alternative<NetH4Reclaim>(payload) || std::holds_alternative<NetH4Proof>(payload) ||
-		    std::holds_alternative<NetH4LeaveRequest>(payload)) {
+		    std::holds_alternative<NetH4LeaveRequest>(payload) || std::holds_alternative<NetH4Applicant>(payload) ||
+		    std::holds_alternative<NetH4SubstitutionAck>(payload)) {
 			// The client's own requests; a host that echoes one is talking out of turn.
 			return true;
 		}
@@ -1008,6 +1587,14 @@ namespace RTE {
 	}
 
 	void NetReconnectClient::Tick(uint64_t nowMs) {
+		if (m_State == NetH4ClientState::Applied) {
+			// The host's own record of this application expires at P2; past that nobody is coming.
+			if (nowMs >= m_AppliedAtMs && nowMs - m_AppliedAtMs > NetReconnectHost::c_ProvisionalExpiryMs) {
+				m_State = NetH4ClientState::Denied;
+				m_Error = "the host did not act on this application";
+			}
+			return;
+		}
 		if (!m_HasPendingRequest) {
 			return;
 		}
