@@ -4781,6 +4781,38 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (reidentifyForgets ? "PASS" : "FAIL") << " reidentify_then_destroy_forgets" << std::endl;
 	checkpointValues = reidentifyForgets && checkpointValues;
+	// The checkpoint settle sweeps a script-owned object nothing references any more, and the graph's roots
+	// are a native list, so a graph captured before the settle names an object the reinstate cannot find.
+	bool settleRunsFirst = false;
+	{
+		const bool created = RunScriptString(
+			"_SetAsideOrderHeld = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+			"_SetAsideOrderUID = _SetAsideOrderHeld.UniqueID") == 0;
+		lua_getglobal(m_State, "_SetAsideOrderUID");
+		const long identity = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		MovableObject* const parked = identity > 0 ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		if (created && parked) {
+			// Registered with initialized scripts is what makes it a graph root, exactly as a restore adopts one.
+			parked->MoveScriptsToState(g_LuaMan.GetMasterScriptState());
+			parked->AdoptScriptObject();
+			RunScriptString("_SetAsideOrderHeld = nil; _SetAsideOrderUID = nil");
+			MovableMan::WorldSetAside aside;
+			const LuaStateWrapper& master = g_LuaMan.GetMasterScriptState();
+			const bool scripted = parked->ObjectScriptsInitialized();
+			const bool listed = master.GetRegisteredMOs().contains(parked) || master.GetPendingRegisteredMOs().contains(parked);
+			const bool held = scripted && listed && g_MovableMan.SetAsideWorld(aside, false);
+			const bool reinstated = held && g_MovableMan.ReinstateWorld(aside);
+			const bool swept = g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
+			settleRunsFirst = reinstated && swept;
+			std::cout << "[setaside-order] uid=" << identity << " scripted=" << scripted << " listed=" << listed
+			          << " held=" << held << " reinstated=" << reinstated << " swept=" << swept << std::endl;
+		}
+		RunScriptString("_SetAsideOrderHeld = nil; _SetAsideOrderUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (settleRunsFirst ? "PASS" : "FAIL") << " set_aside_settles_before_the_graph_capture" << std::endl;
+	checkpointValues = settleRunsFirst && checkpointValues;
 	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
 	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
 	bool soundRegistryForgetsDestroyed = false;

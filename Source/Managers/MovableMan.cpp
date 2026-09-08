@@ -1408,6 +1408,8 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	WaitForActorsSeeTask();
 	{
 	AudioMan::CheckpointRegistryScope captureSounds;
+	// The settle comes first, as it does in CaptureWorld: a graph captured before it names the objects it sweeps.
+	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
 	out.soundRegistrations = g_AudioMan.CaptureCheckpointSoundRegistry();
 	std::vector<std::string> luaProblems;
 	m_ScriptGraphFailure.clear();
@@ -1419,7 +1421,6 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		out.luaGraphs.clear();
 		return false;
 	}
-	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
 	out.frameState = g_FrameMan.SaveCheckpoint();
 	if (holdActivity && !out.terrain.Capture()) return false;
 	if (holdActivity && g_SceneMan.GetScene()) out.sceneRuntime = g_SceneMan.GetScene()->SaveRuntimeCheckpoint();
