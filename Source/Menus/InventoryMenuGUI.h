@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "Timer.h"
 #include "Vector.h"
 
@@ -29,8 +32,14 @@ namespace RTE {
 
 	/// A GUI menu for managing inventories.
 	class InventoryMenuGUI {
+		friend class GUICheckpoint;
 
 	public:
+
+		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
+		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		/// Enumeration for the modes an InventoryMenuGUI can have.
 		enum class MenuMode {
 			Carousel,
@@ -129,6 +138,17 @@ namespace RTE {
 #pragma endregion
 
 	private:
+
+		std::string m_PendingCheckpoint;
+		bool m_CheckpointInitialized = false;
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_MenuMode, self.m_CenterPos, self.m_EnabledState, self.m_EnableDisableAnimationTimer,
+				self.m_InventoryActorIsHuman, self.m_CarouselDrawEmptyBoxes, self.m_CarouselBackgroundTransparent, self.m_CarouselBackgroundBoxColor,
+				self.m_CarouselBackgroundBoxBorderSize, self.m_CarouselBackgroundBoxBorderColor, self.m_CarouselAnimationDirection, self.m_CarouselAnimationTimer,
+				self.m_GUIDisplayOnly, self.m_GUIShowEmptyRows, self.m_GUICursorPos, self.m_PreviousGUICursorPos,
+				self.m_GUIInventoryActorCurrentEquipmentSetIndex, self.m_GUIRepeatStartTimer, self.m_GUIRepeatTimer, self.m_GUITopLevelBoxFullSize,
+				self.m_GUIShowInformationText);
+		}
 		/// A struct containing all information required to drawn and animate a carousel item box in Carousel MenuMode.
 		struct CarouselItemBox {
 			MovableObject* Item; //!< A pointer to the item being displayed in the CarouselItemBox.

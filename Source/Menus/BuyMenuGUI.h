@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 /// BuyMenuGUI class
 /// @author Daniel Tabar
 /// dtabar@datarealms.com
@@ -32,9 +35,15 @@ namespace RTE {
 
 	/// A full menu system that represents a purchasing GUI for Cortex Command
 	class BuyMenuGUI {
+		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
 	public:
+
+		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
+		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		/// Constructor method used to instantiate a BuyMenuGUI object in system
 		/// memory. Create() should be called before using the object.
 		BuyMenuGUI();
@@ -511,6 +520,21 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+
+		std::string m_PendingCheckpoint;
+		bool m_CheckpointInitialized = false;
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_MenuEnabled, self.m_MenuFocus, self.m_FocusChange, self.m_MenuCategory,
+				self.m_MenuSpeed, self.m_ListItemIndex, self.m_DraggedItemIndex, self.m_IsDragging,
+				self.m_LastHoveredMouseIndex, self.m_CategoryItemIndex, self.m_MetaPlayer, self.m_NativeTechModule,
+				self.m_ForeignCostMult, self.m_BlinkTimer, self.m_BlinkMode, self.m_MenuTimer,
+				self.m_RepeatStartTimer, self.m_RepeatTimer, self.m_SelectingEquipment, self.m_LastVisitedEquipmentTab,
+				self.m_LastVisitedMainTab, self.m_LastEquipmentScrollPosition, self.m_LastMainScrollPosition, self.m_FirstMainTab,
+				self.m_LastMainTab, self.m_FirstEquipmentTab, self.m_LastEquipmentTab, self.m_SelectedLoadoutIndex,
+				self.m_PurchaseMade, self.m_DeliveryWidth, self.m_EnforceMaxPassengersConstraint, self.m_EnforceMaxMassConstraint,
+				self.m_OnlyShowOwnedItems, self.m_AllowedItems, self.m_AlwaysAllowedItems, self.m_ProhibitedItems,
+				self.m_OwnedItems);
+		}
 		static const std::string c_DefaultBannerImagePath; //!< Path to the default banner image.
 		static const std::string c_DefaultLogoImagePath; //!< Path to the default logo image.
 

@@ -1,3 +1,6 @@
+#include "CheckpointArchive.h"
+#include "GUICheckpoint.h"
+#include <iostream>
 #include "ObjectPickerGUI.h"
 
 #include "CameraMan.h"
@@ -28,6 +31,8 @@ using namespace RTE;
 BITMAP* ObjectPickerGUI::s_Cursor = nullptr;
 
 void ObjectPickerGUI::Clear() {
+	m_PendingCheckpoint.clear();
+	m_CheckpointInitialized = false;
 	m_GUIScreen = nullptr;
 	m_GUIInput = nullptr;
 	m_GUIControlManager = nullptr;
@@ -53,10 +58,11 @@ void ObjectPickerGUI::Clear() {
 
 	m_ExpandedModules.resize(g_PresetMan.GetTotalModuleCount());
 	std::fill(m_ExpandedModules.begin(), m_ExpandedModules.end(), false);
-	m_ExpandedModules[0] = true; // Base.rte is always expanded
+	if (!m_ExpandedModules.empty()) m_ExpandedModules[0] = true; // Base.rte is always expanded
 }
 
 int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const std::string_view& onlyOfType) {
+	m_CheckpointInitialized = true;
 	RTEAssert(controller, "No controller sent to ObjectPickerGUI on creation!");
 	m_Controller = controller;
 
@@ -608,4 +614,37 @@ void ObjectPickerGUI::Draw(BITMAP* drawBitmap) const {
 			m_GUIControlManager->DrawMouse(&drawScreen);
 		}
 	}
+}
+
+std::string ObjectPickerGUI::SaveCheckpoint() const {
+	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
+	CheckpointWriter writer("ObjectPickerGUI2");
+	writer(m_CheckpointInitialized);
+	VisitCheckpoint(writer, *this);
+	writer(GUICheckpoint::SaveEntityReference(m_PickedObject), m_GUIControlManager != nullptr);
+	if (m_GUIControlManager) writer(m_GUIControlManager->SaveCheckpoint());
+	return writer.Text();
+}
+
+bool ObjectPickerGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		if (!validateOnly && !LoadCheckpoint(text, true)) return false;
+		if (text.starts_with("16 ObjectPickerGUI1 ")) {
+			CheckpointReader reader(text, "ObjectPickerGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
+		}
+		CheckpointReader reader(text, "ObjectPickerGUI2", validateOnly);
+		reader(m_CheckpointInitialized);
+		VisitCheckpoint(reader, *this);
+		std::string picked, controls;
+		bool hasControls;
+		reader.Value(picked); reader.Value(hasControls);
+		GUICheckpoint::LoadEntityReference(picked, true);
+		if (hasControls) { reader.Value(controls); if (!GUICheckpoint::Validate(controls)) return false; }
+		if (validateOnly) { reader.Finish(); return true; }
+		if (!m_Controller) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
+		const auto* object = dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(picked));
+		if (hasControls && (!m_GUIControlManager || !m_GUIControlManager->LoadCheckpoint(controls))) return false;
+		reader.Finish(); m_PickedObject = object; m_PendingCheckpoint.clear();
+		return true;
+	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] object-picker validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }
 }

@@ -1,4 +1,7 @@
 #include "SLBackground.h"
+#include "GUICheckpoint.h"
+#include "CheckpointArchive.h"
+#include "BigTexture.h"
 #include "FrameMan.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
@@ -20,6 +23,7 @@ SLBackground::~SLBackground() {
 }
 
 void SLBackground::Clear() {
+	m_CheckpointBitmaps.clear();
 	m_Bitmaps.clear();
 	m_FrameCount = 1;
 	m_Frame = 0;
@@ -76,7 +80,8 @@ int SLBackground::Create(const SLBackground& reference) {
 
 	m_Bitmaps.clear();
 	m_Bitmaps = reference.m_Bitmaps;
-	m_MainBitmap = m_Bitmaps[0];
+	m_CheckpointBitmaps = reference.m_CheckpointBitmaps;
+	m_MainBitmap = reference.m_MainBitmap;
 
 	m_FillColorLeft = reference.m_FillColorLeft;
 	m_FillColorRight = reference.m_FillColorRight;
@@ -86,11 +91,17 @@ int SLBackground::Create(const SLBackground& reference) {
 	m_FrameCount = reference.m_FrameCount;
 	m_SpriteAnimMode = reference.m_SpriteAnimMode;
 	m_SpriteAnimDuration = reference.m_SpriteAnimDuration;
+	m_Frame = reference.m_Frame;
+	m_SpriteAnimIsReversingFrames = reference.m_SpriteAnimIsReversingFrames;
+	m_SpriteAnimTimer = reference.m_SpriteAnimTimer;
+	m_IsAnimatedManually = reference.m_IsAnimatedManually;
 
 	m_CanAutoScrollX = reference.m_CanAutoScrollX;
 	m_CanAutoScrollY = reference.m_CanAutoScrollY;
 	m_AutoScrollStep = reference.m_AutoScrollStep;
 	m_AutoScrollStepInterval = reference.m_AutoScrollStepInterval;
+	m_AutoScrollStepTimer = reference.m_AutoScrollStepTimer;
+	m_AutoScrollOffset = reference.m_AutoScrollOffset;
 
 	m_IgnoreAutoScale = reference.m_IgnoreAutoScale;
 
@@ -242,4 +253,73 @@ void SLBackground::Draw(const Box& targetDimensions, Box& targetBox, bool offset
 		}
 	}
 	rlZDepth(c_DefaultDrawDepth);
+}
+
+std::string SLBackground::SaveCheckpoint() const {
+	if (m_BitmapClearTask.valid()) m_BitmapClearTask.wait();
+	CheckpointWriter writer("SLBackground2");
+	writer(m_BitmapFile, m_FrameCount, m_Frame, m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimIsReversingFrames, m_SpriteAnimTimer,
+		m_IsAnimatedManually, m_CanAutoScrollX, m_CanAutoScrollY, m_AutoScrollStep, m_AutoScrollStepInterval, m_AutoScrollStepTimer, m_AutoScrollOffset,
+		m_FillColorLeft, m_FillColorRight, m_FillColorUp, m_FillColorDown, m_IgnoreAutoScale, m_LastClearColor, m_MainBitmapUpdated, m_DrawMasked,
+		m_WrapX, m_WrapY, m_OriginOffset, m_Offset, m_ZOrder, m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
+	writer(m_Drawings.size());
+	for (const auto& rectangle: m_Drawings) writer(rectangle.m_Left, rectangle.m_Top, rectangle.m_Right, rectangle.m_Bottom);
+	std::vector<std::string> frames;
+	int mainIndex = -1;
+	for (size_t index = 0; index < m_Bitmaps.size(); ++index) {
+		frames.push_back(GUICheckpoint::SaveBitmap(m_Bitmaps[index]));
+		if (m_Bitmaps[index] == m_MainBitmap) mainIndex = static_cast<int>(index);
+	}
+	writer(frames, mainIndex, GUICheckpoint::SaveBitmap(mainIndex < 0 ? m_MainBitmap : nullptr), GUICheckpoint::SaveBitmap(m_BackBitmap));
+	return writer.Text();
+}
+
+bool SLBackground::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		if (!validateOnly && !LoadCheckpoint(text, true)) return false;
+		const bool legacy = text.starts_with("13 SLBackground1 ");
+		CheckpointReader reader(text, legacy ? "SLBackground1" : "SLBackground2", validateOnly);
+		std::string path;
+		int frameCount, frame;
+		if (legacy) reader.Value(path); else reader(m_BitmapFile);
+		reader.Value(frameCount); reader.Value(frame);
+		reader(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimIsReversingFrames, m_SpriteAnimTimer,
+			m_IsAnimatedManually, m_CanAutoScrollX, m_CanAutoScrollY, m_AutoScrollStep, m_AutoScrollStepInterval, m_AutoScrollStepTimer, m_AutoScrollOffset,
+			m_FillColorLeft, m_FillColorRight, m_FillColorUp, m_FillColorDown, m_IgnoreAutoScale, m_LastClearColor, m_MainBitmapUpdated, m_DrawMasked,
+			m_WrapX, m_WrapY, m_OriginOffset, m_Offset, m_ZOrder, m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
+		size_t count;
+		reader.Value(count);
+		if (count > text.size()) return false;
+		std::vector<IntRect> drawings(count, IntRect(0, 0, 0, 0));
+		for (auto& rectangle: drawings) { reader.Value(rectangle.m_Left); reader.Value(rectangle.m_Top); reader.Value(rectangle.m_Right); reader.Value(rectangle.m_Bottom); }
+		std::vector<std::string> frames;
+		int mainIndex;
+		std::string mainBitmap, backBitmap;
+		reader.Value(frames); reader.Value(mainIndex); reader.Value(mainBitmap); reader.Value(backBitmap);
+		if (frameCount < 1 || frame < 0 || frame >= frameCount || mainIndex < -1 || mainIndex >= static_cast<int64_t>(frames.size()) || (!frames.empty() && frames.size() != static_cast<size_t>(frameCount))) return false;
+		for (const auto& image: frames) GUICheckpoint::LoadBitmap(image, true);
+		GUICheckpoint::LoadBitmap(mainBitmap, true); GUICheckpoint::LoadBitmap(backBitmap, true);
+		if (validateOnly) { reader.Finish(); return true; }
+		std::vector<std::shared_ptr<BITMAP>> owned;
+		std::vector<BITMAP*> bitmaps;
+		for (const auto& image: frames) {
+			owned.emplace_back(GUICheckpoint::LoadBitmap(image), destroy_bitmap);
+			if (!owned.back()) return false;
+			bitmaps.push_back(owned.back().get());
+		}
+		BITMAP* main;
+		if (mainIndex < 0) { owned.emplace_back(GUICheckpoint::LoadBitmap(mainBitmap), destroy_bitmap); main = owned.back().get(); }
+		else main = bitmaps[mainIndex];
+		std::unique_ptr<BITMAP, void(*)(BITMAP*)> back(GUICheckpoint::LoadBitmap(backBitmap), destroy_bitmap);
+		if (m_BitmapClearTask.valid()) m_BitmapClearTask.wait();
+		reader.Finish();
+		if (m_MainBitmapOwned) destroy_bitmap(m_MainBitmap);
+		destroy_bitmap(m_BackBitmap);
+		m_MainTexture.reset();
+		if (legacy) { if (path.empty()) m_BitmapFile.Reset(); else m_BitmapFile.SetDataPath(path); }
+		m_FrameCount = frameCount; m_Frame = frame;
+		m_Drawings = std::move(drawings); m_MainBitmapOwned = false;
+		m_CheckpointBitmaps = std::move(owned); m_Bitmaps = std::move(bitmaps); m_MainBitmap = main; m_BackBitmap = back.release();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

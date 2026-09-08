@@ -17,6 +17,7 @@ namespace RTE {
 
 	/// Defines a delivery of Actors, with all their equipment etc.
 	class Loadout : public Entity {
+		friend class BuyMenuGUI;
 
 		/// Public member variable, method and friend function declarations
 	public:

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 /// GUIBanner class
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -10,6 +13,8 @@
 
 #include <list>
 #include <map>
+#include <array>
+#include <memory>
 
 struct BITMAP;
 
@@ -20,9 +25,13 @@ namespace RTE {
 	/// A class to handle the drawing of LARGE text banners that fly across
 	/// the screen, grabbing the player's attention.
 	class GUIBanner {
+		friend class GUICheckpoint;
 
 		/// Public member variable, method and friend function declarations
 	public:
+
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		enum FontMode {
 			REGULAR = 0,
 			BLURRED,
@@ -47,6 +56,8 @@ namespace RTE {
 
 		// Font character
 		struct FontChar {
+			std::string SaveCheckpoint() const;
+			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 			int m_Width;
 			int m_Height;
 			int m_Offset;
@@ -54,6 +65,9 @@ namespace RTE {
 
 		// Flying characters
 		struct FlyingChar {
+			std::string SaveCheckpoint() const;
+			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+			FlyingChar() : FlyingChar(0, NOTSTARTED, 0, 0) {}
 			FlyingChar(char character, AnimState state, int showPosX, float speed) {
 				m_Character = character;
 				m_MoveState = state;
@@ -167,8 +181,16 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
-		// Font bitmap files - not owned
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_aaFontChars, self.m_CharIndexCap, self.m_FontHeight, self.m_Kerning,
+				self.m_BannerText, self.m_BannerChars, self.m_TargetSize, self.m_BannerPosY,
+				self.m_FlySpeed, self.m_FlySpacing, self.m_AnimMode, self.m_AnimState,
+				self.m_TotalAnimTimer, self.m_DisplayTimer, self.m_SpacingTimer, self.m_FrameTimer);
+		}
+		// Content-cache fonts, or private bitmap storage restored from a checkpoint.
 		BITMAP* m_pFontImage[FONTMODECOUNT];
+		std::array<std::shared_ptr<BITMAP>, FONTMODECOUNT> m_CheckpointFontImages;
 
 		// The loaded font information for each filepath to a font bitmap
 		static std::map<std::string, FontChar*> m_sFontCache;
