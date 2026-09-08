@@ -124,8 +124,10 @@ namespace RTE {
 		}
 
 		std::vector<NetH4Seat> MakeSeatTable() {
-			// Two human seats plus one CPU slot, keyed by slot index the way a live match config is.
-			return {{0, 1, 1, false}, {1, 2, 2, false}, {2, 0, 3, true}};
+			// Two human seats plus one CPU slot, keyed by slot index the way a live match config is. The
+			// session id a commit hands back and the lockstep id the ledger names are deliberately
+			// different numbers here, because in a real match config they are.
+			return {{0, 1, 1, false, 2, false}, {1, 2, 2, false, 3, false}, {2, 0, 3, true, 0, false}};
 		}
 
 		// Every test writes its store beneath the private runtime's Userdata, never the repo's. The
@@ -1372,12 +1374,12 @@ namespace RTE {
 			}
 			// Seat 0's peer owns three actors on team 1; another peer owns one on team 2.
 			g_Census = {
-			    {101, 1, 1, true},
-			    {102, 1, 1, true},
-			    {103, 1, 1, true},
-			    {201, 2, 2, true},
+			    {101, 1, 2, true},
+			    {102, 1, 2, true},
+			    {103, 1, 2, true},
+			    {201, 2, 3, true},
 			};
-			if (NetReconnectLedger::CollectOwnedActorUIDs(g_Census, 1) != std::vector<int64_t>{101, 102, 103}) {
+			if (NetReconnectLedger::CollectOwnedActorUIDs(g_Census, 2) != std::vector<int64_t>{101, 102, 103}) {
 				return Fail("the drop census did not collect exactly the peer's actors, in order");
 			}
 
@@ -1395,7 +1397,7 @@ namespace RTE {
 			}
 			const NetH4SeatOwnership* ledgered = wire.host.GetLedger().Find(0);
 			if (ledgered == nullptr || ledgered->actorUIDs != std::vector<int64_t>{101, 102, 103} ||
-			    ledgered->peerId != 1 || ledgered->team != 1 || ledgered->droppedAtFrame != 100) {
+			    ledgered->peerId != MakeSeatTable()[0].lockstepPeerId || ledgered->team != 1 || ledgered->droppedAtFrame != 100) {
 				return Fail("the drop did not record the seat's ownership");
 			}
 
@@ -1404,7 +1406,7 @@ namespace RTE {
 			    {101, 1, 0, true},
 			    {102, 1, 0, false},
 			    {103, 2, 0, true},
-			    {201, 2, 2, true},
+			    {201, 2, 3, true},
 			};
 			wire.host.SetLiveMatch(true);
 			Endpoint returner;
@@ -1419,7 +1421,9 @@ namespace RTE {
 			if (reseats.size() != 1) {
 				return Fail("the committed reclaim did not produce exactly one reseat");
 			}
-			if (reseats.front().team != 1 || reseats.front().newOwnerPeerId != 1) {
+			// The reseat names the LOCKSTEP id, which is not the session id the commit handed back.
+			if (reseats.front().team != 1 || reseats.front().newOwnerPeerId != MakeSeatTable()[0].lockstepPeerId ||
+			    reseats.front().newOwnerPeerId == MakeSeatTable()[0].peerId) {
 				return Fail("the reseat did not address the returner's own seat");
 			}
 			if (reseats.front().actorUIDs != std::vector<int64_t>{101}) {
@@ -1894,6 +1898,87 @@ namespace RTE {
 			}
 			return 0;
 		}
+
+		// The seat table a real match config produces. The commit hands back a SESSION id and the ledger
+		// names a LOCKSTEP id; the host's own seat is never offered, and a CPU slot never is either.
+		int TestSeatTableFromMatchConfig() {
+			NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x4242ULL);
+			config.mode = NetMatchMode::PvPvE;
+			config.peerCount = 3;
+			config.players.clear();
+			for (uint8_t peerId = 1; peerId <= 3; ++peerId) {
+				NetMatchPlayerSlot slot;
+				slot.peerId = peerId;
+				slot.team = static_cast<uint8_t>(peerId - 1);
+				slot.displayName = "P" + std::to_string(peerId);
+				config.players.push_back(slot);
+			}
+			NetMatchPlayerSlot cpu;
+			cpu.peerId = 0;
+			cpu.team = 3;
+			cpu.cpu = true;
+			cpu.displayName = "CPU";
+			config.players.push_back(cpu);
+
+			const std::vector<NetH4Seat> seats = NetH4BuildSeatTable(config);
+			if (seats.size() != 4) {
+				return Fail("the seat table lost a slot");
+			}
+			for (size_t index = 0; index < seats.size(); ++index) {
+				if (seats[index].stableSeat != static_cast<uint16_t>(index)) {
+					return Fail("the stable seat is not the slot index");
+				}
+			}
+			if (!seats[0].local || seats[1].local || seats[2].local || seats[3].local) {
+				return Fail("the host's own seat was not the only local one");
+			}
+			if (!seats[3].cpu || seats[3].lockstepPeerId != 0) {
+				return Fail("the CPU slot was not carried as one");
+			}
+			for (size_t index = 0; index < 3; ++index) {
+				if (seats[index].lockstepPeerId != config.players[index].peerId) {
+					return Fail("a seat lost its lockstep peer id");
+				}
+				if (seats[index].peerId != static_cast<uint8_t>(config.players[index].peerId - 1)) {
+					return Fail("a seat's session peer id is not one below its lockstep id");
+				}
+				if (seats[index].team != static_cast<int32_t>(config.players[index].team)) {
+					return Fail("a seat lost its team");
+				}
+			}
+
+			// A joiner must never be handed the host's own seat or the CPU's.
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1700000000000ULL;
+			Wire wire;
+			wire.registry.BeginHostedSession();
+			wire.host.Configure(&wire.registry, 0x4242ULL, MakeIdentity());
+			wire.host.SetSeatTable(seats, config.mode);
+			wire.host.SetLiveMatch(false);
+			Endpoint joiner;
+			joiner.connection = 71;
+			ConfigureEndpoint(joiner, "seattable", &unixNow);
+			wire.Add(&joiner);
+			if (!joiner.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the joiner did not settle: " + error);
+			}
+			if (joiner.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the joiner never committed a seat");
+			}
+			if (joiner.client.GetRecord().stableSeat == seats[0].stableSeat) {
+				return Fail("a joiner was handed the host's own seat");
+			}
+			if (joiner.client.GetAssignedPeerId() != seats[1].peerId) {
+				return Fail("the joiner did not land on the first joinable seat's session id");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -1940,6 +2025,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLobbyAdmissionIsolation(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSeatTableFromMatchConfig(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

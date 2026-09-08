@@ -27,9 +27,11 @@ namespace RTE {
 	/// a committed reclaim reuses instead of allocating a fresh one (P4).
 	struct NetH4Seat {
 		uint16_t stableSeat = 0;
-		uint8_t peerId = 0;
+		uint8_t peerId = 0; //!< Session-assigned id: what a commit hands back, and what the session keys peers on.
 		int32_t team = 0;
 		bool cpu = false;
+		uint8_t lockstepPeerId = 0; //!< The sim-side id: what the ledger and the reseat command name.
+		bool local = false;         //!< The host's own seat. It never joins, and host loss is out of scope.
 
 		bool operator==(const NetH4Seat&) const = default;
 	};
