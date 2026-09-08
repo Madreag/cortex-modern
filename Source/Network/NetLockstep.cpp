@@ -1593,11 +1593,14 @@ namespace RTE {
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
+		m_ObservationDecodeTables.Reset();
+		m_ObservationEncodeTables.Reset();
 		m_RemoteObservations.clear();
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
 		m_RoundId = config.roundId;
+		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_LastStartSentMs = UINT64_MAX;
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
@@ -1657,7 +1660,7 @@ namespace RTE {
 			m_PreStartChecksums.erase(held);
 		}
 		for (const NetLockstepFrame& frame : frames) {
-			HandleFrame(frame, nowMs, fromTransport);
+			HandleFrame(frame, nowMs, fromTransport, false);
 		}
 		for (const NetLockstepChecksum& checksum : checksums) {
 			HandleChecksum(checksum, fromTransport);
@@ -1699,6 +1702,8 @@ namespace RTE {
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
+		m_ObservationDecodeTables.Reset();
+		m_ObservationEncodeTables.Reset();
 		m_RemoteObservations.clear();
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
@@ -1798,7 +1803,7 @@ namespace RTE {
 		for (NetSoundObservation& observation : packet.observations) {
 			observation.senderPeerId = m_Config.localPeerId;
 		}
-		if (!SendPacket({packet}, m_Config.frameLane, error)) {
+		if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId))) {
 			return false;
 		}
 		m_LocalFrames[targetFrame] = frames;
@@ -2192,6 +2197,8 @@ namespace RTE {
 		out << "\"relay_bytes_sent\":" << m_Stats.relayBytesSent << ",";
 		out << "\"largest_relay_packet_bytes\":" << m_Stats.largestRelayPacketBytes << ",";
 		out << "\"relay_backlog_bytes\":" << m_Stats.relayBacklogBytes << ",";
+		out << "\"unresolved_observation_packets\":" << m_Stats.unresolvedObservationPackets << ",";
+		out << "\"relay_observation_overflows\":" << m_Stats.relayObservationOverflows << ",";
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
@@ -2242,10 +2249,10 @@ namespace RTE {
 		return "Unknown";
 	}
 
-	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error) {
+	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded) {
 		std::vector<uint8_t> bytes;
 		NetLockstepError encodeError;
-		if (!NetLockstepCodec::Encode(packet, bytes, &encodeError)) {
+		if (!NetLockstepCodec::Encode(packet, bytes, &encodeError, dictionary, outObservationsEncoded)) {
 			if (error) *error = encodeError.message;
 			return false;
 		}
@@ -2284,6 +2291,15 @@ namespace RTE {
 		return std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peerId) != m_RemotePeerIds.end();
 	}
 
+	uint8_t NetLockstepCoordinator::LockstepPeerOfTransport(NetPeerId transportPeerId) const {
+		for (const auto& [peerId, transportId]: m_RemoteTransports) {
+			if (transportId == transportPeerId) {
+				return peerId;
+			}
+		}
+		return 0;
+	}
+
 	bool NetLockstepCoordinator::UsesTransportPeer(NetPeerId transportPeerId) const {
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
 			if (transportId == transportPeerId) {
@@ -2300,8 +2316,17 @@ namespace RTE {
 			return;
 		}
 		std::vector<uint8_t> bytes;
-		if (!NetLockstepCodec::Encode(packet, bytes)) {
+		size_t observationsEncoded = 0;
+		if (!NetLockstepCodec::Encode(packet, bytes, nullptr, &m_ObservationEncodeTables.Exactly(fromPeerId), &observationsEncoded)) {
 			return;
+		}
+		// The table this re-encodes from is the one that just decoded the packet, so every key is already
+		// a slot and the forward is never longer than what arrived. If it ever were, the peers behind the
+		// relay would commit a smaller table than the host and the desync check would find it.
+		if (const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&packet.payload); frame && observationsEncoded < frame->observations.size()) {
+			++m_Stats.relayObservationOverflows;
+			std::cout << "[lockstep] relay of peer " << static_cast<int>(fromPeerId) << "'s frame " << frame->targetFrame
+			          << " carried " << observationsEncoded << " of " << frame->observations.size() << " sound observations" << std::endl;
 		}
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
 			if (peerId == fromPeerId) {
@@ -2472,8 +2497,32 @@ namespace RTE {
 				}
 				break;
 			case NetTransportEventType::PacketReceived: {
-				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes);
+				// A frame's observation slots only mean anything against its sender's table. The relay host
+				// picks that table by the transport the bytes actually came in on, so a peer claiming to be
+				// another can only ever disturb its own; an unbound transport gets no table at all.
+				NetSoundObservationTables* tables = &m_ObservationDecodeTables;
+				m_ObservationDecodeTables.transportSender = 0;
+				if (m_RelayHost) {
+					const uint8_t transportSender = LockstepPeerOfTransport(event.peerId);
+					m_ObservationDecodeTables.transportSender = transportSender;
+					tables = transportSender != 0 ? &m_ObservationDecodeTables : nullptr;
+				}
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes.data(), event.bytes.size(), ControllerFrame::c_Version, tables);
 				if (!decoded.ok) {
+					if (decoded.error.code == NetLockstepErrorCode::StaleRound) {
+						// Another round's frame, the same straggler HandleFrame drops once it is decoded.
+						++m_Stats.staleRoundPackets;
+						return;
+					}
+					if (decoded.error.code == NetLockstepErrorCode::UnboundObservationSlot) {
+						// The sender's binding stream has a hole this peer never saw. Drop the packet rather
+						// than read a slot as the wrong sound; the missing frame is what shows up.
+						if (m_Stats.unresolvedObservationPackets == 0) {
+							std::cout << "[lockstep] dropped a frame naming an unknown sound observation slot: " << decoded.error.message << std::endl;
+						}
+						++m_Stats.unresolvedObservationPackets;
+						return;
+					}
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetProtocol::Decode(event.bytes).ok) {
 						// Session-protocol traffic mid-match is a reconnect handshake; hand it over.
 						if (m_SessionEventSink) {
@@ -2565,6 +2614,12 @@ namespace RTE {
 		}
 		if (m_RoundId == 0 && start.roundId != 0) {
 			m_RoundId = start.roundId;
+			// Frames that arrived before the round was known may have come from before a resync; only now
+			// can their slot tables be told apart from this round's.
+			if (m_ObservationDecodeTables.roundId != m_RoundId) {
+				m_ObservationDecodeTables.Reset();
+				m_ObservationDecodeTables.roundId = m_RoundId;
+			}
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {
@@ -2584,7 +2639,7 @@ namespace RTE {
 		}
 	}
 
-	void NetLockstepCoordinator::HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport) {
+	void NetLockstepCoordinator::HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay) {
 		++m_Stats.framePacketsReceived;
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
 		++peerStats.framePacketsReceived;
@@ -2602,6 +2657,12 @@ namespace RTE {
 			return;
 		}
 		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
+		// Forward every frame this peer's slot table has taken in, before any rule of ours drops it: what
+		// the peers behind the relay decode has to be the same sequence, or their tables fall behind and a
+		// later slot reference means nothing to them. They apply the same rules to it that we do.
+		if (relay) {
+			RelayToOtherRemotes({frame}, frame.senderPeerId);
+		}
 		// After a round restart a peer's first frames can outrun its start; hold them until it lands.
 		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end()) {
 			std::deque<NetLockstepFrame>& held = m_PreStartFrames[frame.senderPeerId];
@@ -2650,7 +2711,6 @@ namespace RTE {
 		if (!frame.observations.empty()) {
 			m_RemoteObservations[frame.targetFrame][frame.senderPeerId] = frame.observations;
 		}
-		RelayToOtherRemotes({frame}, frame.senderPeerId);
 		AdvanceReadyFrames(nowMs);
 	}
 

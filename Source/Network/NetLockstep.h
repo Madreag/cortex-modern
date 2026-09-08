@@ -302,6 +302,8 @@ namespace RTE {
 		uint64_t relayBytesSent = 0; //!< Encoded bytes this host forwarded, across every peer.
 		uint32_t largestRelayPacketBytes = 0;
 		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
+		uint32_t unresolvedObservationPackets = 0; //!< Frames dropped because an observation named a slot this peer never got.
+		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
@@ -447,11 +449,12 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 	private:
-		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr);
+		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
-		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport);
+		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true);
+		uint8_t LockstepPeerOfTransport(NetPeerId transportPeerId) const;
 		bool SendStart(std::string* error);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
@@ -528,6 +531,12 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetSoundObservation>>> m_RemoteObservations; //!< frame -> (peerId -> observations)
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
+		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.
+		// What this peer spells its own observations with, and what a relay host re-encodes each other
+		// sender's with. A relay table is fed by exactly the frames it forwards, which is exactly what its
+		// sender encoded, so a forward is the same size as the packet it came from and its receivers see
+		// every binding the sender made.
+		NetSoundObservationTables m_ObservationEncodeTables;
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
 		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
