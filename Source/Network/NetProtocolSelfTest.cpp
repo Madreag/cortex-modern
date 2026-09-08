@@ -6,6 +6,7 @@
 #include <array>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -199,21 +200,32 @@ namespace RTE {
 			reclaim.identity = MakeH4Identity();
 			reclaim.displayName = "Player";
 
-			const std::vector<NetMessage> messages = {
-				{20, 0, newJoin},
-				{21, 0, NetH4TicketOffer{c_NetH4Version, MakeBytes<16>(0x40), MakeBytes<16>(0x50), 3, 1, MakeBytes<32>(0x60), 0xAABBCCDDEEFF0011ULL, 20000}},
-				{22, 0, NetH4TicketStoredAck{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, true}},
-				{23, 0, NetH4JoinCommitted{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, 1, 2}},
-				{24, 0, reclaim},
-				{25, 0, NetH4Challenge{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<32>(0x70), 10000}},
-				{26, 0, NetH4Proof{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<16>(0x30), 2, 7, MakeBytes<16>(0x80), MakeBytes<32>(0x90)}},
-				{27, 0, NetH4LeaveRequest{c_NetH4Version, MakeBytes<16>(0xA0), MakeBytes<16>(0x30), 2, 7}},
-				{28, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}},
+			// Every fixed-width admission message, with the size the wire schema fixes for it.
+			const std::vector<std::pair<NetMessage, size_t>> messages = {
+				{{21, 0, NetH4TicketOffer{c_NetH4Version, MakeBytes<16>(0x40), MakeBytes<16>(0x50), 3, 1, MakeBytes<32>(0x60), 0xAABBCCDDEEFF0011ULL, 20000}}, 84},
+				{{22, 0, NetH4TicketStoredAck{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, true}}, 28},
+				{{23, 0, NetH4JoinCommitted{c_NetH4Version, MakeBytes<16>(0x40), 3, 1, 1, 2}}, 32},
+				{{25, 0, NetH4Challenge{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<32>(0x70), 10000}}, 54},
+				{{26, 0, NetH4Proof{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<16>(0x30), 2, 7, MakeBytes<16>(0x80), MakeBytes<32>(0x90)}}, 88},
+				{{27, 0, NetH4LeaveRequest{c_NetH4Version, MakeBytes<16>(0xA0), MakeBytes<16>(0x30), 2, 7}}, 40},
+				{{28, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}}, 28},
 			};
-			for (const NetMessage& message : messages) {
+			for (const auto& [message, payloadBytes] : messages) {
 				if (!RoundTrip(message, error)) {
 					return false;
 				}
+				std::vector<uint8_t> bytes;
+				if (!EncodeMessage(message, bytes, error)) {
+					return false;
+				}
+				if (bytes.size() - NetProtocol::c_HeaderBytes != payloadBytes) {
+					*error = std::string(NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload))) +
+					         " encoded " + std::to_string(bytes.size() - NetProtocol::c_HeaderBytes) + " payload bytes, not " + std::to_string(payloadBytes);
+					return false;
+				}
+			}
+			if (!RoundTrip({20, 0, newJoin}, error) || !RoundTrip({24, 0, reclaim}, error)) {
+				return false;
 			}
 
 			// The worst-case admission message must fit the size the host refuses above, with headroom
@@ -224,6 +236,11 @@ namespace RTE {
 			widest.displayName.assign(NetProtocol::c_MaxDisplayNameBytes, 'n');
 			std::vector<uint8_t> widestBytes;
 			if (!EncodeMessage({29, 0, widest}, widestBytes, error)) {
+				return false;
+			}
+			// The cap is sized against this number, so pin it rather than only bounding it.
+			if (widestBytes.size() - NetProtocol::c_HeaderBytes != 498U) {
+				*error = "worst-case Reclaim payload is " + std::to_string(widestBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 498";
 				return false;
 			}
 			if (widestBytes.size() - NetProtocol::c_HeaderBytes > NetProtocol::c_MaxH4PayloadBytes) {
