@@ -64,6 +64,8 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 
@@ -829,6 +831,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_SplashRatio, self.m_MaxDroppedItems, self.m_SettlingEnabled, self.m_MOSubtractionEnabled,
+				self.m_SimUpdateFrameNumber);
+		}
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
 		/// Clears all the member variables of this MovableMan, effectively

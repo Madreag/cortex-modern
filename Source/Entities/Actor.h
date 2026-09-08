@@ -572,6 +572,8 @@ namespace RTE {
 		const MovableObject* GetMOMoveTarget() const { return m_pMOMoveTarget; }
 		void SetMOMoveTarget(const MovableObject* object) { m_pMOMoveTarget = object; m_FaithfulMOMoveTargetUID = 0; }
 		static bool RunBorrowedReferenceSelfTest();
+		std::vector<long> GetCheckpointBorrowedReferences() const override;
+		bool RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly = false) override;
 
 		/// Sets this' perceptiveness to alarming events going on around him.
 		/// @param newPerceptiveness The current perceptiveness, 0.0 - 1.0

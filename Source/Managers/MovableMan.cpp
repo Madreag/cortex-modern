@@ -1,3 +1,4 @@
+#include "CheckpointArchive.h"
 #include "MovableMan.h"
 #include <chrono>
 #include <map>
@@ -3995,5 +3996,47 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 		if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
 			(*aIt)->DrawHUD(pTargetBitmap, targetPos, which);
 		}
+	}
+}
+
+std::string MovableMan::SaveCheckpoint() const {
+	CheckpointWriter writer("MovableMan2");
+	VisitCheckpoint(writer, *this);
+	std::map<long, std::vector<long>> references;
+	for (const auto& [identity, object]: m_KnownObjects) references.emplace(identity, object->GetCheckpointBorrowedReferences());
+	writer(references);
+	return writer.Text();
+}
+
+bool MovableMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		const bool legacy = text.starts_with("11 MovableMan1 ");
+		CheckpointReader reader(text, legacy ? "MovableMan1" : "MovableMan2", validateOnly);
+		std::map<long, std::vector<long>> references;
+		if (!legacy) reader.OnCommit([this, &references] {
+			// The graph has registered every candidate before RuntimeGlobals commits.
+			// Validate the whole alias table before changing any manager or native field.
+			for (const auto& [identity, links]: references) {
+				auto* object = FindObjectByUniqueID(identity);
+				if (!object || !object->RebindCheckpointBorrowedReferences(links, true)) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity));
+			}
+		});
+		VisitCheckpoint(reader, *this);
+		if (!legacy) {
+			reader.Value(references);
+			for (const auto& [identity, links]: references) {
+				if (identity <= 0 || links.empty() || std::any_of(links.begin(), links.end(), [](long target) { return target < 0; })) return false;
+			}
+			reader.OnCommit([this, &references] {
+				for (const auto& [identity, links]: references) {
+					if (!FindObjectByUniqueID(identity)->RebindCheckpointBorrowedReferences(links)) throw std::runtime_error("could not rebind native references for owner " + std::to_string(identity));
+				}
+			});
+		}
+		reader.Finish();
+		return true;
+	} catch (const std::exception& error) {
+		std::cout << "[native-references] " << error.what() << std::endl;
+		return false;
 	}
 }
