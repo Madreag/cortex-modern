@@ -772,7 +772,14 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepHoldingSeatForReclaim() {
-		return s_LockstepCoordinator != nullptr && s_LockstepCoordinator->IsHoldingSeatForReclaim();
+		if (!s_LockstepCoordinator) {
+			return false;
+		}
+		// A round that has committed nothing yet is still resuming: after a resync relaunch the ledgered
+		// reseat rides its first committed frame, and the activity update runs before MovableMan applies
+		// it, so the first evaluation a match may be judged on is the one after that frame lands.
+		return s_LockstepCoordinator->IsHoldingSeatForReclaim() ||
+		       (s_LockstepCoordinator->IsRunning() && !s_LockstepCoordinator->HasCommittedAFrame());
 	}
 
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {

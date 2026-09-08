@@ -352,6 +352,9 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
+		/// Whether the round has yet to commit a frame. A resync relaunch lands here: the ledgered
+		/// reseat rides the first committed frame, so nothing the round produced can be judged before it.
+		bool HasCommittedAFrame() const { return m_Stats.framesAccepted > 0; }
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
 		/// The peer's roster display name, or "peer N" when the roster has none.
