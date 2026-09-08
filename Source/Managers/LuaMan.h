@@ -402,7 +402,7 @@ namespace RTE {
 		int GetScriptStateCursor() const { return m_LastAssignedLuaState; }
 
 		/// Restores the threaded state cursor after a checkpoint.
-		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = cursor % m_ScriptStates.size(); }
+		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : cursor % m_ScriptStates.size(); }
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);
