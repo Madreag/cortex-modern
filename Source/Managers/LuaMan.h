@@ -560,6 +560,9 @@ namespace RTE {
 
 		/// Blocks until any in-flight async GC finishes.
 		void WaitForAsyncGarbageCollection();
+
+		/// Collects every state fully so a checkpoint captures a settled object graph.
+		void CollectGarbageForCheckpoint();
 #pragma endregion
 
 		/// Clears Script Timings.

@@ -1531,6 +1531,11 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 		std::cout << "[scriptgraph] reinstate failed: " << luaError << std::endl;
 		return false;
 	}
+	// The stash only has to outlive the candidate. Held past that it keeps unreachable script
+	// objects alive into the next capture, which then names sound owners no restore can produce.
+	for (size_t index = 0; index < in.luaGraphs.size(); ++index) {
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
+	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
 	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
 	if (in.terrain.width && !in.terrain.Restore()) return false;
