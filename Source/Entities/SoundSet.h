@@ -19,6 +19,7 @@ namespace RTE {
 
 	/// A set of sounds, and their selection data.
 	class SoundSet : public Serializable {
+		friend struct MusicCheckpoint;
 		friend struct ContractAudit;
 
 		friend struct EntityLuaBindings;

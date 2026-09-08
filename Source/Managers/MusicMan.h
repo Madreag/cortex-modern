@@ -3,14 +3,23 @@
 #include "DynamicSong.h"
 #include "Timer.h"
 #include "Singleton.h"
+#include <string_view>
 
 #define g_MusicMan MusicMan::Instance()
 
 namespace RTE {
 
 	class MusicMan : public Singleton<MusicMan> {
+		friend struct MusicCheckpoint;
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		bool LoadCheckpointWithAudio(std::string_view text, std::string_view audio);
+		bool RunCheckpointSelfTest();
+		struct CheckpointOwners;
+		std::shared_ptr<CheckpointOwners> TakeCheckpointOwners();
+		bool RestoreCheckpointOwners(std::shared_ptr<CheckpointOwners>& owners);
 #pragma region Creation
 		/// Constructor method used to instantiate a MusicMan object in system memory.
 		/// Create() should be called before using the object.
