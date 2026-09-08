@@ -12,9 +12,11 @@ extern "C" {
 #include "lj_vm.h"
 }
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Return addresses are offsets into Lua functions; native continuations have stable names.
@@ -104,11 +106,13 @@ namespace {
 		return "notstarted";
 	}
 
-	// (coroutine) -> { status, base, top, slots = {[i] = value}, links = {[i] = {type, ftsz | pcslot, pos}}, conts = {[i] = name} }, or nil, message.
+	// (coroutine [, raw]) -> { status, base, top, slots = {[i] = value}, links = {[i] = {type, ftsz | pcslot, pos}}, conts = {[i] = name} }, or nil, message.
+	// A yield from a compiled trace sits above LuaJIT's stitch continuation; unless raw is set, the description carries the plain call the trace stitched.
 	int ThreadCapture(lua_State* L) {
 		if (!lua_isthread(L, 1)) {
 			return Failure(L, "not a coroutine");
 		}
+		const bool raw = lua_toboolean(L, 2) != 0;
 		lua_State* co = lua_tothread(L, 1);
 		const std::string status = ThreadStatus(L, co);
 		if (status == "running" || status == "normal") {
@@ -117,13 +121,114 @@ namespace {
 		TValue* stack = tvref(co->stack);
 		const ptrdiff_t topIndex = co->top - stack;
 		const ptrdiff_t baseIndex = co->base - stack;
+		struct Frame {
+			ptrdiff_t index;
+			int64_t ftsz;
+			const BCIns* pc;
+			const char* cont;
+			bool lua;
+			bool collapsed;
+		};
+		std::vector<Frame> frames;
+		if (status == "suspended") {
+			int guard = 0;
+			for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
+				if (++guard > 100000 || frame - stack >= topIndex) {
+					return Failure(L, "the coroutine's frame chain is corrupt");
+				}
+				Frame info{frame - stack, static_cast<int64_t>(frame_ftsz(frame)), nullptr, nullptr, frame_islua(frame) != 0, false};
+				if (info.lua) {
+					info.pc = frame_pc(frame);
+				} else if (frame_iscont(frame)) {
+					if (frame_iscont_fficb(frame) || frame_contv(frame) == LJ_CONT_TAILCALL) {
+						return Failure(L, "the coroutine is suspended inside an unsupported continuation");
+					}
+					info.cont = ContName(frame_contf(frame));
+					if (!info.cont) {
+						return Failure(L, "the coroutine is suspended inside an unknown continuation");
+					}
+					info.pc = frame_contpc(frame);
+					info.collapsed = !raw && std::strcmp(info.cont, "stitch") == 0;
+					if (info.collapsed && (info.index - 4 < 1 + LJ_FR2 || !tvisfunc(frame - 1))) {
+						return Failure(L, "the coroutine's stitch frame is corrupt");
+					}
+				}
+				frames.push_back(info);
+				frame = info.lua ? frame_prevl(frame) : frame_prevd(frame);
+			}
+		}
+		// The three slots a stitch inserted below its callee go away and everything above moves down.
+		std::vector<ptrdiff_t> removed;
+		for (const Frame& info: frames) {
+			if (info.collapsed) {
+				removed.insert(removed.end(), {info.index - 4, info.index - 3, info.index - 2});
+			}
+		}
+		std::sort(removed.begin(), removed.end());
+		const auto remap = [&removed](ptrdiff_t slot) { return slot - (std::lower_bound(removed.begin(), removed.end(), slot) - removed.begin()); };
+		std::vector<ptrdiff_t> funcSlots;
+		for (const Frame& info: frames) {
+			funcSlots.push_back(info.index - 1);
+		}
+		// Each return address as a position inside a function that sits on this stack.
+		const auto locate = [&](const BCIns* pc, ptrdiff_t& funcSlot, ptrdiff_t& pos) {
+			for (const ptrdiff_t candidate: funcSlots) {
+				const TValue* funcValue = stack + candidate;
+				if (!tvisfunc(funcValue) || !isluafunc(funcV(funcValue))) {
+					continue;
+				}
+				GCproto* proto = funcproto(funcV(funcValue));
+				const BCIns* code = proto_bc(proto);
+				if (pc >= code && pc <= code + proto->sizebc) {
+					funcSlot = candidate;
+					pos = pc - code;
+					return true;
+				}
+			}
+			return false;
+		};
+		struct Link {
+			ptrdiff_t index;
+			ptrdiff_t funcSlot;
+			ptrdiff_t pos;
+			int64_t ftsz;
+			int type;
+		};
+		std::vector<Link> resolved;
+		std::vector<std::pair<ptrdiff_t, const char*>> contNames;
+		std::vector<char> kind(static_cast<size_t>(topIndex) + 1, 0);
+		for (const Frame& info: frames) {
+			kind[info.index] = 1;
+			Link link{info.index, -1, 0, info.ftsz, info.collapsed ? FRAME_LUA : static_cast<int>(info.ftsz & FRAME_TYPEP)};
+			if (info.lua || info.collapsed) {
+				if (!locate(info.pc, link.funcSlot, link.pos)) {
+					return Failure(L, "a frame's return address lies in no function on the coroutine's stack");
+				}
+			}
+			resolved.push_back(link);
+			if (info.collapsed) {
+				kind[info.index - 4] = kind[info.index - 3] = kind[info.index - 2] = 5;
+			} else if (info.cont) {
+				kind[info.index - 3] = 2;
+				kind[info.index - 2] = 3;
+				if (std::strcmp(info.cont, "stitch") == 0) {
+					kind[info.index - 4] = 4;
+				}
+				contNames.emplace_back(info.index - 3, info.cont);
+				Link contPc{info.index - 2, -1, 0, 0, -1};
+				if (!locate(info.pc, contPc.funcSlot, contPc.pos)) {
+					return Failure(L, "a frame's return address lies in no function on the coroutine's stack");
+				}
+				resolved.push_back(contPc);
+			}
+		}
 		lua_newtable(L);
 		const int desc = lua_gettop(L);
 		lua_pushstring(L, status.c_str());
 		lua_setfield(L, desc, "status");
-		lua_pushinteger(L, static_cast<lua_Integer>(baseIndex));
+		lua_pushinteger(L, static_cast<lua_Integer>(remap(baseIndex)));
 		lua_setfield(L, desc, "base");
-		lua_pushinteger(L, static_cast<lua_Integer>(topIndex));
+		lua_pushinteger(L, static_cast<lua_Integer>(remap(topIndex)));
 		lua_setfield(L, desc, "top");
 		lua_pushinteger(L, 1 + LJ_FR2);
 		lua_setfield(L, desc, "first");
@@ -133,92 +238,32 @@ namespace {
 		const int links = lua_gettop(L);
 		lua_newtable(L);
 		const int conts = lua_gettop(L);
-		std::vector<char> kind(static_cast<size_t>(topIndex) + 1, 0);
-		struct PcRef {
-			ptrdiff_t index;
-			const BCIns* pc;
-		};
-		std::vector<PcRef> pcs;
-		std::vector<ptrdiff_t> funcSlots;
-		if (status == "suspended") {
-			int guard = 0;
-			for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
-				if (++guard > 100000 || frame - stack >= topIndex) {
-					lua_settop(L, desc - 1);
-					return Failure(L, "the coroutine's frame chain is corrupt");
-				}
-				const ptrdiff_t index = frame - stack;
-				kind[index] = 1;
-				funcSlots.push_back(index - 1);
-				lua_newtable(L);
-				lua_pushinteger(L, static_cast<lua_Integer>(frame_ftsz(frame) & FRAME_TYPEP));
+		for (const Link& link: resolved) {
+			lua_newtable(L);
+			if (link.type >= 0) {
+				lua_pushinteger(L, link.type);
 				lua_setfield(L, -2, "type");
-				if (frame_islua(frame)) {
-					pcs.push_back({index, frame_pc(frame)});
-				} else {
-					lua_pushinteger(L, static_cast<lua_Integer>(frame_ftsz(frame)));
-					lua_setfield(L, -2, "ftsz");
-				}
-				lua_rawseti(L, links, static_cast<int>(index));
-				if (frame_iscont(frame)) {
-					if (frame_iscont_fficb(frame) || frame_contv(frame) == LJ_CONT_TAILCALL) {
-						lua_settop(L, desc - 1);
-						return Failure(L, "the coroutine is suspended inside an unsupported continuation");
-					}
-					const char* name = ContName(frame_contf(frame));
-					if (!name) {
-						lua_settop(L, desc - 1);
-						return Failure(L, "the coroutine is suspended inside an unknown continuation");
-					}
-					kind[index - 3] = 2;
-					kind[index - 2] = 3;
-					if (std::strcmp(name, "stitch") == 0) {
-						kind[index - 4] = 4;
-					}
-					lua_pushstring(L, name);
-					lua_rawseti(L, conts, static_cast<int>(index - 3));
-					pcs.push_back({index - 2, frame_contpc(frame)});
-				}
-				frame = frame_islua(frame) ? frame_prevl(frame) : frame_prevd(frame);
 			}
+			if (link.funcSlot >= 0) {
+				lua_pushinteger(L, static_cast<lua_Integer>(remap(link.funcSlot)));
+				lua_setfield(L, -2, "pcslot");
+				lua_pushinteger(L, static_cast<lua_Integer>(link.pos));
+				lua_setfield(L, -2, "pos");
+			} else {
+				lua_pushinteger(L, static_cast<lua_Integer>(link.ftsz));
+				lua_setfield(L, -2, "ftsz");
+			}
+			lua_rawseti(L, links, static_cast<int>(remap(link.index)));
 		}
-		// Each return address as a position inside a function that sits on this stack.
-		for (const PcRef& ref: pcs) {
-			bool found = false;
-			for (const ptrdiff_t funcSlot: funcSlots) {
-				const TValue* funcValue = stack + funcSlot;
-				if (!tvisfunc(funcValue) || !isluafunc(funcV(funcValue))) {
-					continue;
-				}
-				GCproto* proto = funcproto(funcV(funcValue));
-				const BCIns* code = proto_bc(proto);
-				if (ref.pc >= code && ref.pc <= code + proto->sizebc) {
-					lua_rawgeti(L, links, static_cast<int>(ref.index));
-					if (lua_isnil(L, -1)) {
-						lua_pop(L, 1);
-						lua_newtable(L);
-						lua_pushvalue(L, -1);
-						lua_rawseti(L, links, static_cast<int>(ref.index));
-					}
-					lua_pushinteger(L, static_cast<lua_Integer>(funcSlot));
-					lua_setfield(L, -2, "pcslot");
-					lua_pushinteger(L, static_cast<lua_Integer>(ref.pc - code));
-					lua_setfield(L, -2, "pos");
-					lua_pop(L, 1);
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				lua_settop(L, desc - 1);
-				return Failure(L, "a frame's return address lies in no function on the coroutine's stack");
-			}
+		for (const auto& [index, name]: contNames) {
+			lua_pushstring(L, name);
+			lua_rawseti(L, conts, static_cast<int>(remap(index)));
 		}
 		for (ptrdiff_t i = 1 + LJ_FR2; i < topIndex; ++i) {
 			if (kind[i] == 4) {
-				// A restored stitch can return through the interpreter without its old machine code.
+				// A raw stitch keeps a zero trace so the interpreter continues it.
 				lua_pushnumber(L, 0);
-				lua_rawseti(L, slots, static_cast<int>(i));
+				lua_rawseti(L, slots, static_cast<int>(remap(i)));
 				continue;
 			}
 			if (kind[i] != 0 || tvisnil(stack + i)) {
@@ -226,7 +271,7 @@ namespace {
 			}
 			copyTV(L, L->top, stack + i);
 			incr_top(L);
-			lua_rawseti(L, slots, static_cast<int>(i));
+			lua_rawseti(L, slots, static_cast<int>(remap(i)));
 		}
 		lua_setfield(L, desc, "conts");
 		lua_setfield(L, desc, "links");
