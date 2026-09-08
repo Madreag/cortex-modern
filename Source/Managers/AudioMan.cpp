@@ -1372,15 +1372,20 @@ namespace {
 		std::map<int, float> minimumDistances;
 		std::array<std::vector<CheckpointSoundEvent>, c_MaxClients> events;
 		std::vector<CommittedAudibilityRecord> audibility;
+		// The deferred call's number inside its tick derives the archived playback key, so a restored
+		// or re-simulated tick has to continue from the same place.
+		uint64_t deferredSoundOpTick = 0;
+		uint64_t deferredSoundOpOrdinal = 0;
 		template <class Archive> void Fields(Archive& archive) {
 			archive(enabled, nextVoice, nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer, playerPositions, listeners, groups, samples, voices, minimumDistances, events);
 		}
-		std::string Save() { CheckpointWriter archive("AudioRuntime2"); Fields(archive); archive(audibility); return archive.Text(); }
+		std::string Save() { CheckpointWriter archive("AudioRuntime3"); Fields(archive); archive(audibility, deferredSoundOpTick, deferredSoundOpOrdinal); return archive.Text(); }
 		bool Load(std::string_view text) {
 			try {
 				const std::string_view version = AudioMan::CheckpointVersion(text);
 				CheckpointReader archive(text, version); Fields(archive);
-				if (version == "AudioRuntime2") archive(audibility);
+				if (version == "AudioRuntime3") archive(audibility, deferredSoundOpTick, deferredSoundOpOrdinal);
+				else if (version == "AudioRuntime2") archive(audibility);
 				archive.Finish();
 				std::set<std::pair<SoundObservationKey, uint8_t>> readings;
 				for (const auto& record: audibility) if (!readings.insert({record.key, record.peer}).second) return false;
@@ -1400,6 +1405,7 @@ std::string AudioMan::SaveCheckpoint() const {
 	AudioRuntime state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
 	state.nextSoundContainer = m_NextSoundContainerIdentity;
+	state.deferredSoundOpTick = m_DeferredSoundOpTick; state.deferredSoundOpOrdinal = m_DeferredSoundOpOrdinal;
 	state.muteMaster = m_MuteMaster; state.muteMusic = m_MuteMusic; state.muteSounds = m_MuteSounds; state.muteOnFocusLoss = m_MuteAudioOnFocusLoss;
 	state.masterVolume = m_MasterVolume; state.musicVolume = m_MusicVolume; state.soundsVolume = m_SoundsVolume; state.globalPitch = m_GlobalPitch;
 	state.panning = m_SoundPanningEffectStrength; state.listenerZ = m_ListenerZOffset; state.minimumPanning = m_MinimumDistanceForPanning;
@@ -1575,6 +1581,8 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		m_BackendVoiceIdentities.swap(backendIdentities); m_SoundChannelMinimumAudibleDistances.swap(minimumDistances);
 		m_NextVoiceIdentity = state.nextVoice;
 		m_NextSoundContainerIdentity = state.nextSoundContainer;
+		m_DeferredSoundOpTick = state.deferredSoundOpTick;
+		m_DeferredSoundOpOrdinal = state.deferredSoundOpOrdinal;
 		m_MuteMaster = state.muteMaster; m_MuteMusic = state.muteMusic; m_MuteSounds = state.muteSounds; m_MuteAudioOnFocusLoss = state.muteOnFocusLoss;
 		m_MasterVolume = state.masterVolume; m_MusicVolume = state.musicVolume; m_SoundsVolume = state.soundsVolume; m_GlobalPitch = state.globalPitch;
 		m_SoundPanningEffectStrength = state.panning; m_ListenerZOffset = state.listenerZ; m_MinimumDistanceForPanning = state.minimumPanning;
