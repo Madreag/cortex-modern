@@ -1162,6 +1162,16 @@ std::vector<SoundContainer*> AudioMan::TakePendingSoundOpContainers() {
 	return containers;
 }
 
+void AudioMan::SettleSharedSoundWrites() {
+	std::vector<SoundContainer*> containers;
+	{
+		std::lock_guard lock(m_PendingSoundOpsMutex);
+		containers.reserve(m_PendingSoundOpContainers.size());
+		for (const auto& [identity, container]: m_PendingSoundOpContainers) containers.push_back(container);
+	}
+	for (SoundContainer* container: containers) container->SettleSharedWritesBeforeAIPass();
+}
+
 uint64_t AudioMan::NextDeferredSoundOpOrdinal() {
 	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	if (tick != m_DeferredSoundOpTick) {
@@ -2316,6 +2326,57 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			          " identity " + std::to_string(restored.GetCheckpointIdentity()) +
 			          " voices " + std::to_string(restored.GetSharedLogicalVoices().size()) +
 			          " channels " + std::to_string(restored.GetPlayingChannels()->size()));
+		}
+		{
+			// The AI hook keeps a position from one pass and writes it in a later one, making no other
+			// call on that container at all: shared state must not move until the drain, and the drain
+			// must hand out a deferred call rather than settle the write itself.
+			SoundContainer kept;
+			kept.Create(samplePath, false, true, SoundContainer::SFX);
+			Vector* alias = nullptr;
+			{
+				SoundSimulationScope shared(4242, phase);
+				kept.SetPosition(Vector(10.0F, 20.0F));
+			}
+			{
+				SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
+				alias = const_cast<Vector*>(&kept.GetScriptPosition());
+			}
+			kept.TakePendingSoundOps();
+			// The pass boundary: the shared hooks' writes land here, before any AI hook runs.
+			SettleSharedSoundWrites();
+			const bool sharedUntouchedBefore = kept.GetPosition().m_X == 10.0F;
+			{
+				SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
+				alias->m_X = 55.0F;
+			}
+			const bool sharedUntouchedAfterPass = kept.GetPosition().m_X == 10.0F;
+			std::vector<SoundContainer::PendingOp> drained = kept.TakePendingSoundOps();
+			const bool deferred = drained.size() == 1 && drained.front().op == SoundContainer::PendingOp::SetProperty &&
+			    drained.front().property == SoundContainer::PendingOp::PositionAlias && drained.front().x == 55.0F;
+			const bool sharedUntouchedAtDrain = kept.GetPosition().m_X == 10.0F;
+			bool applied = !drained.empty();
+			{
+				SoundSimulationScope drain(4242, phase, SoundExecutionDomain::SharedSimulation, NextDeferredSoundOpOrdinal());
+				for (const SoundContainer::PendingOp& op: drained) applied = kept.ApplyPendingSoundOp(op) && applied;
+			}
+			check("ai_alias_only_write_defers",
+			      sharedUntouchedBefore && sharedUntouchedAfterPass && deferred && sharedUntouchedAtDrain &&
+			          applied && kept.GetPosition().m_X == 55.0F && kept.GetPosition().m_Y == 20.0F,
+			      std::to_string(drained.size()) + " ops, x " + std::to_string(kept.GetPosition().m_X));
+			// The same write made by a shared hook still lands where it always did, at once, and the
+			// next pass boundary leaves it alone rather than taking it for the AI's.
+			{
+				SoundSimulationScope shared(4242, phase);
+				alias = const_cast<Vector*>(&kept.GetScriptPosition());
+				alias->m_X = 77.0F;
+			}
+			const bool settledAtOnce = kept.GetPosition().m_X == 77.0F;
+			SettleSharedSoundWrites();
+			check("shared_alias_only_write_settles",
+			      settledAtOnce && kept.TakePendingSoundOps().empty() && kept.GetPosition().m_X == 77.0F,
+			      std::to_string(kept.GetPosition().m_X));
+			kept.Stop();
 		}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 	s_PlaybackSuppressed = suppressed;
