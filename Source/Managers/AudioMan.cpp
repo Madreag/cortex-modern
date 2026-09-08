@@ -1795,6 +1795,11 @@ namespace {
 	SoundObservationKey KeyOf(const NetSoundObservation& observation) { return {observation.objectUID, observation.tick, observation.phase, observation.occurrence, observation.ordinal}; }
 	constexpr uint64_t c_AudibilityPruneInterval = 600;
 	constexpr uint64_t c_AudibilityRetainFrames = 36000;
+	// CC_TRACE_AUDIBILITY=<nonzero> prints every sound's first committed reading and every query that finds none, so two peers' committed tables can be compared.
+	bool TraceAudibility() {
+		static const bool traced = [] { const char* value = std::getenv("CC_TRACE_AUDIBILITY"); return value && std::strtoull(value, nullptr, 10) != 0ULL; }();
+		return traced;
+	}
 } // namespace
 
 uint8_t AudioMan::AudibilityAuthority(uint64_t objectUID) {
@@ -1843,7 +1848,7 @@ void AudioMan::CommitSoundObservations(uint64_t frame, const std::vector<NetSoun
 	std::stable_sort(observations.begin(), observations.end(), [](const NetSoundObservation* a, const NetSoundObservation* b) { return a->senderPeerId < b->senderPeerId; });
 	for (const NetSoundObservation* observation: observations) {
 		const SoundObservationKey key = KeyOf(*observation);
-		if (!m_CommittedAudibility.contains(key)) {
+		if (TraceAudibility() && !m_CommittedAudibility.contains(key)) {
 			std::cout << "[audibility] first reading object=" << key.objectUID << " tick=" << key.tick << " phase=" << key.phase << " occurrence=" << key.occurrence << " ordinal=" << key.ordinal
 			          << " from peer " << static_cast<int>(observation->senderPeerId) << " value=" << observation->value << " frame=" << frame << std::endl;
 		}
@@ -1862,10 +1867,12 @@ float AudioMan::GetCommittedAudibility(const SoundContainer& container) const {
 	if (!identity.ordinal) return 0.0F;
 	const auto entry = m_CommittedAudibility.find(KeyOf(identity));
 	if (entry == m_CommittedAudibility.end()) {
-		std::lock_guard lock(m_AudibilityMissMutex);
-		if (m_ReportedAudibilityMisses.insert(KeyOf(identity)).second) {
-			std::cout << "[audibility] no committed reading for " << container.GetPresetName() << " object=" << identity.objectUID << " tick=" << identity.tick << " phase=" << identity.phase
-			          << " occurrence=" << identity.occurrence << " ordinal=" << identity.ordinal << " at " << g_TimerMan.GetSimUpdateCount() << " (table " << m_CommittedAudibility.size() << ")" << std::endl;
+		if (TraceAudibility()) {
+			std::lock_guard lock(m_AudibilityMissMutex);
+			if (m_ReportedAudibilityMisses.insert(KeyOf(identity)).second) {
+				std::cout << "[audibility] no committed reading for " << container.GetPresetName() << " object=" << identity.objectUID << " tick=" << identity.tick << " phase=" << identity.phase
+				          << " occurrence=" << identity.occurrence << " ordinal=" << identity.ordinal << " at " << g_TimerMan.GetSimUpdateCount() << " (table " << m_CommittedAudibility.size() << ")" << std::endl;
+			}
 		}
 		return 0.0F;
 	}
@@ -1882,6 +1889,8 @@ float AudioMan::GetCommittedAudibility(const SoundContainer& container) const {
 void AudioMan::ClearCommittedAudibility() {
 	m_CommittedAudibility.clear();
 	m_LastSentAudibility.clear();
+	std::lock_guard lock(m_AudibilityMissMutex);
+	m_ReportedAudibilityMisses.clear();
 }
 
 bool AudioMan::RunLogicalPlaybackSelfTest() {
