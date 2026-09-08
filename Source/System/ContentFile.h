@@ -165,6 +165,10 @@ namespace RTE {
 		/// @return Pointer to the BITMAP loaded from disk.
 		BITMAP* GetAsBitmap(int conversionMode = 0, bool storeBitmap = true, const std::string& dataPathToSpecificFrame = "");
 
+		/// Runs the image load path over a readable image and over a file that is not an image.
+		/// @return Whether every case passed.
+		static bool RunImageLoadSelfTest();
+
 		/// Fills an existing vector of Allegro BITMAPs representing each frame in the animation with the data represented by this ContentFile object.
 		/// It loads the BITMAPs into the static maps if they're not already loaded. Ownership of the BITMAPs is NOT transferred!
 		/// @param vectorToFill The existing vector of Allegro BITMAPs to fill.
