@@ -754,6 +754,51 @@ namespace RTE {
 			return 0;
 		}
 
+		// The precise refusal Phase B owes a loser rides the SAME schedule as every uniform denial, so
+		// the timing an observer can measure is unchanged.
+		int TestPreciseDenialKeepsUniformTiming() {
+			ScriptedAuthCrypto provider;
+			ScopedTestCrypto scoped(&provider);
+			NetReconnectAdmission admission;
+			const NetAuthBytes16 preciseTx = Ramp<16>(0x10);
+			const NetAuthBytes16 uniformTx = Ramp<16>(0x20);
+			const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReassigned, "this seat was given to another player", "seat_reassigned", "", ""};
+
+			admission.ScheduleDenial(1, preciseTx, NetH4DenialReason::SeatReassigned, 5000, &refusal);
+			admission.ScheduleDenial(2, uniformTx, NetH4DenialReason::UnknownSeat, 5000);
+			if (!admission.ReleaseDueDenials(5999).empty()) {
+				return Fail("a precise refusal was released early");
+			}
+			const std::vector<NetH4Denial> due = admission.ReleaseDueDenials(6000);
+			if (due.size() != 2) {
+				return Fail("the precise and uniform refusals did not release together");
+			}
+			for (const NetH4Denial& denial : due) {
+				if (denial.issuedAtMs != 5000 || denial.releaseAtMs != 6000) {
+					return Fail("a refusal moved off the fixed issue+release schedule");
+				}
+				const bool shouldBePrecise = denial.connection == 1;
+				if (denial.precise != shouldBePrecise) {
+					return Fail("a refusal carried the wrong wording");
+				}
+				if (shouldBePrecise && !(denial.payload == refusal)) {
+					return Fail("the precise refusal was not the one that was scheduled");
+				}
+			}
+
+			// A precise refusal upgrades a uniform one already pending on the connection - and keeps
+			// the release time the first one set, so the upgrade is invisible to a clock.
+			admission.ScheduleDenial(3, uniformTx, NetH4DenialReason::BadProof, 7000);
+			admission.ScheduleDenial(3, preciseTx, NetH4DenialReason::SeatReassigned, 7400, &refusal);
+			const std::vector<NetH4Denial> upgraded = admission.ReleaseDueDenials(8000);
+			if (upgraded.size() != 1 || !upgraded.front().precise || upgraded.front().releaseAtMs != 8000) {
+				return Fail("a coalesced precise refusal lost either its wording or its schedule");
+			}
+			if (admission.GetCoalescedDenials() != 1) {
+				return Fail("the coalesced refusal was not counted");
+			}
+			return 0;
+		}
 	} // namespace
 
 	int NetReconnectSelfTest::Run() {
@@ -799,6 +844,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSubstitutionCredentialLifecycle(); result != 0) {
+			return result;
+		}
+		if (const int result = TestPreciseDenialKeepsUniformTiming(); result != 0) {
 			return result;
 		}
 		if (GetNetAuthCrypto().IsRealCrypto() !=
