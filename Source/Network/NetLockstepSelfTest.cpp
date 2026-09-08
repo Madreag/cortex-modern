@@ -11,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace RTE {
@@ -2078,6 +2079,174 @@ namespace RTE {
 		// A6: the sim thread parks in the lockstep wait while a peer is silent, so the admission plane
 		// has to be serviced from inside it - the silent peer may be waiting on the very answer only
 		// that pump can send, which is what left every clean leave unacknowledged.
+		// Four peers over a host-star loopback, each reporting N changing sound readings a frame, so the
+		// relay's own byte counters say what the compact form costs. The same frames priced the way
+		// version 13 spelled them out give the factor. The first frame and the steady ones are measured
+		// apart, because only the first spells its keys out.
+		bool TestFourPeerObservationRelayBytes(std::string* error) {
+			for (const size_t observationsPerFrame: {size_t{64}, size_t{256}, size_t{512}}) {
+				const uint16_t port = static_cast<uint16_t>(43040 + observationsPerFrame % 16);
+				const uint64_t sessionId = 0x7000000000000040ULL + observationsPerFrame;
+				LoopbackTransport hostT, clientAT, clientBT, clientCT;
+				if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+				    !clientBT.Connect("loopback", port, error) || !clientCT.Connect("loopback", port, error)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = sessionId;
+					c.startFrame = 0;
+					c.inputDelayFrames = 0;
+					c.timeoutMs = 4000;
+					c.localPeerId = local;
+					c.peerCount = 4;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.frameLane = NetTransportLane::ControlReliable;
+					c.scenario = "LockstepSelfTest";
+					c.ownershipPolicy = "unique-id-split";
+					c.roundId = 0x1400000000000001ULL + observationsPerFrame;
+					return c;
+				};
+				NetLockstepCoordinator host, clientA, clientB, clientC;
+				NetLockstepConfig clientCfg = cfg(2, {{1, 1}}, false);
+				clientCfg.roundId = 0;
+				if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}, {4, 3}}, true), error)) {
+					return false;
+				}
+				clientCfg.localPeerId = 2;
+				if (!clientA.Start(clientAT, clientCfg, error)) {
+					return false;
+				}
+				clientCfg.localPeerId = 3;
+				if (!clientB.Start(clientBT, clientCfg, error)) {
+					return false;
+				}
+				clientCfg.localPeerId = 4;
+				if (!clientC.Start(clientCT, clientCfg, error)) {
+					return false;
+				}
+				NetLockstepCoordinator* peers[4] = {&host, &clientA, &clientB, &clientC};
+				LoopbackTransport* transports[4] = {&hostT, &clientAT, &clientBT, &clientCT};
+				auto drive = [&](const std::function<bool()>& done) {
+					for (uint64_t now = 0; now <= 20000; now += 5) {
+						for (NetLockstepCoordinator* peer: peers) {
+							peer->Tick(now);
+						}
+						if (done()) {
+							return true;
+						}
+						for (LoopbackTransport* transport: transports) {
+							transport->AdvanceTimeMs(5);
+						}
+					}
+					return false;
+				};
+				if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning() && clientC.IsRunning(); })) {
+					*error = "four-peer lockstep did not reach Running";
+					return false;
+				}
+
+				std::map<uint8_t, std::map<uint64_t, std::vector<NetSoundObservation>>> committed;
+				size_t readyPerPeer[4] = {0, 0, 0, 0};
+				auto collect = [&](size_t index) {
+					NetLockstepReadyFrame ready;
+					while (peers[index]->PopReadyFrame(ready)) {
+						std::vector<NetSoundObservation> all = ready.localObservations;
+						all.insert(all.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+						std::stable_sort(all.begin(), all.end(), [](const NetSoundObservation& a, const NetSoundObservation& b) {
+							return std::tie(a.senderPeerId, a.objectUID, a.ordinal) < std::tie(b.senderPeerId, b.objectUID, b.ordinal);
+						});
+						committed[static_cast<uint8_t>(index)][ready.frame] = std::move(all);
+						++readyPerPeer[index];
+					}
+				};
+				// Version 13 priced the same frames at forty-four bytes an observation, on top of a packet
+				// that is otherwise byte for byte the same one this build sends.
+				size_t legacyBytesPerFrame = 0;
+				const size_t frameCount = 12;
+				const auto runFrames = [&](uint64_t from, uint64_t to) {
+					for (uint64_t f = from; f < to; ++f) {
+						for (uint8_t peer = 1; peer <= 4; ++peer) {
+							std::vector<NetSoundObservation> observations = MakeObservationSet(peer, observationsPerFrame, 400 + peer, static_cast<float>(f) / 16.0F);
+							if (peer == 1 && legacyBytesPerFrame == 0) {
+								NetLockstepFrame priced;
+								priced.senderPeerId = peer;
+								priced.targetFrame = f;
+								priced.roundId = 0x1400000000000001ULL + observationsPerFrame;
+								priced.frames = {MakeFrame(100 + static_cast<int64_t>(f), f + 1)};
+								priced.observations = observations;
+								legacyBytesPerFrame = FrameBytesWithoutObservations(priced) + 44 * observationsPerFrame;
+							}
+							if (!peers[peer - 1]->QueueLocalInput(f, {MakeFrame(100 * peer + static_cast<int64_t>(f), f + 1)}, {}, error, observations)) {
+								return false;
+							}
+						}
+					}
+					if (!drive([&] {
+							for (size_t i = 0; i < 4; ++i) {
+								collect(i);
+							}
+							return readyPerPeer[0] >= to && readyPerPeer[1] >= to && readyPerPeer[2] >= to && readyPerPeer[3] >= to;
+						})) {
+						*error = "four-peer lockstep did not produce every ready frame: " + std::to_string(readyPerPeer[0]) + "," + std::to_string(readyPerPeer[1]) +
+						         "," + std::to_string(readyPerPeer[2]) + "," + std::to_string(readyPerPeer[3]);
+						return false;
+					}
+					return true;
+				};
+				const uint64_t startBytes = host.GetStats().relayBytesSent;
+				const uint32_t startPackets = host.GetStats().relayPacketsSent;
+				if (!runFrames(0, 1)) {
+					return false;
+				}
+				const uint64_t firstUseBytes = host.GetStats().relayBytesSent - startBytes;
+				const uint32_t firstUsePackets = host.GetStats().relayPacketsSent - startPackets;
+				if (!runFrames(1, frameCount)) {
+					return false;
+				}
+				const uint64_t steadyBytes = host.GetStats().relayBytesSent - startBytes - firstUseBytes;
+				const uint32_t steadyPackets = host.GetStats().relayPacketsSent - startPackets - firstUsePackets;
+
+				// Every peer commits the identical table, which is the whole point of the wire form.
+				for (uint64_t f = 0; f < frameCount; ++f) {
+					for (uint8_t peer = 1; peer < 4; ++peer) {
+						if (committed[peer][f] != committed[0][f]) {
+							*error = "four-peer observation tables differ at frame " + std::to_string(f) + " on peer " + std::to_string(peer + 1);
+							return false;
+						}
+					}
+					if (committed[0][f].size() != observationsPerFrame * 4) {
+						*error = "four-peer frame " + std::to_string(f) + " committed " + std::to_string(committed[0][f].size()) +
+						         " observations, expected " + std::to_string(observationsPerFrame * 4);
+						return false;
+					}
+				}
+				const NetLockstepStats& stats = host.GetStats();
+				if (stats.relayObservationOverflows != 0 || stats.unresolvedObservationPackets != 0 ||
+				    stats.observationsCarried != 0 || stats.observationsDropped != 0) {
+					*error = "four-peer relay reported an observation fault";
+					return false;
+				}
+				if (firstUsePackets == 0 || steadyPackets == 0) {
+					*error = "four-peer relay forwarded nothing to measure";
+					return false;
+				}
+				const double firstUsePerPacket = static_cast<double>(firstUseBytes) / firstUsePackets;
+				const double steadyPerPacket = static_cast<double>(steadyBytes) / steadyPackets;
+				const double legacy = static_cast<double>(legacyBytesPerFrame);
+				std::cout << "[net-lockstep-selftest] PASS four_peer_observation_relay n=" << observationsPerFrame
+				          << " relayed_bytes_per_frame first_use=" << firstUsePerPacket << " steady=" << steadyPerPacket
+				          << " (was " << legacy << ") factor first_use=" << legacy / firstUsePerPacket << " steady=" << legacy / steadyPerPacket
+				          << " relay_bytes_sent=" << stats.relayBytesSent << " largest_relay_packet_bytes=" << stats.largestRelayPacketBytes << std::endl;
+				if (legacy / steadyPerPacket < 6.0) {
+					*error = "the compact observation form saved less than six times in the steady state at n=" + std::to_string(observationsPerFrame);
+					return false;
+				}
+			}
+			return true;
+		}
+
 		// More changed readings in one frame than its byte budget holds: the sender keeps the rest for the
 		// next frame instead of refusing the frame, and both peers commit the same table either way.
 		bool TestObservationOverflowCarry(std::string* error) {
@@ -2348,7 +2517,8 @@ namespace RTE {
 		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
 		    !TestRelayHostFinishesWhatItOwes(&error) ||
-		    !TestObservationOverflowCarry(&error)) {
+		    !TestObservationOverflowCarry(&error) ||
+		    !TestFourPeerObservationRelayBytes(&error)) {
 			return fail(error);
 		}
 
