@@ -24,6 +24,7 @@ sources += files(
 'NetProtocolSelfTest.cpp',
 'NetReconnectAdmission.cpp',
 'NetReconnectLedger.cpp',
+'NetReconnectSession.cpp',
 'NetReconnectTicketStore.cpp',
 'NetReconnectSelfTest.cpp',
 'NetReconnectTranscript.cpp',
