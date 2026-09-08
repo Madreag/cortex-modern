@@ -116,6 +116,7 @@ SCHEMAS["AudioRuntime1"] = [*fields("enabled next_voice next_sound_container mut
     ("player_positions", sequence(VECTOR)), ("listeners", sequence(array(4, array(3)))), ("groups", array(4, "o")),
     *fields("samples voices", sequence("o")), ("minimum_distances", sequence(array(2))), ("events", array(4, sequence("o")))]
 SCHEMAS["AudioRuntime2"] = [*SCHEMAS["AudioRuntime1"], ("audibility", sequence("o"))]
+SCHEMAS["AudioRuntime3"] = [*SCHEMAS["AudioRuntime2"], *fields("deferred_sound_op_tick deferred_sound_op_ordinal")]
 SCHEMAS["CommittedAudibility1"] = fields("object_uid tick phase occurrence ordinal peer frame value")
 SCHEMAS["SoundPlayback1"] = [("voices", sequence("o"))]
 SCHEMAS["SoundContainer1"] = [("entity", "o"), ("identity", "n"), ("playing_channels", sequence("n")),
@@ -431,6 +432,7 @@ _LOCAL_FIELDS = {
     # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
     "AudioRuntime1": {"player_positions", "listeners"},
     "AudioRuntime2": {"player_positions", "listeners"},
+    "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
     "ActorRuntime1": {"hud_stack"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},

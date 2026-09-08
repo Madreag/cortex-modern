@@ -533,6 +533,19 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assert_field(palette, (key,), False)
 
+    def test_deferred_sound_op_counters_are_shared_in_audio_runtime3(self):
+        """AudioRuntime3 adds the deferred sound-op counters; only the listener-derived fields stay local."""
+        runtime_state = dict(version="AudioRuntime3", player_positions=1, listeners=1, audibility=1,
+            deferred_sound_op_tick=1, deferred_sound_op_ordinal=1, samples=1, voices=1, groups=1, events=1,
+            minimum_distances=1, next_voice=1, next_sound_container=1)
+        for key in ("player_positions", "listeners"):
+            with self.subTest(key=key):
+                self.assert_field(runtime_state, (key,), True)
+        for key in ("audibility", "deferred_sound_op_tick", "deferred_sound_op_ordinal", "samples", "voices",
+                "groups", "events", "minimum_distances", "next_voice", "next_sound_container"):
+            with self.subTest(key=key):
+                self.assert_field(runtime_state, (key,), False)
+
     def test_voice_control_and_lowpass_are_local_but_group_buses_are_not(self):
         """The same AudioControl1 payload is local under audio.voices and strict under audio.groups."""
         effect = dict(version="AudioEffect1", type=36, index=0, active=1, wet_dry=1,
