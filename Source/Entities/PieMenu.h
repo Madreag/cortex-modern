@@ -45,6 +45,7 @@ namespace RTE {
 		/// @param reference A reference to the Attachable to deep copy.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create(const PieMenu& reference);
+		static bool RunCheckpointSelfTest();
 #pragma endregion
 
 #pragma region Destruction
@@ -386,6 +387,9 @@ namespace RTE {
 		BITMAP* m_BGBitmap; //!< The intermediary bitmap used to first draw the PieMenu background, which will be blitted to the final draw target surface.
 		BITMAP* m_BGRotationBitmap; //!< The intermediary bitmap used to allow the PieMenu background to rotate, which will be pivoted onto the BG bitmap.
 		BITMAP* m_BGPieSlicesWithSubPieMenuBitmap; //!< The intermediary bitmap used to support handling PieSlices with sub-PieMenus, which will be drawn onto the BG bitmap.
+		std::string m_PersistedRuntime;
+		std::string SaveRuntimeCheckpoint() const;
+		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
 		bool m_BGBitmapNeedsRedrawing; //!< Whether the BG bitmap should be redrawn during the next Update call.
 		bool m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing; //!< Whether the BG bitmap for PieSlices with sub-PieMenus should be redrawn when the BGBitmap is redrawn.
 

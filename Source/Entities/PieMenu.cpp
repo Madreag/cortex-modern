@@ -6,6 +6,8 @@
 #include "SettingsMan.h"
 #include "LuaMan.h"
 #include "GLResourceMan.h"
+#include "BitmapCheckpoint.h"
+#include "Base64/base64.h"
 
 #include "AHuman.h"
 #include "ContentFile.h"
@@ -57,6 +59,7 @@ PieMenu::~PieMenu() {
 }
 
 void PieMenu::Clear() {
+	m_PersistedRuntime.clear();
 	m_LargeFont = nullptr;
 
 	m_Owner = nullptr;
@@ -119,6 +122,10 @@ int PieMenu::Create() {
 	if (!m_BGBitmap) {
 		RecreateBackgroundBitmaps();
 	}
+	if (!m_PersistedRuntime.empty()) {
+		if (!LoadRuntimeCheckpoint(m_PersistedRuntime)) return -1;
+		m_PersistedRuntime.clear();
+	}
 
 	return 0;
 }
@@ -151,7 +158,7 @@ int PieMenu::Create(const PieMenu& reference) {
 	m_SelectedItemBackgroundColor = reference.m_SelectedItemBackgroundColor;
 
 	// A faithful clone keeps every slice, whoever added it; a preset copy keeps only the menu's own.
-	const bool faithful = MovableObject::IsFaithfulClone();
+	const bool faithful = Entity::IsCheckpointClone();
 	for (int i = 0; i < m_PieQuadrants.size(); i++) {
 		m_PieQuadrants[i].Create(reference.m_PieQuadrants[i], &reference, this);
 		if (faithful) {
@@ -185,6 +192,9 @@ int PieMenu::Create(const PieMenu& reference) {
 	RecreateBackgroundBitmaps();
 
 	RepopulateAndRealignCurrentPieSlices();
+	if (faithful) {
+		if (!LoadRuntimeCheckpoint(reference.SaveRuntimeCheckpoint())) return -1;
+	}
 
 	return 0;
 }
@@ -282,6 +292,11 @@ void PieMenu::Destroy(bool notInherited) {
 
 int PieMenu::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Entity::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_PieMenuRuntime", {
+		m_PersistedRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadRuntimeCheckpoint(m_PersistedRuntime, true)) reader.ReportError("invalid PieMenu runtime checkpoint");
+	});
+	MatchProperty("SpecialBehaviour_Rotation", { reader >> m_Rotation; });
 
 	MatchProperty("IconSeparatorMode", {
 		std::string iconSeparatorModeString = reader.ReadPropValue();
@@ -317,6 +332,7 @@ int PieMenu::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 int PieMenu::Save(Writer& writer) const {
 	Entity::Save(writer);
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_Rotation", m_Rotation);
 
 	writer.NewPropertyWithValue("IconSeparatorMode", static_cast<int>(m_IconSeparatorMode));
 	writer.NewPropertyWithValue("FullInnerRadius", m_FullInnerRadius);
@@ -332,8 +348,78 @@ int PieMenu::Save(Writer& writer) const {
 			writer.NewPropertyWithValue("AddPieSlice", pieSlice);
 		}
 	}
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_PieMenuRuntime", base64_encode(SaveRuntimeCheckpoint(), true));
 
 	return 0;
+}
+
+std::string PieMenu::SaveRuntimeCheckpoint() const {
+	CheckpointWriter writer("PieMenuRuntime1");
+	writer(static_cast<const Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
+		m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
+	writer(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
+		m_DrawBackgroundTransparent, m_BackgroundColor, m_BackgroundBorderColor, m_SelectedItemBackgroundColor);
+	for (const auto& quadrant: m_PieQuadrants) writer(quadrant.m_Enabled, quadrant.m_Direction);
+	writer(m_CurrentInnerRadius, m_CursorInVisiblePosition, m_CursorAngle, m_CursorVisualAngle,
+		m_BGBitmapNeedsRedrawing, m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing);
+	BitmapCheckpoint background, rotation, slices;
+	background.Capture(m_BGBitmap); rotation.Capture(m_BGRotationBitmap); slices.Capture(m_BGPieSlicesWithSubPieMenuBitmap);
+	writer(background, rotation, slices);
+	return writer.Text();
+}
+
+bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "PieMenuRuntime1", validateOnly);
+		reader(static_cast<Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
+			m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
+		reader(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
+			m_DrawBackgroundTransparent, m_BackgroundColor, m_BackgroundBorderColor, m_SelectedItemBackgroundColor);
+		for (auto& quadrant: m_PieQuadrants) reader(quadrant.m_Enabled, quadrant.m_Direction);
+		reader(m_CurrentInnerRadius, m_CursorInVisiblePosition, m_CursorAngle, m_CursorVisualAngle,
+			m_BGBitmapNeedsRedrawing, m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing);
+		BitmapCheckpoint::StageOwned(reader, m_BGBitmap, validateOnly);
+		BitmapCheckpoint::StageOwned(reader, m_BGRotationBitmap, validateOnly);
+		BitmapCheckpoint::StageOwned(reader, m_BGPieSlicesWithSubPieMenuBitmap, validateOnly);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+bool PieMenu::RunCheckpointSelfTest() {
+	bool passed = true;
+	const auto check = [&](const char* name, bool value) {
+		passed = passed && value;
+		std::cout << "[piemenu-checkpoint-selftest] " << (value ? "PASS " : "FAIL ") << name << std::endl;
+	};
+	PieMenu menu;
+	if (menu.Create() < 0) return false;
+	menu.m_CenterPos.SetXY(13.25F, -7.5F); menu.m_Rotation.SetRadAngle(0.375F);
+	menu.m_CurrentInnerRadius = 31; menu.m_CursorAngle = -0.5F; menu.m_CursorVisualAngle = 0.625F;
+	menu.m_CursorInVisiblePosition = true; menu.m_MenuMode = MenuMode::Freeze;
+	menu.m_EnableDisableAnimationTimer.SetStartSimTimeTicks(1234);
+	menu.m_HoverTimer.SetSimTimeLimitTicks(4321);
+	menu.m_BGBitmapNeedsRedrawing = false; menu.m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing = false;
+	int color = 21;
+	for (BITMAP* bitmap: {menu.m_BGBitmap, menu.m_BGRotationBitmap, menu.m_BGPieSlicesWithSubPieMenuBitmap}) {
+		putpixel(bitmap, 3, 4, color++); set_clip_rect(bitmap, 1, 2, 8, 9);
+	}
+	const auto saved = menu.SaveRuntimeCheckpoint();
+	BITMAP* retained = menu.m_BGBitmap;
+	menu.m_CenterPos.SetXY(-1, -2); menu.m_CursorAngle = 1.0F;
+	putpixel(menu.m_BGBitmap, 3, 4, 77);
+	const auto perturbed = menu.SaveRuntimeCheckpoint();
+	check("validation_does_not_mutate", menu.LoadRuntimeCheckpoint(saved, true) && menu.SaveRuntimeCheckpoint() == perturbed);
+	check("malformed_is_atomic", !menu.LoadRuntimeCheckpoint(saved + "extra") && menu.SaveRuntimeCheckpoint() == perturbed);
+	check("values_and_bitmap_identity", menu.LoadRuntimeCheckpoint(saved) && menu.SaveRuntimeCheckpoint() == saved && menu.m_BGBitmap == retained);
+	check("independent_values", menu.m_CenterPos == Vector(13.25F, -7.5F) && menu.m_CurrentInnerRadius == 31 && menu.m_CursorAngle == -0.5F &&
+		menu.m_CursorVisualAngle == 0.625F && menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 1234 && menu.m_HoverTimer.GetSimTimeLimitTicks() == 4321);
+	check("independent_pixels_and_clip", getpixel(menu.m_BGBitmap, 3, 4) == 21 && getpixel(menu.m_BGRotationBitmap, 3, 4) == 22 &&
+		getpixel(menu.m_BGPieSlicesWithSubPieMenuBitmap, 3, 4) == 23 && menu.m_BGBitmap->cl == 1 && menu.m_BGBitmap->cb == 10 && !menu.m_BGBitmapNeedsRedrawing);
+	PieMenu copy;
+	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved); }
+	check("clone_owns_its_bitmaps", copy.m_BGBitmap != menu.m_BGBitmap && copy.m_BGRotationBitmap != menu.m_BGRotationBitmap && copy.m_BGPieSlicesWithSubPieMenuBitmap != menu.m_BGPieSlicesWithSubPieMenuBitmap);
+	return passed;
 }
 
 void PieMenu::SetOwner(Actor* newOwner) {
