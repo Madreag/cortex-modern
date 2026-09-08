@@ -204,6 +204,7 @@ static std::string ResyncSaveName() {
 			}
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<GnsTransport> transport;
 		std::unique_ptr<NetSession> session;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
@@ -438,6 +439,7 @@ static std::string ResyncSaveName() {
 		RunCleanLeave();
 		m_LanDiscovery.Stop();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetSession> session;
@@ -476,6 +478,7 @@ static std::string ResyncSaveName() {
 			m_Worker.join();
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetSession> session;
@@ -521,6 +524,7 @@ static std::string ResyncSaveName() {
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::SetSessionPump(nullptr);
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(result.empty() ? "match over" : result);
@@ -534,6 +538,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::SetSessionPump(nullptr);
 		const std::string reason = result.empty() ? std::string("player left") : result;
 		bool exchangeOwed = false;
 		{
@@ -671,6 +676,9 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get());
 		m_Coordinator->DeferStopsToTickBoundary();
 		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
+		// The lockstep wait parks the sim thread; without this the plane could not answer a leave or a
+		// reclaim while the round waits on the very peer that sent it.
+		ScenarioRunner::SetSessionPump([this] { PumpSessionEvents(); });
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
 		m_PendingSessionEvents.clear();

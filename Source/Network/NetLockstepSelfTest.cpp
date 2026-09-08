@@ -3,6 +3,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetProtocol.h"
+#include "System/ScenarioRunner.h"
 
 #include <algorithm>
 #include <functional>
@@ -1761,6 +1762,72 @@ namespace RTE {
 			return true;
 		}
 
+		// A6: the sim thread parks in the lockstep wait while a peer is silent, so the admission plane
+		// has to be serviced from inside it - the silent peer may be waiting on the very answer only
+		// that pump can send, which is what left every clean leave unacknowledged.
+		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
+			const uint16_t port = 43050;
+			const uint64_t sessionId = 0x7000000000000050ULL;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 200;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 2000; now += 5) {
+				host.Tick(now);
+				client.Tick(now);
+				if (host.IsRunning() && client.IsRunning()) {
+					break;
+				}
+				hostT.AdvanceTimeMs(5);
+				clientT.AdvanceTimeMs(5);
+			}
+			if (!host.IsRunning()) {
+				*error = "the pump fixture did not reach Running";
+				return false;
+			}
+			// The client never sends frame 0, so the host waits for it and times out.
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
+				return false;
+			}
+			uint32_t pumps = 0;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&pumps] { ++pumps; });
+			NetLockstepReadyFrame ready;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(0, ready, &waitError);
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (got) {
+				*error = "the wait returned a frame the peer never sent";
+				return false;
+			}
+			if (pumps == 0) {
+				*error = "the admission plane was never serviced while the round waited";
+				return false;
+			}
+			// Paced, not spun: a wait of a few hundred ms must not run the plane's clock away.
+			if (pumps > 200) {
+				*error = "the wait pumped the admission plane " + std::to_string(pumps) + " times, unpaced";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1792,6 +1859,7 @@ namespace RTE {
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
 		    !TestCoordinatorDroppedSeatHold(&error) ||
 		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
+		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error)) {
 			return fail(error);
 		}
