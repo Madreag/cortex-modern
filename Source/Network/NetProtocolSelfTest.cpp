@@ -151,6 +151,24 @@ namespace RTE {
 			if (!RoundTrip({12, 0, emptyDiagnostics}, error)) {
 				return false;
 			}
+			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::SeatReassigned); ++raw) {
+				const NetRejectReason reason = static_cast<NetRejectReason>(raw);
+				if (std::string(NetProtocol::RejectReasonName(reason)) == "Unknown") {
+					*error = "reject reason " + std::to_string(raw) + " has no name";
+					return false;
+				}
+				if (!RoundTrip({13, 0, NetJoinRejected{reason, "refused", "key", "", ""}}, error)) {
+					*error = "reject reason " + std::to_string(raw) + " did not survive the wire: " + *error;
+					return false;
+				}
+			}
+			std::vector<uint8_t> beyond;
+			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::SeatReassigned) + 1U), "refused", "key", "", ""}}, beyond, error)) {
+				return false;
+			}
+			if (!ExpectDecodeError(beyond, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
 			return true;
 		}
 
@@ -209,6 +227,9 @@ namespace RTE {
 				{{26, 0, NetH4Proof{c_NetH4Version, MakeBytes<16>(0x20), MakeBytes<16>(0x30), 2, 7, MakeBytes<16>(0x80), MakeBytes<32>(0x90)}}, 88},
 				{{27, 0, NetH4LeaveRequest{c_NetH4Version, MakeBytes<16>(0xA0), MakeBytes<16>(0x30), 2, 7}}, 40},
 				{{28, 0, NetH4LeaveAck{c_NetH4Version, MakeBytes<16>(0xA0), 2, 7, true}}, 28},
+				{{30, 0, NetH4ApplicantAck{c_NetH4Version, MakeBytes<16>(0xB0), 1, 20000}}, 24},
+				{{31, 0, NetH4SubstitutionOffer{c_NetH4Version, MakeBytes<16>(0xB0), MakeBytes<16>(0x50), 1, 2, MakeBytes<32>(0x60), MakeBytes<32>(0x70), 0xAABBCCDDEEFF0011ULL, 20000}}, 116},
+				{{32, 0, NetH4SubstitutionAck{c_NetH4Version, MakeBytes<16>(0xB0), 1, 2, MakeBytes<16>(0x80), MakeBytes<32>(0x90), true}}, 76},
 			};
 			for (const auto& [message, payloadBytes] : messages) {
 				if (!RoundTrip(message, error)) {
@@ -224,7 +245,30 @@ namespace RTE {
 					return false;
 				}
 			}
-			if (!RoundTrip({20, 0, newJoin}, error) || !RoundTrip({24, 0, reclaim}, error)) {
+			NetH4Applicant applicant;
+			applicant.txId = MakeBytes<16>(0xB0);
+			applicant.stableSeat = 1;
+			applicant.identity = MakeH4Identity();
+			applicant.displayName = "Substitute";
+			if (!RoundTrip({20, 0, newJoin}, error) || !RoundTrip({24, 0, reclaim}, error) || !RoundTrip({33, 0, applicant}, error)) {
+				return false;
+			}
+
+			// The Phase-B applicant is the second-widest admission message; the Reclaim stays the one
+			// the cap is sized against.
+			NetH4Applicant widestApplicant = applicant;
+			widestApplicant.identity.gameVersion.assign(NetProtocol::c_MaxShortTextBytes, 'v');
+			widestApplicant.identity.buildId.assign(NetProtocol::c_MaxShortTextBytes, 'b');
+			widestApplicant.displayName.assign(NetProtocol::c_MaxDisplayNameBytes, 'n');
+			std::vector<uint8_t> widestApplicantBytes;
+			if (!EncodeMessage({34, 0, widestApplicant}, widestApplicantBytes, error)) {
+				return false;
+			}
+			if (widestApplicantBytes.size() - NetProtocol::c_HeaderBytes != 478U) {
+				*error = "worst-case Applicant payload is " + std::to_string(widestApplicantBytes.size() - NetProtocol::c_HeaderBytes) + " bytes, not 478";
+				return false;
+			}
+			if (!RoundTrip({34, 0, widestApplicant}, error)) {
 				return false;
 			}
 
@@ -303,6 +347,36 @@ namespace RTE {
 				*error = "canonical LeaveAck bytes differed (size " + std::to_string(bytes.size()) + ")";
 				return false;
 			}
+
+			if (!EncodeMessage({9, 0, NetH4SubstitutionAck{c_NetH4Version, MakeBytes<16>(0xB0), 1, 2, MakeBytes<16>(0x80), MakeBytes<32>(0x90), true}}, bytes, error)) {
+				return false;
+			}
+			std::vector<uint8_t> expectedSubstitution = {
+				0x43, 0x43, 0x4E, 0x32,
+				0x01, 0x00,
+				0x18, 0x00,
+				0x17, 0x00,
+				0x00, 0x00,
+				0x09, 0x00, 0x00, 0x00,
+				0x4C, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00,
+				0x01, 0x00,
+			};
+			for (uint8_t i = 0; i < 16; ++i) {
+				expectedSubstitution.push_back(static_cast<uint8_t>(0xB0 + i));
+			}
+			expectedSubstitution.insert(expectedSubstitution.end(), {0x01, 0x00, 0x02, 0x00, 0x00, 0x00});
+			for (uint8_t i = 0; i < 16; ++i) {
+				expectedSubstitution.push_back(static_cast<uint8_t>(0x80 + i));
+			}
+			for (uint8_t i = 0; i < 32; ++i) {
+				expectedSubstitution.push_back(static_cast<uint8_t>(0x90 + i));
+			}
+			expectedSubstitution.insert(expectedSubstitution.end(), {0x01, 0x00, 0x00, 0x00});
+			if (bytes != expectedSubstitution) {
+				*error = "canonical SubstitutionAck bytes differed (size " + std::to_string(bytes.size()) + ")";
+				return false;
+			}
 			return true;
 		}
 
@@ -374,6 +448,38 @@ namespace RTE {
 			mutated = bytes;
 			for (size_t i = 0; i < 4; ++i) {
 				mutated[NetProtocol::c_HeaderBytes + 24U + i] = 0;
+			}
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+
+			if (!EncodeMessage({6, 0, NetH4SubstitutionAck{c_NetH4Version, MakeBytes<16>(0xB0), 1, 2, MakeBytes<16>(0x80), MakeBytes<32>(0x90), true}}, bytes, error)) {
+				return false;
+			}
+			mutated = bytes;
+			for (size_t i = 0; i < 4; ++i) {
+				mutated[NetProtocol::c_HeaderBytes + 20U + i] = 0;
+			}
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+			mutated = bytes;
+			mutated[NetProtocol::c_HeaderBytes + 72U] = 2U;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+			mutated = bytes;
+			mutated[NetProtocol::c_HeaderBytes + 73U] = 1U;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::ReservedFieldNonZero, error)) {
+				return false;
+			}
+
+			if (!EncodeMessage({7, 0, NetH4SubstitutionOffer{c_NetH4Version, MakeBytes<16>(0xB0), MakeBytes<16>(0x50), 1, 2, MakeBytes<32>(0x60), MakeBytes<32>(0x70), 1, 20000}}, bytes, error)) {
+				return false;
+			}
+			mutated = bytes;
+			for (size_t i = 0; i < 4; ++i) {
+				mutated[NetProtocol::c_HeaderBytes + 36U + i] = 0;
 			}
 			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
 				return false;

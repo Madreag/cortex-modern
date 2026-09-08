@@ -211,6 +211,8 @@ namespace RTE {
 				case NetRejectReason::MalformedMessage:
 				case NetRejectReason::Timeout:
 				case NetRejectReason::InternalError:
+				case NetRejectReason::SessionEnded:
+				case NetRejectReason::SeatReassigned:
 					out = static_cast<NetRejectReason>(rawReason);
 					return true;
 			}
@@ -431,6 +433,46 @@ namespace RTE {
 			AppendU16LE(out, payload.stableSeat);
 			AppendU32LE(out, payload.holderGeneration);
 			AppendBool(out, payload.seatClosed);
+			return AppendH4Reserved(out, 3);
+		}
+
+		bool EncodePayload(const NetH4Applicant& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendU16LE(out, payload.stableSeat);
+			return AppendH4Identity(out, payload.identity, error) &&
+			       AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+		}
+
+		bool EncodePayload(const NetH4ApplicantAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.expiresInMs);
+			return true;
+		}
+
+		bool EncodePayload(const NetH4SubstitutionOffer& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.epoch);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendBytes(out, payload.credential);
+			AppendBytes(out, payload.challenge);
+			AppendU64LE(out, payload.hostSessionId);
+			AppendU32LE(out, payload.provisionalExpiryMs);
+			return true;
+		}
+
+		bool EncodePayload(const NetH4SubstitutionAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendBytes(out, payload.clientNonce);
+			AppendBytes(out, payload.mac);
+			AppendBool(out, payload.stored);
 			return AppendH4Reserved(out, 3);
 		}
 
@@ -737,6 +779,44 @@ namespace RTE {
 			       ReadH4Bool(reader, payload.seatClosed, "seat_closed", error) &&
 			       ReadH4Reserved(reader, 3, error);
 		}
+
+		bool DecodePayload(ByteReader& reader, NetH4Applicant& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4Identity(reader, payload.identity, error) &&
+			       reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4ApplicantAck& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadOrTruncated(reader.ReadU32LE(payload.expiresInMs), reader, error, "expires_in_ms");
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4SubstitutionOffer& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.epoch), reader, error, "epoch") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.credential), reader, error, "credential") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.challenge), reader, error, "challenge") &&
+			       ReadOrTruncated(reader.ReadU64LE(payload.hostSessionId), reader, error, "host_session_id") &&
+			       ReadOrTruncated(reader.ReadU32LE(payload.provisionalExpiryMs), reader, error, "provisional_expiry_ms");
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4SubstitutionAck& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.clientNonce), reader, error, "client_nonce") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.mac), reader, error, "mac") &&
+			       ReadH4Bool(reader, payload.stored, "stored", error) &&
+			       ReadH4Reserved(reader, 3, error);
+		}
 	}
 
 	bool NetProtocol::IsH4MessageType(NetMessageType type) {
@@ -750,6 +830,10 @@ namespace RTE {
 			case NetMessageType::Proof:
 			case NetMessageType::LeaveRequest:
 			case NetMessageType::LeaveAck:
+			case NetMessageType::Applicant:
+			case NetMessageType::ApplicantAck:
+			case NetMessageType::SubstitutionOffer:
+			case NetMessageType::SubstitutionAck:
 				return true;
 			default:
 				return false;
@@ -777,6 +861,10 @@ namespace RTE {
 			[](const NetH4Proof&) { return NetMessageType::Proof; },
 			[](const NetH4LeaveRequest&) { return NetMessageType::LeaveRequest; },
 			[](const NetH4LeaveAck&) { return NetMessageType::LeaveAck; },
+			[](const NetH4Applicant&) { return NetMessageType::Applicant; },
+			[](const NetH4ApplicantAck&) { return NetMessageType::ApplicantAck; },
+			[](const NetH4SubstitutionOffer&) { return NetMessageType::SubstitutionOffer; },
+			[](const NetH4SubstitutionAck&) { return NetMessageType::SubstitutionAck; },
 		}, payload);
 	}
 
@@ -801,6 +889,10 @@ namespace RTE {
 			case NetMessageType::Proof: return "Proof";
 			case NetMessageType::LeaveRequest: return "LeaveRequest";
 			case NetMessageType::LeaveAck: return "LeaveAck";
+			case NetMessageType::Applicant: return "Applicant";
+			case NetMessageType::ApplicantAck: return "ApplicantAck";
+			case NetMessageType::SubstitutionOffer: return "SubstitutionOffer";
+			case NetMessageType::SubstitutionAck: return "SubstitutionAck";
 		}
 		return "Unknown";
 	}
@@ -823,6 +915,7 @@ namespace RTE {
 			case NetRejectReason::Timeout: return "Timeout";
 			case NetRejectReason::InternalError: return "InternalError";
 			case NetRejectReason::SessionEnded: return "SessionEnded";
+			case NetRejectReason::SeatReassigned: return "SeatReassigned";
 		}
 		return "Unknown";
 	}
@@ -1095,6 +1188,30 @@ namespace RTE {
 			}
 			case NetMessageType::LeaveAck: {
 				NetH4LeaveAck value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::Applicant: {
+				NetH4Applicant value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::ApplicantAck: {
+				NetH4ApplicantAck value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::SubstitutionOffer: {
+				NetH4SubstitutionOffer value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::SubstitutionAck: {
+				NetH4SubstitutionAck value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = value;
 				break;
