@@ -134,6 +134,13 @@ namespace RTE {
 		}
 		CheckTimeouts();
 		MaybeSendHeartbeats();
+		if (m_ReconnectHost) {
+			m_ReconnectHost->Tick(m_NowMs);
+		}
+		if (m_ReconnectClient) {
+			m_ReconnectClient->Tick(m_NowMs);
+		}
+		FlushReconnectOutbound();
 	}
 
 	void NetSession::TickKeepalive(uint64_t nowMs) {
@@ -152,6 +159,22 @@ namespace RTE {
 			return;
 		}
 		ProcessEvent(event);
+		FlushReconnectOutbound();
+	}
+
+	void NetSession::EndHostedSession(const std::string& reason) {
+		if (m_Transport && m_Role == NetSessionRole::Host) {
+			for (const PeerState& peer : m_Peers) {
+				if (IsActive(peer.state)) {
+					Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::SessionEnded), reason});
+				}
+			}
+		}
+		if (m_ReconnectHost) {
+			m_ReconnectHost->EndHostedSession();
+			m_ReconnectHost->TakeOutbound();
+		}
+		Close(reason);
 	}
 
 	void NetSession::Close(const std::string& reason) {
@@ -292,6 +315,11 @@ namespace RTE {
 				break;
 			case NetTransportEventType::PeerDisconnected:
 				if (m_Role == NetSessionRole::Host) {
+					if (m_ReconnectHost && m_ReconnectHost->NotifyDisconnect(event.peerId, m_LockstepFrame) == NetH4DisconnectOutcome::Fenced) {
+						// A superseded incarnation timing out; the seat's live holder is untouched.
+						++m_Stats.fencedDisconnects;
+						break;
+					}
 					if (PeerState* peer = FindPeer(event.peerId)) {
 						peer->state = NetSessionState::Closed;
 					}
@@ -305,6 +333,12 @@ namespace RTE {
 				}
 				break;
 			case NetTransportEventType::PacketReceived:
+				if (m_Role == NetSessionRole::Host && m_ReconnectHost && m_ReconnectHost->IsFenced(event.peerId)) {
+					// Delayed traffic from a transport the seat no longer answers to.
+					++m_Stats.fencedPackets;
+					m_ReconnectHost->CountFencedPacket();
+					break;
+				}
 				ProcessPacket(event.peerId, event.bytes);
 				break;
 			case NetTransportEventType::LocalTransportFault:
@@ -446,8 +480,58 @@ namespace RTE {
 			RefreshHostState();
 			return;
 		}
+		if (RouteAdmissionMessage(peerId, message.payload)) {
+			return;
+		}
 		if (peer->state == NetSessionState::Handshake) {
 			RejectPeer(*peer, NetRejectReason::MalformedMessage, "message_type", "ClientHello", NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload)), "unexpected handshake message");
+		}
+	}
+
+	bool NetSession::RouteAdmissionMessage(NetPeerId peerId, const NetPayload& payload) {
+		if (!NetProtocol::IsH4MessageType(NetProtocol::MessageTypeOf(payload))) {
+			return false;
+		}
+		bool handled = false;
+		if (m_Role == NetSessionRole::Host && m_ReconnectHost) {
+			handled = m_ReconnectHost->HandleMessage(peerId, payload, m_NowMs);
+		} else if (m_Role == NetSessionRole::Client && m_ReconnectClient) {
+			handled = m_ReconnectClient->HandleMessage(payload, m_NowMs);
+		}
+		if (handled) {
+			++m_Stats.admissionMessages;
+			FlushReconnectOutbound();
+		}
+		return handled;
+	}
+
+	void NetSession::FlushReconnectOutbound() {
+		if (m_ReconnectHost) {
+			for (NetH4Outbound& outbound : m_ReconnectHost->TakeOutbound()) {
+				Send(outbound.connection, std::move(outbound.payload));
+			}
+			for (const NetH4Commit& commit : m_ReconnectHost->TakeCommits()) {
+				// The seat's own peer id, never a freshly allocated one: ownership resolution keys on it,
+				// so a different id would silently re-point every actor the returner had.
+				if (PeerState* peer = FindPeer(commit.connection)) {
+					peer->assignedPeerId = commit.assignedPeerId;
+					peer->state = NetSessionState::Ready;
+					peer->lastReceiveMs = m_NowMs;
+					peer->lastHeartbeatMs = m_NowMs;
+				}
+				if (commit.supersededConnection != c_InvalidNetPeerId) {
+					if (PeerState* superseded = FindPeer(commit.supersededConnection)) {
+						superseded->state = NetSessionState::Closed;
+					}
+					m_Transport->Disconnect(commit.supersededConnection, "seat reclaimed by a newer connection");
+				}
+				RefreshHostState();
+			}
+		}
+		if (m_ReconnectClient && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			for (NetH4Outbound& outbound : m_ReconnectClient->TakeOutbound()) {
+				Send(m_RemoteTransportPeerId, std::move(outbound.payload));
+			}
 		}
 	}
 
@@ -493,7 +577,14 @@ namespace RTE {
 			m_LastReceiveMs = m_NowMs;
 			return;
 		}
+		if (RouteAdmissionMessage(peerId, message.payload)) {
+			return;
+		}
 		if (const auto* disconnect = std::get_if<NetDisconnect>(&message.payload)) {
+			if (m_ReconnectClient && disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::SessionEnded)) {
+				// The one signal, other than a LeaveAck, that lets the recovery record be deleted.
+				m_ReconnectClient->NotifyConfirmedSessionEnd();
+			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
 				if (!m_HasReject && !disconnect->message.empty()) {
 					RecordReject(NetRejectReason::InternalError, "", "", "", disconnect->message);
@@ -807,6 +898,42 @@ namespace RTE {
 			});
 		}
 
+		// The reconnect counters the 9a gates read: nothing here is a secret, only how many of each
+		// kind of admission event the host saw.
+		json admission = json::object();
+		if (m_ReconnectHost) {
+			const NetReconnectHostStats& stats = m_ReconnectHost->GetStats();
+			admission = json{
+				{"new_joins", stats.newJoins},
+				{"ticket_offers_sent", stats.ticketOffersSent},
+				{"ticket_offer_retransmits", stats.ticketOfferRetransmits},
+				{"provisional_seats_opened", stats.provisionalSeatsOpened},
+				{"provisional_seats_committed", stats.provisionalSeatsCommitted},
+				{"provisional_seats_expired", stats.provisionalSeatsExpired},
+				{"provisional_seats_refused", stats.provisionalSeatsRefused},
+				{"provisional_seats_resumed", stats.provisionalSeatsResumed},
+				{"persistence_failures", stats.persistenceFailures},
+				{"reclaims_accepted", stats.reclaimsAccepted},
+				{"identity_rejections", stats.identityRejections},
+				{"denials_scheduled", stats.denialsScheduled},
+				{"denials_released", stats.denialsReleased},
+				{"replayed_results", stats.replayedResults},
+				{"stale_epoch_drops", stats.staleEpochDrops},
+				{"unknown_transaction_drops", stats.unknownTransactionDrops},
+				{"fenced_packets", stats.fencedPackets},
+				{"fenced_disconnects", stats.fencedDisconnects},
+				{"incarnations_bound", stats.incarnationsBound},
+				{"seats_dropped", stats.seatsDropped},
+				{"seats_closed_by_leave", stats.seatsClosedByLeave},
+				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
+				{"reseats_issued", stats.reseatsIssued},
+				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
+				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
+				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
+				{"ledger_seats", m_ReconnectHost->GetLedger().Size()},
+			};
+		}
+
 		json report{
 			{"schema", 1},
 			{"session_id", std::to_string(m_SessionId)},
@@ -832,12 +959,18 @@ namespace RTE {
 			}},
 			{"remote_identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
 			{"peers", peers},
+			{"admission", admission},
 			{"stats", {
 				{"sent_messages", m_Stats.sentMessages},
 				{"received_messages", m_Stats.receivedMessages},
 				{"malformed_messages", m_Stats.malformedMessages},
 				{"ignored_phase_packets", m_Stats.ignoredPhasePackets},
 				{"timeouts", m_Stats.timeouts},
+				{"unbound_connection_faults", m_Stats.unboundConnectionFaults},
+				{"unauthenticated_connections_refused", m_Stats.unauthenticatedConnectionsRefused},
+				{"fenced_packets", m_Stats.fencedPackets},
+				{"fenced_disconnects", m_Stats.fencedDisconnects},
+				{"admission_messages", m_Stats.admissionMessages},
 			}},
 		};
 		return report.dump(2);
