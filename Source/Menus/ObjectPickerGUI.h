@@ -20,6 +20,7 @@ namespace RTE {
 
 	/// A GUI for picking object instances for placement to the Scene in various editors.
 	class ObjectPickerGUI {
+		friend class GUICheckpoint;
 
 	public:
 
