@@ -1404,6 +1404,7 @@ namespace RTE {
 			bool holdingBeforeDrop = false;
 			bool holdingDuringHold = false;
 			bool holdingAfterWindow = false;
+			bool stillUsesDeadTransport = false;
 			auto runDrop = [&](bool holdSeat, bool fenceTransport, bool cleanLeave, NetLockstepState& outState,
 			                   size_t& outLeaves, std::string& outReason, uint64_t& outFramesAlone) {
 				++port;
@@ -1491,6 +1492,8 @@ namespace RTE {
 				outReason = host.GetStats().timeoutReason;
 				// A5: the activity gate reads exactly this - the round is alive only for a held seat.
 				holdingDuringHold = host.IsHoldingSeatForReclaim();
+				// A6: whatever the round decided, it must stop naming a transport that is gone.
+				stillUsesDeadTransport = host.UsesTransportPeer(static_cast<NetPeerId>(1));
 				if (outState == NetLockstepState::Running && !cleanLeave && !fenceTransport) {
 					// The window closes: the very next Tick must end a round nobody is coming back to.
 					stub.held = false;
@@ -1575,6 +1578,10 @@ namespace RTE {
 			}
 			if (holdingDuringHold) {
 				*error = "a round with nobody gone reported itself as holding a seat";
+				return false;
+			}
+			if (stillUsesDeadTransport) {
+				*error = "the round kept naming a superseded incarnation's transport";
 				return false;
 			}
 			return true;
