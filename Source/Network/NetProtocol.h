@@ -366,6 +366,16 @@ namespace RTE {
 		static const char* ErrorCodeName(NetProtocolErrorCode code);
 
 		static bool Encode(const NetMessage& message, std::vector<uint8_t>& outBytes, NetProtocolError* error = nullptr);
+		/// Encodes at an explicit header version so a peer on an older wire can still decode the
+		/// envelope. Refused for any version whose payload schema this build cannot produce, because a
+		/// rejection the peer misreads is worse than none (§10).
+		static bool EncodeAtVersion(const NetMessage& message, uint16_t headerVersion, std::vector<uint8_t>& outBytes, NetProtocolError* error = nullptr);
+		/// Whether a rejection stamped at that header version is one this build can honestly produce.
+		static bool CanEncodeAtVersion(uint16_t headerVersion);
+		/// Reads the header version out of a buffer whose magic matches, without decoding the payload.
+		/// This is the stable negotiation envelope §10's probe asks about: magic and version sit at
+		/// fixed offsets in every version of this header.
+		static bool PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion);
 		static NetDecodeResult Decode(const uint8_t* data, size_t size);
 		static NetDecodeResult Decode(const std::vector<uint8_t>& bytes);
 	};
