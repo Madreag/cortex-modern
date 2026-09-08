@@ -197,6 +197,7 @@ namespace RTE {
 	}
 
 	bool NetReconnectHost::HandleMessage(NetPeerId connection, const NetPayload& payload, uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
 		if (const auto* newJoin = std::get_if<NetH4NewJoin>(&payload)) {
 			HandleNewJoin(connection, *newJoin, nowMs);
 			return true;
@@ -495,6 +496,7 @@ namespace RTE {
 		seat->closed = true;
 		seat->committed = false;
 		seat->activeConnection = c_InvalidNetPeerId;
+		seat->dropped = false;
 		m_Ledger.ClearSeat(message.stableSeat);
 		m_Admission.DropConnection(connection);
 		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [&message](const Fence& fence) {
@@ -519,6 +521,8 @@ namespace RTE {
 		}
 		++seat.incarnation;
 		seat.activeConnection = connection;
+		seat.dropped = false;
+		seat.holdExpired = false;
 		// A transport that reclaims its own seat is live again, so it is no longer a fence.
 		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [connection](const Fence& fence) {
 			return fence.connection == connection;
@@ -593,6 +597,9 @@ namespace RTE {
 		for (SeatState& seat : m_Seats) {
 			if (seat.committed && seat.activeConnection == connection) {
 				seat.activeConnection = c_InvalidNetPeerId;
+				seat.dropped = true;
+				seat.droppedAtMs = m_NowMs;
+				seat.holdExpired = false;
 				RecordDrop(seat, frame);
 				++m_Stats.seatsDropped;
 				return NetH4DisconnectOutcome::SeatDropped;
@@ -620,10 +627,13 @@ namespace RTE {
 			seat.committed = false;
 			seat.closed = false;
 			seat.saturated = false;
+			seat.dropped = false;
+			seat.holdExpired = false;
 		}
 	}
 
 	void NetReconnectHost::Tick(uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
 		for (auto pending = m_Provisionals.begin(); pending != m_Provisionals.end();) {
 			if (nowMs >= pending->openedAtMs && nowMs - pending->openedAtMs > c_ProvisionalExpiryMs) {
 				if (m_Registry != nullptr) {
@@ -649,7 +659,21 @@ namespace RTE {
 			++m_Stats.denialsReleased;
 			Send(denial.connection, NetJoinRejected{NetRejectReason::HostNotAccepting, c_DenialText, "", "", ""});
 		}
+		// A dropped holder stops being worth waiting for at the same P2 horizon a provisional seat has;
+		// the seat stays reclaimable, it just no longer keeps a round alive on its own.
+		for (SeatState& seat : m_Seats) {
+			if (seat.dropped && !seat.holdExpired && nowMs >= seat.droppedAtMs && nowMs - seat.droppedAtMs > c_ProvisionalExpiryMs) {
+				seat.holdExpired = true;
+				++m_Stats.seatHoldsExpired;
+			}
+		}
 		m_TxCache.Expire(nowMs);
+	}
+
+	bool NetReconnectHost::IsSeatHeldForReclaim(uint8_t lockstepPeerId) const {
+		return std::any_of(m_Seats.begin(), m_Seats.end(), [lockstepPeerId](const SeatState& seat) {
+			return seat.seat.lockstepPeerId == lockstepPeerId && seat.committed && !seat.closed && !seat.holdExpired;
+		});
 	}
 
 	bool NetReconnectHost::GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const {

@@ -6,6 +6,7 @@
 #include "SoundSimulation.h"
 
 namespace RTE {
+	class SoundContainer;
 
 	/// Self-contained struct defining an individual sound in a SoundSet.
 	struct SoundData {
@@ -119,7 +120,11 @@ namespace RTE {
 
 		/// Adds a copy of the passed in SoundSet as a sub SoundSet of this SoundSet. Ownership IS transferred!
 		/// @param soundSetToAdd A reference to the SoundSet to be copied in as a sub SoundSet of this SoundSet. Ownership IS transferred!
-		void AddSoundSet(const SoundSet& soundSetToAdd) { m_SubSoundSets.push_back(new SoundSet(soundSetToAdd)); }
+		void AddSoundSet(const SoundSet& soundSetToAdd) {
+			SoundSet* added = new SoundSet(soundSetToAdd);
+			added->SetOwnerContainer(m_OwnerContainer);
+			m_SubSoundSets.push_back(added);
+		}
 #pragma endregion
 
 #pragma region Getters and Setters
@@ -159,6 +164,13 @@ namespace RTE {
 		/// Selects the next sounds of this SoundSet to be played, also selecting them for sub SoundSets as appropriate.
 		/// @return False if this SoundSet or any of its sub SoundSets failed to select sounds, or true if everything worked.
 		bool SelectNextSounds();
+
+		/// Selects the next sounds for real, without deferring an AI hook's call.
+		bool SelectNextSoundsNow();
+
+		/// Names the SoundContainer this set belongs to, so an AI hook's selection can be deferred to
+		/// the committed tick. A set a script owns outright has none.
+		void SetOwnerContainer(SoundContainer* owner);
         bool HasSelectedSounds() const;
         std::string SaveSimulationCheckpoint() const;
         bool LoadSimulationCheckpoint(std::string_view text, bool validateOnly = false);
@@ -177,9 +189,12 @@ namespace RTE {
 		SoundSelectionCycleMode m_SoundSelectionCycleMode; //!< The SoundSelectionCycleMode for this SoundSet.
 		std::pair<bool, int> m_CurrentSelection; //!< Whether the current selection is in the SoundData (false) or SoundSet (true) vector, and its index in the appropriate vector.
 
-        std::array<std::pair<bool, int>, 2> m_SimulationSelections{{{false, -1}, {false, -1}}};
-        std::pair<bool, int>& CurrentSelection() { const auto domain = SoundSimulationScope::Domain(); return domain == SoundExecutionDomain::Presentation ? m_CurrentSelection : m_SimulationSelections[domain == SoundExecutionDomain::LocalSimulation ? 1 : 0]; }
-        const std::pair<bool, int>& CurrentSelection() const { const auto domain = SoundSimulationScope::Domain(); return domain == SoundExecutionDomain::Presentation ? m_CurrentSelection : m_SimulationSelections[domain == SoundExecutionDomain::LocalSimulation ? 1 : 0]; }
+        // Simulation has one selection, whichever hook asks: an AI hook reads what the simulation
+        // selected and its own selection lands there at the committed tick.
+        std::pair<bool, int> m_SimulationSelection{false, -1};
+        SoundContainer* m_OwnerContainer = nullptr;
+        std::pair<bool, int>& CurrentSelection() { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
+        const std::pair<bool, int>& CurrentSelection() const { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
 
 		std::vector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
 		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.

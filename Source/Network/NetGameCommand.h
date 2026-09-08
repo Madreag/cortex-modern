@@ -21,6 +21,7 @@ namespace RTE {
 		AIEquip = 9,
 		AIOrder = 10,
 		Reseat = 11,
+		SoundOp = 12,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -168,6 +169,36 @@ namespace RTE {
 		bool operator==(const NetGameAIEquip&) const = default;
 	};
 
+	// A sound call an AI hook made on an actor the issuing peer drives. The decision is per-machine
+	// (off-wire); the call crosses the wire so every peer's sim, the owner's included, performs it at
+	// the committed tick, exactly like the equip calls.
+	struct NetGameSoundOp {
+		// Mirrors SoundContainer::PendingOp; MovableMan asserts the two stay in step.
+		enum Op : uint8_t {
+			Play = 0,
+			Stop = 1,
+			Restart = 2,
+			FadeOut = 3,
+			SelectSounds = 4,
+			SetProperty = 5,
+			OpCount = 6
+		};
+		static constexpr uint8_t c_PropertyCount = 17;
+
+		int64_t actorUID = 0;
+		int32_t team = 0;
+		uint64_t soundIdentity = 0;
+		uint8_t op = 0;
+		uint8_t property = 0;
+		int32_t player = -1;
+		int32_t value = 0;
+		float x = 0.0F;
+		float y = 0.0F;
+		std::vector<uint16_t> soundSetPath;
+
+		bool operator==(const NetGameSoundOp&) const = default;
+	};
+
 	// An order a player gives a unit of their team through the AI view modes: waypoints and squads. The
 	// decision is the player's (off-wire); the writes land on every peer at the committed tick.
 	struct NetGameAIOrder {
@@ -200,7 +231,7 @@ namespace RTE {
 		bool operator==(const NetGameReseat&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

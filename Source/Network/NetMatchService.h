@@ -81,8 +81,12 @@ namespace RTE {
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
 		/// Ends the match locally as a clean leave: the other peers keep playing (N-peer) or hear
-		/// "player left" (2-peer); the session objects stay alive exactly like FinishMatch.
+		/// "player left" (2-peer); the session objects stay alive exactly like FinishMatch. §7's leave
+		/// exchange runs first, on the worker, so the ticket is answered while the link is still up.
 		void LeaveMatch(const std::string& result);
+		/// Blocks until the worker has finished. A report written before a leave settles would describe
+		/// the exchange as unacknowledged when it was not.
+		void WaitForPendingWork();
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 
@@ -124,9 +128,14 @@ namespace RTE {
 		/// The drop-frame ownership census. Called by the reconnect host, and only ever from inside
 		/// PumpSessionEvents on the game thread - g_MovableMan is not safe to walk from anywhere else.
 		static std::vector<NetH4LedgerActor> CollectDropOwnership(void* context);
+		/// The H4 seat state the round consults before it adjudicates a lost transport. Called by the
+		/// coordinator on the game thread, which never holds this lock.
+		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();
+		/// The worker half of a leave: the §7 exchange, then - and only then - the round is told.
+		void LeaveWorkerMain(std::string result);
 		/// Ends the hosted session: tells every peer with the one reason that permits deleting a
 		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
 		void EndAdmissionSession();
@@ -155,6 +164,7 @@ namespace RTE {
 		NetReconnectTicketStore m_TicketStore;
 		NetReconnectUx m_ReconnectUx;
 		bool m_AdmissionAttached = false;
+		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
 		static bool s_AdmissionEnabled;
