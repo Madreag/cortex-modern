@@ -427,6 +427,9 @@ namespace RTE {
 		bool IsFailed() const { return m_State == NetLockstepState::Failed; }
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
+		/// The readings this peer held and then had to drop. Their sampler must forget it ever sent them,
+		/// or it will not offer them again until the sound's audibility moves.
+		std::vector<NetSoundObservation> TakeDroppedObservations();
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
 		uint64_t GetRoundId() const { return m_RoundId; }
@@ -552,6 +555,7 @@ namespace RTE {
 		// every binding the sender made.
 		NetSoundObservationTables m_ObservationEncodeTables;
 		std::vector<NetSoundObservation> m_PendingObservations; //!< What the last frame could not hold; rides the next one.
+		std::vector<NetSoundObservation> m_DroppedObservations; //!< Readings the wire never carried, for their sampler to take back.
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
 		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;

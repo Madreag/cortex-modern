@@ -10,6 +10,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -2460,6 +2461,28 @@ namespace RTE {
 			}
 			if (host.GetStats().observationsDropped == 0) {
 				*error = "the held observation set was not bounded under a sustained flood";
+				return false;
+			}
+			// Every dropped reading comes back exactly once, in the order it was sampled, so its sampler
+			// can forget it was ever sent and offer it again.
+			const std::vector<NetSoundObservation> handedBack = host.TakeDroppedObservations();
+			if (handedBack.size() != host.GetStats().observationsDropped) {
+				*error = "the dropped readings were not all handed back: " + std::to_string(handedBack.size()) +
+				         " of " + std::to_string(host.GetStats().observationsDropped);
+				return false;
+			}
+			std::set<NetSoundObservationKey> committedKeys;
+			for (const NetSoundObservation& observation: hostSeen) {
+				committedKeys.insert(KeyOfObservation(observation));
+			}
+			for (const NetSoundObservation& observation: handedBack) {
+				if (committedKeys.contains(KeyOfObservation(observation))) {
+					*error = "a reading was both committed and handed back as dropped";
+					return false;
+				}
+			}
+			if (!host.TakeDroppedObservations().empty()) {
+				*error = "a dropped reading was handed back twice";
 				return false;
 			}
 			if (hostSeen != clientSeen) {
