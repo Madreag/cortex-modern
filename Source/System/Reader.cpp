@@ -3,8 +3,11 @@
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "System.h"
+#include "Vector.h"
 
+#include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -331,6 +334,15 @@ bool Reader::DiscardEmptySpace(bool stopAtLineEnd) {
 	return true;
 }
 
+void Reader::ReportUnknownProperty(const std::string& objectName, const std::string_view& propName) const {
+	// A checkpoint written by another build can name a property this one no longer has. The object loads without it rather than not at all; anything structurally wrong still fails below.
+	if (m_IsCheckpoint) {
+		g_ConsoleMan.PrintString("WARNING: Skipped unknown property '" + std::string(propName) + "' of " + objectName + " in " + m_FilePath + " at line " + std::to_string(m_CurrentLine));
+		return;
+	}
+	ReportError("Could not match property '" + std::string(propName) + "'!");
+}
+
 void Reader::ReportError(const std::string& errorDesc) const {
 	if (m_ThrowOnError) {
 		throw std::runtime_error(errorDesc + " in " + m_FilePath + " at line " + std::to_string(m_CurrentLine));
@@ -342,6 +354,53 @@ void Reader::ReportError(const std::string& errorDesc) const {
 			m_ReportProgress(errorDesc + ", skipping!", true);
 		}
 	}
+}
+
+bool Reader::RunUnknownPropertySelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
+		std::cout << "[reader-selftest] " << (ok ? "PASS " : "FAIL ") << name << (detail.empty() ? "" : " " + detail) << std::endl;
+		passed = passed && ok;
+	};
+
+	const std::string unknownProperty = "SelfTestUnknownProperty";
+	const std::string unknown = "SelfTestVector = Vector\n\tX = 3.25\n\t" + unknownProperty + " = 7\n\tY = -4.5\n";
+	const std::string overIndented = "SelfTestVector = Vector\n\tX = 3.25\n\t\t\tY = -4.5\n";
+
+	// The configuration LuaMan builds to restore a saved native object.
+	const auto readVector = [](const std::string& source, bool checkpoint, Vector& value) {
+		Reader reader(std::make_unique<std::stringstream>(source), "Base.rte/ScriptGraph.ini", false, nullptr, true);
+		reader.SetCheckpoint(checkpoint);
+		reader.SetThrowOnError(true);
+		reader.SetSkipIncludes(true);
+		try {
+			return reader.NextProperty() && reader.ReadPropName() == "SelfTestVector" && value.Create(reader, true, true) >= 0;
+		} catch (const std::exception&) {
+			return false;
+		}
+	};
+
+	Vector tolerated;
+	const bool loaded = readVector(unknown, true, tolerated);
+	check("checkpoint_tolerates_unknown_property", loaded && tolerated.GetX() == 3.25F && tolerated.GetY() == -4.5F, std::to_string(tolerated.GetX()) + "," + std::to_string(tolerated.GetY()));
+
+	Vector refused;
+	check("ordinary_reader_refuses_unknown_property", !readVector(unknown, false, refused));
+
+	Vector malformed;
+	check("checkpoint_refuses_structural_error", !readVector(overIndented, true, malformed));
+
+	const std::string logPath = "ReaderSelfTestConsole.txt";
+	std::string log;
+	if (g_ConsoleMan.SaveAllText(logPath)) {
+		std::ifstream stream(logPath);
+		log.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+	}
+	std::error_code error;
+	std::filesystem::remove(logPath, error);
+	check("checkpoint_warns_on_unknown_property", log.find("Skipped unknown property '" + unknownProperty + "' of Vector") != std::string::npos);
+
+	return passed;
 }
 
 bool Reader::StartIncludeFile() {
