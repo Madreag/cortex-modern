@@ -175,6 +175,10 @@ namespace RTE {
 		/// An id past the peer cap for a mid-match joiner to run its admission transaction on; a commit
 		/// replaces it with the seat's own id. Zero outside a live match, or when the range is full.
 		uint8_t AllocatePendingAdmissionPeerId() const;
+		/// Host: closes a peer's transport ourselves. The admission plane only ever hears about a drop
+		/// through the transport's own event, so a peer we hang up on must be handed to it here or its
+		/// seat is held forever and the next joiner is refused a full lobby.
+		void DropPeerTransport(NetPeerId peerId, const std::string& reason);
 		void RefreshHostState();
 
 		NetClientHello BuildClientHello() const;

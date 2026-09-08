@@ -526,7 +526,7 @@ namespace RTE {
 		}
 		if (std::holds_alternative<NetDisconnect>(message.payload)) {
 			peer->state = NetSessionState::Closed;
-			m_Transport->Disconnect(peerId, "peer disconnected");
+			DropPeerTransport(peerId, "peer disconnected");
 			RefreshHostState();
 			return;
 		}
@@ -702,7 +702,7 @@ namespace RTE {
 						RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "client hello timeout");
 					} else {
 						Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::Timeout), "heartbeat timeout"});
-						m_Transport->Disconnect(peer.transportPeerId, "heartbeat timeout");
+						DropPeerTransport(peer.transportPeerId, "heartbeat timeout");
 						peer.state = NetSessionState::Failed;
 						RecordReject(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "heartbeat timeout");
 						RefreshHostState();
@@ -719,6 +719,16 @@ namespace RTE {
 		}
 	}
 
+	void NetSession::DropPeerTransport(NetPeerId peerId, const std::string& reason) {
+		if (m_Role == NetSessionRole::Host && m_ReconnectHost) {
+			// Fenced connections are handled inside: a superseded incarnation keeps the seat.
+			(void)m_ReconnectHost->NotifyDisconnect(peerId, m_LockstepFrame);
+		}
+		if (m_Transport) {
+			m_Transport->Disconnect(peerId, reason);
+		}
+	}
+
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
 		peer.state = NetSessionState::Rejected;
@@ -730,7 +740,7 @@ namespace RTE {
 		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
 		if (m_Transport) {
 			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
-			m_Transport->Disconnect(peerId, BuildRejectText());
+			DropPeerTransport(peerId, BuildRejectText());
 		}
 	}
 

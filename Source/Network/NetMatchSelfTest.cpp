@@ -752,6 +752,98 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// A joiner arriving into a lobby that is already full of names hears the host's roster before
+		// the host's next config resend: the state names peers its placeholder config cannot seat yet.
+		// Failing the session over a name-and-ping message killed every four-member lobby lane, so the
+		// unseated peer is dropped and the config that follows brings it back.
+		bool TestLobbyLateJoinerRosterRace(std::string* error) {
+			const uint16_t port = 43008;
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = 4;
+			matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client B"});
+			matchConfig.players.push_back(NetMatchPlayerSlot{4, 3, false, "Client C"});
+			LoopbackTransport hostT, clientAT, clientBT, clientCT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](bool host, uint8_t local, std::map<uint8_t, NetPeerId> transports, const char* name, const NetMatchConfig& config) {
+				NetLobbySessionConfig c;
+				c.host = host;
+				c.localPeerId = local;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.matchConfig = config;
+				c.startFrame = 5;
+				c.displayName = name;
+				c.platform = "windows";
+				// The roster moves on every change; the config only resends on its own cadence, which is
+				// exactly the gap a late joiner lands in.
+				c.peerStateIntervalMs = 10;
+				c.resendIntervalMs = 400;
+				return c;
+			};
+			NetLobbySession host, clientA, clientB, clientC;
+			if (!host.Start(hostT, cfg(true, 1, {{2, 1}, {3, 2}, {4, 3}}, "Host", matchConfig), error) ||
+			    !clientA.Start(clientAT, cfg(false, 2, {{1, 1}}, "Client A", matchConfig), error) ||
+			    !clientB.Start(clientBT, cfg(false, 3, {{1, 1}}, "Client B", matchConfig), error)) {
+				return false;
+			}
+			auto step = [&](uint64_t now, bool withC) {
+				host.Tick(now);
+				clientA.Tick(now);
+				clientB.Tick(now);
+				if (withC) clientC.Tick(now);
+				hostT.AdvanceTimeMs(10);
+				clientAT.AdvanceTimeMs(10);
+				clientBT.AdvanceTimeMs(10);
+				if (withC) clientCT.AdvanceTimeMs(10);
+			};
+			// Let the roster fill up with the two seated clients first.
+			uint64_t now = 0;
+			for (; now <= 600; now += 10) {
+				step(now, false);
+			}
+			if (host.GetRemoteName(2) != "Client A" || host.GetRemoteName(3) != "Client B") {
+				*error = "the four-member lobby did not seat its first two clients";
+				return false;
+			}
+			// Client C joins knowing only itself and the host, as a client does before any config lands.
+			NetMatchConfig placeholder = MakeConfig();
+			if (!clientCT.Connect("loopback", port, error) ||
+			    !clientC.Start(clientCT, cfg(false, 4, {{1, 1}}, "Client C", placeholder), error)) {
+				return false;
+			}
+			for (; now <= 4000; now += 10) {
+				step(now, true);
+				if (host.IsStarted() && clientA.IsStarted() && clientB.IsStarted() && clientC.IsStarted()) {
+					break;
+				}
+				if (clientC.IsFailed() || clientC.IsRejected()) {
+					*error = "the late joiner failed on the host's roster: " + clientC.GetFailureReason();
+					return false;
+				}
+			}
+			if (!clientC.IsStarted() || !host.IsStarted()) {
+				*error = "the four-member lobby did not start with a late joiner; c=" +
+				         std::string(NetLobbySession::StateName(clientC.GetState())) +
+				         " host=" + NetLobbySession::StateName(host.GetState());
+				return false;
+			}
+			// It really did see a state it could not seat - otherwise this proves nothing.
+			if (clientC.GetStats().unconfiguredPeerStates == 0) {
+				*error = "the late joiner never met the roster race this test exists for";
+				return false;
+			}
+			if (host.GetMatchConfigHash() != clientC.GetMatchConfigHash()) {
+				*error = "the late joiner did not adopt the host's four-member config";
+				return false;
+			}
+			if (clientC.GetRemoteName(2) != "Client A" || clientC.GetRemoteName(3) != "Client B") {
+				*error = "the late joiner did not end up with the whole roster";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetMatchSelfTest::Run() {
@@ -773,6 +865,7 @@ namespace RTE {
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
+		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
