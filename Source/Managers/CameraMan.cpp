@@ -200,8 +200,14 @@ void CameraMan::AddScreenShake(float magnitude, const Vector& position) {
 }
 
 void CameraMan::Update(int screenId) {
+	Scene* scene = g_SceneMan.GetScene();
+	if (!scene) {
+		// Nothing to scroll over: a match that ended, or an activity that would not launch, leaves the
+		// loop running for a frame with no scene.
+		return;
+	}
 	Screen& screen = m_Screens[screenId];
-	const SLTerrain* terrain = g_SceneMan.GetScene()->GetTerrain();
+	const SLTerrain* terrain = scene->GetTerrain();
 
 	screen.PrevOffset = screen.Offset;
 
@@ -243,7 +249,8 @@ void CameraMan::Update(int screenId) {
 		newOffset += scrollVec * scrollProgress;
 	}
 
-	if (g_ActivityMan.GetActivity()->GetActivityState() == Activity::ActivityState::Running) {
+	const Activity* activity = g_ActivityMan.GetActivity();
+	if (activity && activity->GetActivityState() == Activity::ActivityState::Running) {
 		// Don't let our screen shake beyond our max.
 		screen.ScreenShakeMagnitude = std::min(screen.ScreenShakeMagnitude, m_ScreenShakeDecay * m_MaxScreenShakeTime);
 
