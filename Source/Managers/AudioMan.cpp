@@ -1,6 +1,7 @@
 #include "AudioMan.h"
 #include <cstdlib>
 #include <cstring>
+#include "SoundSimulation.h"
 #include "CheckpointArchive.h"
 #include "AudioCheckpoint.h"
 
@@ -27,6 +28,43 @@
 
 using namespace RTE;
 
+thread_local SoundSimulationScope* SoundSimulationScope::s_Current = nullptr;
+
+uint64_t SoundSimulationScope::Mix(uint64_t value) {
+	value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+	value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+	return value ^ (value >> 31);
+}
+
+SoundSimulationScope::SoundSimulationScope(uint64_t objectUID, uint64_t phase, SoundExecutionDomain domain, uint64_t occurrence) : m_Previous(s_Current) {
+	// A nested native callback inside local AI remains local unless it explicitly
+	// enters presentation. Its shared cohort must not inherit local AI decisions.
+	if (m_Previous && m_Previous->m_Key.domain == SoundExecutionDomain::LocalSimulation && domain == SoundExecutionDomain::SharedSimulation) domain = SoundExecutionDomain::LocalSimulation;
+	if (m_Previous && m_Previous->m_Key.domain == domain && !occurrence) occurrence = Mix(m_Previous->m_Seed ^ ++m_Previous->m_ChildOrdinal);
+	m_Key = {domain, objectUID, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), phase, occurrence, 0};
+	m_Seed = Mix(g_SimRNG.GetSeed() ^ Mix(objectUID) ^ Mix(m_Key.tick) ^ Mix(phase) ^ Mix(occurrence));
+	s_Current = this;
+}
+
+SoundSimulationScope::~SoundSimulationScope() { s_Current = m_Previous; }
+SoundExecutionDomain SoundSimulationScope::Domain() { return s_Current ? s_Current->m_Key.domain : SoundExecutionDomain::Presentation; }
+SoundExecutionKey SoundSimulationScope::CurrentKey() { return s_Current ? s_Current->m_Key : SoundExecutionKey{}; }
+SoundExecutionKey SoundSimulationScope::NextQueryKey() { auto key = CurrentKey(); if (s_Current) key.ordinal = ++s_Current->m_QueryOrdinal; return key; }
+SoundExecutionKey SoundSimulationScope::NextPlayKey() { auto key = CurrentKey(); if (s_Current) key.ordinal = ++s_Current->m_PlayOrdinal; return key; }
+uint32_t SoundSimulationScope::Draw() { return static_cast<uint32_t>(Mix(m_Seed + (++m_DrawOrdinal * 0x9e3779b97f4a7c15ULL)) >> 32); }
+int SoundSimulationScope::RandomNum(int minimum, int maximum) {
+	if (!IsSimulation()) return g_RenderRNG.RandomNum(minimum, maximum);
+	if (maximum <= minimum) return minimum;
+	const uint32_t range = static_cast<uint32_t>(static_cast<int64_t>(maximum) - minimum + 1);
+	const uint32_t threshold = static_cast<uint32_t>(-range) % range;
+	uint32_t draw; do { draw = s_Current->Draw(); } while (draw < threshold);
+	return minimum + static_cast<int>(draw % range);
+}
+float SoundSimulationScope::RandomNum(float minimum, float maximum) {
+	if (!IsSimulation()) return g_RenderRNG.RandomNum(minimum, maximum);
+	return minimum + (maximum - minimum) * (static_cast<float>(s_Current->Draw() >> 8) * 0x1.0p-24F);
+}
+
 AudioMan::AudioMan() {
 	Clear();
 }
@@ -37,6 +75,7 @@ AudioMan::~AudioMan() {
 
 void AudioMan::Clear() {
 	m_InaudibleTestOutputVerified = false;
+	m_ActiveLogicalSounds.clear();
 	m_AudioEnabled = false;
 	m_PlayingVoices.clear();
 	m_BackendVoiceIdentities.clear();
@@ -68,13 +107,13 @@ void AudioMan::Clear() {
 	}
 }
 
-bool AudioMan::Initialize() {
+FMOD_RESULT AudioMan::InitializeAudioSystem(bool silentOutput) {
+	if (m_AudioSystem) {
+		m_AudioSystem->release();
+		m_AudioSystem = nullptr;
+	}
 	FMOD_RESULT audioSystemSetupResult = FMOD::System_Create(&m_AudioSystem);
-	const char* testOutput = std::getenv("CC_TEST_AUDIO_NOSOUND");
-	const bool requireSilentTestOutput = testOutput && std::strcmp(testOutput, "1") == 0;
-	m_InaudibleTestOutputVerified = false;
-	if (requireSilentTestOutput) {
-		m_OutputSilenced = true;
+	if (silentOutput) {
 		audioSystemSetupResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->setOutput(FMOD_OUTPUTTYPE_NOSOUND) : audioSystemSetupResult;
 	}
 
@@ -95,13 +134,6 @@ bool AudioMan::Initialize() {
 #endif
 
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->init(c_MaxVirtualChannels * 2, flags, 0) : audioSystemSetupResult;
-	if (requireSilentTestOutput) {
-		FMOD_OUTPUTTYPE actualOutput = FMOD_OUTPUTTYPE_AUTODETECT;
-		const FMOD_RESULT outputResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->getOutput(&actualOutput) : audioSystemSetupResult;
-		m_InaudibleTestOutputVerified = outputResult == FMOD_OK && actualOutput == FMOD_OUTPUTTYPE_NOSOUND;
-		std::cout << "[audio-test-output] requested=NOSOUND verified=" << m_InaudibleTestOutputVerified << " output=" << static_cast<int>(actualOutput) << " result=" << static_cast<int>(outputResult) << std::endl;
-		if (!m_InaudibleTestOutputVerified) audioSystemSetupResult = outputResult == FMOD_OK ? FMOD_ERR_OUTPUT_INIT : outputResult;
-	}
 
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->getMasterChannelGroup(&m_MasterChannelGroup) : audioSystemSetupResult;
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->createChannelGroup("SFX", &m_SFXChannelGroup) : audioSystemSetupResult;
@@ -134,6 +166,27 @@ bool AudioMan::Initialize() {
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_MasterChannelGroup->addGroup(m_UIChannelGroup) : audioSystemSetupResult;
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_MasterChannelGroup->addGroup(m_MusicChannelGroup) : audioSystemSetupResult;
 
+	return audioSystemSetupResult;
+}
+
+bool AudioMan::Initialize() {
+	const char* testOutput = std::getenv("CC_TEST_AUDIO_NOSOUND");
+	const bool requireSilentTestOutput = testOutput && std::strcmp(testOutput, "1") == 0;
+	m_InaudibleTestOutputVerified = false;
+	if (requireSilentTestOutput) m_OutputSilenced = true;
+	FMOD_RESULT audioSystemSetupResult = InitializeAudioSystem(requireSilentTestOutput);
+	if (requireSilentTestOutput) {
+		FMOD_OUTPUTTYPE actualOutput = FMOD_OUTPUTTYPE_AUTODETECT;
+		const FMOD_RESULT outputResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->getOutput(&actualOutput) : audioSystemSetupResult;
+		m_InaudibleTestOutputVerified = outputResult == FMOD_OK && actualOutput == FMOD_OUTPUTTYPE_NOSOUND;
+		std::cout << "[audio-test-output] requested=NOSOUND verified=" << m_InaudibleTestOutputVerified << " output=" << static_cast<int>(actualOutput) << " result=" << static_cast<int>(outputResult) << std::endl;
+		if (!m_InaudibleTestOutputVerified) audioSystemSetupResult = outputResult == FMOD_OK ? FMOD_ERR_OUTPUT_INIT : outputResult;
+	} else if (audioSystemSetupResult != FMOD_OK) {
+		// Simulation sounds need sample metadata on every peer, so a missing device still gets a silent backend.
+		std::cout << "[audio-output] device unavailable, using silent output: " << FMOD_ErrorString(audioSystemSetupResult) << std::endl;
+		m_OutputSilenced = true;
+		audioSystemSetupResult = InitializeAudioSystem(true);
+	}
 	m_AudioEnabled = audioSystemSetupResult == FMOD_OK;
 
 	if (!m_AudioEnabled) {
@@ -275,6 +328,21 @@ bool AudioMan::SetMusicPitch(float pitch) {
 }
 
 void AudioMan::FinishIngameLoopingSounds() {
+	{
+		std::lock_guard lock(m_LogicalSoundsMutex);
+		const bool localOnly = SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
+		const long long now = g_TimerMan.GetSimTimeTicks();
+		const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+		for (SoundContainer* container: m_ActiveLogicalSounds) {
+			for (size_t cohort = localOnly ? 1 : 0; cohort < 2; ++cohort) {
+				for (LogicalSoundVoice& voice: container->m_LogicalPlayback[cohort].voices) {
+					if (voice.bus != SoundContainer::SFX || voice.loops == 0) continue;
+					voice.Fold(now, ticksPerSecond);
+					voice.loops = 0;
+				}
+			}
+		}
+	}
 	if (m_AudioEnabled) {
 		int numberOfPlayingChannels;
 		FMOD::Channel* soundChannel;
@@ -394,21 +462,25 @@ void AudioMan::ClearSoundEvents(int player) {
 }
 
 bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
-	if (s_PlaybackSuppressed || !m_AudioEnabled || !soundContainer) {
-		return false;
-	}
+	if (!soundContainer) return false;
+	const bool logical = soundContainer->UsesLogicalPlayback();
+	const bool physical = !s_PlaybackSuppressed && m_AudioEnabled;
+	if (!logical && !physical) return false;
+	if (logical) soundContainer->RetireFinishedLogicalVoices();
 	std::erase_if(soundContainer->m_PlayingChannels, [this, soundContainer](int identity) { return !OwnsVoice(identity, soundContainer); });
-	if (soundContainer->m_PlayingChannels.size() >= c_MaxPlayingSoundsPerContainer) return false;
+	if (logical ? soundContainer->CurrentLogicalPlayback().voices.size() >= c_MaxPlayingSoundsPerContainer : soundContainer->m_PlayingChannels.size() >= c_MaxPlayingSoundsPerContainer) return false;
 	FMOD_RESULT result = FMOD_OK;
 
-	if (!soundContainer->SoundPropertiesUpToDate()) {
+	// A preview never touches the shared samples; the canonical play sets their properties.
+	if (physical && !soundContainer->SoundPropertiesUpToDate()) {
 		result = soundContainer->UpdateSoundProperties();
-		soundContainer->GetTopLevelSoundSet().SelectNextSounds();
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: Could not update sound properties for SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
-			return false;
+			if (!logical) return false;
+			result = FMOD_OK;
 		}
 	}
+	if (!soundContainer->GetTopLevelSoundSet().HasSelectedSounds() && !soundContainer->GetTopLevelSoundSet().SelectNextSounds()) return false;
 
 	FMOD::ChannelGroup* channelGroupToPlayIn = m_SFXChannelGroup;
 
@@ -429,18 +501,56 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	std::vector<const SoundData*> selectedSoundData;
 	soundContainer->GetTopLevelSoundSet().GetFlattenedSoundData(selectedSoundData, true);
 	float pitchVariationFactor = 1.0F + std::abs(soundContainer->GetPitchVariation());
+	std::vector<float> pitches;
+	pitches.reserve(selectedSoundData.size());
+	std::vector<LogicalSoundVoice> logicalVoices;
+	const auto playKey = logical ? SoundSimulationScope::NextPlayKey() : SoundExecutionKey{};
+	const long long now = g_TimerMan.GetSimTimeTicks();
+	for (size_t sampleIndex = 0; sampleIndex < selectedSoundData.size(); ++sampleIndex) {
+		const float variation = pitchVariationFactor == 1.0F ? 1.0F : SoundSimulationScope::RandomNum(1.0F / pitchVariationFactor, pitchVariationFactor);
+		pitches.push_back(soundContainer->GetPitch() * variation);
+		if (!logical) continue;
+		LogicalSoundVoice voice;
+		voice.origin.value = playKey;
+		voice.sampleOrdinal = static_cast<uint32_t>(sampleIndex);
+		const SoundData* data = selectedSoundData[sampleIndex];
+		if (!data->SoundObject || data->SoundObject->getLength(&voice.sampleFrames, FMOD_TIMEUNIT_PCM) != FMOD_OK ||
+		    data->SoundObject->getDefaults(&voice.sampleRate, nullptr) != FMOD_OK || !voice.sampleFrames || !(voice.sampleRate > 0)) {
+			g_ConsoleMan.PrintString("ERROR: No sample metadata for simulation sound " + soundContainer->GetPresetName() + " (" + data->SoundFile.GetDataPath() + ")");
+			return false;
+		}
+		voice.loopEnd = voice.sampleFrames - 1;
+		data->SoundObject->getLoopPoints(&voice.loopStart, FMOD_TIMEUNIT_PCM, &voice.loopEnd, FMOD_TIMEUNIT_PCM);
+		voice.pitch = pitches.back();
+		voice.loops = soundContainer->GetLoopSetting();
+		voice.bus = soundContainer->GetBusRouting();
+		voice.anchorTicks = now;
+		voice.paused = soundContainer->IsPaused();
+		if (voice.loops < -1 || !std::isfinite(voice.pitch) || voice.pitch <= 0 || voice.loopStart > voice.loopEnd || voice.loopEnd >= voice.sampleFrames) return false;
+		logicalVoices.push_back(std::move(voice));
+	}
+	if (selectedSoundData.empty()) return false;
+	if (logical) {
+		LogicalSoundPlayback& playback = soundContainer->CurrentLogicalPlayback();
+		if (playback.voices.size() + logicalVoices.size() > c_MaxPlayingSoundsPerContainer) return false;
+		if (!playback.identity.value.ordinal) playback.identity.value = playKey;
+		playback.voices.insert(playback.voices.end(), std::make_move_iterator(logicalVoices.begin()), std::make_move_iterator(logicalVoices.end()));
+		RefreshLogicalSound(soundContainer);
+	}
+	size_t sampleIndex = 0;
 	for (const SoundData* soundData: selectedSoundData) {
-		if (!MakeVoiceSlotAvailable()) return false;
+		const float selectedPitch = pitches[sampleIndex++];
+		if (!physical) continue;
+		if (!MakeVoiceSlotAvailable()) { if (logical) continue; return false; }
 		channel = nullptr; channelIndex = 0;
 		result = (result == FMOD_OK) ? m_AudioSystem->playSound(soundData->SoundObject, channelGroupToPlayIn, true, &channel) : result;
 		if (result == FMOD_OK) channelIndex = RegisterPlayingVoice(channel, soundContainer, soundData->SoundFile.GetDataPath(), soundData->MinimumAudibleDistance);
-		if (result != FMOD_OK) return false;
+		if (result != FMOD_OK) { if (logical) { result = FMOD_OK; continue; } return false; }
 
 		result = (result == FMOD_OK) ? channel->setUserData(soundContainer) : result;
 		result = (result == FMOD_OK) ? channel->setCallback(SoundChannelEndedCallback) : result;
 		result = (result == FMOD_OK) ? channel->setPriority(soundContainer->GetPriority()) : result;
-		float pitchVariationMultiplier = pitchVariationFactor == 1.0F ? 1.0F : g_RenderRNG.RandomNum(1.0F / pitchVariationFactor, 1.0F * pitchVariationFactor);
-		result = (result == FMOD_OK) ? channel->setPitch(soundContainer->GetPitch() * pitchVariationMultiplier) : result;
+		result = (result == FMOD_OK) ? channel->setPitch(selectedPitch) : result;
 
 		if (soundContainer->GetCustomPanValue() != 0.0f) {
 			result = (result == FMOD_OK) ? channel->setPan(soundContainer->GetCustomPanValue()) : result;
@@ -469,6 +579,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		if (result != FMOD_OK) {
 			channel->setCallback(nullptr); channel->setUserData(nullptr); channel->stop(); RetireVoice(channelIndex);
 			g_ConsoleMan.PrintString("ERROR: Could not play sounds from SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
+			if (logical) { result = FMOD_OK; continue; }
 			return false;
 		}
 
@@ -480,6 +591,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 			if (result != FMOD_OK) {
 				channel->setCallback(nullptr); channel->setUserData(nullptr); channel->stop(); RetireVoice(channelIndex);
 				g_ConsoleMan.PrintString("ERROR: Failed to start playing sounds from SoundContainer " + soundContainer->GetPresetName() + " after setting it up: " + std::string(FMOD_ErrorString(result)));
+				if (logical) { result = FMOD_OK; continue; }
 				return false;
 			}
 		}
@@ -511,7 +623,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPosition(const SoundContainer*
 
 	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
-		if (!OwnsVoice(channelIndex, soundContainer)) continue;
+		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
 		result = (result == FMOD_OK) ? soundChannel->getCurrentSound(&sound) : result;
 		const SoundData* soundData = soundContainer->GetSoundDataForSound(sound);
@@ -536,7 +648,7 @@ float AudioMan::GetSoundContainerAudibleVolume(const SoundContainer* soundContai
 
 	const std::unordered_set<int> channels = *soundContainer->GetPlayingChannels();
 	for (int channel: channels) {
-		if (!OwnsVoice(channel, soundContainer)) continue;
+		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
 		result = (result == FMOD_OK) ? soundChannel->getAudibility(&audibleVolume) : result;
 
@@ -565,7 +677,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsVolume(const SoundContainer* s
 
 	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
-		if (!OwnsVoice(channelIndex, soundContainer)) continue;
+		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
 		result = result == FMOD_OK ? soundChannel->getVolume(&soundChannelCurrentVolume) : result;
 
@@ -596,7 +708,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPitch(const SoundContainer* so
 
 	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
-		if (!OwnsVoice(channelIndex, soundContainer)) continue;
+		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
 		result = result == FMOD_OK ? soundChannel->setPitch(soundContainer->GetPitch()) : result;
 		if (result != FMOD_OK) {
@@ -619,7 +731,7 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsCustomPanValue(const SoundCont
 
 	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
-		if (!OwnsVoice(channelIndex, soundContainer)) continue;
+		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
 		result = result == FMOD_OK ? soundChannel->setPan(soundContainer->GetCustomPanValue()) : result;
 		if (result != FMOD_OK) {
@@ -630,9 +742,14 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsCustomPanValue(const SoundCont
 }
 
 bool AudioMan::StopSoundContainerPlayingChannels(SoundContainer* soundContainer, int player) {
-	if (!m_AudioEnabled || !soundContainer || !soundContainer->IsBeingPlayed()) {
-		return false;
-	}
+	if (!soundContainer) return false;
+	const bool logical = soundContainer->UsesLogicalPlayback();
+	if (logical) {
+		if (!soundContainer->HasLiveLogicalVoices()) return false;
+		soundContainer->CurrentLogicalPlayback().voices.clear();
+		RefreshLogicalSound(soundContainer);
+		if (!m_AudioEnabled || s_PlaybackSuppressed) return true;
+	} else if (!m_AudioEnabled || !soundContainer->IsBeingPlayed()) return false;
 	if (m_IsInMultiplayerMode) {
 		RegisterSoundEvent(player, SOUND_STOP, soundContainer);
 	}
@@ -644,14 +761,14 @@ bool AudioMan::StopSoundContainerPlayingChannels(SoundContainer* soundContainer,
 	for (std::unordered_set<int>::const_iterator channelIterator = channels->begin(); channelIterator != channels->end();) {
 		const int identity = *channelIterator;
 		++channelIterator; // NOTE - stopping the sound will remove the channel, screwing things up if we don't move to the next iterator preemptively
-		if (!OwnsVoice(identity, soundContainer)) continue;
+		if (!VoiceMatchesContext(identity, soundContainer)) continue;
 		result = GetVoiceChannel(identity, &soundChannel);
 		result = (result == FMOD_OK) ? soundChannel->stop() : result;
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("Error: Failed to stop playing channel in SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 		}
 	}
-	return result == FMOD_OK;
+	return logical || result == FMOD_OK;
 }
 
 void AudioMan::DisownSoundContainerPlayingChannels(const SoundContainer* soundContainer) {
@@ -664,7 +781,14 @@ void AudioMan::DisownSoundContainerPlayingChannels(const SoundContainer* soundCo
 }
 
 void AudioMan::FadeOutSoundContainerPlayingChannels(SoundContainer* soundContainer, int fadeOutTime) {
-	if (!m_AudioEnabled || !soundContainer || !soundContainer->IsBeingPlayed()) {
+	if (soundContainer && soundContainer->UsesLogicalPlayback()) {
+		const long long now = g_TimerMan.GetSimTimeTicks();
+		for (LogicalSoundVoice& voice: soundContainer->CurrentLogicalPlayback().voices) {
+			voice.fadeStartTicks = now;
+			voice.fadeSeconds = std::max(0, fadeOutTime) / 1000.0;
+		}
+	}
+	if (!m_AudioEnabled || s_PlaybackSuppressed || !soundContainer || !soundContainer->IsBeingPlayed()) {
 		return;
 	}
 	if (m_IsInMultiplayerMode) {
@@ -682,7 +806,7 @@ void AudioMan::FadeOutSoundContainerPlayingChannels(SoundContainer* soundContain
 
 	const std::unordered_set<int> channels = *soundContainer->GetPlayingChannels();
 	for (int channel: channels) {
-		if (!OwnsVoice(channel, soundContainer)) continue;
+		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
 		result = (result == FMOD_OK) ? soundChannel->getDSPClock(nullptr, &parentClock) : result;
 		result = (result == FMOD_OK) ? soundChannel->getVolume(&currentVolume) : result;
@@ -701,7 +825,7 @@ void AudioMan::SetPausedSoundContainerPlayingChannels(SoundContainer* soundConta
 
 	const std::unordered_set<int>* playingChannels = soundContainer->GetPlayingChannels();
 	for (int channelIndex: *playingChannels) {
-		if (!OwnsVoice(channelIndex, soundContainer)) continue;
+		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
 		result = (result == FMOD_OK) ? soundChannel->setPaused(paused) : result;
 		if (result != FMOD_OK) {
@@ -964,7 +1088,7 @@ int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner
 	int backend;
 	if (channel->getIndex(&backend) != FMOD_OK) throw std::runtime_error("could not identify playing audio channel");
 	m_BackendVoiceIdentities[backend] = m_NextVoiceIdentity;
-	m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance});
+	m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance, SoundSimulationScope::Domain()});
 	return m_NextVoiceIdentity;
 }
 
@@ -987,6 +1111,81 @@ FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel
 bool AudioMan::OwnsVoice(int voiceIdentity, const SoundContainer* owner) const {
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	return found != m_PlayingVoices.end() && found->second.owner == owner;
+}
+
+bool AudioMan::VoiceMatchesContext(int identity, const SoundContainer* owner) const {
+	const auto found = m_PlayingVoices.find(identity);
+	if (found == m_PlayingVoices.end() || found->second.owner != owner) return false;
+	const auto domain = SoundSimulationScope::Domain();
+	return domain == SoundExecutionDomain::Presentation || found->second.domain == domain;
+}
+
+void AudioMan::RefreshLogicalSound(SoundContainer* container) {
+	std::lock_guard lock(m_LogicalSoundsMutex);
+	if (container->m_CheckpointRegistered && (!container->m_LogicalPlayback[0].voices.empty() || !container->m_LogicalPlayback[1].voices.empty())) m_ActiveLogicalSounds.insert(container);
+	else m_ActiveLogicalSounds.erase(container);
+}
+
+void AudioMan::UnregisterLogicalSound(SoundContainer* container) {
+	std::lock_guard lock(m_LogicalSoundsMutex);
+	m_ActiveLogicalSounds.erase(container);
+}
+
+void AudioMan::RetireFinishedSimulationSounds() {
+	std::lock_guard lock(m_LogicalSoundsMutex);
+	const long long now = g_TimerMan.GetSimTimeTicks();
+	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+	for (auto it = m_ActiveLogicalSounds.begin(); it != m_ActiveLogicalSounds.end();) {
+		SoundContainer* container = *it;
+		if (FindCheckpointSoundContainer(container->GetCheckpointIdentity()) != container) { ++it; continue; }
+		for (LogicalSoundPlayback& cohort: container->m_LogicalPlayback) {
+			std::erase_if(cohort.voices, [&](const LogicalSoundVoice& voice) { return voice.At(now, ticksPerSecond).finished; });
+		}
+		if (container->m_LogicalPlayback[0].voices.empty() && container->m_LogicalPlayback[1].voices.empty()) it = m_ActiveLogicalSounds.erase(it);
+		else ++it;
+	}
+}
+
+void AudioMan::VisitSharedSimulationSounds(const std::function<void(const SoundContainer&)>& visitor) const {
+	std::lock_guard lock(m_LogicalSoundsMutex);
+	const long long now = g_TimerMan.GetSimTimeTicks();
+	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+	for (const SoundContainer* container: m_ActiveLogicalSounds) {
+		if (FindCheckpointSoundContainer(container->GetCheckpointIdentity()) != container) continue;
+		for (const LogicalSoundVoice& voice: container->m_LogicalPlayback[0].voices) {
+			if (!voice.At(now, ticksPerSecond).finished) { visitor(*container); break; }
+		}
+	}
+}
+
+float AudioMan::GetLocalSoundAudibility(const SoundContainer* container) const {
+	if (!m_AudioEnabled || !container) return 0;
+	// Keep the existing first-channel aggregation. Cohort filtering keeps an AI
+	// sound on the same native container out of shared input observations.
+	for (int identity: container->m_PlayingChannels) {
+		const auto found = m_PlayingVoices.find(identity);
+		if (found == m_PlayingVoices.end() || found->second.owner != container || found->second.domain != SoundExecutionDomain::SharedSimulation || !found->second.channel) continue;
+		float value;
+		if (found->second.channel->getAudibility(&value) == FMOD_OK) return value;
+	}
+	return 0;
+}
+
+void AudioMan::StopAll() {
+	{
+		std::lock_guard lock(m_LogicalSoundsMutex);
+		const bool localOnly = SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
+		for (SoundContainer* container: m_ActiveLogicalSounds) {
+			container->m_LogicalPlayback[1].voices.clear();
+			if (!localOnly) container->m_LogicalPlayback[0].voices.clear();
+		}
+		std::erase_if(m_ActiveLogicalSounds, [](const SoundContainer* container) { return container->m_LogicalPlayback[0].voices.empty() && container->m_LogicalPlayback[1].voices.empty(); });
+	}
+	if (m_AudioEnabled && !s_PlaybackSuppressed) m_MasterChannelGroup->stop();
+}
+
+void AudioMan::PauseIngameSounds(bool pause) {
+	if (m_AudioEnabled && !s_PlaybackSuppressed) m_SFXChannelGroup->setPaused(pause);
 }
 
 void AudioMan::RetireVoice(int identity) {
@@ -1537,4 +1736,168 @@ bool AudioMan::RunCheckpointSelfTest() {
 	ok = LoadCheckpoint(original) && ok;
 	g_RenderRNG = originalRenderRNG;
 	return ok;
+}
+
+static_assert(c_MaxLogicalVoicesPerContainer == c_MaxPlayingSoundsPerContainer);
+
+bool AudioMan::RunLogicalPlaybackSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
+		std::cout << "[audio-logical-selftest] " << (ok ? "PASS " : "FAIL ") << name << (detail.empty() ? "" : " " + detail) << std::endl;
+		passed = passed && ok;
+	};
+	if (!m_AudioEnabled) {
+		check("backend_available", false, "audio backend unavailable");
+		return false;
+	}
+	const long long simCount = g_TimerMan.GetSimUpdateCount();
+	const long long simTicks = g_TimerMan.GetSimTimeTicks();
+	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+	const bool suppressed = s_PlaybackSuppressed;
+	s_PlaybackSuppressed = true;
+	const auto advance = [&](double seconds) {
+		const long long target = g_TimerMan.GetSimTimeTicks() + static_cast<long long>(seconds * static_cast<double>(ticksPerSecond));
+		while (g_TimerMan.GetSimTimeTicks() < target) {
+			const long long before = g_TimerMan.GetSimTimeTicks();
+			g_TimerMan.AdvanceSimTickForPreview();
+			if (g_TimerMan.GetSimTimeTicks() == before) return false;
+		}
+		return true;
+	};
+	static const uint64_t phase = Hash("LogicalSelfTest");
+	const char* samplePath = "Base.rte/Sounds/GUIs/ButtonPress.flac";
+	{
+		SoundContainer sound;
+		sound.Create(samplePath, false, true, SoundContainer::SFX);
+		double duration = 0;
+		{
+			SoundSimulationScope shared(4242, phase);
+			check("plays_logically", sound.Play() && sound.IsBeingPlayed() && sound.GetSharedLogicalVoices().size() == 1);
+			if (!sound.GetSharedLogicalVoices().empty()) {
+				const LogicalSoundVoice& voice = sound.GetSharedLogicalVoices().front();
+				duration = static_cast<double>(voice.sampleFrames) / static_cast<double>(voice.sampleRate);
+			}
+			check("sample_metadata", duration > 0, std::to_string(duration));
+		}
+		check("logical_independent_of_output", !sound.IsBeingPlayed());
+		{
+			SoundSimulationScope shared(4242, phase);
+			check("sim_time_advances", advance(duration * 0.5));
+			check("still_playing_midway", sound.IsBeingPlayed());
+			size_t visited = 0;
+			VisitSharedSimulationSounds([&](const SoundContainer& container) { visited += &container == &sound; });
+			check("registered_while_live", visited == 1);
+			advance(duration * 0.6);
+			check("finishes_by_sim_time", !sound.IsBeingPlayed());
+			RetireFinishedSimulationSounds();
+			visited = 0;
+			VisitSharedSimulationSounds([&](const SoundContainer& container) { visited += &container == &sound; });
+			check("retired_when_finished", visited == 0 && sound.GetSharedLogicalVoices().empty());
+
+			sound.SetLoopSetting(-1);
+			sound.Play();
+			advance(duration * 10);
+			const bool loopedTenTimes = sound.IsBeingPlayed();
+			check("loops_until_stopped", loopedTenTimes && sound.Stop() && !sound.IsBeingPlayed());
+
+			sound.SetLoopSetting(2);
+			sound.Play();
+			advance(duration * 2.5);
+			const bool midLoops = sound.IsBeingPlayed();
+			advance(duration * 0.6);
+			check("finite_loops", midLoops && !sound.IsBeingPlayed());
+			sound.SetLoopSetting(0);
+
+			sound.Play();
+			sound.SetPitch(2.0F);
+			advance(duration * 0.6);
+			check("pitch_scales_progress", !sound.IsBeingPlayed());
+			sound.SetPitch(1.0F);
+
+			sound.Play();
+			sound.SetPaused(true);
+			advance(duration * 2);
+			const bool heldWhilePaused = sound.IsBeingPlayed();
+			sound.SetPaused(false);
+			advance(duration * 0.5);
+			const bool resumedAfterPause = sound.IsBeingPlayed();
+			advance(duration * 0.6);
+			check("pause_holds_progress", heldWhilePaused && resumedAfterPause && !sound.IsBeingPlayed());
+
+			sound.SetSoundOverlapMode(SoundContainer::RESTART);
+			sound.Play();
+			advance(duration * 0.5);
+			sound.Play();
+			advance(duration * 0.7);
+			check("restart_replaces_voice", sound.IsBeingPlayed() && sound.GetSharedLogicalVoices().size() == 1);
+			sound.Stop();
+			sound.SetSoundOverlapMode(SoundContainer::OVERLAP);
+			sound.Play();
+			sound.FadeOut(200);
+			advance(duration * 0.5);
+			check("fade_keeps_liveness", sound.IsBeingPlayed() && sound.GetSharedLogicalVoices().front().fadeStartTicks >= 0);
+			sound.Stop();
+		}
+		{
+			SoundSimulationScope shared(4242, phase);
+			sound.Play();
+		}
+		{
+			SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
+			const bool localEmpty = !sound.IsBeingPlayed();
+			sound.SetVolume(0.25F);
+			sound.Play();
+			check("cohorts_isolated", localEmpty && sound.IsBeingPlayed() && sound.GetVolume() == 0.25F);
+		}
+		{
+			SoundSimulationScope shared(4242, phase);
+			check("local_controls_private", sound.IsBeingPlayed() && sound.GetSharedLogicalVoices().size() == 1 && sound.GetVolume() == 1.0F);
+			sound.Stop();
+		}
+		{
+			SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
+			check("local_stop_leaves_shared_alone", sound.Stop() && !sound.IsBeingPlayed());
+		}
+		{
+			SoundSimulationScope shared(4242, phase);
+			sound.Play();
+			advance(duration * 0.4);
+			const std::string checkpoint = sound.SaveCheckpoint();
+			MovableObject::FaithfulCloneScope privateObjects(false);
+			SoundContainer copy;
+			const bool loaded = copy.LoadCheckpoint(checkpoint);
+			const bool liveAfterLoad = loaded && copy.IsBeingPlayed();
+			advance(duration * 0.7);
+			check("checkpoint_carries_playback", loaded && liveAfterLoad && !copy.IsBeingPlayed() && !sound.IsBeingPlayed() && copy.SaveCheckpoint() == sound.SaveCheckpoint());
+			LogicalSoundVoice broken = copy.GetSharedLogicalVoices().empty() ? LogicalSoundVoice{} : copy.GetSharedLogicalVoices().front();
+			broken.anchorPosition = static_cast<double>(broken.sampleFrames);
+			LogicalSoundVoice probe;
+			check("checkpoint_rejects_invalid_voice", !copy.GetSharedLogicalVoices().empty() && !probe.LoadCheckpoint(broken.SaveCheckpoint(), true));
+			sound.Stop();
+		}
+		{
+			SoundContainer ui;
+			ui.Create(samplePath, true, false, SoundContainer::UI);
+			SoundSimulationScope shared(4242, phase);
+			check("ui_bus_stays_physical", !ui.Play() && !ui.IsBeingPlayed() && ui.GetSharedLogicalVoices().empty());
+		}
+		{
+			SoundContainer other;
+			other.Create(samplePath, false, true, SoundContainer::SFX);
+			SoundSimulationScope shared(4243, phase);
+			sound.Play();
+			other.Play();
+			advance(duration * 0.3);
+			const long long now = g_TimerMan.GetSimTimeTicks();
+			const bool bothLive = sound.GetSharedLogicalVoices().size() == 1 && other.GetSharedLogicalVoices().size() == 1;
+			const LogicalSoundVoice::Progress first = bothLive ? sound.GetSharedLogicalVoices().front().At(now, ticksPerSecond) : LogicalSoundVoice::Progress{};
+			const LogicalSoundVoice::Progress second = bothLive ? other.GetSharedLogicalVoices().front().At(now, ticksPerSecond) : LogicalSoundVoice::Progress{};
+			check("identical_progress", bothLive && first.position == second.position && first.position > 0 && !first.finished);
+			sound.Stop();
+			other.Stop();
+		}
+	}
+	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
+	s_PlaybackSuppressed = suppressed;
+	return passed;
 }

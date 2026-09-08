@@ -6,6 +6,7 @@
 #include "Vector.h"
 #include "Singleton.h"
 #include "SoundContainerRegistry.h"
+#include "SoundSimulation.h"
 
 #include "fmod/fmod.hpp"
 #include <map>
@@ -29,6 +30,7 @@ namespace RTE {
 
 	public:
 		std::string SaveCheckpoint() const;
+		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"; }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
@@ -36,6 +38,11 @@ namespace RTE {
 		void TraceCheckpointBoundary(const char* stage) const;
 		bool PerturbCheckpointCursorForSelfTest();
 		bool RunCheckpointPlaybackContinuationSelfTest() const;
+		/// Drops finished logical voices at a tick boundary; liveness itself is a function of simulation time.
+		void RetireFinishedSimulationSounds();
+		void VisitSharedSimulationSounds(const std::function<void(const SoundContainer&)>& visitor) const;
+		float GetLocalSoundAudibility(const SoundContainer* container) const;
+		bool RunLogicalPlaybackSelfTest();
 		uint64_t GetCheckpointSoundContainerCursor() const { return m_NextSoundContainerIdentity; }
 		void SetCheckpointSoundContainerCursor(uint64_t value) { m_NextSoundContainerIdentity = value; }
 		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { return m_CheckpointSoundContainers; }
@@ -293,22 +300,14 @@ namespace RTE {
 
 #pragma region Global Playback and Handling
 		/// Stops all playback.
-		void StopAll() {
-			if (m_AudioEnabled) {
-				m_MasterChannelGroup->stop();
-			}
-		}
+		void StopAll();
 
 		/// Makes all sounds that are looping stop looping, allowing them to play once more then be finished.
 		void FinishIngameLoopingSounds();
 
 		/// Pauses all ingame sounds.
 		/// @param pause Whether to pause sounds or resume them.
-		void PauseIngameSounds(bool pause = true) {
-			if (m_AudioEnabled) {
-				m_SFXChannelGroup->setPaused(pause);
-			}
-		}
+		void PauseIngameSounds(bool pause = true);
 #pragma endregion
 
 #pragma region Music Handling
@@ -412,6 +411,7 @@ namespace RTE {
 			SoundContainer* owner = nullptr;
 			std::string soundPath;
 			float minimumAudibleDistance = 0;
+			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
@@ -419,6 +419,12 @@ namespace RTE {
 		CheckpointSoundRegistry m_CheckpointSoundContainers;
 		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
 		uint64_t m_NextSoundContainerIdentity = 0;
+		mutable std::mutex m_LogicalSoundsMutex;
+		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
+		FMOD_RESULT InitializeAudioSystem(bool silentOutput);
+		void RefreshLogicalSound(SoundContainer* container);
+		void UnregisterLogicalSound(SoundContainer* container);
+		bool VoiceMatchesContext(int identity, const SoundContainer* owner) const;
 		uint64_t AllocateCheckpointSoundContainerID();
 		void RegisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity);
 		void UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity);

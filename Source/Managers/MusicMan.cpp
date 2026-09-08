@@ -451,7 +451,7 @@ struct MusicCheckpoint {
     }
     static bool ValidateSound(const Sound& value, SoundContainer& probe, std::set<uint64_t>& identities) {
         if (!probe.LoadCheckpoint(value.native, true) || !ValidateSet(value.set)) return false;
-        CheckpointReader reader(value.native, "SoundContainer1"); std::string entity; uint64_t identity; reader.Value(entity); reader.Value(identity);
+        CheckpointReader reader(value.native, SoundContainer::CheckpointVersion(value.native)); std::string entity; uint64_t identity; reader.Value(entity); reader.Value(identity);
         return identities.insert(identity).second;
     }
     static bool ValidateSection(const Section& value, SoundContainer& probe, std::set<uint64_t>& identities) {

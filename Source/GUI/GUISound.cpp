@@ -212,7 +212,7 @@ struct GUISoundCheckpoint {
         std::set<uint64_t> identities;
         for (const auto& sound: value.sounds) {
             if (!probe.LoadCheckpoint(sound.native, true) || !ValidateSet(sound.set)) return false;
-            CheckpointReader reader(sound.native, "SoundContainer1"); std::string entity; uint64_t identity; reader.Value(entity); reader.Value(identity);
+            CheckpointReader reader(sound.native, SoundContainer::CheckpointVersion(sound.native)); std::string entity; uint64_t identity; reader.Value(entity); reader.Value(identity);
             if (!identities.insert(identity).second) return false;
         }
         return true;
@@ -257,7 +257,7 @@ struct GUISoundCheckpoint {
             CheckpointReader audioHeader(audio, "AudioRuntime1"); bool enabled; int nextVoice; uint64_t nextSound;
             audioHeader.Value(enabled); audioHeader.Value(nextVoice); audioHeader.Value(nextSound);
             for (const auto& sound: record.sounds) {
-                CheckpointReader soundHeader(sound.native, "SoundContainer1"); std::string entity; uint64_t identity;
+                CheckpointReader soundHeader(sound.native, SoundContainer::CheckpointVersion(sound.native)); std::string entity; uint64_t identity;
                 soundHeader.Value(entity); soundHeader.Value(identity);
                 if (identity > nextSound) return false;
             }

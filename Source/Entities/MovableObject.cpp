@@ -1,5 +1,6 @@
 #include "MovableObject.h"
 #include "CheckpointArchive.h"
+#include "SoundSimulation.h"
 
 #include <bit>
 #include <mutex>
@@ -1113,6 +1114,9 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		// callbacks included: their firing order isn't deterministic (the MOID map and terrain they
 		// read are built off-thread), so the shared RNG can't be drawn from here.
 		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), true);
+		// The AI passes are per-machine, so their sounds join the local cohort.
+		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
+		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation);
 
 		for (const LuaFunction& luaFunction: itr->second) {
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();

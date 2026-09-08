@@ -60,6 +60,7 @@
 #include "LuaMan.h"
 #include "MusicMan.h"
 #include "AudioMan.h"
+#include "SoundSimulation.h"
 #include "AudioCheckpoint.h"
 #include "System.h"
 
@@ -2042,6 +2043,7 @@ void RunGameLoop() {
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
+			g_AudioMan.RetireFinishedSimulationSounds();
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
@@ -2266,14 +2268,18 @@ void RunGameLoop() {
 				g_MovableMan.CompleteQueuedMOIDDrawings();
 
 				g_ConsoleMan.Update();
-				g_ActivityMan.Update();
+				{
+					static const uint64_t soundPhase = Hash("Tick");
+					SoundSimulationScope simulationSounds(0, soundPhase);
+					g_ActivityMan.Update();
 
-				if (g_SceneMan.GetScene()) {
-					g_SceneMan.GetScene()->Update();
+					if (g_SceneMan.GetScene()) {
+						g_SceneMan.GetScene()->Update();
+					}
+
+					g_LuaMan.ClearScriptTimings();
+					g_MovableMan.Update();
 				}
-
-				g_LuaMan.ClearScriptTimings();
-				g_MovableMan.Update();
 			}
 			if (ScenarioRunner::HasControllerReplayError()) {
 				HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);

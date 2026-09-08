@@ -1,11 +1,15 @@
 #include "SoundContainer.h"
 #include "CheckpointArchive.h"
+#include "TimerMan.h"
 #include "Base64/base64.h"
 #include "MovableObject.h"
 
 #include "SoundSet.h"
 #include "SettingsMan.h"
 #include "ConsoleMan.h"
+
+#include <cmath>
+#include <utility>
 
 using namespace RTE;
 
@@ -42,6 +46,9 @@ SoundContainer::~SoundContainer() {
 }
 
 void SoundContainer::Clear() {
+	g_AudioMan.UnregisterLogicalSound(this);
+	m_LogicalPlayback = {};
+	m_LocalControls = {};
 	if (m_CheckpointRegistered) {
 		g_AudioMan.DisownSoundContainerPlayingChannels(this);
 		g_AudioMan.UnregisterCheckpointSoundContainer(this, m_CheckpointIdentity);
@@ -300,15 +307,15 @@ const SoundData* SoundContainer::GetSoundDataForSound(const FMOD::Sound* sound) 
 }
 
 void SoundContainer::SetCustomPanValue(float customPanValue) {
-	m_CustomPanValue = std::clamp(customPanValue, -1.0f, 1.0f);
+	CurrentCustomPanValue() = std::clamp(customPanValue, -1.0f, 1.0f);
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsCustomPanValue(this);
 	}
 }
 
 void SoundContainer::SetPosition(const Vector& newPosition) {
-	if (!m_Immobile && newPosition != m_Pos) {
-		m_Pos = newPosition;
+	if (!std::as_const(*this).CurrentImmobile() && newPosition != std::as_const(*this).CurrentPos()) {
+		CurrentPos() = newPosition;
 		if (IsBeingPlayed()) {
 			g_AudioMan.ChangeSoundContainerPlayingChannelsPosition(this);
 		}
@@ -324,30 +331,39 @@ void SoundContainer::SetVolume(float newVolume) {
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsVolume(this, newVolume);
 	}
-	m_Volume = newVolume;
+	CurrentVolume() = newVolume;
 }
 
 void SoundContainer::SetPitch(float newPitch) {
-	m_Pitch = std::clamp(newPitch, 0.125F, 8.0F);
+	const bool logical = UsesLogicalPlayback();
+	if (logical) FoldLogicalVoices();
+	CurrentPitch() = std::clamp(newPitch, 0.125F, 8.0F);
+	if (logical) {
+		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.pitch = std::as_const(*this).CurrentPitch();
+	}
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsPitch(this);
 	}
 }
 
 void SoundContainer::SetPaused(bool paused) {
-	if (paused != m_Paused) {
-		m_Paused = paused;
-		g_AudioMan.SetPausedSoundContainerPlayingChannels(this, paused);
+	if (paused == std::as_const(*this).CurrentPaused()) return;
+	if (UsesLogicalPlayback()) {
+		FoldLogicalVoices();
+		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.paused = paused;
 	}
+	CurrentPaused() = paused;
+	g_AudioMan.SetPausedSoundContainerPlayingChannels(this, paused);
 }
 
 bool SoundContainer::Play(int player) {
 	if (HasAnySounds()) {
-		m_WasFadedOut = false;
+		CurrentWasFadedOut() = false;
 		if (IsBeingPlayed()) {
-			if (m_SoundOverlapMode == SoundOverlapMode::RESTART) {
+			const SoundOverlapMode overlapMode = std::as_const(*this).CurrentSoundOverlapMode();
+			if (overlapMode == SoundOverlapMode::RESTART) {
 				return Restart(player);
-			} else if (m_SoundOverlapMode == SoundOverlapMode::IGNORE_PLAY) {
+			} else if (overlapMode == SoundOverlapMode::IGNORE_PLAY) {
 				return false;
 			}
 		}
@@ -361,6 +377,7 @@ bool SoundContainer::Stop(int player) {
 }
 
 bool SoundContainer::IsBeingPlayed() const {
+	if (UsesLogicalPlayback()) return HasLiveLogicalVoices();
 	for (int identity: m_PlayingChannels) if (g_AudioMan.OwnsVoice(identity, this)) return true;
 	return false;
 }
@@ -370,10 +387,56 @@ bool SoundContainer::Restart(int player) {
 }
 
 void SoundContainer::FadeOut(int fadeOutTime) {
-	if (!m_WasFadedOut && IsBeingPlayed()) {
-		m_WasFadedOut = true;
+	if (!std::as_const(*this).CurrentWasFadedOut() && IsBeingPlayed()) {
+		CurrentWasFadedOut() = true;
 		return g_AudioMan.FadeOutSoundContainerPlayingChannels(this, fadeOutTime);
 	}
+}
+
+bool SoundContainer::HasLiveLogicalVoices() const {
+	const long long now = g_TimerMan.GetSimTimeTicks();
+	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+	for (const LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) {
+		if (!voice.At(now, ticksPerSecond).finished) return true;
+	}
+	return false;
+}
+
+void SoundContainer::RetireFinishedLogicalVoices() {
+	const long long now = g_TimerMan.GetSimTimeTicks();
+	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+	std::erase_if(CurrentLogicalPlayback().voices, [&](const LogicalSoundVoice& voice) { return voice.At(now, ticksPerSecond).finished; });
+}
+
+void SoundContainer::FoldLogicalVoices() {
+	RetireFinishedLogicalVoices();
+	const long long now = g_TimerMan.GetSimTimeTicks();
+	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
+	for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.Fold(now, ticksPerSecond);
+}
+
+std::string SoundContainer::LocalControls::SaveCheckpoint() const {
+	CheckpointWriter writer("LocalSoundControls1");
+	const_cast<LocalControls*>(this)->Fields(writer);
+	return writer.Text();
+}
+
+bool SoundContainer::LocalControls::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		LocalControls candidate;
+		CheckpointReader reader(text, "LocalSoundControls1");
+		candidate.Fields(reader);
+		reader.Finish();
+		const auto finite = [](float value) { return std::isfinite(value); };
+		const bool valid = candidate.written < (1u << LocalControlCount) && candidate.m_SoundOverlapMode >= OVERLAP && candidate.m_SoundOverlapMode <= IGNORE_PLAY &&
+		    candidate.m_BusRouting >= SFX && candidate.m_BusRouting <= MUSIC && finite(candidate.m_AttenuationStartDistance) && finite(candidate.m_CustomPanValue) &&
+		    finite(candidate.m_PanningStrengthMultiplier) && candidate.m_Loops >= -1 && candidate.m_Priority >= 0 && candidate.m_Priority <= 256 &&
+		    finite(candidate.m_Pos.m_X) && finite(candidate.m_Pos.m_Y) && finite(candidate.m_Pitch) && finite(candidate.m_PitchVariation) && finite(candidate.m_Volume) &&
+		    finite(candidate.m_MusicPreEntryTime) && finite(candidate.m_MusicExitTime);
+		if (!valid) return false;
+		if (!validateOnly) *this = candidate;
+		return true;
+	} catch (const std::exception&) { return false; }
 }
 
 FMOD_RESULT SoundContainer::UpdateSoundProperties() {
@@ -382,10 +445,10 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 	std::vector<SoundData*> flattenedSoundData;
 	m_TopLevelSoundSet->GetFlattenedSoundData(flattenedSoundData, false);
 	for (SoundData* soundData: flattenedSoundData) {
-		FMOD_MODE soundMode = (m_Loops == 0) ? FMOD_LOOP_OFF : FMOD_LOOP_NORMAL;
-		if (m_Immobile) {
+		FMOD_MODE soundMode = (std::as_const(*this).CurrentLoops() == 0) ? FMOD_LOOP_OFF : FMOD_LOOP_NORMAL;
+		if (std::as_const(*this).CurrentImmobile()) {
 			soundMode |= FMOD_2D;
-			m_AttenuationStartDistance = c_SoundMaxAudibleDistance;
+			CurrentAttenuationStartDistance() = c_SoundMaxAudibleDistance;
 		} else if (g_AudioMan.GetSoundPanningEffectStrength() == 1.0F) {
 			soundMode |= FMOD_3D_INVERSEROLLOFF;
 		} else {
@@ -393,9 +456,9 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 		}
 
 		result = (result == FMOD_OK) ? soundData->SoundObject->setMode(soundMode) : result;
-		result = (result == FMOD_OK) ? soundData->SoundObject->setLoopCount(m_Loops) : result;
-		m_AttenuationStartDistance = std::clamp(m_AttenuationStartDistance, 0.0F, static_cast<float>(c_SoundMaxAudibleDistance) - soundData->MinimumAudibleDistance);
-		result = (result == FMOD_OK) ? soundData->SoundObject->set3DMinMaxDistance(soundData->MinimumAudibleDistance + m_AttenuationStartDistance, c_SoundMaxAudibleDistance) : result;
+		result = (result == FMOD_OK) ? soundData->SoundObject->setLoopCount(CurrentLoops()) : result;
+		CurrentAttenuationStartDistance() = std::clamp(CurrentAttenuationStartDistance(), 0.0F, static_cast<float>(c_SoundMaxAudibleDistance) - soundData->MinimumAudibleDistance);
+		result = (result == FMOD_OK) ? soundData->SoundObject->set3DMinMaxDistance(soundData->MinimumAudibleDistance + CurrentAttenuationStartDistance(), c_SoundMaxAudibleDistance) : result;
 		if (result != FMOD_OK) {
 			FMOD_OPENSTATE openState = FMOD_OPENSTATE_ERROR;
 			const FMOD_RESULT openResult = soundData->SoundObject->getOpenState(&openState, nullptr, nullptr, nullptr);
@@ -403,7 +466,7 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 			break;
 		}
 	}
-	m_SoundPropertiesUpToDate = result == FMOD_OK;
+	CurrentSoundPropertiesUpToDate() = result == FMOD_OK;
 
 	return result;
 }
@@ -416,15 +479,17 @@ void SoundContainer::ReidentifyCheckpoint(uint64_t identity) {
 }
 
 std::string SoundContainer::SaveCheckpoint() const {
-	CheckpointWriter archive("SoundContainer1");
+	CheckpointWriter archive("SoundContainer2");
 	archive(Entity::SaveCheckpoint(), m_CheckpointIdentity, std::set<int>(m_PlayingChannels.begin(), m_PlayingChannels.end()));
 	archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
+	archive(m_LogicalPlayback, m_LocalControls);
 	return archive.Text();
 }
 
 bool SoundContainer::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "SoundContainer1", validateOnly);
+		const auto version = CheckpointVersion(text);
+		CheckpointReader archive(text, version, validateOnly);
 		std::string identity;
 		uint64_t checkpointIdentity;
 		std::set<int> playing;
@@ -437,7 +502,10 @@ bool SoundContainer::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			m_PlayingChannels.clear(); m_PlayingChannels.insert(playing.begin(), playing.end());
 		});
 		archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
+		if (version == "SoundContainer2") archive(m_LogicalPlayback, m_LocalControls);
+		else archive.OnCommit([this] { m_LogicalPlayback = {}; m_LocalControls = {}; });
 		archive.Finish();
+		if (!validateOnly) g_AudioMan.RefreshLogicalSound(this);
 		return true;
 	} catch (const std::exception&) { return false; }
 }
@@ -453,6 +521,8 @@ void SoundContainer::SwapCheckpoint(SoundContainer& other) noexcept {
 	swap(m_RandomWeight, other.m_RandomWeight);
 	swap(m_Groups, other.m_Groups);
 	swap(m_CheckpointIdentity, other.m_CheckpointIdentity);
+	swap(m_LocalControls, other.m_LocalControls);
+	swap(m_LogicalPlayback, other.m_LogicalPlayback);
 	swap(m_TopLevelSoundSet, other.m_TopLevelSoundSet);
 	swap(m_PlayingChannels, other.m_PlayingChannels);
 	swap(m_SoundOverlapMode, other.m_SoundOverlapMode);
