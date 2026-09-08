@@ -1479,6 +1479,39 @@ namespace RTE {
 		return Decode(bytes.data(), bytes.size(), controllerFrameVersion, tables);
 	}
 
+	// The header alone identifies the wire; a frame's observations need their sender's slot table, which
+	// the session and lobby planes do not keep, so they must not have to decode a payload to place it.
+	bool NetLockstepCodec::LooksLikePacket(const std::vector<uint8_t>& bytes) {
+		if (bytes.size() < c_HeaderBytes) {
+			return false;
+		}
+		ByteReader reader(bytes.data(), c_HeaderBytes);
+		uint32_t magic = 0;
+		uint16_t version = 0;
+		uint16_t headerBytes = 0;
+		uint16_t rawPacketType = 0;
+		uint16_t flags = 0;
+		uint32_t payloadLength = 0;
+		reader.ReadU32LE(magic);
+		reader.ReadU16LE(version);
+		reader.ReadU16LE(headerBytes);
+		reader.ReadU16LE(rawPacketType);
+		reader.ReadU16LE(flags);
+		reader.ReadU32LE(payloadLength);
+		switch (static_cast<NetLockstepPacketType>(rawPacketType)) {
+			case NetLockstepPacketType::Start:
+			case NetLockstepPacketType::Frame:
+			case NetLockstepPacketType::Ack:
+			case NetLockstepPacketType::Stop:
+			case NetLockstepPacketType::Checksum:
+				break;
+			default:
+				return false;
+		}
+		return magic == c_Magic && version >= c_MinVersion && version <= c_Version && headerBytes == c_HeaderBytes &&
+		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
+	}
+
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
 		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
 		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
