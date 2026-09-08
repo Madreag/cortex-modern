@@ -133,6 +133,15 @@ namespace RTE {
 		/// @param errorDesc The message describing what's wrong.
 		void ReportError(const std::string& errorDesc) const;
 
+		/// Reports a property no class in the chain matched. A checkpoint reader warns and carries on, any other reader treats it as an error.
+		/// @param objectName The class name of the object being read.
+		/// @param propName The property that could not be matched.
+		void ReportUnknownProperty(const std::string& objectName, const std::string_view& propName) const;
+
+		/// Runs the unknown property rule over the restore reader's configuration and over an ordinary one.
+		/// @return Whether every case passed.
+		static bool RunUnknownPropertySelfTest();
+
 		/// Lets callers recover from parse errors instead of terminating the process.
 		void SetThrowOnError(bool enabled) { m_ThrowOnError = enabled; }
 

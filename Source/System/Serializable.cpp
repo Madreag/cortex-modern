@@ -26,7 +26,7 @@ namespace RTE {
 
 	int Serializable::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader.ReadPropValue();
-		reader.ReportError("Could not match property '" + std::string(propName) + "'!");
+		reader.ReportUnknownProperty(GetClassName(), propName);
 		return -1;
 	}
 
