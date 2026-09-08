@@ -156,6 +156,11 @@ namespace RTE {
 		/// Whether the round is running only because a dropped player still has a seat to come back to.
 		static bool IsLockstepHoldingSeatForReclaim();
 
+		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
+		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
+		/// including the leave the waited-for peer is waiting to have acknowledged.
+		static void SetSessionPump(std::function<void()> pump);
+
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
