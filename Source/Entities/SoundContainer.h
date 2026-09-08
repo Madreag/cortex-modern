@@ -4,6 +4,7 @@
 #include "AudioMan.h"
 #include "LogicalSound.h"
 
+#include <mutex>
 #include <unordered_set>
 
 namespace RTE {
@@ -22,11 +23,11 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
-		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("15 SoundContainer2 ") ? "SoundContainer2" : "SoundContainer1"; }
+		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("15 SoundContainer3 ") ? "SoundContainer3" : (text.starts_with("15 SoundContainer2 ") ? "SoundContainer2" : "SoundContainer1"); }
 		uint64_t GetCheckpointIdentity() const { return m_CheckpointIdentity; }
-		const SoundExecutionKey& GetSharedPlaybackIdentity() const { return m_LogicalPlayback[0].identity.value; }
-		const LogicalSoundPlayback& GetSharedLogicalPlayback() const { return m_LogicalPlayback[0]; }
-		const std::vector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback[0].voices; }
+		const SoundExecutionKey& GetSharedPlaybackIdentity() const { return m_LogicalPlayback.identity.value; }
+		const LogicalSoundPlayback& GetSharedLogicalPlayback() const { return m_LogicalPlayback; }
+		const std::vector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback.voices; }
 		/// Every sound played from simulation code is logical whatever bus carries it: a mod can route a gameplay sound to the UI bus and still query it from shared simulation.
 		bool UsesLogicalPlayback() const { return SoundSimulationScope::IsSimulation(); }
 		EntityAllocation(SoundContainer);
@@ -45,6 +46,51 @@ namespace RTE {
 			OVERLAP = 0,
 			RESTART = 1,
 			IGNORE_PLAY = 2
+		};
+
+		/// One sound call an AI hook made. The decision is the owning machine's, so the call reads back
+		/// inside that pass and lands on shared state at the committed tick, exactly like the equip
+		/// calls the AI queues.
+		struct PendingOp {
+			enum Op : uint8_t {
+				Play = 0,
+				Stop = 1,
+				Restart = 2,
+				FadeOut = 3,
+				SelectSounds = 4,
+				SetProperty = 5,
+				OpCount = 6
+			};
+			enum Property : uint8_t {
+				Volume = 0,
+				Pitch = 1,
+				PitchVariation = 2,
+				Loops = 3,
+				Priority = 4,
+				Immobile = 5,
+				BusRoute = 6,
+				OverlapMode = 7,
+				AttenuationStart = 8,
+				CustomPan = 9,
+				PanningStrength = 10,
+				GlobalPitch = 11,
+				Paused = 12,
+				Position = 13,
+				// A write through the position alias Lua holds, which never repositioned playing channels.
+				PositionAlias = 14,
+				MusicPreEntry = 15,
+				MusicExit = 16,
+				PropertyCount = 17
+			};
+			Op op = Play;
+			Property property = Volume;
+			int64_t actorUID = 0; //!< The actor whose AI pass made the call; only its peer may issue it.
+			int32_t team = 0;
+			int32_t player = -1;
+			int32_t value = 0; //!< Fade time, loop count, priority, bus, overlap mode or a boolean.
+			float x = 0.0F;
+			float y = 0.0F;
+			std::vector<uint16_t> soundSetPath; //!< The sub-SoundSet a SelectSounds call named.
 		};
 
 #pragma region Creation
@@ -144,7 +190,10 @@ namespace RTE {
 
 		/// Sets the SoundOverlapMode of this SoundContainer, which is used to determine how it should behave when it's told to play while already playing.
 		/// @param newSoundOverlapMode The new SoundOverlapMode this SoundContainer should use.
-		void SetSoundOverlapMode(SoundOverlapMode newSoundOverlapMode) { CurrentSoundOverlapMode() = newSoundOverlapMode; }
+		void SetSoundOverlapMode(SoundOverlapMode newSoundOverlapMode) {
+			DeferProperty(PendingOp::OverlapMode, 0.0F, 0.0F, newSoundOverlapMode);
+			CurrentSoundOverlapMode() = newSoundOverlapMode;
+		}
 #pragma endregion
 
 #pragma region Sound Property Getters and Setters
@@ -155,7 +204,10 @@ namespace RTE {
 
 		/// Sets the bus this sound routes to.
 		/// @param newBusRoute The new bus for this sound to route to.
-		void SetBusRouting(BusRouting newBusRoute) { CurrentBusRouting() = newBusRoute; }
+		void SetBusRouting(BusRouting newBusRoute) {
+			DeferProperty(PendingOp::BusRoute, 0.0F, 0.0F, newBusRoute);
+			CurrentBusRouting() = newBusRoute;
+		}
 
 		/// Gets whether the sounds in this SoundContainer should be considered immobile, i.e. always play at the listener's position.
 		/// @return Whether or not the sounds in this SoundContainer are immobile.
@@ -164,6 +216,7 @@ namespace RTE {
 		/// Sets whether the sounds in this SoundContainer should be considered immobile, i.e. always play at the listener's position. Does not affect currently playing sounds.
 		/// @param immobile The new immobile setting.
 		void SetImmobile(bool immobile) {
+			DeferProperty(PendingOp::Immobile, 0.0F, 0.0F, immobile ? 1 : 0);
 			CurrentImmobile() = immobile;
 			CurrentSoundPropertiesUpToDate() = false;
 		}
@@ -175,7 +228,9 @@ namespace RTE {
 		/// Sets the attenuation start distance of this SoundContainer. Values < 0 set it to default. Does not affect currently playing sounds.
 		/// @param attenuationStartDistance The new attenuation start distance.
 		void SetAttenuationStartDistance(float attenuationStartDistance) {
-			CurrentAttenuationStartDistance() = (attenuationStartDistance < 0) ? c_DefaultAttenuationStartDistance : attenuationStartDistance;
+			attenuationStartDistance = (attenuationStartDistance < 0) ? c_DefaultAttenuationStartDistance : attenuationStartDistance;
+			DeferProperty(PendingOp::AttenuationStart, attenuationStartDistance);
+			CurrentAttenuationStartDistance() = attenuationStartDistance;
 			CurrentSoundPropertiesUpToDate() = false;
 		}
 
@@ -194,6 +249,7 @@ namespace RTE {
 		/// Sets the panning strength multiplier of this SoundContainer.
 		/// @param panningStrengthMultiplier The new panning strength multiplier.
 		void SetPanningStrengthMultiplier(float panningStrengthMultiplier) {
+			DeferProperty(PendingOp::PanningStrength, panningStrengthMultiplier);
 			CurrentPanningStrengthMultiplier() = panningStrengthMultiplier;
 			CurrentSoundPropertiesUpToDate() = false;
 		}
@@ -206,6 +262,7 @@ namespace RTE {
 		/// 0 means the sound is set to only play once. -1 means it loops indefinitely.
 		/// @param loops The new loop count.
 		void SetLoopSetting(int loops) {
+			DeferProperty(PendingOp::Loops, 0.0F, 0.0F, loops);
 			CurrentLoops() = loops;
 			CurrentSoundPropertiesUpToDate() = false;
 		}
@@ -220,7 +277,11 @@ namespace RTE {
 
 		/// Sets the current playback priority. Higher priority (lower value) will make this more likely to make it into mixing on playback. Does not affect currently playing sounds.
 		/// @param priority The new priority. See AudioMan::PRIORITY_* enumeration.
-		void SetPriority(int priority) { CurrentPriority() = std::clamp(priority, 0, 256); }
+		void SetPriority(int priority) {
+			priority = std::clamp(priority, 0, 256);
+			DeferProperty(PendingOp::Priority, 0.0F, 0.0F, priority);
+			CurrentPriority() = priority;
+		}
 
 		/// Gets whether the sounds in this SoundContainer are affected by global pitch changes or not.
 		/// @return Whether or not the sounds in this SoundContainer are affected by global pitch changes.
@@ -228,13 +289,17 @@ namespace RTE {
 
 		/// Sets whether the sounds in this SoundContainer are affected by global pitch changes or not. Does not affect currently playing sounds.
 		/// @param affectedByGlobalPitch The new affected by global pitch setting.
-		void SetAffectedByGlobalPitch(bool affectedByGlobalPitch) { CurrentAffectedByGlobalPitch() = affectedByGlobalPitch; }
+		void SetAffectedByGlobalPitch(bool affectedByGlobalPitch) {
+			DeferProperty(PendingOp::GlobalPitch, 0.0F, 0.0F, affectedByGlobalPitch ? 1 : 0);
+			CurrentAffectedByGlobalPitch() = affectedByGlobalPitch;
+		}
 
 		/// Gets the position at which this SoundContainer's sound will be played. Note that its individual sounds can be offset from this.
 		/// @return The position of this SoundContainer.
 		const Vector& GetPosition() const { return CurrentPos(); }
-		/// Lua receives the position by value: with copy-on-write local controls a reference could name shared state on one peer and this machine's copy on another.
-		Vector GetLuaPosition() const { return CurrentPos(); }
+		/// The position Lua holds. In an AI hook it is this pass's private copy, so a write through it
+		/// is reconciled into a deferred position write instead of landing on shared state early.
+		const Vector& GetScriptPosition() const;
 
 		/// Sets the position of the SoundContainer's sounds while they're playing.
 		/// @param position The new position to play the SoundContainer's sounds.
@@ -267,7 +332,10 @@ namespace RTE {
 
 		/// Sets the pitch variation the sounds in this SoundContainer are played at.
 		/// @param newValue The pitch variation the sounds in this SoundContainer are played at.
-		void SetPitchVariation(float newValue) { CurrentPitchVariation() = newValue; }
+		void SetPitchVariation(float newValue) {
+			DeferProperty(PendingOp::PitchVariation, newValue);
+			CurrentPitchVariation() = newValue;
+		}
 
 		/// Gets whether this SoundContainer's channels are paused or not.
 		/// @return Whether this SoundContainer's channels are paused or not.
@@ -283,7 +351,10 @@ namespace RTE {
 
 		/// Sets the music pre-entry time for this SoundContainer.
 		/// @param newValue The new MusicPreEntryTime for this SoundContainer in MS.
-		void SetMusicPreEntryTime(float newValue) { CurrentMusicPreEntryTime() = newValue; }
+		void SetMusicPreEntryTime(float newValue) {
+			DeferProperty(PendingOp::MusicPreEntry, newValue);
+			CurrentMusicPreEntryTime() = newValue;
+		}
 
 		/// Gets the music post-exit time for this SoundContainer.
 		/// @return The time after the music ends in this SoundContainer in MS.
@@ -291,7 +362,10 @@ namespace RTE {
 
 		/// Sets the music post-exit time for this SoundContainer.
 		/// @param newValue The new MusicExitTime for this SoundContainer in MS.
-		void SetMusicExitTime(float newValue) { CurrentMusicExitTime() = newValue; }
+		void SetMusicExitTime(float newValue) {
+			DeferProperty(PendingOp::MusicExit, newValue);
+			CurrentMusicExitTime() = newValue;
+		}
 #pragma endregion
 
 #pragma region Playback Controls
@@ -339,6 +413,18 @@ namespace RTE {
 		/// Fades out playback of the SoundContainer to 0 volume.
 		/// @param fadeOutTime How long the fadeout should take.
 		void FadeOut(int fadeOutTime = 1000);
+
+		/// Hands out the sound calls this pass's AI hooks made, in call order; mods don't call this.
+		std::vector<PendingOp> TakePendingSoundOps();
+
+		/// Performs one deferred sound call for real. Run it in a shared simulation scope.
+		bool ApplyPendingSoundOp(const PendingOp& op);
+
+		/// Queues an AI hook's SelectNextSounds call on the named sub-SoundSet.
+		bool QueuePendingSelectSounds(std::vector<uint16_t> soundSetPath);
+
+		/// Finds the path from the top level SoundSet to the given one, or false if it isn't in here.
+		bool FindSoundSetPath(const SoundSet& soundSet, std::vector<uint16_t>& path) const;
 #pragma endregion
 
 #pragma region Miscellaneous
@@ -354,8 +440,10 @@ namespace RTE {
 		static const std::unordered_map<std::string, BusRouting> c_BusRoutingMap; //!< A map of strings to BusRoutings to support string parsing for the BusRouting enum. Populated in the implementing cpp file.
 
 
-		/// Local AI writes land on a private copy of a control; everything else reads and writes the shared one.
-		struct LocalControls {
+		/// The AI pass's private view of the controls it has written this pass. It exists only between
+		/// the write and the drain -- long enough for the hook to read back what it just set -- and is
+		/// never archived: the values reach shared state through the deferred operations instead.
+		struct PendingControls {
 			uint32_t written = 0;
 			SoundOverlapMode m_SoundOverlapMode{};
 			BusRouting m_BusRouting{};
@@ -375,68 +463,78 @@ namespace RTE {
 			bool m_Paused{};
 			float m_MusicPreEntryTime{};
 			float m_MusicExitTime{};
-			template<class Archive> void Fields(Archive& archive) { archive(written, m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime); }
-			std::string SaveCheckpoint() const;
-			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		};
-		enum LocalControl : uint32_t {
+		enum PendingControl : uint32_t {
 			LocalOverlapMode = 1u << 0, LocalBusRouting = 1u << 1, LocalImmobile = 1u << 2, LocalAttenuationStartDistance = 1u << 3, LocalCustomPanValue = 1u << 4,
 			LocalPanningStrengthMultiplier = 1u << 5, LocalLoops = 1u << 6, LocalSoundPropertiesUpToDate = 1u << 7, LocalPriority = 1u << 8, LocalAffectedByGlobalPitch = 1u << 9,
 			LocalPos = 1u << 10, LocalPitch = 1u << 11, LocalPitchVariation = 1u << 12, LocalVolume = 1u << 13, LocalWasFadedOut = 1u << 14, LocalPaused = 1u << 15,
-			LocalMusicPreEntryTime = 1u << 16, LocalMusicExitTime = 1u << 17, LocalControlCount = 18
+			LocalMusicPreEntryTime = 1u << 16, LocalMusicExitTime = 1u << 17
 		};
-		LocalControls m_LocalControls;
-		std::array<LogicalSoundPlayback, 2> m_LogicalPlayback;
+		PendingControls m_Pending;
+		std::vector<PendingOp> m_PendingOps; //!< The sound calls this pass's AI hooks made, in call order.
+		mutable std::recursive_mutex m_PendingMutex; //!< The AI passes run in parallel; only they touch the pending state.
+		uint32_t m_PendingPlays = 0; //!< Plays this pass has queued, so the hook's own liveness question answers as it always did.
+		bool m_PendingStopped = false; //!< A Stop this pass has queued.
+		bool m_PendingPositionWritten = false; //!< A position write is queued, so a read must not refresh from shared state.
+		Vector m_PendingAliasBaseline; //!< The position the alias Lua holds was handed out at.
+		LogicalSoundPlayback m_LogicalPlayback;
 
-		static bool InLocalSoundContext() { return SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation; }
-		template<class T> const T& Control(const T& shared, T LocalControls::*member, uint32_t field) const { return InLocalSoundContext() && (m_LocalControls.written & field) ? m_LocalControls.*member : shared; }
-		template<class T> T& Control(T& shared, T LocalControls::*member, uint32_t field) {
-			if (!InLocalSoundContext()) return shared;
-			if (!(m_LocalControls.written & field)) {
-				m_LocalControls.*member = shared;
-				m_LocalControls.written |= field;
+		/// Whether a mutation made here is the AI's decision rather than the simulation's action.
+		static bool Deferring() { return SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation; }
+		bool DeferProperty(PendingOp::Property property, float x = 0.0F, float y = 0.0F, int32_t value = 0);
+		void QueuePendingOp(PendingOp op);
+		void ReconcileAliasPosition();
+		bool ApplyPendingProperty(const PendingOp& op);
+		void NotePending();
+		template<class T> const T& Control(const T& shared, T PendingControls::*member, uint32_t field) const { return Deferring() && (m_Pending.written & field) ? m_Pending.*member : shared; }
+		template<class T> T& Control(T& shared, T PendingControls::*member, uint32_t field) {
+			if (!Deferring()) return shared;
+			if (!(m_Pending.written & field)) {
+				m_Pending.*member = shared;
+				m_Pending.written |= field;
+				NotePending();
 			}
-			return m_LocalControls.*member;
+			return m_Pending.*member;
 		}
-		const SoundOverlapMode& CurrentSoundOverlapMode() const { return Control(m_SoundOverlapMode, &LocalControls::m_SoundOverlapMode, LocalOverlapMode); }
-		SoundOverlapMode& CurrentSoundOverlapMode() { return Control(m_SoundOverlapMode, &LocalControls::m_SoundOverlapMode, LocalOverlapMode); }
-		const BusRouting& CurrentBusRouting() const { return Control(m_BusRouting, &LocalControls::m_BusRouting, LocalBusRouting); }
-		BusRouting& CurrentBusRouting() { return Control(m_BusRouting, &LocalControls::m_BusRouting, LocalBusRouting); }
-		const bool& CurrentImmobile() const { return Control(m_Immobile, &LocalControls::m_Immobile, LocalImmobile); }
-		bool& CurrentImmobile() { return Control(m_Immobile, &LocalControls::m_Immobile, LocalImmobile); }
-		const float& CurrentAttenuationStartDistance() const { return Control(m_AttenuationStartDistance, &LocalControls::m_AttenuationStartDistance, LocalAttenuationStartDistance); }
-		float& CurrentAttenuationStartDistance() { return Control(m_AttenuationStartDistance, &LocalControls::m_AttenuationStartDistance, LocalAttenuationStartDistance); }
-		const float& CurrentCustomPanValue() const { return Control(m_CustomPanValue, &LocalControls::m_CustomPanValue, LocalCustomPanValue); }
-		float& CurrentCustomPanValue() { return Control(m_CustomPanValue, &LocalControls::m_CustomPanValue, LocalCustomPanValue); }
-		const float& CurrentPanningStrengthMultiplier() const { return Control(m_PanningStrengthMultiplier, &LocalControls::m_PanningStrengthMultiplier, LocalPanningStrengthMultiplier); }
-		float& CurrentPanningStrengthMultiplier() { return Control(m_PanningStrengthMultiplier, &LocalControls::m_PanningStrengthMultiplier, LocalPanningStrengthMultiplier); }
-		const int& CurrentLoops() const { return Control(m_Loops, &LocalControls::m_Loops, LocalLoops); }
-		int& CurrentLoops() { return Control(m_Loops, &LocalControls::m_Loops, LocalLoops); }
-		const bool& CurrentSoundPropertiesUpToDate() const { return Control(m_SoundPropertiesUpToDate, &LocalControls::m_SoundPropertiesUpToDate, LocalSoundPropertiesUpToDate); }
-		bool& CurrentSoundPropertiesUpToDate() { return Control(m_SoundPropertiesUpToDate, &LocalControls::m_SoundPropertiesUpToDate, LocalSoundPropertiesUpToDate); }
-		const int& CurrentPriority() const { return Control(m_Priority, &LocalControls::m_Priority, LocalPriority); }
-		int& CurrentPriority() { return Control(m_Priority, &LocalControls::m_Priority, LocalPriority); }
-		const bool& CurrentAffectedByGlobalPitch() const { return Control(m_AffectedByGlobalPitch, &LocalControls::m_AffectedByGlobalPitch, LocalAffectedByGlobalPitch); }
-		bool& CurrentAffectedByGlobalPitch() { return Control(m_AffectedByGlobalPitch, &LocalControls::m_AffectedByGlobalPitch, LocalAffectedByGlobalPitch); }
-		const Vector& CurrentPos() const { return Control(m_Pos, &LocalControls::m_Pos, LocalPos); }
-		Vector& CurrentPos() { return Control(m_Pos, &LocalControls::m_Pos, LocalPos); }
-		const float& CurrentPitch() const { return Control(m_Pitch, &LocalControls::m_Pitch, LocalPitch); }
-		float& CurrentPitch() { return Control(m_Pitch, &LocalControls::m_Pitch, LocalPitch); }
-		const float& CurrentPitchVariation() const { return Control(m_PitchVariation, &LocalControls::m_PitchVariation, LocalPitchVariation); }
-		float& CurrentPitchVariation() { return Control(m_PitchVariation, &LocalControls::m_PitchVariation, LocalPitchVariation); }
-		const float& CurrentVolume() const { return Control(m_Volume, &LocalControls::m_Volume, LocalVolume); }
-		float& CurrentVolume() { return Control(m_Volume, &LocalControls::m_Volume, LocalVolume); }
-		const bool& CurrentWasFadedOut() const { return Control(m_WasFadedOut, &LocalControls::m_WasFadedOut, LocalWasFadedOut); }
-		bool& CurrentWasFadedOut() { return Control(m_WasFadedOut, &LocalControls::m_WasFadedOut, LocalWasFadedOut); }
-		const bool& CurrentPaused() const { return Control(m_Paused, &LocalControls::m_Paused, LocalPaused); }
-		bool& CurrentPaused() { return Control(m_Paused, &LocalControls::m_Paused, LocalPaused); }
-		const float& CurrentMusicPreEntryTime() const { return Control(m_MusicPreEntryTime, &LocalControls::m_MusicPreEntryTime, LocalMusicPreEntryTime); }
-		float& CurrentMusicPreEntryTime() { return Control(m_MusicPreEntryTime, &LocalControls::m_MusicPreEntryTime, LocalMusicPreEntryTime); }
-		const float& CurrentMusicExitTime() const { return Control(m_MusicExitTime, &LocalControls::m_MusicExitTime, LocalMusicExitTime); }
-		float& CurrentMusicExitTime() { return Control(m_MusicExitTime, &LocalControls::m_MusicExitTime, LocalMusicExitTime); }
+		const SoundOverlapMode& CurrentSoundOverlapMode() const { return Control(m_SoundOverlapMode, &PendingControls::m_SoundOverlapMode, LocalOverlapMode); }
+		SoundOverlapMode& CurrentSoundOverlapMode() { return Control(m_SoundOverlapMode, &PendingControls::m_SoundOverlapMode, LocalOverlapMode); }
+		const BusRouting& CurrentBusRouting() const { return Control(m_BusRouting, &PendingControls::m_BusRouting, LocalBusRouting); }
+		BusRouting& CurrentBusRouting() { return Control(m_BusRouting, &PendingControls::m_BusRouting, LocalBusRouting); }
+		const bool& CurrentImmobile() const { return Control(m_Immobile, &PendingControls::m_Immobile, LocalImmobile); }
+		bool& CurrentImmobile() { return Control(m_Immobile, &PendingControls::m_Immobile, LocalImmobile); }
+		const float& CurrentAttenuationStartDistance() const { return Control(m_AttenuationStartDistance, &PendingControls::m_AttenuationStartDistance, LocalAttenuationStartDistance); }
+		float& CurrentAttenuationStartDistance() { return Control(m_AttenuationStartDistance, &PendingControls::m_AttenuationStartDistance, LocalAttenuationStartDistance); }
+		const float& CurrentCustomPanValue() const { return Control(m_CustomPanValue, &PendingControls::m_CustomPanValue, LocalCustomPanValue); }
+		float& CurrentCustomPanValue() { return Control(m_CustomPanValue, &PendingControls::m_CustomPanValue, LocalCustomPanValue); }
+		const float& CurrentPanningStrengthMultiplier() const { return Control(m_PanningStrengthMultiplier, &PendingControls::m_PanningStrengthMultiplier, LocalPanningStrengthMultiplier); }
+		float& CurrentPanningStrengthMultiplier() { return Control(m_PanningStrengthMultiplier, &PendingControls::m_PanningStrengthMultiplier, LocalPanningStrengthMultiplier); }
+		const int& CurrentLoops() const { return Control(m_Loops, &PendingControls::m_Loops, LocalLoops); }
+		int& CurrentLoops() { return Control(m_Loops, &PendingControls::m_Loops, LocalLoops); }
+		const bool& CurrentSoundPropertiesUpToDate() const { return Control(m_SoundPropertiesUpToDate, &PendingControls::m_SoundPropertiesUpToDate, LocalSoundPropertiesUpToDate); }
+		bool& CurrentSoundPropertiesUpToDate() { return Control(m_SoundPropertiesUpToDate, &PendingControls::m_SoundPropertiesUpToDate, LocalSoundPropertiesUpToDate); }
+		const int& CurrentPriority() const { return Control(m_Priority, &PendingControls::m_Priority, LocalPriority); }
+		int& CurrentPriority() { return Control(m_Priority, &PendingControls::m_Priority, LocalPriority); }
+		const bool& CurrentAffectedByGlobalPitch() const { return Control(m_AffectedByGlobalPitch, &PendingControls::m_AffectedByGlobalPitch, LocalAffectedByGlobalPitch); }
+		bool& CurrentAffectedByGlobalPitch() { return Control(m_AffectedByGlobalPitch, &PendingControls::m_AffectedByGlobalPitch, LocalAffectedByGlobalPitch); }
+		const Vector& CurrentPos() const { return Control(m_Pos, &PendingControls::m_Pos, LocalPos); }
+		Vector& CurrentPos() { return Control(m_Pos, &PendingControls::m_Pos, LocalPos); }
+		const float& CurrentPitch() const { return Control(m_Pitch, &PendingControls::m_Pitch, LocalPitch); }
+		float& CurrentPitch() { return Control(m_Pitch, &PendingControls::m_Pitch, LocalPitch); }
+		const float& CurrentPitchVariation() const { return Control(m_PitchVariation, &PendingControls::m_PitchVariation, LocalPitchVariation); }
+		float& CurrentPitchVariation() { return Control(m_PitchVariation, &PendingControls::m_PitchVariation, LocalPitchVariation); }
+		const float& CurrentVolume() const { return Control(m_Volume, &PendingControls::m_Volume, LocalVolume); }
+		float& CurrentVolume() { return Control(m_Volume, &PendingControls::m_Volume, LocalVolume); }
+		const bool& CurrentWasFadedOut() const { return Control(m_WasFadedOut, &PendingControls::m_WasFadedOut, LocalWasFadedOut); }
+		bool& CurrentWasFadedOut() { return Control(m_WasFadedOut, &PendingControls::m_WasFadedOut, LocalWasFadedOut); }
+		const bool& CurrentPaused() const { return Control(m_Paused, &PendingControls::m_Paused, LocalPaused); }
+		bool& CurrentPaused() { return Control(m_Paused, &PendingControls::m_Paused, LocalPaused); }
+		const float& CurrentMusicPreEntryTime() const { return Control(m_MusicPreEntryTime, &PendingControls::m_MusicPreEntryTime, LocalMusicPreEntryTime); }
+		float& CurrentMusicPreEntryTime() { return Control(m_MusicPreEntryTime, &PendingControls::m_MusicPreEntryTime, LocalMusicPreEntryTime); }
+		const float& CurrentMusicExitTime() const { return Control(m_MusicExitTime, &PendingControls::m_MusicExitTime, LocalMusicExitTime); }
+		float& CurrentMusicExitTime() { return Control(m_MusicExitTime, &PendingControls::m_MusicExitTime, LocalMusicExitTime); }
 
-		const LogicalSoundPlayback& CurrentLogicalPlayback() const { return m_LogicalPlayback[InLocalSoundContext() ? 1 : 0]; }
-		LogicalSoundPlayback& CurrentLogicalPlayback() { return m_LogicalPlayback[InLocalSoundContext() ? 1 : 0]; }
+		const LogicalSoundPlayback& CurrentLogicalPlayback() const { return m_LogicalPlayback; }
+		LogicalSoundPlayback& CurrentLogicalPlayback() { return m_LogicalPlayback; }
 		bool HasLiveLogicalVoices() const;
 		void RetireFinishedLogicalVoices();
 		void FoldLogicalVoices();
