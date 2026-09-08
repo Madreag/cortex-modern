@@ -631,7 +631,7 @@ bool MusicMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
     catch (const std::exception&) { return false; }
 }
 
-bool MusicMan::LoadCheckpointWithAudio(std::string_view text, std::string_view audio) {
+bool MusicMan::LoadCheckpointWithAudio(std::string_view text, std::string_view audio, const std::vector<std::pair<SoundData*, std::string>>* inheritedBindings) {
     const auto originalRegistry = g_AudioMan.CaptureCheckpointSoundRegistry();
     const uint64_t originalCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
     std::unique_ptr<MusicCheckpoint::State> candidate;
@@ -639,13 +639,14 @@ bool MusicMan::LoadCheckpointWithAudio(std::string_view text, std::string_view a
     try {
         MusicCheckpoint::Record record;
         if (!record.LoadCheckpoint(text) || !MusicCheckpoint::Validate(record) || !g_AudioMan.LoadCheckpoint(audio, true)) return false;
-        if (SaveCheckpoint() == text) return g_AudioMan.LoadCheckpoint(audio);
+        if (SaveCheckpoint() == text) return g_AudioMan.LoadCheckpoint(audio, false, inheritedBindings);
         CheckpointSoundRegistry registrations;
         {
             AudioMan::CheckpointRegistryScope registryScope;
             candidate = MusicCheckpoint::Build(record);
             registrations = g_AudioMan.AddedCheckpointSoundRegistrations(originalRegistry);
         }
+        if (inheritedBindings) candidate->sampleBindings.insert(candidate->sampleBindings.end(), inheritedBindings->begin(), inheritedBindings->end());
         g_AudioMan.RestoreCheckpointSoundRegistry(MusicCheckpoint::WithoutOwners(originalRegistry, MusicCheckpoint::OwnedSounds(*this)));
         g_AudioMan.ActivateCheckpointSoundRegistrations(registrations);
         candidate->Swap(*this); swapped = true;

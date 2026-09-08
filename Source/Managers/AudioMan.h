@@ -25,6 +25,7 @@ namespace RTE {
 	class AudioMan : public Singleton<AudioMan> {
 		friend class SettingsMan;
 		friend class SoundContainer;
+		friend struct GUISoundCheckpoint;
 
 	public:
 		std::string SaveCheckpoint() const;

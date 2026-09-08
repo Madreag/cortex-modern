@@ -15,7 +15,7 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
-		bool LoadCheckpointWithAudio(std::string_view text, std::string_view audio);
+		bool LoadCheckpointWithAudio(std::string_view text, std::string_view audio, const std::vector<std::pair<SoundData*, std::string>>* inheritedBindings = nullptr);
 		bool RunCheckpointSelfTest();
 		struct CheckpointOwners;
 		std::shared_ptr<CheckpointOwners> TakeCheckpointOwners();

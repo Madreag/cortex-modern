@@ -2,6 +2,8 @@
 
 #include "SoundContainer.h"
 #include "Singleton.h"
+#include <functional>
+#include <string_view>
 
 #define g_GUISound GUISound::Instance()
 
@@ -9,8 +11,14 @@ namespace RTE {
 
 	/// The singleton loader for all GUI sound effects.
 	class GUISound : public Singleton<GUISound> {
+		friend struct GUISoundCheckpoint;
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		bool LoadCheckpointWithAudio(std::string_view text, std::string_view music, std::string_view audio);
+		bool RunCheckpointSelfTest();
+		void VisitCheckpointSounds(const std::function<void(size_t, const SoundContainer&)>& visitor) const;
 #pragma region Creation
 		/// Constructor method used to instantiate a GUISound object in system memory. Create() should be called before using the object.
 		GUISound();

@@ -13,6 +13,7 @@ namespace RTE {
 	/// A container for sounds that represent a specific sound effect.
 	class SoundContainer : public Entity {
 		friend struct MusicCheckpoint;
+		friend struct GUISoundCheckpoint;
 		friend class AudioMan;
 		friend struct ContractAudit;
 
@@ -347,6 +348,7 @@ namespace RTE {
 		bool m_CheckpointRegistered = false;
 		bool m_IsDestroying = false;
 		void ReidentifyCheckpoint(uint64_t identity);
+		void SwapCheckpoint(SoundContainer& other) noexcept;
 
 		std::shared_ptr<SoundSet> m_TopLevelSoundSet; // The top level SoundSet that handles all SoundData and sub SoundSets in this SoundContainer.
 
