@@ -830,6 +830,8 @@ namespace RTE {
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
 		bool m_HasWorldSetAside = false;
+		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
+		void ForgetHeldWorld(WorldSetAside& in);
 		bool RestoreWorldCandidate(const WorldSnapshot& in);
 		struct Speculation {
 			struct Shadow {

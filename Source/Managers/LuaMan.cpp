@@ -4684,6 +4684,44 @@ _PrimitiveQueueCapture = nil
 		scopeForgetsDestroyed = identity > 0 && g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
 	}
 	std::cout << "[script-graph-selftest] " << (scopeForgetsDestroyed ? "PASS" : "FAIL") << " construction_scope_forgets_destroyed_owner" << std::endl;
+	// A world held aside keeps the same registry copy for the whole hold, and the collector can sweep an
+	// object that stayed live in that window: reinstating the copy would put the freed pointer back, and
+	// retiring the world calls DiscardScriptState on every recorded object the live registry no longer names.
+	bool setAsideForgetsDestroyed = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		const long identity = object->GetUniqueID();
+		MovableMan::WorldSetAside aside;
+		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+			const bool recorded = aside.knownObjects.contains(identity);
+			delete object;
+			setAsideForgetsDestroyed = recorded && !aside.knownObjects.contains(identity);
+			// Anything the record still names would be walked by the reinstate, so drop it rather than leave the world held.
+			aside.knownObjects.erase(identity);
+			setAsideForgetsDestroyed = g_MovableMan.ReinstateWorld(aside) && setAsideForgetsDestroyed;
+			setAsideForgetsDestroyed = g_MovableMan.FindObjectByUniqueID(identity) == nullptr && setAsideForgetsDestroyed;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (setAsideForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_forgets_destroyed_owner" << std::endl;
+	checkpointValues = setAsideForgetsDestroyed && checkpointValues;
+	// Retiring a held world reads the same record, so the object the sweep destroyed must be gone from it there too.
+	bool discardForgetsDestroyed = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		const long identity = object->GetUniqueID();
+		MovableMan::WorldSetAside aside;
+		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+			delete object;
+			discardForgetsDestroyed = !aside.knownObjects.contains(identity);
+			aside.knownObjects.erase(identity);
+			g_MovableMan.DiscardWorld(aside);
+			discardForgetsDestroyed = !aside.held && !g_MovableMan.HasWorldSetAside() && g_MovableMan.FindObjectByUniqueID(identity) == nullptr && discardForgetsDestroyed;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (discardForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_discard_forgets_destroyed_owner" << std::endl;
+	checkpointValues = discardForgetsDestroyed && checkpointValues;
 	// A world set aside for an in-memory restore leaves its script-owned trees in the heap while the
 	// restored copies hold their identities. Only the live registration reaches the reference map,
 	// so the shadowed original is not an owner any restore can fail to find.
