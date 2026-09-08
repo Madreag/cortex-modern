@@ -15,6 +15,9 @@ namespace RTE {
 		bool reorderUnreliable = false;
 		uint32_t unreliableDropEveryN = 0;
 		uint32_t unreliableDuplicateEveryN = 0;
+		// Every send to this peer is refused, as a full reliable send buffer does: the message is
+		// never queued, so on an ordered lane the receiver has a gap it can never fill.
+		NetPeerId refuseSendsToPeer = c_InvalidNetPeerId;
 	};
 
 	class LoopbackTransport : public INetTransport {

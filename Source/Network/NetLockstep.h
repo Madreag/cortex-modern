@@ -199,6 +199,7 @@ namespace RTE {
 		uint32_t preStartBuffered = 0;
 		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
 		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
+		uint32_t relayResends = 0; //!< Host: refused forwards a later retry did deliver.
 		uint64_t highestTargetFrame = 0;
 		uint64_t lastHeardMs = 0;
 	};
@@ -229,6 +230,8 @@ namespace RTE {
 		uint32_t missingFrameStalls = 0;
 		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
 		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
+		uint32_t relayResends = 0; //!< Refused forwards a later retry did deliver.
+		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
 		uint64_t longestStallMs = 0;
@@ -357,6 +360,21 @@ namespace RTE {
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs);
+		/// The first frame this peer has no data for, walking up from the committed one.
+		uint64_t FirstFrameWithout(uint8_t peerId) const;
+		/// How long the host lets a required remote go quiet before calling it gone. Half the
+		/// missing-frame grace, so the relayed notice still has the other half to reach the survivors.
+		uint64_t PeerSilenceLeaveMs() const { return m_Config.timeoutMs / 2; }
+		/// Relay host: a required remote that has blocked the round this long has left, whatever its
+		/// socket still says. Waiting for the transport means waiting on the dead peer's own process.
+		void AdjudicateSilentPeers(uint64_t nowMs);
+		/// Holds a refused forward for retry, keeping this peer's stream in order behind it.
+		void QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes);
+		/// Retries refused forwards. A momentarily full send buffer heals; one that stays refused past
+		/// the silence budget is a gap the receiver can never fill, so that peer leaves the round.
+		void FlushRelayBacklog(uint64_t nowMs);
+		/// Drops peers whose forwards could not be delivered at all.
+		void DropUnreachablePeers(uint64_t nowMs);
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
 		uint16_t PeerInputDelay(uint8_t peerId) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
@@ -372,6 +390,10 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
+		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
+		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.
+		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
