@@ -10,6 +10,7 @@
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectTranscript.h"
+#include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
 #include "NetSession.h"
 #include "System/System.h"
@@ -2349,6 +2350,131 @@ namespace RTE {
 			return 0;
 		}
 
+		// §11's schedule, entirely on an injected clock: one attempt per full P3 ladder for the whole P2
+		// resume window, cancel and manual retry, and the four startup-offer outcomes.
+		int TestReconnectUxSchedule() {
+			static_assert(NetReconnectUx::c_AttemptIntervalMs == 2000, "one attempt per P3 ladder");
+			static_assert(NetReconnectUx::c_ResumeWindowMs == 20000, "the P2 resume window");
+			static_assert(NetReconnectUx::c_MaxAttempts == 10, "ten attempts fit the window");
+
+			NetReconnectUx ux;
+			if (ux.GetState() != NetReconnectUxState::Idle || ux.IsActive() || !ux.GetStatusText().empty()) {
+				return Fail("a fresh reconnect UX was not idle and silent");
+			}
+			uint64_t nowMs = 1000;
+			ux.NoteConnected(nowMs);
+			if (ux.Tick(nowMs)) {
+				return Fail("a connected UX asked for a reconnect attempt");
+			}
+			ux.NoteDropped(nowMs, "connection closed by peer");
+			if (!ux.IsActive() || ux.GetStatusText().find("Reconnecting") == std::string::npos ||
+			    ux.GetStatusText().find("connection closed by peer") == std::string::npos) {
+				return Fail("the drop did not produce a persistent reason-carrying status");
+			}
+			// The first attempt is due at once; each later one waits a whole ladder.
+			std::vector<uint64_t> attemptsAt;
+			for (uint32_t attempt = 0; attempt < NetReconnectUx::c_MaxAttempts; ++attempt) {
+				bool fired = false;
+				for (uint64_t step = 0; step < 400 && !fired; ++step, nowMs += 10) {
+					if (ux.Tick(nowMs)) {
+						fired = true;
+						attemptsAt.push_back(nowMs);
+						ux.NoteAttemptStarted(nowMs);
+						ux.NoteAttemptFailed(nowMs, "host did not answer");
+					}
+				}
+				if (!fired) {
+					return Fail("attempt " + std::to_string(attempt + 1) + " never came due");
+				}
+				if (ux.GetAttempts() != attempt + 1) {
+					return Fail("the attempt count did not follow the schedule");
+				}
+			}
+			for (size_t attempt = 1; attempt < attemptsAt.size(); ++attempt) {
+				const uint64_t gap = attemptsAt[attempt] - attemptsAt[attempt - 1];
+				if (gap < NetReconnectUx::c_AttemptIntervalMs || gap > NetReconnectUx::c_AttemptIntervalMs + 10) {
+					return Fail("attempts were not one P3 ladder apart: " + std::to_string(gap) + " ms");
+				}
+			}
+			if (attemptsAt.back() - attemptsAt.front() >= NetReconnectUx::c_ResumeWindowMs) {
+				return Fail("the schedule ran past the resume window it is budgeted against");
+			}
+			if (ux.GetState() != NetReconnectUxState::GaveUp || ux.Tick(nowMs)) {
+				return Fail("the UX kept trying after its attempts were spent");
+			}
+			if (!ux.CanRetryManually() || ux.CanCancel()) {
+				return Fail("a spent schedule did not offer exactly a manual retry");
+			}
+			ux.RequestManualRetry(nowMs);
+			if (ux.GetState() != NetReconnectUxState::Waiting || ux.GetAttempts() != 0 || !ux.Tick(nowMs)) {
+				return Fail("the manual retry did not reopen the window");
+			}
+			ux.NoteAttemptStarted(nowMs);
+			if (!ux.CanCancel()) {
+				return Fail("an in-flight attempt could not be cancelled");
+			}
+			ux.Cancel(nowMs);
+			if (ux.GetState() != NetReconnectUxState::Cancelled || ux.Tick(nowMs + 100000)) {
+				return Fail("a cancelled schedule kept firing");
+			}
+			if (!ux.CanRetryManually()) {
+				return Fail("a cancel removed the manual retry as well");
+			}
+			ux.RequestManualRetry(nowMs);
+			ux.NoteAttemptStarted(nowMs);
+			ux.NoteReconnected(nowMs);
+			if (ux.GetState() != NetReconnectUxState::Reconnected || ux.IsActive() || ux.GetStatusText() != "Reconnected.") {
+				return Fail("a successful reconnect did not settle the banner");
+			}
+
+			// The window closing is a real end, not just a spent counter.
+			{
+				NetReconnectUx expired;
+				expired.NoteDropped(5000, "link lost");
+				expired.NoteAttemptStarted(5000);
+				expired.NoteAttemptFailed(5000 + NetReconnectUx::c_ResumeWindowMs + 1, "");
+				if (expired.GetState() != NetReconnectUxState::GaveUp) {
+					return Fail("an attempt that failed past the resume window kept the schedule alive");
+				}
+			}
+
+			// The startup offer distinguishes what the store found; §11 requires exactly that.
+			{
+				NetReconnectUx offer;
+				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
+				if (offer.GetOffer() != NetReconnectOffer::Available || offer.GetOfferAddress() != "10.0.0.7" ||
+				    offer.GetOfferText().find("10.0.0.7") == std::string::npos) {
+					return Fail("a usable record was not offered with its host");
+				}
+				offer.OfferStoredTicket(NetH4TicketLoadResult::Corrupt, "10.0.0.7");
+				if (offer.GetOffer() != NetReconnectOffer::Corrupt || !offer.GetOfferAddress().empty() ||
+				    offer.GetOfferText().find("damaged") == std::string::npos) {
+					return Fail("a damaged record was not reported as damaged");
+				}
+				offer.OfferStoredTicket(NetH4TicketLoadResult::Stale, "10.0.0.7");
+				if (offer.GetOffer() != NetReconnectOffer::Stale || offer.GetOfferText().find("too old") == std::string::npos) {
+					return Fail("a stale record was not reported as stale");
+				}
+				offer.OfferStoredTicket(NetH4TicketLoadResult::Missing, "");
+				if (offer.GetOffer() != NetReconnectOffer::None || !offer.GetOfferText().empty()) {
+					return Fail("a missing record produced an offer");
+				}
+				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
+				offer.DismissOffer();
+				if (offer.GetOffer() != NetReconnectOffer::None) {
+					return Fail("the offer could not be dismissed");
+				}
+			}
+
+			// The roster mark is persistent text, not a toast, and reclaiming outranks dropped.
+			if (std::string(NetReconnectUx::RosterMark(false, false)) != "" ||
+			    std::string(NetReconnectUx::RosterMark(true, false)).find("Disconnected") == std::string::npos ||
+			    std::string(NetReconnectUx::RosterMark(true, true)).find("Reconnecting") == std::string::npos) {
+				return Fail("the roster mark did not describe the seat");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2407,6 +2533,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestReclaimLadderFitsHandshakeTimeout(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReconnectUxSchedule(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
