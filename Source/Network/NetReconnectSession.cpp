@@ -688,6 +688,71 @@ namespace RTE {
 		m_Outbound.push_back({c_InvalidNetPeerId, m_PendingRequest});
 	}
 
+	const char* NetReconnectClientStateName(NetH4ClientState state) {
+		switch (state) {
+			case NetH4ClientState::Idle: return "Idle";
+			case NetH4ClientState::Joining: return "Joining";
+			case NetH4ClientState::Storing: return "Storing";
+			case NetH4ClientState::Reclaiming: return "Reclaiming";
+			case NetH4ClientState::Proving: return "Proving";
+			case NetH4ClientState::Joined: return "Joined";
+			case NetH4ClientState::Leaving: return "Leaving";
+			case NetH4ClientState::Left: return "Left";
+			case NetH4ClientState::Denied: return "Denied";
+			case NetH4ClientState::Failed: return "Failed";
+		}
+		return "Unknown";
+	}
+
+	void NetReconnectClient::SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash) {
+		m_HostAddress = std::move(hostAddress);
+		m_MatchConfigHash = matchConfigHash;
+		m_Record.hostAddress = m_HostAddress;
+		m_Record.matchConfigHash = m_MatchConfigHash;
+	}
+
+	bool NetReconnectClient::IsAdmissionPending() const {
+		return m_State == NetH4ClientState::Joining || m_State == NetH4ClientState::Storing ||
+		       m_State == NetH4ClientState::Reclaiming || m_State == NetH4ClientState::Proving;
+	}
+
+	bool NetReconnectClient::BeginAdmission(uint64_t nowMs, std::string* error) {
+		if (m_Store == nullptr) {
+			if (error) *error = "no ticket store";
+			return false;
+		}
+		m_UsedStoredTicket = false;
+		m_FellBackToNewJoin = false;
+		NetH4TicketRecord record;
+		m_LastLoad = m_Store->Load(UnixNowMs(), record, nullptr);
+		// A record for a different host names a different session's seat; only this host's reclaims.
+		if (m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress) {
+			m_UsedStoredTicket = true;
+			record.matchConfigHash = m_MatchConfigHash;
+			return BeginReclaim(record, nowMs, error);
+		}
+		return BeginNewJoin(nowMs, error);
+	}
+
+	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs) {
+		if (!m_UsedStoredTicket || m_FellBackToNewJoin || m_State == NetH4ClientState::Joined) {
+			return false;
+		}
+		// The stored ticket named a hosted session that is gone (or a seat this host no longer knows).
+		// A fresh join is what a ticketless client would have sent, so try it once and let the seat
+		// protection decide; a second refusal is a real refusal.
+		m_FellBackToNewJoin = true;
+		m_HasRecord = false;
+		m_Record = {};
+		m_Record.hostAddress = m_HostAddress;
+		m_Record.matchConfigHash = m_MatchConfigHash;
+		if (!BeginNewJoin(nowMs, nullptr)) {
+			return false;
+		}
+		m_Error = "the stored reconnect ticket was refused; joining as a new player";
+		return true;
+	}
+
 	bool NetReconnectClient::BeginNewJoin(uint64_t nowMs, std::string* error) {
 		if (m_Store == nullptr) {
 			Fail("no ticket store");

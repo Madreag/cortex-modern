@@ -245,6 +245,8 @@ namespace RTE {
 		Failed = 9,      //!< Local failure (no provider, no durable store); nothing was committed.
 	};
 
+	const char* NetReconnectClientStateName(NetH4ClientState state);
+
 	struct NetReconnectClientStats {
 		uint32_t requestsSent = 0;
 		uint32_t retransmits = 0;
@@ -270,6 +272,18 @@ namespace RTE {
 
 		void Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName);
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
+		/// Names the host this client is joining, so a stored record can be told from another host's and
+		/// the record it writes says where it came from.
+		void SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash);
+
+		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
+		/// reclaimed, anything else is a fresh join.
+		/// @return Whether a transaction is now running; false leaves the session's ordinary Ready path.
+		bool BeginAdmission(uint64_t nowMs, std::string* error = nullptr);
+		/// The host refused the transaction. A refused RECLAIM falls back to one fresh join (the ticket
+		/// was for a session that is gone), which is exactly what a ticketless client would have sent.
+		/// @return Whether the refusal was absorbed; false means the session should fail on it.
+		bool AbsorbRejection(uint64_t nowMs);
 
 		bool BeginNewJoin(uint64_t nowMs, std::string* error = nullptr);
 		bool BeginReclaim(const NetH4TicketRecord& record, uint64_t nowMs, std::string* error = nullptr);
@@ -286,6 +300,12 @@ namespace RTE {
 		void NotifyAmbiguousLoss();
 
 		NetH4ClientState GetState() const { return m_State; }
+		bool IsAdmitted() const { return m_State == NetH4ClientState::Joined; }
+		/// A transaction is in flight: the session owes it a commit before it may declare itself Ready.
+		bool IsAdmissionPending() const;
+		/// Why the last store read produced nothing, so §11 can tell missing from corrupt from stale.
+		NetH4TicketLoadResult GetLastLoadResult() const { return m_LastLoad; }
+		bool UsedStoredTicket() const { return m_UsedStoredTicket; }
 		/// Set when an unacknowledged leave gave up: keep the ticket and close the link.
 		bool WantsLinkClosed() const { return m_WantsLinkClosed; }
 		const std::string& GetError() const { return m_Error; }
@@ -306,10 +326,15 @@ namespace RTE {
 		NetReconnectTicketStore* m_Store = nullptr;
 		NetH4Identity m_Identity;
 		std::string m_DisplayName = "Player";
+		std::string m_HostAddress;
+		NetHash32 m_MatchConfigHash{};
 		uint64_t (*m_UnixClock)(void*) = nullptr;
 		void* m_UnixClockContext = nullptr;
 
 		NetH4ClientState m_State = NetH4ClientState::Idle;
+		NetH4TicketLoadResult m_LastLoad = NetH4TicketLoadResult::Missing;
+		bool m_UsedStoredTicket = false;
+		bool m_FellBackToNewJoin = false;
 		NetPayload m_PendingRequest;
 		bool m_HasPendingRequest = false;
 		uint64_t m_RequestSentMs = 0;
