@@ -1,6 +1,3 @@
-		int8_t m_PendingHasSounds = -1; //!< What a structural call this pass made leaves HasAnySounds answering, or -1 for nothing queued.
-		bool ApplyPendingStructure(const PendingOp& op);
-		SoundSet* SoundSetAtPath(const std::vector<uint16_t>& path);
 #pragma once
 
 #include "Entity.h"
@@ -489,6 +486,7 @@ namespace RTE {
 		uint32_t m_PendingPlays = 0; //!< Plays this pass has queued, so the hook's own liveness question answers as it always did.
 		bool m_PendingStopped = false; //!< A Stop this pass has queued.
 		bool m_PendingPositionWritten = false; //!< A position write is queued, so a read must not refresh from shared state.
+		int8_t m_PendingHasSounds = -1; //!< What a structural call this pass made leaves HasAnySounds answering, or -1 for nothing queued.
 		bool m_PendingTouchedByAI = false; //!< An AI hook has touched this container since the last drain, so a change found now was made there.
 		bool m_SharedAliasHeld = false; //!< A shared scope has handed the position itself to Lua, which can then be written from anywhere.
 		int64_t m_PendingActorUID = 0; //!< The last AI actor to touch this container; a reconcile made at the drain belongs to it.
@@ -509,6 +507,8 @@ namespace RTE {
 		void SettleSharedAliasWrite();
 		void NoteAIActor();
 		bool ApplyPendingProperty(const PendingOp& op);
+		bool ApplyPendingStructure(const PendingOp& op);
+		SoundSet* SoundSetAtPath(const std::vector<uint16_t>& path);
 		void NotePending();
 		template<class T> const T& Control(const T& shared, T PendingControls::*member, uint32_t field) const { return Deferring() && (m_Pending.written & field) ? m_Pending.*member : shared; }
 		template<class T> T& Control(T& shared, T PendingControls::*member, uint32_t field) {
