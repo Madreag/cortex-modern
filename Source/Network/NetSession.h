@@ -2,6 +2,7 @@
 
 #include "NetIdentity.h"
 #include "NetProtocol.h"
+#include "NetReconnectSession.h"
 #include "NetTransport.h"
 
 #include <cstdint>
@@ -51,6 +52,9 @@ namespace RTE {
 		uint32_t timeouts = 0;
 		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
 		uint32_t unauthenticatedConnectionsRefused = 0; //!< Host: connections refused because the half-open bound was already full.
+		uint32_t fencedPackets = 0; //!< Host: packets from a superseded incarnation of a seat, dropped for it.
+		uint32_t fencedDisconnects = 0; //!< Host: a dead incarnation timing out, which must not evict the seat.
+		uint32_t admissionMessages = 0; //!< H4 admission messages handed to the reconnect plane.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -78,6 +82,17 @@ namespace RTE {
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void Close(const std::string& reason);
+		/// Ends the hosted session for every peer with the one reason that lets a client delete its
+		/// recovery record. Sent from the same place the seat registry is cleared, and nowhere else.
+		void EndHostedSession(const std::string& reason);
+
+		/// Attaches the H4 admission plane. Without one the session behaves exactly as it did before
+		/// reconnect existed: an admission message is an unexpected handshake message.
+		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
+		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
+		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
+        /// The frame a seat drop is recorded against; the match runner keeps it current.
+		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
 		NetSessionRole GetRole() const { return m_Role; }
 		NetSessionState GetState() const { return m_State; }
@@ -150,6 +165,10 @@ namespace RTE {
 		NetHostHello BuildHostHello(uint8_t assignedPeerId) const;
 		NetJoinAccepted BuildJoinAccepted(uint8_t assignedPeerId) const;
 		NetReadyState BuildReadyState(bool ready) const;
+		/// @return Whether the payload was an admission message the reconnect plane took.
+		bool RouteAdmissionMessage(NetPeerId peerId, const NetPayload& payload);
+		void FlushReconnectOutbound();
+
 		NetIdentityMismatch ValidateClientHello(const NetClientHello& hello) const;
 		NetIdentityMismatch ValidateHostHello(const NetHostHello& hello) const;
 
@@ -177,6 +196,9 @@ namespace RTE {
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
 		NetSessionStats m_Stats;
+		NetReconnectHost* m_ReconnectHost = nullptr;
+		NetReconnectClient* m_ReconnectClient = nullptr;
+		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
 	};
 
