@@ -499,7 +499,7 @@ namespace RTE {
 
 		/// Gets the list of waypoints for this Actor.
 		/// @return The list of waypoints for this Actor.
-		const std::list<std::pair<Vector, const MovableObject*>>& GetWaypointList() const { return m_Waypoints; }
+		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const { return m_Waypoints; }
 
 		/// Gets how many waypoints this actor have.
 		/// @return How many waypoints.
@@ -570,6 +570,8 @@ namespace RTE {
 		/// Gets a pointer to the MovableObject move target of this Actor.
 		/// @return A pointer to the MovableObject move target of this Actor.
 		const MovableObject* GetMOMoveTarget() const { return m_pMOMoveTarget; }
+		void SetMOMoveTarget(const MovableObject* object) { m_pMOMoveTarget = object; m_FaithfulMOMoveTargetUID = 0; }
+		static bool RunBorrowedReferenceSelfTest();
 
 		/// Sets this' perceptiveness to alarming events going on around him.
 		/// @param newPerceptiveness The current perceptiveness, 0.0 - 1.0
@@ -1144,7 +1146,7 @@ namespace RTE {
 		AIMode m_AIMode;
 		// The list of waypoints remaining between which the paths are made. If this is empty, the last path is in teh MovePath
 		// The MO pointer in the pair is nonzero if the waypoint is tied to an MO in the scene, and gets updated each UpdateAI. This needs to be checked for validity/existence each UpdateAI
-		std::list<std::pair<Vector, const MovableObject*>> m_Waypoints;
+		std::list<std::pair<Vector, MovableObjectReference>> m_Waypoints;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
@@ -1152,7 +1154,7 @@ namespace RTE {
 		// Absolute target to move to on the scene; this is usually the point at the front of the movepath list
 		Vector m_MoveTarget;
 		// The MO we're currently following, if any. If still valid, this' position will update the MoveTarget each UpdateAI.
-		const MovableObject* m_pMOMoveTarget;
+		MovableObjectReference m_pMOMoveTarget;
 		// The point previous on the path to the one currently assigned the move target
 		Vector m_PrevPathTarget;
 		// The relative, scene-wrapped difference between the current m_Pos and the m_MoveTarget.

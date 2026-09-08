@@ -1961,7 +1961,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 		// Draw the AI paths, from the ultimate destination back up to the actor's position.
 		// We do this backwards so the lines won't crawl and the dots can be evenly spaced throughout
 		Vector waypoint;
-		std::list<std::pair<Vector, const MovableObject*>>::reverse_iterator vLast, vItr;
+		std::list<std::pair<Vector, MovableObjectReference>>::reverse_iterator vLast, vItr;
 		std::list<Vector>::reverse_iterator lLast, lItr;
 		int skipPhase = 0;
 
@@ -2104,4 +2104,49 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 			}
 		}
 	}
+}
+
+bool Actor::RunBorrowedReferenceSelfTest() {
+    MovableMan::ConstructionRegistryScope registryScope;
+    try {
+        auto owner = std::make_unique<Actor>();
+        auto target = std::make_unique<Actor>();
+        if (target->MovableObject::Create(1) < 0) return false;
+        const long firstIdentity = target->GetUniqueID();
+        owner->SetWhichMOToNotHit(target.get());
+        owner->SetMOMoveTarget(target.get());
+        owner->m_Waypoints.emplace_back(Vector(3, 4), target.get());
+        auto copiedWaypoints = owner->m_Waypoints;
+        std::vector<MovableObjectReference> links;
+        for (int index = 0; index < 128; ++index) links.emplace_back(target.get());
+        auto copiedLinks = links;
+        auto movedLinks = std::move(links);
+        if (owner->GetMOToNotHitUID() != firstIdentity || owner->GetMOMoveTargetUniqueID() != firstIdentity) return false;
+        target->Reset();
+        if (owner->GetWhichMOToNotHit() || owner->GetMOToNotHitUID() || owner->GetMOMoveTarget() || owner->GetMOMoveTargetUniqueID()) return false;
+        if (owner->m_Waypoints.front().second || copiedWaypoints.front().second || owner->m_Waypoints.front().first != Vector(3, 4)) return false;
+        for (const auto& link: copiedLinks) if (link) return false;
+        for (const auto& link: movedLinks) if (link) return false;
+        // Reusing the exact same object address must not revive expired links.
+        if (target->MovableObject::Create(1) < 0 || target->GetUniqueID() == firstIdentity) return false;
+        if (owner->GetWhichMOToNotHit() || owner->GetMOMoveTarget() || copiedWaypoints.front().second) return false;
+        owner->SetWhichMOToNotHit(target.get());
+        owner->SetMOMoveTarget(target.get());
+        owner->m_Waypoints.front().second = target.get();
+        const MovableObject* retiredAddress = target.get();
+        target.reset();
+        if (owner->GetWhichMOToNotHit() || owner->GetMOToNotHitUID() || owner->GetMOMoveTarget() || owner->m_Waypoints.front().second) return false;
+        auto replacement = std::make_unique<Actor>();
+        if (replacement->MovableObject::Create(1) < 0) return false;
+        if (owner->GetWhichMOToNotHit() || owner->GetMOMoveTarget() || owner->m_Waypoints.front().second) return false;
+        owner->SetMOMoveTarget(replacement.get());
+        owner->m_Waypoints.front().second = replacement.get();
+        owner.reset();
+        replacement->Reset();
+        std::cout << "[native-reference-selftest] reset/deletion, reused address, copied/moved links and owner-first destruction PASS; pool_reused=" << (replacement.get() == retiredAddress) << std::endl;
+        return true;
+    } catch (const std::exception& error) {
+        std::cout << "[native-reference-selftest] " << error.what() << std::endl;
+        return false;
+    }
 }

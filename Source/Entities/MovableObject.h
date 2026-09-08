@@ -6,6 +6,7 @@
 /// http://www.datarealms.com
 /// Inclusions of header files, forward declarations, namespace stuff
 #include "SceneObject.h"
+#include "MovableObjectReference.h"
 #include "Vector.h"
 #include "Matrix.h"
 #include "Timer.h"
@@ -34,6 +35,7 @@ namespace RTE {
 		friend struct ContractAudit;
 
 
+		friend class MovableObjectReference;
 		friend class Atom;
 		friend struct EntityLuaBindings;
 
@@ -1278,7 +1280,7 @@ namespace RTE {
 		// Whether or not this MovableObject will test for collisions against other MOs.
 		bool m_HitsMOs;
 		// Another MovableObject that this should not be hitting even if it is set to hit MOs.
-		MovableObject* m_pMOToNotHit;
+		MovableObjectReference m_pMOToNotHit;
 		long m_MOToNotHitUID = 0; //!< The UniqueID m_pMOToNotHit had when it was set; names it without touching a pointer that may be gone.
 		// For how long to not hit specific MO above
 		Timer m_MOIgnoreTimer;
@@ -1378,6 +1380,7 @@ namespace RTE {
 		bool m_PostEffectEnabled;
 
 		// This object's unique persistent ID
+		mutable MovableObjectReference* m_IncomingWeakReferences = nullptr;
 		long m_UniqueID = 0;
 		// Saved state waiting to be adopted when the object enters the world; survives the
 		// clones a restored scene goes through, unlike the live fields every copy re-derives.
