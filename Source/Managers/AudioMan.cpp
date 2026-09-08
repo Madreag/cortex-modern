@@ -1816,7 +1816,8 @@ std::vector<NetSoundObservation> AudioMan::SampleSoundObservations() {
 	std::set<SoundObservationKey> answered;
 	for (const SoundContainer* container: live) {
 		const SoundExecutionKey& identity = container->GetSharedPlaybackIdentity();
-		if (!identity.ordinal || AudibilityAuthority(container->GetSharedLogicalPlayback().lastObjectUID) != localPeer) continue;
+		// Every peer reports every live shared sound, so the reading of whoever controls it next is already committed when control moves.
+		if (!identity.ordinal) continue;
 		const SoundObservationKey key = KeyOf(identity);
 		answered.insert(key);
 		const float value = GetLocalSoundAudibility(container);
@@ -1829,7 +1830,7 @@ std::vector<NetSoundObservation> AudioMan::SampleSoundObservations() {
 		observation.value = value;
 		observations.push_back(observation);
 	}
-	// A sound this peer stopped answering for reports afresh when it comes back.
+	// A sound that leaves the live set reports afresh if it returns.
 	std::erase_if(m_LastSentAudibility, [&](const auto& entry) { return !answered.contains(entry.first); });
 	return observations;
 }
@@ -2022,7 +2023,9 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			SoundContainer ui;
 			ui.Create(samplePath, true, false, SoundContainer::UI);
 			SoundSimulationScope shared(4242, phase);
-			check("ui_bus_stays_physical", !ui.Play() && !ui.IsBeingPlayed() && ui.GetSharedLogicalVoices().empty());
+			const bool played = ui.Play();
+			check("ui_bus_in_simulation_is_logical", played && ui.IsBeingPlayed() && !ui.GetSharedLogicalVoices().empty() && static_cast<int>(ui.GetSharedLogicalVoices().front().bus) == static_cast<int>(SoundContainer::UI));
+			ui.Stop();
 		}
 		{
 			SoundContainer other;

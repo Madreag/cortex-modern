@@ -1316,7 +1316,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SoundContainer) {
 	    .property("Loops", &SoundContainer::GetLoopSetting, &SoundContainer::SetLoopSetting)
 	    .property("Priority", &SoundContainer::GetPriority, &SoundContainer::SetPriority)
 	    .property("AffectedByGlobalPitch", &SoundContainer::IsAffectedByGlobalPitch, &SoundContainer::SetAffectedByGlobalPitch)
-	    .property("Pos", &SoundContainer::GetPosition, &SoundContainer::SetPosition)
+	    .property("Pos", &SoundContainer::GetLuaPosition, &SoundContainer::SetPosition)
 	    .property("Volume", &SoundContainer::GetVolume, &SoundContainer::SetVolume)
 	    .property("Pitch", &SoundContainer::GetPitch, &SoundContainer::SetPitch)
 	    .property("Paused", &SoundContainer::IsPaused, &SoundContainer::SetPaused)
