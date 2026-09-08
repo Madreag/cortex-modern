@@ -79,6 +79,12 @@ struct Effect {
 		}
 		return effects;
 	}
+	static void ApplyActivation(FMOD::ChannelControl* control, const std::vector<Effect>& effects) {
+		for (const Effect& effect: effects) {
+			FMOD::DSP* dsp; Require(control->getDSP(effect.index, &dsp));
+			Require(dsp->setActive(effect.active)); Require(dsp->setBypass(effect.bypass));
+		}
+	}
 	static void Apply(FMOD::System* system, FMOD::ChannelControl* control, const std::vector<Effect>& effects) {
 		int count; Require(control->getNumDSPs(&count));
 		for (int index = count - 1; index >= 0; --index) {
@@ -206,7 +212,12 @@ struct Control {
 			Require(control->set3DDistanceFilter(customDistanceFilter, customLevel, centerFrequency));
 		}
 		if (applyEffects) Effect::Apply(system, control, effects);
-		if (unpause) Require(control->setPaused(paused));
+		if (unpause) {
+			Require(control->setPaused(paused));
+			// FMOD activates the DSP chain when a control is unpaused.
+			// Restore explicit effect switches after that backend transition.
+			if (applyEffects) Effect::ApplyActivation(control, effects);
+		}
 	}
 };
 
