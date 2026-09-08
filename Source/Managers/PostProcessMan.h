@@ -37,7 +37,8 @@ namespace RTE {
 	};
 
 	/// Singleton manager responsible for all 32bpp post-process effect drawing.
-	class PostProcessMan : public Singleton<PostProcessMan> {
+    class PostProcessMan : public Singleton<PostProcessMan> {
+        friend struct ContractAudit;
 
 	public:
 #pragma region Creation
@@ -156,6 +157,9 @@ namespace RTE {
 		std::shared_ptr<RenderTarget> GetPostProcessColorBuffer() { return m_PostProcessFramebuffer; }
 
 		GLuint GetPaletteTexture() { return m_Palette8Texture; }
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		bool RunCheckpointSelfTest();
 
 	protected:
 		std::list<PostEffect> m_PostScreenEffects; //!< List of effects to apply at the end of each frame. This list gets cleared out and re-filled each frame.
@@ -175,7 +179,8 @@ namespace RTE {
 		size_t m_RedGlowHash; //!< Hash value for the red dot glow effect bitmap.
 		size_t m_BlueGlowHash; //!< Hash value for the blue dot glow effect bitmap.
 
-		std::unordered_map<int, BITMAP*> m_TempEffectBitmaps; //!< Stores temporary bitmaps to rotate post effects in for quick access.
+		std::unordered_map<int, std::shared_ptr<BITMAP>> m_TempEffectBitmaps; //!< Owns temporary bitmaps to rotate post effects in for quick access.
+		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmaps; //!< Owns restored effect pixels; queued and standard glow pointers may alias these images.
 
 	private:
 		GLuint m_BackBuffer8; //!< Backbuffer texture for incoming indexed drawings.
