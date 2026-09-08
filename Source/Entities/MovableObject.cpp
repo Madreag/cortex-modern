@@ -1123,7 +1123,8 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		// read are built off-thread), so the shared RNG can't be drawn from here.
 		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), true);
 		// The AI passes are per-machine, so their sounds join the local cohort.
-		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
+		// AI runs on the owning peer only and the pie menu is local UI: their sounds belong to this machine, never to the shared cohort.
+		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI" || functionName == "WhilePieMenuOpen";
 		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation);
 
 		for (const LuaFunction& luaFunction: itr->second) {

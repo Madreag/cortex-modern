@@ -3995,9 +3995,10 @@ void MovableMan::UpdateControllers() {
 				}
 			}
 		};
+		// An actor's scripts initialize in its first Update stage on every peer; the owner's AI pass must not run Create early on a worker thread.
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (Actor* actor: m_Actors) {
-			if (isLocalControllerActor(actor) && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
 				g_CurrentAIActor = actor;
 				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
@@ -4013,7 +4014,7 @@ void MovableMan::UpdateControllers() {
 			                                                     LuaStateWrapper& luaState = luaStates[start];
 			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
 			                                                     for (Actor* actor: m_Actors) {
-				                                                     if (isLocalControllerActor(actor) && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
+				                                                     if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;
 					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 					                                                     g_CurrentAIActor = nullptr;
@@ -4028,7 +4029,7 @@ void MovableMan::UpdateControllers() {
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
 		for (Actor* actor: m_Actors) {
-			if (isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				if (lockstepActive) {
 					g_CurrentAIActor = actor;
 				}
