@@ -12,6 +12,7 @@
 #include "ScenarioRunner.h"
 #include "FaultInjection.h"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -328,9 +329,9 @@ const SoundData* SoundContainer::GetSoundDataForSound(const FMOD::Sound* sound) 
 
 void SoundContainer::SetCustomPanValue(float customPanValue) {
 	customPanValue = std::clamp(customPanValue, -1.0f, 1.0f);
-	const bool deferred = DeferProperty(PendingOp::CustomPan, customPanValue);
-	CurrentCustomPanValue() = customPanValue;
-	if (!deferred && IsBeingPlayed()) {
+	if (DeferProperty(PendingOp::CustomPan, customPanValue)) return;
+	m_CustomPanValue = customPanValue;
+	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsCustomPanValue(this);
 	}
 }
@@ -339,10 +340,7 @@ void SoundContainer::SetPosition(const Vector& newPosition) {
 	if (std::as_const(*this).CurrentImmobile() || newPosition == std::as_const(*this).CurrentPos()) {
 		return;
 	}
-	if (DeferProperty(PendingOp::Position, newPosition.m_X, newPosition.m_Y)) {
-		CurrentPos() = newPosition;
-		return;
-	}
+	if (DeferProperty(PendingOp::Position, newPosition.m_X, newPosition.m_Y)) return;
 	m_Pos = newPosition;
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsPosition(this);
@@ -359,24 +357,21 @@ float SoundContainer::GetAudibleVolume() const {
 
 void SoundContainer::SetVolume(float newVolume) {
 	newVolume = std::clamp(newVolume, 0.0F, 10.0F);
-	const bool deferred = DeferProperty(PendingOp::Volume, newVolume);
-	if (!deferred && IsBeingPlayed()) {
+	if (DeferProperty(PendingOp::Volume, newVolume)) return;
+	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsVolume(this, newVolume);
 	}
-	CurrentVolume() = newVolume;
+	m_Volume = newVolume;
 }
 
 void SoundContainer::SetPitch(float newPitch) {
 	newPitch = std::clamp(newPitch, 0.125F, 8.0F);
-	if (DeferProperty(PendingOp::Pitch, newPitch)) {
-		CurrentPitch() = newPitch;
-		return;
-	}
+	if (DeferProperty(PendingOp::Pitch, newPitch)) return;
 	const bool logical = UsesLogicalPlayback();
 	if (logical) FoldLogicalVoices();
-	CurrentPitch() = newPitch;
+	m_Pitch = newPitch;
 	if (logical) {
-		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.pitch = std::as_const(*this).CurrentPitch();
+		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.pitch = m_Pitch;
 	}
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsPitch(this);
@@ -385,15 +380,12 @@ void SoundContainer::SetPitch(float newPitch) {
 
 void SoundContainer::SetPaused(bool paused) {
 	if (paused == std::as_const(*this).CurrentPaused()) return;
-	if (DeferProperty(PendingOp::Paused, 0.0F, 0.0F, paused ? 1 : 0)) {
-		CurrentPaused() = paused;
-		return;
-	}
+	if (DeferProperty(PendingOp::Paused, 0.0F, 0.0F, paused ? 1 : 0)) return;
 	if (UsesLogicalPlayback()) {
 		FoldLogicalVoices();
 		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.paused = paused;
 	}
-	CurrentPaused() = paused;
+	m_Paused = paused;
 	g_AudioMan.SetPausedSoundContainerPlayingChannels(this, paused);
 }
 
@@ -593,6 +585,9 @@ bool SoundContainer::DeferProperty(PendingOp::Property property, float x, float 
 		m_PendingPositionWritten = true;
 		m_PendingAliasBaseline = Vector(x, y);
 	}
+	// The overlay is written here, under the lock the queue is written under: two AI threads on one
+	// container must not race on this pass's private view.
+	ApplyPendingControl(property, x, y, value);
 	PendingOp op;
 	op.op = PendingOp::SetProperty;
 	op.property = property;
@@ -615,6 +610,9 @@ void SoundContainer::QueuePendingOp(PendingOp op) {
 	// this container: an unattributed call would be refused on the wire.
 	op.actorUID = g_CurrentAIActor ? static_cast<int64_t>(g_CurrentAIActor->GetUniqueID()) : m_PendingActorUID;
 	op.team = g_CurrentAIActor ? g_CurrentAIActor->GetTeam() : m_PendingTeam;
+	for (const PendingOp& queued: m_PendingOps) {
+		if (queued.actorUID == op.actorUID) op.sequence = std::max(op.sequence, queued.sequence + 1);
+	}
 	m_PendingOps.push_back(std::move(op));
 	NotePending();
 }
@@ -659,6 +657,11 @@ std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
 	}
 	std::vector<PendingOp> taken;
 	taken.swap(m_PendingOps);
+	// Two AI threads may have queued on one container in either order; the drained order is by actor
+	// and by that actor's own call number, so every peer and every re-run applies the same sequence.
+	std::stable_sort(taken.begin(), taken.end(), [](const PendingOp& first, const PendingOp& second) {
+		return first.actorUID != second.actorUID ? first.actorUID < second.actorUID : first.sequence < second.sequence;
+	});
 	// The position Lua holds outlives the pass that took it, exactly as the shared one does, so the
 	// container keeps being drained: that is where a write made through a retained alias is found.
 	const bool aliasHeld = (m_Pending.written & LocalPos) != 0;
