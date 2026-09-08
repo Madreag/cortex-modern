@@ -61,8 +61,8 @@ namespace RTE {
 		InvalidString,
 		InvalidValue,
 		EncodeFailed,
-		StaleRound, //!< A frame from another lockstep round; its observation slots mean nothing here.
 		UnboundObservationSlot, //!< An observation named a slot this sender never spelled out.
+		ObservationBindingGap, //!< A sender's bindings do not follow on from the ones this peer has.
 	};
 
 	struct NetLockstepError {
@@ -131,6 +131,10 @@ namespace RTE {
 		void Bind(uint16_t slot, const NetSoundObservationKey& key);
 		bool Resolve(uint16_t slot, NetSoundObservationKey& outKey) const;
 		void Reset();
+		/// How many keys this sender has spelled out. A packet says what this was before its own
+		/// bindings, so a receiver that missed one refuses rather than reading a reused slot as the key
+		/// it held before.
+		uint64_t BindingCount() const { return m_Bindings; }
 
 	private:
 		struct Slot {
@@ -142,15 +146,13 @@ namespace RTE {
 		std::vector<Slot> m_Slots;
 		std::map<NetSoundObservationKey, uint16_t> m_SlotOf;
 		std::list<uint16_t> m_Recent; //!< Least recently assigned first: the slot to reuse once every slot is bound.
+		uint64_t m_Bindings = 0;
 	};
 
 	/// The observation tables one peer keeps for the senders it decodes and, on the relay host,
 	/// re-encodes. A round's tables are reset when the round starts.
 	struct NetSoundObservationTables {
 		std::map<uint8_t, NetSoundObservationDictionary> bySender;
-		/// The round these tables belong to, adopted from the first frame that carries one. A frame from
-		/// any other round is refused whole, so one round's slots never stand for another's keys.
-		uint64_t roundId = 0;
 		/// Relay host: the lockstep peer this transport actually is, so a frame claiming another
 		/// sender can only ever disturb its own table. Zero on a client, whose one link is the host.
 		uint8_t transportSender = 0;
@@ -159,7 +161,7 @@ namespace RTE {
 		/// The table of a named sender, whatever transport is being decoded: what this peer encodes its
 		/// own frames with, and what a relay host re-encodes another peer's frames with.
 		NetSoundObservationDictionary& Exactly(uint8_t senderPeerId) { return bySender[senderPeerId]; }
-		void Reset() { bySender.clear(); roundId = 0; }
+		void Reset() { bySender.clear(); }
 	};
 
 	struct NetLockstepFrame {
@@ -319,14 +321,17 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 14;
+		static constexpr uint16_t c_Version = 15;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
 		// Version 14 spells a sound observation's key once per sender and refers to it by slot after that.
+		// Version 15 says how many keys the sender had spelled out before the packet, so a receiver that
+		// missed one refuses instead of reading a reused slot as the key it held before.
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
 		static constexpr uint16_t c_ObservationSlotVersion = 14;
+		static constexpr uint16_t c_ObservationBindingSequenceVersion = 15;
 		static constexpr size_t c_MaxObservationsPerPacket = NetSoundObservationDictionary::c_MaxSlots;
 		// What one frame's observations may cost. The compact form makes 4096 of them about 21 KB, so a
 		// frame that hits this is carrying keys nobody has seen before; the rest ride the next frame.

@@ -367,6 +367,9 @@ namespace RTE {
 					return false;
 				}
 			}
+			// What the sender had spelled out before this packet. A receiver that missed a packet carrying
+			// a binding sees the gap here, on the very next packet, whether or not that one binds anything.
+			AppendVarU64(out, dictionary ? dictionary->BindingCount() : 0);
 			const size_t countOffset = out.size();
 			AppendU16LE(out, 0);
 			const size_t blockStart = out.size();
@@ -657,6 +660,22 @@ namespace RTE {
 		}
 
 		bool ReadObservations(ByteReader& reader, NetLockstepFrame& payload, NetSoundObservationDictionary* dictionary, NetLockstepError* error, uint16_t version) {
+			if (version >= NetLockstepCodec::c_ObservationBindingSequenceVersion) {
+				uint64_t bindingsBefore = 0;
+				if (!ReadVarOrFail(reader, bindingsBefore, error, "observation_bindings_before")) {
+					return false;
+				}
+				if (dictionary && bindingsBefore != dictionary->BindingCount()) {
+					// A sender that starts over has spelled nothing out yet, which is a new round and not a
+					// hole; anything else means this peer is missing a binding it can never be told again.
+					if (bindingsBefore != 0) {
+						SetError(error, NetLockstepErrorCode::ObservationBindingGap, reader.Offset(),
+						         "sound observation bindings jump from " + std::to_string(dictionary->BindingCount()) + " to " + std::to_string(bindingsBefore));
+						return false;
+					}
+					dictionary->Reset();
+				}
+			}
 			uint16_t observationCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(observationCount), reader, error, "observation_count")) {
 				return false;
@@ -1116,20 +1135,10 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id")) {
 					return false;
 				}
-				NetSoundObservationDictionary* dictionary = nullptr;
-				if (tables) {
-					// One round's slots never stand for another's keys: a straggler from before a resync is
-					// refused whole rather than read against tables that were reset under it.
-					if (payload.roundId != 0) {
-						if (tables->roundId == 0) {
-							tables->roundId = payload.roundId;
-						} else if (tables->roundId != payload.roundId) {
-							SetError(error, NetLockstepErrorCode::StaleRound, reader.Offset() - 8, "frame belongs to another lockstep round");
-							return false;
-						}
-					}
-					dictionary = &tables->For(payload.senderPeerId);
-				}
+				// A frame from another round decodes like any other and is dropped by the round's own rule,
+				// so its sender still counts as heard from; the binding sequence, not the round tag, is
+				// what keeps one round's slots from standing for another's keys.
+				NetSoundObservationDictionary* dictionary = tables ? &tables->For(payload.senderPeerId) : nullptr;
 				if (!ReadObservations(reader, payload, dictionary, error, version)) {
 					return false;
 				}
@@ -1281,8 +1290,8 @@ namespace RTE {
 			case NetLockstepErrorCode::InvalidString: return "InvalidString";
 			case NetLockstepErrorCode::InvalidValue: return "InvalidValue";
 			case NetLockstepErrorCode::EncodeFailed: return "EncodeFailed";
-			case NetLockstepErrorCode::StaleRound: return "StaleRound";
 			case NetLockstepErrorCode::UnboundObservationSlot: return "UnboundObservationSlot";
+			case NetLockstepErrorCode::ObservationBindingGap: return "ObservationBindingGap";
 		}
 		return "Unknown";
 	}
@@ -1333,6 +1342,7 @@ namespace RTE {
 		entry.bound = true;
 		entry.recency = m_Recent.insert(m_Recent.end(), slot);
 		m_SlotOf[key] = slot;
+		++m_Bindings;
 	}
 
 	bool NetSoundObservationDictionary::Resolve(uint16_t slot, NetSoundObservationKey& outKey) const {
@@ -1347,6 +1357,7 @@ namespace RTE {
 		m_Slots.clear();
 		m_SlotOf.clear();
 		m_Recent.clear();
+		m_Bindings = 0;
 	}
 
 	bool NetLockstepCodec::Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded) {
@@ -1635,7 +1646,6 @@ namespace RTE {
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
 		m_RoundId = config.roundId;
-		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_LastStartSentMs = UINT64_MAX;
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
@@ -2587,16 +2597,18 @@ namespace RTE {
 				}
 				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes.data(), event.bytes.size(), ControllerFrame::c_Version, tables);
 				if (!decoded.ok) {
-					if (decoded.error.code == NetLockstepErrorCode::StaleRound) {
-						// Another round's frame, the same straggler HandleFrame drops once it is decoded.
-						++m_Stats.staleRoundPackets;
-						return;
-					}
-					if (decoded.error.code == NetLockstepErrorCode::UnboundObservationSlot) {
-						// The sender's binding stream has a hole this peer never saw. Drop the packet rather
-						// than read a slot as the wrong sound; the missing frame is what shows up.
+					if (decoded.error.code == NetLockstepErrorCode::UnboundObservationSlot ||
+					    decoded.error.code == NetLockstepErrorCode::ObservationBindingGap) {
+						// A transport with no table of its own is a superseded incarnation or an unauthenticated
+						// joiner still talking; its slots were never ours to resolve and it is admission traffic,
+						// not a fault. From a peer of this round it means a binding this peer can never be told
+						// again, so the packet is dropped rather than read as the wrong sound.
+						if (tables == nullptr) {
+							++m_Stats.ignoredAdmissionFaults;
+							return;
+						}
 						if (m_Stats.unresolvedObservationPackets == 0) {
-							std::cout << "[lockstep] dropped a frame naming an unknown sound observation slot: " << decoded.error.message << std::endl;
+							std::cout << "[lockstep] dropped a frame over its sound observations: " << decoded.error.message << std::endl;
 						}
 						++m_Stats.unresolvedObservationPackets;
 						return;
@@ -2692,12 +2704,6 @@ namespace RTE {
 		}
 		if (m_RoundId == 0 && start.roundId != 0) {
 			m_RoundId = start.roundId;
-			// Frames that arrived before the round was known may have come from before a resync; only now
-			// can their slot tables be told apart from this round's.
-			if (m_ObservationDecodeTables.roundId != m_RoundId) {
-				m_ObservationDecodeTables.Reset();
-				m_ObservationDecodeTables.roundId = m_RoundId;
-			}
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {
