@@ -23,6 +23,7 @@ sources += files(
 'NetProtocol.cpp',
 'NetProtocolSelfTest.cpp',
 'NetReconnectAdmission.cpp',
+'NetReconnectLedger.cpp',
 'NetReconnectTicketStore.cpp',
 'NetReconnectSelfTest.cpp',
 'NetReconnectTranscript.cpp',
