@@ -44,6 +44,7 @@ int DynamicSongSection::Create(const DynamicSongSection& reference) {
 		m_TransitionSoundContainers.push_back(soundContainer);
 	}
 	m_LastTransitionSoundContainerIndex = reference.m_LastTransitionSoundContainerIndex;
+	m_TransitionShuffleUnplayedIndices = reference.m_TransitionShuffleUnplayedIndices;
 
 	for (const SoundContainer& referenceSoundContainer: reference.m_SoundContainers) {
 		SoundContainer soundContainer;
@@ -51,6 +52,7 @@ int DynamicSongSection::Create(const DynamicSongSection& reference) {
 		m_SoundContainers.push_back(soundContainer);
 	}
 	m_LastSoundContainerIndex = reference.m_LastSoundContainerIndex;
+	m_ShuffleUnplayedIndices = reference.m_ShuffleUnplayedIndices;
 
 	m_SoundContainerSelectionCycleMode = reference.m_SoundContainerSelectionCycleMode;
 	m_SectionType = reference.m_SectionType;

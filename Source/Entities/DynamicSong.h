@@ -6,6 +6,7 @@
 namespace RTE {
 	/// A typed SongSection containing one or more SoundContainers to play.
 	class DynamicSongSection : public Entity {
+		friend struct MusicCheckpoint;
 
 	public:
 		EntityAllocation(DynamicSongSection);
@@ -135,6 +136,7 @@ namespace RTE {
 
 	/// A container for coherent DynamicSongSections forming a full music track.
 	class DynamicSong : public Entity {
+		friend struct MusicCheckpoint;
 
 	public:
 		EntityAllocation(DynamicSong);
