@@ -461,10 +461,16 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "handshake", StateName(peer->state), "host is not accepting another hello for this peer");
 				return;
 			}
-			const uint8_t assignedPeerId = AllocatePeerId();
+			uint8_t assignedPeerId = AllocatePeerId();
 			if (assignedPeerId == 0) {
-				RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
-				return;
+				// §6: the seat's own id is still held by the incarnation this joiner may be about to
+				// supersede, so it proves on a provisional one and takes the seat's id from the commit.
+				assignedPeerId = AllocatePendingAdmissionPeerId();
+				if (assignedPeerId == 0) {
+					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
+					return;
+				}
+				++m_Stats.pendingAdmissionJoins;
 			}
 			for (const PeerState& other : m_Peers) {
 				if (&other != peer && IsActive(other.state) && other.clientNonce == hello->clientNonce) {
@@ -790,6 +796,22 @@ namespace RTE {
 		}));
 	}
 
+	uint8_t NetSession::AllocatePendingAdmissionPeerId() const {
+		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->IsLiveMatch()) {
+			return 0;
+		}
+		for (uint16_t candidate = static_cast<uint16_t>(m_Config.maxPeers) + 1;
+		     candidate <= static_cast<uint16_t>(m_Config.maxPeers) + c_MaxPendingAdmissions && candidate <= UINT8_MAX; ++candidate) {
+			const bool used = std::any_of(m_Peers.begin(), m_Peers.end(), [candidate](const PeerState& peer) {
+				return IsActive(peer.state) && peer.assignedPeerId == candidate;
+			});
+			if (!used) {
+				return static_cast<uint8_t>(candidate);
+			}
+		}
+		return 0;
+	}
+
 	uint8_t NetSession::AllocatePeerId() const {
 		for (uint16_t candidate = 1; candidate <= m_Config.maxPeers; ++candidate) {
 			const bool used = std::any_of(m_Peers.begin(), m_Peers.end(), [candidate](const PeerState& peer) {
@@ -1061,6 +1083,7 @@ namespace RTE {
 				{"admission_messages", m_Stats.admissionMessages},
 				{"old_wire_rejections_sent", m_Stats.oldWireRejectionsSent},
 				{"old_wire_disconnects", m_Stats.oldWireDisconnects},
+				{"pending_admission_joins", m_Stats.pendingAdmissionJoins},
 			}},
 		};
 		return report.dump(2);
