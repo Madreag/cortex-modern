@@ -10,6 +10,7 @@
 
 #include "CameraMan.h"
 #include "ConsoleMan.h"
+#include "ScenarioRunner.h"
 #include "PresetMan.h"
 #include "UInputMan.h"
 #include "AudioMan.h"
@@ -980,9 +981,42 @@ bool ActivityMan::RestartActivityCandidate() {
 	}
 }
 
+namespace {
+	// The sim runs these on one thread; the flag only has to survive the scripted update it wraps.
+	bool s_ScriptedOutcomeOpen = false;
+	bool s_ReportedDeferredEnd = false;
+
+	// Only an activity script's own outcome is ever held back, only while the activity is running, and
+	// only while a seat is inside its reclaim window. Every teardown the engine or the player asks for
+	// goes through untouched.
+	static_assert(ActivityMan::ScriptedEndIsDeferred(true, true, true), "a scripted game-over waits for a held seat");
+	static_assert(!ActivityMan::ScriptedEndIsDeferred(false, true, true), "an engine teardown is never held back");
+	static_assert(!ActivityMan::ScriptedEndIsDeferred(true, false, true), "an activity that already ended is not held back");
+	static_assert(!ActivityMan::ScriptedEndIsDeferred(true, true, false), "no held seat, no deferral");
+} // namespace
+
+ActivityMan::ScriptedOutcomeScope::ScriptedOutcomeScope() {
+	s_ScriptedOutcomeOpen = true;
+}
+
+ActivityMan::ScriptedOutcomeScope::~ScriptedOutcomeScope() {
+	s_ScriptedOutcomeOpen = false;
+}
+
 void ActivityMan::EndActivity() const {
 	// TODO: Set the activity pointer to nullptr so it doesn't return junk after being destructed. Do it here, or wherever works without crashing.
 	if (m_Activity) {
+		// H4 §4: a dropped player inside its reclaim window is not gone, so an outcome its absence
+		// produced waits for the window instead of ending the match under a player who is coming back.
+		if (ScriptedEndIsDeferred(s_ScriptedOutcomeOpen, m_Activity->GetActivityState() == Activity::ActivityState::Running,
+		                          ScenarioRunner::IsLockstepHoldingSeatForReclaim())) {
+			if (!s_ReportedDeferredEnd) {
+				s_ReportedDeferredEnd = true;
+				g_ConsoleMan.PrintString("NETWORK: Holding the match open for a player who can still return");
+			}
+			return;
+		}
+		s_ReportedDeferredEnd = false;
 		g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 		g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 
