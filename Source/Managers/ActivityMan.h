@@ -225,6 +225,24 @@ namespace RTE {
 		/// Forces the current game's end.
 		void EndActivity() const;
 
+		/// Open while an activity's own script decides the outcome, so an end IT declares can be told
+		/// apart from a teardown the engine or the player asked for.
+		class ScriptedOutcomeScope {
+		public:
+			ScriptedOutcomeScope();
+			~ScriptedOutcomeScope();
+			ScriptedOutcomeScope(const ScriptedOutcomeScope&) = delete;
+			ScriptedOutcomeScope& operator=(const ScriptedOutcomeScope&) = delete;
+		};
+
+		/// Whether a scripted game-over is being held back because a dropped player may still return.
+		/// @param scriptedOutcome Whether an activity script is the one asking for the end.
+		/// @param activityRunning Whether the activity is still running (a game-over, not a teardown).
+		/// @param holdingSeat Whether the round is alive only for a seat inside its reclaim window.
+		static constexpr bool ScriptedEndIsDeferred(bool scriptedOutcome, bool activityRunning, bool holdingSeat) {
+			return scriptedOutcome && activityRunning && holdingSeat;
+		}
+
 		/// Only updates Global Scripts of the current activity with LateUpdate flag enabled.
 		void LateUpdateGlobalScripts() const;
 

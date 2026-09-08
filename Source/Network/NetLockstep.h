@@ -262,6 +262,7 @@ namespace RTE {
 		// P26's per-seat ledger cap: the largest actor list a reseat can legitimately carry.
 		static constexpr size_t c_MaxReseatActors = 512;
 		static constexpr size_t c_MaxSoundSetPath = 32;
+		static constexpr size_t c_MaxSoundStructureBytes = 65536;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
 		static constexpr uint8_t c_MaxPeerCount = 16;
 		// How far ahead of the committed frame a received frame/checksum may legitimately target
@@ -347,6 +348,10 @@ namespace RTE {
 		bool IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const;
 		/// Peers that announced a clean leave, each with the first frame that lacks their data.
 		const std::map<uint8_t, uint64_t>& GetPeerLeaveFrames() const { return m_PeerLeaveFrames; }
+		/// Whether the round is only still alive because a dropped seat may still be reclaimed: every
+		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
+		/// with this peer about it, because while it holds there is no other peer in the round.
+		bool IsHoldingSeatForReclaim() const;
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
 		/// The peer's roster display name, or "peer N" when the roster has none.

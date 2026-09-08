@@ -453,6 +453,9 @@ namespace RTE {
 						for (const uint16_t index: sound.soundSetPath) {
 							AppendU16LE(out, index);
 						}
+						if (!AppendString(out, sound.payload, NetLockstepCodec::c_MaxSoundStructureBytes, "sound_op_payload", error)) {
+							return false;
+						}
 						break;
 					}
 					case NetGameCommandType::AIOrder: {
@@ -844,6 +847,9 @@ namespace RTE {
 							if (!ReadOrTruncated(reader.ReadU16LE(sound.soundSetPath[index]), reader, error, "sound_op_path")) {
 								return false;
 							}
+						}
+						if (!reader.ReadString(sound.payload, NetLockstepCodec::c_MaxSoundStructureBytes, "sound_op_payload", error)) {
+							return false;
 						}
 						sound.actorUID = static_cast<int64_t>(actorUID);
 						sound.team = static_cast<int32_t>(team);
@@ -2378,6 +2384,11 @@ namespace RTE {
 		return std::any_of(m_PeerLeaveFrames.begin(), m_PeerLeaveFrames.end(), [this](const auto& left) {
 			return SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim;
 		});
+	}
+
+	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
+		return m_State == NetLockstepState::Running && !m_RemotePeerIds.empty() &&
+		       m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && AnyLeftSeatHeld();
 	}
 
 	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {

@@ -142,6 +142,7 @@ namespace RTE {
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
 
+
 		mutable std::mutex m_Mutex;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
 		std::string m_StatusText = "Idle";
@@ -165,6 +166,7 @@ namespace RTE {
 		NetReconnectUx m_ReconnectUx;
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
+		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
 		static bool s_AdmissionEnabled;

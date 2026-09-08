@@ -181,7 +181,12 @@ namespace RTE {
 			FadeOut = 3,
 			SelectSounds = 4,
 			SetProperty = 5,
-			OpCount = 6
+			AddSound = 6,
+			RemoveSound = 7,
+			AddSoundSet = 8,
+			SetTopLevelSet = 9,
+			SetCycleMode = 10,
+			OpCount = 11
 		};
 		static constexpr uint8_t c_PropertyCount = 17;
 
@@ -195,6 +200,7 @@ namespace RTE {
 		float x = 0.0F;
 		float y = 0.0F;
 		std::vector<uint16_t> soundSetPath;
+		std::string payload; //!< A sound path or a SoundSet structure, for the calls that carry one.
 
 		bool operator==(const NetGameSoundOp&) const = default;
 	};
