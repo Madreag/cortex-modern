@@ -10,6 +10,15 @@ namespace RTE {
 
 	using NetHash32 = std::array<uint8_t, 32>;
 
+	// Fixed-width auth material on the admission wire: transaction ids, the session epoch and client
+	// nonces are 16 B; seat credentials, server challenges and proof macs are 32 B.
+	using NetAuthBytes16 = std::array<uint8_t, 16>;
+	using NetAuthBytes32 = std::array<uint8_t, 32>;
+
+	/// Version of the H4 admission payloads, carried per message so the reconnect handshake can move
+	/// without bumping the envelope an old client still has to decode a rejection from.
+	constexpr uint16_t c_NetH4Version = 1;
+
 	enum class NetMessageType : uint16_t {
 		ClientHello = 1,
 		HostHello = 2,
@@ -21,6 +30,15 @@ namespace RTE {
 		Pong = 8,
 		Disconnect = 9,
 		SessionSummary = 10,
+		NewJoin = 11,
+		TicketOffer = 12,
+		TicketStoredAck = 13,
+		JoinCommitted = 14,
+		Reclaim = 15,
+		Challenge = 16,
+		Proof = 17,
+		LeaveRequest = 18,
+		LeaveAck = 19,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -177,6 +195,117 @@ namespace RTE {
 		bool operator==(const NetSessionSummary&) const = default;
 	};
 
+	/// The build/config/module identity re-validated on every H4 admission message, ahead of the seat
+	/// lookup so a mismatch never reveals whether the seat exists.
+	struct NetH4Identity {
+		uint16_t controllerFrameVersion = 0;
+		uint16_t controllerFrameEncodedSize = 0;
+		std::string gameVersion;
+		std::string buildId;
+		NetHash32 deterministicConfigHash{};
+		NetHash32 moduleManifestHash{};
+		NetHash32 sessionRulesHash{};
+		NetHash32 sessionIdentityHash{};
+
+		bool operator==(const NetH4Identity&) const = default;
+	};
+
+	struct NetH4NewJoin {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetH4Identity identity;
+		std::string displayName;
+
+		bool operator==(const NetH4NewJoin&) const = default;
+	};
+
+	struct NetH4TicketOffer {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		NetAuthBytes32 credential{};
+		uint64_t hostSessionId = 0;
+		uint32_t provisionalExpiryMs = 0;
+
+		bool operator==(const NetH4TicketOffer&) const = default;
+	};
+
+	struct NetH4TicketStoredAck {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		bool stored = false;
+
+		bool operator==(const NetH4TicketStoredAck&) const = default;
+	};
+
+	struct NetH4JoinCommitted {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		uint32_t incarnation = 0;
+		uint8_t assignedPeerId = 0;
+
+		bool operator==(const NetH4JoinCommitted&) const = default;
+	};
+
+	struct NetH4Reclaim {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		NetH4Identity identity;
+		std::string displayName;
+
+		bool operator==(const NetH4Reclaim&) const = default;
+	};
+
+	struct NetH4Challenge {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetAuthBytes32 challenge{};
+		uint32_t lifetimeMs = 0;
+
+		bool operator==(const NetH4Challenge&) const = default;
+	};
+
+	struct NetH4Proof {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		NetAuthBytes16 clientNonce{};
+		NetAuthBytes32 mac{};
+
+		bool operator==(const NetH4Proof&) const = default;
+	};
+
+	struct NetH4LeaveRequest {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+
+		bool operator==(const NetH4LeaveRequest&) const = default;
+	};
+
+	struct NetH4LeaveAck {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		bool seatClosed = false;
+
+		bool operator==(const NetH4LeaveAck&) const = default;
+	};
+
 	using NetPayload = std::variant<
 		NetClientHello,
 		NetHostHello,
@@ -187,7 +316,16 @@ namespace RTE {
 		NetPing,
 		NetPong,
 		NetDisconnect,
-		NetSessionSummary>;
+		NetSessionSummary,
+		NetH4NewJoin,
+		NetH4TicketOffer,
+		NetH4TicketStoredAck,
+		NetH4JoinCommitted,
+		NetH4Reclaim,
+		NetH4Challenge,
+		NetH4Proof,
+		NetH4LeaveRequest,
+		NetH4LeaveAck>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;
@@ -212,6 +350,12 @@ namespace RTE {
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
 		static constexpr size_t c_MaxShortTextBytes = 128;
 		static constexpr size_t c_MaxDiagnosticTextBytes = 512;
+		// An admission message comes from a connection nobody has authenticated yet, so it is refused
+		// on size before anything parses it. The largest H4 message is a Reclaim at ~498 B.
+		static constexpr size_t c_MaxH4PayloadBytes = 1024;
+
+		/// Whether the type is one of the H4 admission messages, which are size-capped separately.
+		static bool IsH4MessageType(NetMessageType type);
 
 		static NetMessageType MessageTypeOf(const NetPayload& payload);
 		static const char* MessageTypeName(NetMessageType type);

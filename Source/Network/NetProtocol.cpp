@@ -81,6 +81,11 @@ namespace RTE {
 			out.insert(out.end(), hash.begin(), hash.end());
 		}
 
+		template <size_t N>
+		void AppendBytes(std::vector<uint8_t>& out, const std::array<uint8_t, N>& bytes) {
+			out.insert(out.end(), bytes.begin(), bytes.end());
+		}
+
 		class ByteReader {
 		public:
 			ByteReader(const uint8_t* data, size_t size) : m_Data(data), m_Size(size) {}
@@ -155,11 +160,16 @@ namespace RTE {
 			}
 
 			bool ReadHash(NetHash32& out) {
-				if (!CanRead(out.size())) {
+				return ReadBytes(out);
+			}
+
+			template <size_t N>
+			bool ReadBytes(std::array<uint8_t, N>& out) {
+				if (!CanRead(N)) {
 					return false;
 				}
-				std::memcpy(out.data(), m_Data + m_Offset, out.size());
-				m_Offset += out.size();
+				std::memcpy(out.data(), m_Data + m_Offset, N);
+				m_Offset += N;
 				return true;
 			}
 
@@ -316,6 +326,112 @@ namespace RTE {
 			AppendHash(out, payload.deterministicConfigHash);
 			AppendHash(out, payload.moduleManifestHash);
 			return true;
+		}
+
+		bool AppendH4Identity(std::vector<uint8_t>& out, const NetH4Identity& identity, NetProtocolError* error) {
+			AppendU16LE(out, identity.controllerFrameVersion);
+			AppendU16LE(out, identity.controllerFrameEncodedSize);
+			if (!AppendString(out, identity.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
+			    !AppendString(out, identity.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
+				return false;
+			}
+			AppendHash(out, identity.deterministicConfigHash);
+			AppendHash(out, identity.moduleManifestHash);
+			AppendHash(out, identity.sessionRulesHash);
+			AppendHash(out, identity.sessionIdentityHash);
+			return true;
+		}
+
+		bool AppendH4Reserved(std::vector<uint8_t>& out, int count) {
+			for (int i = 0; i < count; ++i) {
+				AppendU8(out, 0);
+			}
+			return true;
+		}
+
+		bool EncodePayload(const NetH4NewJoin& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			return AppendH4Identity(out, payload.identity, error) &&
+			       AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+		}
+
+		bool EncodePayload(const NetH4TicketOffer& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.epoch);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendBytes(out, payload.credential);
+			AppendU64LE(out, payload.hostSessionId);
+			AppendU32LE(out, payload.provisionalExpiryMs);
+			return true;
+		}
+
+		bool EncodePayload(const NetH4TicketStoredAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendBool(out, payload.stored);
+			return AppendH4Reserved(out, 3);
+		}
+
+		bool EncodePayload(const NetH4JoinCommitted& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendU32LE(out, payload.incarnation);
+			AppendU8(out, payload.assignedPeerId);
+			return AppendH4Reserved(out, 3);
+		}
+
+		bool EncodePayload(const NetH4Reclaim& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.epoch);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			return AppendH4Identity(out, payload.identity, error) &&
+			       AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+		}
+
+		bool EncodePayload(const NetH4Challenge& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.challenge);
+			AppendU32LE(out, payload.lifetimeMs);
+			return true;
+		}
+
+		bool EncodePayload(const NetH4Proof& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.epoch);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendBytes(out, payload.clientNonce);
+			AppendBytes(out, payload.mac);
+			return true;
+		}
+
+		bool EncodePayload(const NetH4LeaveRequest& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.epoch);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			return true;
+		}
+
+		bool EncodePayload(const NetH4LeaveAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
+			AppendU16LE(out, payload.h4Version);
+			AppendBytes(out, payload.txId);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendBool(out, payload.seatClosed);
+			return AppendH4Reserved(out, 3);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetClientHello& payload, NetProtocolError* error) {
@@ -475,6 +591,169 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadHash(payload.deterministicConfigHash), reader, error, "deterministic_config_hash") &&
 			       ReadOrTruncated(reader.ReadHash(payload.moduleManifestHash), reader, error, "module_manifest_hash");
 		}
+
+		bool ReadH4Version(ByteReader& reader, uint16_t& out, NetProtocolError* error) {
+			if (!ReadOrTruncated(reader.ReadU16LE(out), reader, error, "h4_version")) {
+				return false;
+			}
+			if (out != c_NetH4Version) {
+				SetError(error, NetProtocolErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported H4 admission version");
+				return false;
+			}
+			return true;
+		}
+
+		bool ReadH4Identity(ByteReader& reader, NetH4Identity& identity, NetProtocolError* error) {
+			return ReadOrTruncated(reader.ReadU16LE(identity.controllerFrameVersion), reader, error, "controller_frame_version") &&
+			       ReadOrTruncated(reader.ReadU16LE(identity.controllerFrameEncodedSize), reader, error, "controller_frame_encoded_size") &&
+			       reader.ReadString(identity.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) &&
+			       reader.ReadString(identity.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error) &&
+			       ReadOrTruncated(reader.ReadHash(identity.deterministicConfigHash), reader, error, "deterministic_config_hash") &&
+			       ReadOrTruncated(reader.ReadHash(identity.moduleManifestHash), reader, error, "module_manifest_hash") &&
+			       ReadOrTruncated(reader.ReadHash(identity.sessionRulesHash), reader, error, "session_rules_hash") &&
+			       ReadOrTruncated(reader.ReadHash(identity.sessionIdentityHash), reader, error, "session_identity_hash");
+		}
+
+		bool ReadH4Reserved(ByteReader& reader, int count, NetProtocolError* error) {
+			for (int i = 0; i < count; ++i) {
+				uint8_t reserved = 0;
+				if (!ReadOrTruncated(reader.ReadU8(reserved), reader, error, "h4 reserved") || reserved != 0U) {
+					SetError(error, NetProtocolErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "H4 reserved field is nonzero");
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool ReadH4Bool(ByteReader& reader, bool& out, const char* fieldName, NetProtocolError* error) {
+			uint8_t raw = 0;
+			if (!ReadOrTruncated(reader.ReadU8(raw), reader, error, fieldName)) {
+				return false;
+			}
+			if (raw > 1U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 1, std::string(fieldName) + " must be 0 or 1");
+				return false;
+			}
+			out = raw != 0U;
+			return true;
+		}
+
+		// Generation 0 is reserved for "seat has no holder", so a message claiming one cannot carry it.
+		bool ReadH4HolderGeneration(ByteReader& reader, uint32_t& out, NetProtocolError* error) {
+			if (!ReadOrTruncated(reader.ReadU32LE(out), reader, error, "holder_generation")) {
+				return false;
+			}
+			if (out == 0U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 4, "holder generation 0 is reserved for an unheld seat");
+				return false;
+			}
+			return true;
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4NewJoin& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadH4Identity(reader, payload.identity, error) &&
+			       reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4TicketOffer& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.epoch), reader, error, "epoch") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.credential), reader, error, "credential") &&
+			       ReadOrTruncated(reader.ReadU64LE(payload.hostSessionId), reader, error, "host_session_id") &&
+			       ReadOrTruncated(reader.ReadU32LE(payload.provisionalExpiryMs), reader, error, "provisional_expiry_ms");
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4TicketStoredAck& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadH4Bool(reader, payload.stored, "stored", error) &&
+			       ReadH4Reserved(reader, 3, error);
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4JoinCommitted& payload, NetProtocolError* error) {
+			if (!ReadH4Version(reader, payload.h4Version, error) ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") ||
+			    !ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") ||
+			    !ReadH4HolderGeneration(reader, payload.holderGeneration, error) ||
+			    !ReadOrTruncated(reader.ReadU32LE(payload.incarnation), reader, error, "incarnation")) {
+				return false;
+			}
+			// Incarnations count from 1 at the seat's first commit; 0 would name no transport at all.
+			if (payload.incarnation == 0U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 4, "incarnation 0 is not a committed transport");
+				return false;
+			}
+			return ReadOrTruncated(reader.ReadU8(payload.assignedPeerId), reader, error, "assigned_peer_id") &&
+			       ReadH4Reserved(reader, 3, error);
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4Reclaim& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.epoch), reader, error, "epoch") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadH4Identity(reader, payload.identity, error) &&
+			       reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4Challenge& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.challenge), reader, error, "challenge") &&
+			       ReadOrTruncated(reader.ReadU32LE(payload.lifetimeMs), reader, error, "lifetime_ms");
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4Proof& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.epoch), reader, error, "epoch") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.clientNonce), reader, error, "client_nonce") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.mac), reader, error, "mac");
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4LeaveRequest& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadBytes(payload.epoch), reader, error, "epoch") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error);
+		}
+
+		bool DecodePayload(ByteReader& reader, NetH4LeaveAck& payload, NetProtocolError* error) {
+			return ReadH4Version(reader, payload.h4Version, error) &&
+			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
+			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
+			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
+			       ReadH4Bool(reader, payload.seatClosed, "seat_closed", error) &&
+			       ReadH4Reserved(reader, 3, error);
+		}
+	}
+
+	bool NetProtocol::IsH4MessageType(NetMessageType type) {
+		switch (type) {
+			case NetMessageType::NewJoin:
+			case NetMessageType::TicketOffer:
+			case NetMessageType::TicketStoredAck:
+			case NetMessageType::JoinCommitted:
+			case NetMessageType::Reclaim:
+			case NetMessageType::Challenge:
+			case NetMessageType::Proof:
+			case NetMessageType::LeaveRequest:
+			case NetMessageType::LeaveAck:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	NetMessageType NetProtocol::MessageTypeOf(const NetPayload& payload) {
@@ -489,6 +768,15 @@ namespace RTE {
 			[](const NetPong&) { return NetMessageType::Pong; },
 			[](const NetDisconnect&) { return NetMessageType::Disconnect; },
 			[](const NetSessionSummary&) { return NetMessageType::SessionSummary; },
+			[](const NetH4NewJoin&) { return NetMessageType::NewJoin; },
+			[](const NetH4TicketOffer&) { return NetMessageType::TicketOffer; },
+			[](const NetH4TicketStoredAck&) { return NetMessageType::TicketStoredAck; },
+			[](const NetH4JoinCommitted&) { return NetMessageType::JoinCommitted; },
+			[](const NetH4Reclaim&) { return NetMessageType::Reclaim; },
+			[](const NetH4Challenge&) { return NetMessageType::Challenge; },
+			[](const NetH4Proof&) { return NetMessageType::Proof; },
+			[](const NetH4LeaveRequest&) { return NetMessageType::LeaveRequest; },
+			[](const NetH4LeaveAck&) { return NetMessageType::LeaveAck; },
 		}, payload);
 	}
 
@@ -504,6 +792,15 @@ namespace RTE {
 			case NetMessageType::Pong: return "Pong";
 			case NetMessageType::Disconnect: return "Disconnect";
 			case NetMessageType::SessionSummary: return "SessionSummary";
+			case NetMessageType::NewJoin: return "NewJoin";
+			case NetMessageType::TicketOffer: return "TicketOffer";
+			case NetMessageType::TicketStoredAck: return "TicketStoredAck";
+			case NetMessageType::JoinCommitted: return "JoinCommitted";
+			case NetMessageType::Reclaim: return "Reclaim";
+			case NetMessageType::Challenge: return "Challenge";
+			case NetMessageType::Proof: return "Proof";
+			case NetMessageType::LeaveRequest: return "LeaveRequest";
+			case NetMessageType::LeaveAck: return "LeaveAck";
 		}
 		return "Unknown";
 	}
@@ -568,6 +865,10 @@ namespace RTE {
 		}
 		if (payloadBytes.size() > c_MaxControlPayloadBytes) {
 			SetError(error, NetProtocolErrorCode::PayloadTooLarge, c_HeaderBytes, "payload exceeds max control payload size");
+			return false;
+		}
+		if (IsH4MessageType(MessageTypeOf(message.payload)) && payloadBytes.size() > c_MaxH4PayloadBytes) {
+			SetError(error, NetProtocolErrorCode::PayloadTooLarge, c_HeaderBytes, "H4 admission payload exceeds max admission size");
 			return false;
 		}
 
@@ -637,6 +938,11 @@ namespace RTE {
 		}
 
 		const auto messageType = static_cast<NetMessageType>(rawMessageType);
+		// An admission message arrives from a connection nobody has authenticated, so refuse an
+		// oversized one on the header alone rather than parsing it.
+		if (IsH4MessageType(messageType) && payloadBytes > c_MaxH4PayloadBytes) {
+			return Fail(NetProtocolErrorCode::PayloadTooLarge, 16, "H4 admission payload exceeds max admission size");
+		}
 		ByteReader payloadReader(data + c_HeaderBytes, payloadBytes);
 		NetProtocolError payloadError;
 		NetPayload payload;
@@ -698,6 +1004,60 @@ namespace RTE {
 			}
 			case NetMessageType::SessionSummary: {
 				NetSessionSummary value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::NewJoin: {
+				NetH4NewJoin value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::TicketOffer: {
+				NetH4TicketOffer value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::TicketStoredAck: {
+				NetH4TicketStoredAck value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::JoinCommitted: {
+				NetH4JoinCommitted value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::Reclaim: {
+				NetH4Reclaim value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::Challenge: {
+				NetH4Challenge value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::Proof: {
+				NetH4Proof value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::LeaveRequest: {
+				NetH4LeaveRequest value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::LeaveAck: {
+				NetH4LeaveAck value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = value;
 				break;
