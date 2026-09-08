@@ -83,6 +83,9 @@ namespace RTE {
 		/// Feeds one transport event when another phase owns the queue (a reconnect handshake the
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);
+		/// Advances the admission plane alone: mid-match the coordinator owns the transport queue and the
+		/// heartbeats, so this must not poll either or a peer whose traffic rides the round would time out.
+		void TickAdmissionPlane(uint64_t nowMs);
 		void Close(const std::string& reason);
 		/// Ends the hosted session for every peer with the one reason that lets a client delete its
 		/// recovery record. Sent from the same place the seat registry is cleared, and nowhere else.

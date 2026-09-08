@@ -624,6 +624,7 @@ static std::string ResyncSaveName() {
 		}
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get());
 		m_Coordinator->DeferStopsToTickBoundary();
+		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
 		m_PendingSessionEvents.clear();
@@ -660,6 +661,12 @@ static std::string ResyncSaveName() {
 			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
 		m_SessionPumpNowMs += 15;
+		if (hostAdmission) {
+			// The coordinator owns the transport queue mid-match, so the session's own Tick never runs;
+			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
+			// dropped seat's reclaim window would wait for the match to end.
+			m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+		}
 		for (const NetTransportEvent& event: events) {
 			m_Session->InjectEvent(event, m_SessionPumpNowMs);
 		}
@@ -932,6 +939,21 @@ static std::string ResyncSaveName() {
 			actors.push_back({owner.actorUID, owner.team, owner.ownerPeerId, true});
 		}
 		return actors;
+	}
+
+	NetLockstepSeatState NetMatchService::QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId) {
+		auto* service = static_cast<NetMatchService*>(context);
+		NetLockstepSeatState state;
+		if (!service) {
+			return state;
+		}
+		std::lock_guard<std::mutex> lock(service->m_Mutex);
+		if (!service->m_AdmissionAttached || !service->m_IsHost) {
+			return state;
+		}
+		state.fencedTransport = transportPeerId != c_InvalidNetPeerId && service->m_ReconnectHost.IsFenced(transportPeerId);
+		state.heldForReclaim = service->m_ReconnectHost.IsSeatHeldForReclaim(lockstepPeerId);
+		return state;
 	}
 
 	void NetMatchService::AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest) {

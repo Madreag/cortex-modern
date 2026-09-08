@@ -247,6 +247,14 @@ namespace RTE {
 		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion = ControllerFrame::c_Version);
 	};
 
+	/// What the H4 admission plane says about a seat mid-round. The round asks before it adjudicates a
+	/// lost transport, so a superseded incarnation is not read as a leave and a dropped holder still
+	/// inside its reclaim window does not end the match it left.
+	struct NetLockstepSeatState {
+		bool fencedTransport = false; //!< The transport is a superseded incarnation; the seat's holder is elsewhere.
+		bool heldForReclaim = false;  //!< The seat is committed and may still come back.
+	};
+
 	class NetLockstepCoordinator {
 	public:
 		bool Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
@@ -277,6 +285,9 @@ namespace RTE {
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
 		/// would otherwise discard while it owns the transport queue.
 		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { m_SessionEventSink = std::move(sink); }
+		/// The H4 seat state, asked for by lockstep peer id and (on a disconnect) the transport that
+		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
+		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
@@ -327,7 +338,12 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced);
+		NetLockstepSeatState SeatStateOf(uint8_t peerId, NetPeerId transportPeerId) const;
+		/// Whether any peer that has left still holds a seat a returning player can reclaim.
+		bool AnyLeftSeatHeld() const;
+		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
+		void EndRoundIfNobodyIsComingBack();
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
 		uint16_t PeerInputDelay(uint8_t peerId) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
@@ -346,6 +362,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
+		NetLockstepSeatState (*m_SeatStateSource)(void*, uint8_t, NetPeerId) = nullptr;
+		void* m_SeatStateContext = nullptr;
+		std::string m_LastLeaveMessage; //!< The message the round ends with once no left seat is held any more.
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		bool m_DeferStops = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;

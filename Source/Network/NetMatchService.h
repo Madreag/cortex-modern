@@ -124,6 +124,9 @@ namespace RTE {
 		/// The drop-frame ownership census. Called by the reconnect host, and only ever from inside
 		/// PumpSessionEvents on the game thread - g_MovableMan is not safe to walk from anywhere else.
 		static std::vector<NetH4LedgerActor> CollectDropOwnership(void* context);
+		/// The H4 seat state the round consults before it adjudicates a lost transport. Called by the
+		/// coordinator on the game thread, which never holds this lock.
+		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();

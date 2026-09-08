@@ -2475,6 +2475,93 @@ namespace RTE {
 			return 0;
 		}
 
+		// §4's other half: a seat whose holder DROPPED stays worth waiting for until the P2 window
+		// closes, so a round with nobody left does not end under a player who is coming back. The window
+		// governs the round, not the ticket - the seat stays reclaimable either way.
+		int TestSeatHoldWindow() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 91;
+			ConfigureEndpoint(player, "hold", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the seeding join did not settle: " + error);
+			}
+			NetH4TicketRecord record;
+			if (player.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			const std::vector<NetH4Seat> seats = MakeSeatTable();
+			const uint8_t held = seats[0].lockstepPeerId;
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a committed seat did not read as worth waiting for");
+			}
+			if (wire.host.IsSeatHeldForReclaim(seats[1].lockstepPeerId)) {
+				return Fail("a seat nobody has ever held read as worth waiting for");
+			}
+			wire.host.SetLiveMatch(true);
+
+			// The drop, then the whole P2 window: held throughout, and not one millisecond past it.
+			wire.host.NotifyDisconnect(player.connection, 120);
+			player.connected = false;
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a dropped holder stopped being worth waiting for the moment it dropped");
+			}
+			wire.host.Tick(wire.nowMs + NetReconnectHost::c_ProvisionalExpiryMs);
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("the hold ended inside the P2 window");
+			}
+			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
+			wire.host.Tick(wire.nowMs);
+			if (wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("the hold outlived the P2 window");
+			}
+			if (wire.host.GetStats().seatHoldsExpired != 1) {
+				return Fail("the closed window was not counted");
+			}
+			wire.host.Tick(wire.nowMs + 5000);
+			if (wire.host.GetStats().seatHoldsExpired != 1) {
+				return Fail("the closed window was counted more than once");
+			}
+
+			// The narrowness this case exists for: a closed window ends the ROUND's wait, not the seat's
+			// ticket. The same holder still reclaims, and the seat is worth waiting for again.
+			Endpoint returner;
+			returner.connection = 92;
+			ConfigureEndpoint(returner, "hold-return", &unixNow);
+			wire.Add(&returner);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the reclaim after the window closed did not settle: " + error);
+			}
+			if (returner.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("a closed hold window refused the seat's own ticket");
+			}
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a reclaimed seat did not become worth waiting for again");
+			}
+
+			// A clean leave closes the seat, so a round with nobody left ends at once rather than waiting.
+			if (!returner.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the leave did not settle: " + error);
+			}
+			if (wire.host.GetStats().seatsClosedByLeave != 1) {
+				return Fail("the leave did not close the seat");
+			}
+			if (wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a seat closed by a clean leave is still being waited for");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2536,6 +2623,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestReconnectUxSchedule(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSeatHoldWindow(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

@@ -1255,6 +1255,7 @@ namespace RTE {
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_LastLeaveMessage.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
@@ -1355,6 +1356,7 @@ namespace RTE {
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_LastLeaveMessage.clear();
 		m_PeerEffectiveStart.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
@@ -1574,6 +1576,7 @@ namespace RTE {
 			}
 		}
 		AdvanceReadyFrames(nowMs);
+		EndRoundIfNobodyIsComingBack();
 	}
 
 	void NetLockstepCoordinator::Complete(const std::string& message) {
@@ -1930,6 +1933,12 @@ namespace RTE {
 					m_RemoteTransports.erase(lockstepPeer);
 					break;
 				}
+				// A superseded incarnation's socket finally closing says nothing about the seat: its live
+				// holder is another transport, which the resync brings into the round.
+				if (m_RelayHost && lockstepPeer != 0 && SeatStateOf(lockstepPeer, event.peerId).fencedTransport) {
+					++m_Stats.ignoredAdmissionFaults;
+					break;
+				}
 				// The relay host adjudicates a client drop as a leave at the first frame it has no data
 				// for, so the survivors keep playing; a host drop still ends the match. The relayed
 				// frames precede this notice on the reliable lane, so no survivor learns of the leave
@@ -1943,7 +1952,7 @@ namespace RTE {
 						}
 						++firstMissingFrame;
 					}
-					ApplyPeerLeave(lockstepPeer, firstMissingFrame, "connection lost", nowMs);
+					ApplyPeerLeave(lockstepPeer, firstMissingFrame, "connection lost", nowMs, false);
 					break;
 				}
 				// A transport peer outside the round — a leaver's stale socket finally timing out, a
@@ -2149,7 +2158,7 @@ namespace RTE {
 		}
 		if (stop.reason == NetLockstepStopReason::PeerLeft) {
 			if (IsKnownRemotePeer(stop.senderPeerId)) {
-				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs);
+				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, true);
 			}
 			return;
 		}
@@ -2157,9 +2166,34 @@ namespace RTE {
 		m_State = stop.reason == NetLockstepStopReason::Complete ? NetLockstepState::Stopped : NetLockstepState::Failed;
 	}
 
+	void NetLockstepCoordinator::SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context) {
+		m_SeatStateSource = source;
+		m_SeatStateContext = context;
+	}
+
+	NetLockstepSeatState NetLockstepCoordinator::SeatStateOf(uint8_t peerId, NetPeerId transportPeerId) const {
+		return m_SeatStateSource ? m_SeatStateSource(m_SeatStateContext, peerId, transportPeerId) : NetLockstepSeatState{};
+	}
+
+	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
+		return std::any_of(m_PeerLeaveFrames.begin(), m_PeerLeaveFrames.end(), [this](const auto& left) {
+			return SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim;
+		});
+	}
+
+	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {
+		if (m_State != NetLockstepState::Running || m_RemotePeerIds.empty() ||
+		    m_PeerLeaveFrames.size() < m_RemotePeerIds.size() || AnyLeftSeatHeld()) {
+			return;
+		}
+		// Nobody left to play with.
+		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
+		m_State = NetLockstepState::Stopped;
+	}
+
 	// A leave is deterministic by construction: no survivor can advance to the leaver's first missing
 	// frame without processing this, so every peer drops the requirement at the same tick.
-	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs) {
+	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced) {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
@@ -2171,7 +2205,11 @@ namespace RTE {
 		notice.message = message;
 		RelayToOtherRemotes({notice}, peerId);
 		m_RemoteTransports.erase(peerId);
-		if (m_PeerLeaveFrames.size() >= m_RemotePeerIds.size()) {
+		m_LastLeaveMessage = message;
+		// A holder that DROPPED with a live ticket is not gone yet: the round plays on exactly as it does
+		// with survivors present, and ends only once the last held seat's reclaim window closes. A peer
+		// that announced its leave said it is not coming back, so that still ends the match at once.
+		if (m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld())) {
 			// Nobody left to play with.
 			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + message;
 			m_State = NetLockstepState::Stopped;
