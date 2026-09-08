@@ -93,7 +93,9 @@ namespace RTE {
 		/// @param whichFrame Which frame to get. (default: 0)
 		/// @return A pointer to the requested frame of this MOSprite's BITMAP array.
 		/// Ownership is NOT transferred!
-		BITMAP* GetSpriteFrame(unsigned int whichFrame = 0) const { return (whichFrame < m_FrameCount) ? m_aSprite[whichFrame] : 0; }
+		BITMAP* GetSpriteFrame(unsigned int whichFrame = 0) const { return whichFrame < m_aSprite.size() ? m_aSprite[whichFrame] : nullptr; }
+		std::shared_ptr<BITMAP> ShareSpriteBitmap(BITMAP* bitmap) const;
+		static bool RunCheckpointSelfTest();
 
 		/// Gets the color index of the pixel at position (X, Y) in the sprite bitmap
 		/// @param x X coordinate on the bitmap of the pixel to get.
@@ -269,7 +271,7 @@ namespace RTE {
 
 		/// Gets the GUI representation of this MOSprite, either based on the first frame of its sprite or separately defined icon file.
 		/// @return The graphical representation of this MOSprite as a BITMAP.
-		BITMAP* GetGraphicalIcon() const override { return m_GraphicalIcon != nullptr ? m_GraphicalIcon : m_aSprite[0]; }
+		BITMAP* GetGraphicalIcon() const override { return m_GraphicalIcon != nullptr ? m_GraphicalIcon : GetSpriteFrame(); }
 
 		/// Gets the width of this MOSprite's GUI icon.
 		/// @return The width of the GUI icon bitmap.
@@ -382,6 +384,7 @@ namespace RTE {
 		ContentFile m_SpriteFile;
 		// Vector of pointers to BITMAPs representing the multiple frames of this sprite.
 		std::vector<BITMAP*> m_aSprite;
+		std::vector<std::shared_ptr<BITMAP>> m_SpriteBitmapOwners;
 		ContentFile m_IconFile; //!< The file containing the GUI icon.
 		BITMAP* m_GraphicalIcon; //!< The GUI representation of this MOSprite as a BITMAP.
 		// Number of frames, or elements in the m_aSprite array.

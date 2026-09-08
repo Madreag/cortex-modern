@@ -1,8 +1,16 @@
 #include "MOSprite.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
+#include "GUICheckpoint.h"
+#include "GLResourceMan.h"
+#include <unordered_map>
+#include <iostream>
 
 #include "AEmitter.h"
+#include "MOSParticle.h"
+#include "AHuman.h"
+#include "ACraft.h"
+#include "GraphicalPrimitive.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "FrameMan.h"
@@ -31,6 +39,7 @@ void MOSprite::Clear() {
 	m_aSprite.clear();
 	m_IconFile.Reset();
 	m_GraphicalIcon = nullptr;
+	m_SpriteBitmapOwners.clear();
 	m_FrameCount = 1;
 	m_SpriteOffset.Reset();
 	m_Frame = 0;
@@ -120,11 +129,29 @@ int MOSprite::Create(const MOSprite& reference) {
 
 	m_SpriteFile = reference.m_SpriteFile;
 	m_IconFile = reference.m_IconFile;
-	m_GraphicalIcon = m_IconFile.GetAsBitmap();
+	m_GraphicalIcon = reference.m_GraphicalIcon;
 
 	m_FrameCount = reference.m_FrameCount;
 	m_Frame = reference.m_Frame;
 	m_aSprite = reference.m_aSprite;
+	m_SpriteBitmapOwners = reference.m_SpriteBitmapOwners;
+	m_SpriteModified = reference.m_SpriteModified;
+	if (reference.m_SpriteModified) {
+		std::unordered_map<BITMAP*, std::shared_ptr<BITMAP>> copies;
+		m_SpriteBitmapOwners.clear();
+		for (BITMAP*& frame: m_aSprite) {
+			auto [copy, inserted] = copies.emplace(frame, nullptr);
+			if (inserted) {
+				copy->second = std::shared_ptr<BITMAP>(GUICheckpoint::LoadBitmap(GUICheckpoint::SaveBitmap(frame)), [](BITMAP* value) {
+					if (value) { g_GLResourceMan.DestroyBitmapInfo(value); destroy_bitmap(value); }
+				});
+				m_SpriteBitmapOwners.push_back(copy->second);
+			}
+			if (frame == reference.m_GraphicalIcon) m_GraphicalIcon = copy->second.get();
+			frame = copy->second.get();
+		}
+		if (reference.m_GraphicalIcon && !copies.contains(reference.m_GraphicalIcon)) m_SpriteBitmapOwners.push_back(reference.ShareSpriteBitmap(reference.m_GraphicalIcon));
+	}
 	m_SpriteOffset = reference.m_SpriteOffset;
 	m_SpriteAnimMode = reference.m_SpriteAnimMode;
 	m_SpriteAnimDuration = reference.m_SpriteAnimDuration;
@@ -329,12 +356,6 @@ void MOSprite::Destroy(bool notInherited) {
 	//    delete m_pEntryWound; Not doing this anymore since we're not owning
 	//    delete m_pExitWound;
 
-	if (m_SpriteModified) {
-		for (BITMAP* sprite : m_aSprite) {
-			destroy_bitmap(sprite);
-		}
-	}
-
 	if (!notInherited)
 		MovableObject::Destroy();
 	Clear();
@@ -499,17 +520,22 @@ std::vector<Vector>* MOSprite::GetAllSpritePixelPositions(const Vector& origin, 
 }
 
 bool MOSprite::SetSpritePixelIndex(int x, int y, int whichFrame, int colorIndex, int ignoreIndex, bool invert) {
+	if (m_aSprite.empty()) return false;
 	if (!m_SpriteModified) {
 		std::vector<BITMAP*> spriteList;
+		std::vector<std::shared_ptr<BITMAP>> owners;
 
 		for (BITMAP* sprite : m_aSprite) {
 			BITMAP* spriteCopy = create_bitmap_ex(8, sprite->w, sprite->h);
 			rectfill(spriteCopy, 0, 0, spriteCopy->w - 1, spriteCopy->h - 1, 0);
 			draw_sprite(spriteCopy, sprite, 0, 0);
 			spriteList.push_back(spriteCopy);
+			owners.emplace_back(spriteCopy, [](BITMAP* value) { g_GLResourceMan.DestroyBitmapInfo(value); destroy_bitmap(value); });
 		}
 
 		m_aSprite = spriteList;
+		if (m_GraphicalIcon) owners.push_back(ShareSpriteBitmap(m_GraphicalIcon));
+		m_SpriteBitmapOwners = std::move(owners);
 		m_SpriteModified = true;
 	}
 
@@ -517,6 +543,7 @@ bool MOSprite::SetSpritePixelIndex(int x, int y, int whichFrame, int colorIndex,
 	BITMAP* targetSprite = m_aSprite[clampedFrame];
 	if (is_inside_bitmap(targetSprite, x, y, 0) && (ignoreIndex < 0 || (_getpixel(targetSprite, x, y) != ignoreIndex) != invert)) {
 		_putpixel(targetSprite, x, y, colorIndex);
+		g_GLResourceMan.DestroyBitmapInfo(targetSprite);
 		return true;
 	}
 	return false;
@@ -671,20 +698,124 @@ void MOSprite::Draw(BITMAP* pTargetBitmap,
 }
 
 std::string MOSprite::SaveMOSpriteRuntime() const {
-	CheckpointWriter archive("MOSpriteRuntime1");
+	CheckpointWriter archive("MOSpriteRuntime2");
 	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
 	archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
 	archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
+	archive(m_SpriteFile.SaveCheckpoint(), m_IconFile.SaveCheckpoint());
+	std::vector<BITMAP*> images;
+	std::unordered_map<BITMAP*, size_t> indices;
+	const auto index = [&](BITMAP* image) {
+		if (!image) return size_t{0};
+		auto [found, inserted] = indices.emplace(image, images.size() + 1);
+		if (inserted) images.push_back(image);
+		return found->second;
+	};
+	std::vector<size_t> frames;
+	for (BITMAP* frame: m_aSprite) frames.push_back(index(frame));
+	const size_t icon = index(m_GraphicalIcon);
+	archive(images.size());
+	for (BITMAP* image: images) archive(GUICheckpoint::SaveSharedBitmap(image));
+	archive(frames, icon);
 	return archive.Text();
 }
 
 bool MOSprite::LoadMOSpriteRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "MOSpriteRuntime1", validateOnly);
+		if (!validateOnly && !LoadMOSpriteRuntime(text, true)) return false;
+		const bool complete = text.starts_with("16 MOSpriteRuntime2 ");
+		if (!validateOnly && complete && SaveMOSpriteRuntime() == text) return true;
+		CheckpointReader archive(text, complete ? "MOSpriteRuntime2" : "MOSpriteRuntime1", validateOnly);
 		archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
 		archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
 		archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
+		if (complete) {
+			std::string spriteFile, iconFile;
+			archive.Value(spriteFile); archive.Value(iconFile);
+			if (!m_SpriteFile.LoadCheckpoint(spriteFile, true) || !m_IconFile.LoadCheckpoint(iconFile, true)) throw std::runtime_error("invalid sprite content file");
+			std::vector<std::string> images;
+			std::vector<size_t> frames;
+			size_t icon = 0;
+			archive.Value(images); archive.Value(frames); archive.Value(icon);
+			for (const auto& image: images) GUICheckpoint::LoadSharedBitmap(image, true);
+			if (icon > images.size()) throw std::runtime_error("invalid sprite icon reference");
+			for (size_t frame: frames) if (frame > images.size()) throw std::runtime_error("invalid sprite frame reference");
+			std::vector<std::shared_ptr<BITMAP>> owners;
+			if (!validateOnly) for (const auto& image: images) {
+				auto bitmap = GUICheckpoint::LoadSharedBitmap(image);
+				if (!bitmap) throw std::runtime_error("null sprite bitmap pool entry");
+				owners.push_back(std::move(bitmap));
+			}
+			archive.OnCommit([this, spriteFile = std::move(spriteFile), iconFile = std::move(iconFile), owners = std::move(owners), frames = std::move(frames), icon]() mutable {
+				std::vector<BITMAP*> sprites;
+				for (size_t frame: frames) sprites.push_back(frame ? owners[frame - 1].get() : nullptr);
+				m_SpriteFile.LoadCheckpoint(spriteFile); m_IconFile.LoadCheckpoint(iconFile);
+				m_aSprite = std::move(sprites);
+				m_GraphicalIcon = icon ? owners[icon - 1].get() : nullptr;
+				m_SpriteBitmapOwners = std::move(owners);
+			});
+		}
 		archive.Finish();
 		return true;
-	} catch (const std::exception&) { return false; }
+	} catch (const std::exception& error) { std::cerr << "[sprite-checkpoint] " << error.what() << std::endl; return false; }
+}
+
+std::shared_ptr<BITMAP> MOSprite::ShareSpriteBitmap(BITMAP* bitmap) const {
+	std::function<std::shared_ptr<BITMAP>(const MOSprite*)> find = [&](const MOSprite* sprite) -> std::shared_ptr<BITMAP> {
+		if (!sprite) return {};
+		for (const auto& owner: sprite->m_SpriteBitmapOwners) if (owner.get() == bitmap) return owner;
+		if (const auto* rotating = dynamic_cast<const MOSRotating*>(sprite)) {
+			for (const auto* child: rotating->GetAttachables()) if (auto owner = find(child)) return owner;
+			for (const auto* child: rotating->GetWoundList()) if (auto owner = find(child)) return owner;
+		}
+		if (const auto* actor = dynamic_cast<const Actor*>(sprite)) for (const auto* child: *actor->GetInventory()) if (auto owner = find(dynamic_cast<const MOSprite*>(child))) return owner;
+		if (const auto* craft = dynamic_cast<const ACraft*>(sprite)) for (const auto* child: craft->GetCollectedInventory()) if (auto owner = find(dynamic_cast<const MOSprite*>(child))) return owner;
+		return {};
+	};
+	if (auto owner = find(this)) return owner;
+	return std::shared_ptr<BITMAP>(bitmap, [](BITMAP*) {});
+}
+
+bool MOSprite::RunCheckpointSelfTest() {
+	bool passed = true;
+	const auto check = [&](const char* name, bool valid) { passed &= valid; std::cout << "[sprite-checkpoint-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl; };
+	try {
+		MOSParticle source;
+		source.m_SpriteFile = ContentFile("Base.rte/GUIs/Skins/Cursor.png");
+		BITMAP* cached = source.m_SpriteFile.GetAsBitmap();
+		source.m_aSprite = {cached, cached}; source.m_FrameCount = 2; source.m_Frame = 1;
+		source.m_GraphicalIcon = cached;
+		const std::string cachePixels = GUICheckpoint::SaveBitmap(cached), cachedState = source.SaveMOSpriteRuntime();
+		check("cached_frame_and_icon_aliases", source.LoadMOSpriteRuntime(cachedState) && source.GetSpriteFrame(0) == source.GetSpriteFrame(1) && source.GetGraphicalIcon() == cached);
+		check("public_pixel_mutation", source.SetSpritePixelIndex(1, 1, 0, 37, -1, false) && source.GetSpritePixelIndex(1, 1, 0) == 37);
+		check("preset_pixels_remain_independent", GUICheckpoint::SaveBitmap(cached) == cachePixels && source.GetSpriteFrame(0) != cached);
+		const std::string modified = source.SaveMOSpriteRuntime();
+		MOSParticle clone;
+		clone.MOSprite::Create(source);
+		check("clone_keeps_mutated_pixels", clone.GetSpritePixelIndex(1, 1, 0) == 37 && clone.GetSpriteFrame(0) != source.GetSpriteFrame(0));
+		clone.SetSpritePixelIndex(1, 1, 0, 91, -1, false);
+		check("clone_pixel_mutations_are_independent", source.GetSpritePixelIndex(1, 1, 0) == 37 && clone.GetSpritePixelIndex(1, 1, 0) == 91);
+		MOSParticle restored;
+		check("fresh_mutated_frame_restore", restored.LoadMOSpriteRuntime(modified) && restored.GetSpritePixelIndex(1, 1, 0) == 37 && restored.SaveMOSpriteRuntime() == modified);
+		check("trailing_rejected_atomically", !restored.LoadMOSpriteRuntime(modified + "extra") && restored.SaveMOSpriteRuntime() == modified);
+		check("truncated_rejected_atomically", !restored.LoadMOSpriteRuntime(modified.substr(0, modified.size() / 2)) && restored.SaveMOSpriteRuntime() == modified);
+		auto bitmap = std::make_unique<BitmapPrimitive>(-1, Vector(), &source, 0, 0, false, false);
+		const std::string retained = GUICheckpoint::SaveBitmap(bitmap->m_Bitmap);
+		source.Reset();
+		check("queued_bitmap_survives_source_reset", bitmap->m_SpriteOwner.get() == nullptr && GUICheckpoint::SaveBitmap(bitmap->m_Bitmap) == retained);
+		check("queued_expired_source_checkpoint", !bitmap->SaveCheckpoint().empty());
+		check("fresh_cached_restore_alias", restored.LoadMOSpriteRuntime(cachedState) && restored.GetSpriteFrame(0) == cached && restored.GetGraphicalIcon() == cached);
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
+		if (!preset) throw std::runtime_error("missing sprite icon fixture preset");
+		std::unique_ptr<AHuman> actor(static_cast<AHuman*>(preset->Clone()));
+		actor->m_GraphicalIcon = nullptr;
+		if (!actor->GetHead()) throw std::runtime_error("missing sprite icon fixture head");
+		actor->GetHead()->SetSpritePixelIndex(1, 1, 0, 95, -1, false);
+		auto childIcon = actor->ShareSpriteBitmap(actor->GetGraphicalIcon());
+		const std::string childPixels = GUICheckpoint::SaveBitmap(childIcon.get());
+		check("child_icon_owner_shared", childIcon.use_count() > 1 && childIcon.get() == actor->GetHead()->GetSpriteFrame());
+		actor.reset();
+		check("child_icon_survives_actor_delete", GUICheckpoint::SaveBitmap(childIcon.get()) == childPixels);
+	} catch (const std::exception& error) { check("exception", false); std::cerr << "[sprite-checkpoint-selftest] " << error.what() << std::endl; }
+	return passed;
 }
