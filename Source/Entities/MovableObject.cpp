@@ -1464,3 +1464,19 @@ void MovableObject::SetPostScreenEffectToDraw() const {
 		}
 	}
 }
+
+std::vector<long> MovableObject::GetCheckpointBorrowedReferences() const {
+	return {m_pMOToNotHit ? m_pMOToNotHit->GetUniqueID() : 0};
+}
+
+bool MovableObject::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
+	if (identities.size() != 1 || identities[0] < 0) return false;
+	auto* target = identities[0] ? g_MovableMan.FindObjectByUniqueID(identities[0]) : nullptr;
+	if (identities[0] && !target) return false;
+	if (!validateOnly) {
+		m_pMOToNotHit = target;
+		m_MOToNotHitUID = identities[0];
+		m_FaithfulMOToNotHitUID = 0;
+	}
+	return true;
+}

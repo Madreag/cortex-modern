@@ -532,6 +532,8 @@ namespace RTE {
 		/// Gets the MO this MO is set not to hit even when MO hitting is enabled on this MO.
 		/// @return The MO this MO is set not to hit.
 		const MovableObject* GetWhichMOToNotHit() const { return m_pMOToNotHit; }
+		virtual std::vector<long> GetCheckpointBorrowedReferences() const;
+		virtual bool RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly = false);
 		long GetMOToNotHitUID() const { return m_MOToNotHitUID; }
 		int64_t GetMOIgnoreTimerStart() const { return m_MOIgnoreTimer.GetStartSimTimeMS(); }
 		double GetMOIgnoreTimerLimitMS() const { return m_MOIgnoreTimer.GetSimTimeLimitMS(); }

@@ -2150,3 +2150,30 @@ bool Actor::RunBorrowedReferenceSelfTest() {
         return false;
     }
 }
+
+std::vector<long> Actor::GetCheckpointBorrowedReferences() const {
+	auto identities = MovableObject::GetCheckpointBorrowedReferences();
+	identities.push_back(m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : 0);
+	for (const auto& [position, target]: m_Waypoints) identities.push_back(target ? target->GetUniqueID() : 0);
+	return identities;
+}
+
+bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
+	if (identities.size() != m_Waypoints.size() + 2) return false;
+	for (long identity: identities) {
+		if (identity < 0) return false;
+		const auto* target = identity ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		if (identity && !target) return false;
+	}
+	if (!validateOnly) {
+		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(identities[0]);
+		m_MOToNotHitUID = identities[0];
+		m_FaithfulMOToNotHitUID = 0;
+		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(identities[1]);
+		m_FaithfulMOMoveTargetUID = 0;
+		size_t index = 2;
+		for (auto& [position, target]: m_Waypoints) target = g_MovableMan.FindObjectByUniqueID(identities[index++]);
+		m_FaithfulWaypointUIDs.clear();
+	}
+	return true;
+}
