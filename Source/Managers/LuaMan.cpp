@@ -4666,6 +4666,20 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (unreachableOwner ? "PASS" : "FAIL") << " checkpoint_drops_unreachable_script_owner" << std::endl;
 	checkpointValues = unreachableOwner && checkpointValues;
+	// The collector can sweep a script-owned object while a construction scope holds a registry copy,
+	// so putting that copy back must not name the object the sweep destroyed.
+	bool scopeForgetsDestroyed = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		const long identity = object->GetUniqueID();
+		{
+			MovableMan::ConstructionRegistryScope registryScope;
+			delete object;
+		}
+		scopeForgetsDestroyed = identity > 0 && g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
+	}
+	std::cout << "[script-graph-selftest] " << (scopeForgetsDestroyed ? "PASS" : "FAIL") << " construction_scope_forgets_destroyed_owner" << std::endl;
 	bool nativeLifetime = true;
 	{
 		MOPixel object;
@@ -4794,7 +4808,7 @@ _PrimitiveQueueCapture = nil
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
-	const bool pass = checkpointValues && settledSoundOwner && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
+	const bool pass = checkpointValues && settledSoundOwner && scopeForgetsDestroyed && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;
 }
