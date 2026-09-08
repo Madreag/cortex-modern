@@ -1451,8 +1451,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 			}
 		}
 		auto& lists = out.scriptRegistrations.emplace_back();
-		state.SwapRegisteredMOs(lists.first, lists.second);
-		state.HoldRegisteredMOs(lists.first, lists.second);
+		state.SwapAndHoldRegisteredMOs(lists.first, lists.second);
 	};
 	stashState(g_LuaMan.GetMasterScriptState());
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
