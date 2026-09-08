@@ -1010,7 +1010,11 @@ namespace {
 				for (int index = 0; index < count; ++index) {
 					FMOD::DSP* dsp; FMOD_DSP_TYPE type;
 					AudioCheckpoint::Require(group->getDSP(index, &dsp)); AudioCheckpoint::Require(dsp->getType(&type));
-					if (AudioCheckpoint::Effect::Managed(type)) m_Original.push_back({group, index, dsp});
+					if (AudioCheckpoint::Effect::Managed(type)) {
+						bool active, bypass;
+						AudioCheckpoint::Require(dsp->getActive(&active)); AudioCheckpoint::Require(dsp->getBypass(&bypass));
+						m_Original.push_back({group, index, dsp, active, bypass});
+					}
 				}
 			}
 			m_Started = true;
@@ -1030,10 +1034,13 @@ namespace {
 					if (std::none_of(m_Original.begin(), m_Original.end(), [dsp](const Original& item) { return item.dsp == dsp; })) dsp->release();
 				}
 			}
-			for (const auto& original: m_Original) original.group->addDSP(original.index, original.dsp);
+			for (const auto& original: m_Original) {
+				original.group->addDSP(original.index, original.dsp);
+				original.dsp->setActive(original.active); original.dsp->setBypass(original.bypass);
+			}
 		}
 	private:
-		struct Original { FMOD::ChannelGroup* group; int index; FMOD::DSP* dsp; };
+		struct Original { FMOD::ChannelGroup* group; int index; FMOD::DSP* dsp; bool active, bypass; };
 		std::array<FMOD::ChannelGroup*, 4> m_Groups;
 		std::vector<Original> m_Original;
 		bool m_Started = false, m_Committed = false;
@@ -1220,6 +1227,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 					AudioCheckpoint::Require(channel->setUserData(candidates.at(identity).owner));
 					AudioCheckpoint::Require(channel->setCallback(SoundChannelEndedCallback));
 					AudioCheckpoint::Require(channel->setPaused(descriptions.at(identity)->control.paused));
+					AudioCheckpoint::Effect::ApplyActivation(channel, descriptions.at(identity)->control.effects);
 				}
 				if (state.enabled) {
 					AudioCheckpoint::Require(m_AudioSystem->set3DNumListeners(static_cast<int>(state.listeners.size())));
@@ -1299,6 +1307,19 @@ bool AudioMan::RunCheckpointSelfTest() {
 		if (!source->Play()) throw std::runtime_error("checkpoint test sound did not play");
 		const int identity = *source->GetPlayingChannels()->begin();
 		FMOD::Channel* originalChannel = nullptr; AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
+		{
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			FMOD::DSP* effect;
+			AudioCheckpoint::Require(m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &effect));
+			AudioCheckpoint::Require(originalChannel->addDSP(0, effect));
+			AudioCheckpoint::Require(originalChannel->setPaused(false));
+			AudioCheckpoint::Require(effect->setActive(false));
+			const auto control = AudioCheckpoint::Control::Capture(originalChannel, false);
+			control.Apply(m_AudioSystem, originalChannel, true);
+			bool active; AudioCheckpoint::Require(effect->getActive(&active));
+			if (active) throw std::runtime_error("unpausing activated a checkpoint-disabled effect");
+			AudioCheckpoint::Require(originalChannel->setPaused(true));
+		}
 		AudioCheckpoint::Require(originalChannel->setPosition(123, FMOD_TIMEUNIT_PCM));
 		const std::string native = source->SaveCheckpoint();
 		const std::string playback = GetSoundContainerPlaybackCheckpoint(source.get());
