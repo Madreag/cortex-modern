@@ -32,7 +32,7 @@ namespace RTE {
 
 	public:
 		std::string SaveCheckpoint() const;
-		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"; }
+		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime3 ") ? "AudioRuntime3" : (text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
@@ -49,6 +49,9 @@ namespace RTE {
 		std::vector<SoundContainer*> TakePendingSoundOpContainers();
 		/// Numbers a deferred sound call inside its tick, so every peer derives the same playback key.
 		uint64_t NextDeferredSoundOpOrdinal();
+		/// The tick and call number a restored run has to continue from; both are checkpoint state.
+		std::pair<uint64_t, uint64_t> GetDeferredSoundOpOrdinal() const { return {m_DeferredSoundOpTick, m_DeferredSoundOpOrdinal}; }
+		void SetDeferredSoundOpOrdinal(uint64_t tick, uint64_t ordinal) { m_DeferredSoundOpTick = tick; m_DeferredSoundOpOrdinal = ordinal; }
 		/// The live SoundContainer a checkpoint identity names, or none.
 		SoundContainer* FindSimulationSoundContainer(uint64_t identity) const { return FindCheckpointSoundContainer(identity); }
 		void VisitSharedSimulationSounds(const std::function<void(const SoundContainer&)>& visitor) const;

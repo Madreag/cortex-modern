@@ -230,6 +230,7 @@ namespace RTE {
 		// P26's per-seat ledger cap: the largest actor list a reseat can legitimately carry.
 		static constexpr size_t c_MaxReseatActors = 512;
 		static constexpr size_t c_MaxSoundSetPath = 32;
+		static constexpr size_t c_MaxSoundStructureBytes = 65536;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
 		static constexpr uint8_t c_MaxPeerCount = 16;
 		// How far ahead of the committed frame a received frame/checksum may legitimately target
