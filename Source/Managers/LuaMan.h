@@ -115,8 +115,10 @@ namespace RTE {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
 		}
-		/// Marks lists a set-aside world will swap back, so a destroyed object leaves them as well.
-		void HoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
+		void SwapAndHoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			m_RegisteredMOs.swap(registered);
+			m_AddedRegisteredMOs.swap(pending);
 			m_HeldRegisteredMOs.push_back(&registered);
 			m_HeldRegisteredMOs.push_back(&pending);
 		}
