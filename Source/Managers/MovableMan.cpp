@@ -4117,6 +4117,9 @@ void MovableMan::UpdateControllers() {
 		for (Actor* actor: m_Actors) {
 			actor->InitializeObjectScriptsIfNeeded();
 		}
+		// The shared hooks' sound writes land here, after the last shared script of the tick and before
+		// the first AI one, so everything the drain finds afterwards was written by an AI pass.
+		g_AudioMan.SettleSharedSoundWrites();
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.

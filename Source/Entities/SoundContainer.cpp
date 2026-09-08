@@ -59,7 +59,6 @@ void SoundContainer::Clear() {
 	m_PendingPlays = 0;
 	m_PendingStopped = false;
 	m_PendingPositionWritten = false;
-	m_PendingTouchedByAI = false;
 	m_PendingHasSounds = -1;
 	m_SharedAliasHeld = false;
 	m_PendingActorUID = 0;
@@ -278,6 +277,7 @@ int SoundContainer::Save(Writer& writer) const {
 }
 
 bool SoundContainer::HasAnySounds() const {
+	NoteAIActor();
 	// A structural call this pass made has not landed yet, but the hook that made it must read back
 	// what it did, exactly as it did when the call was immediate.
 	if (Deferring() && m_PendingHasSounds >= 0) return m_PendingHasSounds != 0;
@@ -285,6 +285,7 @@ bool SoundContainer::HasAnySounds() const {
 }
 
 float SoundContainer::GetLength(LengthOfSoundType type) const {
+	NoteAIActor();
 	if (!m_SoundPropertiesUpToDate) {
 		// Todo - use a post-load fixup stage instead of lazily initializing shit everywhere... Eugh.
 		const_cast<SoundContainer*>(this)->UpdateSoundProperties();
@@ -312,6 +313,7 @@ void SoundContainer::SetTopLevelSoundSet(const SoundSet& newTopLevelSoundSet) {
 }
 
 std::vector<std::size_t> SoundContainer::GetSelectedSoundHashes() const {
+	NoteAIActor();
 	std::vector<size_t> soundHashes;
 	std::vector<const SoundData*> flattenedSoundData;
 	m_TopLevelSoundSet->GetFlattenedSoundData(flattenedSoundData, false);
@@ -353,6 +355,7 @@ void SoundContainer::SetPosition(const Vector& newPosition) {
 }
 
 float SoundContainer::GetAudibleVolume() const {
+	NoteAIActor();
 	// A shared query reads the committed observation set so every peer sees one value; local AI and presentation keep this machine's.
 	if (SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation && ScenarioRunner::IsLockstepControllerSyncActive() && !FaultInjected("local_audibility")) {
 		return g_AudioMan.GetCommittedAudibility(*this);
@@ -437,6 +440,7 @@ bool SoundContainer::Stop(int player) {
 }
 
 bool SoundContainer::IsBeingPlayed() const {
+	NoteAIActor();
 	if (Deferring()) {
 		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
 		if (m_PendingPlays > 0) return true;
@@ -603,14 +607,22 @@ bool SoundContainer::DeferProperty(PendingOp::Property property, float x, float 
 	return true;
 }
 
-void SoundContainer::NoteAIActor() {
-	m_PendingTouchedByAI = true;
-	if (!g_CurrentAIActor) return;
+void SoundContainer::NoteAIActor() const {
+	// Every AI-scope entry names the actor, so a call the drain reconciles out of a position Lua kept
+	// -- where no actor is running any more -- still goes out attributed.
+	if (!Deferring() || !g_CurrentAIActor) return;
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
 	m_PendingActorUID = static_cast<int64_t>(g_CurrentAIActor->GetUniqueID());
 	m_PendingTeam = g_CurrentAIActor->GetTeam();
 }
 
+void SoundContainer::SettleSharedWritesBeforeAIPass() {
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	SettleSharedAliasWrite();
+}
+
 void SoundContainer::QueuePendingOp(PendingOp op) {
+	NoteAIActor();
 	// A call reconciled at the drain has no running AI actor, so it keeps the one that last touched
 	// this container: an unattributed call would be refused on the wire.
 	op.actorUID = g_CurrentAIActor ? static_cast<int64_t>(g_CurrentAIActor->GetUniqueID()) : m_PendingActorUID;
@@ -707,13 +719,11 @@ bool SoundContainer::FindSoundSetPath(const SoundSet& soundSet, std::vector<uint
 
 std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
 	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
-	if (m_PendingTouchedByAI) {
-		AdoptSharedAliasWrite();
-		ReconcileAliasPosition();
-	} else {
-		// Nothing ran in an AI pass since the last drain, so a change found now was a shared write.
-		SettleSharedAliasWrite();
-	}
+	// The shared hooks' writes were landed before the AI passes, so anything found now was written by
+	// one of them -- including a write made through a position Lua kept from an earlier pass, which
+	// reaches this container through no call at all.
+	AdoptSharedAliasWrite();
+	ReconcileAliasPosition();
 	std::vector<PendingOp> taken;
 	taken.swap(m_PendingOps);
 	// Two AI threads may have queued on one container in either order; the drained order is by actor
@@ -733,7 +743,6 @@ std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
 	m_PendingPlays = 0;
 	m_PendingStopped = false;
 	m_PendingPositionWritten = false;
-	m_PendingTouchedByAI = false;
 	m_PendingHasSounds = -1;
 	m_TopLevelSoundSet->ClearPendingCycleMode();
 	m_PendingAliasBaseline = aliasHeld ? aliasPosition : Vector();
