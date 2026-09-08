@@ -3,6 +3,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetProtocol.h"
+#include "System/ScenarioRunner.h"
 
 #include <algorithm>
 #include <functional>
@@ -1403,6 +1404,7 @@ namespace RTE {
 			bool holdingBeforeDrop = false;
 			bool holdingDuringHold = false;
 			bool holdingAfterWindow = false;
+			bool stillUsesDeadTransport = false;
 			auto runDrop = [&](bool holdSeat, bool fenceTransport, bool cleanLeave, NetLockstepState& outState,
 			                   size_t& outLeaves, std::string& outReason, uint64_t& outFramesAlone) {
 				++port;
@@ -1490,6 +1492,8 @@ namespace RTE {
 				outReason = host.GetStats().timeoutReason;
 				// A5: the activity gate reads exactly this - the round is alive only for a held seat.
 				holdingDuringHold = host.IsHoldingSeatForReclaim();
+				// A6: whatever the round decided, it must stop naming a transport that is gone.
+				stillUsesDeadTransport = host.UsesTransportPeer(static_cast<NetPeerId>(1));
 				if (outState == NetLockstepState::Running && !cleanLeave && !fenceTransport) {
 					// The window closes: the very next Tick must end a round nobody is coming back to.
 					stub.held = false;
@@ -1576,6 +1580,10 @@ namespace RTE {
 				*error = "a round with nobody gone reported itself as holding a seat";
 				return false;
 			}
+			if (stillUsesDeadTransport) {
+				*error = "the round kept naming a superseded incarnation's transport";
+				return false;
+			}
 			return true;
 		}
 
@@ -1638,6 +1646,195 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// A6: a seat inside its reclaim window still has a player, so its units keep playing under the
+		// relay host instead of standing down to be shot where they stand - which is what emptied the
+		// returner's team before the resync snapshot was ever taken.
+		bool TestCoordinatorHeldSeatKeepsPlaying(std::string* error) {
+			const uint16_t port = 43040;
+			const uint64_t sessionId = 0x7000000000000040ULL;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.hostPeerId = 1;
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			SeatStateStub stub;
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "the held-seat ownership fixture did not reach Running";
+				return false;
+			}
+
+			// A round that has committed nothing may not be judged yet: after a resync relaunch the
+			// ledgered reseat rides the first committed frame.
+			if (host.HasCommittedAFrame()) {
+				*error = "a round reported a committed frame before it had one";
+				return false;
+			}
+			const int64_t clientActor = 4242;
+			if (host.ResolveActorOwner(clientActor, 1, false) != 2) {
+				*error = "the client's team did not resolve to the client before the drop";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "the held-seat ownership fixture never committed a frame";
+				return false;
+			}
+			if (!host.HasCommittedAFrame()) {
+				*error = "a round that committed two frames still reported none";
+				return false;
+			}
+
+			// The drop, with the seat held: the client's units become the host's to play, and nothing
+			// stands them down.
+			stub.held = true;
+			clientT.Stop();
+			drive(200, [] { return false; });
+			if (host.GetPeerLeaveFrames().size() != 1 || !host.IsHoldingSeatForReclaim()) {
+				*error = "the held drop did not put the round in its reclaim window";
+				return false;
+			}
+			if (host.ResolveActorOwner(clientActor, 1, false) != 1) {
+				*error = "a held seat's units did not fall to the relay host";
+				return false;
+			}
+			if (host.IsActorOwnerGone(clientActor, 1, false, host.GetStats().nextFrame)) {
+				*error = "a held seat's units were stood down while their player could still return";
+				return false;
+			}
+			if (!host.IsLocalActor(clientActor, 1, false)) {
+				*error = "the relay host did not take the held seat's units as its own";
+				return false;
+			}
+			// The host's own units are untouched by any of this.
+			if (host.ResolveActorOwner(7777, 0, false) != 1 || host.IsActorOwnerGone(7777, 0, false, host.GetStats().nextFrame)) {
+				*error = "the hold moved the host's own units";
+				return false;
+			}
+
+			// The control: once the window closes the seat has no player, and the units stand down
+			// exactly as they did before - which is the pre-A6 behaviour, kept.
+			stub.held = false;
+			if (host.ResolveActorOwner(clientActor, 1, false) != 0) {
+				*error = "a released seat's units still had an owner";
+				return false;
+			}
+			if (!host.IsActorOwnerGone(clientActor, 1, false, host.GetStats().nextFrame)) {
+				*error = "a released seat's units were not stood down";
+				return false;
+			}
+			return true;
+		}
+
+		// A6: the sim thread parks in the lockstep wait while a peer is silent, so the admission plane
+		// has to be serviced from inside it - the silent peer may be waiting on the very answer only
+		// that pump can send, which is what left every clean leave unacknowledged.
+		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
+			const uint16_t port = 43050;
+			const uint64_t sessionId = 0x7000000000000050ULL;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 200;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 2000; now += 5) {
+				host.Tick(now);
+				client.Tick(now);
+				if (host.IsRunning() && client.IsRunning()) {
+					break;
+				}
+				hostT.AdvanceTimeMs(5);
+				clientT.AdvanceTimeMs(5);
+			}
+			if (!host.IsRunning()) {
+				*error = "the pump fixture did not reach Running";
+				return false;
+			}
+			// The client never sends frame 0, so the host waits for it and times out.
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
+				return false;
+			}
+			uint32_t pumps = 0;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&pumps] { ++pumps; });
+			NetLockstepReadyFrame ready;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(0, ready, &waitError);
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (got) {
+				*error = "the wait returned a frame the peer never sent";
+				return false;
+			}
+			if (pumps == 0) {
+				*error = "the admission plane was never serviced while the round waited";
+				return false;
+			}
+			// Paced, not spun: a wait of a few hundred ms must not run the plane's clock away.
+			if (pumps > 200) {
+				*error = "the wait pumped the admission plane " + std::to_string(pumps) + " times, unpaced";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1668,6 +1865,8 @@ namespace RTE {
 		    !TestCoordinatorRelayBacklogHeals(&error) ||
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
 		    !TestCoordinatorDroppedSeatHold(&error) ||
+		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
+		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error)) {
 			return fail(error);
 		}

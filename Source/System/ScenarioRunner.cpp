@@ -48,6 +48,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		std::function<void()> s_SessionPump;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		std::map<int64_t, uint8_t> s_LockstepControlOverrides; //!< Synced per-actor control handoffs (co-op shared teams).
 		bool s_LockstepStallOverlayEnabled = false;
@@ -571,6 +572,10 @@ namespace RTE {
 		return s_ControllerReplayError;
 	}
 
+	void ScenarioRunner::SetSessionPump(std::function<void()> pump) {
+		s_SessionPump = std::move(pump);
+	}
+
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator) {
 		s_LockstepCoordinator = coordinator;
 		s_LockstepControlOverrides.clear();
@@ -772,7 +777,14 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepHoldingSeatForReclaim() {
-		return s_LockstepCoordinator != nullptr && s_LockstepCoordinator->IsHoldingSeatForReclaim();
+		if (!s_LockstepCoordinator) {
+			return false;
+		}
+		// A round that has committed nothing yet is still resuming: after a resync relaunch the ledgered
+		// reseat rides its first committed frame, and the activity update runs before MovableMan applies
+		// it, so the first evaluation a match may be judged on is the one after that frame lands.
+		return s_LockstepCoordinator->IsHoldingSeatForReclaim() ||
+		       (s_LockstepCoordinator->IsRunning() && !s_LockstepCoordinator->HasCommittedAFrame());
 	}
 
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
@@ -1081,8 +1093,19 @@ namespace RTE {
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
+		uint32_t nextPumpMs = 0;
 		while (true) {
 			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			// A stalled round must not stall the admission plane with it: the peer we are waiting on may
+			// be waiting on an answer only this pump can send. Paced to the tick so the plane's own
+			// clock does not run ahead of the wall clock while we spin.
+			if (s_SessionPump) {
+				const uint32_t sincePumpMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
+				if (sincePumpMs >= nextPumpMs) {
+					nextPumpMs = sincePumpMs + 15;
+					s_SessionPump();
+				}
+			}
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {

@@ -1908,6 +1908,21 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
 			System::SetQuit(true);
+		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+			// The last peer announced its leave, so the match is over rather than broken: it ends the
+			// way a finished one does, which keeps the seats and the admission counters in the report.
+			const Activity* leftActivity = g_ActivityMan.GetActivity();
+			const std::string result = (leftActivity && leftActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+			g_NetMatchService.FinishMatch(result);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
+			}
 		} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
 			// If our activity is not over, they left mid-match rather than finishing it.

@@ -1795,7 +1795,11 @@ namespace RTE {
 			// A leaver's team falls to its next surviving human peer, so the units play on. The
 			// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
 			if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
-				ownerPeerId = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+				const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+				// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
+				// teammate the relay host plays its units until the holder returns, instead of standing
+				// them down to be shot where they stand - the round is held open only while it is alone.
+				ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
 			}
 			return ownerPeerId;
 		}
@@ -1825,8 +1829,9 @@ namespace RTE {
 		if (!IsPeerGoneAtFrame(NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled}), frame)) {
 			return false;
 		}
-		// The team's units fall to the next surviving human peer; only an ownerless team stands down.
-		return FirstAliveHumanPeerForTeam(team, frame) == 0;
+		// The team's units fall to the next surviving human peer; only an ownerless team stands down,
+		// and a seat still inside its reclaim window is not ownerless (the relay host plays it).
+		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsHoldingSeatForReclaim();
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
@@ -1993,8 +1998,30 @@ namespace RTE {
 		}
 		// Send to every remote peer's transport (a set of one in the 2-peer case).
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
-			if (!m_Transport->Send(transportId, lane, bytes, error)) {
+			// Behind an undrained backlog, or this peer's stream would arrive out of order.
+			const bool backlogged = lane == m_Config.frameLane && [&] {
+				const auto backlogIt = m_RelayBacklog.find(peerId);
+				return backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty();
+			}();
+			std::string sendError;
+			if (!backlogged && m_Transport->Send(transportId, lane, bytes, &sendError)) {
+				continue;
+			}
+			// One client's refused send is that peer's problem, not the round's: a seat reclaimed by a
+			// newer connection leaves a handle the transport has forgotten, and the host must not end
+			// everyone's match on it. Frames take the same retry backlog a refused forward takes, so a
+			// brief refusal still arrives in order; a client has one link, so its refusal stays fatal.
+			if (!m_RelayHost) {
+				if (error) *error = sendError;
 				return false;
+			}
+			if (!backlogged) {
+				++m_Stats.relaySendFailures;
+				++m_Stats.peers[peerId].relaySendFailures;
+				m_Stats.lastRelayError = sendError;
+			}
+			if (lane == m_Config.frameLane) {
+				QueueRelayBacklog(peerId, bytes);
 			}
 		}
 		return true;
@@ -2124,8 +2151,10 @@ namespace RTE {
 					break;
 				}
 				// A superseded incarnation's socket finally closing says nothing about the seat: its live
-				// holder is another transport, which the resync brings into the round.
+				// holder is another transport, which the resync brings into the round. The dead handle
+				// leaves the round with it, or the next send names a peer the transport has forgotten.
 				if (m_RelayHost && lockstepPeer != 0 && SeatStateOf(lockstepPeer, event.peerId).fencedTransport) {
+					m_RemoteTransports.erase(lockstepPeer);
 					++m_Stats.ignoredAdmissionFaults;
 					break;
 				}
