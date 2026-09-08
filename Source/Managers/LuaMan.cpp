@@ -4729,6 +4729,31 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (discardForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_discard_forgets_destroyed_owner" << std::endl;
 	checkpointValues = discardForgetsDestroyed && checkpointValues;
+	// A restore detaches every Lua-owned tree while the original world waits (RestoreWorldCandidate and
+	// RestartActivityCandidate both run that walk), so a detach must leave the record alone: those
+	// objects are alive and the world that comes back still has to name them.
+	bool keepsDetachedOwner = false;
+	{
+		const bool created = RunScriptString(
+			"_SetAsideDetachHeld = { held = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\") };"
+			"_SetAsideDetachUID = _SetAsideDetachHeld.held.UniqueID") == 0;
+		lua_getglobal(m_State, "_SetAsideDetachUID");
+		const long identity = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		MovableObject* const parked = identity > 0 ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		MovableMan::WorldSetAside aside;
+		if (created && parked && g_MovableMan.SetAsideWorld(aside, false)) {
+			const bool recorded = aside.knownObjects.contains(identity);
+			g_LuaMan.GetMasterScriptState().ReleaseScriptOwnedObjects();
+			const bool keptWhileHeld = aside.knownObjects.contains(identity);
+			const bool reinstated = g_MovableMan.ReinstateWorld(aside);
+			keepsDetachedOwner = recorded && keptWhileHeld && reinstated && g_MovableMan.FindObjectByUniqueID(identity) == parked;
+		}
+		RunScriptString("_SetAsideDetachHeld = nil; _SetAsideDetachUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (keepsDetachedOwner ? "PASS" : "FAIL") << " reinstate_keeps_a_detached_live_owner" << std::endl;
+	checkpointValues = keepsDetachedOwner && checkpointValues;
 	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
 	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
 	bool soundRegistryForgetsDestroyed = false;
