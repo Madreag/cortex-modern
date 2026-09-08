@@ -2561,6 +2561,104 @@ namespace RTE {
 			return true;
 		}
 
+		// Two frames a relay host cannot read the observations of, for opposite reasons: one from a
+		// transport that is not in the round at all, one from a peer that is. Only the second is a fault.
+		bool TestObservationFaultsAreToldApart(std::string* error) {
+			const uint16_t port = 43080;
+			const uint64_t sessionId = 0x7000000000000080ULL;
+			LoopbackTransport hostT, clientAT, clientBT, strangerT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+			    !clientBT.Connect("loopback", port, error) || !strangerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 4000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.roundId = 0x1400000000000080ULL;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			NetLockstepConfig clientCfg = cfg(2, {{1, 1}}, false);
+			clientCfg.roundId = 0;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error)) {
+				return false;
+			}
+			clientCfg.localPeerId = 2;
+			if (!clientA.Start(clientAT, clientCfg, error)) {
+				return false;
+			}
+			clientCfg.localPeerId = 3;
+			if (!clientB.Start(clientBT, clientCfg, error)) {
+				return false;
+			}
+			NetLockstepCoordinator* peers[3] = {&host, &clientA, &clientB};
+			LoopbackTransport* transports[4] = {&hostT, &clientAT, &clientBT, &strangerT};
+			auto drive = [&](uint64_t from, uint64_t to) {
+				for (uint64_t now = from; now <= to; now += 5) {
+					for (NetLockstepCoordinator* peer: peers) {
+						peer->Tick(now);
+					}
+					for (LoopbackTransport* transport: transports) {
+						transport->AdvanceTimeMs(5);
+					}
+				}
+			};
+			drive(0, 1000);
+			if (!host.IsRunning()) {
+				*error = "the fault-classification host did not reach Running";
+				return false;
+			}
+
+			// A frame whose observations refer to slots this host was never given.
+			NetSoundObservationDictionary strangerEncoder;
+			std::vector<uint8_t> binding, reference;
+			size_t encoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(2, 0x1400000000000080ULL, MakeObservationSet(2, 4, 31, 0.0F))}, binding, nullptr, &strangerEncoder, &encoded) ||
+			    !NetLockstepCodec::Encode({MakeObservationFrame(3, 0x1400000000000080ULL, MakeObservationSet(2, 4, 31, 0.5F))}, reference, nullptr, &strangerEncoder, &encoded)) {
+				*error = "the unreadable frames did not encode";
+				return false;
+			}
+
+			// From a transport with no seat in the round: admission traffic, not a fault of ours.
+			const uint32_t admissionBefore = host.GetStats().ignoredAdmissionFaults;
+			if (!strangerT.Send(1, NetTransportLane::ControlReliable, reference, error)) {
+				return false;
+			}
+			drive(1005, 1200);
+			if (host.GetStats().ignoredAdmissionFaults != admissionBefore + 1 || host.GetStats().unresolvedObservationPackets != 0) {
+				*error = "an unknown transport's unreadable frame was counted as a fault: admission=" +
+				         std::to_string(host.GetStats().ignoredAdmissionFaults) + " unresolved=" + std::to_string(host.GetStats().unresolvedObservationPackets);
+				return false;
+			}
+
+			// From a peer of the round, the same shape means a binding it can never be told again.
+			if (!clientAT.Send(1, NetTransportLane::ControlReliable, reference, error)) {
+				return false;
+			}
+			drive(1205, 1400);
+			if (host.GetStats().unresolvedObservationPackets != 1) {
+				*error = "a round member's unreadable frame was not counted as a fault";
+				return false;
+			}
+			if (host.IsFailed() || !host.IsRunning()) {
+				*error = "an unreadable observation block ended the round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS observation_faults_told_apart admission=" << host.GetStats().ignoredAdmissionFaults
+			          << " unresolved=" << host.GetStats().unresolvedObservationPackets << std::endl;
+			return true;
+		}
+
 		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
 			const uint16_t port = 43050;
 			const uint64_t sessionId = 0x7000000000000050ULL;
@@ -2727,6 +2825,7 @@ namespace RTE {
 		    !TestRelayHostFinishesWhatItOwes(&error) ||
 		    !TestObservationOverflowCarry(&error) ||
 		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||
+		    !TestObservationFaultsAreToldApart(&error) ||
 		    !TestFourPeerObservationRelayBytes(&error)) {
 			return fail(error);
 		}
