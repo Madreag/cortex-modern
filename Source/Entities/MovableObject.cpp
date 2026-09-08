@@ -1000,6 +1000,15 @@ int MovableObject::ReloadScripts() {
 	return status;
 }
 
+int MovableObject::InitializeObjectScriptsIfNeeded() {
+	if (ObjectScriptsInitialized() || m_AllLoadedScripts.empty()) {
+		return 0;
+	}
+	GetAndLockStateForScript("");
+	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex(), std::adopt_lock);
+	return InitializeObjectScripts();
+}
+
 int MovableObject::InitializeObjectScripts(bool runCreate) {
 	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";

@@ -4102,8 +4102,12 @@ void MovableMan::UpdateControllers() {
 				}
 			}
 		};
-		// An actor's scripts initialize in its first Update stage on every peer; the owner's AI pass must not run Create early on a worker thread.
+		// Scripts initialize here, at one deterministic point on the sim thread on every peer, so a
+		// freshly added actor keeps its first AI pass and every peer numbers its sound scopes alike.
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
+		for (Actor* actor: m_Actors) {
+			actor->InitializeObjectScriptsIfNeeded();
+		}
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
