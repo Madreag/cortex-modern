@@ -645,32 +645,79 @@ const std::list<Box>* LuaAdaptersSceneMan::WrapBoxes(SceneMan& sceneMan, const B
 	return wrappedBoxes;
 }
 
+namespace {
+	template <typename Type> std::vector<Type*> AdoptPrimitiveTable(const luabind::object& table) {
+		std::vector<Type*> values;
+		if (!table.is_valid() || luabind::type(table) != LUA_TTABLE) return values;
+		lua_State* state = table.interpreter();
+		struct StackGuard { lua_State* state; int top; ~StackGuard() { lua_settop(state, top); } } guard{state, lua_gettop(state)};
+		table.push(state);
+		const int tableIndex = lua_gettop(state);
+		std::unordered_map<Type*, luabind::detail::object_rep*> owners;
+		lua_pushnil(state);
+		while (lua_next(state, tableIndex)) {
+			luabind::object value(luabind::from_stack(state, -1));
+			auto* pointer = luabind::object_cast<Type*>(value);
+			auto* native = luabind::detail::is_class_object(state, -1);
+			if (!pointer || !native) throw std::runtime_error("primitive drawing requires native objects");
+			auto [entry, inserted] = owners.try_emplace(pointer, nullptr);
+			if constexpr (std::is_same_v<Type, GraphicalPrimitive>) {
+				if (!inserted) throw std::runtime_error("a primitive can only be submitted once");
+			}
+			if (native->flags() & luabind::detail::object_rep::owner) entry->second = native;
+			values.push_back(pointer);
+			lua_pop(state, 1);
+		}
+		if constexpr (std::is_same_v<Type, Vector>) {
+			if (values.size() < 2) throw std::runtime_error("a polygon requires at least two vertices");
+		}
+		for (const auto& [pointer, owner]: owners) {
+			if (owner) continue;
+			if constexpr (std::is_same_v<Type, Vector>) {
+				if (g_PrimitiveMan.FindCheckpointVertex(pointer) >= 0) continue;
+			}
+			throw std::runtime_error("primitive drawing cannot adopt an object owned elsewhere");
+		}
+		// Conversion and ownership checks complete before any userdata is released.
+		for (const auto& [pointer, owner]: owners) if (owner) owner->remove_ownership();
+		return values;
+	}
+
+	void ValidatePrimitiveBlendMode(int blendMode) {
+		if (blendMode < static_cast<int>(DrawBlendMode::NoBlend) || blendMode >= static_cast<int>(DrawBlendMode::BlendModeCount)) {
+			throw std::runtime_error("primitive drawing requires a valid blend mode");
+		}
+	}
+}
+
 void LuaAdaptersPrimitiveMan::DrawPolygonPrimitive(PrimitiveMan& primitiveMan, const Vector& centerPos, int color, const luabind::object& verticesTable) {
-	primitiveMan.DrawPolygonOrPolygonFillPrimitive(-1, centerPos, color, ConvertLuaTableToVectorOfType<Vector*>(verticesTable), false);
+	primitiveMan.DrawPolygonOrPolygonFillPrimitive(-1, centerPos, color, AdoptPrimitiveTable<Vector>(verticesTable), false);
 }
 
 void LuaAdaptersPrimitiveMan::DrawPolygonPrimitiveForPlayer(PrimitiveMan& primitiveMan, int player, const Vector& centerPos, int color, const luabind::object& verticesTable) {
-	primitiveMan.DrawPolygonOrPolygonFillPrimitive(player, centerPos, color, ConvertLuaTableToVectorOfType<Vector*>(verticesTable), false);
+	primitiveMan.DrawPolygonOrPolygonFillPrimitive(player, centerPos, color, AdoptPrimitiveTable<Vector>(verticesTable), false);
 }
 
 void LuaAdaptersPrimitiveMan::DrawPolygonFillPrimitive(PrimitiveMan& primitiveMan, const Vector& startPos, int color, const luabind::object& verticesTable) {
-	primitiveMan.DrawPolygonOrPolygonFillPrimitive(-1, startPos, color, ConvertLuaTableToVectorOfType<Vector*>(verticesTable), true);
+	primitiveMan.DrawPolygonOrPolygonFillPrimitive(-1, startPos, color, AdoptPrimitiveTable<Vector>(verticesTable), true);
 }
 
 void LuaAdaptersPrimitiveMan::DrawPolygonFillPrimitiveForPlayer(PrimitiveMan& primitiveMan, int player, const Vector& startPos, int color, const luabind::object& verticesTable) {
-	primitiveMan.DrawPolygonOrPolygonFillPrimitive(player, startPos, color, ConvertLuaTableToVectorOfType<Vector*>(verticesTable), true);
+	primitiveMan.DrawPolygonOrPolygonFillPrimitive(player, startPos, color, AdoptPrimitiveTable<Vector>(verticesTable), true);
 }
 
 void LuaAdaptersPrimitiveMan::DrawPrimitivesWithTransparency(PrimitiveMan& primitiveMan, int transValue, const luabind::object& primitivesTable) {
-	primitiveMan.SchedulePrimitivesForBlendedDrawing(DrawBlendMode::BlendTransparency, transValue, transValue, transValue, BlendAmountLimits::MinBlend, ConvertLuaTableToVectorOfType<GraphicalPrimitive*>(primitivesTable));
+	primitiveMan.SchedulePrimitivesForBlendedDrawing(DrawBlendMode::BlendTransparency, transValue, transValue, transValue, BlendAmountLimits::MinBlend, AdoptPrimitiveTable<GraphicalPrimitive>(primitivesTable));
 }
 
 void LuaAdaptersPrimitiveMan::DrawPrimitivesWithBlending(PrimitiveMan& primitiveMan, int blendMode, int blendAmount, const luabind::object& primitivesTable) {
-	primitiveMan.SchedulePrimitivesForBlendedDrawing(static_cast<DrawBlendMode>(blendMode), blendAmount, blendAmount, blendAmount, blendAmount, ConvertLuaTableToVectorOfType<GraphicalPrimitive*>(primitivesTable));
+	ValidatePrimitiveBlendMode(blendMode);
+	primitiveMan.SchedulePrimitivesForBlendedDrawing(static_cast<DrawBlendMode>(blendMode), blendAmount, blendAmount, blendAmount, blendAmount, AdoptPrimitiveTable<GraphicalPrimitive>(primitivesTable));
 }
 
 void LuaAdaptersPrimitiveMan::DrawPrimitivesWithBlendingPerChannel(PrimitiveMan& primitiveMan, int blendMode, int blendAmountR, int blendAmountG, int blendAmountB, int blendAmountA, const luabind::object& primitivesTable) {
-	primitiveMan.SchedulePrimitivesForBlendedDrawing(static_cast<DrawBlendMode>(blendMode), blendAmountR, blendAmountG, blendAmountB, blendAmountA, ConvertLuaTableToVectorOfType<GraphicalPrimitive*>(primitivesTable));
+	ValidatePrimitiveBlendMode(blendMode);
+	primitiveMan.SchedulePrimitivesForBlendedDrawing(static_cast<DrawBlendMode>(blendMode), blendAmountR, blendAmountG, blendAmountB, blendAmountA, AdoptPrimitiveTable<GraphicalPrimitive>(primitivesTable));
 }
 
 float LuaAdaptersUtility::GetMPP() {
