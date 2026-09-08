@@ -3253,7 +3253,7 @@ const char* ActivityStateName(Activity::ActivityState state) {
 std::string BuildControllerBoundaryJson() {
 	const MovableMan::ControllerBoundaryStats& stats = g_MovableMan.GetControllerBoundaryStats();
 	std::ostringstream out;
-	out << "{\"equip_commands\":" << stats.equipCommands << ",\"aim_intents\":" << stats.aimIntents
+	out << "{\"equip_commands\":" << stats.equipCommands << ",\"sound_commands\":" << stats.soundCommands << ",\"aim_intents\":" << stats.aimIntents
 	    << ",\"flip_intents\":" << stats.flipIntents << ",\"direct_writes\":" << stats.directWrites << "}";
 	return out.str();
 }

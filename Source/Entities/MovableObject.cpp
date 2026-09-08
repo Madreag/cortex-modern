@@ -1000,6 +1000,15 @@ int MovableObject::ReloadScripts() {
 	return status;
 }
 
+int MovableObject::InitializeObjectScriptsIfNeeded() {
+	if (ObjectScriptsInitialized() || m_AllLoadedScripts.empty()) {
+		return 0;
+	}
+	GetAndLockStateForScript("");
+	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex(), std::adopt_lock);
+	return InitializeObjectScripts();
+}
+
 int MovableObject::InitializeObjectScripts(bool runCreate) {
 	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";
@@ -1122,10 +1131,11 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		// callbacks included: their firing order isn't deterministic (the MOID map and terrain they
 		// read are built off-thread), so the shared RNG can't be drawn from here.
 		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), true);
-		// The AI passes are per-machine, so their sounds join the local cohort.
-		// AI runs on the owning peer only and the pie menu is local UI: their sounds belong to this machine, never to the shared cohort.
-		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI" || functionName == "WhilePieMenuOpen";
-		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation);
+		// The AI passes are per-machine: their sound calls are decisions this machine makes, deferred
+		// to the committed tick. The pie menu is local UI and plays on this machine only.
+		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
+		const bool presentation = functionName == "WhilePieMenuOpen";
+		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), presentation ? SoundExecutionDomain::Presentation : (localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation));
 
 		for (const LuaFunction& luaFunction: itr->second) {
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();

@@ -434,6 +434,27 @@ namespace RTE {
 						}
 						break;
 					}
+					case NetGameCommandType::SoundOp: {
+						const NetGameSoundOp& sound = std::get<NetGameSoundOp>(command.payload);
+						if (sound.soundSetPath.size() > NetLockstepCodec::c_MaxSoundSetPath) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "sound op names too deep a sound set");
+							return false;
+						}
+						AppendU64LE(out, static_cast<uint64_t>(sound.actorUID));
+						AppendU32LE(out, static_cast<uint32_t>(sound.team));
+						AppendU64LE(out, sound.soundIdentity);
+						AppendU8(out, sound.op);
+						AppendU8(out, sound.property);
+						AppendU32LE(out, static_cast<uint32_t>(sound.player));
+						AppendU32LE(out, static_cast<uint32_t>(sound.value));
+						AppendU32LE(out, FloatToBitsLE(sound.x));
+						AppendU32LE(out, FloatToBitsLE(sound.y));
+						AppendU16LE(out, static_cast<uint16_t>(sound.soundSetPath.size()));
+						for (const uint16_t index: sound.soundSetPath) {
+							AppendU16LE(out, index);
+						}
+						break;
+					}
 					case NetGameCommandType::AIOrder: {
 						const NetGameAIOrder& order = std::get<NetGameAIOrder>(command.payload);
 						AppendU64LE(out, static_cast<uint64_t>(order.actorUID));
@@ -787,6 +808,50 @@ namespace RTE {
 						equip.team = static_cast<int32_t>(team);
 						equip.depositToFront = depositToFront != 0;
 						command.payload = std::move(equip);
+						break;
+					}
+					case NetGameCommandType::SoundOp: {
+						NetGameSoundOp sound;
+						uint64_t actorUID = 0;
+						uint32_t team = 0;
+						uint32_t player = 0;
+						uint32_t value = 0;
+						uint32_t xBits = 0;
+						uint32_t yBits = 0;
+						uint16_t pathSize = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "sound_op_actor_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "sound_op_team") ||
+						    !ReadOrTruncated(reader.ReadU64LE(sound.soundIdentity), reader, error, "sound_op_identity") ||
+						    !ReadOrTruncated(reader.ReadU8(sound.op), reader, error, "sound_op_op") ||
+						    !ReadOrTruncated(reader.ReadU8(sound.property), reader, error, "sound_op_property") ||
+						    !ReadOrTruncated(reader.ReadU32LE(player), reader, error, "sound_op_player") ||
+						    !ReadOrTruncated(reader.ReadU32LE(value), reader, error, "sound_op_value") ||
+						    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "sound_op_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "sound_op_y") ||
+						    !ReadOrTruncated(reader.ReadU16LE(pathSize), reader, error, "sound_op_path_size")) {
+							return false;
+						}
+						if (sound.op >= NetGameSoundOp::OpCount || sound.property >= NetGameSoundOp::c_PropertyCount) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "sound op is invalid");
+							return false;
+						}
+						if (pathSize > NetLockstepCodec::c_MaxSoundSetPath) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "sound op names too deep a sound set");
+							return false;
+						}
+						sound.soundSetPath.resize(pathSize);
+						for (uint16_t index = 0; index < pathSize; ++index) {
+							if (!ReadOrTruncated(reader.ReadU16LE(sound.soundSetPath[index]), reader, error, "sound_op_path")) {
+								return false;
+							}
+						}
+						sound.actorUID = static_cast<int64_t>(actorUID);
+						sound.team = static_cast<int32_t>(team);
+						sound.player = static_cast<int32_t>(player);
+						sound.value = static_cast<int32_t>(value);
+						sound.x = FloatFromBitsLE(xBits);
+						sound.y = FloatFromBitsLE(yBits);
+						command.payload = std::move(sound);
 						break;
 					}
 					case NetGameCommandType::AIOrder: {

@@ -1,4 +1,5 @@
 #include "SoundSet.h"
+#include "SoundContainer.h"
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "AudioMan.h"
@@ -27,7 +28,7 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 		SoundSet copy(reference);
 		std::swap(m_SoundSelectionCycleMode, copy.m_SoundSelectionCycleMode);
 		std::swap(m_CurrentSelection, copy.m_CurrentSelection);
-		std::swap(m_SimulationSelections, copy.m_SimulationSelections);
+		std::swap(m_SimulationSelection, copy.m_SimulationSelection);
 		m_SoundData.swap(copy.m_SoundData);
 		m_SubSoundSets.swap(copy.m_SubSoundSets);
 	}
@@ -37,7 +38,8 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 void SoundSet::Clear() {
 	m_SoundSelectionCycleMode = SoundSelectionCycleMode::RANDOM;
 	m_CurrentSelection = {false, -1};
-	m_SimulationSelections = {{{false, -1}, {false, -1}}};
+	m_SimulationSelection = {false, -1};
+	m_OwnerContainer = nullptr;
 
 	m_SoundData.clear();
 	m_SubSoundSets.clear();
@@ -46,7 +48,7 @@ void SoundSet::Clear() {
 int SoundSet::Create(const SoundSet& reference) {
 	m_SoundSelectionCycleMode = reference.m_SoundSelectionCycleMode;
 	m_CurrentSelection = reference.m_CurrentSelection;
-	m_SimulationSelections = reference.m_SimulationSelections;
+	m_SimulationSelection = reference.m_SimulationSelection;
 	for (SoundData referenceSoundData: reference.m_SoundData) {
 		m_SoundData.push_back(std::move(referenceSoundData));
 	}
@@ -264,10 +266,29 @@ void SoundSet::GetFlattenedSoundData(std::vector<const SoundData*>& flattenedSou
 	}
 }
 
+void SoundSet::SetOwnerContainer(SoundContainer* owner) {
+	m_OwnerContainer = owner;
+	for (SoundSet* subSoundSet: m_SubSoundSets) {
+		subSoundSet->SetOwnerContainer(owner);
+	}
+}
+
 bool SoundSet::SelectNextSounds() {
+	// From an AI hook this is a decision, not an action: it lands on the one simulation selection at
+	// the committed tick, like every other sound call the hook makes.
+	if (m_OwnerContainer && SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation) {
+		std::vector<uint16_t> path;
+		if (m_OwnerContainer->FindSoundSetPath(*this, path)) {
+			return m_OwnerContainer->QueuePendingSelectSounds(std::move(path));
+		}
+	}
+	return SelectNextSoundsNow();
+}
+
+bool SoundSet::SelectNextSoundsNow() {
 	if (m_SoundSelectionCycleMode == SoundSelectionCycleMode::ALL) {
 		for (SoundSet* subSoundSet: m_SubSoundSets) {
-			if (!subSoundSet->SelectNextSounds()) {
+			if (!subSoundSet->SelectNextSoundsNow()) {
 				return false;
 			}
 		}
@@ -332,7 +353,7 @@ bool SoundSet::SelectNextSounds() {
 	}
 
 	if (CurrentSelection().first == true) {
-		return m_SubSoundSets[CurrentSelection().second]->SelectNextSounds();
+		return m_SubSoundSets[CurrentSelection().second]->SelectNextSoundsNow();
 	}
 
 	return true;
@@ -345,11 +366,16 @@ bool SoundSet::HasSelectedSounds() const {
     if (selection.first) return static_cast<size_t>(selection.second) < m_SubSoundSets.size() && m_SubSoundSets[selection.second]->HasSelectedSounds();
     return static_cast<size_t>(selection.second) < m_SoundData.size();
 }
-std::string SoundSet::SaveSimulationCheckpoint() const { CheckpointWriter writer("SoundSetSimulation1"); writer(m_SimulationSelections); return writer.Text(); }
+std::string SoundSet::SaveSimulationCheckpoint() const { CheckpointWriter writer("SoundSetSimulation2"); writer(m_SimulationSelection); return writer.Text(); }
 bool SoundSet::LoadSimulationCheckpoint(std::string_view text, bool validateOnly) {
+    const bool twoCohorts = text.starts_with("20 SoundSetSimulation1 ");
     try {
-        std::array<std::pair<bool, int>, 2> selections; CheckpointReader reader(text, "SoundSetSimulation1"); reader.Value(selections); reader.Finish();
-        for (const auto& selection: selections) if (selection.second < -1 || (selection.second >= 0 && static_cast<size_t>(selection.second) >= (selection.first ? m_SubSoundSets.size() : m_SoundData.size()))) return false;
-        if (!validateOnly) m_SimulationSelections = selections; return true;
+        std::pair<bool, int> selection;
+        CheckpointReader reader(text, twoCohorts ? "SoundSetSimulation1" : "SoundSetSimulation2");
+        reader.Value(selection);
+        if (twoCohorts) { std::pair<bool, int> discarded; reader.Value(discarded); }
+        reader.Finish();
+        if (selection.second < -1 || (selection.second >= 0 && static_cast<size_t>(selection.second) >= (selection.first ? m_SubSoundSets.size() : m_SoundData.size()))) return false;
+        if (!validateOnly) m_SimulationSelection = selection; return true;
     } catch (const std::exception&) { return false; }
 }

@@ -91,6 +91,12 @@ AudioMan::~AudioMan() {
 void AudioMan::Clear() {
 	m_InaudibleTestOutputVerified = false;
 	m_ActiveLogicalSounds.clear();
+	{
+		std::lock_guard lock(m_PendingSoundOpsMutex);
+		m_PendingSoundOpContainers.clear();
+	}
+	m_DeferredSoundOpTick = 0;
+	m_DeferredSoundOpOrdinal = 0;
 	m_CommittedAudibility.clear();
 	m_LastSentAudibility.clear();
 	m_AudioEnabled = false;
@@ -347,16 +353,13 @@ bool AudioMan::SetMusicPitch(float pitch) {
 void AudioMan::FinishIngameLoopingSounds() {
 	{
 		std::lock_guard lock(m_LogicalSoundsMutex);
-		const bool localOnly = SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
 		const long long now = g_TimerMan.GetSimTimeTicks();
 		const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
 		for (SoundContainer* container: m_ActiveLogicalSounds) {
-			for (size_t cohort = localOnly ? 1 : 0; cohort < 2; ++cohort) {
-				for (LogicalSoundVoice& voice: container->m_LogicalPlayback[cohort].voices) {
-					if (voice.bus != SoundContainer::SFX || voice.loops == 0) continue;
-					voice.Fold(now, ticksPerSecond);
-					voice.loops = 0;
-				}
+			for (LogicalSoundVoice& voice: container->m_LogicalPlayback.voices) {
+				if (voice.bus != SoundContainer::SFX || voice.loops == 0) continue;
+				voice.Fold(now, ticksPerSecond);
+				voice.loops = 0;
 			}
 		}
 	}
@@ -1134,13 +1137,43 @@ bool AudioMan::OwnsVoice(int voiceIdentity, const SoundContainer* owner) const {
 bool AudioMan::VoiceMatchesContext(int identity, const SoundContainer* owner) const {
 	const auto found = m_PlayingVoices.find(identity);
 	if (found == m_PlayingVoices.end() || found->second.owner != owner) return false;
-	const auto domain = SoundSimulationScope::Domain();
-	return domain == SoundExecutionDomain::Presentation || found->second.domain == domain;
+	// Only a shared simulation call is confined to the shared cohort's voices. An AI hook mutates
+	// nothing directly any more, so its reads see every voice this container owns, as they always did.
+	return SoundSimulationScope::Domain() != SoundExecutionDomain::SharedSimulation || found->second.domain == SoundExecutionDomain::SharedSimulation;
+}
+
+void AudioMan::NotePendingSoundOps(SoundContainer* container) {
+	if (!container->GetCheckpointIdentity()) return;
+	std::lock_guard lock(m_PendingSoundOpsMutex);
+	m_PendingSoundOpContainers[container->GetCheckpointIdentity()] = container;
+}
+
+void AudioMan::ClearPendingSoundOps(SoundContainer* container) {
+	std::lock_guard lock(m_PendingSoundOpsMutex);
+	std::erase_if(m_PendingSoundOpContainers, [container](const auto& entry) { return entry.second == container; });
+}
+
+std::vector<SoundContainer*> AudioMan::TakePendingSoundOpContainers() {
+	std::lock_guard lock(m_PendingSoundOpsMutex);
+	std::vector<SoundContainer*> containers;
+	containers.reserve(m_PendingSoundOpContainers.size());
+	for (const auto& [identity, container]: m_PendingSoundOpContainers) containers.push_back(container);
+	m_PendingSoundOpContainers.clear();
+	return containers;
+}
+
+uint64_t AudioMan::NextDeferredSoundOpOrdinal() {
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	if (tick != m_DeferredSoundOpTick) {
+		m_DeferredSoundOpTick = tick;
+		m_DeferredSoundOpOrdinal = 0;
+	}
+	return ++m_DeferredSoundOpOrdinal;
 }
 
 void AudioMan::RefreshLogicalSound(SoundContainer* container) {
 	std::lock_guard lock(m_LogicalSoundsMutex);
-	if (container->m_CheckpointRegistered && (!container->m_LogicalPlayback[0].voices.empty() || !container->m_LogicalPlayback[1].voices.empty())) m_ActiveLogicalSounds.insert(container);
+	if (container->m_CheckpointRegistered && !container->m_LogicalPlayback.voices.empty()) m_ActiveLogicalSounds.insert(container);
 	else m_ActiveLogicalSounds.erase(container);
 }
 
@@ -1156,10 +1189,8 @@ void AudioMan::RetireFinishedSimulationSounds() {
 	for (auto it = m_ActiveLogicalSounds.begin(); it != m_ActiveLogicalSounds.end();) {
 		SoundContainer* container = *it;
 		if (FindCheckpointSoundContainer(container->GetCheckpointIdentity()) != container) { ++it; continue; }
-		for (LogicalSoundPlayback& cohort: container->m_LogicalPlayback) {
-			std::erase_if(cohort.voices, [&](const LogicalSoundVoice& voice) { return voice.At(now, ticksPerSecond).finished; });
-		}
-		if (container->m_LogicalPlayback[0].voices.empty() && container->m_LogicalPlayback[1].voices.empty()) it = m_ActiveLogicalSounds.erase(it);
+		std::erase_if(container->m_LogicalPlayback.voices, [&](const LogicalSoundVoice& voice) { return voice.At(now, ticksPerSecond).finished; });
+		if (container->m_LogicalPlayback.voices.empty()) it = m_ActiveLogicalSounds.erase(it);
 		else ++it;
 	}
 }
@@ -1170,7 +1201,7 @@ void AudioMan::VisitSharedSimulationSounds(const std::function<void(const SoundC
 	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
 	for (const SoundContainer* container: m_ActiveLogicalSounds) {
 		if (FindCheckpointSoundContainer(container->GetCheckpointIdentity()) != container) continue;
-		for (const LogicalSoundVoice& voice: container->m_LogicalPlayback[0].voices) {
+		for (const LogicalSoundVoice& voice: container->m_LogicalPlayback.voices) {
 			if (!voice.At(now, ticksPerSecond).finished) { visitor(*container); break; }
 		}
 	}
@@ -1192,12 +1223,8 @@ float AudioMan::GetLocalSoundAudibility(const SoundContainer* container) const {
 void AudioMan::StopAll() {
 	{
 		std::lock_guard lock(m_LogicalSoundsMutex);
-		const bool localOnly = SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
-		for (SoundContainer* container: m_ActiveLogicalSounds) {
-			container->m_LogicalPlayback[1].voices.clear();
-			if (!localOnly) container->m_LogicalPlayback[0].voices.clear();
-		}
-		std::erase_if(m_ActiveLogicalSounds, [](const SoundContainer* container) { return container->m_LogicalPlayback[0].voices.empty() && container->m_LogicalPlayback[1].voices.empty(); });
+		for (SoundContainer* container: m_ActiveLogicalSounds) container->m_LogicalPlayback.voices.clear();
+		m_ActiveLogicalSounds.clear();
 	}
 	if (m_AudioEnabled && !s_PlaybackSuppressed) m_MasterChannelGroup->stop();
 }
@@ -1994,22 +2021,63 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		{
 			SoundSimulationScope shared(4242, phase);
 			sound.Play();
+			sound.SetPosition(Vector(10.0F, 20.0F));
 		}
+		std::vector<SoundContainer::PendingOp> deferred;
 		{
 			SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
-			const bool localEmpty = !sound.IsBeingPlayed();
+			// An AI hook asks the one simulation cohort what is playing, and reads back its own calls.
+			const bool sawShared = sound.IsBeingPlayed();
 			sound.SetVolume(0.25F);
-			sound.Play();
-			check("cohorts_isolated", localEmpty && sound.IsBeingPlayed() && sound.GetVolume() == 0.25F);
+			const bool readBack = sound.GetVolume() == 0.25F;
+			const bool stopTook = sound.Stop() && !sound.IsBeingPlayed();
+			check("ai_reads_the_simulation_cohort", sawShared && readBack && stopTook);
+			Vector& alias = const_cast<Vector&>(sound.GetScriptPosition());
+			const bool aliasTracks = alias.m_X == 10.0F && alias.m_Y == 20.0F;
+			alias.m_X = 33.0F;
+			check("ai_alias_reads_back", aliasTracks && sound.GetScriptPosition().m_X == 33.0F);
 		}
 		{
 			SoundSimulationScope shared(4242, phase);
-			check("local_controls_private", sound.IsBeingPlayed() && sound.GetSharedLogicalVoices().size() == 1 && sound.GetVolume() == 1.0F);
-			sound.Stop();
+			// The calls are decisions, not actions: nothing has landed on shared state yet.
+			check("ai_writes_wait_for_the_drain", sound.IsBeingPlayed() && sound.GetSharedLogicalVoices().size() == 1 && sound.GetVolume() == 1.0F && sound.GetPosition().m_X == 10.0F);
 		}
 		{
-			SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
-			check("local_stop_leaves_shared_alone", sound.Stop() && !sound.IsBeingPlayed());
+			deferred = sound.TakePendingSoundOps();
+			SoundSimulationScope drain(4242, phase, SoundExecutionDomain::SharedSimulation, NextDeferredSoundOpOrdinal());
+			bool applied = deferred.size() == 3;
+			for (const SoundContainer::PendingOp& op: deferred) applied = sound.ApplyPendingSoundOp(op) && applied;
+			check("ai_writes_land_at_the_drain", applied && !sound.IsBeingPlayed() && sound.GetVolume() == 0.25F && sound.GetPosition().m_X == 33.0F && sound.GetPosition().m_Y == 20.0F, std::to_string(deferred.size()));
+			sound.SetVolume(1.0F);
+			sound.SetPosition(Vector());
+		}
+		{
+			// Every deferred call survives the wire byte for byte, so both peers apply the same one.
+			bool identical = !deferred.empty();
+			for (const SoundContainer::PendingOp& op: deferred) {
+				NetGameSoundOp command;
+				command.actorUID = op.actorUID;
+				command.team = op.team;
+				command.soundIdentity = sound.GetCheckpointIdentity();
+				command.op = static_cast<uint8_t>(op.op);
+				command.property = static_cast<uint8_t>(op.property);
+				command.player = op.player;
+				command.value = op.value;
+				command.x = op.x;
+				command.y = op.y;
+				command.soundSetPath = op.soundSetPath;
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = 5;
+				frame.commands = {NetGameCommand{1, command}};
+				const NetLockstepPacket packet{frame};
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode(packet, bytes)) { identical = false; break; }
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+				identical = identical && decoded.ok && decoded.packet == packet;
+				if (!identical) break;
+			}
+			check("deferred_call_survives_the_wire", identical);
 		}
 		{
 			SoundSimulationScope shared(4242, phase);

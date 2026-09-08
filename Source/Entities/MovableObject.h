@@ -116,6 +116,10 @@ namespace RTE {
 		/// @return Whether or not the object's scripts have been successfully initialized.
 		bool ObjectScriptsInitialized() const { return !m_ScriptObjectName.empty() && m_ScriptObjectName != "ERROR"; }
 
+		/// Runs this object's Create on the calling thread if its scripts have not initialized yet, so
+		/// every peer initializes at one deterministic point instead of whichever hook gets there first.
+		int InitializeObjectScriptsIfNeeded();
+
 		/// Whether the saved script graph lays this object's fields in, so the scripts initialize without Create.
 		bool ScriptStateRestorePending() const { return m_ScriptStateRestored || !m_PersistedScriptState.empty(); }
 
