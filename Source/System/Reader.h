@@ -102,7 +102,7 @@ namespace RTE {
 		/// @return The whitespace-trimmed std::string that will hold the next property's name.
 		std::string ReadPropName();
 
-		/// Reads the next property value from the context object Reader's stream after eating all whitespace including newlines up till the first newline char.
+		/// Reads a property value on the current line, preserving an empty value at the line ending.
 		/// Basically gets anything after the last "=" and up to the next newline after that.
 		/// @return The whitespace-trimmed std::string that will hold the next property value.
 		std::string ReadPropValue();
@@ -121,7 +121,7 @@ namespace RTE {
 
 		/// Discards all whitespace, newlines and comment lines (which start with '//') so that the next thing to be read will be actual data.
 		/// @return Whether there is more data to read from the file streams after this eat.
-		bool DiscardEmptySpace();
+		bool DiscardEmptySpace(bool stopAtLineEnd = false);
 #pragma endregion
 
 #pragma region Reader Status
