@@ -4729,6 +4729,23 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (discardForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_discard_forgets_destroyed_owner" << std::endl;
 	checkpointValues = discardForgetsDestroyed && checkpointValues;
+	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
+	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
+	bool soundRegistryForgetsDestroyed = false;
+	{
+		auto* container = new SoundContainer;
+		const uint64_t identity = container->GetCheckpointIdentity();
+		const bool registered = identity != 0 && g_AudioMan.FindSimulationSoundContainer(identity) == container;
+		bool goneWhileHeld = false;
+		{
+			AudioMan::CheckpointRegistryScope soundScope;
+			delete container;
+			goneWhileHeld = g_AudioMan.FindSimulationSoundContainer(identity) == nullptr;
+		}
+		soundRegistryForgetsDestroyed = registered && goneWhileHeld && g_AudioMan.FindSimulationSoundContainer(identity) == nullptr;
+	}
+	std::cout << "[script-graph-selftest] " << (soundRegistryForgetsDestroyed ? "PASS" : "FAIL") << " sound_registry_copy_forgets_destroyed_owner" << std::endl;
+	checkpointValues = soundRegistryForgetsDestroyed && checkpointValues;
 	// A world set aside for an in-memory restore leaves its script-owned trees in the heap while the
 	// restored copies hold their identities. Only the live registration reaches the reference map,
 	// so the shadowed original is not an owner any restore can fail to find.
