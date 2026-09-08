@@ -605,7 +605,7 @@ namespace RTE {
 					// Another phase's packet on the shared wire: session leftovers, or the prior
 					// match's in-flight lockstep frames when a rematch lobby round starts.
 					if (decoded.error.code == NetLobbyErrorCode::BadMagic &&
-					    (NetProtocol::Decode(event.bytes).ok || NetLockstepCodec::Decode(event.bytes).ok)) {
+					    (NetProtocol::Decode(event.bytes).ok || NetLockstepCodec::LooksLikePacket(event.bytes))) {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}

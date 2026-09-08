@@ -366,6 +366,10 @@ namespace RTE {
 		/// The frame version selects the ControllerFrame layout and semantics; a recording carries its own.
 		static NetLockstepDecodeResult Decode(const uint8_t* data, size_t size, uint16_t controllerFrameVersion = ControllerFrame::c_Version, NetSoundObservationTables* tables = nullptr);
 		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion = ControllerFrame::c_Version, NetSoundObservationTables* tables = nullptr);
+		/// Whether these bytes are a lockstep packet at all, for the session and lobby wires that share
+		/// the socket and need to tell another phase's traffic from garbage without decoding a payload
+		/// they hold no observation tables for.
+		static bool LooksLikePacket(const std::vector<uint8_t>& bytes);
 	};
 
 	/// What the H4 admission plane says about a seat mid-round. The round asks before it adjudicates a
