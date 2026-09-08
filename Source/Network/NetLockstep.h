@@ -200,6 +200,9 @@ namespace RTE {
 		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
 		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
 		uint32_t relayResends = 0; //!< Host: refused forwards a later retry did deliver.
+		uint64_t relayBytesSent = 0; //!< Host: encoded bytes forwarded to this peer, the send-buffer pressure it sees.
+		uint32_t largestRelayPacketBytes = 0; //!< Host: the biggest single forward, so an oversized frame is visible.
+		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
 		uint64_t highestTargetFrame = 0;
 		uint64_t lastHeardMs = 0;
 	};
@@ -231,6 +234,9 @@ namespace RTE {
 		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
 		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
 		uint32_t relayResends = 0; //!< Refused forwards a later retry did deliver.
+		uint64_t relayBytesSent = 0; //!< Encoded bytes this host forwarded, across every peer.
+		uint32_t largestRelayPacketBytes = 0;
+		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
@@ -352,6 +358,9 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
+		/// Whether this relay host still owes a peer a forward it has not managed to send. The star's
+		/// hub cannot leave while this is true: a client waiting on that frame loses the round.
+		bool HasPendingRelayWork() const { return m_RelayHost && !m_RelayBacklog.empty(); }
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
 		/// The peer's roster display name, or "peer N" when the roster has none.
@@ -385,6 +394,10 @@ namespace RTE {
 		/// Relay host: a required remote that has blocked the round this long has left, whatever its
 		/// socket still says. Waiting for the transport means waiting on the dead peer's own process.
 		void AdjudicateSilentPeers(uint64_t nowMs);
+		void CountRelaySent(NetLockstepPeerStats& peerStats, size_t bytes);
+		uint64_t RelayBacklogBytes() const;
+		void UpdateRelayBacklogBytes() { m_Stats.relayBacklogBytes = RelayBacklogBytes(); }
+		uint32_t RelayBacklogPackets(uint8_t peerId) const;
 		/// Holds a refused forward for retry, keeping this peer's stream in order behind it.
 		void QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes);
 		/// Retries refused forwards. A momentarily full send buffer heals; one that stays refused past

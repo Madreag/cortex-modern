@@ -178,6 +178,10 @@ static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netLockstepReportPath;
+// A capped stop holds the link while the relay host hands over what it still owes; a client one
+// input-delay behind needs those forwards to finish its own last tick.
+static constexpr uint32_t c_CappedStopDrainMs = 8000;
+static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static uint64_t s_netLockstepTicks = 0;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
@@ -2657,9 +2661,11 @@ void RunGameLoop() {
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 				if (g_MetricsCollector.GetTickHashCount() >= cap) {
 					std::cout << "[menu-mp] trace complete at tick " << g_TimerMan.GetSimUpdateCount() << std::endl;
+					// Hand over what we still owe BEFORE the goodbye, so a client one input-delay
+					// behind can finish its own last tick instead of losing the round to our exit.
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					g_NetMatchService.Complete("menu mp trace complete");
-					// Same capped-stop drain as the e2e path.
-					std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 					g_ActivityMan.EndActivity();
 					System::SetQuit(true);
 					break;
@@ -2791,10 +2797,12 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					if (s_netMatchServiceE2ERunningTicks > tickCap) {
-						g_NetMatchService.Complete("e2e complete");
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
-						// owes itself our in-flight tail, so hold the socket open before quitting drops it.
-						std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
+						// socket open before quitting drops it.
+						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
+						g_NetMatchService.Complete("e2e complete");
+						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 						g_ActivityMan.EndActivity();
 						System::SetQuit(true);
 						break;
@@ -3905,6 +3913,7 @@ int main(int argc, char** argv) {
 					scenarioExitCode = s_netReplayExitCode;
 				}
 				if (NetGameplayRequested()) {
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					netLockstepCoordinator.Complete(scenarioExitCode == 0 ? "scenario complete" : "scenario failed");
 				}
 			}
