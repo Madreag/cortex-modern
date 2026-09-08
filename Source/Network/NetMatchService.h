@@ -56,6 +56,12 @@ namespace RTE {
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
 		/// recovery-record path instead of racing over the default one.
 		static void SetTicketStorePath(std::string path);
+		/// Phase B, client: ask the host for this seat instead of joining one. The UI (B2) sets it from
+		/// the roster; the gate drivers set it from the command line.
+		static void SetApplyForSeat(bool enabled, uint16_t stableSeat);
+		/// Phase B, host: stand in for the moderator in an unattended gate - approve the first
+		/// applicant for this seat after the delay, and optionally withdraw the approval again.
+		static void SetAutoSubstitute(bool enabled, uint16_t stableSeat, uint64_t delayMs, bool thenCancel);
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
 
@@ -97,6 +103,14 @@ namespace RTE {
 		/// dropped/reclaiming marks. Game-thread only.
 		NetReconnectUx& GetReconnectUx() { return m_ReconnectUx; }
 		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
+		/// §9b's host moderation API. Every one of these is game-thread-only and match-only: the
+		/// admission plane runs on the worker while the lobby round is up, and there is nothing to
+		/// moderate in a lobby - a seat whose holder leaves there simply goes back in the pool.
+		std::vector<NetH4ModerationSeat> GetModerationSeats() const;
+		NetH4ModerationResult WaitForSeat(uint16_t stableSeat);
+		NetH4ModerationResult SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection);
+		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat);
+
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
@@ -169,8 +183,20 @@ namespace RTE {
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
+		/// The moderator stand-in for the unattended gates: runs from PumpSessionEvents, on the game
+		/// thread, and does exactly what a host clicking the UI would do.
+		void DriveAutoSubstitution(uint64_t nowMs);
+
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
+		static bool s_ApplyForSeat;
+		static uint16_t s_ApplySeat;
+		static bool s_AutoSubstitute;
+		static uint16_t s_AutoSubstituteSeat;
+		static uint64_t s_AutoSubstituteDelayMs;
+		static bool s_AutoSubstituteThenCancel;
+		uint64_t m_AutoSubstituteReadyMs = 0; //!< When the stand-in first saw an applicant it could approve.
+		bool m_AutoSubstituteDone = false;
 
 		std::unique_ptr<GnsTransport> m_Transport;
 		std::unique_ptr<NetSession> m_Session;

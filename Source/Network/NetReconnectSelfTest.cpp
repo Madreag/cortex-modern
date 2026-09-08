@@ -659,6 +659,146 @@ namespace RTE {
 			}
 			return 0;
 		}
+
+		// Phase B's credential lifecycle: a reservation moves nothing, an adoption installs exactly the
+		// credential the substitute was handed, and the superseded one can only ever refuse.
+		int TestSubstitutionCredentialLifecycle() {
+			ScriptedAuthCrypto provider;
+			ScopedTestCrypto scoped(&provider);
+			NetSeatAuthRegistry registry;
+			if (registry.PeekNextGeneration(2) != 0) {
+				return Fail("an inactive registry offered a generation");
+			}
+			if (!registry.BeginHostedSession()) {
+				return Fail("the registry could not arm a hosted session");
+			}
+			uint32_t holderGeneration = 0;
+			NetSeatCredential original{};
+			if (!registry.IssueCredential(2, holderGeneration, original) || holderGeneration != 1) {
+				return Fail("the seat's first credential was not generation 1");
+			}
+			// Reserving is a question, not a change: the seat still answers to its current holder.
+			if (registry.PeekNextGeneration(2) != 2 || registry.GetActiveGeneration(2) != 1) {
+				return Fail("peeking at the next generation moved the seat");
+			}
+			if (registry.PeekNextGeneration(2) != 2) {
+				return Fail("peeking twice moved the generation");
+			}
+			// Only the next generation may be adopted, so a reassignment can never rewind one.
+			const NetSeatCredential substitute = Ramp<32>(0x70);
+			if (registry.AdoptCredential(2, 1, substitute) || registry.AdoptCredential(2, 3, substitute) ||
+			    registry.AdoptCredential(2, 0, substitute)) {
+				return Fail("a credential was adopted at a generation other than the next one");
+			}
+			if (registry.GetActiveGeneration(2) != 1 || !registry.MatchesActiveCredential(2, 1, original)) {
+				return Fail("a refused adoption disturbed the seat");
+			}
+			registry.RetireCredentialForSubstitution(2);
+			if (!registry.AdoptCredential(2, 2, substitute)) {
+				return Fail("the substitute's own credential could not be installed at the next generation");
+			}
+			if (registry.GetActiveGeneration(2) != 2 || !registry.MatchesActiveCredential(2, 2, substitute)) {
+				return Fail("the adopted credential is not the one the substitute holds");
+			}
+			if (registry.MatchesActiveCredential(2, 1, original)) {
+				return Fail("the superseded credential still claims the seat");
+			}
+
+			// The retired credential answers - and nothing else. It cannot claim; it can only be told
+			// apart from a stranger, which is the whole reason it is kept.
+			NetH4Transcript transcript = MakeTranscript();
+			transcript.stableSeat = 2;
+			transcript.holderGeneration = 1;
+			NetAuthBytes32 mac{};
+			if (!NetH4ComputeProof(original, transcript, mac)) {
+				return Fail("the superseded holder could not compute its own proof");
+			}
+			if (!registry.HasRetiredGeneration(2, 1) || registry.HasRetiredGeneration(2, 2) || registry.HasRetiredGeneration(3, 1)) {
+				return Fail("the retired generation is not the one that was superseded");
+			}
+			if (!registry.VerifyRetiredProof(2, 1, transcript, mac)) {
+				return Fail("the superseded holder's proof did not verify against the retired credential");
+			}
+			if (registry.VerifySeatProof(2, 1, transcript, mac)) {
+				return Fail("a retired credential verified as a live one");
+			}
+			NetAuthBytes32 tampered = mac;
+			tampered[0] = static_cast<uint8_t>(tampered[0] ^ 0x01U);
+			if (registry.VerifyRetiredProof(2, 1, transcript, tampered) || registry.VerifyRetiredProof(2, 2, transcript, mac)) {
+				return Fail("the retired credential verified something it should not have");
+			}
+			registry.ClearRetired(2);
+			if (registry.HasRetiredGeneration(2, 1) || registry.VerifyRetiredProof(2, 1, transcript, mac)) {
+				return Fail("the retired credential outlived ClearRetired");
+			}
+			if (registry.GetActiveGeneration(2) != 2) {
+				return Fail("clearing the retired credential disturbed the live one");
+			}
+
+			// Revoking and ending the session take the retired credential with them.
+			registry.RetireCredentialForSubstitution(2);
+			registry.RevokeSeat(2);
+			if (registry.HasRetiredGeneration(2, 2)) {
+				return Fail("a revoked seat kept its retired credential");
+			}
+			uint32_t third = 0;
+			NetSeatCredential fresh{};
+			if (!registry.IssueCredential(2, third, fresh) || third != 3) {
+				return Fail("generations rewound after a substitution");
+			}
+			registry.RetireCredentialForSubstitution(2);
+			registry.EndSession();
+			if (registry.HasRetiredGeneration(2, 3) || registry.PeekNextGeneration(2) != 0) {
+				return Fail("the hosted session's end left credentials behind");
+			}
+			return 0;
+		}
+
+		// The precise refusal Phase B owes a loser rides the SAME schedule as every uniform denial, so
+		// the timing an observer can measure is unchanged.
+		int TestPreciseDenialKeepsUniformTiming() {
+			ScriptedAuthCrypto provider;
+			ScopedTestCrypto scoped(&provider);
+			NetReconnectAdmission admission;
+			const NetAuthBytes16 preciseTx = Ramp<16>(0x10);
+			const NetAuthBytes16 uniformTx = Ramp<16>(0x20);
+			const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReassigned, "this seat was given to another player", "seat_reassigned", "", ""};
+
+			admission.ScheduleDenial(1, preciseTx, NetH4DenialReason::SeatReassigned, 5000, &refusal);
+			admission.ScheduleDenial(2, uniformTx, NetH4DenialReason::UnknownSeat, 5000);
+			if (!admission.ReleaseDueDenials(5999).empty()) {
+				return Fail("a precise refusal was released early");
+			}
+			const std::vector<NetH4Denial> due = admission.ReleaseDueDenials(6000);
+			if (due.size() != 2) {
+				return Fail("the precise and uniform refusals did not release together");
+			}
+			for (const NetH4Denial& denial : due) {
+				if (denial.issuedAtMs != 5000 || denial.releaseAtMs != 6000) {
+					return Fail("a refusal moved off the fixed issue+release schedule");
+				}
+				const bool shouldBePrecise = denial.connection == 1;
+				if (denial.precise != shouldBePrecise) {
+					return Fail("a refusal carried the wrong wording");
+				}
+				if (shouldBePrecise && !(denial.payload == refusal)) {
+					return Fail("the precise refusal was not the one that was scheduled");
+				}
+			}
+
+			// A precise refusal upgrades a uniform one already pending on the connection - and keeps
+			// the release time the first one set, so the upgrade is invisible to a clock.
+			admission.ScheduleDenial(3, uniformTx, NetH4DenialReason::BadProof, 7000);
+			admission.ScheduleDenial(3, preciseTx, NetH4DenialReason::SeatReassigned, 7400, &refusal);
+			const std::vector<NetH4Denial> upgraded = admission.ReleaseDueDenials(8000);
+			if (upgraded.size() != 1 || !upgraded.front().precise || upgraded.front().releaseAtMs != 8000) {
+				return Fail("a coalesced precise refusal lost either its wording or its schedule");
+			}
+			if (admission.GetCoalescedDenials() != 1) {
+				return Fail("the coalesced refusal was not counted");
+			}
+			return 0;
+		}
 	} // namespace
 
 	int NetReconnectSelfTest::Run() {
@@ -701,6 +841,12 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSecretCanary(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSubstitutionCredentialLifecycle(); result != 0) {
+			return result;
+		}
+		if (const int result = TestPreciseDenialKeepsUniformTiming(); result != 0) {
 			return result;
 		}
 		if (GetNetAuthCrypto().IsRealCrypto() !=
