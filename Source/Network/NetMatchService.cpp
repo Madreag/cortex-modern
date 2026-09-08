@@ -10,9 +10,12 @@
 #include "System.h"
 #include "TimerMan.h"
 
+#include "MovableMan.h"
+
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -20,6 +23,9 @@
 #include <utility>
 
 namespace RTE {
+
+	bool NetMatchService::s_AdmissionEnabled = true;
+	std::string NetMatchService::s_TicketStorePath;
 
 // Per-process file names: same-machine instances share Userdata, so concurrent matches must never share a snapshot file.
 static std::string ResyncSaveName() {
@@ -39,6 +45,36 @@ static std::string ResyncSaveName() {
 		uint64_t MakeClientNonce() {
 			std::random_device device;
 			return c_ClientNonce ^ (static_cast<uint64_t>(device()) << 32) ^ static_cast<uint64_t>(device());
+		}
+
+		// Set only while PumpSessionEvents runs, which is the game thread inside the sim tick. The
+		// ownership census walks g_MovableMan, so any other thread asking for one is refused.
+		thread_local bool t_SimCensusOpen = false;
+
+		struct SimCensusScope {
+			SimCensusScope() { t_SimCensusOpen = true; }
+			~SimCensusScope() { t_SimCensusOpen = false; }
+		};
+
+		uint64_t SteadyNowMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
+		uint64_t UnixNowMs(void*) {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		}
+
+		NetH4Identity BuildH4Identity(const NetIdentityManifest& manifest) {
+			NetH4Identity identity;
+			identity.controllerFrameVersion = manifest.controllerFrameVersion;
+			identity.controllerFrameEncodedSize = manifest.controllerFrameEncodedSize;
+			identity.gameVersion = manifest.gameVersion;
+			identity.buildId = manifest.buildId;
+			identity.deterministicConfigHash = manifest.deterministicConfigHash;
+			identity.moduleManifestHash = manifest.moduleManifestHash;
+			identity.sessionRulesHash = manifest.sessionRulesHash;
+			identity.sessionIdentityHash = manifest.sessionIdentityHash;
+			return identity;
 		}
 
 		std::string PlayerNameOrDefault(const NetMatchServiceRequest& request, bool hostSlot) {
@@ -324,11 +360,55 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::EndAdmissionSession() {
+		if (m_AdmissionAttached && m_IsHost && m_Session) {
+			// P22: sent from the same call that clears the registry, so a client's record is provably
+			// dead exactly here - not on a transport disconnect, a timeout or a match Complete.
+			m_Session->EndHostedSession("the host ended the session");
+		}
+		m_SeatAuth.EndSession();
+		m_ReconnectHost.EndHostedSession();
+		m_ReconnectHost.TakeOutbound();
+		m_SeatStatuses.clear();
+		m_AdmissionAttached = false;
+	}
+
+	void NetMatchService::RunCleanLeave() {
+		NetSession* session = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			// A leave needs a live link. Without one this is an ambiguous loss, and §7 is explicit that
+			// the ticket must survive that - which is exactly when it is needed.
+			if (!m_AdmissionAttached || m_IsHost || !m_Session || !m_Session->IsReady() || !m_TicketStore.HasRecord()) {
+				return;
+			}
+			session = m_Session.get();
+		}
+		// §7: leaving is a protocol, not a flag. Only an acknowledged LeaveAck clears the ticket, and an
+		// unacknowledged one is an ambiguous loss that KEEPS it - so this waits exactly the P21 budget
+		// and no longer, whatever the answer.
+		std::string error;
+		const uint64_t startMs = SteadyNowMs();
+		if (!m_ReconnectClient.BeginLeave(session->GetClockMs(), &error)) {
+			return;
+		}
+		while (SteadyNowMs() - startMs <= NetReconnectClient::c_LeaveAckBudgetMs) {
+			session->Tick(session->GetClockMs() + 5);
+			if (m_ReconnectClient.GetState() == NetH4ClientState::Left || m_ReconnectClient.WantsLinkClosed()) {
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		std::cout << "[net-reconnect] leave: " << NetReconnectClientStateName(m_ReconnectClient.GetState())
+		          << (m_TicketStore.HasRecord() ? " (ticket kept)" : " (ticket cleared)") << std::endl;
+	}
+
 	void NetMatchService::Destroy() {
 		m_CancelRequested.store(true);
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		RunCleanLeave();
 		m_LanDiscovery.Stop();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
@@ -353,7 +433,7 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
-			m_SeatAuth.EndSession();
+			EndAdmissionSession();
 		}
 		runner.reset();
 		coordinator.reset();
@@ -388,7 +468,7 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Match stopped";
 			m_ErrorText = error;
 			m_LobbySnapshot = {};
-			m_SeatAuth.EndSession();
+			EndAdmissionSession();
 		}
 		runner.reset();
 		coordinator.reset();
@@ -461,6 +541,49 @@ static std::string ResyncSaveName() {
 		} else if (m_LanDiscovery.IsBeaconing()) {
 			m_LanDiscovery.Stop();
 		}
+		DriveReconnectUx(nowMs);
+	}
+
+	void NetMatchService::DriveReconnectUx(uint64_t nowMs) {
+		NetMatchServiceState state = NetMatchServiceState::Idle;
+		bool isHost = false;
+		bool hasRecord = false;
+		std::string reason;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			state = m_State;
+			isHost = m_IsHost;
+			hasRecord = m_TicketStore.HasRecord();
+			reason = m_ErrorText;
+		}
+		if (state == NetMatchServiceState::Running || state == NetMatchServiceState::ReadyToLaunch) {
+			if (m_ReconnectUx.IsActive()) {
+				m_ReconnectUx.NoteReconnected(nowMs);
+			} else if (m_ReconnectUx.GetState() == NetReconnectUxState::Idle) {
+				m_ReconnectUx.NoteConnected(nowMs);
+			}
+			return;
+		}
+		// §11's same-process loss: the link died and we still hold the record that proves the seat.
+		if (!s_AdmissionEnabled || isHost || !hasRecord || state == NetMatchServiceState::Starting) {
+			return;
+		}
+		if (state != NetMatchServiceState::Failed) {
+			return;
+		}
+		if (m_ReconnectUx.GetState() == NetReconnectUxState::Retrying) {
+			m_ReconnectUx.NoteAttemptFailed(nowMs, reason);
+		} else {
+			m_ReconnectUx.NoteDropped(nowMs, reason);
+		}
+		if (!m_ReconnectUx.Tick(nowMs)) {
+			return;
+		}
+		m_ReconnectUx.NoteAttemptStarted(nowMs);
+		std::string attemptError;
+		if (!BeginTicketRejoin(&attemptError)) {
+			m_ReconnectUx.NoteAttemptFailed(nowMs, attemptError);
+		}
 	}
 
 	void NetMatchService::SetReady() {
@@ -518,7 +641,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PumpSessionEvents() {
-		if (m_PendingSessionEvents.empty()) {
+		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
+		if (m_PendingSessionEvents.empty() && !hostAdmission) {
 			return;
 		}
 		std::vector<NetTransportEvent> events;
@@ -527,9 +651,31 @@ static std::string ResyncSaveName() {
 		if (!m_Session || m_State != NetMatchServiceState::Running) {
 			return;
 		}
+		// This is the sim thread inside the tick, so the drop-frame ownership census may walk the world
+		// here and nowhere else. The scope is what makes that a checked property rather than a comment.
+		const SimCensusScope censusScope;
+		if (hostAdmission) {
+			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
+			m_ReconnectHost.SetLiveMatch(true);
+			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
+		}
 		m_SessionPumpNowMs += 15;
 		for (const NetTransportEvent& event: events) {
 			m_Session->InjectEvent(event, m_SessionPumpNowMs);
+		}
+		if (hostAdmission) {
+			// The reseat is a lockstep command, not a local mutation: every peer applies the identical
+			// ownership at the identical tick. QueueLocalInput restamps the sender as this peer, which
+			// on the host is exactly the id MovableMan's reseat gate requires.
+			for (const NetGameReseat& reseat: m_ReconnectHost.TakePendingReseats()) {
+				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
+				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
+			}
+			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
+		}
+		if (events.empty()) {
+			return;
 		}
 		// A transport peer that reached session-Ready but carries no lockstep remote is a
 		// reconnector: the host ends the round so everyone reconvenes around its snapshot.
@@ -574,6 +720,17 @@ static std::string ResyncSaveName() {
 			local.connected = true;
 			snapshot.members.push_back(local);
 		}
+		// §11: a dropped seat stays marked on the roster for as long as it is dropped, so the remaining
+		// players see who is missing rather than a toast they may have blinked past.
+		for (NetLobbyMember& member: snapshot.members) {
+			for (const NetH4SeatStatus& seat: m_SeatStatuses) {
+				if (seat.lockstepPeerId == member.peerId) {
+					member.dropped = seat.dropped;
+					member.reclaiming = seat.reclaiming;
+					break;
+				}
+			}
+		}
 		return snapshot;
 	}
 
@@ -598,6 +755,37 @@ static std::string ResyncSaveName() {
 			{"local_peer_id", static_cast<int>(m_LocalPeerId)},
 			{"local_team", m_LocalTeam},
 		};
+		json reconnect{
+			{"admission_enabled", s_AdmissionEnabled},
+			{"admission_attached", m_AdmissionAttached},
+			{"ux_state", NetReconnectUx::StateName(m_ReconnectUx.GetState())},
+			{"ux_attempts", m_ReconnectUx.GetAttempts()},
+			{"ticket_store_path", m_TicketStore.GetPath()},
+			{"ticket_stored", m_TicketStore.HasRecord()},
+			{"ticket_stores", m_TicketStore.GetStores()},
+			{"ticket_clears", m_TicketStore.GetClears()},
+			{"ticket_refused_loads", m_TicketStore.GetRefusedLoads()},
+			// Every census must come from the sim tick; anything else means a drop was seen from a
+			// thread that may not walk the world, and the ledger recorded nothing for it.
+			{"census_refusals", m_CensusRefusals.load()},
+			{"client_state", NetReconnectClientStateName(m_ReconnectClient.GetState())},
+			{"client_used_stored_ticket", m_ReconnectClient.UsedStoredTicket()},
+			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},
+			{"client_leave_acks", m_ReconnectClient.GetStats().leaveAcksReceived},
+			{"client_ambiguous_losses", m_ReconnectClient.GetStats().ambiguousLosses},
+			{"client_confirmed_session_ends", m_ReconnectClient.GetStats().confirmedSessionEnds},
+		};
+		json seats = json::array();
+		for (const NetH4SeatStatus& seat: m_SeatStatuses) {
+			seats.push_back({{"stable_seat", seat.stableSeat},
+			                 {"lockstep_peer_id", static_cast<int>(seat.lockstepPeerId)},
+			                 {"committed", seat.committed},
+			                 {"closed", seat.closed},
+			                 {"dropped", seat.dropped},
+			                 {"reclaiming", seat.reclaiming}});
+		}
+		reconnect["seats"] = seats;
+		report["reconnect"] = reconnect;
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		}
@@ -664,6 +852,8 @@ static std::string ResyncSaveName() {
 			m_LobbySnapshot = snapshot;
 		};
 
+		AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
+
 		std::string error;
 		bool started = runner->Start(*transport, *session, *coordinator, runnerConfig, &error);
 		// A joiner whose lobby round carried a match state is RECONNECTING into a live match; it
@@ -721,6 +911,88 @@ static std::string ResyncSaveName() {
 			}
 			m_WorkerDone = true;
 		}
+	}
+
+	void NetMatchService::SetTicketStorePath(std::string path) {
+		s_TicketStorePath = std::move(path);
+	}
+
+	std::vector<NetH4LedgerActor> NetMatchService::CollectDropOwnership(void* context) {
+		auto* service = static_cast<NetMatchService*>(context);
+		if (!t_SimCensusOpen) {
+			// A drop seen from the setup worker, not the sim tick. Walking g_MovableMan from there is a
+			// data race, so the seat records an empty ledger rather than a torn one.
+			if (service) {
+				service->m_CensusRefusals.fetch_add(1);
+			}
+			return {};
+		}
+		std::vector<NetH4LedgerActor> actors;
+		for (const MovableMan::LockstepActorOwner& owner: g_MovableMan.BuildLockstepOwnershipCensus()) {
+			actors.push_back({owner.actorUID, owner.team, owner.ownerPeerId, true});
+		}
+		return actors;
+	}
+
+	void NetMatchService::AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest) {
+		m_AdmissionAttached = false;
+		if (!s_AdmissionEnabled) {
+			return;
+		}
+		const NetH4Identity identity = BuildH4Identity(manifest);
+		if (request.host) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_SeatAuth.IsActive()) {
+				// Fail closed: with no crypto nothing can be issued or proven, so the session keeps the
+				// pre-admission handshake rather than gating every join on a ticket it cannot mint.
+				return;
+			}
+			m_ReconnectHost.Configure(&m_SeatAuth, sessionConfig.sessionId, identity);
+			m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
+			m_ReconnectHost.SetHostAddress(NetLanDiscovery::GetPrimaryLocalAddress());
+			m_ReconnectHost.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(matchConfig));
+			m_ReconnectHost.SetLiveMatch(false);
+			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+			session.SetReconnectHost(&m_ReconnectHost);
+			m_AdmissionAttached = true;
+			return;
+		}
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		m_ReconnectClient.Configure(&m_TicketStore, identity, request.playerName.empty() ? "Client" : request.playerName);
+		m_ReconnectClient.SetUnixClock(&UnixNowMs, nullptr);
+		// The record names the host it belongs to; the config hash is context, not a gate - a client
+		// adopts the host's match config in the lobby round that follows.
+		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
+		session.SetReconnectClient(&m_ReconnectClient);
+		m_AdmissionAttached = true;
+	}
+
+	void NetMatchService::ScanStoredTicket() {
+		if (!s_AdmissionEnabled) {
+			m_ReconnectUx.DismissOffer();
+			return;
+		}
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		NetH4TicketRecord record;
+		const NetH4TicketLoadResult load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
+		m_ReconnectUx.OfferStoredTicket(load, record.hostAddress);
+	}
+
+	bool NetMatchService::BeginTicketRejoin(std::string* error) {
+		NetH4TicketRecord record;
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		const NetH4TicketLoadResult load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
+		m_ReconnectUx.OfferStoredTicket(load, record.hostAddress);
+		if (load != NetH4TicketLoadResult::Loaded) {
+			if (error) *error = m_ReconnectUx.GetOfferText().empty() ? "no reconnect ticket to rejoin with" : m_ReconnectUx.GetOfferText();
+			return false;
+		}
+		NetMatchServiceRequest request;
+		request.host = false;
+		request.address = record.hostAddress;
+		request.playerName = m_LocalName.empty() ? "Client" : m_LocalName;
+		request.resyncOnDesync = true;
+		return Start(request, error);
 	}
 
 	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const {

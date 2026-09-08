@@ -668,6 +668,24 @@ namespace RTE {
 		return seat != nullptr && seat->closed;
 	}
 
+	std::vector<NetH4SeatStatus> NetReconnectHost::GetSeatStatuses() const {
+		std::vector<NetH4SeatStatus> statuses;
+		statuses.reserve(m_Seats.size());
+		for (const SeatState& seat : m_Seats) {
+			NetH4SeatStatus status;
+			status.stableSeat = seat.seat.stableSeat;
+			status.lockstepPeerId = seat.seat.lockstepPeerId;
+			status.committed = seat.committed;
+			status.closed = seat.closed;
+			status.dropped = seat.committed && seat.activeConnection == c_InvalidNetPeerId;
+			status.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
+				return pending.stableSeat == seat.seat.stableSeat;
+			});
+			statuses.push_back(status);
+		}
+		return statuses;
+	}
+
 	void NetReconnectClient::Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName) {
 		m_Store = store;
 		m_Identity = std::move(identity);
