@@ -254,7 +254,7 @@ struct GUISoundCheckpoint {
         try {
             Record record;
             if (!record.LoadCheckpoint(text) || !Validate(record) || !g_MusicMan.LoadCheckpoint(music, true) || !audioManager.LoadCheckpoint(audio, true)) return false;
-            CheckpointReader audioHeader(audio, "AudioRuntime1"); bool enabled; int nextVoice; uint64_t nextSound;
+            CheckpointReader audioHeader(audio, AudioMan::CheckpointVersion(audio)); bool enabled; int nextVoice; uint64_t nextSound;
             audioHeader.Value(enabled); audioHeader.Value(nextVoice); audioHeader.Value(nextSound);
             for (const auto& sound: record.sounds) {
                 CheckpointReader soundHeader(sound.native, SoundContainer::CheckpointVersion(sound.native)); std::string entity; uint64_t identity;

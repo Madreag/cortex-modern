@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <iterator>
@@ -425,7 +426,24 @@ namespace RTE {
 					}
 				}
 			}
+			if (payload.observations.size() > NetLockstepCodec::c_MaxObservationsPerPacket) {
+				SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "frame packet has too many sound observations");
+				return false;
+			}
 			AppendU64LE(out, payload.roundId);
+			AppendU16LE(out, static_cast<uint16_t>(payload.observations.size()));
+			for (const NetSoundObservation& observation : payload.observations) {
+				if (!std::isfinite(observation.value)) {
+					SetError(error, NetLockstepErrorCode::InvalidValue, out.size(), "sound observation value is not finite");
+					return false;
+				}
+				AppendU64LE(out, observation.objectUID);
+				AppendU64LE(out, observation.tick);
+				AppendU64LE(out, observation.phase);
+				AppendU64LE(out, observation.occurrence);
+				AppendU64LE(out, observation.ordinal);
+				AppendU32LE(out, FloatToBitsLE(observation.value));
+			}
 			return true;
 		}
 
@@ -785,8 +803,35 @@ namespace RTE {
 				payload.commands.push_back(std::move(command));
 			}
 			if (version >= NetLockstepCodec::c_RoundVersion) {
-				if (!ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id")) {
+				uint16_t observationCount = 0;
+				if (!ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id") ||
+				    !ReadOrTruncated(reader.ReadU16LE(observationCount), reader, error, "observation_count")) {
 					return false;
+				}
+				if (observationCount > NetLockstepCodec::c_MaxObservationsPerPacket) {
+					SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "observation_count exceeds maximum");
+					return false;
+				}
+				payload.observations.reserve(observationCount);
+				for (uint16_t i = 0; i < observationCount; ++i) {
+					NetSoundObservation observation;
+					uint32_t valueBits = 0;
+					if (!ReadOrTruncated(reader.ReadU64LE(observation.objectUID), reader, error, "observation_object") ||
+					    !ReadOrTruncated(reader.ReadU64LE(observation.tick), reader, error, "observation_tick") ||
+					    !ReadOrTruncated(reader.ReadU64LE(observation.phase), reader, error, "observation_phase") ||
+					    !ReadOrTruncated(reader.ReadU64LE(observation.occurrence), reader, error, "observation_occurrence") ||
+					    !ReadOrTruncated(reader.ReadU64LE(observation.ordinal), reader, error, "observation_ordinal") ||
+					    !ReadOrTruncated(reader.ReadU32LE(valueBits), reader, error, "observation_value")) {
+						return false;
+					}
+					observation.value = FloatFromBitsLE(valueBits);
+					if (!std::isfinite(observation.value)) {
+						SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 4, "sound observation value is not finite");
+						return false;
+					}
+					// The observation's sender is the authenticated frame sender, like a command's.
+					observation.senderPeerId = payload.senderPeerId;
+					payload.observations.push_back(observation);
 				}
 			}
 			out = std::move(payload);
@@ -871,7 +916,7 @@ namespace RTE {
 
 	bool NetLockstepFrame::operator==(const NetLockstepFrame& rhs) const {
 		if (senderPeerId != rhs.senderPeerId || targetFrame != rhs.targetFrame || frames.size() != rhs.frames.size() || commands != rhs.commands ||
-		    roundId != rhs.roundId) {
+		    roundId != rhs.roundId || observations != rhs.observations) {
 			return false;
 		}
 		for (size_t i = 0; i < frames.size(); ++i) {
@@ -1179,6 +1224,8 @@ namespace RTE {
 		m_RemoteFrames.clear();
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
+		m_LocalObservations.clear();
+		m_RemoteObservations.clear();
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
@@ -1278,6 +1325,8 @@ namespace RTE {
 		m_RemoteFrames.clear();
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
+		m_LocalObservations.clear();
+		m_RemoteObservations.clear();
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
@@ -1295,7 +1344,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error) {
+	bool NetLockstepCoordinator::QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error, std::vector<NetSoundObservation> observations) {
 		if (m_State != NetLockstepState::Running) {
 			if (error) *error = m_Stats.timeoutReason.empty() ? "replay coordinator is not running" : m_Stats.timeoutReason;
 			return false;
@@ -1316,6 +1365,9 @@ namespace RTE {
 		m_RemoteFrames[frame][bucketPeer] = std::move(frames);
 		if (!commands.empty()) {
 			m_RemoteCommands[frame][bucketPeer] = std::move(commands);
+		}
+		if (!observations.empty()) {
+			m_RemoteObservations[frame][bucketPeer] = std::move(observations);
 		}
 		return true;
 	}
@@ -1342,7 +1394,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error) {
+	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations) {
 		if (m_State != NetLockstepState::Running) {
 			// Carry the stop reason so the caller can route it (a resync request must not read as a
 			// generic failure).
@@ -1369,12 +1421,19 @@ namespace RTE {
 			command.senderPeerId = m_Config.localPeerId;
 		}
 		packet.roundId = m_RoundId;
+		packet.observations = observations;
+		for (NetSoundObservation& observation : packet.observations) {
+			observation.senderPeerId = m_Config.localPeerId;
+		}
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
 		m_LocalFrames[targetFrame] = frames;
 		if (!packet.commands.empty()) {
 			m_LocalCommands[targetFrame] = packet.commands;
+		}
+		if (!packet.observations.empty()) {
+			m_LocalObservations[targetFrame] = packet.observations;
 		}
 		++m_Stats.framePacketsSent;
 		m_Stats.localControllerFramesSent += frames.size();
@@ -2026,6 +2085,9 @@ namespace RTE {
 		if (!frame.commands.empty()) {
 			m_RemoteCommands[frame.targetFrame][frame.senderPeerId] = frame.commands;
 		}
+		if (!frame.observations.empty()) {
+			m_RemoteObservations[frame.targetFrame][frame.senderPeerId] = frame.observations;
+		}
 		RelayToOtherRemotes({frame}, frame.senderPeerId);
 		AdvanceReadyFrames(nowMs);
 	}
@@ -2127,6 +2189,16 @@ namespace RTE {
 					ready.remoteCommands.insert(ready.remoteCommands.end(), std::make_move_iterator(cmds.begin()), std::make_move_iterator(cmds.end()));
 				}
 				m_RemoteCommands.erase(remoteCmdIt);
+			}
+			if (auto localObsIt = m_LocalObservations.find(ready.frame); localObsIt != m_LocalObservations.end()) {
+				ready.localObservations = std::move(localObsIt->second);
+				m_LocalObservations.erase(localObsIt);
+			}
+			if (auto remoteObsIt = m_RemoteObservations.find(ready.frame); remoteObsIt != m_RemoteObservations.end()) {
+				for (auto& [peerId, observations]: remoteObsIt->second) {
+					ready.remoteObservations.insert(ready.remoteObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
+				}
+				m_RemoteObservations.erase(remoteObsIt);
 			}
 			m_Stats.remoteControllerFramesAccepted += ready.remoteFrames.size();
 			if (localIt != m_LocalFrames.end()) {

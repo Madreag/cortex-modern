@@ -16,13 +16,19 @@
 #include "ContentFile.h"
 #include "PresetMan.h"
 #include "MovableObject.h"
+#include "MovableMan.h"
+#include "Actor.h"
 #include "HDFirearm.h"
+#include "NetLockstep.h"
+#include "ScenarioRunner.h"
 
 #include <iostream>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -76,6 +82,8 @@ AudioMan::~AudioMan() {
 void AudioMan::Clear() {
 	m_InaudibleTestOutputVerified = false;
 	m_ActiveLogicalSounds.clear();
+	m_CommittedAudibility.clear();
+	m_LastSentAudibility.clear();
 	m_AudioEnabled = false;
 	m_PlayingVoices.clear();
 	m_BackendVoiceIdentities.clear();
@@ -534,6 +542,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		LogicalSoundPlayback& playback = soundContainer->CurrentLogicalPlayback();
 		if (playback.voices.size() + logicalVoices.size() > c_MaxPlayingSoundsPerContainer) return false;
 		if (!playback.identity.value.ordinal) playback.identity.value = playKey;
+		playback.lastObjectUID = playKey.objectUID;
 		playback.voices.insert(playback.voices.end(), std::make_move_iterator(logicalVoices.begin()), std::make_move_iterator(logicalVoices.end()));
 		RefreshLogicalSound(soundContainer);
 	}
@@ -1276,6 +1285,26 @@ namespace {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) { try { CheckpointSoundEvent value; CheckpointReader archive(text, "AudioEvent1"); value.Fields(archive); archive.Finish(); if (!validateOnly) *this = value; return true; } catch (const std::exception&) { return false; } }
 	};
 
+	struct CommittedAudibilityRecord {
+		SoundObservationKey key;
+		uint8_t peer = 0;
+		uint64_t frame = 0;
+		float value = 0.0F;
+		template <class Archive> void Fields(Archive& archive) { archive(key.objectUID, key.tick, key.phase, key.occurrence, key.ordinal, peer, frame, value); }
+		std::string SaveCheckpoint() const { CheckpointWriter writer("CommittedAudibility1"); const_cast<CommittedAudibilityRecord*>(this)->Fields(writer); return writer.Text(); }
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
+			try {
+				CommittedAudibilityRecord candidate;
+				CheckpointReader reader(text, "CommittedAudibility1");
+				candidate.Fields(reader);
+				reader.Finish();
+				if (candidate.peer == 0 || candidate.peer > NetLockstepCodec::c_MaxPeerCount || !std::isfinite(candidate.value)) return false;
+				if (!validateOnly) *this = candidate;
+				return true;
+			} catch (const std::exception&) { return false; }
+		}
+	};
+
 	struct AudioRuntime {
 		bool enabled = false;
 		int nextVoice = 0;
@@ -1290,13 +1319,19 @@ namespace {
 		std::vector<AudioCheckpoint::Voice> voices;
 		std::map<int, float> minimumDistances;
 		std::array<std::vector<CheckpointSoundEvent>, c_MaxClients> events;
+		std::vector<CommittedAudibilityRecord> audibility;
 		template <class Archive> void Fields(Archive& archive) {
 			archive(enabled, nextVoice, nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer, playerPositions, listeners, groups, samples, voices, minimumDistances, events);
 		}
-		std::string Save() { CheckpointWriter archive("AudioRuntime1"); Fields(archive); return archive.Text(); }
+		std::string Save() { CheckpointWriter archive("AudioRuntime2"); Fields(archive); archive(audibility); return archive.Text(); }
 		bool Load(std::string_view text) {
 			try {
-				CheckpointReader archive(text, "AudioRuntime1"); Fields(archive); archive.Finish();
+				const std::string_view version = AudioMan::CheckpointVersion(text);
+				CheckpointReader archive(text, version); Fields(archive);
+				if (version == "AudioRuntime2") archive(audibility);
+				archive.Finish();
+				std::set<std::pair<SoundObservationKey, uint8_t>> readings;
+				for (const auto& record: audibility) if (!readings.insert({record.key, record.peer}).second) return false;
 				if (nextVoice < 0 || voices.size() > c_MaxVirtualChannels || listeners.size() > 8 || (enabled && listeners.empty())) return false;
 				for (float value: {masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning}) if (!AudioCheckpoint::Finite(value)) return false;
 				std::set<int> voiceIDs; for (const auto& voice: voices) if (!voiceIDs.insert(voice.identity).second || voice.owner > nextSoundContainer) return false;
@@ -1317,6 +1352,9 @@ std::string AudioMan::SaveCheckpoint() const {
 	state.masterVolume = m_MasterVolume; state.musicVolume = m_MusicVolume; state.soundsVolume = m_SoundsVolume; state.globalPitch = m_GlobalPitch;
 	state.panning = m_SoundPanningEffectStrength; state.listenerZ = m_ListenerZOffset; state.minimumPanning = m_MinimumDistanceForPanning;
 	state.musicMuffled = m_MusicMuffled; state.multiplayer = m_IsInMultiplayerMode;
+	for (const auto& [key, readings]: m_CommittedAudibility) {
+		for (const auto& [peer, reading]: readings) state.audibility.push_back({key, peer, reading.frame, reading.value});
+	}
 	for (const auto& position: m_CurrentActivityHumanPlayerPositions) if (position) state.playerPositions.push_back(*position);
 	for (int player = 0; player < c_MaxClients; ++player) {
 		std::lock_guard lock(const_cast<AudioMan*>(this)->g_SoundEventsListMutex[player]);
@@ -1489,6 +1527,9 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		m_MasterVolume = state.masterVolume; m_MusicVolume = state.musicVolume; m_SoundsVolume = state.soundsVolume; m_GlobalPitch = state.globalPitch;
 		m_SoundPanningEffectStrength = state.panning; m_ListenerZOffset = state.listenerZ; m_MinimumDistanceForPanning = state.minimumPanning;
 		m_MusicMuffled = state.musicMuffled; m_IsInMultiplayerMode = state.multiplayer;
+		m_CommittedAudibility.clear();
+		for (const auto& record: state.audibility) m_CommittedAudibility[record.key][record.peer] = {record.frame, record.value};
+		m_LastSentAudibility.clear();
 		m_CurrentActivityHumanPlayerPositions.swap(playerPositions);
 		for (int player = 0; player < c_MaxClients; ++player) {
 			std::lock_guard lock(g_SoundEventsListMutex[player]);
@@ -1740,6 +1781,85 @@ bool AudioMan::RunCheckpointSelfTest() {
 
 static_assert(c_MaxLogicalVoicesPerContainer == c_MaxPlayingSoundsPerContainer);
 
+namespace {
+	SoundObservationKey KeyOf(const SoundExecutionKey& key) { return {key.objectUID, key.tick, key.phase, key.occurrence, key.ordinal}; }
+	SoundObservationKey KeyOf(const NetSoundObservation& observation) { return {observation.objectUID, observation.tick, observation.phase, observation.occurrence, observation.ordinal}; }
+	constexpr uint64_t c_AudibilityPruneInterval = 600;
+	constexpr uint64_t c_AudibilityRetainFrames = 36000;
+} // namespace
+
+uint8_t AudioMan::AudibilityAuthority(uint64_t objectUID) {
+	const uint8_t host = ScenarioRunner::GetLockstepHostPeerId();
+	if (objectUID == 0) return host;
+	const MovableObject* object = g_MovableMan.FindObjectByUniqueID(static_cast<long>(objectUID));
+	const Actor* actor = object ? dynamic_cast<const Actor*>(object->GetRootParent()) : nullptr;
+	if (!actor) return host;
+	return ScenarioRunner::GetLockstepActorOwner(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
+}
+
+std::vector<NetSoundObservation> AudioMan::SampleSoundObservations() {
+	std::vector<NetSoundObservation> observations;
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) return observations;
+	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
+	std::vector<const SoundContainer*> live;
+	VisitSharedSimulationSounds([&](const SoundContainer& container) { live.push_back(&container); });
+	std::sort(live.begin(), live.end(), [](const SoundContainer* a, const SoundContainer* b) { return a->GetCheckpointIdentity() < b->GetCheckpointIdentity(); });
+	std::set<SoundObservationKey> answered;
+	for (const SoundContainer* container: live) {
+		const SoundExecutionKey& identity = container->GetSharedPlaybackIdentity();
+		if (!identity.ordinal || AudibilityAuthority(container->GetSharedLogicalPlayback().lastObjectUID) != localPeer) continue;
+		const SoundObservationKey key = KeyOf(identity);
+		answered.insert(key);
+		const float value = GetLocalSoundAudibility(container);
+		const auto sent = m_LastSentAudibility.find(key);
+		if (sent != m_LastSentAudibility.end() && sent->second == value) continue;
+		m_LastSentAudibility[key] = value;
+		NetSoundObservation observation;
+		observation.senderPeerId = localPeer;
+		observation.objectUID = key.objectUID; observation.tick = key.tick; observation.phase = key.phase; observation.occurrence = key.occurrence; observation.ordinal = key.ordinal;
+		observation.value = value;
+		observations.push_back(observation);
+	}
+	// A sound this peer stopped answering for reports afresh when it comes back.
+	std::erase_if(m_LastSentAudibility, [&](const auto& entry) { return !answered.contains(entry.first); });
+	return observations;
+}
+
+void AudioMan::CommitSoundObservations(uint64_t frame, const std::vector<NetSoundObservation>& local, const std::vector<NetSoundObservation>& remote) {
+	std::vector<const NetSoundObservation*> observations;
+	observations.reserve(local.size() + remote.size());
+	for (const NetSoundObservation& observation: local) observations.push_back(&observation);
+	for (const NetSoundObservation& observation: remote) observations.push_back(&observation);
+	std::stable_sort(observations.begin(), observations.end(), [](const NetSoundObservation* a, const NetSoundObservation* b) { return a->senderPeerId < b->senderPeerId; });
+	for (const NetSoundObservation* observation: observations) m_CommittedAudibility[KeyOf(*observation)][observation->senderPeerId] = {frame, observation->value};
+	if (frame % c_AudibilityPruneInterval != 0) return;
+	// Readings nobody refreshed for ten minutes belong to finished sounds; every peer prunes on the same frame.
+	for (auto entry = m_CommittedAudibility.begin(); entry != m_CommittedAudibility.end();) {
+		std::erase_if(entry->second, [&](const auto& reading) { return reading.second.frame + c_AudibilityRetainFrames <= frame; });
+		entry = entry->second.empty() ? m_CommittedAudibility.erase(entry) : std::next(entry);
+	}
+}
+
+float AudioMan::GetCommittedAudibility(const SoundContainer& container) const {
+	const SoundExecutionKey& identity = container.GetSharedPlaybackIdentity();
+	if (!identity.ordinal) return 0.0F;
+	const auto entry = m_CommittedAudibility.find(KeyOf(identity));
+	if (entry == m_CommittedAudibility.end()) return 0.0F;
+	const uint8_t authority = AudibilityAuthority(container.GetSharedLogicalPlayback().lastObjectUID);
+	if (const auto reading = entry->second.find(authority); reading != entry->second.end()) return reading->second.value;
+	// Between a control change and the new controller's first reading, the latest committed reading stands.
+	const CommittedAudibility* latest = nullptr;
+	for (const auto& [peer, reading]: entry->second) {
+		if (!latest || reading.frame > latest->frame) latest = &reading;
+	}
+	return latest ? latest->value : 0.0F;
+}
+
+void AudioMan::ClearCommittedAudibility() {
+	m_CommittedAudibility.clear();
+	m_LastSentAudibility.clear();
+}
+
 bool AudioMan::RunLogicalPlaybackSelfTest() {
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
@@ -1896,6 +2016,37 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			sound.Stop();
 			other.Stop();
 		}
+	}
+	{
+		ClearCommittedAudibility();
+		SoundContainer keyed;
+		keyed.Create(samplePath, false, true, SoundContainer::SFX);
+		SoundExecutionKey identity;
+		{
+			SoundSimulationScope shared(4242, phase);
+			keyed.Play();
+			identity = keyed.GetSharedPlaybackIdentity();
+		}
+		NetSoundObservation reading;
+		reading.objectUID = identity.objectUID; reading.tick = identity.tick; reading.phase = identity.phase; reading.occurrence = identity.occurrence; reading.ordinal = identity.ordinal;
+		NetSoundObservation earlier = reading, later = reading, newest = reading;
+		earlier.senderPeerId = 2; earlier.value = 0.75F;
+		later.senderPeerId = 1; later.value = 0.25F;
+		newest.senderPeerId = 2; newest.value = 0.5F;
+		CommitSoundObservations(100, {earlier}, {});
+		CommitSoundObservations(101, {}, {later});
+		SoundSimulationScope shared(4242, phase);
+		const bool latestWins = GetCommittedAudibility(keyed) == 0.25F;
+		CommitSoundObservations(102, {}, {newest});
+		check("committed_latest_reading", latestWins && GetCommittedAudibility(keyed) == 0.5F, std::to_string(GetCommittedAudibility(keyed)));
+		const std::string checkpoint = SaveCheckpoint();
+		ClearCommittedAudibility();
+		const bool cleared = GetCommittedAudibility(keyed) == 0.0F && GetCommittedAudibilityCount() == 0;
+		check("committed_table_checkpoint", cleared && LoadCheckpoint(checkpoint) && GetCommittedAudibility(keyed) == 0.5F && GetCommittedAudibilityCount() == 1);
+		CommitSoundObservations(36600, {}, {});
+		check("committed_table_prunes_stale", GetCommittedAudibilityCount() == 0 && GetCommittedAudibility(keyed) == 0.0F);
+		keyed.Stop();
+		ClearCommittedAudibility();
 	}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 	s_PlaybackSuppressed = suppressed;

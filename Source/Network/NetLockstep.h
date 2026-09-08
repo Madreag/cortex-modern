@@ -78,12 +78,27 @@ namespace RTE {
 		bool operator==(const NetLockstepStart&) const = default;
 	};
 
+	/// One peer's actual audibility of a shared simulation sound, sampled at its input boundary and
+	/// committed with the sender's delayed frame so every peer reads the identical value.
+	struct NetSoundObservation {
+		uint8_t senderPeerId = 0;
+		uint64_t objectUID = 0;
+		uint64_t tick = 0;
+		uint64_t phase = 0;
+		uint64_t occurrence = 0;
+		uint64_t ordinal = 0;
+		float value = 0.0F;
+
+		bool operator==(const NetSoundObservation&) const = default;
+	};
+
 	struct NetLockstepFrame {
 		uint8_t senderPeerId = 0;
 		uint64_t targetFrame = 0;
 		std::vector<ControllerFrame> frames;
 		std::vector<NetGameCommand> commands;
 		uint64_t roundId = 0;
+		std::vector<NetSoundObservation> observations;
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -162,6 +177,8 @@ namespace RTE {
 		std::vector<ControllerFrame> remoteFrames;
 		std::vector<NetGameCommand> localCommands;
 		std::vector<NetGameCommand> remoteCommands;
+		std::vector<NetSoundObservation> localObservations;
+		std::vector<NetSoundObservation> remoteObservations;
 	};
 
 	struct NetLockstepStats {
@@ -197,9 +214,10 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		static constexpr uint16_t c_Version = 11;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
-		// Version 11 adds the round tag to starts, frames and checksums.
+		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
+		static constexpr size_t c_MaxObservationsPerPacket = 512;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -234,11 +252,11 @@ namespace RTE {
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
-		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr);
+		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {});
 		/// Rewinds a playback coordinator to re-commit from an earlier frame (the rollback
 		/// fidelity gate re-runs a window). Replay mode only — there is no wire to rewind.
 		bool RewindReplay(uint64_t firstFrame, std::string* error = nullptr);
-		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
+		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr, const std::vector<NetSoundObservation>& observations = {});
 		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr);
 		void Tick(uint64_t nowMs);
 		void Complete(const std::string& message = "complete");
@@ -337,6 +355,8 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
 		std::map<uint64_t, std::vector<NetGameCommand>> m_LocalCommands;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
+		std::map<uint64_t, std::vector<NetSoundObservation>> m_LocalObservations;
+		std::map<uint64_t, std::map<uint8_t, std::vector<NetSoundObservation>>> m_RemoteObservations; //!< frame -> (peerId -> observations)
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.

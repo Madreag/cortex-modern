@@ -98,15 +98,26 @@ namespace RTE {
 		}
 	};
 
+	/// Names one shared playback stream across peers, checkpoints and replays.
+	struct SoundObservationKey {
+		uint64_t objectUID = 0;
+		uint64_t tick = 0;
+		uint64_t phase = 0;
+		uint64_t occurrence = 0;
+		uint64_t ordinal = 0;
+		auto operator<=>(const SoundObservationKey&) const = default;
+	};
+
 	struct LogicalSoundPlayback {
 		LogicalSoundKey identity;
+		uint64_t lastObjectUID = 0; //!< The object whose phase last played this container; its controller answers for the sound.
 		std::vector<LogicalSoundVoice> voices;
-		template<class Archive> void Fields(Archive& archive) { archive(identity, voices); }
-		std::string SaveCheckpoint() const { CheckpointWriter writer("LogicalSoundPlayback1"); const_cast<LogicalSoundPlayback*>(this)->Fields(writer); return writer.Text(); }
+		template<class Archive> void Fields(Archive& archive) { archive(identity, lastObjectUID, voices); }
+		std::string SaveCheckpoint() const { CheckpointWriter writer("LogicalSoundPlayback2"); const_cast<LogicalSoundPlayback*>(this)->Fields(writer); return writer.Text(); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
 			try {
 				LogicalSoundPlayback candidate;
-				CheckpointReader reader(text, "LogicalSoundPlayback1");
+				CheckpointReader reader(text, "LogicalSoundPlayback2");
 				candidate.Fields(reader);
 				reader.Finish();
 				if (candidate.voices.size() > c_MaxLogicalVoicesPerContainer) return false;

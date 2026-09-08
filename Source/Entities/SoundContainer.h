@@ -25,6 +25,7 @@ namespace RTE {
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("15 SoundContainer2 ") ? "SoundContainer2" : "SoundContainer1"; }
 		uint64_t GetCheckpointIdentity() const { return m_CheckpointIdentity; }
 		const SoundExecutionKey& GetSharedPlaybackIdentity() const { return m_LogicalPlayback[0].identity.value; }
+		const LogicalSoundPlayback& GetSharedLogicalPlayback() const { return m_LogicalPlayback[0]; }
 		const std::vector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback[0].voices; }
 		/// Simulation code plays UI bus sounds for the local player only, so those stay physical.
 		bool UsesLogicalPlayback() const { return SoundSimulationScope::IsSimulation() && m_BusRouting != BusRouting::UI; }

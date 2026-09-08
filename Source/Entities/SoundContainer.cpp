@@ -7,6 +7,8 @@
 #include "SoundSet.h"
 #include "SettingsMan.h"
 #include "ConsoleMan.h"
+#include "ScenarioRunner.h"
+#include "FaultInjection.h"
 
 #include <cmath>
 #include <utility>
@@ -323,6 +325,11 @@ void SoundContainer::SetPosition(const Vector& newPosition) {
 }
 
 float SoundContainer::GetAudibleVolume() const {
+	// A shared query reads the committed observation set so every peer sees one value; local AI and presentation keep this machine's.
+	if (SoundSimulationScope::Domain() == SoundExecutionDomain::SharedSimulation && m_BusRouting != BusRouting::UI &&
+	    ScenarioRunner::IsLockstepControllerSyncActive() && !FaultInjected("local_audibility")) {
+		return g_AudioMan.GetCommittedAudibility(*this);
+	}
 	return g_AudioMan.GetSoundContainerAudibleVolume(this);
 }
 
