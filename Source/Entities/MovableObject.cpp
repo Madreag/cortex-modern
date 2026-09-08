@@ -539,6 +539,8 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 		m_PersistedAgeTimerAnchor.pending = true;
 	});
 	MatchProperty("MOToNotHitUniqueID", {
+		// The record is the whole truth about this link, so the preset copy's own does not survive it.
+		m_pMOToNotHit = nullptr;
 		reader >> m_FaithfulMOToNotHitUID;
 		m_MOToNotHitUID = m_FaithfulMOToNotHitUID;
 	});
