@@ -1384,13 +1384,14 @@ namespace RTE {
 		// hold; the plane's own answer is pinned by -net-reconnect-session-selftest.
 		struct SeatStateStub {
 			bool held = false;
+			uint8_t heldPeerId = 0; //!< 0 holds every peer's seat; otherwise only this one's.
 			NetPeerId fenced = c_InvalidNetPeerId;
 		};
 
-		NetLockstepSeatState QuerySeatStateStub(void* context, uint8_t, NetPeerId transportPeerId) {
+		NetLockstepSeatState QuerySeatStateStub(void* context, uint8_t peerId, NetPeerId transportPeerId) {
 			auto* stub = static_cast<SeatStateStub*>(context);
 			NetLockstepSeatState state;
-			state.heldForReclaim = stub->held;
+			state.heldForReclaim = stub->held && (stub->heldPeerId == 0 || stub->heldPeerId == peerId);
 			state.fencedTransport = transportPeerId != c_InvalidNetPeerId && transportPeerId == stub->fenced;
 			return state;
 		}
@@ -1553,6 +1554,66 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// The host's silence budget and the seat hold answer different questions, and a round that
+		// loses every remote is where the two meet: adjudication decides whether to keep WAITING for a
+		// peer, the hold decides whether the round may END because nobody is coming back. A peer the
+		// host called gone on its own budget still holds its seat.
+		bool TestCoordinatorAdjudicatedPeerKeepsItsSeat(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 400;
+			SeatStateStub stub;
+			stub.held = true;
+			stub.heldPeerId = 3; // Only the peer that wedges is holding a ticket.
+			if (!fx.Start(43016, 0x7000000000000016ULL, timeoutMs, error)) {
+				return false;
+			}
+			fx.host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "adjudicated-seat fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "adjudicated-seat fixture did not get the round moving";
+				return false;
+			}
+			// B wedges: the host calls it gone on its own budget rather than waiting on its socket.
+			if (!fx.DriveProducing(false, [&] { return fx.host.GetPeerLeaveFrames().count(3) != 0; }, fx.now + 4 * timeoutMs)) {
+				*error = "the host kept waiting for the wedged peer: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.GetStats().peersDroppedSilent != 1) {
+				*error = "the wedged peer was not adjudicated: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// A's socket goes away too, so no remote is left - and the round must still play on,
+			// because the peer the host adjudicated is holding a seat someone can come back to.
+			fx.clientAT.Stop();
+			const size_t committedBefore = hostReady.size();
+			if (!fx.DriveProducing(false, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= committedBefore + 4;
+				}, fx.now + 4 * timeoutMs)) {
+				*error = "the host stopped producing once every remote was gone: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.IsRunning()) {
+				*error = "a round holding an adjudicated peer's seat ended with the last remote: " + fx.host.GetStats().timeoutReason;
+				return false;
+			}
+			// The window closes: the next tick ends a round nobody is coming back to.
+			stub.held = false;
+			fx.host.Tick(fx.now + 5);
+			if (fx.host.GetState() != NetLockstepState::Stopped || fx.host.GetStats().timeoutReason.rfind("PeerLeft:", 0) != 0) {
+				*error = "the round did not end once the reclaim window closed: " + fx.host.GetStats().timeoutReason;
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1582,7 +1643,8 @@ namespace RTE {
 		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
 		    !TestCoordinatorRelayBacklogHeals(&error) ||
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
-		    !TestCoordinatorDroppedSeatHold(&error)) {
+		    !TestCoordinatorDroppedSeatHold(&error) ||
+		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error)) {
 			return fail(error);
 		}
 
