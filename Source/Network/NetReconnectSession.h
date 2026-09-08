@@ -55,7 +55,55 @@ namespace RTE {
 		uint32_t incarnation = 0;
 		NetPeerId supersededConnection = c_InvalidNetPeerId;
 		bool reclaim = false;
+		bool substitute = false; //!< The seat changed hands by an explicit host action, not a reclaim.
 	};
+
+	/// One player asking the host for a seat whose holder is gone (§4, P15). An applicant holds no
+	/// peer id, no team, no snapshot and no authority: it is a name on the host's list until an
+	/// approved substitution commits.
+	struct NetH4ApplicantView {
+		NetPeerId connection = c_InvalidNetPeerId;
+		uint16_t stableSeat = 0;
+		std::string displayName;
+		uint64_t appliedAtMs = 0;
+		uint64_t expiresAtMs = 0;
+		bool approved = false; //!< An approval for this applicant is in flight.
+
+		bool operator==(const NetH4ApplicantView&) const = default;
+	};
+
+	/// One seat as the host's moderation view sees it (§9b): whether it is waiting for someone, and
+	/// who is asking for it.
+	struct NetH4ModerationSeat {
+		uint16_t stableSeat = 0;
+		uint8_t lockstepPeerId = 0;
+		int32_t team = 0;
+		bool committed = false;
+		bool dropped = false;
+		bool closed = false;
+		bool heldForReclaim = false;  //!< The original holder can still return.
+		bool substitutable = false;   //!< A host action may reassign it right now.
+		bool substituting = false;    //!< An approval is in flight for it.
+		uint32_t holderGeneration = 0;
+		uint32_t seatGeneration = 0;  //!< The value a pending approval compares against at commit.
+		std::vector<NetH4ApplicantView> applicants;
+
+		bool operator==(const NetH4ModerationSeat&) const = default;
+	};
+
+	/// Why a host moderation action was refused. Nothing here reaches the wire.
+	enum class NetH4ModerationResult : uint8_t {
+		Ok = 0,
+		NotHosting = 1,
+		UnknownSeat = 2,
+		SeatNotSubstitutable = 3,
+		UnknownApplicant = 4,
+		SubstitutionInFlight = 5,
+		NoSubstitutionPending = 6,
+		ProviderUnavailable = 7,
+	};
+
+	const char* NetH4ModerationResultName(NetH4ModerationResult result);
 
 	/// A seat's live admission status, for §11's persistent roster indication and the reports.
 	struct NetH4SeatStatus {
@@ -63,8 +111,10 @@ namespace RTE {
 		uint8_t lockstepPeerId = 0;
 		bool committed = false;
 		bool closed = false;
-		bool dropped = false;    //!< Committed, but its holder's transport is gone.
-		bool reclaiming = false; //!< A reclaim transaction for it is in flight.
+		bool dropped = false;      //!< Committed, but its holder's transport is gone.
+		bool reclaiming = false;   //!< A reclaim transaction for it is in flight.
+		bool substituting = false; //!< An approved substitute is persisting its ticket.
+		uint16_t applicants = 0;   //!< Players asking the host for this seat.
 
 		bool operator==(const NetH4SeatStatus&) const = default;
 	};
@@ -97,6 +147,17 @@ namespace RTE {
 		uint32_t reclaimRetransmitsDropped = 0;
 		uint32_t seatHoldsExpired = 0;
 		uint32_t seatsReleasedInLobby = 0;
+		uint32_t applicantsRegistered = 0;
+		uint32_t applicantsRefused = 0;
+		uint32_t applicantsExpired = 0;
+		uint32_t applicantsDisplaced = 0; //!< Told the seat went to somebody else.
+		uint32_t substitutionOffersSent = 0;
+		uint32_t substitutionOfferRetransmits = 0;
+		uint32_t substitutionsCommitted = 0;
+		uint32_t substitutionsCancelled = 0;
+		uint32_t substitutionsSuperseded = 0; //!< Lost the seat-generation CAS to a returner.
+		uint32_t substitutionAckFailures = 0;
+		uint32_t reassignedReclaimsRefused = 0; //!< Proved the retired credential and was told why.
 	};
 
 	/// The host's §4/§6/§7 state machine: it runs the admission transaction, fences a superseded
@@ -113,6 +174,12 @@ namespace RTE {
 		// in-match "this peer is genuinely gone" horizon.
 		static constexpr uint64_t c_ProvisionalExpiryMs = 20000;
 		static constexpr size_t c_MaxProvisionalSeats = 4;
+		// P15: the plan gates "two pending applicants for one seat", 4 global is the peer cap, and one
+		// per connection stops a single socket filling the queue. Records expire at P2, so the
+		// lifecycle has one lifetime constant rather than two.
+		static constexpr size_t c_MaxApplicants = 4;
+		static constexpr size_t c_MaxApplicantsPerSeat = 2;
+		static constexpr size_t c_MaxApplicantsPerConnection = 1;
 
 		void Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity);
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);
@@ -160,6 +227,21 @@ namespace RTE {
 		const NetReconnectTxCache& GetTxCache() const { return m_TxCache; }
 		size_t GetProvisionalSeatCount() const { return m_Provisionals.size(); }
 
+		/// §9b's moderation API: every seat, whether it may be reassigned, and who is asking for it.
+		/// The host UI renders this and calls one of the three verbs below; nothing here is a secret.
+		std::vector<NetH4ModerationSeat> GetModerationView() const;
+		/// Keep waiting for the original holder. Explicit, so "wait" is a recorded decision rather
+		/// than the absence of one.
+		NetH4ModerationResult WaitForSeat(uint16_t stableSeat);
+		/// Approves one applicant for one seat, atomically: the seat is never released first, and the
+		/// approval hands out a provisional ticket without touching the seat's current holder.
+		NetH4ModerationResult SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection, uint64_t nowMs);
+		/// Withdraws an approval that has not committed. The provisional record is invalidated and
+		/// removed; the seat was never given away, so there is nothing to take back.
+		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
+		bool HasSubstitution(uint16_t stableSeat) const;
+		size_t GetApplicantCount() const { return m_Applicants.size(); }
+
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
 		bool IsSeatClosed(uint16_t stableSeat) const;
@@ -181,6 +263,45 @@ namespace RTE {
 			bool dropped = false;
 			uint64_t droppedAtMs = 0;
 			bool holdExpired = false;
+			// The compare-and-swap value a pending substitution captures at approval. Anything that
+			// changes who may hold the seat moves it, so an approval that was overtaken cannot commit.
+			uint32_t seatGeneration = 1;
+			uint32_t retiredGeneration = 0; //!< A generation a substitute superseded, kept only to answer it.
+			uint64_t retiredUntilMs = 0;
+		};
+
+		/// A pending applicant. It carries an identity because §4 re-validates one on every admission
+		/// message, and a display name because the host has to be able to tell two applicants apart.
+		struct Applicant {
+			NetPeerId connection = c_InvalidNetPeerId;
+			uint16_t stableSeat = 0;
+			NetAuthBytes16 txId{};
+			NetH4Identity identity;
+			std::string displayName;
+			uint64_t appliedAtMs = 0;
+			NetH4TxKey key;
+			bool approved = false;
+		};
+
+		/// An approved substitution between the host action and the commit. The credential lives here
+		/// and NOT in the registry until the commit, which is what makes the first COMMIT win instead
+		/// of the first approval.
+		struct Substitution {
+			uint16_t stableSeat = 0;
+			NetPeerId connection = c_InvalidNetPeerId;
+			NetAuthBytes16 txId{};
+			uint32_t holderGeneration = 0;
+			uint32_t seatGeneration = 0;
+			uint32_t supersededGeneration = 0;
+			NetAuthBytes32 credential{};
+			NetAuthBytes32 challenge{};
+			NetH4Identity identity;
+			std::string displayName;
+			uint64_t openedAtMs = 0;
+			uint64_t lastSentMs = 0;
+			uint32_t retransmits = 0;
+			NetH4TxKey key;
+			NetH4SubstitutionOffer offer;
 		};
 
 		struct Provisional {
@@ -202,6 +323,9 @@ namespace RTE {
 			uint32_t holderGeneration = 0;
 			NetH4TxKey key;
 			uint64_t openedAtMs = 0;
+			// The generation this names was superseded by a substitute. The challenge is real and the
+			// answer is a refusal either way; proving it only decides whether the refusal says why.
+			bool superseded = false;
 		};
 
 		struct Fence {
@@ -215,6 +339,8 @@ namespace RTE {
 		void HandleReclaim(NetPeerId connection, const NetH4Reclaim& message, uint64_t nowMs);
 		void HandleProof(NetPeerId connection, const NetH4Proof& message, uint64_t nowMs);
 		void HandleLeaveRequest(NetPeerId connection, const NetH4LeaveRequest& message, uint64_t nowMs);
+		void HandleApplicant(NetPeerId connection, const NetH4Applicant& message, uint64_t nowMs);
+		void HandleSubstitutionAck(NetPeerId connection, const NetH4SubstitutionAck& message, uint64_t nowMs);
 
 		/// P5: the identity re-validation, run before the seat lookup so a mismatch never says whether
 		/// the seat exists. @return Whether the identity matches; sets a specific rejection when not.
@@ -238,6 +364,24 @@ namespace RTE {
 		void IssueReseat(const SeatState& seat);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 
+		/// Whether an explicit host action may hand this seat to somebody else: a live match, a real
+		/// human seat, and a holder who is either gone or has cleanly left.
+		bool IsSeatSubstitutable(const SeatState& seat) const;
+		/// Moves the seat's compare-and-swap value. Called by everything that changes who may hold it.
+		void BumpSeatGeneration(SeatState& seat);
+		/// The transaction key of a substitution. The host draws the transaction id, so the id itself
+		/// is the unforgeable handle and the key binds only the seat and the generation it names.
+		static NetH4TxKey SubstitutionKey(uint16_t stableSeat, uint32_t holderGeneration);
+		Substitution* FindSubstitutionBySeat(uint16_t stableSeat);
+		Substitution* FindSubstitutionByConnection(NetPeerId connection);
+		Applicant* FindApplicant(NetPeerId connection, uint16_t stableSeat);
+		/// Ends a pending substitution: caches the terminal refusal under its transaction id so a
+		/// retransmitted ack replays it, tells the substitute, and forgets the credential.
+		void AbandonSubstitution(size_t index, NetH4DenialReason reason, const std::string& summary, uint64_t nowMs);
+		/// Every applicant for the seat except the one that just took it hears that it is gone.
+		void DisplaceApplicants(uint16_t stableSeat, NetPeerId keepConnection, uint64_t nowMs);
+		void DropApplicantsFor(NetPeerId connection);
+
 		NetSeatAuthRegistry* m_Registry = nullptr;
 		uint64_t m_HostSessionId = 0;
 		NetH4Identity m_LocalIdentity;
@@ -253,6 +397,8 @@ namespace RTE {
 		NetReconnectTxCache m_TxCache;
 		NetReconnectLedger m_Ledger;
 		std::vector<SeatState> m_Seats;
+		std::vector<Applicant> m_Applicants;
+		std::vector<Substitution> m_Substitutions;
 		std::vector<Provisional> m_Provisionals;
 		std::vector<PendingReclaim> m_PendingReclaims;
 		std::vector<Fence> m_Fences;
@@ -273,6 +419,9 @@ namespace RTE {
 		Left = 7,        //!< Acknowledged leave; the record is gone.
 		Denied = 8,      //!< The host refused; the record stays for the next attempt.
 		Failed = 9,      //!< Local failure (no provider, no durable store); nothing was committed.
+		Applying = 10,   //!< Applicant sent, waiting for the host to acknowledge the request.
+		Applied = 11,    //!< On the host's list, waiting for a human decision.
+		Substituting = 12, //!< Approved: the ticket is persisted and the ack proves it.
 	};
 
 	const char* NetReconnectClientStateName(NetH4ClientState state);
@@ -286,6 +435,10 @@ namespace RTE {
 		uint32_t proofsSent = 0;
 		uint32_t commitsReceived = 0;
 		uint32_t leaveAcksReceived = 0;
+		uint32_t applicationsSent = 0;
+		uint32_t applicationsAcknowledged = 0;
+		uint32_t substitutionOffersReceived = 0;
+		uint32_t substitutionAcksSent = 0;
 		uint32_t unacknowledgedLeaves = 0;
 		uint32_t ambiguousLosses = 0;
 		uint32_t confirmedSessionEnds = 0;
@@ -312,12 +465,19 @@ namespace RTE {
 		bool BeginAdmission(uint64_t nowMs, std::string* error = nullptr);
 		/// The host refused the transaction. A refused RECLAIM falls back to one fresh join (the ticket
 		/// was for a session that is gone), which is exactly what a ticketless client would have sent.
+		/// A seat the host says was REASSIGNED is gone for good, so that one is never retried.
 		/// @return Whether the refusal was absorbed; false means the session should fail on it.
-		bool AbsorbRejection(uint64_t nowMs);
+		bool AbsorbRejection(uint64_t nowMs, NetRejectReason reason = NetRejectReason::HostNotAccepting);
 
 		bool BeginNewJoin(uint64_t nowMs, std::string* error = nullptr);
 		bool BeginReclaim(const NetH4TicketRecord& record, uint64_t nowMs, std::string* error = nullptr);
 		bool BeginLeave(uint64_t nowMs, std::string* error = nullptr);
+		/// Phase B: ask the host for a seat instead of joining one. A live match refuses an ordinary
+		/// join, so this is the only way in for a player the host has to approve by hand.
+		bool BeginApplication(uint16_t stableSeat, uint64_t nowMs, std::string* error = nullptr);
+		/// Makes BeginAdmission apply for a seat rather than join or reclaim. The UI (B2) and the gate
+		/// drivers set this; nothing on the wire does.
+		void SetApplyForSeat(bool enabled, uint16_t stableSeat);
 
 		/// @return Whether the payload was an H4 message this plane handled.
 		bool HandleMessage(const NetPayload& payload, uint64_t nowMs);
@@ -338,6 +498,10 @@ namespace RTE {
 		bool UsedStoredTicket() const { return m_UsedStoredTicket; }
 		/// Set when an unacknowledged leave gave up: keep the ticket and close the link.
 		bool WantsLinkClosed() const { return m_WantsLinkClosed; }
+		/// The reason the host last refused this client, so §11 can say "the seat was reassigned"
+		/// rather than "denied" when the host actually said so.
+		NetRejectReason GetLastRejectReason() const { return m_LastRejectReason; }
+		bool HasLastRejectReason() const { return m_HasLastRejectReason; }
 		const std::string& GetError() const { return m_Error; }
 		const NetH4TicketRecord& GetRecord() const { return m_Record; }
 		bool HasRecord() const { return m_HasRecord; }
@@ -365,6 +529,11 @@ namespace RTE {
 		NetH4TicketLoadResult m_LastLoad = NetH4TicketLoadResult::Missing;
 		bool m_UsedStoredTicket = false;
 		bool m_FellBackToNewJoin = false;
+		bool m_ApplyForSeat = false;
+		uint16_t m_ApplySeat = 0;
+		uint64_t m_AppliedAtMs = 0;
+		NetRejectReason m_LastRejectReason = NetRejectReason::HostNotAccepting;
+		bool m_HasLastRejectReason = false;
 		NetPayload m_PendingRequest;
 		bool m_HasPendingRequest = false;
 		uint64_t m_RequestSentMs = 0;
