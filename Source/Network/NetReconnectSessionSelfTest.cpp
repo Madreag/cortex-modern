@@ -2941,6 +2941,108 @@ namespace RTE {
 
 	} // namespace
 
+		// A lobby member whose process is gone sends nothing and closes nothing: the host reaps it on
+		// its own heartbeat timeout. That close is ours, so no transport event ever reaches the
+		// admission plane, and before this the seat stayed committed to a peer that no longer existed -
+		// every replacement was then refused a full lobby, which is what the 4-peer drop lane measured.
+		int TestReapedLobbySeatReturnsToThePool() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42160;
+			LoopbackTransport hostTransport;
+			LoopbackTransport firstTransport;
+			LoopbackTransport secondTransport;
+			NetSession host;
+			NetSession first;
+			NetSession second;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			// One human seat, so the replacement can only be admitted if the reaped seat came back.
+			admission.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore firstStore;
+			firstStore.SetPath(StorePath("reap-first"));
+			NetReconnectClient firstClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			firstClient.Configure(&firstStore, MakeIdentity(), "Player");
+			firstClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			firstClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			first.SetReconnectClient(&firstClient);
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 2;
+			// The transport says nothing about a close we make ourselves, which is how GNS behaved: the
+			// seat has to come back because the session hands the peer over, not because the wire did.
+			LoopbackTransportConfig silentClose;
+			silentClose.silentLocalDisconnect = true;
+			hostTransport.SetFaultConfig(silentClose);
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !first.StartClient(firstTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the first member: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+			}
+			if (firstClient.GetState() != NetH4ClientState::Joined || host.GetReadyPeerCount() != 1) {
+				return Fail("the first member never committed the only seat");
+			}
+
+			// Its process dies: it stops answering and it never closes the socket. Only the host runs.
+			const uint64_t silentFrom = nowMs;
+			for (const uint64_t until = silentFrom + 2 * hostConfig.timeoutMs; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+			}
+			if (host.GetStats().timeouts == 0) {
+				return Fail("the host never reaped the silent member");
+			}
+			const std::vector<NetH4SeatStatus> seats = admission.GetSeatStatuses();
+			const auto reaped = std::find_if(seats.begin(), seats.end(), [](const NetH4SeatStatus& seat) { return seat.stableSeat == 0; });
+			if (reaped == seats.end() || reaped->committed) {
+				return Fail("the reaped member's seat is still committed to a peer that is gone");
+			}
+			// It has to be the reap that released it, not a later sweep: the session hands the peer over.
+			if (admission.GetStats().seatsReleased != 1 || admission.GetStats().seatsClosedByLeave != 0) {
+				return Fail("the seat came back by some route other than the reap: released=" +
+				            std::to_string(admission.GetStats().seatsReleased) +
+				            " byLeave=" + std::to_string(admission.GetStats().seatsClosedByLeave));
+			}
+
+			// The replacement: it can only be admitted onto the one seat the reap released.
+			NetReconnectTicketStore secondStore;
+			secondStore.SetPath(StorePath("reap-second"));
+			NetReconnectClient secondClient;
+			secondClient.Configure(&secondStore, MakeIdentity(), "Replacement");
+			secondClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			secondClient.SetHostContext("loopback", MakeHash(5));
+			second.SetReconnectClient(&secondClient);
+			if (!second.StartClient(secondTransport, "loopback", MakeSessionConfig(port, 303, "Replacement"), &error)) {
+				return Fail("the replacement could not connect: " + error);
+			}
+			for (const uint64_t until = nowMs + 1200; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				second.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				secondTransport.AdvanceTimeMs(10);
+			}
+			if (secondClient.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the replacement was refused the reaped seat: ") + second.BuildRejectText());
+			}
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("the host did not end up with exactly the replacement seated");
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -2979,6 +3081,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSessionWiring(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReapedLobbySeatReturnsToThePool(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSessionEndIsTheOnlySignal(); result != 0) {
