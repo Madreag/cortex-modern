@@ -163,7 +163,10 @@ namespace RTE {
 
 		/// Gets a reference to the top level SoundSet of this SoundContainer, to which all SoundData and sub SoundSets belong.
 		/// @return A reference to the top level SoundSet of this SoundContainer.
-		SoundSet& GetTopLevelSoundSet() { return *m_TopLevelSoundSet; }
+		SoundSet& GetTopLevelSoundSet() {
+			NoteAIActor();
+			return *m_TopLevelSoundSet;
+		}
 
 		/// Copies the passed in SoundSet reference into the top level SoundSet of this SoundContainer, effectively making that the new top level SoundSet.
 		/// @param newTopLevelSoundSet A reference to the new top level SoundSet for this SoundContainer.
@@ -427,6 +430,10 @@ namespace RTE {
 		/// Hands out the sound calls this pass's AI hooks made, in call order; mods don't call this.
 		std::vector<PendingOp> TakePendingSoundOps();
 
+		/// Lands whatever the shared hooks wrote through a position Lua holds. Called once, before the
+		/// AI passes, so a change found at the drain can only have been made by one of them.
+		void SettleSharedWritesBeforeAIPass();
+
 		/// Performs one deferred sound call for real. Run it in a shared simulation scope.
 		bool ApplyPendingSoundOp(const PendingOp& op);
 
@@ -487,10 +494,9 @@ namespace RTE {
 		bool m_PendingStopped = false; //!< A Stop this pass has queued.
 		bool m_PendingPositionWritten = false; //!< A position write is queued, so a read must not refresh from shared state.
 		int8_t m_PendingHasSounds = -1; //!< What a structural call this pass made leaves HasAnySounds answering, or -1 for nothing queued.
-		bool m_PendingTouchedByAI = false; //!< An AI hook has touched this container since the last drain, so a change found now was made there.
 		bool m_SharedAliasHeld = false; //!< A shared scope has handed the position itself to Lua, which can then be written from anywhere.
-		int64_t m_PendingActorUID = 0; //!< The last AI actor to touch this container; a reconcile made at the drain belongs to it.
-		int32_t m_PendingTeam = -1;
+		mutable int64_t m_PendingActorUID = 0; //!< The last AI actor to touch this container; a reconcile made at the drain belongs to it.
+		mutable int32_t m_PendingTeam = -1;
 		Vector m_PendingAliasBaseline; //!< The position the alias Lua holds was handed out at.
 		Vector m_SharedAliasBaseline; //!< The position the shared alias was handed out at.
 		LogicalSoundPlayback m_LogicalPlayback;
@@ -505,12 +511,18 @@ namespace RTE {
 		void AdoptSharedAliasWrite();
 		/// Lands a write Lua made through a held position when no AI pass made it.
 		void SettleSharedAliasWrite();
-		void NoteAIActor();
+		void NoteAIActor() const;
 		bool ApplyPendingProperty(const PendingOp& op);
 		bool ApplyPendingStructure(const PendingOp& op);
 		SoundSet* SoundSetAtPath(const std::vector<uint16_t>& path);
 		void NotePending();
-		template<class T> const T& Control(const T& shared, T PendingControls::*member, uint32_t field) const { return Deferring() && (m_Pending.written & field) ? m_Pending.*member : shared; }
+		template<class T> const T& Control(const T& shared, T PendingControls::*member, uint32_t field) const {
+			if (!Deferring()) return shared;
+			// A read is an AI-scope touch as much as a write: it can precede a write through a position
+			// this pass, or an earlier one, handed to Lua.
+			const_cast<SoundContainer*>(this)->NoteAIActor();
+			return (m_Pending.written & field) ? m_Pending.*member : shared;
+		}
 		template<class T> T& Control(T& shared, T PendingControls::*member, uint32_t field) {
 			if (!Deferring()) return shared;
 			if (!(m_Pending.written & field)) {

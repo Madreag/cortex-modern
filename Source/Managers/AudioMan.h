@@ -47,6 +47,8 @@ namespace RTE {
 		void ClearPendingSoundOps(SoundContainer* container);
 		/// The containers with pending calls, in checkpoint-identity order so the drain is the same everywhere.
 		std::vector<SoundContainer*> TakePendingSoundOpContainers();
+		/// Lands every shared hook's write through a position Lua holds, before the AI passes run.
+		void SettleSharedSoundWrites();
 		/// Numbers a deferred sound call inside its tick, so every peer derives the same playback key.
 		uint64_t NextDeferredSoundOpOrdinal();
 		/// The tick and call number a restored run has to continue from; both are checkpoint state.
