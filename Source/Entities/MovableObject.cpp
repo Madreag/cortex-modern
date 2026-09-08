@@ -135,10 +135,8 @@ MovableObject::MovableObject() {
 }
 
 MovableObject::~MovableObject() {
-	// Clear() zeroes the identity, so the copies a held world will put back need it from here.
-	const long identity = m_UniqueID;
 	Destroy(true);
-	g_MovableMan.ForgetDestroyedObject(this, identity);
+	g_MovableMan.ForgetDestroyedObject(this);
 }
 
 void MovableObject::Clear() {
