@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace RTE {
 
@@ -48,6 +49,13 @@ namespace RTE {
 
 	/// Verifies a proof in constant time. A provider failure is a verification failure, never a pass.
 	bool NetH4VerifyProof(const NetAuthBytes32& credential, const NetH4Transcript& transcript, const NetAuthBytes32& mac);
+
+	/// Macs a stored ticket record: the ticket domain tag followed by the record's canonical bytes.
+	/// The tag is what keeps a stored record from ever verifying as a reclaim or substitution proof.
+	bool NetH4MacTicketRecord(const NetAuthBytes32& credential, const std::vector<uint8_t>& recordBytes, NetAuthBytes32& mac);
+
+	/// Verifies a stored ticket record's mac in constant time.
+	bool NetH4VerifyTicketRecord(const NetAuthBytes32& credential, const std::vector<uint8_t>& recordBytes, const NetAuthBytes32& mac);
 
 	/// Draws a server challenge / client nonce / transaction id from the CSPRNG.
 	/// @return Whether the draw succeeded; a refusal means no auth material may be issued.
