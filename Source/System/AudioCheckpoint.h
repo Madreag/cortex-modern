@@ -240,6 +240,10 @@ struct Voice {
 		Voice voice; voice.identity = identity; voice.owner = owner; voice.path = path; voice.minimumAudibleDistance = minimumAudibleDistance; voice.bus = bus;
 		if (!channel || channel->isPlaying(&voice.playing) != FMOD_OK || !voice.playing) { voice.playing = false; return voice; }
 		Require(channel->getPosition(&voice.position, FMOD_TIMEUNIT_PCM)); Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
+		// A channel that has run out of samples still reports playing, but its length is one past
+		// the last frame a restore can seek to.
+		FMOD::Sound* current = nullptr; unsigned int length = 0;
+		if (channel->getCurrentSound(&current) == FMOD_OK && current && current->getLength(&length, FMOD_TIMEUNIT_PCM) == FMOD_OK && length > 0 && voice.position >= length) voice.position = length - 1;
 		Require(channel->getLoopCount(&voice.loops)); Require(channel->getLoopPoints(&voice.loopStart, FMOD_TIMEUNIT_PCM, &voice.loopEnd, FMOD_TIMEUNIT_PCM));
 		FMOD_MODE mode; Require(channel->getMode(&mode)); voice.control = Control::Capture(channel, (mode & FMOD_3D) != 0);
 		return voice;
