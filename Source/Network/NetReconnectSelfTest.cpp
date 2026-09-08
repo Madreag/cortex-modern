@@ -584,6 +584,7 @@ namespace RTE {
 			NetAuthBytes16 nonce{};
 			NetAuthBytes16 txId{};
 			std::string captured;
+			bool flowRan = false;
 			{
 				ScopedConsoleCapture capture;
 				NetReconnectAdmission admission;
@@ -614,8 +615,13 @@ namespace RTE {
 					(void)NetProtocol::Decode(encoded);
 					(void)NetProtocol::Encode({2, 0, NetH4Proof{c_NetH4Version, txId, epoch, 2, generation, nonce, mac}}, encoded);
 					(void)NetProtocol::Decode(encoded);
+					flowRan = true;
 				}
 				captured = capture.Text();
+			}
+			// Without this the scan would pass on an empty capture because nothing ran.
+			if (!flowRan) {
+				return Fail("the canary run did not reach the surfaces it scans");
 			}
 
 			struct Secret {
