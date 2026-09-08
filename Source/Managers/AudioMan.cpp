@@ -2194,6 +2194,129 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		keyed.Stop();
 		ClearCommittedAudibility();
 	}
+		{
+			// The call's number inside its tick derives the archived playback key, so a run that
+			// restores mid-tick has to carry on from the same place rather than start again.
+			SoundContainer keyed;
+			keyed.Create(samplePath, false, true, SoundContainer::SFX);
+			ClearCommittedAudibility();
+			SetDeferredSoundOpOrdinal(0, 0);
+			const uint64_t first = NextDeferredSoundOpOrdinal();
+			const uint64_t second = NextDeferredSoundOpOrdinal();
+			const std::string midTick = SaveCheckpoint();
+			SoundExecutionKey beforeKey;
+			{
+				SoundSimulationScope drain(4242, phase, SoundExecutionDomain::SharedSimulation, NextDeferredSoundOpOrdinal());
+				keyed.Play();
+				beforeKey = keyed.GetSharedPlaybackIdentity();
+				keyed.Stop();
+			}
+			// A process that had gone further, then restores the same tick.
+			for (int extra = 0; extra < 9; ++extra) NextDeferredSoundOpOrdinal();
+			const bool moved = GetDeferredSoundOpOrdinal().second != second;
+			const bool loaded = LoadCheckpoint(midTick);
+			const uint64_t restoredOrdinal = GetDeferredSoundOpOrdinal().second;
+			SoundExecutionKey afterKey;
+			{
+				SoundSimulationScope drain(4242, phase, SoundExecutionDomain::SharedSimulation, NextDeferredSoundOpOrdinal());
+				keyed.Play();
+				afterKey = keyed.GetSharedPlaybackIdentity();
+				keyed.Stop();
+			}
+			check("deferred_ordinal_survives_a_restore",
+			      first == 1 && second == 2 && moved && loaded && restoredOrdinal == second &&
+			          afterKey.occurrence == beforeKey.occurrence && afterKey.ordinal == beforeKey.ordinal && beforeKey.occurrence != 0,
+			      "key " + std::to_string(beforeKey.occurrence) + "/" + std::to_string(afterKey.occurrence) +
+			          " ordinal " + std::to_string(restoredOrdinal) + " loaded " + std::to_string(loaded ? 1 : 0));
+			ClearCommittedAudibility();
+			SetDeferredSoundOpOrdinal(0, 0);
+		}
+		{
+			// Two AI actors on one container: whichever order the worker threads reach it in, the
+			// drain hands the calls out in one order, by actor and by that actor's own call number.
+			SoundContainer shared;
+			shared.Create(samplePath, false, true, SoundContainer::SFX);
+			const Entity* preset = g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte");
+			Actor* first = preset ? dynamic_cast<Actor*>(preset->Clone()) : nullptr;
+			Actor* second = preset ? dynamic_cast<Actor*>(preset->Clone()) : nullptr;
+			const auto drive = [&](Actor* a, Actor* b) {
+				SoundSimulationScope local(4242, phase, SoundExecutionDomain::LocalSimulation);
+				g_CurrentAIActor = a;
+				shared.SetVolume(0.25F);
+				g_CurrentAIActor = b;
+				shared.SetVolume(0.5F);
+				g_CurrentAIActor = a;
+				shared.SetPitch(2.0F);
+				g_CurrentAIActor = b;
+				shared.SetPitch(4.0F);
+				g_CurrentAIActor = nullptr;
+			};
+			const auto describe = [](const std::vector<SoundContainer::PendingOp>& ops) {
+				std::string text;
+				for (const SoundContainer::PendingOp& op: ops) {
+					text += std::to_string(op.actorUID) + ":" + std::to_string(static_cast<int>(op.property)) + ":" + std::to_string(op.sequence) + " ";
+				}
+				return text;
+			};
+			std::string forward, reversed;
+			if (first && second) {
+				drive(first, second);
+				forward = describe(shared.TakePendingSoundOps());
+				drive(second, first);
+				reversed = describe(shared.TakePendingSoundOps());
+			}
+			check("drained_order_is_deterministic", first && second && !forward.empty() && forward == reversed, forward);
+			shared.Stop();
+			delete first;
+			delete second;
+		}
+		{
+			// A record an older build wrote, taken from a save that build produced: the reader has to
+			// take every field of the two-cohort shape and give back the same container.
+			static const char* const legacy = "15 SoundContainer2 56 7 Entity1 11 Robot Death 11 Robot Death 0  0  0 0 100 0  9144 1 13 1 1 0 1123483648 1056964608 1061158912 -1 1 42 1 1096286208 3250716672 1056964608 1040187392 1048576000 0 0 0 0 282 21 LogicalSoundPlayback2 77 16 LogicalSoundKey1 1 1048577 2 10017187472382406708 15672542840968860955 12  1048577 1 161 18 LogicalSoundVoice1 77 16 LogicalSoundKey1 1 1048577 2 10017187472382406708 15672542840968860955 12  0 38976 0 38975 1194083328 1055794925 1 33332 0 -1 0 -1 0   65 21 LogicalSoundPlayback2 32 16 LogicalSoundKey1 0 0 0 0 0 0  0 0  63 19 LocalSoundControls1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  ";
+			SoundContainer restored;
+			const bool loaded = restored.LoadCheckpoint(legacy);
+			const bool version = SoundContainer::CheckpointVersion(legacy) == "SoundContainer2";
+			const bool fields = loaded &&
+			    restored.GetPresetName() == "Robot Death" &&
+			    restored.GetSoundOverlapMode() == SoundContainer::RESTART &&
+			    restored.GetBusRouting() == SoundContainer::UI &&
+			    !restored.IsImmobile() &&
+			    restored.GetAttenuationStartDistance() == 123.5F &&
+			    restored.GetCustomPanValue() == 0.5F &&
+			    restored.GetPanningStrengthMultiplier() == 0.75F &&
+			    restored.GetLoopSetting() == -1 &&
+			    restored.GetPriority() == 42 &&
+			    restored.IsAffectedByGlobalPitch() &&
+			    restored.GetPosition().m_X == 13.5F && restored.GetPosition().m_Y == -24.25F &&
+			    restored.GetPitch() == 0.5F && restored.GetPitchVariation() == 0.125F &&
+			    restored.GetVolume() == 0.25F && !restored.IsPaused() &&
+			    restored.GetMusicPreEntryTime() == 0.0F && restored.GetMusicExitTime() == 0.0F &&
+			    restored.GetCheckpointIdentity() == 9144 &&
+			    restored.GetPlayingChannels()->size() == 1 && restored.GetPlayingChannels()->contains(13);
+			const std::vector<LogicalSoundVoice>& voices = restored.GetSharedLogicalVoices();
+			const bool playback = voices.size() == 1 && voices.front().sampleOrdinal == 0 && voices.front().sampleFrames == 38976 &&
+			    voices.front().loopStart == 0 && voices.front().loopEnd == 38975 && voices.front().sampleRate == 44100.0F &&
+			    voices.front().bus == 1 && voices.front().anchorTicks == 33332 && voices.front().anchorPosition == 0.0 &&
+			    voices.front().loops == -1 && !voices.front().paused && voices.front().fadeStartTicks == -1 && voices.front().fadeSeconds == 0.0 &&
+			    voices.front().origin.value.objectUID == 1048577 && voices.front().origin.value.ordinal == 12 &&
+			    restored.GetSharedPlaybackIdentity().objectUID == 1048577 && restored.GetSharedPlaybackIdentity().ordinal == 12 &&
+			    restored.GetSharedLogicalPlayback().lastObjectUID == 1048577;
+			// What it writes now must read back the same, so nothing was dropped on the way through.
+			SoundContainer again;
+			const std::string current = restored.SaveCheckpoint();
+			const bool round = again.LoadCheckpoint(current) && again.SaveCheckpoint() == current &&
+			    SoundContainer::CheckpointVersion(current) == "SoundContainer3";
+			check("legacy_sound_container_record_loads", version && loaded && fields && playback && round,
+			      "version " + std::to_string(version ? 1 : 0) + " loaded " + std::to_string(loaded ? 1 : 0) +
+			          " rate " + std::to_string(voices.empty() ? 0.0F : voices.front().sampleRate) +
+			          " pitch " + std::to_string(voices.empty() ? 0.0F : voices.front().pitch) +
+			          " fields " + std::to_string(fields ? 1 : 0) + " playback " + std::to_string(playback ? 1 : 0) +
+			          " round " + std::to_string(round ? 1 : 0) + " preset " + restored.GetPresetName() +
+			          " identity " + std::to_string(restored.GetCheckpointIdentity()) +
+			          " voices " + std::to_string(restored.GetSharedLogicalVoices().size()) +
+			          " channels " + std::to_string(restored.GetPlayingChannels()->size()));
+		}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 	s_PlaybackSuppressed = suppressed;
 	return passed;
