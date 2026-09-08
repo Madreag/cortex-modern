@@ -186,6 +186,23 @@ namespace RTE {
 		std::vector<NetSoundObservation> remoteObservations;
 	};
 
+	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
+	/// stopped RELAYING to, and from one whose frames arrived and were refused.
+	struct NetLockstepPeerStats {
+		uint32_t framePacketsReceived = 0;
+		uint64_t controllerFramesReceived = 0;
+		uint32_t framesContributed = 0; //!< This peer's frames that reached a committed tick.
+		uint32_t duplicateFrames = 0;
+		uint32_t outOfOrderFrames = 0;
+		uint32_t futureFrameDrops = 0;
+		uint32_t staleRoundPackets = 0;
+		uint32_t preStartBuffered = 0;
+		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
+		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
+		uint64_t highestTargetFrame = 0;
+		uint64_t lastHeardMs = 0;
+	};
+
 	struct NetLockstepStats {
 		uint64_t sessionId = 0;
 		uint64_t configuredStartFrame = 0;
@@ -208,10 +225,17 @@ namespace RTE {
 		uint32_t framesAccepted = 0;
 		uint32_t duplicateFrames = 0;
 		uint32_t outOfOrderFrames = 0;
+		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
+		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
+		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
+		uint64_t longestStallMs = 0;
+		std::string lastMissingPeers; //!< Who the longest stall was waiting on.
+		std::string lastRelayError;
 		std::string timeoutReason;
+		std::map<uint8_t, NetLockstepPeerStats> peers;
 	};
 
 	class NetLockstepCodec {
