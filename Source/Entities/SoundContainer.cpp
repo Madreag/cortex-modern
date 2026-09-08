@@ -441,3 +441,36 @@ bool SoundContainer::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		return true;
 	} catch (const std::exception&) { return false; }
 }
+
+void SoundContainer::SwapCheckpoint(SoundContainer& other) noexcept {
+	using std::swap;
+	swap(m_PresetName, other.m_PresetName);
+	swap(m_CopiedFromPresetName, other.m_CopiedFromPresetName);
+	swap(m_PresetDescription, other.m_PresetDescription);
+	swap(m_FormattedReaderPosition, other.m_FormattedReaderPosition);
+	swap(m_IsOriginalPreset, other.m_IsOriginalPreset);
+	swap(m_DefinedInModule, other.m_DefinedInModule);
+	swap(m_RandomWeight, other.m_RandomWeight);
+	swap(m_Groups, other.m_Groups);
+	swap(m_CheckpointIdentity, other.m_CheckpointIdentity);
+	swap(m_TopLevelSoundSet, other.m_TopLevelSoundSet);
+	swap(m_PlayingChannels, other.m_PlayingChannels);
+	swap(m_SoundOverlapMode, other.m_SoundOverlapMode);
+	swap(m_BusRouting, other.m_BusRouting);
+	swap(m_Immobile, other.m_Immobile);
+	swap(m_AttenuationStartDistance, other.m_AttenuationStartDistance);
+	swap(m_CustomPanValue, other.m_CustomPanValue);
+	swap(m_PanningStrengthMultiplier, other.m_PanningStrengthMultiplier);
+	swap(m_Loops, other.m_Loops);
+	swap(m_SoundPropertiesUpToDate, other.m_SoundPropertiesUpToDate);
+	swap(m_Priority, other.m_Priority);
+	swap(m_AffectedByGlobalPitch, other.m_AffectedByGlobalPitch);
+	swap(m_Pos, other.m_Pos);
+	swap(m_Pitch, other.m_Pitch);
+	swap(m_PitchVariation, other.m_PitchVariation);
+	swap(m_Volume, other.m_Volume);
+	swap(m_WasFadedOut, other.m_WasFadedOut);
+	swap(m_Paused, other.m_Paused);
+	swap(m_MusicPreEntryTime, other.m_MusicPreEntryTime);
+	swap(m_MusicExitTime, other.m_MusicExitTime);
+}
