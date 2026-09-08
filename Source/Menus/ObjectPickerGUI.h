@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "Controller.h"
 
 #include "GUI.h"
@@ -19,6 +22,11 @@ namespace RTE {
 	class ObjectPickerGUI {
 
 	public:
+
+		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
+		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 #pragma region Creation
 		/// Constructor method used to instantiate a ObjectPickerGUI object in system memory. Create() should be called before using the object.
 		ObjectPickerGUI() { Clear(); }
@@ -125,6 +133,15 @@ namespace RTE {
 #pragma endregion
 
 	private:
+
+		std::string m_PendingCheckpoint;
+		bool m_CheckpointInitialized = false;
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_PickerState, self.m_PickerFocus, self.m_OpenCloseSpeed, self.m_ModuleSpaceID,
+				self.m_ShowType, self.m_NativeTechModuleID, self.m_ForeignCostMult, self.m_ShownGroupIndex,
+				self.m_SelectedGroupIndex, self.m_SelectedObjectIndex, self.m_RepeatStartTimer, self.m_RepeatTimer,
+				self.m_ExpandedModules);
+		}
 		/// Enumeration for ObjectPicker states when enabling/disabling the ObjectPicker.
 		enum class PickerState {
 			Enabling,

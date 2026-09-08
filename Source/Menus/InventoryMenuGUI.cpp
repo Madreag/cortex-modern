@@ -1,3 +1,6 @@
+#include "CheckpointArchive.h"
+#include "GUICheckpoint.h"
+#include <iostream>
 #include "InventoryMenuGUI.h"
 
 #include "WindowMan.h"
@@ -61,6 +64,8 @@ void InventoryMenuGUI::CarouselItemBox::GetIconsAndMass(std::vector<BITMAP*>& it
 }
 
 void InventoryMenuGUI::Clear() {
+	m_PendingCheckpoint.clear();
+	m_CheckpointInitialized = false;
 	m_SmallFont = nullptr;
 	m_LargeFont = nullptr;
 
@@ -131,6 +136,7 @@ void InventoryMenuGUI::Clear() {
 }
 
 int InventoryMenuGUI::Create(Controller* activityPlayerController, Actor* inventoryActor, MenuMode menuMode) {
+	m_CheckpointInitialized = true;
 	RTEAssert(activityPlayerController, "No controller sent to InventoryMenuGUI on creation!");
 	RTEAssert(c_ItemsPerRow % 2 == 1, "Don't you dare use an even number of items per inventory row, you filthy animal!");
 
@@ -190,6 +196,8 @@ int InventoryMenuGUI::SetupCarouselMode() {
 
 	m_CarouselBitmap = std::unique_ptr<BITMAP>(create_bitmap_ex(8, carouselBitmapWidth, c_CarouselBoxMaxSize.GetFloorIntY() + m_SmallFont->GetFontHeight() / 2));
 	m_CarouselBGBitmap = std::unique_ptr<BITMAP>(create_bitmap_ex(8, carouselBitmapWidth, c_CarouselBoxMaxSize.GetFloorIntY() + m_SmallFont->GetFontHeight() / 2));
+	clear_to_color(m_CarouselBitmap.get(), g_MaskColor);
+	clear_to_color(m_CarouselBGBitmap.get(), g_MaskColor);
 
 	return 0;
 }
@@ -1407,4 +1415,132 @@ void InventoryMenuGUI::DrawFullMode(BITMAP* targetBitmap, const Vector& drawPos)
 			draw_sprite(targetBitmap, s_CursorBitmap, m_GUICursorPos.GetFloorIntX(), m_GUICursorPos.GetFloorIntY());
 		}
 	}
+}
+
+std::string InventoryMenuGUI::SaveCheckpoint() const {
+	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
+	CheckpointWriter writer("InventoryMenuGUI2");
+	writer(m_CheckpointInitialized);
+	VisitCheckpoint(writer, *this);
+	writer(GUICheckpoint::SaveEntityReference(m_InventoryActor), m_InventoryActorEquippedItems.size());
+	for (const auto& [item, offhand]: m_InventoryActorEquippedItems) writer(GUICheckpoint::SaveEntityReference(item), GUICheckpoint::SaveEntityReference(offhand));
+	const auto saveBox = [](const std::unique_ptr<CarouselItemBox>& box) {
+		CheckpointWriter state("CarouselItemBox1");
+		state(box != nullptr);
+		if (box) state(GUICheckpoint::SaveEntityReference(box->Item), box->IsForEquippedItems, box->FullSize, box->CurrentSize, box->Pos, box->IconCenterPosition, box->RoundedAndBorderedSides);
+		return state.Text();
+	};
+	for (const auto& box: m_CarouselItemBoxes) writer(saveBox(box));
+	writer(saveBox(m_CarouselExitingItemBox), GUICheckpoint::SaveBitmap(m_CarouselBitmap.get()), GUICheckpoint::SaveBitmap(m_CarouselBGBitmap.get()));
+	const auto buttonName = [](GUIButton* button) { return button ? button->GetName() : std::string{}; };
+	writer(buttonName(m_NonMouseHighlightedButton), buttonName(m_NonMousePreviousEquippedItemsBoxButton), buttonName(m_NonMousePreviousInventoryItemsBoxButton), buttonName(m_NonMousePreviousReloadOrDropButton));
+	writer(GUICheckpoint::SaveEntityReference(m_GUIInformationToggleButtonIcon), GUICheckpoint::SaveEntityReference(m_GUIReloadButtonIcon), GUICheckpoint::SaveEntityReference(m_GUIDropButtonIcon));
+	writer(m_GUISelectedItem != nullptr);
+	if (m_GUISelectedItem) writer(buttonName(m_GUISelectedItem->Button), GUICheckpoint::SaveEntityReference(m_GUISelectedItem->Object), m_GUISelectedItem->InventoryIndex, m_GUISelectedItem->EquippedItemIndex, m_GUISelectedItem->IsBeingDragged, m_GUISelectedItem->DragHoldCount);
+	writer(m_GUIInventoryItemButtons.size());
+	for (const auto& [item, button]: m_GUIInventoryItemButtons) writer(GUICheckpoint::SaveEntityReference(item), buttonName(button));
+	writer(m_GUIControlManager != nullptr);
+	if (m_GUIControlManager) writer(m_GUIControlManager->SaveCheckpoint());
+	return writer.Text();
+}
+
+bool InventoryMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		if (!validateOnly && !LoadCheckpoint(text, true)) return false;
+		if (text.starts_with("17 InventoryMenuGUI1 ")) {
+			CheckpointReader reader(text, "InventoryMenuGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
+		}
+		CheckpointReader reader(text, "InventoryMenuGUI2", validateOnly);
+		reader(m_CheckpointInitialized);
+		VisitCheckpoint(reader, *this);
+		std::string actor, carousel, background, controls;
+		size_t count;
+		reader.Value(actor); reader.Value(count);
+		GUICheckpoint::LoadEntityReference(actor, true);
+		if (count > text.size()) return false;
+		std::vector<std::pair<std::string, std::string>> equipment(count);
+		for (auto& [item, offhand]: equipment) { reader.Value(item); reader.Value(offhand); GUICheckpoint::LoadEntityReference(item, true); GUICheckpoint::LoadEntityReference(offhand, true); }
+		std::array<std::unique_ptr<CarouselItemBox>, c_ItemsPerRow + 1> boxes;
+		std::array<std::string, c_ItemsPerRow + 1> boxItems;
+		for (size_t index = 0; index < boxes.size(); ++index) {
+			std::string saved;
+			reader.Value(saved);
+			CheckpointReader state(saved, "CarouselItemBox1");
+			bool present;
+			state.Value(present);
+			if (present) {
+				boxes[index] = std::make_unique<CarouselItemBox>();
+				auto& box = *boxes[index];
+				state.Value(boxItems[index]); state.Value(box.IsForEquippedItems); state.Value(box.FullSize); state.Value(box.CurrentSize); state.Value(box.Pos); state.Value(box.IconCenterPosition); state.Value(box.RoundedAndBorderedSides);
+				GUICheckpoint::LoadEntityReference(boxItems[index], true);
+			}
+			state.Finish();
+		}
+		reader.Value(carousel); reader.Value(background);
+		GUICheckpoint::LoadBitmap(carousel, true); GUICheckpoint::LoadBitmap(background, true);
+		std::array<std::string, 4> buttonNames;
+		std::array<std::string, 3> icons;
+		reader.Value(buttonNames); reader.Value(icons);
+		for (const auto& icon: icons) GUICheckpoint::LoadEntityReference(icon, true);
+		bool hasSelected;
+		reader.Value(hasSelected);
+		std::unique_ptr<GUISelectedItem> selected;
+		std::string selectedButton, selectedObject;
+		if (hasSelected) {
+			selected = std::make_unique<GUISelectedItem>();
+			reader.Value(selectedButton); reader.Value(selectedObject); reader.Value(selected->InventoryIndex); reader.Value(selected->EquippedItemIndex); reader.Value(selected->IsBeingDragged); reader.Value(selected->DragHoldCount);
+			GUICheckpoint::LoadEntityReference(selectedObject, true);
+		}
+		reader.Value(count);
+		if (count > text.size()) return false;
+		std::vector<std::pair<std::string, std::string>> buttons(count);
+		for (auto& [item, button]: buttons) { reader.Value(item); reader.Value(button); GUICheckpoint::LoadEntityReference(item, true); }
+		bool hasControls;
+		reader.Value(hasControls);
+		if (hasControls) { reader.Value(controls); if (!GUICheckpoint::Validate(controls)) return false; }
+		else if (hasSelected || !buttons.empty() || std::any_of(buttonNames.begin(), buttonNames.end(), [](const auto& name) { return !name.empty(); })) return false;
+		if (validateOnly) { reader.Finish(); return true; }
+		if (!m_MenuController) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
+		const auto movable = [](const std::string& value) { return const_cast<MovableObject*>(dynamic_cast<const MovableObject*>(GUICheckpoint::LoadEntityReference(value))); };
+		auto* restoredActor = dynamic_cast<Actor*>(movable(actor));
+		std::vector<std::pair<MovableObject*, MovableObject*>> restoredEquipment;
+		for (const auto& [item, offhand]: equipment) restoredEquipment.emplace_back(movable(item), movable(offhand));
+		for (size_t index = 0; index < boxes.size(); ++index) if (boxes[index]) boxes[index]->Item = movable(boxItems[index]);
+		std::unique_ptr<BITMAP, void(*)(BITMAP*)> restoredCarousel(GUICheckpoint::LoadBitmap(carousel), destroy_bitmap);
+		std::unique_ptr<BITMAP, void(*)(BITMAP*)> restoredBackground(GUICheckpoint::LoadBitmap(background), destroy_bitmap);
+		std::array<const Icon*, 3> restoredIcons;
+		for (size_t index = 0; index < icons.size(); ++index) restoredIcons[index] = dynamic_cast<const Icon*>(GUICheckpoint::LoadEntityReference(icons[index]));
+		if (hasControls) {
+			if (!FullOrTransferModeReadyForUse() && SetupFullOrTransferMode() < 0) return false;
+			if (!m_GUIControlManager->LoadCheckpoint(controls)) return false;
+		}
+		const auto button = [&](const std::string& name) -> GUIButton* {
+			if (name.empty()) return nullptr;
+			auto* value = m_GUIControlManager ? dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl(name)) : nullptr;
+			if (!value) throw std::runtime_error("an inventory button reference is missing");
+			return value;
+		};
+		std::array<GUIButton*, 4> restoredButtons;
+		for (size_t index = 0; index < buttonNames.size(); ++index) restoredButtons[index] = button(buttonNames[index]);
+		if (selected) { selected->Object = movable(selectedObject); selected->Button = button(selectedButton); }
+		std::vector<std::pair<MovableObject*, GUIButton*>> itemButtons;
+		for (const auto& [item, name]: buttons) itemButtons.emplace_back(movable(item), button(name));
+		reader.Finish();
+		m_InventoryActor = restoredActor; m_InventoryActorEquippedItems = std::move(restoredEquipment);
+		for (size_t index = 0; index < m_CarouselItemBoxes.size(); ++index) m_CarouselItemBoxes[index] = std::move(boxes[index]);
+		m_CarouselExitingItemBox = std::move(boxes.back());
+		destroy_bitmap(m_CarouselBitmap.release()); destroy_bitmap(m_CarouselBGBitmap.release());
+		m_CarouselBitmap.reset(restoredCarousel.release()); m_CarouselBGBitmap.reset(restoredBackground.release());
+		m_NonMouseHighlightedButton = restoredButtons[0]; m_NonMousePreviousEquippedItemsBoxButton = restoredButtons[1]; m_NonMousePreviousInventoryItemsBoxButton = restoredButtons[2]; m_NonMousePreviousReloadOrDropButton = restoredButtons[3];
+		m_GUIInformationToggleButtonIcon = restoredIcons[0]; m_GUIReloadButtonIcon = restoredIcons[1]; m_GUIDropButtonIcon = restoredIcons[2];
+		m_GUISelectedItem = std::move(selected); m_GUIInventoryItemButtons = std::move(itemButtons); m_PendingCheckpoint.clear();
+		if (!hasControls) {
+			m_GUIControlManager.reset(); m_GUIScreen.reset(); m_GUIInput.reset();
+			m_GUITopLevelBox = nullptr; m_GUIInformationText = nullptr; m_GUIInformationToggleButton = nullptr;
+			m_GUIEquippedItemsBox = nullptr; m_GUISwapSetButton = nullptr; m_GUIEquippedItemButton = nullptr;
+			m_GUIOffhandEquippedItemButton = nullptr; m_GUIReloadButton = nullptr; m_GUIDropButton = nullptr;
+			m_GUIInventoryItemsBox = nullptr; m_GUIInventoryItemsScrollbar = nullptr;
+		}
+		return true;
+	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] inventory validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }
 }

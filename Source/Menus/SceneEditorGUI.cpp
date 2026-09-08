@@ -1,3 +1,6 @@
+#include "CheckpointArchive.h"
+#include "GUICheckpoint.h"
+#include <iostream>
 #include "SceneEditorGUI.h"
 
 #include "CameraMan.h"
@@ -50,6 +53,8 @@ SceneEditorGUI::~SceneEditorGUI() {
 }
 
 void SceneEditorGUI::Clear() {
+	m_PendingCheckpoint.clear();
+	m_CheckpointInitialized = false;
 	m_pController = 0;
 	m_FeatureSet = INGAMEEDIT;
 	m_EditMade = false;
@@ -83,13 +88,14 @@ void SceneEditorGUI::Clear() {
 }
 
 int SceneEditorGUI::Create(Controller* pController, FeatureSets featureSet, int whichModuleSpace, int nativeTechModule, float foreignCostMult) {
+	m_CheckpointInitialized = true;
 	RTEAssert(pController, "No controller sent to SceneEditorGUI on creation!");
 	m_pController = pController;
 
 	SetFeatureSet(featureSet);
 
-	// Update the brain path
-	UpdateBrainPath();
+	// A restored editor already carries the completed request and result.
+	if (m_PendingCheckpoint.empty()) UpdateBrainPath();
 
 	// Allocate and (re)create the Editor GUIs
 	if (!m_pPicker)
@@ -1452,4 +1458,74 @@ bool SceneEditorGUI::UpdateBrainPath() {
 		return false;
 	}
 	return true;
+}
+
+std::string SceneEditorGUI::SaveCheckpoint() const {
+	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
+	CheckpointWriter writer("SceneEditorGUI2");
+	writer(m_CheckpointInitialized);
+	VisitCheckpoint(writer, *this);
+	writer(GUICheckpoint::SaveOwnedEntity(m_pCurrentObject), GUICheckpoint::SaveOwnedEntity(m_PieMenu.get()), m_pPicker != nullptr);
+	if (m_pPicker) writer(m_pPicker->SaveCheckpoint());
+	writer(m_pObjectToBlink == m_pCurrentObject && m_pObjectToBlink != nullptr);
+	writer(GUICheckpoint::SaveEntityReference(m_pObjectToBlink == m_pCurrentObject ? nullptr : m_pObjectToBlink));
+	writer(m_PathRequest != nullptr);
+	if (m_PathRequest) {
+		const auto& request = const_cast<const PathRequest&>(*m_PathRequest);
+		if (!request.complete) throw std::runtime_error("an editor path request is still running at checkpoint capture");
+		writer(request.complete, request.status, request.path, request.pathLength, request.totalCost, request.startPos, request.targetPos);
+	}
+	writer(GUICheckpoint::SaveBitmap(m_DrawBitmap.get()));
+	return writer.Text();
+}
+
+bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		if (!validateOnly && !LoadCheckpoint(text, true)) return false;
+		if (text.starts_with("15 SceneEditorGUI1 ")) {
+			CheckpointReader reader(text, "SceneEditorGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
+		}
+		CheckpointReader reader(text, "SceneEditorGUI2", validateOnly);
+		reader(m_CheckpointInitialized);
+		VisitCheckpoint(reader, *this);
+		std::string current, pie, picker, blink, bitmap;
+		bool hasPicker, blinkCurrent, hasRequest;
+		reader.Value(current); reader.Value(pie); reader.Value(hasPicker);
+		GUICheckpoint::LoadOwnedEntity(current, true); GUICheckpoint::LoadOwnedEntity(pie, true);
+		if (hasPicker) {
+			reader.Value(picker);
+			ObjectPickerGUI validator;
+			if (!validator.LoadCheckpoint(picker, true)) return false;
+		}
+		reader.Value(blinkCurrent); reader.Value(blink); reader.Value(hasRequest);
+		GUICheckpoint::LoadEntityReference(blink, true);
+		std::shared_ptr<PathRequest> request;
+		if (hasRequest) {
+			request = std::make_shared<PathRequest>();
+			reader.Value(request->complete); reader.Value(request->status); reader.Value(request->path); reader.Value(request->pathLength); reader.Value(request->totalCost); reader.Value(request->startPos); reader.Value(request->targetPos);
+			if (!request->complete) return false;
+		}
+		reader.Value(bitmap); GUICheckpoint::LoadBitmap(bitmap, true);
+		if (validateOnly) { reader.Finish(); return true; }
+		if (!m_pController) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
+		const bool keepObject = GUICheckpoint::SaveOwnedEntity(m_pCurrentObject) == current;
+		const bool keepMenu = GUICheckpoint::SaveOwnedEntity(m_PieMenu.get()) == pie;
+		auto object = keepObject ? std::unique_ptr<Entity>{} : GUICheckpoint::LoadOwnedEntity(current);
+		auto menu = keepMenu ? std::unique_ptr<Entity>{} : GUICheckpoint::LoadOwnedEntity(pie);
+		if ((object && !dynamic_cast<SceneObject*>(object.get())) || (menu && !dynamic_cast<PieMenu*>(menu.get()))) return false;
+		const auto* objectToBlink = blinkCurrent ? (keepObject ? m_pCurrentObject : static_cast<const SceneObject*>(object.get())) : dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(blink));
+		std::unique_ptr<BITMAP, BitmapDeleter> image(GUICheckpoint::LoadBitmap(bitmap));
+		if (hasPicker) {
+			if (!m_pPicker) { m_pPicker = new ObjectPickerGUI(); if (m_pPicker->Create(m_pController) < 0) return false; }
+			if (!m_pPicker->LoadCheckpoint(picker)) return false;
+		}
+		reader.Finish();
+		if (!keepObject) { delete m_pCurrentObject; m_pCurrentObject = static_cast<SceneObject*>(object.release()); }
+		if (!keepMenu) m_PieMenu.reset(static_cast<PieMenu*>(menu.release()));
+		if (m_PieMenu) m_PieMenu->SetMenuController(m_pController);
+		if (!hasPicker) { delete m_pPicker; m_pPicker = nullptr; }
+		m_pObjectToBlink = objectToBlink; m_PathRequest = std::move(request);
+		m_DrawTexture.reset(); m_DrawBitmap = std::move(image); m_PendingCheckpoint.clear();
+		return true;
+	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] scene-editor validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }
 }

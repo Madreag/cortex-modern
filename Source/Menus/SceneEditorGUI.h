@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 /// SceneEditorGUI class
 /// @author Daniel Tabar
 /// dtabar@datarealms.com
@@ -29,6 +32,11 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+
+		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
+		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		enum FeatureSets {
 			ONLOADEDIT = 0,
 			BLUEPRINTEDIT,
@@ -112,6 +120,8 @@ namespace RTE {
 		/// IS NOT transferred!
 		/// @return The currently held object, if any. OWNERSHIP IS NOT TRANSFERRED!
 		const SceneObject* GetCurrentObject() const { return m_pCurrentObject; }
+		PieMenu* GetCheckpointPieMenu() const { return m_PieMenu.get(); }
+		ObjectPickerGUI* GetCheckpointPicker() const { return m_pPicker; }
 
 		/// Sets the current mode of this editor.
 		/// @param newMode The new mode to set to, see the EditorGUIMode enum.
@@ -252,6 +262,17 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+
+		std::string m_PendingCheckpoint;
+		bool m_CheckpointInitialized = false;
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_FeatureSet, self.m_EditMade, self.m_EditorGUIMode, self.m_PreviousMode,
+				self.m_ModeChanged, self.m_BlinkTimer, self.m_BlinkMode, self.m_RepeatStartTimer,
+				self.m_RepeatTimer, self.m_RevealTimer, self.m_RevealIndex, self.m_RequireClearPathToOrbit,
+				self.m_NativeTechModule, self.m_ForeignCostMult, self.m_GridSnapping, self.m_CursorPos,
+				self.m_CursorOffset, self.m_CursorInAir, self.m_FacingLeft, self.m_PlaceTeam,
+				self.m_ObjectListOrder, self.m_DrawCurrentObject, self.m_BrainSkyPath, self.m_BrainSkyPathCost);
+		}
 		/// Clears all the member variables of this SceneEditorGUI, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

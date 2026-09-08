@@ -1,5 +1,8 @@
+#include "CheckpointArchive.h"
 #include "GUIBanner.h"
 #include "ContentFile.h"
+#include "GUICheckpoint.h"
+#include <iostream>
 
 using namespace RTE;
 
@@ -42,6 +45,7 @@ bool GUIBanner::Create(const std::string fontFilePath, const std::string fontBlu
 		// Load the font images
 		fontFile.SetDataPath(filePaths[mode]);
 		m_pFontImage[mode] = fontFile.GetAsBitmap(bitDepth == 8 ? COLORCONV_REDUCE_TO_256 : COLORCONV_8_TO_32);
+		m_CheckpointFontImages[mode].reset();
 		RTEAssert(m_pFontImage[mode], "Couldn't load font bitmap for banner font from this file:\n" + fontFilePath);
 
 		// Check the color key to be the same color as the Bottom-Right hand corner pixel
@@ -384,4 +388,66 @@ int GUIBanner::CalculateWidth(const char Character, FontMode mode) const {
 		return m_aaFontChars[mode][c].m_Width + m_Kerning;
 
 	return 0;
+}
+
+std::string GUIBanner::SaveCheckpoint() const {
+	CheckpointWriter writer("GUIBanner2");
+	VisitCheckpoint(writer, *this);
+	for (const auto* image: m_pFontImage) writer(GUICheckpoint::SaveBitmap(image));
+	return writer.Text();
+}
+
+bool GUIBanner::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		const bool legacy = text.starts_with("10 GUIBanner1 ");
+		GUIBanner candidate(*this);
+		CheckpointReader reader(text, legacy ? "GUIBanner1" : "GUIBanner2");
+		VisitCheckpoint(reader, candidate);
+		if (!legacy) {
+			for (int mode = 0; mode < FONTMODECOUNT; ++mode) {
+				std::string pixels; reader.Value(pixels);
+				if (validateOnly) GUICheckpoint::LoadBitmap(pixels, true);
+				else {
+					candidate.m_CheckpointFontImages[mode] = std::shared_ptr<BITMAP>(GUICheckpoint::LoadBitmap(pixels), destroy_bitmap);
+					candidate.m_pFontImage[mode] = candidate.m_CheckpointFontImages[mode].get();
+				}
+			}
+		}
+		reader.Finish();
+		if (!validateOnly) *this = std::move(candidate);
+		return true;
+	} catch (const std::exception& exception) {
+		std::cout << "[gui-checkpoint] banner validation=" << validateOnly << " error=" << exception.what() << std::endl;
+		return false;
+	}
+}
+
+std::string GUIBanner::FontChar::SaveCheckpoint() const {
+	CheckpointWriter writer("FontChar1");
+	writer(m_Width, m_Height, m_Offset);
+	return writer.Text();
+}
+
+bool GUIBanner::FontChar::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "FontChar1", validateOnly);
+		reader(m_Width, m_Height, m_Offset);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+std::string GUIBanner::FlyingChar::SaveCheckpoint() const {
+	CheckpointWriter writer("FlyingChar1");
+	writer(m_Character, m_MoveState, m_PosX, m_StartPosX, m_ShowPosX, m_HidePosX, m_Speed);
+	return writer.Text();
+}
+
+bool GUIBanner::FlyingChar::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "FlyingChar1", validateOnly);
+		reader(m_Character, m_MoveState, m_PosX, m_StartPosX, m_ShowPosX, m_HidePosX, m_Speed);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

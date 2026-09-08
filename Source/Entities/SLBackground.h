@@ -10,6 +10,8 @@ namespace RTE {
 		friend class NetworkServer;
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		EntityAllocation(SLBackground);
 		SerializableOverrideMethods;
 		ClassInfoGetters;
@@ -155,6 +157,7 @@ namespace RTE {
 
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 
+		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmaps;
 		std::vector<BITMAP*> m_Bitmaps; //!< Vector containing all the BITMAPs of this SLBackground. Not owned.
 		int m_FrameCount; //!< The total number of frames in this SLBackground's animation.
 		int m_Frame; //!< The frame that is currently being shown/drawn.

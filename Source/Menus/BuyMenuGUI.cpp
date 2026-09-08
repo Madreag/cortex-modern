@@ -1,3 +1,6 @@
+#include "CheckpointArchive.h"
+#include "GUICheckpoint.h"
+#include <iostream>
 #include "BuyMenuGUI.h"
 
 #include "CameraMan.h"
@@ -48,6 +51,8 @@ BuyMenuGUI::~BuyMenuGUI() {
 }
 
 void BuyMenuGUI::Clear() {
+	m_PendingCheckpoint.clear();
+	m_CheckpointInitialized = false;
 	m_pController = 0;
 	m_pGUIScreen = 0;
 	m_pGUIInput = 0;
@@ -104,12 +109,14 @@ void BuyMenuGUI::Clear() {
 	m_Loadouts.clear();
 	m_SelectedLoadoutIndex = -1;
 	m_PurchaseMade = false;
+	m_DeliveryWidth = 0;
 
 	m_EnforceMaxPassengersConstraint = true;
 	m_EnforceMaxMassConstraint = true;
 
 	m_OnlyShowOwnedItems = false;
 	m_AllowedItems.clear();
+	m_ProhibitedItems.clear();
 	m_AlwaysAllowedItems.clear();
 	m_OwnedItems.clear();
 
@@ -125,6 +132,7 @@ void BuyMenuGUI::Clear() {
 }
 
 int BuyMenuGUI::Create(Controller* pController) {
+	m_CheckpointInitialized = true;
 	RTEAssert(pController, "No controller sent to BuyMenyGUI on creation!");
 	m_pController = pController;
 
@@ -2456,4 +2464,76 @@ void BuyMenuGUI::TryPurchase() {
 
 		g_GUISound.PurchaseMadeSound()->Play(player);
 	}
+}
+
+std::string BuyMenuGUI::SaveCheckpoint() const {
+	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
+	CheckpointWriter writer("BuyMenuGUI2");
+	writer(m_CheckpointInitialized);
+	VisitCheckpoint(writer, *this);
+	writer(GUICheckpoint::SaveEntityReference(m_pSelectedCraft));
+	std::vector<bool> expanded;
+	if (m_aExpandedModules) for (int i = 0; i < g_PresetMan.GetTotalModuleCount(); ++i) expanded.push_back(m_aExpandedModules[i]);
+	writer(expanded, m_Loadouts.size());
+	for (const auto& loadout: m_Loadouts) {
+		std::vector<std::string> cargo;
+		for (const auto* item: loadout.m_CargoItems) cargo.push_back(GUICheckpoint::SaveEntityReference(item));
+		writer(GUICheckpoint::SaveOwnedEntity(&loadout), loadout.m_Complete, GUICheckpoint::SaveEntityReference(loadout.m_pDeliveryCraft), cargo);
+	}
+	writer(m_pGUIController != nullptr);
+	if (m_pGUIController) writer(m_pGUIController->SaveCheckpoint());
+	return writer.Text();
+}
+
+bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		if (!validateOnly && !LoadCheckpoint(text, true)) return false;
+		if (text.starts_with("11 BuyMenuGUI1 ")) {
+			CheckpointReader reader(text, "BuyMenuGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
+		}
+		CheckpointReader reader(text, "BuyMenuGUI2", validateOnly);
+		reader(m_CheckpointInitialized);
+		VisitCheckpoint(reader, *this);
+		std::string selected, controls;
+		std::vector<bool> expanded;
+		size_t count;
+		reader.Value(selected); reader.Value(expanded); reader.Value(count);
+		GUICheckpoint::LoadEntityReference(selected, true);
+		if (count > text.size() || (!expanded.empty() && expanded.size() != static_cast<size_t>(g_PresetMan.GetTotalModuleCount()))) return false;
+		struct SavedLoadout { std::string native, craft; bool complete; std::vector<std::string> cargo; };
+		std::vector<SavedLoadout> loadouts(count);
+		for (auto& item: loadouts) {
+			reader.Value(item.native); reader.Value(item.complete); reader.Value(item.craft); reader.Value(item.cargo);
+			GUICheckpoint::LoadOwnedEntity(item.native, true); GUICheckpoint::LoadEntityReference(item.craft, true);
+			for (const auto& cargo: item.cargo) GUICheckpoint::LoadEntityReference(cargo, true);
+		}
+		bool hasControls;
+		reader.Value(hasControls);
+		if (hasControls) { reader.Value(controls); if (!GUICheckpoint::Validate(controls)) return false; }
+		if (validateOnly) { reader.Finish(); return true; }
+		if (!m_pController) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
+		std::vector<Loadout> candidates;
+		for (const auto& item: loadouts) {
+			auto entity = GUICheckpoint::LoadOwnedEntity(item.native);
+			auto* loadout = dynamic_cast<Loadout*>(entity.get());
+			if (!loadout) return false;
+			loadout->m_Complete = item.complete;
+			loadout->m_pDeliveryCraft = dynamic_cast<const ACraft*>(GUICheckpoint::LoadEntityReference(item.craft));
+			loadout->m_CargoItems.clear();
+			for (const auto& cargo: item.cargo) {
+				const auto* object = dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(cargo));
+				if (!object) return false;
+				loadout->m_CargoItems.push_back(object);
+			}
+			candidates.push_back(*loadout);
+		}
+		const auto* craft = dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(selected));
+		if (hasControls && (!m_pGUIController || !m_pGUIController->LoadCheckpoint(controls))) return false;
+		reader.Finish();
+		m_Loadouts = std::move(candidates); m_pSelectedCraft = craft;
+		delete[] m_aExpandedModules; m_aExpandedModules = expanded.empty() ? nullptr : new bool[expanded.size()];
+		for (size_t index = 0; index < expanded.size(); ++index) m_aExpandedModules[index] = expanded[index];
+		m_PendingCheckpoint.clear();
+		return true;
+	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] buy-menu validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }
 }
