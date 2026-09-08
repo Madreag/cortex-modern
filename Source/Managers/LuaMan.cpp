@@ -295,6 +295,48 @@ namespace {
 -- so serializing again after a restore reproduces it byte for byte.
 _ScriptGraph = _ScriptGraph or {}
 local Graph = _ScriptGraph
+
+-- An older graph can hold a yield that ran through a compiled trace: three continuation slots
+-- below the callee. The runtime only ever rebuilds the plain call the trace stitched.
+function Graph.canonicalThread(desc)
+	local stitched = {}
+	for index, name in pairs(desc.conts) do
+		if name == "stitch" then stitched[#stitched + 1] = index end
+	end
+	if #stitched == 0 then return desc end
+	table.sort(stitched)
+	for _, cont in ipairs(stitched) do
+		local pc, link = desc.links[cont + 1], desc.links[cont + 3]
+		if not (pc and pc.pcslot and link and link.ftsz and desc.slots[cont + 2] ~= nil) then return nil, "malformed stitch continuation" end
+	end
+	local function dropped(slot)
+		for _, cont in ipairs(stitched) do if slot >= cont - 1 and slot <= cont + 1 then return true end end
+		return false
+	end
+	local function remap(slot)
+		local shift = 0
+		for _, cont in ipairs(stitched) do if slot > cont + 1 then shift = shift + 3 end end
+		return slot - shift
+	end
+	local out = { status = desc.status, first = desc.first, base = remap(desc.base), top = remap(desc.top), slots = {}, links = {}, conts = {} }
+	for index, value in pairs(desc.slots) do
+		if not dropped(index) then out.slots[remap(index)] = value end
+	end
+	for index, link in pairs(desc.links) do
+		local callee = nil
+		for _, cont in ipairs(stitched) do if index == cont + 3 then callee = cont end end
+		if callee then
+			local pc = desc.links[callee + 1]
+			out.links[remap(index)] = { pcslot = remap(pc.pcslot), pos = pc.pos }
+		elseif not dropped(index) then
+			out.links[remap(index)] = link.pcslot and { pcslot = remap(link.pcslot), pos = link.pos } or { ftsz = link.ftsz }
+		end
+	end
+	for index, name in pairs(desc.conts) do
+		if name ~= "stitch" then out.conts[remap(index)] = name end
+	end
+	return out
+end
 local SKIP_GLOBALS = { _ScriptedObjects = true, _ScriptGraph = true, _ScriptGraphBaseline = true, _ScriptGraphNative = true, _ScriptGraphProgress = true, _G = true, _ScriptFieldsStash = true }
 local _G, type, pairs, ipairs, next, rawget, rawset, rawequal = _G, type, pairs, ipairs, next, rawget, rawset, rawequal
 local tonumber, tostring, error, pcall, xpcall, getfenv, setfenv, loadstring = tonumber, tostring, error, pcall, xpcall, getfenv, setfenv, loadstring
@@ -1488,7 +1530,9 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 					elseif entry.kind == "K" then desc.conts[index] = entry.name
 					else desc.slots[index] = resolve(entry.value) end
 				end
-				local thread, message = _ScriptGraphThreadRestore(desc, objects[id])
+				local canonical, problem = Graph.canonicalThread(desc)
+				if not canonical then fail("a coroutine could not be rebuilt: " .. tostring(problem)) end
+				local thread, message = _ScriptGraphThreadRestore(canonical or desc, objects[id])
 				if thread then objects[id] = thread else fail("a coroutine could not be rebuilt: " .. tostring(message)) end
 			end
 		end
@@ -1828,10 +1872,14 @@ do
 		return true
 	end
 	check("coroutine_stitch_capture_canonical", sameLayout(canonical, plain))
+	local collapsed = raw and _ScriptGraph.canonicalThread(raw)
+	check("coroutine_stitch_raw_collapses", sameLayout(collapsed, canonical))
 	local fromCanonical = canonical and _ScriptGraphThreadRestore(canonical)
-	local fromRaw = raw and _ScriptGraphThreadRestore(raw)
+	local fromRaw = collapsed and _ScriptGraphThreadRestore(collapsed)
 	check("coroutine_stitch_canonical_resumes", fromCanonical and resumed(fromCanonical) == "true/9/suspended" and resumed(fromCanonical) == "true/10/suspended")
 	check("coroutine_stitch_raw_resumes", fromRaw and resumed(fromRaw) == "true/9/suspended" and resumed(fromRaw) == "true/10/suspended")
+	local malformed = raw and _ScriptGraph.canonicalThread({ status = raw.status, first = raw.first, base = raw.base, top = raw.top, slots = raw.slots, links = {}, conts = raw.conts })
+	check("coroutine_stitch_malformed_refused", malformed == nil)
 end
 b.shared = _SelfTestShared
 b.other = a
