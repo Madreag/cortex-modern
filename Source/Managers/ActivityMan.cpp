@@ -1018,6 +1018,9 @@ void ActivityMan::RenderUpdate() {
 }
 
 std::string ActivityMan::CaptureRuntimeGlobals() const {
+	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
+	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
+	g_LuaMan.CollectGarbageForCheckpoint();
 	CheckpointWriter writer("RuntimeGlobals9");
 	writer(g_SimRNG.SerializeCheckpoint(), g_RenderRNG.SerializeCheckpoint(), g_TimerMan,
 		g_MovableMan, g_SceneMan, g_CameraMan, g_FrameMan);
