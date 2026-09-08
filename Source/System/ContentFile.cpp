@@ -12,6 +12,8 @@
 #include "png.h"
 #include "fmod/fmod.hpp"
 #include "fmod/fmod_errors.h"
+
+#include <iostream>
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
