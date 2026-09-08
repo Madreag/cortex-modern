@@ -94,6 +94,7 @@ namespace RTE {
 		uint32_t ledgerDropsRecorded = 0;
 		uint32_t reseatsIssued = 0;
 		uint32_t reclaimRetransmitsDropped = 0;
+		uint32_t seatHoldsExpired = 0;
 	};
 
 	/// The host's §4/§6/§7 state machine: it runs the admission transaction, fences a superseded
@@ -137,6 +138,10 @@ namespace RTE {
 		/// Tells the plane a transport went away.
 		NetH4DisconnectOutcome NotifyDisconnect(NetPeerId connection, uint64_t frame);
 
+		/// Whether the seat that lockstep peer plays is still worth waiting for: a committed seat whose
+		/// holder dropped stays reclaimable for the P2 window, so the round it left must not end on it.
+		bool IsSeatHeldForReclaim(uint8_t lockstepPeerId) const;
+
 		/// Ends the hosted session: every credential dies, so every client may delete its record.
 		void EndHostedSession();
 
@@ -170,6 +175,9 @@ namespace RTE {
 			bool committed = false;
 			bool closed = false;
 			bool saturated = false;
+			bool dropped = false;
+			uint64_t droppedAtMs = 0;
+			bool holdExpired = false;
 		};
 
 		struct Provisional {
@@ -230,6 +238,7 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		std::string m_HostAddress;
 		NetMatchMode m_Mode = NetMatchMode::PvPSkirmish;
+		uint64_t m_NowMs = 0; //!< The plane's own clock, so a drop can be stamped without one being passed in.
 		bool m_LiveMatch = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
 		void* m_DropOwnershipContext = nullptr;

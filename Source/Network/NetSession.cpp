@@ -162,6 +162,16 @@ namespace RTE {
 		FlushReconnectOutbound();
 	}
 
+	void NetSession::TickAdmissionPlane(uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (!m_Transport || !m_ReconnectHost || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+			return;
+		}
+		m_ReconnectHost->Tick(m_NowMs);
+		FlushReconnectOutbound();
+	}
+
 	void NetSession::EndHostedSession(const std::string& reason) {
 		if (m_Transport && m_Role == NetSessionRole::Host) {
 			for (const PeerState& peer : m_Peers) {
@@ -1004,6 +1014,7 @@ namespace RTE {
 				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
 				{"reseats_issued", stats.reseatsIssued},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},

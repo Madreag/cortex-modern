@@ -1091,6 +1091,180 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// The H4 seat state the round asks for, stubbed. This case pins the coordinator half of the
+		// hold; the plane's own answer is pinned by -net-reconnect-session-selftest.
+		struct SeatStateStub {
+			bool held = false;
+			NetPeerId fenced = c_InvalidNetPeerId;
+		};
+
+		NetLockstepSeatState QuerySeatStateStub(void* context, uint8_t, NetPeerId transportPeerId) {
+			auto* stub = static_cast<SeatStateStub*>(context);
+			NetLockstepSeatState state;
+			state.heldForReclaim = stub->held;
+			state.fencedTransport = transportPeerId != c_InvalidNetPeerId && transportPeerId == stub->fenced;
+			return state;
+		}
+
+		// H4 §4: a 1v1 whose only remote DROPS holds its seat for the reclaim window instead of ending,
+		// so the returner has a match to come back to. A clean leave with nobody left still ends at once.
+		bool TestCoordinatorDroppedSeatHold(std::string* error) {
+			uint16_t port = 43020;
+			auto runDrop = [&](bool holdSeat, bool fenceTransport, bool cleanLeave, NetLockstepState& outState,
+			                   size_t& outLeaves, std::string& outReason, uint64_t& outFramesAlone) {
+				++port;
+				const uint64_t sessionId = 0x7000000000000020ULL + port;
+				LoopbackTransport hostT, clientT;
+				std::string ignored;
+				if (!hostT.StartHost(port, &ignored) || !clientT.Connect("loopback", port, &ignored)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = sessionId;
+					c.timeoutMs = 5000;
+					c.localPeerId = local;
+					c.peerCount = 2;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.scenario = "LockstepSelfTest";
+					c.ownershipPolicy = "unique-id-split";
+					return c;
+				};
+				SeatStateStub stub;
+				stub.held = holdSeat;
+				NetLockstepCoordinator host, client;
+				if (!host.Start(hostT, cfg(1, {{2, 1}}, true), &ignored) || !client.Start(clientT, cfg(2, {{1, 1}}, false), &ignored)) {
+					return false;
+				}
+				host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+				uint64_t now = 0;
+				auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						client.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						clientT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
+				if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+					return false;
+				}
+				for (uint64_t f = 0; f < 2; ++f) {
+					if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, &ignored) ||
+					    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, &ignored)) {
+						return false;
+					}
+				}
+				NetLockstepReadyFrame ready;
+				size_t committed = 0;
+				if (!drive(2000, [&] {
+						while (host.PopReadyFrame(ready)) {
+							++committed;
+						}
+						return committed >= 2;
+					})) {
+					return false;
+				}
+				// The drop: the transport goes away with no notice. A clean leave announces itself first.
+				stub.fenced = fenceTransport ? static_cast<NetPeerId>(1) : c_InvalidNetPeerId;
+				if (cleanLeave) {
+					client.Leave("bye");
+					drive(200, [] { return false; });
+				}
+				clientT.Stop();
+				drive(200, [] { return false; });
+				// Whatever the host decided, it must be able to keep producing frames on its own.
+				outFramesAlone = 0;
+				for (uint64_t f = 2; f < 5; ++f) {
+					if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, &ignored)) {
+						break;
+					}
+				}
+				drive(200, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++outFramesAlone;
+					}
+					return false;
+				});
+				outState = host.GetState();
+				outLeaves = host.GetPeerLeaveFrames().size();
+				outReason = host.GetStats().timeoutReason;
+				if (outState == NetLockstepState::Running && !cleanLeave && !fenceTransport) {
+					// The window closes: the very next Tick must end a round nobody is coming back to.
+					stub.held = false;
+					host.Tick(now + 5);
+					outState = host.GetState();
+					outReason = host.GetStats().timeoutReason;
+				}
+				return true;
+			};
+
+			NetLockstepState state = NetLockstepState::Idle;
+			size_t leaves = 0;
+			std::string reason;
+			uint64_t framesAlone = 0;
+
+			// Held: the round plays on without the dropped peer, then ends when the window closes.
+			if (!runDrop(true, false, false, state, leaves, reason, framesAlone)) {
+				*error = "the held-seat drop fixture did not run";
+				return false;
+			}
+			if (leaves != 1) {
+				*error = "a held drop did not stop requiring the dropped peer's frames";
+				return false;
+			}
+			if (framesAlone == 0) {
+				*error = "the host produced nothing while it held the seat";
+				return false;
+			}
+			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
+				*error = "the round did not end once the reclaim window closed: " + reason;
+				return false;
+			}
+
+			// The control: with no seat held this is exactly the old behaviour - the drop ends the match.
+			uint64_t controlFrames = 0;
+			if (!runDrop(false, false, false, state, leaves, reason, controlFrames)) {
+				*error = "the unheld-seat control did not run";
+				return false;
+			}
+			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
+				*error = "an unheld 1v1 drop no longer ends the match: " + reason;
+				return false;
+			}
+			if (controlFrames != 0) {
+				*error = "the host kept producing frames after an unheld drop";
+				return false;
+			}
+
+			// A clean leave with nobody left ends the match at once even while the seat would be held.
+			if (!runDrop(true, false, true, state, leaves, reason, framesAlone)) {
+				*error = "the clean-leave fixture did not run";
+				return false;
+			}
+			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
+				*error = "a clean 1v1 leave no longer ends the match: " + reason;
+				return false;
+			}
+
+			// A superseded incarnation's socket closing is not a leave at all: the seat's live holder is
+			// another transport, so the round keeps requiring it.
+			if (!runDrop(false, true, false, state, leaves, reason, framesAlone)) {
+				*error = "the fenced-transport fixture did not run";
+				return false;
+			}
+			if (leaves != 0 || state != NetLockstepState::Running) {
+				*error = "a fenced transport's disconnect was adjudicated as a leave";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1115,7 +1289,8 @@ namespace RTE {
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
-		    !TestCoordinatorPeerLeave(&error)) {
+		    !TestCoordinatorPeerLeave(&error) ||
+		    !TestCoordinatorDroppedSeatHold(&error)) {
 			return fail(error);
 		}
 
