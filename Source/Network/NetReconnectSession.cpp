@@ -490,18 +490,24 @@ namespace RTE {
 			++m_Stats.unknownTransactionDrops;
 			return;
 		}
-		if (m_Registry != nullptr) {
-			m_Registry->RevokeSeat(message.stableSeat);
-		}
-		seat->closed = true;
-		seat->committed = false;
-		seat->activeConnection = c_InvalidNetPeerId;
-		seat->dropped = false;
-		m_Ledger.ClearSeat(message.stableSeat);
 		m_Admission.DropConnection(connection);
-		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [&message](const Fence& fence) {
-			return fence.stableSeat == message.stableSeat;
-		}), m_Fences.end());
+		if (m_LiveMatch) {
+			if (m_Registry != nullptr) {
+				m_Registry->RevokeSeat(message.stableSeat);
+			}
+			seat->closed = true;
+			seat->committed = false;
+			seat->activeConnection = c_InvalidNetPeerId;
+			seat->dropped = false;
+			m_Ledger.ClearSeat(message.stableSeat);
+			m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [&message](const Fence& fence) {
+				return fence.stableSeat == message.stableSeat;
+			}), m_Fences.end());
+		} else {
+			// A lobby leave takes nothing with it: the seat goes back in the pool so the next player -
+			// this one returning or somebody new - joins exactly as they did before H4 existed.
+			ReleaseSeat(*seat);
+		}
 		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, true};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
@@ -544,6 +550,28 @@ namespace RTE {
 		}
 		m_Ledger.RecordDrop(seat.seat.stableSeat, seat.seat.lockstepPeerId, seat.seat.team, frame, std::move(owned));
 		++m_Stats.ledgerDropsRecorded;
+	}
+
+	void NetReconnectHost::ReleaseSeat(SeatState& seat) {
+		if (m_Registry != nullptr) {
+			m_Registry->RevokeSeat(seat.seat.stableSeat);
+		}
+		seat.holderGeneration = 0;
+		seat.incarnation = 0;
+		seat.activeConnection = c_InvalidNetPeerId;
+		seat.committed = false;
+		seat.closed = false;
+		seat.saturated = false;
+		seat.dropped = false;
+		seat.holdExpired = false;
+		seat.identity = {};
+		m_Ledger.ClearSeat(seat.seat.stableSeat);
+		ReleaseProvisional(seat.seat.stableSeat);
+		const uint16_t stableSeat = seat.seat.stableSeat;
+		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [stableSeat](const Fence& fence) {
+			return fence.stableSeat == stableSeat;
+		}), m_Fences.end());
+		++m_Stats.seatsReleasedInLobby;
 	}
 
 	void NetReconnectHost::IssueReseat(const SeatState& seat) {
@@ -596,6 +624,12 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 		for (SeatState& seat : m_Seats) {
 			if (seat.committed && seat.activeConnection == connection) {
+				if (!m_LiveMatch) {
+					// Nothing has been played, so there is no ownership to hold and no world to come
+					// back to; the seat is free for the next joiner.
+					ReleaseSeat(seat);
+					return NetH4DisconnectOutcome::SeatDropped;
+				}
 				seat.activeConnection = c_InvalidNetPeerId;
 				seat.dropped = true;
 				seat.droppedAtMs = m_NowMs;
