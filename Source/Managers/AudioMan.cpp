@@ -46,7 +46,9 @@ SoundSimulationScope::SoundSimulationScope(uint64_t objectUID, uint64_t phase, S
 	// A nested native callback inside local AI remains local unless it explicitly
 	// enters presentation. Its shared cohort must not inherit local AI decisions.
 	if (m_Previous && m_Previous->m_Key.domain == SoundExecutionDomain::LocalSimulation && domain == SoundExecutionDomain::SharedSimulation) domain = SoundExecutionDomain::LocalSimulation;
-	if (m_Previous && m_Previous->m_Key.domain == domain && !occurrence) occurrence = Mix(m_Previous->m_Seed ^ ++m_Previous->m_ChildOrdinal);
+	// Only shared children number their parent's shared sequence: a per-machine AI scope must not shift the keys every peer derives.
+	if (m_Previous && !occurrence && domain == SoundExecutionDomain::SharedSimulation && m_Previous->m_Key.domain == domain) occurrence = Mix(m_Previous->m_Seed ^ ++m_Previous->m_ChildOrdinal);
+	else if (m_Previous && !occurrence && domain == SoundExecutionDomain::LocalSimulation) occurrence = Mix(m_Previous->m_Seed ^ ~(++m_Previous->m_LocalChildOrdinal));
 	m_Key = {domain, objectUID, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), phase, occurrence, 0};
 	m_Seed = Mix(g_SimRNG.GetSeed() ^ Mix(objectUID) ^ Mix(m_Key.tick) ^ Mix(phase) ^ Mix(occurrence));
 	s_Current = this;
@@ -2016,6 +2018,25 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			sound.Stop();
 			other.Stop();
 		}
+	}
+	{
+		SoundExecutionKey withoutLocal, withLocal;
+		{
+			SoundSimulationScope parent(77, phase);
+			SoundSimulationScope child(78, phase);
+			withoutLocal = SoundSimulationScope::CurrentKey();
+		}
+		{
+			SoundSimulationScope parent(77, phase);
+			{
+				SoundSimulationScope ai(79, phase, SoundExecutionDomain::LocalSimulation);
+				SoundSimulationScope nested(80, phase);
+				check("shared_inside_local_stays_local", SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation);
+			}
+			SoundSimulationScope child(78, phase);
+			withLocal = SoundSimulationScope::CurrentKey();
+		}
+		check("local_scopes_keep_shared_keys", withoutLocal.occurrence != 0 && withoutLocal.occurrence == withLocal.occurrence && withoutLocal.objectUID == 78);
 	}
 	{
 		ClearCommittedAudibility();
