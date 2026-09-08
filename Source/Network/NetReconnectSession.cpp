@@ -553,6 +553,7 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::ReleaseSeat(SeatState& seat) {
+		++m_Stats.seatsReleased;
 		if (m_Registry != nullptr) {
 			m_Registry->RevokeSeat(seat.seat.stableSeat);
 		}

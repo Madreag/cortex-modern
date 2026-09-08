@@ -91,6 +91,7 @@ namespace RTE {
 		uint32_t incarnationsBound = 0;
 		uint32_t seatsDropped = 0;
 		uint32_t seatsClosedByLeave = 0;
+		uint32_t seatsReleased = 0; //!< Seats handed back to the pool, whichever way their holder went.
 		uint32_t ledgerDropsRecorded = 0;
 		uint32_t reseatsIssued = 0;
 		uint32_t reclaimRetransmitsDropped = 0;
