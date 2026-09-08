@@ -135,6 +135,10 @@ namespace RTE {
 
 		/// Lets callers recover from parse errors instead of terminating the process.
 		void SetThrowOnError(bool enabled) { m_ThrowOnError = enabled; }
+
+		/// Checkpoints instantiate runtime values without defining or replacing content presets.
+		void SetCheckpoint(bool checkpoint) { m_IsCheckpoint = checkpoint; }
+		bool IsCheckpoint() const { return m_IsCheckpoint; }
 #pragma endregion
 
 #pragma region Operator Overloads
@@ -253,6 +257,7 @@ namespace RTE {
 		bool m_SkipIncludes; //!< Indicates whether reader should skip included files.
 		bool m_CanFail; //!< Whether it's ok for the Reader to fail reading a file and fail silently instead of aborting.
 		bool m_ThrowOnError = false;
+		bool m_IsCheckpoint = false;
 		bool m_NonModulePath; //!< Whether this Reader is reading from path that is not a DataModule and should just read it as provided.
 
 		std::stack<int> m_BlockCommentOpenTagLines; //<! Stores lines on which block comment open tags are encountered. Used for error reporting when a file stream ends with an open block comment.

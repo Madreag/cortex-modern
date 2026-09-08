@@ -373,6 +373,8 @@ const Entity* PresetMan::GetEntityPreset(Reader& reader) {
 			// Abort loading if we can't create entity and it's not in a module that allows ignoring missing items.
 			if (!g_PresetMan.GetDataModule(whichModule)->GetIgnoreMissingItems())
 				RTEAbort("Reading of a preset instance \"" + pNewInstance->GetPresetName() + "\" of class " + pNewInstance->GetClassName() + " failed in file " + reader.GetCurrentFilePath() + ", shortly before line #" + reader.GetCurrentFileLine());
+		} else if (pNewInstance && reader.IsCheckpoint()) {
+			pReturnPreset = pNewInstance->GetPresetForCopy();
 		} else if (pNewInstance) {
 			// Try to add the instance to the collection
 			m_pDataModules[whichModule]->AddEntityPreset(pNewInstance, reader.GetPresetOverwriting(), entityFilePath);
@@ -421,7 +423,7 @@ Entity* PresetMan::ReadReflectedPreset(Reader& reader) {
 		} else {
 			// Try to add the instance to the collection.
 			// Note that we'll return this instance regardless of whether the adding was succesful or not
-			m_pDataModules[whichModule]->AddEntityPreset(pNewInstance, reader.GetPresetOverwriting(), entityFilePath);
+			if (!reader.IsCheckpoint()) m_pDataModules[whichModule]->AddEntityPreset(pNewInstance, reader.GetPresetOverwriting(), entityFilePath);
 			return pNewInstance;
 		}
 	}
