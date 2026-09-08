@@ -153,6 +153,9 @@ namespace RTE {
 		/// leaver's actors down at the identical tick because the lockstep gate syncs the knowledge.
 		static bool IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 
+		/// Whether the round is running only because a dropped player still has a seat to come back to.
+		static bool IsLockstepHoldingSeatForReclaim();
+
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
