@@ -729,7 +729,7 @@ namespace RTE {
 		void UnregisterObject(MovableObject* mo);
 
 		/// Drops a destroyed object from every copy a scope or a held world will put back.
-		void ForgetDestroyedObject(MovableObject* mo, long identity);
+		void ForgetDestroyedObject(MovableObject* mo);
 
 		/// Uses a global lookup map to find an object by it's unique id.
 		/// @param id Unique Id to look for.

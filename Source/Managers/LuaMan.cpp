@@ -4754,6 +4754,33 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (keepsDetachedOwner ? "PASS" : "FAIL") << " reinstate_keeps_a_detached_live_owner" << std::endl;
 	checkpointValues = keepsDetachedOwner && checkpointValues;
+	// A live object can take a new identity while the world is held (Create again, AdoptPersistedUniqueID),
+	// and the record still names it under the old one, so the forget has to find it by address.
+	bool reidentifyForgets = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		MovableObject* const address = object;
+		const long identity = object->GetUniqueID();
+		MovableMan::WorldSetAside aside;
+		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+			const bool recorded = aside.knownObjects.contains(identity);
+			object->Create();
+			const long second = object->GetUniqueID();
+			delete object;
+			bool named = false;
+			for (const auto& [uid, entry]: aside.knownObjects) {
+				if (entry == address) named = true;
+			}
+			reidentifyForgets = recorded && second != identity && !named;
+			// Anything the record still names would be walked by the reinstate, so drop it rather than leave the world held.
+			std::erase_if(aside.knownObjects, [address](const auto& entry) { return entry.second == address; });
+			for (auto& held: aside.scriptRegistrations) { held.first.erase(address); held.second.erase(address); }
+			reidentifyForgets = g_MovableMan.ReinstateWorld(aside) && reidentifyForgets;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (reidentifyForgets ? "PASS" : "FAIL") << " reidentify_then_destroy_forgets" << std::endl;
+	checkpointValues = reidentifyForgets && checkpointValues;
 	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
 	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
 	bool soundRegistryForgetsDestroyed = false;
