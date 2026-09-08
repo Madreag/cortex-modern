@@ -60,6 +60,7 @@ void SoundContainer::Clear() {
 	m_PendingStopped = false;
 	m_PendingPositionWritten = false;
 	m_PendingTouchedByAI = false;
+	m_PendingHasSounds = -1;
 	m_SharedAliasHeld = false;
 	m_PendingActorUID = 0;
 	m_PendingTeam = -1;
@@ -277,6 +278,9 @@ int SoundContainer::Save(Writer& writer) const {
 }
 
 bool SoundContainer::HasAnySounds() const {
+	// A structural call this pass made has not landed yet, but the hook that made it must read back
+	// what it did, exactly as it did when the call was immediate.
+	if (Deferring() && m_PendingHasSounds >= 0) return m_PendingHasSounds != 0;
 	return m_TopLevelSoundSet->HasAnySounds();
 }
 
@@ -301,6 +305,7 @@ float SoundContainer::GetLength(LengthOfSoundType type) const {
 }
 
 void SoundContainer::SetTopLevelSoundSet(const SoundSet& newTopLevelSoundSet) {
+	if (Deferring() && QueuePendingStructure(PendingOp::SetTopLevelSet, {}, newTopLevelSoundSet.SaveStructure(), 0, newTopLevelSoundSet.HasAnySounds())) return;
 	*m_TopLevelSoundSet = newTopLevelSoundSet;
 	m_TopLevelSoundSet->SetOwnerContainer(this);
 	m_SoundPropertiesUpToDate = false;
@@ -621,6 +626,60 @@ void SoundContainer::NotePending() {
 	g_AudioMan.NotePendingSoundOps(this);
 }
 
+bool SoundContainer::QueuePendingStructure(PendingOp::Op operation, std::vector<uint16_t> soundSetPath, std::string payload, int32_t value, bool hasSoundsAfter) {
+	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	NoteAIActor();
+	PendingOp op;
+	op.op = operation;
+	op.soundSetPath = std::move(soundSetPath);
+	op.payload = std::move(payload);
+	op.value = value;
+	QueuePendingOp(std::move(op));
+	m_PendingHasSounds = hasSoundsAfter ? 1 : 0;
+	return true;
+}
+
+SoundSet* SoundContainer::SoundSetAtPath(const std::vector<uint16_t>& path) {
+	SoundSet* soundSet = m_TopLevelSoundSet.get();
+	for (uint16_t index: path) {
+		if (!soundSet || index >= soundSet->GetSubSoundSets().size()) return nullptr;
+		soundSet = soundSet->GetSubSoundSets()[index];
+	}
+	return soundSet;
+}
+
+bool SoundContainer::ApplyPendingStructure(const PendingOp& op) {
+	if (op.op == PendingOp::SetTopLevelSet) {
+		SoundSet replacement;
+		if (!replacement.LoadStructure(op.payload)) return false;
+		SetTopLevelSoundSet(replacement);
+		return true;
+	}
+	SoundSet* soundSet = SoundSetAtPath(op.soundSetPath);
+	if (!soundSet) return false;
+	switch (op.op) {
+		case PendingOp::AddSound: {
+			SoundData data;
+			if (!SoundSet::LoadSoundData(op.payload, data)) return false;
+			soundSet->AddSoundNow(data.SoundFile.GetDataPath(), data.Offset, data.MinimumAudibleDistance, data.AttenuationStartDistance, false);
+			return true;
+		}
+		case PendingOp::RemoveSound:
+			return soundSet->RemoveSoundNow(op.payload, op.value != 0);
+		case PendingOp::AddSoundSet: {
+			SoundSet added;
+			if (!added.LoadStructure(op.payload)) return false;
+			soundSet->AddSoundSetNow(added);
+			return true;
+		}
+		case PendingOp::SetCycleMode:
+			soundSet->SetSoundSelectionCycleModeNow(static_cast<SoundSet::SoundSelectionCycleMode>(op.value));
+			return true;
+		default:
+			return false;
+	}
+}
+
 bool SoundContainer::QueuePendingSelectSounds(std::vector<uint16_t> soundSetPath) {
 	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
 	PendingOp op;
@@ -675,6 +734,8 @@ std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
 	m_PendingStopped = false;
 	m_PendingPositionWritten = false;
 	m_PendingTouchedByAI = false;
+	m_PendingHasSounds = -1;
+	m_TopLevelSoundSet->ClearPendingCycleMode();
 	m_PendingAliasBaseline = aliasHeld ? aliasPosition : Vector();
 	if (aliasHeld || m_SharedAliasHeld) NotePending();
 	else g_AudioMan.ClearPendingSoundOps(this);
@@ -702,6 +763,12 @@ bool SoundContainer::ApplyPendingSoundOp(const PendingOp& op) {
 		}
 		case PendingOp::SetProperty:
 			return ApplyPendingProperty(op);
+		case PendingOp::AddSound:
+		case PendingOp::RemoveSound:
+		case PendingOp::AddSoundSet:
+		case PendingOp::SetTopLevelSet:
+		case PendingOp::SetCycleMode:
+			return ApplyPendingStructure(op);
 		default:
 			return false;
 	}
