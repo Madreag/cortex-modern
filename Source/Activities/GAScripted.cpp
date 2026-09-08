@@ -354,7 +354,12 @@ void GAScripted::Update() {
 		// Need to call this continually unfortunately, as something might change due to dofile()
 		RefreshActivityFunctions();
 
-		RunLuaFunction("UpdateActivity");
+		{
+			// An end this script declares is the activity's own outcome; a dropped player's seat can
+			// hold it back while the reclaim window is open.
+			const ActivityMan::ScriptedOutcomeScope scriptedOutcome;
+			RunLuaFunction("UpdateActivity");
+		}
 
 		UpdateGlobalScripts(false);
 	}

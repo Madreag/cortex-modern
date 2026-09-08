@@ -1037,6 +1037,7 @@ namespace RTE {
 				{"reseats_issued", stats.reseatsIssued},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
+				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
 				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
