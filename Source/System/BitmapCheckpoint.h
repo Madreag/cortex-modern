@@ -37,6 +37,7 @@ namespace RTE {
                 }
                 reader.Finish();
 				if (value.width < 0 || value.height < 0 || ((value.width == 0) != (value.height == 0))) return false;
+				if (!value.width && value.depth != 0) return false;
 				if (value.width && value.depth != 8 && value.depth != 15 && value.depth != 16 && value.depth != 24 && value.depth != 32) return false;
                 if (static_cast<uint64_t>(value.width) * value.height * ((value.depth + 7) / 8) != value.pixels.size()) return false;
                 if (value.clipLeft < 0 || value.clipTop < 0 ||
@@ -46,7 +47,7 @@ namespace RTE {
 				return true;
 			} catch (const std::exception&) { return false; }
 		}
-		BITMAP* Create() const {
+        BITMAP* Create() const {
 			if (!width) return nullptr;
 			BITMAP* bitmap = create_bitmap_ex(depth, width, height);
 			if (!bitmap) throw std::runtime_error("could not allocate checkpoint bitmap");
@@ -55,6 +56,24 @@ namespace RTE {
             bitmap->clip = clip; bitmap->cl = clipLeft; bitmap->ct = clipTop;
             bitmap->cr = clipRight; bitmap->cb = clipBottom;
             return bitmap;
+        }
+        static void StageOwned(CheckpointReader& reader, BITMAP*& target, bool validateOnly) {
+            BitmapCheckpoint value; reader.Value(value);
+            if (validateOnly) return;
+            const bool reuse = target && value.width == target->w && value.height == target->h &&
+                value.depth == bitmap_color_depth(target);
+            using Image = std::unique_ptr<BITMAP, decltype(&destroy_bitmap)>;
+            auto candidate = std::make_shared<Image>(reuse ? nullptr : value.Create(), &destroy_bitmap);
+            reader.OnCommit([&target, value = std::move(value), candidate, reuse] {
+                if (reuse) {
+                    const size_t stride = static_cast<size_t>(value.width) * ((value.depth + 7) / 8);
+                    for (int y = 0; y < value.height; ++y) std::memcpy(target->line[y], value.pixels.data() + y * stride, stride);
+                    target->clip = value.clip; target->cl = value.clipLeft; target->ct = value.clipTop;
+                    target->cr = value.clipRight; target->cb = value.clipBottom;
+                } else {
+                    BITMAP* previous = target; target = candidate->release(); candidate->reset(previous);
+                }
+            });
         }
         static bool RunSelfTest() {
             bool passed = true;
@@ -90,6 +109,9 @@ namespace RTE {
                     saved.Capture(nullptr);
                     check("empty_replaces_previous_image", saved.width == 0 && saved.pixels.empty() && saved.Create() == nullptr);
                 }
+				BitmapCheckpoint empty, invalidEmpty;
+				invalidEmpty.depth = std::numeric_limits<int>::max();
+				check("invalid_empty_depth", !empty.LoadCheckpoint(invalidEmpty.SaveCheckpoint()));
             } catch (const std::exception& error) {
                 passed = false; std::cout << "[bitmap-checkpoint-selftest] " << error.what() << std::endl;
             }
