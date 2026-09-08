@@ -1,6 +1,7 @@
 // Make sure that binding definition files are always set to NOT use pre-compiled headers and conformance mode (/permissive) otherwise everything will be on fire!
 
 #include "LuaBindingRegisterDefinitions.h"
+#include "luabind/dependency_policy.hpp"
 
 using namespace RTE;
 
@@ -42,7 +43,7 @@ LuaBindingRegisterFunctionDefinitionForType(ActivityLuaBindings, Activity) {
 	    .def("HumanBrainCount", &Activity::HumanBrainCount)
 	    .def("AIBrainCount", &Activity::AIBrainCount)
 	    .def("GetControlledActor", &Activity::GetControlledActor)
-	    .def("GetPlayerController", &Activity::GetPlayerController)
+	    .def("GetPlayerController", &Activity::GetPlayerController, luabind::return_internal_reference(_1))
 	    .def("SetTeamFunds", &Activity::SetTeamFunds)
 	    .def("GetTeamFunds", &Activity::GetTeamFunds)
 	    .def("SetTeamAISkill", &Activity::SetTeamAISkill)
@@ -132,16 +133,16 @@ LuaBindingRegisterFunctionDefinitionForType(ActivityLuaBindings, GameActivity) {
 	    .def("SetLandingZone", &GameActivity::SetLandingZone)
 	    .def("GetLandingZone", &GameActivity::GetLandingZone)
 	    .def("SetActorSelectCursor", &GameActivity::SetActorSelectCursor)
-	    .def("GetBuyGUI", &GameActivity::GetBuyGUI)
+	    .def("GetBuyGUI", &GameActivity::GetBuyGUI, luabind::return_internal_reference(_1))
 	    .def("IsBuyGUIVisible", &GameActivity::IsBuyGUIVisible)
-	    .def("GetEditorGUI", &GameActivity::GetEditorGUI)
+	    .def("GetEditorGUI", &GameActivity::GetEditorGUI, luabind::return_internal_reference(_1))
 	    .def("LockControlledActor", &GameActivity::LockControlledActor)
 	    .def("OtherTeam", &GameActivity::OtherTeam)
 	    .def("OneOrNoneTeamsLeft", &GameActivity::OneOrNoneTeamsLeft)
 	    .def("WhichTeamLeft", &GameActivity::WhichTeamLeft)
 	    .def("NoTeamLeft", &GameActivity::NoTeamLeft)
 	    .def("OnlyOneTeamLeft", &GameActivity::OneOrNoneTeamsLeft) // Backwards compat
-	    .def("GetBanner", &GameActivity::GetBanner)
+	    .def("GetBanner", &GameActivity::GetBanner, luabind::return_internal_reference(_1))
 	    .def("SetLZArea", &GameActivity::SetLZArea)
 	    .def("GetLZArea", &GameActivity::GetLZArea)
 	    .def("SetBrainLZWidth", &GameActivity::SetBrainLZWidth)

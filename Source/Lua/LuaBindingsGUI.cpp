@@ -1,6 +1,7 @@
 // Make sure that binding definition files are always set to NOT use pre-compiled headers and conformance mode (/permissive) otherwise everything will be on fire!
 
 #include "LuaBindingRegisterDefinitions.h"
+#include "luabind/dependency_policy.hpp"
 
 using namespace RTE;
 
@@ -58,7 +59,7 @@ LuaBindingRegisterFunctionDefinitionForType(GUILuaBindings, BuyMenuGUI) {
 	    .def("SetLogoImage", &BuyMenuGUI::SetLogoImage)
 	    .def("ClearCartList", &BuyMenuGUI::ClearCartList)
 	    .def("LoadDefaultLoadoutToCart", &BuyMenuGUI::LoadDefaultLoadoutToCart)
-	    .def("GetOrderList", &LuaAdaptersBuyMenuGUI::GetOrderList, luabind::adopt(luabind::return_value) + luabind::return_stl_iterator)
+	    .def("GetOrderList", &LuaAdaptersBuyMenuGUI::GetOrderList, luabind::return_stl_iterator_owned)
 	    .def("GetTotalCartCost", &BuyMenuGUI::GetTotalCartCost)
 	    .def("GetTotalOrderCost", &BuyMenuGUI::GetTotalOrderCost)
 	    .def("GetTotalOrderMass", &BuyMenuGUI::GetTotalOrderMass)
@@ -71,7 +72,7 @@ LuaBindingRegisterFunctionDefinitionForType(GUILuaBindings, SceneEditorGUI) {
 	    .property("EditorMode", &SceneEditorGUI::GetEditorGUIMode, &SceneEditorGUI::SetEditorGUIMode)
 
 	    .def("SetCursorPos", &SceneEditorGUI::SetCursorPos)
-	    .def("GetCurrentObject", &SceneEditorGUI::GetCurrentObject)
+	    .def("GetCurrentObject", &SceneEditorGUI::GetCurrentObject, luabind::return_internal_reference(_1))
 	    .def("SetCurrentObject", &SceneEditorGUI::SetCurrentObject, luabind::adopt(_2))
 	    .def("SetModuleSpace", &SceneEditorGUI::SetModuleSpace)
 	    .def("SetNativeTechModule", &SceneEditorGUI::SetNativeTechModule)
