@@ -195,7 +195,118 @@ void SoundSet::SaveSoundSelectionCycleMode(Writer& writer, SoundSelectionCycleMo
 	}
 }
 
+SoundContainer* SoundSet::DeferringOwner() const {
+	return SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation ? m_OwnerContainer : nullptr;
+}
+
 void SoundSet::AddSound(const std::string& soundFilePath, const Vector& offset, float minimumAudibleDistance, float attenuationStartDistance, bool abortGameForInvalidSound) {
+	// From an AI hook a structural change is a decision like any other: it lands at the committed tick.
+	if (SoundContainer* owner = DeferringOwner()) {
+		std::vector<uint16_t> path;
+		if (owner->FindSoundSetPath(*this, path)) {
+			SoundData data;
+			data.SoundFile = ContentFile(soundFilePath.c_str());
+			data.Offset = offset;
+			data.MinimumAudibleDistance = minimumAudibleDistance;
+			data.AttenuationStartDistance = attenuationStartDistance;
+			owner->QueuePendingStructure(SoundContainer::PendingOp::AddSound, std::move(path), SaveSoundData(data), 0, true);
+			return;
+		}
+	}
+	AddSoundNow(soundFilePath, offset, minimumAudibleDistance, attenuationStartDistance, abortGameForInvalidSound);
+}
+
+void SoundSet::AddSoundSet(const SoundSet& soundSetToAdd) {
+	if (SoundContainer* owner = DeferringOwner()) {
+		std::vector<uint16_t> path;
+		if (owner->FindSoundSetPath(*this, path)) {
+			owner->QueuePendingStructure(SoundContainer::PendingOp::AddSoundSet, std::move(path), soundSetToAdd.SaveStructure(), 0, HasAnySounds() || soundSetToAdd.HasAnySounds());
+			return;
+		}
+	}
+	AddSoundSetNow(soundSetToAdd);
+}
+
+void SoundSet::SetSoundSelectionCycleMode(SoundSelectionCycleMode newSoundSelectionCycleMode) {
+	if (SoundContainer* owner = DeferringOwner()) {
+		std::vector<uint16_t> path;
+		if (owner->FindSoundSetPath(*this, path)) {
+			m_PendingCycleMode = newSoundSelectionCycleMode;
+			m_PendingCycleModeWritten = true;
+			owner->QueuePendingStructure(SoundContainer::PendingOp::SetCycleMode, std::move(path), std::string(), newSoundSelectionCycleMode, HasAnySounds());
+			return;
+		}
+	}
+	SetSoundSelectionCycleModeNow(newSoundSelectionCycleMode);
+}
+
+std::string SoundSet::SaveSoundData(const SoundData& soundData) {
+	CheckpointWriter writer("SoundData1");
+	writer(soundData.SoundFile.GetDataPath(), soundData.Offset, soundData.MinimumAudibleDistance, soundData.AttenuationStartDistance);
+	return writer.Text();
+}
+
+bool SoundSet::LoadSoundData(std::string_view text, SoundData& soundData) {
+	try {
+		std::string path;
+		Vector offset;
+		float minimumAudibleDistance = 0;
+		float attenuationStartDistance = -1;
+		CheckpointReader reader(text, "SoundData1");
+		reader.Value(path);
+		reader.Value(offset);
+		reader.Value(minimumAudibleDistance);
+		reader.Value(attenuationStartDistance);
+		reader.Finish();
+		soundData.SoundFile = ContentFile(path.c_str());
+		soundData.SoundObject = nullptr;
+		soundData.Offset = offset;
+		soundData.MinimumAudibleDistance = minimumAudibleDistance;
+		soundData.AttenuationStartDistance = attenuationStartDistance;
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+std::string SoundSet::SaveStructure() const {
+	CheckpointWriter writer("SoundSetStructure1");
+	std::vector<std::string> sounds;
+	sounds.reserve(m_SoundData.size());
+	for (const SoundData& soundData: m_SoundData) sounds.push_back(SaveSoundData(soundData));
+	std::vector<std::string> subSets;
+	subSets.reserve(m_SubSoundSets.size());
+	for (const SoundSet* subSoundSet: m_SubSoundSets) subSets.push_back(subSoundSet->SaveStructure());
+	writer(static_cast<int>(m_SoundSelectionCycleMode), sounds, subSets);
+	return writer.Text();
+}
+
+bool SoundSet::LoadStructure(std::string_view text) {
+	try {
+		int cycleMode = RANDOM;
+		std::vector<std::string> sounds;
+		std::vector<std::string> subSets;
+		CheckpointReader reader(text, "SoundSetStructure1");
+		reader.Value(cycleMode);
+		reader.Value(sounds);
+		reader.Value(subSets);
+		reader.Finish();
+		if (cycleMode < RANDOM || cycleMode > ALL) return false;
+		Destroy();
+		m_SoundSelectionCycleMode = static_cast<SoundSelectionCycleMode>(cycleMode);
+		for (const std::string& sound: sounds) {
+			SoundData data;
+			if (!LoadSoundData(sound, data)) return false;
+			AddSoundNow(data.SoundFile.GetDataPath(), data.Offset, data.MinimumAudibleDistance, data.AttenuationStartDistance, false);
+		}
+		for (const std::string& subSet: subSets) {
+			SoundSet added;
+			if (!added.LoadStructure(subSet)) return false;
+			AddSoundSetNow(added);
+		}
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+void SoundSet::AddSoundNow(const std::string& soundFilePath, const Vector& offset, float minimumAudibleDistance, float attenuationStartDistance, bool abortGameForInvalidSound) {
 	ContentFile soundFile(soundFilePath.c_str());
 	FMOD::Sound* soundObject = soundFile.GetAsSound(abortGameForInvalidSound, false);
 	if (!soundObject) {
@@ -206,6 +317,30 @@ void SoundSet::AddSound(const std::string& soundFilePath, const Vector& offset, 
 }
 
 bool SoundSet::RemoveSound(const std::string& soundFilePath, bool removeFromSubSoundSets) {
+	if (SoundContainer* owner = DeferringOwner()) {
+		std::vector<uint16_t> path;
+		if (owner->FindSoundSetPath(*this, path)) {
+			const bool found = HasSound(soundFilePath, removeFromSubSoundSets);
+			owner->QueuePendingStructure(SoundContainer::PendingOp::RemoveSound, std::move(path), soundFilePath, removeFromSubSoundSets ? 1 : 0, HasAnySounds() && !(m_SoundData.size() == 1 && found));
+			return found;
+		}
+	}
+	return RemoveSoundNow(soundFilePath, removeFromSubSoundSets);
+}
+
+bool SoundSet::HasSound(const std::string& soundFilePath, bool includeSubSoundSets) const {
+	for (const SoundData& soundData: m_SoundData) {
+		if (soundData.SoundFile.GetDataPath() == soundFilePath) return true;
+	}
+	if (includeSubSoundSets) {
+		for (const SoundSet* subSoundSet: m_SubSoundSets) {
+			if (subSoundSet->HasSound(soundFilePath, includeSubSoundSets)) return true;
+		}
+	}
+	return false;
+}
+
+bool SoundSet::RemoveSoundNow(const std::string& soundFilePath, bool removeFromSubSoundSets) {
 	auto soundsToRemove = std::remove_if(m_SoundData.begin(), m_SoundData.end(), [&soundFilePath](const SoundData& soundData) { return soundData.SoundFile.GetDataPath() == soundFilePath; });
 	bool anySoundsToRemove = soundsToRemove != m_SoundData.end();
 	if (anySoundsToRemove) {

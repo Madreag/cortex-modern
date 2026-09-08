@@ -1,3 +1,6 @@
+		int8_t m_PendingHasSounds = -1; //!< What a structural call this pass made leaves HasAnySounds answering, or -1 for nothing queued.
+		bool ApplyPendingStructure(const PendingOp& op);
+		SoundSet* SoundSetAtPath(const std::vector<uint16_t>& path);
 #pragma once
 
 #include "Entity.h"
@@ -59,7 +62,12 @@ namespace RTE {
 				FadeOut = 3,
 				SelectSounds = 4,
 				SetProperty = 5,
-				OpCount = 6
+				AddSound = 6,
+				RemoveSound = 7,
+				AddSoundSet = 8,
+				SetTopLevelSet = 9,
+				SetCycleMode = 10,
+				OpCount = 11
 			};
 			enum Property : uint8_t {
 				Volume = 0,
@@ -91,7 +99,8 @@ namespace RTE {
 			int32_t value = 0; //!< Fade time, loop count, priority, bus, overlap mode or a boolean.
 			float x = 0.0F;
 			float y = 0.0F;
-			std::vector<uint16_t> soundSetPath; //!< The sub-SoundSet a SelectSounds call named.
+			std::vector<uint16_t> soundSetPath; //!< The sub-SoundSet a structural or SelectSounds call named.
+			std::string payload; //!< A sound path or a SoundSet structure, for the calls that carry one.
 		};
 
 #pragma region Creation
@@ -141,6 +150,9 @@ namespace RTE {
 		/// Shows whether this SoundContainer's top level SoundSet has any SoundData or SoundSets.
 		/// @return Whether this SoundContainer has any sounds.
 		bool HasAnySounds() const;
+
+		/// Queues a structural call an AI hook made on one of this container's SoundSets.
+		bool QueuePendingStructure(PendingOp::Op op, std::vector<uint16_t> soundSetPath, std::string payload, int32_t value, bool hasSoundsAfter);
 
 		enum class LengthOfSoundType {
 			Any,

@@ -1221,6 +1221,22 @@ float AudioMan::GetLocalSoundAudibility(const SoundContainer* container) const {
 }
 
 void AudioMan::StopAll() {
+	if (SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation) {
+		// From an AI hook this is a decision about shared playback, so it becomes one deferred Stop
+		// per live container, in identity order, keeping the order a later call on any of them made.
+		std::vector<SoundContainer*> live;
+		{
+			std::lock_guard lock(m_LogicalSoundsMutex);
+			live.assign(m_ActiveLogicalSounds.begin(), m_ActiveLogicalSounds.end());
+		}
+		std::sort(live.begin(), live.end(), [](const SoundContainer* first, const SoundContainer* second) {
+			return first->GetCheckpointIdentity() < second->GetCheckpointIdentity();
+		});
+		for (SoundContainer* container: live) container->Stop();
+		// The physical stop is presentation on this machine, exactly as it always was.
+		if (m_AudioEnabled && !s_PlaybackSuppressed) m_MasterChannelGroup->stop();
+		return;
+	}
 	{
 		std::lock_guard lock(m_LogicalSoundsMutex);
 		for (SoundContainer* container: m_ActiveLogicalSounds) container->m_LogicalPlayback.voices.clear();
