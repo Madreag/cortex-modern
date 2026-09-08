@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <utility>
 
@@ -1593,6 +1594,7 @@ namespace RTE {
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
+		m_PendingObservations.clear();
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
 		m_RemoteObservations.clear();
@@ -1702,6 +1704,7 @@ namespace RTE {
 		m_LocalCommands.clear();
 		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
+		m_PendingObservations.clear();
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
 		m_RemoteObservations.clear();
@@ -1799,12 +1802,52 @@ namespace RTE {
 			command.senderPeerId = m_Config.localPeerId;
 		}
 		packet.roundId = m_RoundId;
-		packet.observations = observations;
+		// What the last frame could not hold goes first, minus anything this frame reads afresh: a newer
+		// reading for the same sound would only overwrite it in the same commit.
+		packet.observations.reserve(m_PendingObservations.size() + observations.size());
+		if (!m_PendingObservations.empty()) {
+			std::set<NetSoundObservationKey> resampled;
+			for (const NetSoundObservation& observation : observations) {
+				resampled.insert(KeyOfObservation(observation));
+			}
+			for (const NetSoundObservation& carried : m_PendingObservations) {
+				if (!resampled.contains(KeyOfObservation(carried))) {
+					packet.observations.push_back(carried);
+				}
+			}
+			m_PendingObservations.clear();
+		}
+		packet.observations.insert(packet.observations.end(), observations.begin(), observations.end());
 		for (NetSoundObservation& observation : packet.observations) {
 			observation.senderPeerId = m_Config.localPeerId;
 		}
-		if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId))) {
+		size_t heldBack = 0;
+		if (packet.observations.size() > NetLockstepCodec::c_MaxObservationsPerPacket) {
+			heldBack = packet.observations.size() - NetLockstepCodec::c_MaxObservationsPerPacket;
+			m_PendingObservations.assign(packet.observations.begin() + NetLockstepCodec::c_MaxObservationsPerPacket, packet.observations.end());
+			packet.observations.resize(NetLockstepCodec::c_MaxObservationsPerPacket);
+		}
+		size_t observationsEncoded = packet.observations.size();
+		if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded)) {
 			return false;
+		}
+		// Every peer commits what the packet carried, so the leftovers ride the next frame with their own
+		// keys and land one frame later on all of them alike.
+		if (observationsEncoded < packet.observations.size()) {
+			heldBack += packet.observations.size() - observationsEncoded;
+			m_PendingObservations.insert(m_PendingObservations.begin(), packet.observations.begin() + static_cast<std::ptrdiff_t>(observationsEncoded), packet.observations.end());
+			packet.observations.resize(observationsEncoded);
+		}
+		m_Stats.observationsCarried += heldBack;
+		if (m_PendingObservations.size() > NetLockstepCodec::c_MaxCarriedObservations) {
+			// New sounds have outrun the wire for frames on end. The stalest readings go, on this peer
+			// alone, before the packet that would have carried them, so every peer still commits the same.
+			const size_t dropped = m_PendingObservations.size() - NetLockstepCodec::c_MaxCarriedObservations;
+			m_PendingObservations.erase(m_PendingObservations.begin(), m_PendingObservations.begin() + static_cast<std::ptrdiff_t>(dropped));
+			if (m_Stats.observationsDropped == 0) {
+				std::cout << "[lockstep] more new sounds than the frame can carry; dropping the oldest held readings" << std::endl;
+			}
+			m_Stats.observationsDropped += dropped;
 		}
 		m_LocalFrames[targetFrame] = frames;
 		if (!packet.commands.empty()) {
@@ -2197,6 +2240,8 @@ namespace RTE {
 		out << "\"relay_bytes_sent\":" << m_Stats.relayBytesSent << ",";
 		out << "\"largest_relay_packet_bytes\":" << m_Stats.largestRelayPacketBytes << ",";
 		out << "\"relay_backlog_bytes\":" << m_Stats.relayBacklogBytes << ",";
+		out << "\"observations_carried\":" << m_Stats.observationsCarried << ",";
+		out << "\"observations_dropped\":" << m_Stats.observationsDropped << ",";
 		out << "\"unresolved_observation_packets\":" << m_Stats.unresolvedObservationPackets << ",";
 		out << "\"relay_observation_overflows\":" << m_Stats.relayObservationOverflows << ",";
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";

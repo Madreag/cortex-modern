@@ -302,6 +302,8 @@ namespace RTE {
 		uint64_t relayBytesSent = 0; //!< Encoded bytes this host forwarded, across every peer.
 		uint32_t largestRelayPacketBytes = 0;
 		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
+		uint64_t observationsCarried = 0; //!< Times a full frame left a reading for the next one to carry.
+		uint64_t observationsDropped = 0; //!< Carried readings dropped because new sounds outran the wire for frames on end.
 		uint32_t unresolvedObservationPackets = 0; //!< Frames dropped because an observation named a slot this peer never got.
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
@@ -329,6 +331,9 @@ namespace RTE {
 		// What one frame's observations may cost. The compact form makes 4096 of them about 21 KB, so a
 		// frame that hits this is carrying keys nobody has seen before; the rest ride the next frame.
 		static constexpr size_t c_MaxObservationBytesPerPacket = 24U * 1024U;
+		// How much a sender may hold back for later. Reaching this needs thousands of sounds nobody has
+		// heard before, every frame, for frames on end; past it the stalest readings go.
+		static constexpr size_t c_MaxCarriedObservations = NetSoundObservationDictionary::c_MaxSlots;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -537,6 +542,7 @@ namespace RTE {
 		// sender encoded, so a forward is the same size as the packet it came from and its receivers see
 		// every binding the sender made.
 		NetSoundObservationTables m_ObservationEncodeTables;
+		std::vector<NetSoundObservation> m_PendingObservations; //!< What the last frame could not hold; rides the next one.
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
 		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
