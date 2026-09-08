@@ -13,6 +13,7 @@
 #include "PresetMan.h"
 #include "UInputMan.h"
 #include "AudioMan.h"
+#include "SoundSimulation.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "PerformanceMan.h"
@@ -994,6 +995,8 @@ void ActivityMan::EndActivity() const {
 
 void ActivityMan::LateUpdateGlobalScripts() const {
 	if (GAScripted* scriptedActivity = dynamic_cast<GAScripted*>(m_Activity.get())) {
+		static const uint64_t soundPhase = Hash("LateGlobalScripts");
+		SoundSimulationScope sounds(0, soundPhase);
 		scriptedActivity->UpdateGlobalScripts(true);
 	}
 }
@@ -1001,6 +1004,8 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 void ActivityMan::Update() {
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActivityUpdate);
 	if (m_Activity) {
+		static const uint64_t soundPhase = Hash("Activity");
+		SoundSimulationScope sounds(0, soundPhase);
 		m_Activity->Update();
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActivityUpdate);

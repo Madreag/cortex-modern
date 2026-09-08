@@ -33,6 +33,7 @@
 #include "GameActivity.h"
 #include "SceneMan.h"
 #include "AudioMan.h"
+#include "SoundSimulation.h"
 #include "SettingsMan.h"
 #include "ControllerFrame.h"
 #include "PieMenu.h"
@@ -3816,6 +3817,8 @@ void MovableMan::Travel() {
 // exactly what its canonical tick will.
 void MovableMan::TravelStage(MovableObject* mo, bool actor) {
 	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorTravel"), actor);
+	static const uint64_t soundPhase = Hash("Travel");
+	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	if (!mo->IsUpdated()) {
 		mo->ApplyForces();
 		mo->PreTravel();
@@ -3827,12 +3830,16 @@ void MovableMan::TravelStage(MovableObject* mo, bool actor) {
 
 // The pie command lands before the pre-controller pass that consumes its controller states, as the activity used to do.
 void MovableMan::PreControllerStage(Actor* actor) {
+	static const uint64_t soundPhase = Hash("PreController");
+	SoundSimulationScope sounds(actor->GetUniqueID(), soundPhase);
 	actor->HandlePendingPieCommand();
 	actor->PreControllerUpdate();
 }
 
 void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorUpdate"), actor);
+	static const uint64_t soundPhase = Hash("Update");
+	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	mo->Update();
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
@@ -3843,6 +3850,8 @@ void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 }
 
 void MovableMan::PostUpdateStage(MovableObject* mo) {
+	static const uint64_t soundPhase = Hash("PostUpdate");
+	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	mo->PostUpdate();
 }
 

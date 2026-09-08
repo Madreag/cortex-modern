@@ -3,6 +3,7 @@
 #include "Vector.h"
 #include "ContentFile.h"
 #include "LuaMan.h"
+#include "SoundSimulation.h"
 
 namespace RTE {
 
@@ -135,7 +136,7 @@ namespace RTE {
 		void SetSoundSelectionCycleMode(SoundSelectionCycleMode newSoundSelectionCycleMode) {
 			m_SoundSelectionCycleMode = newSoundSelectionCycleMode;
 			if (m_SoundSelectionCycleMode == SoundSelectionCycleMode::FORWARDS) {
-				m_CurrentSelection.second = -1;
+				CurrentSelection().second = -1;
 			}
 		}
 
@@ -158,6 +159,9 @@ namespace RTE {
 		/// Selects the next sounds of this SoundSet to be played, also selecting them for sub SoundSets as appropriate.
 		/// @return False if this SoundSet or any of its sub SoundSets failed to select sounds, or true if everything worked.
 		bool SelectNextSounds();
+        bool HasSelectedSounds() const;
+        std::string SaveSimulationCheckpoint() const;
+        bool LoadSimulationCheckpoint(std::string_view text, bool validateOnly = false);
 #pragma endregion
 
 #pragma region Class Info
@@ -172,6 +176,10 @@ namespace RTE {
 
 		SoundSelectionCycleMode m_SoundSelectionCycleMode; //!< The SoundSelectionCycleMode for this SoundSet.
 		std::pair<bool, int> m_CurrentSelection; //!< Whether the current selection is in the SoundData (false) or SoundSet (true) vector, and its index in the appropriate vector.
+
+        std::array<std::pair<bool, int>, 2> m_SimulationSelections{{{false, -1}, {false, -1}}};
+        std::pair<bool, int>& CurrentSelection() { const auto domain = SoundSimulationScope::Domain(); return domain == SoundExecutionDomain::Presentation ? m_CurrentSelection : m_SimulationSelections[domain == SoundExecutionDomain::LocalSimulation ? 1 : 0]; }
+        const std::pair<bool, int>& CurrentSelection() const { const auto domain = SoundSimulationScope::Domain(); return domain == SoundExecutionDomain::Presentation ? m_CurrentSelection : m_SimulationSelections[domain == SoundExecutionDomain::LocalSimulation ? 1 : 0]; }
 
 		std::vector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
 		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.

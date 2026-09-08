@@ -1,4 +1,5 @@
 #include "SoundSet.h"
+#include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "AudioMan.h"
 #include "RTETools.h"
@@ -26,6 +27,7 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 		SoundSet copy(reference);
 		std::swap(m_SoundSelectionCycleMode, copy.m_SoundSelectionCycleMode);
 		std::swap(m_CurrentSelection, copy.m_CurrentSelection);
+		std::swap(m_SimulationSelections, copy.m_SimulationSelections);
 		m_SoundData.swap(copy.m_SoundData);
 		m_SubSoundSets.swap(copy.m_SubSoundSets);
 	}
@@ -35,6 +37,7 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 void SoundSet::Clear() {
 	m_SoundSelectionCycleMode = SoundSelectionCycleMode::RANDOM;
 	m_CurrentSelection = {false, -1};
+	m_SimulationSelections = {{{false, -1}, {false, -1}}};
 
 	m_SoundData.clear();
 	m_SubSoundSets.clear();
@@ -43,6 +46,7 @@ void SoundSet::Clear() {
 int SoundSet::Create(const SoundSet& reference) {
 	m_SoundSelectionCycleMode = reference.m_SoundSelectionCycleMode;
 	m_CurrentSelection = reference.m_CurrentSelection;
+	m_SimulationSelections = reference.m_SimulationSelections;
 	for (SoundData referenceSoundData: reference.m_SoundData) {
 		m_SoundData.push_back(std::move(referenceSoundData));
 	}
@@ -67,6 +71,7 @@ int SoundSet::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SpecialBehaviour_CurrentSelectionIsSet", { reader >> m_CurrentSelection.first; });
 	MatchProperty("SpecialBehaviour_CurrentSelectionIndex", { reader >> m_CurrentSelection.second; });
 
+	MatchProperty("SpecialBehaviour_SimulationSelection", { if (!LoadSimulationCheckpoint(base64_decode(reader.ReadPropValue()))) reader.ReportError("invalid simulation sound selection"); });
 	EndPropertyList;
 }
 
@@ -98,6 +103,7 @@ int SoundSet::Save(Writer& writer) const {
 	}
 	writer.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIsSet", m_CurrentSelection.first);
 	writer.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIndex", m_CurrentSelection.second);
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_SimulationSelection", base64_encode(SaveSimulationCheckpoint(), true));
 
 	return 0;
 }
@@ -232,11 +238,11 @@ void SoundSet::GetFlattenedSoundData(std::vector<SoundData*>& flattenedSoundData
 		for (SoundSet* subSoundSet: m_SubSoundSets) {
 			subSoundSet->GetFlattenedSoundData(flattenedSoundData, onlyGetSelectedSoundData);
 		}
-	} else {
-		if (m_CurrentSelection.first == false) {
-			flattenedSoundData.push_back(&m_SoundData[m_CurrentSelection.second]);
+	} else if (HasSelectedSounds()) {
+		if (CurrentSelection().first == false) {
+			flattenedSoundData.push_back(&m_SoundData[CurrentSelection().second]);
 		} else {
-			m_SubSoundSets[m_CurrentSelection.second]->GetFlattenedSoundData(flattenedSoundData, onlyGetSelectedSoundData);
+			m_SubSoundSets[CurrentSelection().second]->GetFlattenedSoundData(flattenedSoundData, onlyGetSelectedSoundData);
 		}
 	}
 }
@@ -249,11 +255,11 @@ void SoundSet::GetFlattenedSoundData(std::vector<const SoundData*>& flattenedSou
 		for (const SoundSet* subSoundSet: m_SubSoundSets) {
 			subSoundSet->GetFlattenedSoundData(flattenedSoundData, onlyGetSelectedSoundData);
 		}
-	} else {
-		if (m_CurrentSelection.first == false) {
-			flattenedSoundData.push_back(&m_SoundData[m_CurrentSelection.second]);
+	} else if (HasSelectedSounds()) {
+		if (CurrentSelection().first == false) {
+			flattenedSoundData.push_back(&m_SoundData[CurrentSelection().second]);
 		} else {
-			m_SubSoundSets[m_CurrentSelection.second]->GetFlattenedSoundData(flattenedSoundData, onlyGetSelectedSoundData);
+			m_SubSoundSets[CurrentSelection().second]->GetFlattenedSoundData(flattenedSoundData, onlyGetSelectedSoundData);
 		}
 	}
 }
@@ -267,10 +273,10 @@ bool SoundSet::SelectNextSounds() {
 		}
 		return true;
 	}
-	int selectedVectorSize = m_CurrentSelection.first == false ? m_SoundData.size() : m_SubSoundSets.size();
-	int unselectedVectorSize = m_CurrentSelection.first == true ? m_SoundData.size() : m_SubSoundSets.size();
+	int selectedVectorSize = CurrentSelection().first == false ? m_SoundData.size() : m_SubSoundSets.size();
+	int unselectedVectorSize = CurrentSelection().first == true ? m_SoundData.size() : m_SubSoundSets.size();
 	if (selectedVectorSize == 0 && unselectedVectorSize > 0) {
-		m_CurrentSelection.first = !m_CurrentSelection.first;
+		CurrentSelection().first = !CurrentSelection().first;
 		std::swap(selectedVectorSize, unselectedVectorSize);
 	}
 
@@ -278,15 +284,15 @@ bool SoundSet::SelectNextSounds() {
 	/// Internal lambda function to pick a random sound that's not the previously played sound. Done to avoid scoping issues inside the switch below.
 	/// </summary>
 	auto selectSoundRandom = [&selectedVectorSize, &unselectedVectorSize, this]() {
-		if (unselectedVectorSize > 0 && (selectedVectorSize == 1 || g_RenderRNG.RandomNum(0, 1) == 1)) {
+		if (unselectedVectorSize > 0 && (selectedVectorSize == 1 || SoundSimulationScope::RandomNum(0, 1) == 1)) {
 			std::swap(selectedVectorSize, unselectedVectorSize);
-			m_CurrentSelection = {!m_CurrentSelection.first, g_RenderRNG.RandomNum(0, selectedVectorSize - 1)};
+			CurrentSelection() = {!CurrentSelection().first, SoundSimulationScope::RandomNum(0, selectedVectorSize - 1)};
 		} else {
-			size_t soundToSelect = g_RenderRNG.RandomNum(0, selectedVectorSize - 1);
-			while (soundToSelect == m_CurrentSelection.second) {
-				soundToSelect = g_RenderRNG.RandomNum(0, selectedVectorSize - 1);
+			size_t soundToSelect = SoundSimulationScope::RandomNum(0, selectedVectorSize - 1);
+			while (soundToSelect == CurrentSelection().second) {
+				soundToSelect = SoundSimulationScope::RandomNum(0, selectedVectorSize - 1);
 			}
-			m_CurrentSelection.second = soundToSelect;
+			CurrentSelection().second = soundToSelect;
 		}
 	};
 
@@ -294,11 +300,11 @@ bool SoundSet::SelectNextSounds() {
 	/// Internal lambda function to pick the next sound in the forwards direction.
 	/// </summary>
 	auto selectSoundForwards = [&selectedVectorSize, &unselectedVectorSize, this]() {
-		m_CurrentSelection.second++;
-		if (m_CurrentSelection.second > selectedVectorSize - 1) {
-			m_CurrentSelection.second = 0;
+		CurrentSelection().second++;
+		if (CurrentSelection().second > selectedVectorSize - 1) {
+			CurrentSelection().second = 0;
 			if (unselectedVectorSize > 0) {
-				m_CurrentSelection.first = !m_CurrentSelection.first;
+				CurrentSelection().first = !CurrentSelection().first;
 				std::swap(selectedVectorSize, unselectedVectorSize);
 			}
 		}
@@ -308,7 +314,7 @@ bool SoundSet::SelectNextSounds() {
 		case 0:
 			return false;
 		case 1:
-			m_CurrentSelection.second = 0;
+			CurrentSelection().second = 0;
 			break;
 		default:
 			switch (m_SoundSelectionCycleMode) {
@@ -322,12 +328,28 @@ bool SoundSet::SelectNextSounds() {
 					RTEAbort("Invalid sound selection sound cycle mode. " + m_SoundSelectionCycleMode);
 					break;
 			}
-			RTEAssert(m_CurrentSelection.second >= 0 && m_CurrentSelection.second < selectedVectorSize, "Failed to select next sound, either none was selected or the selected sound was invalid.");
+			RTEAssert(CurrentSelection().second >= 0 && CurrentSelection().second < selectedVectorSize, "Failed to select next sound, either none was selected or the selected sound was invalid.");
 	}
 
-	if (m_CurrentSelection.first == true) {
-		return m_SubSoundSets[m_CurrentSelection.second]->SelectNextSounds();
+	if (CurrentSelection().first == true) {
+		return m_SubSoundSets[CurrentSelection().second]->SelectNextSounds();
 	}
 
 	return true;
+}
+
+bool SoundSet::HasSelectedSounds() const {
+    if (m_SoundSelectionCycleMode == ALL) return HasAnySounds();
+    const auto& selection = CurrentSelection();
+    if (selection.second < 0) return false;
+    if (selection.first) return static_cast<size_t>(selection.second) < m_SubSoundSets.size() && m_SubSoundSets[selection.second]->HasSelectedSounds();
+    return static_cast<size_t>(selection.second) < m_SoundData.size();
+}
+std::string SoundSet::SaveSimulationCheckpoint() const { CheckpointWriter writer("SoundSetSimulation1"); writer(m_SimulationSelections); return writer.Text(); }
+bool SoundSet::LoadSimulationCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        std::array<std::pair<bool, int>, 2> selections; CheckpointReader reader(text, "SoundSetSimulation1"); reader.Value(selections); reader.Finish();
+        for (const auto& selection: selections) if (selection.second < -1 || (selection.second >= 0 && static_cast<size_t>(selection.second) >= (selection.first ? m_SubSoundSets.size() : m_SoundData.size()))) return false;
+        if (!validateOnly) m_SimulationSelections = selections; return true;
+    } catch (const std::exception&) { return false; }
 }
