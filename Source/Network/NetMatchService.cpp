@@ -26,6 +26,12 @@ namespace RTE {
 
 	bool NetMatchService::s_AdmissionEnabled = true;
 	std::string NetMatchService::s_TicketStorePath;
+	bool NetMatchService::s_ApplyForSeat = false;
+	uint16_t NetMatchService::s_ApplySeat = 0;
+	bool NetMatchService::s_AutoSubstitute = false;
+	uint16_t NetMatchService::s_AutoSubstituteSeat = 0;
+	uint64_t NetMatchService::s_AutoSubstituteDelayMs = 0;
+	bool NetMatchService::s_AutoSubstituteThenCancel = false;
 
 // Per-process file names: same-machine instances share Userdata, so concurrent matches must never share a snapshot file.
 static std::string ResyncSaveName() {
@@ -721,6 +727,7 @@ static std::string ResyncSaveName() {
 			// The reseat is a lockstep command, not a local mutation: every peer applies the identical
 			// ownership at the identical tick. QueueLocalInput restamps the sender as this peer, which
 			// on the host is exactly the id MovableMan's reseat gate requires.
+			DriveAutoSubstitution(m_SessionPumpNowMs);
 			for (const NetGameReseat& reseat: m_ReconnectHost.TakePendingReseats()) {
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
@@ -828,6 +835,11 @@ static std::string ResyncSaveName() {
 			{"client_leave_acks", m_ReconnectClient.GetStats().leaveAcksReceived},
 			{"client_ambiguous_losses", m_ReconnectClient.GetStats().ambiguousLosses},
 			{"client_confirmed_session_ends", m_ReconnectClient.GetStats().confirmedSessionEnds},
+			{"client_applications_sent", m_ReconnectClient.GetStats().applicationsSent},
+			{"client_applications_acknowledged", m_ReconnectClient.GetStats().applicationsAcknowledged},
+			{"client_substitution_offers", m_ReconnectClient.GetStats().substitutionOffersReceived},
+			{"client_substitution_acks", m_ReconnectClient.GetStats().substitutionAcksSent},
+			{"client_reject_reason", m_ReconnectClient.HasLastRejectReason() ? NetProtocol::RejectReasonName(m_ReconnectClient.GetLastRejectReason()) : ""},
 		};
 		json seats = json::array();
 		for (const NetH4SeatStatus& seat: m_SeatStatuses) {
@@ -836,9 +848,39 @@ static std::string ResyncSaveName() {
 			                 {"committed", seat.committed},
 			                 {"closed", seat.closed},
 			                 {"dropped", seat.dropped},
-			                 {"reclaiming", seat.reclaiming}});
+			                 {"reclaiming", seat.reclaiming},
+			                 {"substituting", seat.substituting},
+			                 {"applicants", seat.applicants}});
 		}
 		reconnect["seats"] = seats;
+		// §9b's moderation view, so a gate can read what the host was offered and what it decided.
+		json moderation = json::array();
+		if (m_AdmissionAttached && m_IsHost) {
+			for (const NetH4ModerationSeat& seat: m_ReconnectHost.GetModerationView()) {
+				json applicants = json::array();
+				for (const NetH4ApplicantView& applicant: seat.applicants) {
+					applicants.push_back(json{
+						{"connection", applicant.connection},
+						{"display_name", applicant.displayName},
+						{"approved", applicant.approved},
+					});
+				}
+				moderation.push_back(json{
+					{"stable_seat", seat.stableSeat},
+					{"lockstep_peer_id", static_cast<int>(seat.lockstepPeerId)},
+					{"committed", seat.committed},
+					{"dropped", seat.dropped},
+					{"closed", seat.closed},
+					{"held_for_reclaim", seat.heldForReclaim},
+					{"substitutable", seat.substitutable},
+					{"substituting", seat.substituting},
+					{"holder_generation", seat.holderGeneration},
+					{"seat_generation", seat.seatGeneration},
+					{"applicants", applicants},
+				});
+			}
+		}
+		reconnect["moderation"] = moderation;
 		report["reconnect"] = reconnect;
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
@@ -971,6 +1013,83 @@ static std::string ResyncSaveName() {
 		s_TicketStorePath = std::move(path);
 	}
 
+	void NetMatchService::SetApplyForSeat(bool enabled, uint16_t stableSeat) {
+		s_ApplyForSeat = enabled;
+		s_ApplySeat = stableSeat;
+	}
+
+	void NetMatchService::SetAutoSubstitute(bool enabled, uint16_t stableSeat, uint64_t delayMs, bool thenCancel) {
+		s_AutoSubstitute = enabled;
+		s_AutoSubstituteSeat = stableSeat;
+		s_AutoSubstituteDelayMs = delayMs;
+		s_AutoSubstituteThenCancel = thenCancel;
+	}
+
+	std::vector<NetH4ModerationSeat> NetMatchService::GetModerationSeats() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_AdmissionAttached || !m_IsHost) {
+			return {};
+		}
+		return m_ReconnectHost.GetModerationView();
+	}
+
+	NetH4ModerationResult NetMatchService::WaitForSeat(uint16_t stableSeat) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running) {
+			return NetH4ModerationResult::NotHosting;
+		}
+		return m_ReconnectHost.WaitForSeat(stableSeat);
+	}
+
+	NetH4ModerationResult NetMatchService::SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running || !m_Session) {
+			return NetH4ModerationResult::NotHosting;
+		}
+		const NetH4ModerationResult result = m_ReconnectHost.SubstituteApplicant(stableSeat, applicantConnection, m_SessionPumpNowMs);
+		// The offer has to leave now, not at the next pump: the substitute is waiting on it and P3's
+		// ladder is measured from the moment it was sent.
+		m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+		return result;
+	}
+
+	NetH4ModerationResult NetMatchService::CancelSubstitution(uint16_t stableSeat) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running || !m_Session) {
+			return NetH4ModerationResult::NotHosting;
+		}
+		const NetH4ModerationResult result = m_ReconnectHost.CancelSubstitution(stableSeat, m_SessionPumpNowMs);
+		m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+		return result;
+	}
+
+	void NetMatchService::DriveAutoSubstitution(uint64_t nowMs) {
+		if (!s_AutoSubstitute || m_AutoSubstituteDone) {
+			return;
+		}
+		for (const NetH4ModerationSeat& seat : m_ReconnectHost.GetModerationView()) {
+			if (seat.stableSeat != s_AutoSubstituteSeat || !seat.substitutable || seat.applicants.empty()) {
+				continue;
+			}
+			if (m_AutoSubstituteReadyMs == 0) {
+				m_AutoSubstituteReadyMs = nowMs;
+			}
+			if (nowMs < m_AutoSubstituteReadyMs + s_AutoSubstituteDelayMs) {
+				return;
+			}
+			const NetH4ModerationResult result = m_ReconnectHost.SubstituteApplicant(seat.stableSeat, seat.applicants.front().connection, nowMs);
+			std::cout << "[net-reconnect] moderation: substitute seat " << seat.stableSeat << " -> "
+			          << NetH4ModerationResultName(result) << std::endl;
+			if (result == NetH4ModerationResult::Ok && s_AutoSubstituteThenCancel) {
+				std::cout << "[net-reconnect] moderation: cancel seat " << seat.stableSeat << " -> "
+				          << NetH4ModerationResultName(m_ReconnectHost.CancelSubstitution(seat.stableSeat, nowMs)) << std::endl;
+			}
+			m_AutoSubstituteDone = true;
+			return;
+		}
+	}
+
+
 	std::vector<NetH4LedgerActor> NetMatchService::CollectDropOwnership(void* context) {
 		auto* service = static_cast<NetMatchService*>(context);
 		if (!t_SimCensusOpen) {
@@ -1032,6 +1151,7 @@ static std::string ResyncSaveName() {
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
 		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
+		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat, s_ApplySeat);
 		session.SetReconnectClient(&m_ReconnectClient);
 		m_AdmissionAttached = true;
 	}

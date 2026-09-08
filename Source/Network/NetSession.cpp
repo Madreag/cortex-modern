@@ -620,7 +620,7 @@ namespace RTE {
 		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
 			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
 			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
-			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs)) {
+			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs, rejected->rejectReason)) {
 				FlushReconnectOutbound();
 				return;
 			}
@@ -1038,6 +1038,18 @@ namespace RTE {
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
+				{"applicants_registered", stats.applicantsRegistered},
+				{"applicants_refused", stats.applicantsRefused},
+				{"applicants_expired", stats.applicantsExpired},
+				{"applicants_displaced", stats.applicantsDisplaced},
+				{"substitution_offers_sent", stats.substitutionOffersSent},
+				{"substitution_offer_retransmits", stats.substitutionOfferRetransmits},
+				{"substitutions_committed", stats.substitutionsCommitted},
+				{"substitutions_cancelled", stats.substitutionsCancelled},
+				{"substitutions_superseded", stats.substitutionsSuperseded},
+				{"substitution_ack_failures", stats.substitutionAckFailures},
+				{"reassigned_reclaims_refused", stats.reassignedReclaimsRefused},
+				{"pending_applicants", m_ReconnectHost->GetApplicantCount()},
 				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},

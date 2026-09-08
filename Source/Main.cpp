@@ -173,6 +173,11 @@ static uint16_t s_netPort = 41010;
 static std::string s_netSessionReportPath;
 static bool s_netExitAfterReady = false;
 static bool s_netAllowUserdata = false;
+// Phase B, unattended gates: the host stands in for a moderator on the seat it is told to watch.
+static bool s_netH4Substitute = false;
+static uint16_t s_netH4SubstituteSeat = 0;
+static uint64_t s_netH4SubstituteDelayMs = 0;
+static bool s_netH4SubstituteCancel = false;
 static bool s_netLockstep = false;
 static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
@@ -544,6 +549,33 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-reconnect-ticket") {
 			NetMatchService::SetTicketStorePath(argValue[++i]);
+			continue;
+		}
+
+		// Phase B, unattended gates: the joiner asks the host for a seat instead of joining one, and
+		// the host approves the first applicant for that seat the way a moderator would.
+		if (!lastArg && currentArg == "-net-h4-apply") {
+			NetMatchService::SetApplyForSeat(true, static_cast<uint16_t>(std::stoi(argValue[++i])));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-h4-substitute") {
+			s_netH4Substitute = true;
+			s_netH4SubstituteSeat = static_cast<uint16_t>(std::stoi(argValue[++i]));
+			NetMatchService::SetAutoSubstitute(s_netH4Substitute, s_netH4SubstituteSeat, s_netH4SubstituteDelayMs, s_netH4SubstituteCancel);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-h4-substitute-delay") {
+			s_netH4SubstituteDelayMs = static_cast<uint64_t>(std::stoll(argValue[++i]));
+			NetMatchService::SetAutoSubstitute(s_netH4Substitute, s_netH4SubstituteSeat, s_netH4SubstituteDelayMs, s_netH4SubstituteCancel);
+			continue;
+		}
+
+		if (currentArg == "-net-h4-substitute-cancel") {
+			s_netH4SubstituteCancel = true;
+			NetMatchService::SetAutoSubstitute(s_netH4Substitute, s_netH4SubstituteSeat, s_netH4SubstituteDelayMs, s_netH4SubstituteCancel);
+			++i;
 			continue;
 		}
 
