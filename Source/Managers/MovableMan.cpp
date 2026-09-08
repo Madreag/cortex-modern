@@ -4379,7 +4379,13 @@ std::string MovableMan::SaveCheckpoint() const {
 	CheckpointWriter writer("MovableMan2");
 	VisitCheckpoint(writer, *this);
 	std::map<long, std::vector<long>> references;
-	for (const auto& [identity, object]: m_KnownObjects) references.emplace(identity, object->GetCheckpointBorrowedReferences());
+	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
+	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
+	for (const auto& [identity, object]: m_KnownObjects) {
+		std::vector<long> links = object->GetCheckpointBorrowedReferences();
+		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) continue;
+		references.emplace(identity, std::move(links));
+	}
 	writer(references);
 	return writer.Text();
 }
