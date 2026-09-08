@@ -380,6 +380,7 @@ static void ApplyDeferredSoundOp(const NetGameSoundOp& command) {
 	op.x = command.x;
 	op.y = command.y;
 	op.soundSetPath = command.soundSetPath;
+	op.payload = command.payload;
 	SoundSimulationScope sounds(static_cast<uint64_t>(command.actorUID), Hash("DeferredSoundOp"), SoundExecutionDomain::SharedSimulation, g_AudioMan.NextDeferredSoundOpOrdinal());
 	container->ApplyPendingSoundOp(op);
 }
@@ -4104,6 +4105,7 @@ void MovableMan::UpdateControllers() {
 					command.x = op.x;
 					command.y = op.y;
 					command.soundSetPath = op.soundSetPath;
+					command.payload = op.payload;
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepLocalPeerId(), std::move(command)});
 					++m_ControllerBoundaryStats.soundCommands;
 				}
