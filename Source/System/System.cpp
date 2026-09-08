@@ -14,6 +14,7 @@
 
 #ifdef _WIN32
 #include "Windows.h"
+#include <aclapi.h>
 #elif defined _LINUX_OR_MACOSX_
 #include <unistd.h>
 #include <sys/stat.h>
@@ -146,23 +147,156 @@ bool System::MakeDirectory(const std::string& pathToMake) {
 	return createResult;
 }
 
+void System::HashWorkingTree() {
+	// One entry the OS refuses - a path past its limit, a directory this user may not list - loses only its own subtree. Aborting here aborts startup.
+	std::vector<std::filesystem::path> pending = {s_WorkingDirectory};
+	while (!pending.empty()) {
+		const std::filesystem::path directory = pending.back();
+		pending.pop_back();
+		std::error_code error;
+		std::filesystem::directory_iterator entry(directory, std::filesystem::directory_options::skip_permission_denied, error);
+		for (const std::filesystem::directory_iterator end; !error && entry != end; entry.increment(error)) {
+			s_WorkingTree.emplace_back(Hash(entry->path().generic_string().substr(s_WorkingDirectory.length())));
+			// Symlinked directories are followed, as they were by the recursive iterator this replaced.
+			if (entry->is_directory(error)) {
+				pending.emplace_back(entry->path());
+			}
+			error.clear();
+		}
+	}
+}
+
 bool System::PathExistsCaseSensitive(const std::string& pathToCheck) {
 	// Use Hash for compiler independent hashing.
 	if (s_CaseSensitive) {
 		if (s_WorkingTree.empty()) {
-			for (const std::filesystem::directory_entry& directoryEntry: std::filesystem::recursive_directory_iterator(s_WorkingDirectory, std::filesystem::directory_options::follow_directory_symlink)) {
-				s_WorkingTree.emplace_back(Hash(directoryEntry.path().generic_string().substr(s_WorkingDirectory.length())));
-			}
+			HashWorkingTree();
 		}
+		std::error_code error;
 		if (std::find(s_WorkingTree.begin(), s_WorkingTree.end(), Hash(pathToCheck)) != s_WorkingTree.end()) {
 			return true;
-		} else if (std::filesystem::exists(pathToCheck) && std::filesystem::last_write_time(pathToCheck) > s_ProgramStartTime) {
+		} else if (std::filesystem::exists(pathToCheck, error) && std::filesystem::last_write_time(pathToCheck, error) > s_ProgramStartTime) {
 			s_WorkingTree.emplace_back(Hash(pathToCheck));
 			return true;
 		}
 		return false;
 	}
-	return std::filesystem::exists(pathToCheck);
+	std::error_code error;
+	return std::filesystem::exists(pathToCheck, error);
+}
+
+namespace {
+	// A path past the limit only creates through the extended prefix; the walk deliberately meets it without one.
+	bool MakeLongDirectory(const std::filesystem::path& directory) {
+		std::error_code error;
+#ifdef _WIN32
+		std::filesystem::path target = std::filesystem::absolute(directory, error);
+		target.make_preferred();
+		std::filesystem::create_directories(LR"(\\?\)" + target.native(), error);
+#else
+		std::filesystem::create_directories(directory, error);
+#endif
+		return !error;
+	}
+
+	// std::filesystem::permissions only moves the read-only attribute on Windows, so the deny has to be written into the directory's own list.
+	bool DenyDirectoryListing(const std::filesystem::path& directory) {
+#ifdef _WIN32
+		EXPLICIT_ACCESSW deny = {};
+		deny.grfAccessPermissions = GENERIC_ALL;
+		deny.grfAccessMode = DENY_ACCESS;
+		deny.grfInheritance = NO_INHERITANCE;
+		deny.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+		deny.Trustee.TrusteeType = TRUSTEE_IS_USER;
+		deny.Trustee.ptstrName = const_cast<LPWSTR>(L"CURRENT_USER");
+		PACL list = nullptr;
+		if (SetEntriesInAclW(1, &deny, nullptr, &list) != ERROR_SUCCESS) {
+			return false;
+		}
+		std::wstring target = directory.native();
+		const bool applied = SetNamedSecurityInfoW(target.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, list, nullptr) == ERROR_SUCCESS;
+		LocalFree(list);
+		return applied;
+#else
+		std::error_code error;
+		std::filesystem::permissions(directory, std::filesystem::perms::none, error);
+		return !error;
+#endif
+	}
+
+	// Removing the tree needs the extended prefix for the same reason creating it did.
+	void RemoveLongTree(const std::filesystem::path& directory) {
+		std::error_code error;
+#ifdef _WIN32
+		std::filesystem::path target = std::filesystem::absolute(directory, error);
+		target.make_preferred();
+		std::filesystem::remove_all(LR"(\\?\)" + target.native(), error);
+#else
+		std::filesystem::remove_all(directory, error);
+#endif
+	}
+
+	bool RestoreDirectoryListing(const std::filesystem::path& directory) {
+#ifdef _WIN32
+		std::wstring target = directory.native();
+		return SetNamedSecurityInfoW(target.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+#else
+		std::error_code error;
+		std::filesystem::permissions(directory, std::filesystem::perms::owner_all, error);
+		return !error;
+#endif
+	}
+} // namespace
+
+bool System::RunPathCaseSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
+		std::cout << "[path-case-selftest] " << (ok ? "PASS " : "FAIL ") << name << (detail.empty() ? "" : " " + detail) << std::endl;
+		passed = passed && ok;
+	};
+
+	std::error_code error;
+	const std::filesystem::path root = std::filesystem::temp_directory_path(error) / ("cccp-path-case-" + std::to_string(GetProcessID()));
+	RemoveLongTree(root);
+	std::filesystem::create_directories(root / "readable", error);
+	std::ofstream(root / "readable/present.txt") << "present";
+
+	std::filesystem::path deep = root / "deep";
+	while (deep.generic_string().length() < 300) {
+		deep /= "012345678901234567890123456789012345678901234";
+	}
+	const bool deepMade = MakeLongDirectory(deep);
+	std::filesystem::create_directories(root / "denied", error);
+	std::ofstream(root / "denied/hidden.txt") << "hidden";
+	const bool deniedMade = DenyDirectoryListing(root / "denied");
+
+	const std::string previousDirectory = s_WorkingDirectory;
+	const std::vector<size_t> previousTree = s_WorkingTree;
+	const bool previousCaseSensitivity = s_CaseSensitive;
+	s_WorkingDirectory = root.generic_string() + "/";
+	s_WorkingTree.clear();
+	s_CaseSensitive = true;
+
+	// Neither answer can come from the after-start fallback: both paths are relative to the hostile root, not to the process directory.
+	const bool present = PathExistsCaseSensitive("readable/present.txt");
+	const bool absent = PathExistsCaseSensitive("readable/absent.txt");
+	const bool deniedWalked = std::find(s_WorkingTree.begin(), s_WorkingTree.end(), Hash("denied")) != s_WorkingTree.end();
+	const bool hiddenWalked = std::find(s_WorkingTree.begin(), s_WorkingTree.end(), Hash("denied/hidden.txt")) != s_WorkingTree.end();
+	const size_t walked = s_WorkingTree.size();
+
+	s_WorkingDirectory = previousDirectory;
+	s_WorkingTree = previousTree;
+	s_CaseSensitive = previousCaseSensitivity;
+
+	check("long_path_created", deepMade, std::to_string(deep.generic_string().length()) + " characters");
+	check("unreadable_directory_created", deniedMade);
+	check("existing_path_found", present, std::to_string(walked) + " entries walked");
+	check("missing_path_not_found", !absent);
+	check("unreadable_directory_skipped", deniedWalked && !hiddenWalked);
+
+	RestoreDirectoryListing(root / "denied");
+	RemoveLongTree(root);
+	return passed;
 }
 
 void System::EnableLoggingToCLI() {

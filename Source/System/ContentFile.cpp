@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <thread>
 
@@ -411,6 +412,10 @@ bool ContentFile::EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& o
 
 SDL_Surface* ContentFile::LoadImageAsSurface(int conversionMode, const std::string& dataPathToLoad) {
 	SDL_Surface* image = IMG_Load(dataPathToLoad.c_str());
+	if (!image) {
+		RTEAbort("Failed to load image file with following path and name:\n\n" + dataPathToLoad + "\n\n" + SDL_GetError());
+		return nullptr;
+	}
 	bool convert8To32 = conversionMode & COLORCONV_8_TO_32;
 	bool convertTo8 = conversionMode & COLORCONV_REDUCE_TO_256;
 	int bitDepth = SDL_GetPixelFormatDetails(image->format)->bits_per_pixel;
@@ -444,6 +449,9 @@ BITMAP* ContentFile::LoadAndReleaseBitmap(int conversionMode, const std::string&
 	const std::string dataPathToLoad = dataPathToSpecificFrame.empty() ? m_DataPath : dataPathToSpecificFrame;
 
 	SDL_Surface* image = LoadImageAsSurface(conversionMode, dataPathToLoad);
+	if (!image) {
+		return nullptr;
+	}
 	int bitDepth = SDL_GetPixelFormatDetails(image->format)->bits_per_pixel;
 
 	BITMAP* returnBitmap = create_bitmap_ex(bitDepth, image->w, image->h);
@@ -457,6 +465,57 @@ BITMAP* ContentFile::LoadAndReleaseBitmap(int conversionMode, const std::string&
 	RTEAssert(returnBitmap, "Failed to load image file with following path and name:\n\n" + m_DataPathAndReaderPosition + "\nThe file may be corrupt, incorrectly converted or saved with unsupported parameters.");
 
 	return returnBitmap;
+}
+
+bool ContentFile::RunImageLoadSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
+		std::cout << "[content-file-selftest] " << (ok ? "PASS " : "FAIL ") << name << (detail.empty() ? "" : " " + detail) << std::endl;
+		passed = passed && ok;
+	};
+
+	// A module name of its own re-roots into the mod directory, so the files are written where ContentFile will look and nowhere else.
+	ContentFile readable("SelfTest.rte/ContentFileSelfTestImage.png");
+	ContentFile unreadable("SelfTest.rte/ContentFileSelfTestNotAnImage.png");
+	const std::string readablePath = readable.GetDataPath();
+	const std::string unreadablePath = unreadable.GetDataPath();
+	std::error_code error;
+	std::filesystem::create_directories(std::filesystem::path(readablePath).parent_path(), error);
+
+	BITMAP* source = create_bitmap_ex(8, 4, 3);
+	clear_to_color(source, 0);
+	std::vector<unsigned char> encoded;
+	const bool encodedImage = EncodeIndexedPNG(source, encoded);
+	destroy_bitmap(source);
+	std::ofstream(readablePath, std::ios::binary).write(reinterpret_cast<const char*>(encoded.data()), encoded.size());
+	std::ofstream(unreadablePath, std::ios::binary) << "this is not an image";
+
+	check("selftest_files_are_private", readablePath.starts_with(System::GetModDirectory()), readablePath);
+	BITMAP* loaded = readable.GetAsBitmap(0, false);
+	check("readable_image_loads", encodedImage && loaded && loaded->w == 4 && loaded->h == 3);
+	if (loaded) {
+		destroy_bitmap(loaded);
+	}
+
+	// RTEAbort skips while another abort is in flight, so suppressing it here observes the guard instead of ending the process.
+	SDL_ClearError();
+	const bool wasAborting = RTEError::s_CurrentlyAborting;
+	RTEError::s_CurrentlyAborting = true;
+	BITMAP* refused = unreadable.GetAsBitmap(0, false);
+	RTEError::s_CurrentlyAborting = wasAborting;
+	const std::string loadError = SDL_GetError();
+	// The file is there, so the abort that fired is the load guard and not the missing-file one above it.
+	check("non_image_file_is_present", System::PathExistsCaseSensitive(unreadablePath));
+	check("non_image_returns_null", refused == nullptr);
+	check("non_image_reports_sdl_error", !loadError.empty(), loadError);
+	if (refused) {
+		destroy_bitmap(refused);
+	}
+
+	std::filesystem::remove(readablePath, error);
+	std::filesystem::remove(unreadablePath, error);
+	std::filesystem::remove(std::filesystem::path(readablePath).parent_path(), error);
+	return passed;
 }
 
 bool ContentFile::WaitForPendingSounds(const ProgressCallback& progressCallback) {
