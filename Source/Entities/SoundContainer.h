@@ -12,10 +12,14 @@ namespace RTE {
 
 	/// A container for sounds that represent a specific sound effect.
 	class SoundContainer : public Entity {
+		friend class AudioMan;
 		friend struct ContractAudit;
 
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		uint64_t GetCheckpointIdentity() const { return m_CheckpointIdentity; }
 		EntityAllocation(SoundContainer);
 		SerializableOverrideMethods;
 		ClassInfoGetters;
@@ -41,6 +45,7 @@ namespace RTE {
 		/// Copy constructor method used to instantiate a SoundContainer object identical to an already existing one.
 		/// @param reference A reference to the SoundContainer to deep copy.
 		SoundContainer(const SoundContainer& reference);
+		SoundContainer& operator=(const SoundContainer& reference);
 
 		/// Creates a SoundContainer to be identical to another, by deep copy.
 		/// @param reference A reference to the SoundContainer to deep copy.
@@ -114,7 +119,7 @@ namespace RTE {
 
 		/// Indicates whether any sound in this SoundContainer is currently being played.
 		/// @return Whether any sounds are playing.
-		bool IsBeingPlayed() const { return !m_PlayingChannels.empty(); }
+		bool IsBeingPlayed() const;
 
 		/// Adds a channel index to the SoundContainer's collection of playing channels.
 		/// @param channel The channel index to add.
@@ -336,6 +341,11 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 		static const std::unordered_map<std::string, SoundOverlapMode> c_SoundOverlapModeMap; //!< A map of strings to SoundOverlapModes to support string parsing for the SoundOverlapMode enum. Populated in the implementing cpp file.
 		static const std::unordered_map<std::string, BusRouting> c_BusRoutingMap; //!< A map of strings to BusRoutings to support string parsing for the BusRouting enum. Populated in the implementing cpp file.
+
+		uint64_t m_CheckpointIdentity = 0;
+		bool m_CheckpointRegistered = false;
+		bool m_IsDestroying = false;
+		void ReidentifyCheckpoint(uint64_t identity);
 
 		std::shared_ptr<SoundSet> m_TopLevelSoundSet; // The top level SoundSet that handles all SoundData and sub SoundSets in this SoundContainer.
 

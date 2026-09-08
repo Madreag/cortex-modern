@@ -18,6 +18,7 @@ namespace RTE {
 
 	/// A representation of a content file that is stored directly on disk.
 	class ContentFile : public Serializable {
+		friend class AudioMan;
 		friend struct ContractAudit;
 
 
