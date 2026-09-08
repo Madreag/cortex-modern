@@ -1390,6 +1390,32 @@ bool GUICheckpoint::Validate(std::string_view text) {
 	return Load(manager, text, true);
 }
 
+std::map<std::string, bool> GUICheckpoint::SaveModuleFlags(const std::vector<bool>& flags) {
+	std::map<std::string, bool> saved;
+	for (int module = 0; module < g_PresetMan.GetTotalModuleCount() && module < static_cast<int>(flags.size()); ++module) {
+		saved.emplace(g_PresetMan.GetDataModuleName(module), flags[module]);
+	}
+	return saved;
+}
+
+std::vector<bool> GUICheckpoint::LoadModuleFlags(const std::map<std::string, bool>& saved) {
+	std::vector<bool> flags(g_PresetMan.GetTotalModuleCount());
+	for (int module = 0; module < static_cast<int>(flags.size()); ++module) {
+		const auto found = saved.find(g_PresetMan.GetDataModuleName(module));
+		// A module the save did not know gets what a fresh menu would give it.
+		flags[module] = found != saved.end() ? found->second : module == 0;
+	}
+	return flags;
+}
+
+std::vector<bool> GUICheckpoint::LoadModuleFlags(const std::vector<bool>& savedByModuleID) {
+	std::vector<bool> flags(g_PresetMan.GetTotalModuleCount());
+	for (int module = 0; module < static_cast<int>(flags.size()); ++module) {
+		flags[module] = module < static_cast<int>(savedByModuleID.size()) ? savedByModuleID[module] : module == 0;
+	}
+	return flags;
+}
+
 std::string GUIControlManager::SaveCheckpoint() const { return GUICheckpoint::Save(*this); }
 bool GUIControlManager::LoadCheckpoint(std::string_view text, bool validateOnly) { return GUICheckpoint::Load(*this, text, validateOnly); }
 
