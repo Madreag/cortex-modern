@@ -2078,6 +2078,112 @@ namespace RTE {
 		// A6: the sim thread parks in the lockstep wait while a peer is silent, so the admission plane
 		// has to be serviced from inside it - the silent peer may be waiting on the very answer only
 		// that pump can send, which is what left every clean leave unacknowledged.
+		// More changed readings in one frame than its byte budget holds: the sender keeps the rest for the
+		// next frame instead of refusing the frame, and both peers commit the same table either way.
+		bool TestObservationOverflowCarry(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000050ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000050ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x1400000000000050ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43060, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			// Every key is new every frame, so the block is nothing but spelled-out keys and the budget bites.
+			uint64_t nextObject = 30000000;
+			const auto flood = [&](size_t count, uint64_t tick) {
+				std::vector<NetSoundObservation> observations;
+				for (size_t i = 0; i < count; ++i) {
+					observations.push_back(MakeObservation(1, nextObject++, tick, 0xF0E1D2C3B4A59687ULL + nextObject, 1 + i % 4, 0.125F));
+				}
+				return observations;
+			};
+			// Two frames of new sounds nobody can hold, then quiet ones for the backlog to drain into.
+			const size_t burst = 2048;
+			const size_t frameCount = 10;
+			std::vector<NetSoundObservation> sent;
+			for (uint64_t f = 0; f < frameCount; ++f) {
+				std::vector<NetSoundObservation> observations = f < 2 ? flood(burst, 700 + f) : std::vector<NetSoundObservation>{};
+				sent.insert(sent.end(), observations.begin(), observations.end());
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, observations) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<NetSoundObservation> hostSeen, clientSeen;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&](NetLockstepCoordinator& coordinator, std::vector<NetSoundObservation>& into, size_t& count) {
+				NetLockstepReadyFrame ready;
+				while (coordinator.PopReadyFrame(ready)) {
+					into.insert(into.end(), ready.localObservations.begin(), ready.localObservations.end());
+					into.insert(into.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+					++count;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect(host, hostSeen, hostReady);
+					collect(client, clientSeen, clientReady);
+					return hostReady >= frameCount && clientReady >= frameCount;
+				}, error, 16000)) {
+				return false;
+			}
+			if (host.GetStats().observationsCarried == 0) {
+				*error = "a frame of nothing but new keys did not carry anything over";
+				return false;
+			}
+			if (host.GetStats().observationsDropped != 0) {
+				*error = "a burst the quiet frames could drain still dropped readings";
+				return false;
+			}
+			// The two peers saw the same readings in the same order, and the burst arrived whole.
+			if (hostSeen != clientSeen) {
+				*error = "the carried observations reached the two peers differently";
+				return false;
+			}
+			if (hostSeen != sent) {
+				*error = "the carried observations did not all arrive in their sampled order: " +
+				         std::to_string(hostSeen.size()) + " of " + std::to_string(sent.size());
+				return false;
+			}
+			const uint64_t carriedInBurst = host.GetStats().observationsCarried;
+
+			// Sustained: more new sounds every frame than the wire can ever carry. The held set stays
+			// bounded, the oldest readings go, and the frames themselves keep flowing.
+			for (uint64_t f = frameCount; f < frameCount + 8; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, flood(NetLockstepCodec::c_MaxObservationsPerPacket, 800 + f)) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect(host, hostSeen, hostReady);
+					collect(client, clientSeen, clientReady);
+					return hostReady >= frameCount + 8 && clientReady >= frameCount + 8;
+				}, error, 16000)) {
+				return false;
+			}
+			if (host.GetStats().observationsDropped == 0) {
+				*error = "the held observation set was not bounded under a sustained flood";
+				return false;
+			}
+			if (hostSeen != clientSeen) {
+				*error = "a bounded held set left the two peers with different observations";
+				return false;
+			}
+			if (host.IsFailed() || client.IsFailed()) {
+				*error = "driving past the observation cap failed the round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS observation_overflow_carry burst=" << burst << " carried=" << carriedInBurst
+			          << " delivered=" << sent.size() << "/" << sent.size() << " sustained_dropped=" << host.GetStats().observationsDropped << std::endl;
+			return true;
+		}
+
 		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
 			const uint16_t port = 43050;
 			const uint64_t sessionId = 0x7000000000000050ULL;
@@ -2241,7 +2347,8 @@ namespace RTE {
 		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
 		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
-		    !TestRelayHostFinishesWhatItOwes(&error)) {
+		    !TestRelayHostFinishesWhatItOwes(&error) ||
+		    !TestObservationOverflowCarry(&error)) {
 			return fail(error);
 		}
 
