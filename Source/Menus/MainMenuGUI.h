@@ -120,6 +120,8 @@ namespace RTE {
 			MultiplayerReadyButton,
 			MultiplayerStartButton,
 			MultiplayerLeaveButton,
+			MultiplayerReconnectButton,
+			MultiplayerCancelReconnectButton,
 			MultiplayerHostBackButton,
 			MultiplayerJoinBackButton,
 			PlayTutorialButton,
@@ -293,6 +295,12 @@ namespace RTE {
 
 		/// Refreshes the multiplayer sub-panels, labels, and button states from the lobby snapshot.
 		void RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot);
+
+		/// §11: shows the recovery banner and the rejoin/cancel controls the reconnect state machine says apply.
+		void RefreshReconnectControls();
+
+		/// Real-time clock for the reconnect schedule; the menu runs outside the sim.
+		static uint64_t MenuClockMs();
 
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.
 		void StartMultiplayer(bool host);

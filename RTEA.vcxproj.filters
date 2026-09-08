@@ -493,6 +493,9 @@
     <ClInclude Include="Source\Network\NetReconnectTicketStore.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetReconnectUx.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetReconnectSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -839,6 +842,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetReconnectTicketStore.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetReconnectUx.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetReconnectSelfTest.cpp">
