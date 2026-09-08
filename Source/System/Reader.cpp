@@ -113,7 +113,7 @@ std::string Reader::WholeFileAsString() const {
 }
 
 std::string Reader::ReadLine() {
-	DiscardEmptySpace();
+	DiscardEmptySpace(true);
 
 	std::string retString;
 	char temp;
@@ -220,7 +220,7 @@ std::string Reader::TrimString(const std::string& stringToTrim) const {
 	return stringToTrim.substr(start, (end - start + 1));
 }
 
-bool Reader::DiscardEmptySpace() {
+bool Reader::DiscardEmptySpace(bool stopAtLineEnd) {
 	char peek;
 	int indent = 0;
 	int leadingSpaceCount = 0;
@@ -248,6 +248,9 @@ bool Reader::DiscardEmptySpace() {
 			m_Stream->ignore(1);
 			// Discard newlines and reset the tab count for the new line, also count the lines
 		} else if (peek == '\n' || peek == '\r') {
+			if (stopAtLineEnd) {
+				break;
+			}
 			// So we don't count lines twice when there are both newline and carriage return at the end of lines
 			if (peek == '\n') {
 				m_CurrentLine++;
