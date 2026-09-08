@@ -476,7 +476,12 @@ namespace RTE {
 		uint32_t m_PendingPlays = 0; //!< Plays this pass has queued, so the hook's own liveness question answers as it always did.
 		bool m_PendingStopped = false; //!< A Stop this pass has queued.
 		bool m_PendingPositionWritten = false; //!< A position write is queued, so a read must not refresh from shared state.
+		bool m_PendingTouchedByAI = false; //!< An AI hook has touched this container since the last drain, so a change found now was made there.
+		bool m_SharedAliasHeld = false; //!< A shared scope has handed the position itself to Lua, which can then be written from anywhere.
+		int64_t m_PendingActorUID = 0; //!< The last AI actor to touch this container; a reconcile made at the drain belongs to it.
+		int32_t m_PendingTeam = -1;
 		Vector m_PendingAliasBaseline; //!< The position the alias Lua holds was handed out at.
+		Vector m_SharedAliasBaseline; //!< The position the shared alias was handed out at.
 		LogicalSoundPlayback m_LogicalPlayback;
 
 		/// Whether a mutation made here is the AI's decision rather than the simulation's action.
@@ -484,6 +489,11 @@ namespace RTE {
 		bool DeferProperty(PendingOp::Property property, float x = 0.0F, float y = 0.0F, int32_t value = 0);
 		void QueuePendingOp(PendingOp op);
 		void ReconcileAliasPosition();
+		/// Takes over a write Lua made through a position the shared scope handed out, if the AI made it.
+		void AdoptSharedAliasWrite();
+		/// Lands a write Lua made through a held position when no AI pass made it.
+		void SettleSharedAliasWrite();
+		void NoteAIActor();
 		bool ApplyPendingProperty(const PendingOp& op);
 		void NotePending();
 		template<class T> const T& Control(const T& shared, T PendingControls::*member, uint32_t field) const { return Deferring() && (m_Pending.written & field) ? m_Pending.*member : shared; }
@@ -492,6 +502,7 @@ namespace RTE {
 			if (!(m_Pending.written & field)) {
 				m_Pending.*member = shared;
 				m_Pending.written |= field;
+				NoteAIActor();
 				NotePending();
 			}
 			return m_Pending.*member;
