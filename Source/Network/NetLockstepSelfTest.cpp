@@ -2475,6 +2475,69 @@ namespace RTE {
 			return true;
 		}
 
+		// A frame from another lockstep round is the round's business, not the codec's: it decodes like
+		// any other, its sender still counts as heard from, and the round drops it.
+		bool TestStaleRoundFrameStillCountsAsTraffic(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000070ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000070ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x1400000000000070ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43070, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return false;
+			}
+			const NetLockstepPeerStats before = host.GetStats().peers.at(2);
+			const uint32_t staleBefore = host.GetStats().staleRoundPackets;
+
+			// A frame of the round before this one, with observations whose slots this host was never given.
+			NetSoundObservationDictionary strangerEncoder;
+			NetLockstepFrame stale;
+			stale.senderPeerId = 2;
+			stale.targetFrame = 4;
+			stale.roundId = hostConfig.roundId - 1;
+			stale.frames = {MakeFrame(300, 1)};
+			stale.observations = MakeObservationSet(2, 6, 55, 0.0F);
+			std::vector<uint8_t> bytes;
+			size_t encoded = 0;
+			if (!NetLockstepCodec::Encode({stale}, bytes, nullptr, &strangerEncoder, &encoded) || encoded != stale.observations.size()) {
+				*error = "the stale-round frame did not encode";
+				return false;
+			}
+			if (!clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			for (uint64_t now = 5000; now <= 5100; now += 5) {
+				host.Tick(now);
+				hostTransport.AdvanceTimeMs(5);
+				clientTransport.AdvanceTimeMs(5);
+			}
+			const NetLockstepPeerStats after = host.GetStats().peers.at(2);
+			if (after.staleRoundPackets != before.staleRoundPackets + 1 || host.GetStats().staleRoundPackets != staleBefore + 1) {
+				*error = "a stale-round frame was not counted against its sender";
+				return false;
+			}
+			if (after.framePacketsReceived != before.framePacketsReceived + 1) {
+				*error = "a stale-round frame did not count as a frame packet from its sender";
+				return false;
+			}
+			if (after.lastHeardMs <= before.lastHeardMs) {
+				*error = "a stale-round frame did not prove its sender is still there";
+				return false;
+			}
+			if (host.GetStats().unresolvedObservationPackets != 0 || host.IsFailed()) {
+				*error = "a stale-round frame disturbed the round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS stale_round_frame_counts_as_traffic last_heard=" << before.lastHeardMs << "->" << after.lastHeardMs
+			          << " stale=" << after.staleRoundPackets << " unresolved=0" << std::endl;
+			return true;
+		}
+
 		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
 			const uint16_t port = 43050;
 			const uint64_t sessionId = 0x7000000000000050ULL;
@@ -2640,6 +2703,7 @@ namespace RTE {
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
 		    !TestRelayHostFinishesWhatItOwes(&error) ||
 		    !TestObservationOverflowCarry(&error) ||
+		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||
 		    !TestFourPeerObservationRelayBytes(&error)) {
 			return fail(error);
 		}
