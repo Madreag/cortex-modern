@@ -29,6 +29,8 @@ namespace RTE {
 	class FrameMan : public Singleton<FrameMan> {
 		friend class SettingsMan;
 		friend class WindowMan;
+        friend class GUICheckpoint;
+        friend struct ContractAudit;
 
 	public:
 		static constexpr int c_BPP = 32; //!< Color depth (bits per pixel).
@@ -308,9 +310,15 @@ namespace RTE {
 		int SaveWorldPreviewToPNG(const char* nameBase) { return SaveBitmap(ScenePreviewDump, nameBase); }
 		/// Checks image saves and writes source pixels for the diagnostic runner.
 		bool RunBitmapSaveSelfTest();
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		bool RunPaletteCheckpointSelfTest();
 #pragma endregion
 
 	private:
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_TwoPlayerVSplit, self.m_ScreenText, self.m_TextCentered, self.m_TextDuration, self.m_TextDurationTimer, self.m_TextBlinking, self.m_TextBlinkTimer, self.m_HUDDisabled, self.m_FlashScreenColor, self.m_FlashedLastFrame, self.m_FlashTimer);
+		}
 		/// Enumeration with different settings for the SaveBitmap() method.
 		enum SaveBitmapMode {
 			SingleBitmap,
@@ -329,6 +337,7 @@ namespace RTE {
 		PALETTE m_Palette; //!< The current array of RGB entries read from the palette file.
 		PALETTE m_DefaultPalette; //!< The default array of RGB entries read from the palette file at initialization.
 		RGB_MAP m_RGBTable; //!< RGB mapping table to speed up calculation of Allegro color maps.
+		std::unique_ptr<COLOR_MAP> m_CheckpointColorTable; //!< Owns a restored active table that was supplied outside the standard table cache.
 
 		int m_BlackColor; //!< Palette index for the black color.
 		int m_AlmostBlackColor; //!< Palette index for the closest to black color.
@@ -338,6 +347,8 @@ namespace RTE {
 		std::array<std::unordered_map<std::array<int, 4>, std::pair<COLOR_MAP, long long>>, DrawBlendMode::BlendModeCount> m_ColorTables;
 		Timer m_ColorTablePruneTimer; //!< Timer for pruning unused color tables to prevent ridiculous memory usage.
 		int m_CurrentAlpha; //!< Current alpha level for emulating trans colortables.
+		std::string SavePaletteCheckpoint() const;
+		bool LoadPaletteCheckpoint(std::string_view text, bool validateOnly);
 
 		std::shared_ptr<BITMAP> m_PlayerScreen8; //!< Intermediary split screen bitmap.
 		std::shared_ptr<RenderTarget> m_PlayerScreen; //!< Intermediary split screen bitmap.
