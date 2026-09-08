@@ -3734,6 +3734,10 @@ bool LuaStateWrapper::SerializeScriptGraph(std::string& text, std::vector<std::s
 	// has to rebind its borrowed pointers names an owner no peer can produce.
 	VisitScriptOwnedObjects(m_State, [&carried, &problems](MovableObject* mo) {
 		if (carried.contains(mo)) return;
+		// A world set aside for a restore leaves its script-owned trees in the heap while the
+		// restored copies hold their identities, and only the live registration reaches the
+		// reference map, so a shadowed copy is not an owner a restore can fail to find.
+		if (g_MovableMan.FindObjectByUniqueID(mo->GetUniqueID()) != mo) return;
 		const std::vector<long> links = mo->GetCheckpointBorrowedReferences();
 		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) return;
 		problems.push_back("a script-owned " + mo->GetClassName() + " (" + mo->GetPresetName() + ") that no script graph root reaches");
@@ -4680,6 +4684,41 @@ _PrimitiveQueueCapture = nil
 		scopeForgetsDestroyed = identity > 0 && g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
 	}
 	std::cout << "[script-graph-selftest] " << (scopeForgetsDestroyed ? "PASS" : "FAIL") << " construction_scope_forgets_destroyed_owner" << std::endl;
+	// A world set aside for an in-memory restore leaves its script-owned trees in the heap while the
+	// restored copies hold their identities. Only the live registration reaches the reference map,
+	// so the shadowed original is not an owner any restore can fail to find.
+	bool shadowedOwner = false;
+	{
+		MovableMan::ConstructionRegistryScope registryScope;
+		const bool created = RunScriptString(
+			"_ScriptedObjects = _ScriptedObjects or {};"
+			"_ScriptedObjects[\"scriptgraphselftest\"] = { held = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\") };"
+			"_ScriptGraphSelfTestUID = _ScriptedObjects[\"scriptgraphselftest\"].held.UniqueID") == 0;
+		lua_getglobal(m_State, "_ScriptGraphSelfTestUID");
+		MovableObject* hidden = g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(m_State, -1)));
+		lua_pop(m_State, 1);
+		std::vector<std::string> graphs;
+		std::vector<std::string> graphProblems;
+		if (created && hidden) {
+			MOPixel target;
+			target.Create();
+			hidden->SetWhichMOToNotHit(&target, 10.0F);
+			shadowedOwner = !g_MovableMan.SerializeScriptGraphs(graphs, graphProblems);
+			MOPixel replacement;
+			MovableObject::PinUniqueIDCounter(hidden->GetUniqueID() - 1);
+			replacement.Create();
+			shadowedOwner = replacement.GetUniqueID() == hidden->GetUniqueID() && shadowedOwner;
+			shadowedOwner = g_MovableMan.FindObjectByUniqueID(hidden->GetUniqueID()) == &replacement && shadowedOwner;
+			graphs.clear();
+			graphProblems.clear();
+			shadowedOwner = g_MovableMan.SerializeScriptGraphs(graphs, graphProblems) && shadowedOwner;
+			hidden->SetWhichMOToNotHit(nullptr, 0.0F);
+		}
+		RunScriptString("_ScriptedObjects[\"scriptgraphselftest\"] = nil; _ScriptGraphSelfTestUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (shadowedOwner ? "PASS" : "FAIL") << " checkpoint_ignores_shadowed_script_owner" << std::endl;
+	checkpointValues = shadowedOwner && checkpointValues;
 	bool nativeLifetime = true;
 	{
 		MOPixel object;
