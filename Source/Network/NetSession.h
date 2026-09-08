@@ -55,6 +55,8 @@ namespace RTE {
 		uint32_t fencedPackets = 0; //!< Host: packets from a superseded incarnation of a seat, dropped for it.
 		uint32_t fencedDisconnects = 0; //!< Host: a dead incarnation timing out, which must not evict the seat.
 		uint32_t admissionMessages = 0; //!< H4 admission messages handed to the reconnect plane.
+		uint32_t oldWireRejectionsSent = 0; //!< Host: explicit rejections stamped at the peer's own header version (§10).
+		uint32_t oldWireDisconnects = 0; //!< Host: old-wire peers whose version we cannot answer in, disconnected with the reason text.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -146,7 +148,10 @@ namespace RTE {
 		void MaybeSendHeartbeats();
 		void ProcessEvent(const NetTransportEvent& event);
 		void ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes);
-		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError);
+		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes);
+		/// Host: answers a peer whose header version we do not speak, explicitly when the envelope
+		/// allows it and otherwise with a documented best-effort disconnect (§10).
+		void RejectOldWirePeer(NetPeerId peerId, const std::vector<uint8_t>& bytes);
 		void HandleHostMessage(NetPeerId peerId, const NetMessage& message);
 		void HandleClientMessage(NetPeerId peerId, const NetMessage& message);
 		void CheckTimeouts();

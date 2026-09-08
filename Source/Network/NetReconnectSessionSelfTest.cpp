@@ -1979,6 +1979,169 @@ namespace RTE {
 			return 0;
 		}
 
+		// §10's probe. Two arms, because the answer differs by whether the envelope lets us speak the
+		// peer's version: an unknown message type under the SHARED header version gets an explicit,
+		// decodable rejection; a header version this build cannot write gets a counted best-effort
+		// disconnect and NOT an undecodable reply. Both leave the live players untouched.
+		int TestOldWireProbe() {
+			std::string error;
+			// The mechanism first: we stamp the version we were asked for, and refuse any other.
+			{
+				NetMessage rejection;
+				rejection.sequence = 7;
+				rejection.payload = NetJoinRejected{NetRejectReason::ProtocolMismatch, "old wire", "protocol_version", "1", "2"};
+				std::vector<uint8_t> bytes;
+				if (!NetProtocol::EncodeAtVersion(rejection, NetProtocol::c_Version, bytes)) {
+					return Fail("a rejection would not encode at the version this build speaks");
+				}
+				uint16_t stamped = 0;
+				if (!NetProtocol::PeekHeaderVersion(bytes.data(), bytes.size(), stamped) || stamped != NetProtocol::c_Version) {
+					return Fail("the rejection did not carry the version it was stamped at");
+				}
+				if (!NetProtocol::Decode(bytes).ok) {
+					return Fail("the version-stamped rejection did not decode");
+				}
+				std::vector<uint8_t> refused;
+				if (NetProtocol::EncodeAtVersion(rejection, static_cast<uint16_t>(NetProtocol::c_Version + 1), refused) ||
+				    NetProtocol::CanEncodeAtVersion(static_cast<uint16_t>(NetProtocol::c_Version + 1))) {
+					return Fail("a rejection was encoded at a version whose schema this build cannot write");
+				}
+				if (!refused.empty()) {
+					return Fail("the refused encode left bytes behind");
+				}
+			}
+
+			const uint16_t port = 42134;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			if (!host.StartHost(hostTransport, MakeSessionConfig(port, 101, "Host"), &error) ||
+			    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not start the pair the old-wire peer joins: " + error);
+			}
+			LoopbackTransport oldWireTransport;
+			LoopbackTransport futureWireTransport;
+			uint64_t nowMs = 0;
+			const auto drive = [&](uint64_t untilMs) {
+				for (; nowMs <= untilMs; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+					oldWireTransport.AdvanceTimeMs(10);
+					futureWireTransport.AdvanceTimeMs(10);
+				}
+			};
+			drive(300);
+			if (!host.IsReady() || host.GetReadyPeerCount() != 1) {
+				return Fail("the live pair never settled before the old-wire peer arrived");
+			}
+			const uint32_t readyBefore = host.GetReadyPeerCount();
+
+			const auto envelope = [](uint16_t version, uint16_t messageType) {
+				std::vector<uint8_t> bytes(NetProtocol::c_HeaderBytes, 0);
+				bytes[0] = 0x43;
+				bytes[1] = 0x43;
+				bytes[2] = 0x4E;
+				bytes[3] = 0x32; // "CCN2", the magic every version of this header starts with
+				bytes[4] = static_cast<uint8_t>(version & 0xFFU);
+				bytes[5] = static_cast<uint8_t>((version >> 8) & 0xFFU);
+				bytes[6] = static_cast<uint8_t>(NetProtocol::c_HeaderBytes & 0xFFU);
+				bytes[7] = static_cast<uint8_t>((NetProtocol::c_HeaderBytes >> 8) & 0xFFU);
+				bytes[8] = static_cast<uint8_t>(messageType & 0xFFU);
+				bytes[9] = static_cast<uint8_t>((messageType >> 8) & 0xFFU);
+				return bytes;
+			};
+
+			// The transport hands a client the host's peer id in its own connect event.
+			const auto hostPeerOf = [](LoopbackTransport& transport) {
+				NetPeerId found = c_InvalidNetPeerId;
+				for (const NetTransportEvent& event: transport.PollEvents()) {
+					if (event.type == NetTransportEventType::PeerConnected) {
+						found = event.peerId;
+					}
+				}
+				return found;
+			};
+
+			// Arm A - the envelope allows it: an unknown message type under the SHARED header version.
+			// This is the P6 case, a new client's message reaching a host that does not know the type.
+			if (!oldWireTransport.Connect("loopback", port, &error)) {
+				return Fail("the old-wire peer could not connect: " + error);
+			}
+			drive(nowMs + 100);
+			{
+				const NetPeerId hostPeer = hostPeerOf(oldWireTransport);
+				if (hostPeer == c_InvalidNetPeerId) {
+					return Fail("the old-wire peer never saw the host connect");
+				}
+				if (!oldWireTransport.Send(hostPeer, NetTransportLane::ControlReliable, envelope(NetProtocol::c_Version, 0x00F0), &error)) {
+					return Fail("the old-wire peer could not send its unknown-type message: " + error);
+				}
+				drive(nowMs + 300);
+				bool sawDecodableRejection = false;
+				for (const NetTransportEvent& event: oldWireTransport.PollEvents()) {
+					if (event.type != NetTransportEventType::PacketReceived) {
+						continue;
+					}
+					const NetDecodeResult decoded = NetProtocol::Decode(event.bytes);
+					if (decoded.ok && std::holds_alternative<NetJoinRejected>(decoded.message.payload)) {
+						sawDecodableRejection = true;
+					}
+				}
+				if (!sawDecodableRejection) {
+					return Fail("an unknown message type under the shared header version got no decodable rejection");
+				}
+			}
+
+			// Arm B - the envelope does not allow it: a header version whose payload schema this build
+			// cannot write. The honest answer is no protocol message at all.
+			if (!futureWireTransport.Connect("loopback", port, &error)) {
+				return Fail("the future-wire peer could not connect: " + error);
+			}
+			drive(nowMs + 100);
+			const uint32_t rejectionsBefore = host.GetStats().oldWireRejectionsSent;
+			{
+				const NetPeerId hostPeer = hostPeerOf(futureWireTransport);
+				if (hostPeer == c_InvalidNetPeerId) {
+					return Fail("the future-wire peer never saw the host connect");
+				}
+				const std::vector<uint8_t> future = envelope(static_cast<uint16_t>(NetProtocol::c_Version + 1), static_cast<uint16_t>(NetMessageType::ClientHello));
+				if (!futureWireTransport.Send(hostPeer, NetTransportLane::ControlReliable, future, &error)) {
+					return Fail("the future-wire peer could not send its hello: " + error);
+				}
+				drive(nowMs + 300);
+				if (host.GetStats().oldWireDisconnects != 1) {
+					return Fail("the unspeakable version was not counted as a best-effort disconnect");
+				}
+				if (host.GetStats().oldWireRejectionsSent != rejectionsBefore) {
+					return Fail("the host sent a rejection stamped at a version the peer cannot decode");
+				}
+				bool disconnected = false;
+				for (const NetTransportEvent& event: futureWireTransport.PollEvents()) {
+					if (event.type == NetTransportEventType::PeerDisconnected) {
+						disconnected = true;
+						if (event.reason.find("protocol version") == std::string::npos) {
+							return Fail("the best-effort disconnect carried no version reason");
+						}
+					}
+					if (event.type == NetTransportEventType::PacketReceived) {
+						return Fail("the host answered an unspeakable version with a protocol message");
+					}
+				}
+				if (!disconnected) {
+					return Fail("the unspeakable-version peer was not disconnected");
+				}
+			}
+
+			// Neither arm may touch the live pair.
+			if (!host.IsReady() || host.IsFailed() || host.GetReadyPeerCount() != readyBefore || !client.IsReady()) {
+				return Fail("an old-wire peer disturbed the live session");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2028,6 +2191,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSeatTableFromMatchConfig(); result != 0) {
+			return result;
+		}
+		if (const int result = TestOldWireProbe(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

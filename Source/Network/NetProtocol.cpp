@@ -850,6 +850,42 @@ namespace RTE {
 		return "Unknown";
 	}
 
+	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
+		// Only versions whose payload schema this build still writes. Today that is exactly the current
+		// one; the first real bump adds its predecessor here alongside that version's encoders.
+		return headerVersion == c_Version;
+	}
+
+	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {
+		if (data == nullptr || size < c_HeaderBytes) {
+			return false;
+		}
+		ByteReader reader(data, c_HeaderBytes);
+		uint32_t magic = 0;
+		uint16_t version = 0;
+		reader.ReadU32LE(magic);
+		reader.ReadU16LE(version);
+		if (magic != c_Magic) {
+			return false;
+		}
+		outVersion = version;
+		return true;
+	}
+
+	bool NetProtocol::EncodeAtVersion(const NetMessage& message, uint16_t headerVersion, std::vector<uint8_t>& outBytes, NetProtocolError* error) {
+		outBytes.clear();
+		if (!CanEncodeAtVersion(headerVersion)) {
+			SetError(error, NetProtocolErrorCode::UnsupportedVersion, 4, "cannot encode at that protocol version");
+			return false;
+		}
+		if (!Encode(message, outBytes, error)) {
+			return false;
+		}
+		outBytes[4] = static_cast<uint8_t>(headerVersion & 0xFFU);
+		outBytes[5] = static_cast<uint8_t>((headerVersion >> 8) & 0xFFU);
+		return true;
+	}
+
 	bool NetProtocol::Encode(const NetMessage& message, std::vector<uint8_t>& outBytes, NetProtocolError* error) {
 		outBytes.clear();
 		if (message.flags != 0U) {

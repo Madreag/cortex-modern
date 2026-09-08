@@ -369,7 +369,7 @@ namespace RTE {
 				++m_Stats.ignoredPhasePackets;
 				return;
 			}
-			HandleMalformed(peerId, decoded.error);
+			HandleMalformed(peerId, decoded.error, bytes);
 			return;
 		}
 		++m_Stats.receivedMessages;
@@ -385,9 +385,13 @@ namespace RTE {
 		}
 	}
 
-	void NetSession::HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError) {
+	void NetSession::HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes) {
 		++m_Stats.malformedMessages;
 		const std::string summary = std::string("malformed ") + NetProtocol::ErrorCodeName(decodeError.code) + ": " + decodeError.message;
+		if (m_Role == NetSessionRole::Host && decodeError.code == NetProtocolErrorCode::UnsupportedVersion) {
+			RejectOldWirePeer(peerId, bytes);
+			return;
+		}
 		if (m_Role == NetSessionRole::Host) {
 			if (PeerState* peer = FindPeer(peerId)) {
 				if (peer->state == NetSessionState::Handshake) {
@@ -405,6 +409,36 @@ namespace RTE {
 				m_Transport->Disconnect(m_RemoteTransportPeerId, summary);
 			}
 		}
+	}
+
+	void NetSession::RejectOldWirePeer(NetPeerId peerId, const std::vector<uint8_t>& bytes) {
+		uint16_t claimedVersion = 0;
+		const bool haveVersion = NetProtocol::PeekHeaderVersion(bytes.data(), bytes.size(), claimedVersion);
+		const std::string summary = "protocol version " + (haveVersion ? std::to_string(claimedVersion) : std::string("?")) +
+		                            " does not match this build's " + std::to_string(NetProtocol::c_Version);
+		RecordReject(NetRejectReason::ProtocolMismatch, "protocol_version", std::to_string(NetProtocol::c_Version),
+		             haveVersion ? std::to_string(claimedVersion) : std::string("unknown"), summary);
+		// §10: the envelope's magic and version sit at fixed offsets, so an explicit rejection is
+		// possible whenever we can still write that version's payload schema. When we cannot, sending
+		// one stamped at OUR version would be undecodable noise, so the disconnect reason carries it.
+		if (haveVersion && NetProtocol::CanEncodeAtVersion(claimedVersion)) {
+			NetMessage rejection;
+			rejection.sequence = m_NextSequence++;
+			rejection.payload = NetJoinRejected{NetRejectReason::ProtocolMismatch, summary, "protocol_version", std::to_string(NetProtocol::c_Version), haveVersion ? std::to_string(claimedVersion) : std::string("unknown")};
+			std::vector<uint8_t> encoded;
+			if (NetProtocol::EncodeAtVersion(rejection, claimedVersion, encoded) &&
+			    m_Transport->Send(peerId, NetTransportLane::ControlReliable, encoded, nullptr)) {
+				++m_Stats.sentMessages;
+				++m_Stats.oldWireRejectionsSent;
+			}
+		} else {
+			++m_Stats.oldWireDisconnects;
+		}
+		if (PeerState* peer = FindPeer(peerId)) {
+			peer->state = NetSessionState::Closed;
+		}
+		m_Transport->Disconnect(peerId, summary);
+		RefreshHostState();
 	}
 
 	void NetSession::HandleHostMessage(NetPeerId peerId, const NetMessage& message) {
@@ -973,6 +1007,8 @@ namespace RTE {
 				{"fenced_packets", m_Stats.fencedPackets},
 				{"fenced_disconnects", m_Stats.fencedDisconnects},
 				{"admission_messages", m_Stats.admissionMessages},
+				{"old_wire_rejections_sent", m_Stats.oldWireRejectionsSent},
+				{"old_wire_disconnects", m_Stats.oldWireDisconnects},
 			}},
 		};
 		return report.dump(2);
