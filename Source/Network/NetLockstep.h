@@ -18,6 +18,11 @@
 
 namespace RTE {
 
+	/// The live match's lockstep clock: monotonic milliseconds every caller that drives a coordinator
+	/// reads, so the missing-frame grace is wall time and never steps back between setup and play.
+	/// Selftests inject their own values instead.
+	uint64_t NetLockstepNowMs();
+
 	enum class NetLockstepPacketType : uint16_t {
 		Start = 1,
 		Frame = 2,
