@@ -8,6 +8,8 @@
 #include "Scene.h"
 #include "ContentFile.h"
 #include "Matrix.h"
+#include "CheckpointArchive.h"
+#include "GUICheckpoint.h"
 
 #include "PresetMan.h"
 #include "GLResourceMan.h"
@@ -24,6 +26,9 @@
 #include "raylib/raylib.h"
 
 #include <array>
+#include <iostream>
+#include <map>
+#include <set>
 
 using namespace RTE;
 
@@ -45,6 +50,7 @@ void PostProcessMan::Clear() {
 	m_BlueGlow = nullptr;
 	m_BlueGlowHash = 0;
 	m_TempEffectBitmaps.clear();
+	m_CheckpointBitmaps.clear();
 	m_BackBuffer8 = 0;
 	m_Palette8Texture = 0;
 	m_PostProcessFramebuffer = 0;
@@ -73,13 +79,11 @@ int PostProcessMan::Initialize() {
 	m_BlueGlowHash = glowFile.GetHash();
 
 	// Create temporary bitmaps to rotate post effects in.
-	m_TempEffectBitmaps = {
-	    {16, create_bitmap(16, 16)},
-	    {32, create_bitmap(32, 32)},
-	    {64, create_bitmap(64, 64)},
-	    {128, create_bitmap(128, 128)},
-	    {256, create_bitmap(256, 256)},
-	    {512, create_bitmap(512, 512)}};
+	for (int size: {16, 32, 64, 128, 256, 512}) {
+		auto bitmap = std::shared_ptr<BITMAP>(create_bitmap(size, size), destroy_bitmap);
+		clear_to_color(bitmap.get(), bitmap_mask_color(bitmap.get()));
+		m_TempEffectBitmaps.emplace(size, std::move(bitmap));
+	}
 
 	return 0;
 }
@@ -134,13 +138,171 @@ void PostProcessMan::UpdatePalette() {
 }
 
 void PostProcessMan::Destroy() {
-	for (std::pair<int, BITMAP*> tempBitmapEntry: m_TempEffectBitmaps) {
-		destroy_bitmap(tempBitmapEntry.second);
-	}
 	DestroyGLPointers();
 	ClearScreenPostEffects();
 	ClearScenePostEffects();
 	Clear();
+}
+
+std::string PostProcessMan::SaveCheckpoint() const {
+	std::vector<const BITMAP*> bitmaps;
+	std::unordered_map<const BITMAP*, size_t> bitmapIDs;
+	auto bitmapID = [&](const BITMAP* bitmap) {
+		if (!bitmap) return size_t{0};
+		auto [entry, inserted] = bitmapIDs.emplace(bitmap, bitmaps.size() + 1);
+		if (inserted) bitmaps.push_back(bitmap);
+		return entry->second;
+	};
+	CheckpointWriter queues("PostProcessQueues1");
+	auto effects = [&](const std::list<PostEffect>& values) {
+		queues(values.size());
+		for (const auto& effect: values) {
+			const auto* attached = effect.m_AttachedToMOID >= 0 ? g_MovableMan.GetMOFromID(effect.m_AttachedToMOID) : nullptr;
+			queues(bitmapID(effect.m_Bitmap), effect.m_BitmapHash, effect.m_Angle, effect.m_Strength, effect.m_Pos,
+			       effect.m_AttachedToMOID, attached ? attached->GetUniqueID() : 0L);
+		}
+	};
+	effects(m_PostSceneEffects); effects(m_PostScreenEffects);
+	for (const auto& values: m_ScreenRelativeEffects) effects(values);
+	queues(m_PostScreenGlowBoxes, m_GlowAreas.size());
+	for (const auto& rect: m_GlowAreas) queues(rect.m_Left, rect.m_Top, rect.m_Right, rect.m_Bottom);
+	const std::array<size_t, 3> glowIDs{bitmapID(m_YellowGlow), bitmapID(m_RedGlow), bitmapID(m_BlueGlow)};
+	queues(glowIDs[0], m_YellowGlowHash, glowIDs[1], m_RedGlowHash, glowIDs[2], m_BlueGlowHash);
+	const std::map<int, std::shared_ptr<BITMAP>> temporary(m_TempEffectBitmaps.begin(), m_TempEffectBitmaps.end());
+	queues(temporary.size());
+	for (const auto& [size, bitmap]: temporary) queues(size, bitmapID(bitmap.get()));
+	CheckpointWriter writer("PostProcessMan2");
+	writer(s_RegistrationSuppressed, bitmaps.size());
+	for (const auto* bitmap: bitmaps) writer(GUICheckpoint::SaveSharedBitmap(bitmap));
+	writer(queues.Text());
+	return writer.Text();
+}
+
+bool PostProcessMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		struct EffectState { size_t bitmap, hash; float angle; int strength; Vector position; MOID attached; long uniqueID; };
+		struct State {
+			bool suppressed;
+			std::vector<std::string> images;
+			std::vector<std::shared_ptr<BITMAP>> bitmaps;
+			std::array<std::vector<EffectState>, c_MaxScreenCount + 2> records;
+			std::array<std::list<PostEffect>, c_MaxScreenCount + 2> effects;
+			std::list<Box> boxes;
+			std::list<IntRect> areas;
+			std::array<size_t, 3> glow{}, hashes{};
+			std::map<int, size_t> temporary;
+			std::unordered_map<int, std::shared_ptr<BITMAP>> temporaryImages;
+		};
+		auto state = std::make_shared<State>();
+		const bool legacy = text.starts_with("15 PostProcessMan1 ");
+		CheckpointReader reader(text, legacy ? "PostProcessMan1" : "PostProcessMan2", validateOnly);
+		reader.Value(state->suppressed); reader.Value(state->images);
+		for (const auto& value: state->images) {
+			if (legacy) GUICheckpoint::LoadBitmap(value, true);
+			else GUICheckpoint::LoadSharedBitmap(value, true);
+		}
+		std::string queueText; reader.Value(queueText);
+		CheckpointReader queue(queueText, "PostProcessQueues1", true);
+		auto count = [&] { size_t value; queue.Value(value); if (value > queueText.size()) throw std::runtime_error("invalid post effect count"); return value; };
+		auto image = [&](size_t index) { if (index > state->images.size()) throw std::runtime_error("invalid post effect bitmap reference"); };
+		for (auto& records: state->records) {
+			records.resize(count());
+			for (auto& record: records) {
+				queue.Value(record.bitmap); queue.Value(record.hash); queue.Value(record.angle); queue.Value(record.strength);
+				queue.Value(record.position); queue.Value(record.attached); queue.Value(record.uniqueID);
+				image(record.bitmap);
+				if (record.attached < 0 || record.uniqueID < 0 || (record.uniqueID && (record.attached == 0 || record.attached == g_NoMOID)))
+					throw std::runtime_error("invalid post effect attachment");
+			}
+		}
+		queue.Value(state->boxes);
+		for (size_t remaining = count(); remaining; --remaining) {
+			IntRect area(0, 0, 0, 0);
+			queue.Value(area.m_Left); queue.Value(area.m_Top); queue.Value(area.m_Right); queue.Value(area.m_Bottom);
+			state->areas.push_back(area);
+		}
+		for (size_t index = 0; index < state->glow.size(); ++index) { queue.Value(state->glow[index]); queue.Value(state->hashes[index]); image(state->glow[index]); }
+		for (size_t remaining = count(); remaining; --remaining) {
+			int size; size_t index; queue.Value(size); queue.Value(index); image(index);
+			if (size <= 0 || !index || !state->temporary.emplace(size, index).second) throw std::runtime_error("invalid temporary post effect image");
+		}
+		queue.Finish();
+		if (!validateOnly) {
+			for (const auto& value: state->images) {
+				auto bitmap = legacy ? std::shared_ptr<BITMAP>(GUICheckpoint::LoadBitmap(value), destroy_bitmap) : GUICheckpoint::LoadSharedBitmap(value);
+				if (!bitmap) throw std::runtime_error("null post effect image owner");
+				state->bitmaps.push_back(std::move(bitmap));
+			}
+			auto bitmap = [state](size_t index) { return index ? state->bitmaps[index - 1].get() : nullptr; };
+			for (size_t index = 0; index < state->records.size(); ++index) for (const auto& record: state->records[index]) {
+				if (record.uniqueID) {
+					const auto* attached = g_MovableMan.GetMOFromID(record.attached);
+					if (!attached || attached->GetUniqueID() != record.uniqueID) throw std::runtime_error("unresolved post effect attachment");
+				}
+				state->effects[index].emplace_back(record.position, bitmap(record.bitmap), record.hash, record.strength, record.angle, record.attached);
+			}
+			for (const auto& [size, index]: state->temporary) state->temporaryImages.emplace(size, state->bitmaps[index - 1]);
+			reader.OnCommit([this, state, bitmap] {
+				m_PostSceneEffects.swap(state->effects[0]); m_PostScreenEffects.swap(state->effects[1]);
+				for (size_t index = 0; index < m_ScreenRelativeEffects.size(); ++index) m_ScreenRelativeEffects[index].swap(state->effects[index + 2]);
+				m_PostScreenGlowBoxes.swap(state->boxes); m_GlowAreas.swap(state->areas);
+				m_YellowGlow = bitmap(state->glow[0]); m_RedGlow = bitmap(state->glow[1]); m_BlueGlow = bitmap(state->glow[2]);
+				m_YellowGlowHash = state->hashes[0]; m_RedGlowHash = state->hashes[1]; m_BlueGlowHash = state->hashes[2];
+				m_TempEffectBitmaps.swap(state->temporaryImages); m_CheckpointBitmaps.swap(state->bitmaps);
+				s_RegistrationSuppressed = state->suppressed;
+			});
+		}
+		reader.Finish();
+		return true;
+	} catch (const std::exception& error) {
+		std::cerr << "[post-process-checkpoint] " << error.what() << std::endl;
+		return false;
+	}
+}
+
+bool PostProcessMan::RunCheckpointSelfTest() {
+	const auto original = SaveCheckpoint();
+	struct Restore { PostProcessMan& manager; const std::string& value; ~Restore() { manager.LoadCheckpoint(value); } } restore{*this, original};
+	bool passed = true;
+	auto check = [&](bool value, const char* name) { passed = value && passed; std::cout << "[post-process-checkpoint-selftest] " << (value ? "PASS " : "FAIL ") << name << std::endl; };
+	const auto originalGlows = std::array<BITMAP*, 3>{m_YellowGlow, m_RedGlow, m_BlueGlow};
+	check(LoadCheckpoint(original) && originalGlows == std::array<BITMAP*, 3>{m_YellowGlow, m_RedGlow, m_BlueGlow}, "content_cache_glow_aliases");
+	ClearScenePostEffects(); ClearScreenPostEffects();
+	for (auto& effects: m_ScreenRelativeEffects) effects.clear();
+	auto first = std::shared_ptr<BITMAP>(create_bitmap_ex(32, 16, 16), destroy_bitmap);
+	auto second = std::shared_ptr<BITMAP>(create_bitmap_ex(8, 7, 5), destroy_bitmap);
+	clear_to_color(first.get(), makeacol32(29, 91, 173, 221)); clear_to_color(second.get(), 37);
+	putpixel(first.get(), 4, 6, makeacol32(199, 12, 45, 177)); putpixel(second.get(), 3, 2, 49);
+	m_PostSceneEffects.emplace_back(Vector(12.25F, 17.5F), first.get(), 137, 209, -0.75F);
+	m_PostSceneEffects.emplace_back(Vector(25.5F, 13.75F), first.get(), 137, 143, 0.25F, g_NoMOID);
+	m_PostScreenEffects.emplace_back(Vector(22.5F, 9.75F), second.get(), 941, 179, 0.5F);
+	for (size_t index = 0; index < m_ScreenRelativeEffects.size(); ++index)
+		m_ScreenRelativeEffects[index].emplace_back(Vector(10 + index, 20 + index), index % 2 ? second.get() : first.get(), 200 + index, 100 + index, 0.125F * index);
+	m_PostScreenGlowBoxes.emplace_back(Vector(12.5F, 18.75F), 29.5F, 31.25F);
+	m_GlowAreas.emplace_back(11, 13, 31, 37);
+	m_YellowGlow = first.get(); m_RedGlow = second.get(); m_BlueGlow = first.get();
+	m_YellowGlowHash = 31; m_RedGlowHash = 37; m_BlueGlowHash = 41;
+	m_TempEffectBitmaps.clear(); m_TempEffectBitmaps.emplace(16, first); m_TempEffectBitmaps.emplace(512, first);
+	s_RegistrationSuppressed = true;
+	const auto checkpoint = SaveCheckpoint();
+	check(LoadCheckpoint(checkpoint, true), "validate_full_queues");
+	clear_to_color(first.get(), 0); clear_to_color(second.get(), 0); ClearScenePostEffects(); ClearScreenPostEffects();
+	for (auto& effects: m_ScreenRelativeEffects) effects.clear();
+	m_TempEffectBitmaps.clear(); s_RegistrationSuppressed = false;
+	check(LoadCheckpoint(checkpoint) && SaveCheckpoint() == checkpoint, "all_queues_and_pixels_restored");
+	check(m_PostSceneEffects.size() == 2 && m_PostScreenEffects.size() == 1 && m_GlowAreas.size() == 1 && m_PostScreenGlowBoxes.size() == 1, "independent_pending_queue_counts");
+	check(m_PostSceneEffects.front().m_Bitmap == m_YellowGlow && m_BlueGlow == m_YellowGlow && GetTempEffectBitmap(m_YellowGlow) == m_YellowGlow && m_ScreenRelativeEffects[2].front().m_Bitmap == m_YellowGlow, "shared_bitmap_owner_aliases");
+	check(getpixel(m_YellowGlow, 4, 6) == makeacol32(199, 12, 45, 177) && getpixel(m_RedGlow, 3, 2) == 49, "independent_owned_pixel_observations");
+	std::list<PostEffect> selected;
+	check(GetPostScreenEffects(0, 0, 100, 100, selected) && selected.size() == 2 && selected.front().m_Pos == Vector(12.25F, 17.5F) && selected.front().m_Strength == 209, "scene_effect_query_continuation");
+	RegisterPostEffect(Vector(30, 40), m_YellowGlow, 149, 201, 0.75F);
+	check(m_PostSceneEffects.size() == 2, "registration_suppression_restored");
+	check(!LoadCheckpoint(checkpoint + "x") && SaveCheckpoint() == checkpoint, "trailing_data_rejection_atomic");
+	check(!LoadCheckpoint(checkpoint.substr(0, checkpoint.size() - 1)) && SaveCheckpoint() == checkpoint, "truncated_data_rejection_atomic");
+	ClearScenePostEffects();
+	check(m_PostSceneEffects.empty() && m_GlowAreas.empty() && m_PostScreenEffects.size() == 1 && m_ScreenRelativeEffects[3].size() == 1, "queue_clear_boundaries");
+	check(LoadCheckpoint(original) && SaveCheckpoint() == original, "original_manager_restored");
+	return passed;
 }
 
 void PostProcessMan::AdjustEffectsPosToPlayerScreen(int playerScreen, BITMAP* targetBitmap, const Vector& targetBitmapOffset, std::list<PostEffect>& screenRelativeEffectsList, std::list<Box>& screenRelativeGlowBoxesList) {
@@ -214,14 +376,14 @@ bool PostProcessMan::GetPostScreenEffectsWrapped(const Vector& boxPos, int boxWi
 BITMAP* PostProcessMan::GetTempEffectBitmap(BITMAP* bitmap) const {
 	// Get the largest dimension of the bitmap and convert it to a multiple of 16, i.e. 16, 32, etc
 	int bitmapSizeNeeded = static_cast<int>(std::ceil(static_cast<float>(std::max(bitmap->w, bitmap->h)) / 16.0F)) * 16;
-	std::unordered_map<int, BITMAP*>::const_iterator correspondingBitmapSizeEntry = m_TempEffectBitmaps.find(bitmapSizeNeeded);
+	auto correspondingBitmapSizeEntry = m_TempEffectBitmaps.find(bitmapSizeNeeded);
 
 	// If we didn't find a match then the bitmap size is greater than 512 but that's the biggest we've got, so return it
 	if (correspondingBitmapSizeEntry == m_TempEffectBitmaps.end()) {
 		correspondingBitmapSizeEntry = m_TempEffectBitmaps.find(512);
 	}
 
-	return correspondingBitmapSizeEntry->second;
+	return correspondingBitmapSizeEntry->second.get();
 }
 
 void PostProcessMan::RegisterGlowDotEffect(const Vector& effectPos, DotGlowColor color, int strength) {
