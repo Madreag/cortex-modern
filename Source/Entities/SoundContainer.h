@@ -27,8 +27,8 @@ namespace RTE {
 		const SoundExecutionKey& GetSharedPlaybackIdentity() const { return m_LogicalPlayback[0].identity.value; }
 		const LogicalSoundPlayback& GetSharedLogicalPlayback() const { return m_LogicalPlayback[0]; }
 		const std::vector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback[0].voices; }
-		/// Simulation code plays UI bus sounds for the local player only, so those stay physical.
-		bool UsesLogicalPlayback() const { return SoundSimulationScope::IsSimulation() && m_BusRouting != BusRouting::UI; }
+		/// Every sound played from simulation code is logical whatever bus carries it: a mod can route a gameplay sound to the UI bus and still query it from shared simulation.
+		bool UsesLogicalPlayback() const { return SoundSimulationScope::IsSimulation(); }
 		EntityAllocation(SoundContainer);
 		SerializableOverrideMethods;
 		ClassInfoGetters;
@@ -233,6 +233,8 @@ namespace RTE {
 		/// Gets the position at which this SoundContainer's sound will be played. Note that its individual sounds can be offset from this.
 		/// @return The position of this SoundContainer.
 		const Vector& GetPosition() const { return CurrentPos(); }
+		/// Lua receives the position by value: with copy-on-write local controls a reference could name shared state on one peer and this machine's copy on another.
+		Vector GetLuaPosition() const { return CurrentPos(); }
 
 		/// Sets the position of the SoundContainer's sounds while they're playing.
 		/// @param position The new position to play the SoundContainer's sounds.
