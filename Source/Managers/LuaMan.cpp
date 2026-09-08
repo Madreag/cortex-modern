@@ -4582,6 +4582,23 @@ _PrimitiveQueueCapture = nil
 		checkpointValues = activity.LoadCheckpoint(activityState) && activity.GetDifficulty() == 77 && activity.SaveCheckpoint() == activityState && checkpointValues;
 	}
 	std::cout << "[script-graph-selftest] " << (checkpointValues ? "PASS" : "FAIL") << " native_runtime_checkpoint_values" << std::endl;
+	// A script-owned sound that has lost its last Lua reference keeps its playing voice until the
+	// collector sweeps it, so a capture taken before that names an owner no restore can produce.
+	bool settledSoundOwner = false;
+	{
+		const std::string originalAudio = g_AudioMan.SaveCheckpoint();
+		RunScriptString("_CheckpointSoundOwner = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); _CheckpointSoundOwner.Loops = -1; _CheckpointSoundOwner.Immobile = true; _CheckpointSoundOwner.Paused = true; _CheckpointSoundOwnerPlayed = _CheckpointSoundOwner:Play()");
+		lua_getglobal(m_State, "_CheckpointSoundOwnerPlayed");
+		const bool played = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		RunScriptString("_CheckpointSoundOwner = nil; _CheckpointSoundOwnerPlayed = nil");
+		g_ActivityMan.CaptureRuntimeGlobals();
+		const std::string captured = g_AudioMan.SaveCheckpoint();
+		g_LuaMan.CollectGarbageForCheckpoint();
+		settledSoundOwner = played && g_AudioMan.LoadCheckpoint(captured);
+		settledSoundOwner = g_AudioMan.LoadCheckpoint(originalAudio) && settledSoundOwner;
+	}
+	std::cout << "[script-graph-selftest] " << (settledSoundOwner ? "PASS" : "FAIL") << " checkpoint_settles_script_owned_sound" << std::endl;
 	bool nativeLifetime = true;
 	{
 		MOPixel object;
@@ -4710,7 +4727,7 @@ _PrimitiveQueueCapture = nil
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
-	const bool pass = checkpointValues && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
+	const bool pass = checkpointValues && settledSoundOwner && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;
 }
@@ -5870,6 +5887,28 @@ void LuaMan::Update() {
 
 void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
+}
+
+void LuaMan::CollectGarbageForCheckpoint() {
+	m_GarbageCollectionTask.wait();
+	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs
+	// it, so one pass does not settle a chain. Repeat while a full collection still frees something.
+	const auto collect = [](LuaStateWrapper& luaState) {
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		lua_State* state = luaState.GetLuaState();
+		const auto bytes = [state] { return static_cast<long long>(lua_gc(state, LUA_GCCOUNT, 0)) * 1024 + lua_gc(state, LUA_GCCOUNTB, 0); };
+		long long before = 0;
+		do {
+			before = bytes();
+			lua_gc(state, LUA_GCCOLLECT, 0);
+		} while (bytes() < before);
+		lua_gc(state, LUA_GCSTOP, 0);
+	};
+	collect(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		collect(luaState);
+	}
+	LuabindObjectWrapper::ApplyQueuedDeletions();
 }
 
 void LuaMan::StartAsyncGarbageCollection() {
