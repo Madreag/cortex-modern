@@ -1639,6 +1639,7 @@ namespace RTE {
 		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
 		m_PendingObservations.clear();
+		m_DroppedObservations.clear();
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
 		m_RemoteObservations.clear();
@@ -1748,6 +1749,7 @@ namespace RTE {
 		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
 		m_PendingObservations.clear();
+		m_DroppedObservations.clear();
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
 		m_RemoteObservations.clear();
@@ -1886,6 +1888,7 @@ namespace RTE {
 			// New sounds have outrun the wire for frames on end. The stalest readings go, on this peer
 			// alone, before the packet that would have carried them, so every peer still commits the same.
 			const size_t dropped = m_PendingObservations.size() - NetLockstepCodec::c_MaxCarriedObservations;
+			m_DroppedObservations.insert(m_DroppedObservations.end(), m_PendingObservations.begin(), m_PendingObservations.begin() + static_cast<std::ptrdiff_t>(dropped));
 			m_PendingObservations.erase(m_PendingObservations.begin(), m_PendingObservations.begin() + static_cast<std::ptrdiff_t>(dropped));
 			if (m_Stats.observationsDropped == 0) {
 				std::cout << "[lockstep] more new sounds than the frame can carry; dropping the oldest held readings" << std::endl;
@@ -1905,6 +1908,10 @@ namespace RTE {
 			m_LastQueuedTargetFrame = targetFrame;
 		}
 		return true;
+	}
+
+	std::vector<NetSoundObservation> NetLockstepCoordinator::TakeDroppedObservations() {
+		return std::exchange(m_DroppedObservations, {});
 	}
 
 	bool NetLockstepCoordinator::SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error) {
