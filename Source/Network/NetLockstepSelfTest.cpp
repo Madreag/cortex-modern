@@ -1400,6 +1400,9 @@ namespace RTE {
 		// so the returner has a match to come back to. A clean leave with nobody left still ends at once.
 		bool TestCoordinatorDroppedSeatHold(std::string* error) {
 			uint16_t port = 43020;
+			bool holdingBeforeDrop = false;
+			bool holdingDuringHold = false;
+			bool holdingAfterWindow = false;
 			auto runDrop = [&](bool holdSeat, bool fenceTransport, bool cleanLeave, NetLockstepState& outState,
 			                   size_t& outLeaves, std::string& outReason, uint64_t& outFramesAlone) {
 				++port;
@@ -1461,6 +1464,7 @@ namespace RTE {
 					return false;
 				}
 				// The drop: the transport goes away with no notice. A clean leave announces itself first.
+				holdingBeforeDrop = host.IsHoldingSeatForReclaim();
 				stub.fenced = fenceTransport ? static_cast<NetPeerId>(1) : c_InvalidNetPeerId;
 				if (cleanLeave) {
 					client.Leave("bye");
@@ -1484,12 +1488,15 @@ namespace RTE {
 				outState = host.GetState();
 				outLeaves = host.GetPeerLeaveFrames().size();
 				outReason = host.GetStats().timeoutReason;
+				// A5: the activity gate reads exactly this - the round is alive only for a held seat.
+				holdingDuringHold = host.IsHoldingSeatForReclaim();
 				if (outState == NetLockstepState::Running && !cleanLeave && !fenceTransport) {
 					// The window closes: the very next Tick must end a round nobody is coming back to.
 					stub.held = false;
 					host.Tick(now + 5);
 					outState = host.GetState();
 					outReason = host.GetStats().timeoutReason;
+					holdingAfterWindow = host.IsHoldingSeatForReclaim();
 				}
 				return true;
 			};
@@ -1516,6 +1523,11 @@ namespace RTE {
 				*error = "the round did not end once the reclaim window closed: " + reason;
 				return false;
 			}
+			// A5: the activity may only be held open while the round itself is being held open.
+			if (holdingBeforeDrop || !holdingDuringHold || holdingAfterWindow) {
+				*error = "the held-seat window was not visible to the activity gate";
+				return false;
+			}
 
 			// The control: with no seat held this is exactly the old behaviour - the drop ends the match.
 			uint64_t controlFrames = 0;
@@ -1525,6 +1537,10 @@ namespace RTE {
 			}
 			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
 				*error = "an unheld 1v1 drop no longer ends the match: " + reason;
+				return false;
+			}
+			if (holdingDuringHold) {
+				*error = "a round nobody is coming back to reported itself as holding a seat";
 				return false;
 			}
 			if (controlFrames != 0) {
@@ -1541,6 +1557,10 @@ namespace RTE {
 				*error = "a clean 1v1 leave no longer ends the match: " + reason;
 				return false;
 			}
+			if (holdingDuringHold) {
+				*error = "an announced leave still reported the round as holding its seat";
+				return false;
+			}
 
 			// A superseded incarnation's socket closing is not a leave at all: the seat's live holder is
 			// another transport, so the round keeps requiring it.
@@ -1550,6 +1570,10 @@ namespace RTE {
 			}
 			if (leaves != 0 || state != NetLockstepState::Running) {
 				*error = "a fenced transport's disconnect was adjudicated as a leave";
+				return false;
+			}
+			if (holdingDuringHold) {
+				*error = "a round with nobody gone reported itself as holding a seat";
 				return false;
 			}
 			return true;

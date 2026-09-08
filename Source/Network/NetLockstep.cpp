@@ -2386,6 +2386,11 @@ namespace RTE {
 		});
 	}
 
+	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
+		return m_State == NetLockstepState::Running && !m_RemotePeerIds.empty() &&
+		       m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && AnyLeftSeatHeld();
+	}
+
 	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {
 		if (m_State != NetLockstepState::Running || m_RemotePeerIds.empty() ||
 		    m_PeerLeaveFrames.size() < m_RemotePeerIds.size() || AnyLeftSeatHeld()) {

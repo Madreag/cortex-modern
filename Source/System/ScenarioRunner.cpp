@@ -771,6 +771,10 @@ namespace RTE {
 		return false;
 	}
 
+	bool ScenarioRunner::IsLockstepHoldingSeatForReclaim() {
+		return s_LockstepCoordinator != nullptr && s_LockstepCoordinator->IsHoldingSeatForReclaim();
+	}
+
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
 		if (!s_LockstepCoordinator) {
 			return false;

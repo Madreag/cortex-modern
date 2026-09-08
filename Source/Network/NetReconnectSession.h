@@ -95,6 +95,7 @@ namespace RTE {
 		uint32_t reseatsIssued = 0;
 		uint32_t reclaimRetransmitsDropped = 0;
 		uint32_t seatHoldsExpired = 0;
+		uint32_t seatsReleasedInLobby = 0;
 	};
 
 	/// The host's §4/§6/§7 state machine: it runs the admission transaction, fences a superseded
@@ -230,6 +231,9 @@ namespace RTE {
 		bool BindIncarnation(SeatState& seat, NetPeerId connection);
 		void ReleaseProvisional(uint16_t stableSeat);
 		void RecordDrop(SeatState& seat, uint64_t frame);
+		/// Hands a seat back to the pool. Only in a lobby: nothing has been played, so the player who
+		/// left has nothing to reclaim and the seat must be joinable again.
+		void ReleaseSeat(SeatState& seat);
 		void IssueReseat(const SeatState& seat);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 

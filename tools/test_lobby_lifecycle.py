@@ -30,6 +30,21 @@ def wait_for_log(run, marker, seconds=45):
     raise RuntimeError(f"{run.out.name} did not reach {marker}")
 
 
+def read_lockstep(out):
+    """This peer's own view of the round, from -net-match-report; absent when it never started one."""
+    path = out / "lockstep-report.json"
+    if not path.exists():
+        return None
+    try:
+        report = json.loads(path.read_text(errors="replace"))
+    except ValueError as error:
+        return {"report_error": str(error)}
+    lockstep = report.get("runner", {}).get("lockstep")
+    if not isinstance(lockstep, dict):
+        return {"report_error": "no runner.lockstep block", "service_state": report.get("state")}
+    return lockstep
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -53,7 +68,8 @@ def main():
         path = root / f"{name}.txt"
         path.write_text(script, encoding="utf-8")
         out = root / name
-        args = ["-menu-script", path, "-net-fake-lag", options.fake_lag_ms]
+        args = ["-menu-script", path, "-net-fake-lag", options.fake_lag_ms,
+                "-net-match-report", out / "lockstep-report.json"]
         if trace:
             ticks = 360 if options.short_trace_control and name == "replacement" else 180
             args += ["-tick-hashes", "-max-ticks", ticks, "-out", out / "trace.json"]
@@ -94,7 +110,7 @@ def main():
         with ThreadPoolExecutor(max_workers=len(pending)) as pool:
             for name, record in pool.map(lambda pair: (pair[0], pair[1].finish()), pending):
                 records[name] = record
-        checks, details = {}, {}
+        checks, details, lockstep = {}, {}, {}
         for name, record in records.items():
             log = (root / name / "stdout.log").read_text(errors="replace")
             errors = re.findall(r"^.*(?:FAILED|FAIL|EXCEPTION_|RTE Assert|RTE Abort|Runtime Error).*$", log, re.M)
@@ -107,7 +123,11 @@ def main():
             checks[f"{name}_desktop"] = record["input_desktop_before"] == record["input_desktop_after"]
             checks[f"{name}_binary"] = record["exe_sha256"] == records["host"]["exe_sha256"]
             details[name] = {"exit": record["exit_code"], "binary": record["exe_sha256"], "errors": errors,
-                             "rosters": [line for line in log.splitlines() if "dump_lobby" in line]}
+                             "rosters": [line for line in log.splitlines() if "dump_lobby" in line],
+                             "net_match": [line for line in log.splitlines() if "[net-match] " in line]}
+            stats = read_lockstep(root / name)
+            if stats is not None:
+                lockstep[name] = stats
             if match and name != "departing":
                 if short_trace:
                     ticks, _ = load_trace(root / name / "trace.json")
@@ -122,6 +142,8 @@ def main():
         checks["host_survived_departure"] = "assert_substate expected=Lobby actual=Lobby PASS" in host_log and "assert_enabled ButtonMultiplayerStart expected=0 actual=0 PASS" in host_log
         result.update(pass_=all(checks.values()), checks=checks, details=details)
         result["pass"] = result.pop("pass_")
+        result["lockstep"] = lockstep
+        (root / "lockstep-stats.json").write_text(json.dumps(lockstep, indent=2), encoding="utf-8")
     except Exception as error:
         result["error"] = str(error)
     finally:
