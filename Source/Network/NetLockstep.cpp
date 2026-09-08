@@ -15,6 +15,8 @@
 namespace RTE {
 
 	namespace {
+		constexpr uint64_t c_StartRetransmitMs = 250;
+
 		template <class... T>
 		struct Overloaded : T... {
 			using T::operator()...;
@@ -280,6 +282,7 @@ namespace RTE {
 			AppendU16LE(out, payload.controllerFrameEncodedSize);
 			AppendU8(out, payload.localPeerId);
 			AppendU8(out, payload.peerCount);
+			AppendU64LE(out, payload.roundId);
 			return AppendString(out, payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) &&
 			       AppendString(out, payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error);
 		}
@@ -422,6 +425,7 @@ namespace RTE {
 					}
 				}
 			}
+			AppendU64LE(out, payload.roundId);
 			return true;
 		}
 
@@ -457,10 +461,11 @@ namespace RTE {
 			AppendU16LE(out, 0);
 			AppendU64LE(out, payload.frame);
 			out.insert(out.end(), payload.hash.begin(), payload.hash.end());
+			AppendU64LE(out, payload.roundId);
 			return true;
 		}
 
-		bool DecodeStart(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error) {
+		bool DecodeStart(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t version) {
 			NetLockstepStart payload;
 			if (!ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
 			    !ReadOrTruncated(reader.ReadU64LE(payload.startFrame), reader, error, "start_frame") ||
@@ -469,6 +474,7 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU16LE(payload.controllerFrameEncodedSize), reader, error, "controller_frame_encoded_size") ||
 			    !ReadOrTruncated(reader.ReadU8(payload.localPeerId), reader, error, "local_peer_id") ||
 			    !ReadOrTruncated(reader.ReadU8(payload.peerCount), reader, error, "peer_count") ||
+			    (version >= NetLockstepCodec::c_RoundVersion && !ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id")) ||
 			    !reader.ReadString(payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) ||
 			    !reader.ReadString(payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error) ||
 			    !ValidateStart(payload, error)) {
@@ -478,7 +484,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool DecodeFrame(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t controllerFrameVersion) {
+		bool DecodeFrame(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t controllerFrameVersion, uint16_t version) {
 			NetLockstepFrame payload;
 			uint8_t reserved = 0;
 			uint16_t frameCount = 0;
@@ -778,6 +784,11 @@ namespace RTE {
 				}
 				payload.commands.push_back(std::move(command));
 			}
+			if (version >= NetLockstepCodec::c_RoundVersion) {
+				if (!ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id")) {
+					return false;
+				}
+			}
 			out = std::move(payload);
 			return true;
 		}
@@ -821,7 +832,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool DecodeChecksum(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error) {
+		bool DecodeChecksum(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t version) {
 			NetLockstepChecksum payload;
 			uint8_t reserved0 = 0;
 			uint16_t reserved16 = 0;
@@ -831,6 +842,7 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU16LE(reserved16), reader, error, "reserved") ||
 			    !ReadOrTruncated(reader.ReadU64LE(payload.frame), reader, error, "frame") ||
 			    !ReadOrTruncated(reader.ReadBytes(hashBytes, payload.hash.size()), reader, error, "checksum_hash") ||
+			    (version >= NetLockstepCodec::c_RoundVersion && !ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id")) ||
 			    !ValidatePeerId(payload.senderPeerId, error, "sender_peer_id")) {
 				return false;
 			}
@@ -858,7 +870,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepFrame::operator==(const NetLockstepFrame& rhs) const {
-		if (senderPeerId != rhs.senderPeerId || targetFrame != rhs.targetFrame || frames.size() != rhs.frames.size() || commands != rhs.commands) {
+		if (senderPeerId != rhs.senderPeerId || targetFrame != rhs.targetFrame || frames.size() != rhs.frames.size() || commands != rhs.commands ||
+		    roundId != rhs.roundId) {
 			return false;
 		}
 		for (size_t i = 0; i < frames.size(); ++i) {
@@ -1022,10 +1035,10 @@ namespace RTE {
 		bool payloadOk = false;
 		switch (packetType) {
 			case NetLockstepPacketType::Start:
-				payloadOk = DecodeStart(payloadReader, payload, &payloadError);
+				payloadOk = DecodeStart(payloadReader, payload, &payloadError, version);
 				break;
 			case NetLockstepPacketType::Frame:
-				payloadOk = DecodeFrame(payloadReader, payload, &payloadError, controllerFrameVersion);
+				payloadOk = DecodeFrame(payloadReader, payload, &payloadError, controllerFrameVersion, version);
 				break;
 			case NetLockstepPacketType::Ack:
 				payloadOk = DecodeAck(payloadReader, payload, &payloadError);
@@ -1034,7 +1047,7 @@ namespace RTE {
 				payloadOk = DecodeStop(payloadReader, payload, &payloadError);
 				break;
 			case NetLockstepPacketType::Checksum:
-				payloadOk = DecodeChecksum(payloadReader, payload, &payloadError);
+				payloadOk = DecodeChecksum(payloadReader, payload, &payloadError, version);
 				break;
 		}
 		if (!payloadOk) {
@@ -1137,6 +1150,7 @@ namespace RTE {
 		start.peerCount = config.peerCount;
 		start.scenario = config.scenario;
 		start.ownershipPolicy = config.ownershipPolicy;
+		start.roundId = config.roundId;
 
 		NetLockstepError validateError;
 		std::vector<uint8_t> scratch;
@@ -1168,6 +1182,10 @@ namespace RTE {
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
+		m_RoundId = config.roundId;
+		m_LastStartSentMs = UINT64_MAX;
+		m_PreStartFrames.clear();
+		m_PreStartChecksums.clear();
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
 		m_Stats.configuredStartFrame = config.startFrame;
@@ -1188,11 +1206,47 @@ namespace RTE {
 		m_Stats.remotePeerId = config.remotePeerId;
 		m_Stats.nextFrame = m_Stats.effectiveStartFrame;
 
+		return SendStart(error);
+	}
+
+	bool NetLockstepCoordinator::SendStart(std::string* error) {
+		NetLockstepStart start;
+		start.sessionId = m_Config.sessionId;
+		start.startFrame = m_Config.startFrame;
+		start.inputDelayFrames = m_Config.inputDelayFrames;
+		start.controllerFrameVersion = ControllerFrame::c_Version;
+		start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+		start.localPeerId = m_Config.localPeerId;
+		start.peerCount = m_Config.peerCount;
+		start.scenario = m_Config.scenario;
+		start.ownershipPolicy = m_Config.ownershipPolicy;
+		start.roundId = m_RoundId;
 		if (!SendPacket({start}, NetTransportLane::ControlReliable, error)) {
 			return false;
 		}
 		++m_Stats.startPacketsSent;
 		return true;
+	}
+
+	void NetLockstepCoordinator::FlushPreStart(uint8_t peerId, uint64_t nowMs) {
+		const auto transportIt = m_RemoteTransports.find(peerId);
+		const NetPeerId fromTransport = transportIt != m_RemoteTransports.end() ? transportIt->second : c_InvalidNetPeerId;
+		std::deque<NetLockstepFrame> frames;
+		std::deque<NetLockstepChecksum> checksums;
+		if (auto held = m_PreStartFrames.find(peerId); held != m_PreStartFrames.end()) {
+			frames = std::move(held->second);
+			m_PreStartFrames.erase(held);
+		}
+		if (auto held = m_PreStartChecksums.find(peerId); held != m_PreStartChecksums.end()) {
+			checksums = std::move(held->second);
+			m_PreStartChecksums.erase(held);
+		}
+		for (const NetLockstepFrame& frame : frames) {
+			HandleFrame(frame, nowMs, fromTransport);
+		}
+		for (const NetLockstepChecksum& checksum : checksums) {
+			HandleChecksum(checksum, fromTransport);
+		}
 	}
 
 	bool NetLockstepCoordinator::StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
@@ -1227,6 +1281,10 @@ namespace RTE {
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
+		m_RoundId = 0;
+		m_LastStartSentMs = UINT64_MAX;
+		m_PreStartFrames.clear();
+		m_PreStartChecksums.clear();
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
 		m_Stats.configuredStartFrame = config.startFrame;
@@ -1310,6 +1368,7 @@ namespace RTE {
 		for (NetGameCommand& command : packet.commands) {
 			command.senderPeerId = m_Config.localPeerId;
 		}
+		packet.roundId = m_RoundId;
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
@@ -1334,6 +1393,7 @@ namespace RTE {
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.frame = frame;
 		packet.hash = hash;
+		packet.roundId = m_RoundId;
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
@@ -1347,6 +1407,19 @@ namespace RTE {
 			return;
 		}
 		if (!IsKnownRemotePeer(checksum.senderPeerId)) {
+			return;
+		}
+		if (checksum.roundId != 0 && m_RoundId != 0 && checksum.roundId != m_RoundId) {
+			++m_Stats.staleRoundPackets;
+			return;
+		}
+		if (m_RemoteStartsReceived.find(checksum.senderPeerId) == m_RemoteStartsReceived.end()) {
+			std::deque<NetLockstepChecksum>& held = m_PreStartChecksums[checksum.senderPeerId];
+			if (held.size() >= NetLockstepCodec::c_MaxFutureFrameSkew) {
+				held.pop_front();
+			}
+			held.push_back(checksum);
+			++m_Stats.preStartFramesBuffered;
 			return;
 		}
 		// Drop absurd future checksums; CompareChecksums only prunes matched frames, so an unmatched
@@ -1390,6 +1463,17 @@ namespace RTE {
 		}
 		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
 			HandleEvent(event, nowMs);
+		}
+		// A start sent while a peer was between rounds is gone; repeat it until every start is in.
+		if (m_State == NetLockstepState::WaitingForStart) {
+			if (m_LastStartSentMs == UINT64_MAX) {
+				m_LastStartSentMs = nowMs;
+			} else if (nowMs >= m_LastStartSentMs + c_StartRetransmitMs) {
+				std::string ignored;
+				(void)SendStart(&ignored);
+				++m_Stats.startRetransmits;
+				m_LastStartSentMs = nowMs;
+			}
 		}
 		AdvanceReadyFrames(nowMs);
 	}
@@ -1643,6 +1727,10 @@ namespace RTE {
 		out << "\"frame_packets_sent\":" << m_Stats.framePacketsSent << ",";
 		out << "\"frame_packets_received\":" << m_Stats.framePacketsReceived << ",";
 		out << "\"ignored_session_packets\":" << m_Stats.ignoredSessionPackets << ",";
+		out << "\"stale_round_packets\":" << m_Stats.staleRoundPackets << ",";
+		out << "\"start_retransmits\":" << m_Stats.startRetransmits << ",";
+		out << "\"pre_start_frames_buffered\":" << m_Stats.preStartFramesBuffered << ",";
+		out << "\"round_id\":" << m_RoundId << ",";
 		out << "\"local_controller_frames_sent\":" << m_Stats.localControllerFramesSent << ",";
 		out << "\"remote_controller_frames_received\":" << m_Stats.remoteControllerFramesReceived << ",";
 		out << "\"remote_controller_frames_accepted\":" << m_Stats.remoteControllerFramesAccepted << ",";
@@ -1820,7 +1908,7 @@ namespace RTE {
 
 	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
 		std::visit(Overloaded{
-			[&](const NetLockstepStart& start) { HandleStart(start, fromTransport); },
+			[&](const NetLockstepStart& start) { HandleStart(start, nowMs, fromTransport); },
 			[&](const NetLockstepFrame& frame) { HandleFrame(frame, nowMs, fromTransport); },
 			[&](const NetLockstepAck&) {},
 			[&](const NetLockstepStop& stop) { HandleStop(stop, nowMs, fromTransport); },
@@ -1840,10 +1928,16 @@ namespace RTE {
 		return it == m_RemoteTransports.end() || it->second == fromTransport;
 	}
 
-	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, NetPeerId fromTransport) {
+	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
 		++m_Stats.startPacketsReceived;
 		if (!SenderOwnsTransport(start.localPeerId, fromTransport)) {
 			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport" << std::endl;
+			return;
+		}
+		// Another round's start (a late one from before a resync) is not this round's handshake; before this
+		// peer knows its round, a start for a different frame is that straggler too.
+		if (start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame))) {
+			++m_Stats.staleRoundPackets;
 			return;
 		}
 		if (start.sessionId != m_Config.sessionId ||
@@ -1858,13 +1952,24 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch");
 			return;
 		}
+		if (m_RoundId == 0 && start.roundId != 0) {
+			m_RoundId = start.roundId;
+		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {
 			RelayToOtherRemotes({start}, start.localPeerId);
+		} else if (m_State == NetLockstepState::Running) {
+			// A peer that repeats its start is still waiting for ours, which it may have missed.
+			std::string ignored;
+			(void)SendStart(&ignored);
+			++m_Stats.startRetransmits;
 		}
 		if (m_State == NetLockstepState::WaitingForStart && AllRemoteStartsReceived()) {
 			m_State = NetLockstepState::Running;
 			m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+		}
+		if (firstFromThisPeer) {
+			FlushPreStart(start.localPeerId, nowMs);
 		}
 	}
 
@@ -1874,8 +1979,22 @@ namespace RTE {
 			std::cout << "[lockstep] dropped a frame claiming peer " << static_cast<int>(frame.senderPeerId) << " from the wrong transport" << std::endl;
 			return;
 		}
-		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end() || !IsKnownRemotePeer(frame.senderPeerId)) {
-			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch");
+		if (frame.roundId != 0 && m_RoundId != 0 && frame.roundId != m_RoundId) {
+			++m_Stats.staleRoundPackets;
+			return;
+		}
+		if (!IsKnownRemotePeer(frame.senderPeerId)) {
+			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch: peer " + std::to_string(frame.senderPeerId) + " is not a remote");
+			return;
+		}
+		// After a round restart a peer's first frames can outrun its start; hold them until it lands.
+		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end()) {
+			std::deque<NetLockstepFrame>& held = m_PreStartFrames[frame.senderPeerId];
+			if (held.size() >= NetLockstepCodec::c_MaxFutureFrameSkew) {
+				held.pop_front();
+			}
+			held.push_back(frame);
+			++m_Stats.preStartFramesBuffered;
 			return;
 		}
 		// A sender's frames never target its own delay window; one that does is a broken build.
