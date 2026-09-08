@@ -461,6 +461,7 @@ static std::string ResyncSaveName() {
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
 			m_LeaveExchangeRun = false;
+			m_MatchWasRunning = false;
 			EndAdmissionSession();
 		}
 		runner.reset();
@@ -590,12 +591,14 @@ static std::string ResyncSaveName() {
 		NetMatchServiceState state = NetMatchServiceState::Idle;
 		bool isHost = false;
 		bool hasRecord = false;
+		bool matchWasRunning = false;
 		std::string reason;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			state = m_State;
 			isHost = m_IsHost;
 			hasRecord = m_TicketStore.HasRecord();
+			matchWasRunning = m_MatchWasRunning;
 			reason = m_ErrorText;
 		}
 		if (state == NetMatchServiceState::Running || state == NetMatchServiceState::ReadyToLaunch) {
@@ -606,11 +609,12 @@ static std::string ResyncSaveName() {
 			}
 			return;
 		}
-		// §11's same-process loss: the link died and we still hold the record that proves the seat.
-		if (!s_AdmissionEnabled || isHost || !hasRecord || state == NetMatchServiceState::Starting) {
+		// §11's same-process loss: the link died mid-MATCH and we still hold the record that proves the
+		// seat. A lobby that never started is not a match to reclaim; losing one goes back to the menu.
+		if (!s_AdmissionEnabled || state == NetMatchServiceState::Starting) {
 			return;
 		}
-		if (state != NetMatchServiceState::Failed) {
+		if (!NetReconnectUx::RecoveryApplies(state == NetMatchServiceState::Failed, isHost, hasRecord, matchWasRunning)) {
 			return;
 		}
 		if (m_ReconnectUx.GetState() == NetReconnectUxState::Retrying) {
@@ -678,6 +682,7 @@ static std::string ResyncSaveName() {
 			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
 		}
 		outActivityPreset = m_ActivityPreset;
+		m_MatchWasRunning = true;
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		return true;

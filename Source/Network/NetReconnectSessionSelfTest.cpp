@@ -2916,6 +2916,29 @@ namespace RTE {
 			return 0;
 		}
 
+		// A5: §11's recovery is a MATCH feature. A lobby that never started has no seat to reclaim, and
+		// a retry there drags the player back into a lobby that is gone instead of to the menu.
+		int TestRecoveryAppliesOnlyAfterAMatch() {
+			static_assert(NetReconnectUx::RecoveryApplies(true, false, true, true), "a mid-match loss recovers");
+			static_assert(!NetReconnectUx::RecoveryApplies(true, false, true, false), "a lobby loss does not");
+			static_assert(!NetReconnectUx::RecoveryApplies(true, true, true, true), "the host does not recover its own session");
+			static_assert(!NetReconnectUx::RecoveryApplies(true, false, false, true), "no record, nothing to prove");
+			static_assert(!NetReconnectUx::RecoveryApplies(false, false, true, true), "a session that did not fail is not recovering");
+			// The schedule itself is unchanged, and still runs once the rule admits the loss.
+			NetReconnectUx ux;
+			ux.NoteConnected(0);
+			ux.NoteDropped(1000, "connection lost");
+			if (!ux.IsActive() || !ux.Tick(1000)) {
+				return Fail("a mid-match drop no longer starts the recovery schedule");
+			}
+			ux.NoteAttemptStarted(1000);
+			ux.NoteReconnected(1200);
+			if (ux.GetState() != NetReconnectUxState::Reconnected) {
+				return Fail("the schedule did not settle back into Reconnected");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2989,6 +3012,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLobbySeatIsFreedForTheNextJoiner(); result != 0) {
+			return result;
+		}
+		if (const int result = TestRecoveryAppliesOnlyAfterAMatch(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

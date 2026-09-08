@@ -73,6 +73,17 @@ namespace RTE {
 		/// Whether the recovery banner should be on screen at all.
 		bool IsActive() const;
 
+		/// Whether §11's recovery applies to a lost session at all. It is a MATCH feature: a session
+		/// that never left the lobby has no seat to reclaim, and retrying one drags the player back
+		/// into a lobby that is gone instead of returning them to the menu.
+		/// @param failed Whether the service settled into Failed.
+		/// @param isHost Whether this peer hosts; host loss is out of scope.
+		/// @param hasRecord Whether a recovery record survives.
+		/// @param matchWasRunning Whether this session ever reached a running match.
+		static constexpr bool RecoveryApplies(bool failed, bool isHost, bool hasRecord, bool matchWasRunning) {
+			return failed && !isHost && hasRecord && matchWasRunning;
+		}
+
 		/// The §11 roster mark for another player's seat, or "" while the seat is fine.
 		static const char* RosterMark(bool dropped, bool reclaiming);
 
