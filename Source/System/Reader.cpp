@@ -27,6 +27,7 @@ void Reader::Clear() {
 	m_SkipIncludes = false;
 	m_CanFail = false;
 	m_ThrowOnError = false;
+	m_IsCheckpoint = false;
 	m_NonModulePath = false;
 }
 

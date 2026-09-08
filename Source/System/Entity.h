@@ -6,6 +6,7 @@
 #include <mutex>
 #include <list>
 #include <unordered_set>
+#include <stdexcept>
 
 // Concoction based on:
 // https://stackoverflow.com/questions/34813412/how-to-detect-if-building-with-address-sanitizer-when-building-with-gcc-4-8#78444624
@@ -47,12 +48,19 @@ namespace RTE {
 	static void Deallocate(void* instance) { free(instance); } \
 	static Entity* NewInstance() { return new TYPE; } \
 	Entity* Clone(Entity* cloneTo = nullptr) const override { \
+		const bool checkedClone = Entity::IsCheckpointClone(); \
 		TYPE* ent = cloneTo ? dynamic_cast<TYPE*>(cloneTo) : new TYPE(); \
+		if (!ent && checkedClone) throw std::runtime_error("incompatible checkpoint clone target for " #TYPE); \
 		RTEAssert(ent, "Tried to clone to an incompatible instance!"); \
 		if (cloneTo) { \
 			ent->Destroy(); \
 		} \
-		ent->Create(*this); \
+		try { \
+			if (ent->Create(*this) < 0 && checkedClone) throw std::runtime_error("could not create checkpoint clone of " #TYPE); \
+		} catch (...) { \
+			if (checkedClone && !cloneTo) delete ent; \
+			throw; \
+		} \
 		return ent; \
 	}
 #pragma endregion
@@ -75,6 +83,15 @@ namespace RTE {
 		friend class DataModule;
 
 	public:
+		static bool IsCheckpointClone();
+		struct CheckpointCloneScope {
+			explicit CheckpointCloneScope(bool enabled) : m_Enabled(enabled) { if (m_Enabled) ++s_CheckpointCloneDepth; }
+			~CheckpointCloneScope() { if (m_Enabled) --s_CheckpointCloneDepth; }
+			CheckpointCloneScope(const CheckpointCloneScope&) = delete;
+			CheckpointCloneScope& operator=(const CheckpointCloneScope&) = delete;
+		private:
+			bool m_Enabled;
+		};
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableOverrideMethods;
@@ -213,7 +230,7 @@ namespace RTE {
 		/// @param checkType Whether there is a class name in the stream to check against to make sure the correct type is being read from the stream.
 		/// @param doCreate Whether to do any additional initialization of the object after reading in all the properties from the Reader. This is done by calling Create().
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
-		int Create(Reader& reader, bool checkType = true, bool doCreate = true) override { return Serializable::Create(reader, checkType, doCreate); }
+		int Create(Reader& reader, bool checkType = true, bool doCreate = true) override { CheckpointCloneScope scope(reader.IsCheckpoint()); return Serializable::Create(reader, checkType, doCreate); }
 
 		/// Uses a passed-in instance, or creates a new one, and makes it identical to this.
 		/// @param cloneTo A pointer to an instance to make identical to this. If 0 is passed in, a new instance is made inside here, and ownership of it IS returned!
@@ -401,6 +418,7 @@ namespace RTE {
 		Entity& operator=(const Entity& rhs) { return *this; }
 
 	private:
+		static thread_local unsigned int s_CheckpointCloneDepth;
 		/// Clears all the member variables of this Entity, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

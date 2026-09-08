@@ -4,11 +4,14 @@
 #include "PresetMan.h"
 #include "DataModule.h"
 #include "Base64/base64.h"
+#include "MovableObject.h"
 
 #include <algorithm>
 #include <vector>
 
 namespace RTE {
+	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
+	bool Entity::IsCheckpointClone() { return s_CheckpointCloneDepth != 0 || MovableObject::IsFaithfulClone(); }
 	std::string Entity::SaveCheckpoint() const {
 		CheckpointWriter archive("Entity1");
 		archive(m_PresetName, m_CopiedFromPresetName, m_PresetDescription, m_FormattedReaderPosition, m_IsOriginalPreset, m_DefinedInModule, m_RandomWeight);
@@ -234,7 +237,7 @@ namespace RTE {
 		std::string objectFilePath = reader.GetCurrentFilePath();
 		// Read the Entity from the file and try to add it to PresetMan
 		operand.Create(reader);
-		g_PresetMan.AddEntityPreset(&operand, reader.GetReadModuleID(), reader.GetPresetOverwriting(), objectFilePath);
+		if (!reader.IsCheckpoint()) g_PresetMan.AddEntityPreset(&operand, reader.GetReadModuleID(), reader.GetPresetOverwriting(), objectFilePath);
 
 		return reader;
 	}
@@ -245,7 +248,7 @@ namespace RTE {
 			std::string objectFilePath = reader.GetCurrentFilePath();
 			// Read the Entity from the file and try to add it to PresetMan
 			operand->Create(reader);
-			g_PresetMan.AddEntityPreset(operand, reader.GetReadModuleID(), reader.GetPresetOverwriting(), objectFilePath);
+			if (!reader.IsCheckpoint()) g_PresetMan.AddEntityPreset(operand, reader.GetReadModuleID(), reader.GetPresetOverwriting(), objectFilePath);
 		} else {
 			reader.ReportError("Tried to read an .ini file into a null Entity pointer!");
 		}
