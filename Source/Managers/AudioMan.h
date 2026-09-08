@@ -438,6 +438,8 @@ namespace RTE {
 		};
 		std::map<SoundObservationKey, std::map<uint8_t, CommittedAudibility>> m_CommittedAudibility;
 		std::map<SoundObservationKey, float> m_LastSentAudibility;
+		mutable std::mutex m_AudibilityMissMutex;
+		mutable std::set<SoundObservationKey> m_ReportedAudibilityMisses;
 		static uint8_t AudibilityAuthority(uint64_t objectUID);
 		FMOD_RESULT InitializeAudioSystem(bool silentOutput);
 		void RefreshLogicalSound(SoundContainer* container);

@@ -52,6 +52,13 @@ SoundSimulationScope::SoundSimulationScope(uint64_t objectUID, uint64_t phase, S
 	m_Key = {domain, objectUID, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), phase, occurrence, 0};
 	m_Seed = Mix(g_SimRNG.GetSeed() ^ Mix(objectUID) ^ Mix(m_Key.tick) ^ Mix(phase) ^ Mix(occurrence));
 	s_Current = this;
+	// CC_TRACE_SOUND_SCOPE_OBJECT=<uid> prints every scope opened for that object or directly under it, so two peers' key derivations can be compared.
+	static const uint64_t tracedObject = [] { const char* value = std::getenv("CC_TRACE_SOUND_SCOPE_OBJECT"); return value ? std::strtoull(value, nullptr, 10) : 0ULL; }();
+	if (tracedObject && (objectUID == tracedObject || (m_Previous && m_Previous->m_Key.objectUID == tracedObject))) {
+		std::cout << "[sound-scope] tick=" << m_Key.tick << " domain=" << static_cast<int>(domain) << " uid=" << objectUID << " phase=" << phase << " occurrence=" << occurrence;
+		if (m_Previous) std::cout << " parent(uid=" << m_Previous->m_Key.objectUID << " phase=" << m_Previous->m_Key.phase << " occurrence=" << m_Previous->m_Key.occurrence << " shared=" << m_Previous->m_ChildOrdinal << " local=" << m_Previous->m_LocalChildOrdinal << ")";
+		std::cout << std::endl;
+	}
 }
 
 SoundSimulationScope::~SoundSimulationScope() { s_Current = m_Previous; }
@@ -1833,7 +1840,14 @@ void AudioMan::CommitSoundObservations(uint64_t frame, const std::vector<NetSoun
 	for (const NetSoundObservation& observation: local) observations.push_back(&observation);
 	for (const NetSoundObservation& observation: remote) observations.push_back(&observation);
 	std::stable_sort(observations.begin(), observations.end(), [](const NetSoundObservation* a, const NetSoundObservation* b) { return a->senderPeerId < b->senderPeerId; });
-	for (const NetSoundObservation* observation: observations) m_CommittedAudibility[KeyOf(*observation)][observation->senderPeerId] = {frame, observation->value};
+	for (const NetSoundObservation* observation: observations) {
+		const SoundObservationKey key = KeyOf(*observation);
+		if (!m_CommittedAudibility.contains(key)) {
+			std::cout << "[audibility] first reading object=" << key.objectUID << " tick=" << key.tick << " phase=" << key.phase << " occurrence=" << key.occurrence << " ordinal=" << key.ordinal
+			          << " from peer " << static_cast<int>(observation->senderPeerId) << " value=" << observation->value << " frame=" << frame << std::endl;
+		}
+		m_CommittedAudibility[key][observation->senderPeerId] = {frame, observation->value};
+	}
 	if (frame % c_AudibilityPruneInterval != 0) return;
 	// Readings nobody refreshed for ten minutes belong to finished sounds; every peer prunes on the same frame.
 	for (auto entry = m_CommittedAudibility.begin(); entry != m_CommittedAudibility.end();) {
@@ -1846,7 +1860,14 @@ float AudioMan::GetCommittedAudibility(const SoundContainer& container) const {
 	const SoundExecutionKey& identity = container.GetSharedPlaybackIdentity();
 	if (!identity.ordinal) return 0.0F;
 	const auto entry = m_CommittedAudibility.find(KeyOf(identity));
-	if (entry == m_CommittedAudibility.end()) return 0.0F;
+	if (entry == m_CommittedAudibility.end()) {
+		std::lock_guard lock(m_AudibilityMissMutex);
+		if (m_ReportedAudibilityMisses.insert(KeyOf(identity)).second) {
+			std::cout << "[audibility] no committed reading for " << container.GetPresetName() << " object=" << identity.objectUID << " tick=" << identity.tick << " phase=" << identity.phase
+			          << " occurrence=" << identity.occurrence << " ordinal=" << identity.ordinal << " at " << g_TimerMan.GetSimUpdateCount() << " (table " << m_CommittedAudibility.size() << ")" << std::endl;
+		}
+		return 0.0F;
+	}
 	const uint8_t authority = AudibilityAuthority(container.GetSharedLogicalPlayback().lastObjectUID);
 	if (const auto reading = entry->second.find(authority); reading != entry->second.end()) return reading->second.value;
 	// Between a control change and the new controller's first reading, the latest committed reading stands.

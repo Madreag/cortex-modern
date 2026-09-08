@@ -1,3 +1,6 @@
+#include <iostream>
+#include <cstdlib>
+#include <thread>
 #include "MovableObject.h"
 #include "CheckpointArchive.h"
 #include "SoundSimulation.h"
@@ -1084,6 +1087,11 @@ void MovableObject::EnableOrDisableAllScripts(bool enableScripts) {
 }
 
 int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts, bool stopOnError, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
+	// CC_TRACE_SOUND_SCOPE_OBJECT=<uid> also reports every script call for that object, so the peer that initializes its scripts early can be identified.
+	static const uint64_t tracedObject = [] { const char* value = std::getenv("CC_TRACE_SOUND_SCOPE_OBJECT"); return value ? std::strtoull(value, nullptr, 10) : 0ULL; }();
+	if (tracedObject && m_UniqueID == tracedObject) {
+		std::cout << "[script-call] uid=" << m_UniqueID << " function=" << functionName << " initialized=" << (m_ScriptObjectName.empty() ? 0 : 1) << " domain=" << static_cast<int>(SoundSimulationScope::Domain()) << " tick=" << g_TimerMan.GetSimUpdateCount() << " thread=" << std::this_thread::get_id() << std::endl;
+	}
 	if (!SceneMan::GetTrackedUIDs().empty() && (SceneMan::IsTrackedUID(GetUniqueID()) || (GetRootParent() && SceneMan::IsTrackedUID(GetRootParent()->GetUniqueID())))) {
 		int packed = 0;
 		for (size_t i = 0; i < 4 && i < functionName.size(); ++i) {
