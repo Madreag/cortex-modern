@@ -1,12 +1,12 @@
-#include <iostream>
-#include <cstdlib>
-#include <thread>
 #include "MovableObject.h"
 #include "CheckpointArchive.h"
 #include "SoundSimulation.h"
 
 #include <bit>
+#include <cstdlib>
+#include <iostream>
 #include <mutex>
+#include <thread>
 
 #include "ActivityMan.h"
 #include "PresetMan.h"
