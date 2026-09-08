@@ -218,7 +218,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Actor) {
 	    .property("LimbPushForcesAndCollisionsDisabled", &Actor::GetLimbPushForcesAndCollisionsDisabled, &Actor::SetLimbPushForcesAndCollisionsDisabled)
 	    .property("MoveProximityLimit", &Actor::GetMoveProximityLimit, &Actor::SetMoveProximityLimit)
 
-	    .def_readwrite("MOMoveTarget", &Actor::m_pMOMoveTarget)
+	    .property("MOMoveTarget", &Actor::GetMOMoveTarget, &Actor::SetMOMoveTarget)
 	    .def_readonly("MovePath", &Actor::m_MovePath, luabind::return_stl_iterator)
 	    .def_readonly("Inventory", &Actor::m_Inventory, luabind::return_stl_iterator)
 

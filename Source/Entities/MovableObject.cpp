@@ -1,6 +1,7 @@
 #include "MovableObject.h"
 
 #include <bit>
+#include <mutex>
 
 #include "ActivityMan.h"
 #include "PresetMan.h"
@@ -30,6 +31,83 @@ int MovableObject::s_FaithfulCloneDepth = 0;
 bool MovableObject::s_FaithfulCloneRegisters = false;
 std::string MovableObject::ms_EmptyString = "";
 
+namespace {
+std::array<std::mutex, 256> g_MovableReferenceLocks;
+std::mutex& ReferenceLock(const MovableObject* object) {
+    return g_MovableReferenceLocks[(reinterpret_cast<uintptr_t>(object) >> 4) % g_MovableReferenceLocks.size()];
+}
+}
+
+MovableObjectReference::MovableObjectReference(const MovableObject* object) { *this = object; }
+MovableObjectReference::MovableObjectReference(const MovableObjectReference& reference) { Copy(reference); }
+MovableObjectReference::MovableObjectReference(MovableObjectReference&& reference) noexcept { Copy(reference); reference.Detach(); }
+MovableObjectReference::~MovableObjectReference() { Detach(); }
+
+void MovableObjectReference::AttachLocked(const MovableObject* object) {
+    m_Previous = nullptr;
+    m_Next = object->m_IncomingWeakReferences;
+    if (m_Next) m_Next->m_Previous = this;
+    object->m_IncomingWeakReferences = this;
+    if (m_ExpiryIdentity) *m_ExpiryIdentity = object->GetUniqueID();
+    m_Object.store(object, std::memory_order_release);
+}
+
+void MovableObjectReference::Detach() {
+    const MovableObject* object = get();
+    if (!object) return;
+    std::lock_guard lock(ReferenceLock(object));
+    // Expiry may have run while we waited. Do not touch a retired target.
+    if (get() != object) return;
+    if (m_Previous) m_Previous->m_Next = m_Next;
+    else object->m_IncomingWeakReferences = m_Next;
+    if (m_Next) m_Next->m_Previous = m_Previous;
+    m_Previous = nullptr;
+    m_Next = nullptr;
+    if (m_ExpiryIdentity) *m_ExpiryIdentity = 0;
+    m_Object.store(nullptr, std::memory_order_release);
+}
+
+MovableObjectReference& MovableObjectReference::operator=(const MovableObject* object) {
+    if (get() == object) return *this;
+    Detach();
+    if (object) {
+        std::lock_guard lock(ReferenceLock(object));
+        AttachLocked(object);
+    }
+    return *this;
+}
+
+void MovableObjectReference::Copy(const MovableObjectReference& reference) {
+    Detach();
+    const MovableObject* object = reference.get();
+    if (!object) return;
+    std::lock_guard lock(ReferenceLock(object));
+    if (reference.get() == object) AttachLocked(object);
+}
+
+MovableObjectReference& MovableObjectReference::operator=(const MovableObjectReference& reference) {
+    if (this != &reference) Copy(reference);
+    return *this;
+}
+MovableObjectReference& MovableObjectReference::operator=(MovableObjectReference&& reference) noexcept {
+    if (this != &reference) { Copy(reference); reference.Detach(); }
+    return *this;
+}
+
+void MovableObjectReference::Expire(const MovableObject* object) {
+    std::lock_guard lock(ReferenceLock(object));
+    auto* reference = object->m_IncomingWeakReferences;
+    object->m_IncomingWeakReferences = nullptr;
+    while (reference) {
+        auto* next = reference->m_Next;
+        reference->m_Previous = nullptr;
+        reference->m_Next = nullptr;
+        if (reference->m_ExpiryIdentity) *reference->m_ExpiryIdentity = 0;
+        reference->m_Object.store(nullptr, std::memory_order_release);
+        reference = next;
+    }
+}
+
 MovableObject::MovableObject() {
 	Clear();
 }
@@ -39,6 +117,8 @@ MovableObject::~MovableObject() {
 }
 
 void MovableObject::Clear() {
+	MovableObjectReference::Expire(this);
+	m_pMOToNotHit.m_ExpiryIdentity = &m_MOToNotHitUID;
 	if (m_UniqueID > 0) g_MovableMan.UnregisterObject(this);
 	m_MOType = TypeGeneric;
 	m_Mass = 0;
@@ -716,6 +796,7 @@ Vector MovableObject::GetRenderPos() const {
 }
 
 void MovableObject::Destroy(bool notInherited) {
+	MovableObjectReference::Expire(this);
 	// Unfortunately, shit can still get destroyed at random from Lua states having ownership and their GC deciding to delete it.
 	// This skips the DestroyScriptState call... so there's leftover stale script state that we just can't do shit about.
 	// This means Destroy() doesn't get called, and the lua memory shit leaks because it never gets set to nil. But oh well.
