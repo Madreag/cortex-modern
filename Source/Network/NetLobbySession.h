@@ -53,6 +53,7 @@ namespace RTE {
 		uint32_t startPacketsSent = 0;
 		uint32_t startPacketsReceived = 0;
 		uint32_t timeouts = 0;
+		uint32_t unconfiguredPeerStates = 0; //!< Roster states for a peer this config has no slot for, ignored.
 		uint32_t unboundConnectionFaults = 0; //!< Host: faults from a transport this round never bound.
 		uint32_t unboundDisconnects = 0; //!< Host: disconnects from a transport this round never bound.
 	};
