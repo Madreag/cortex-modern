@@ -133,6 +133,7 @@ static bool s_recordTickHashes = false;
 static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
+static bool s_cameraNullSceneSelfTest = false;
 static bool s_saveIoSelfTest = false;
 static bool s_saveIoSelfTestQueued = false;
 static std::string s_saveIoSelfTestName;
@@ -436,6 +437,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-bitmap-save-selftest") {
 			s_bitmapSaveSelfTest = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-camera-null-scene-selftest") {
+			s_cameraNullSceneSelfTest = true;
 			++i;
 			continue;
 		}
@@ -1991,6 +1997,33 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	}
 }
 
+/// A launch that fails leaves no scene, so the loop below has nothing to run against - a resync whose
+/// snapshot will not apply lands exactly here. The recovery text rides the service, so §11's state
+/// machine says why the seat was lost.
+/// @return Whether the game loop may still be entered.
+static bool HandleFailedActivityLaunch() {
+	const std::string reason = "could not launch the activity";
+	std::cerr << "[net-match] " << reason << std::endl;
+	g_ConsoleMan.PrintString("ERROR: " + reason);
+	if (g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
+		g_NetMatchService.ReportRuntimeError(reason);
+	}
+	g_ActivityMan.EndActivity();
+	g_ActivityMan.SetInActivity(false);
+	if (s_netMatchServiceE2E) {
+		if (s_netMatchServiceE2EExitCode == 0) {
+			s_netMatchServiceE2EError = reason;
+			s_netMatchServiceE2EExitCode = 1;
+		}
+		System::SetQuit(true);
+		return false;
+	}
+	g_TimerMan.PauseSim(true);
+	g_MenuMan.HandleTransitionIntoMenuLoop();
+	RunMenuLoop();
+	return !System::IsSetToQuit();
+}
+
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
@@ -2000,11 +2033,8 @@ void RunGameLoop() {
 	if (g_ActivityMan.ActivitySetToRestart()) {
 		g_LoadingScreen.DrawLoadingSplash();
 		g_WindowMan.UploadFrame();
-		if (!g_ActivityMan.RestartActivity()) {
-			// This doesn't work.
-			// Somewhat related to https://github.com/cortex-command-community/Cortex-Command-Community-Project-Source/issues/472
-			// Deal with later.
-			// g_MenuMan.GetTitleScreen()->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+		if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) {
+			return;
 		}
 	}
 
@@ -3713,6 +3743,21 @@ int main(int argc, char** argv) {
 	InitializeManagers();
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
+
+	if (s_cameraNullSceneSelfTest) {
+		// The scroll update runs from the sim tick, which keeps ticking for a frame after an activity
+		// ends or an activity launch fails. With no scene it must do nothing rather than fault, and
+		// this is the one moment the engine is up with nothing loaded.
+		if (g_SceneMan.GetScene() != nullptr) {
+			std::cerr << "[camera-null-scene-selftest] FAIL: this case needs a scene-less engine" << std::endl;
+			return ShutDown(EXIT_FAILURE);
+		}
+		for (int screenId = 0; screenId < c_MaxScreenCount; ++screenId) {
+			g_CameraMan.Update(screenId);
+		}
+		std::cout << "[camera-null-scene-selftest] PASS" << std::endl;
+		return ShutDown(EXIT_SUCCESS);
+	}
 
 	g_PresetMan.LoadAllDataModules();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
