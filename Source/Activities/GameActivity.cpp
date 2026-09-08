@@ -1,3 +1,4 @@
+#include "CheckpointArchive.h"
 #include "GameActivity.h"
 
 #include "CameraMan.h"
@@ -34,6 +35,7 @@
 #include "GUIBanner.h"
 
 #include <iostream>
+#include <sstream>
 
 #define BRAINLZWIDTHDEFAULT 640
 
@@ -62,6 +64,8 @@ GameActivity::~GameActivity() {
 }
 
 void GameActivity::Clear() {
+	m_CheckpointMarkedActorIDs = {};
+	m_HasCheckpointMarkedActorIDs = false;
 	m_CPUTeam = -1;
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -110,6 +114,7 @@ void GameActivity::Clear() {
 
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
 		m_Deliveries[team].clear();
+		m_TeamIsCPU[team] = false;
 		m_TeamTech[team] = "";
 		m_TeamTechSwitchEnabled[team] = true;
 		m_LandingZoneArea[team].Reset();
@@ -204,6 +209,24 @@ int GameActivity::Create(const GameActivity& reference) {
 	//    m_GameOverTimer = reference.m_GameOverTimer;
 	m_GameOverPeriod = reference.m_GameOverPeriod;
 	m_WinnerTeam = reference.m_WinnerTeam;
+	if (MovableObject::IsFaithfulClone()) {
+		if (!LoadValueCheckpoint(reference.SaveValueCheckpoint())) return -1;
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			m_PurchaseOverride[player] = reference.m_PurchaseOverride[player];
+			m_CheckpointMarkedActorIDs[player] = reference.m_HasCheckpointMarkedActorIDs ? reference.m_CheckpointMarkedActorIDs[player] : (reference.m_pLastMarkedActor[player] ? reference.m_pLastMarkedActor[player]->GetUniqueID() : 0);
+			m_StrategicModePieMenu[player].reset(reference.m_StrategicModePieMenu[player] ? static_cast<PieMenu*>(reference.m_StrategicModePieMenu[player]->Clone()) : nullptr);
+		}
+		m_HasCheckpointMarkedActorIDs = true;
+		for (int team = 0; team < Teams::MaxTeamCount; ++team) {
+			m_aLZCursor[team] = reference.m_aLZCursor[team];
+			m_aObjCursor[team] = reference.m_aObjCursor[team];
+			for (const Delivery& delivery: reference.m_Deliveries[team]) {
+				Delivery copy = delivery;
+				copy.pCraft = delivery.pCraft ? static_cast<ACraft*>(delivery.pCraft->Clone()) : nullptr;
+				m_Deliveries[team].push_back(copy);
+			}
+		}
+	}
 
 	return 0;
 }
@@ -749,8 +772,6 @@ int GameActivity::Start() {
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
 		if (!m_TeamActive[team])
 			continue;
-
-		m_Deliveries[team].clear();
 
 		// Clear delivery queues
 		for (std::deque<Delivery>::iterator itr = m_Deliveries[team].begin(); itr != m_Deliveries[team].end(); ++itr) {
@@ -2525,43 +2546,221 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 		m_NetworkPlayerNames[player] = std::move(name);
 }
 
-void GameActivity::ClearRollbackDeliveries() {
-	for (auto& queue: m_RollbackDeliveries) {
-		for (Delivery& delivery: queue) {
-			delete delivery.pCraft;
-			delivery.pCraft = nullptr;
-		}
-		queue.clear();
+std::string GameActivity::SaveValueCheckpoint() const {
+	CheckpointWriter writer("GameActivity1");
+	writer(Activity::SaveCheckpoint());
+	VisitCheckpoint(writer, *this);
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		writer(m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{},
+			m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{},
+			m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{},
+			m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{},
+			m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{});
 	}
+	return writer.Text();
 }
 
-void GameActivity::CaptureDeliveriesForRollback() {
-	ClearRollbackDeliveries();
-	MovableObject::FaithfulCloneScope scope(false);
-	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
-		for (const Delivery& delivery: m_Deliveries[team]) {
-			Delivery copy = delivery;
-			copy.pCraft = delivery.pCraft ? dynamic_cast<ACraft*>(delivery.pCraft->Clone()) : nullptr;
-			m_RollbackDeliveries[team].push_back(copy);
-		}
-	}
-}
-
-void GameActivity::RestoreDeliveriesFromRollback() {
-	MovableObject::FaithfulCloneScope scope(true);
-	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
-		for (Delivery& delivery: m_Deliveries[team]) {
-			delete delivery.pCraft;
-			delivery.pCraft = nullptr;
-		}
-		m_Deliveries[team].clear();
-		for (const Delivery& delivery: m_RollbackDeliveries[team]) {
-			Delivery copy = delivery;
-			copy.pCraft = delivery.pCraft ? dynamic_cast<ACraft*>(delivery.pCraft->Clone()) : nullptr;
-			if (copy.pCraft) {
-				copy.pCraft->AdoptPersistedUniqueID();
+bool GameActivity::LoadValueCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "GameActivity1", validateOnly);
+		std::string base;
+		reader.Value(base);
+		if (!Activity::LoadCheckpoint(base, true)) return false;
+		reader.OnCommit([this, base] { Activity::LoadCheckpoint(base); });
+		VisitCheckpoint(reader, *this);
+		const auto component = [&reader]<class T>(T*& target, const std::string& label) {
+			std::string state;
+			reader.Value(state);
+			if (!state.empty()) {
+				T validation;
+				if (!validation.LoadCheckpoint(state, true)) throw std::runtime_error("invalid activity UI checkpoint: " + label);
 			}
-			m_Deliveries[team].push_back(copy);
+			reader.OnCommit([&target, state, label] {
+				if (state.empty()) { delete target; target = nullptr; }
+				else {
+					if (!target) target = new T();
+					if (!target->LoadCheckpoint(state)) throw std::runtime_error("could not apply activity UI checkpoint: " + label);
+				}
+			});
+		};
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			const std::string slot = " player=" + std::to_string(player);
+			component(m_pBuyGUI[player], "BuyMenuGUI" + slot); component(m_pEditorGUI[player], "SceneEditorGUI" + slot); component(m_InventoryMenuGUI[player], "InventoryMenuGUI" + slot);
+			component(m_pBannerRed[player], "GUIBanner red" + slot); component(m_pBannerYellow[player], "GUIBanner yellow" + slot);
 		}
+		reader.Finish();
+		return true;
+	} catch (const std::exception& error) {
+		std::cout << "[checkpoint] GameActivity values: " << error.what() << std::endl;
+		return false;
 	}
+}
+
+std::string GameActivity::ObjectivePoint::SaveCheckpoint() const {
+	CheckpointWriter writer("ObjectivePoint1");
+	writer(m_Description, m_ScenePos, m_Team, m_ArrowDir);
+	return writer.Text();
+}
+
+bool GameActivity::ObjectivePoint::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "ObjectivePoint1", validateOnly);
+		reader(m_Description, m_ScenePos, m_Team, m_ArrowDir);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+
+namespace {
+std::string SaveActivityOwnedEntity(const Entity* object) {
+    if (!object) return {};
+    auto stream = std::make_unique<std::stringstream>();
+    auto* raw = stream.get();
+    Writer writer(std::move(stream));
+    Writer::SnapshotScope snapshot(writer);
+    writer.NewProperty("ActivityOwnedEntity");
+    if (const auto* movable = dynamic_cast<const MovableObject*>(object)) {
+        Scene::SaveSceneObject(writer, movable, false, true);
+    } else {
+        object->Save(writer);
+        writer.ObjectEnd();
+    }
+    return raw->str();
+}
+
+std::unique_ptr<Entity> LoadActivityOwnedEntity(const std::string& text) {
+    if (text.empty()) return {};
+    Reader reader(std::make_unique<std::stringstream>(text), "Base.rte/ActivityCheckpoint.ini", false, nullptr, true);
+    reader.SetThrowOnError(true);
+    reader.SetSkipIncludes(true);
+    reader.SetCheckpoint(true);
+    if (!reader.NextProperty() || reader.ReadPropName() != "ActivityOwnedEntity") throw std::runtime_error("invalid activity-owned entity");
+    std::unique_ptr<Entity> object(g_PresetMan.ReadReflectedPreset(reader));
+    if (!object || reader.NextProperty()) throw std::runtime_error("incomplete activity-owned entity");
+    return object;
+}
+}
+
+std::string GameActivity::SaveCheckpoint() const {
+    CheckpointWriter writer("GameActivity2");
+    writer(SaveValueCheckpoint());
+    for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+        writer(m_pLastMarkedActor[player] ? m_pLastMarkedActor[player]->GetUniqueID() : 0);
+        writer(m_PurchaseOverride[player].size());
+        for (const SceneObject* preset: m_PurchaseOverride[player]) writer(preset->GetClassName(), preset->GetPresetName(), preset->GetModuleName());
+        writer(SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()));
+    }
+    for (int team = 0; team < Teams::MaxTeamCount; ++team) {
+        writer(m_Deliveries[team].size());
+        for (const Delivery& delivery: m_Deliveries[team]) {
+            writer(delivery.orderedByPlayer, delivery.landingZone, delivery.multiOrderYOffset, delivery.delay, delivery.timer,
+                SaveActivityOwnedEntity(delivery.pCraft));
+        }
+    }
+    return writer.Text();
+}
+
+bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    if (text.starts_with("13 GameActivity1 ")) return LoadValueCheckpoint(text, validateOnly);
+    try {
+        CheckpointReader reader(text, "GameActivity2");
+        std::string values;
+        reader.Value(values);
+        if (!LoadValueCheckpoint(values, true)) return false;
+        std::array<long, Players::MaxPlayerCount> marked{};
+        std::array<std::list<const SceneObject*>, Players::MaxPlayerCount> purchases;
+        std::array<std::string, Players::MaxPlayerCount> menus;
+        struct SavedDelivery { Delivery metadata{}; std::string native; std::unique_ptr<ACraft> craft; };
+        std::array<std::vector<SavedDelivery>, Teams::MaxTeamCount> deliveries;
+        const auto count = [&reader, text] {
+            size_t size = 0; reader.Value(size);
+            if (size > text.size()) throw std::runtime_error("invalid activity owner count");
+            return size;
+        };
+        for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+            reader.Value(marked[player]);
+            const size_t size = count();
+            for (size_t index = 0; index < size; ++index) {
+                std::string type, name, module;
+                reader.Value(type); reader.Value(name); reader.Value(module);
+                const auto* preset = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(type, name, module));
+                if (!preset) throw std::runtime_error("missing purchase override preset");
+                purchases[player].push_back(preset);
+            }
+            reader.Value(menus[player]);
+        }
+        for (int team = 0; team < Teams::MaxTeamCount; ++team) {
+            deliveries[team].resize(count());
+            for (auto& saved: deliveries[team]) {
+                auto& d = saved.metadata;
+                reader.Value(d.orderedByPlayer); reader.Value(d.landingZone); reader.Value(d.multiOrderYOffset);
+                reader.Value(d.delay); reader.Value(d.timer); reader.Value(saved.native);
+                if (d.orderedByPlayer < Players::NoPlayer || d.orderedByPlayer >= Players::MaxPlayerCount || saved.native.empty()) return false;
+            }
+        }
+        reader.Finish();
+        if (validateOnly) return true;
+        std::array<std::unique_ptr<PieMenu>, Players::MaxPlayerCount> strategic;
+        for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+            auto object = LoadActivityOwnedEntity(menus[player]);
+            if (object && !dynamic_cast<PieMenu*>(object.get())) return false;
+            strategic[player].reset(static_cast<PieMenu*>(object.release()));
+        }
+        for (auto& queue: deliveries) for (auto& saved: queue) {
+            auto object = LoadActivityOwnedEntity(saved.native);
+            if (!dynamic_cast<ACraft*>(object.get())) return false;
+            saved.craft.reset(static_cast<ACraft*>(object.release()));
+        }
+        if (!LoadValueCheckpoint(values)) return false;
+        m_CheckpointMarkedActorIDs = marked;
+        m_HasCheckpointMarkedActorIDs = true;
+        for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+            m_PurchaseOverride[player].swap(purchases[player]);
+            m_StrategicModePieMenu[player].swap(strategic[player]);
+        }
+        for (int team = 0; team < Teams::MaxTeamCount; ++team) {
+            for (Delivery& delivery: m_Deliveries[team]) delete delivery.pCraft;
+            m_Deliveries[team].clear();
+            for (auto& saved: deliveries[team]) {
+                saved.craft->AdoptPersistedUniqueID();
+                saved.metadata.pCraft = saved.craft.release();
+                m_Deliveries[team].push_back(saved.metadata);
+            }
+        }
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+bool GameActivity::ResolveCheckpointReferences() {
+    if (!Activity::ResolveCheckpointReferences()) return false;
+    if (m_HasCheckpointMarkedActorIDs) {
+        std::array<Actor*, Players::MaxPlayerCount> marked{};
+        for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+            const long uid = m_CheckpointMarkedActorIDs[player];
+            marked[player] = uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid)) : nullptr;
+            if (uid && !marked[player]) return false;
+        }
+        for (int player = 0; player < Players::MaxPlayerCount; ++player) m_pLastMarkedActor[player] = marked[player];
+        m_HasCheckpointMarkedActorIDs = false;
+    }
+    for (auto& queue: m_Deliveries) for (Delivery& delivery: queue) if (delivery.pCraft) delivery.pCraft->ResolveFaithfulLinks();
+    return true;
+}
+
+void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const {
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+    for (const SceneEditorGUI* editor: m_pEditorGUI) if (editor) visit(editor->GetCurrentObject());
+}
+
+bool GameActivity::PrepareCheckpointUI() {
+    const std::string values = SaveValueCheckpoint();
+    for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+        if (m_InventoryMenuGUI[player] && m_InventoryMenuGUI[player]->IsCheckpointInitialized() && m_InventoryMenuGUI[player]->Create(&m_PlayerController[player]) < 0) return false;
+        if (m_pEditorGUI[player] && m_pEditorGUI[player]->IsCheckpointInitialized() && m_pEditorGUI[player]->Create(&m_PlayerController[player]) < 0) return false;
+        if (m_pBuyGUI[player] && m_pBuyGUI[player]->IsCheckpointInitialized() && m_pBuyGUI[player]->Create(&m_PlayerController[player]) < 0) return false;
+        if (m_pBannerRed[player] && m_pBannerRed[player]->GetFontHeight() > 0 && !m_pBannerRed[player]->Create("Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png", 8)) return false;
+        if (m_pBannerYellow[player] && m_pBannerYellow[player]->GetFontHeight() > 0 && !m_pBannerYellow[player]->Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) return false;
+    }
+    return LoadValueCheckpoint(values);
 }

@@ -1,5 +1,7 @@
 #include "CheckpointArchive.h"
+#include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "PrimitiveMan.h"
 #include <chrono>
 #include <map>
 
@@ -30,6 +32,7 @@
 #include "FrameMan.h"
 #include "GameActivity.h"
 #include "SceneMan.h"
+#include "AudioMan.h"
 #include "SettingsMan.h"
 #include "ControllerFrame.h"
 #include "PieMenu.h"
@@ -212,9 +215,16 @@ struct MOUniqueIDLess {
 };
 
 // A Lua state's registered-MO set copied into canonical unique-ID order (the set itself is unordered).
-static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& state) {
+static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& state, bool includePending = false) {
 	const auto& registered = state.GetRegisteredMOs();
 	std::vector<MovableObject*> sorted(registered.begin(), registered.end());
+	if (includePending) {
+		for (MovableObject* mo: state.GetPendingRegisteredMOs()) {
+			if (registered.find(mo) == registered.end()) {
+				sorted.push_back(mo);
+			}
+		}
+	}
 	std::sort(sorted.begin(), sorted.end(), MOUniqueIDLess());
 	return sorted;
 }
@@ -811,6 +821,13 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				const long update = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testUpdate", -1.0)) : -1;
 				const long carried = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCarried", -1.0)) : -1;
 				out << " script=" << create << "/" << update << "/" << static_cast<long>(actor->GetNumberValue("TestUpdates")) << "/" << carried;
+				std::vector<std::pair<std::string, double>> numberValues(actor->GetNumberValueMap().begin(), actor->GetNumberValueMap().end());
+				std::sort(numberValues.begin(), numberValues.end());
+				out << " nv=[" << std::hexfloat;
+				for (const auto& [name, value]: numberValues) {
+					out << name << ":" << value << ";";
+				}
+				out << std::defaultfloat << "]";
 			}
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
 				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS() << std::hexfloat << " hatchms=" << craft->GetHatchTimerElapsedSimMS() << " exitms=" << craft->GetExitTimerElapsedSimMS();
@@ -1101,6 +1118,14 @@ const std::vector<MovableObject*>* MovableMan::GetMOsAtPosition(int pixelX, int 
 }
 
 void MovableMan::WorldSnapshot::Clear() {
+	activity.reset();
+	startActivity.reset();
+	sceneRuntime.clear();
+	terrain = {};
+	runtimeGlobals.clear();
+	frameState.clear();
+	sceneAreas.areas.clear();
+	sceneAreas.navigableAreas.clear();
 	for (Actor* actor: actors) {
 		delete actor;
 	}
@@ -1113,22 +1138,49 @@ void MovableMan::WorldSnapshot::Clear() {
 	actors.clear();
 	items.clear();
 	particles.clear();
+	for (Actor* actor: addedActors) delete actor;
+	for (MovableObject* item: addedItems) delete item;
+	for (MovableObject* particle: addedParticles) delete particle;
+	addedActors.clear(); addedItems.clear(); addedParticles.clear();
+	structure.clear();
 	joinQuarantine.clear();
-	for (const LuaFields& fields: luaFields) {
-		fields.state->ReleaseCapture(fields.ref);
-	}
-	luaFields.clear();
+	luaGraphs.clear();
 	uniqueIDCounter = 0;
 }
 
-bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
+bool MovableMan::CaptureWorld(WorldSnapshot& out) {
+	CompleteQueuedMOIDDrawings();
+	WaitForActorsSeeTask();
 	out.Clear();
-	if (!m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
+	try {
+	struct CaptureAllocationState {
+		AudioMan::CheckpointRegistryScope sounds;
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		int cursor = g_LuaMan.GetScriptStateCursor();
+		~CaptureAllocationState() { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
+	} allocationState;
+	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
+	out.frameState = g_FrameMan.SaveCheckpoint();
+	if (!out.terrain.Capture()) return false;
+	out.structure = SaveWorldStructure();
+	if (const Scene* scene = g_SceneMan.GetScene()) {
+		scene->CaptureAreas(out.sceneAreas);
+		out.sceneRuntime = scene->SaveRuntimeCheckpoint();
+	}
+	std::vector<std::string> luaProblems;
+	if (!SerializeScriptGraphs(out.luaGraphs, luaProblems)) {
+		for (const std::string& problem: luaProblems) {
+			std::cout << "[scriptgraph] capture refused: " << problem << std::endl;
+		}
+		out.luaGraphs.clear();
 		return false;
 	}
 	const long counter = MovableObject::GetUniqueIDCounter();
 	{
 		MovableObject::FaithfulCloneScope scope(false);
+		if (const Activity* activity = g_ActivityMan.GetActivity()) out.activity.reset(static_cast<Activity*>(activity->Clone()));
+		if (const Activity* activity = g_ActivityMan.GetCheckpointStartActivity()) out.startActivity.reset(static_cast<Activity*>(activity->Clone()));
 		out.actors.reserve(m_Actors.size());
 		out.items.reserve(m_Items.size());
 		out.particles.reserve(m_Particles.size());
@@ -1149,6 +1201,9 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 		for (const MovableObject* particle: m_Particles) {
 			timed(particle, [&] { out.particles.push_back(dynamic_cast<MovableObject*>(particle->Clone())); });
 		}
+		for (const Actor* actor: m_AddedActors) out.addedActors.push_back(dynamic_cast<Actor*>(actor->Clone()));
+		for (const MovableObject* item: m_AddedItems) out.addedItems.push_back(dynamic_cast<MovableObject*>(item->Clone()));
+		for (const MovableObject* particle: m_AddedParticles) out.addedParticles.push_back(dynamic_cast<MovableObject*>(particle->Clone()));
 		if (std::getenv("CC_CAPTURE_PROFILE")) {
 			std::vector<std::pair<std::string, std::pair<int, double>>> rows(profile.begin(), profile.end());
 			std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
@@ -1158,31 +1213,42 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) const {
 		}
 	}
 	out.joinQuarantine = m_LockstepJoinQuarantine;
-	// Every scripted object's Lua fields go with it (attachables and inventory included), so a re-run's scripts start from the captured state.
-	const auto captureState = [&out](LuaStateWrapper& state) {
-		for (const MovableObject* mo: SortedRegisteredMOs(state)) {
-			if (mo->ObjectScriptsInitialized()) {
-				out.luaFields.push_back({&state, mo->GetUniqueID(), state.CaptureScriptObjectFields(mo->GetUniqueID())});
-			}
-		}
-	};
-	captureState(g_LuaMan.GetMasterScriptState());
-	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
-		captureState(state);
-	}
 	// Faithful clones keep their identity, but anything the clone chain drew from the counter is undone.
 	MovableObject::PinUniqueIDCounter(counter);
 	out.uniqueIDCounter = counter;
+	out.luaStateCursor = allocationState.cursor;
 	return true;
+	} catch (const std::exception& error) {
+		out.Clear();
+		std::cout << "[snapshot] capture refused: " << error.what() << std::endl;
+		return false;
+	}
 }
 
-bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
+bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
+	if (!LoadWorldStructure(in.structure, true) || !in.terrain.CanRestore() || !g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals, true)) return false;
+	struct RestoreFlag {
+		bool previous = g_MovableMan.IsRestoringSnapshot();
+		RestoreFlag() { g_MovableMan.SetRestoringSnapshot(true); }
+		~RestoreFlag() { g_MovableMan.SetRestoringSnapshot(previous); }
+	} restoreFlag;
+	if (!g_ActivityMan.PrepareCheckpointMaterials(in.runtimeGlobals)) return false;
+	if (!in.terrain.Restore()) return false;
+
 	CompleteQueuedMOIDDrawings();
 	if (!m_Actors.empty() || !m_Items.empty() || !m_Particles.empty() || !m_AddedActors.empty() || !m_AddedItems.empty() || !m_AddedParticles.empty()) {
 		PurgeAllMOs();
 	}
+	if (Scene* scene = g_SceneMan.GetScene()) {
+		scene->RestoreAreas(in.sceneAreas);
+		if (!in.sceneRuntime.empty() && !scene->LoadRuntimeCheckpoint(in.sceneRuntime)) return false;
+	}
 	{
 		MovableObject::FaithfulCloneScope scope(true);
+		std::unique_ptr<Activity> candidate(in.activity ? static_cast<Activity*>(in.activity->Clone()) : nullptr);
+		g_ActivityMan.SwapCheckpointActivity(candidate);
+		std::unique_ptr<Activity> startCandidate(in.startActivity ? static_cast<Activity*>(in.startActivity->Clone()) : nullptr);
+		g_ActivityMan.SwapCheckpointStartActivity(startCandidate);
 		for (const Actor* actor: in.actors) {
 			Actor* live = dynamic_cast<Actor*>(actor->Clone());
 			live->AdoptPersistedUniqueID();
@@ -1202,30 +1268,31 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 			m_Particles.push_back(live);
 			m_ValidParticles.insert(live);
 		}
+		for (const Actor* actor: in.addedActors) {
+			Actor* live = dynamic_cast<Actor*>(actor->Clone());
+			live->AdoptPersistedUniqueID(); m_AddedActors.push_back(live); m_ValidActors.insert(live);
+		}
+		for (const MovableObject* item: in.addedItems) {
+			MovableObject* live = dynamic_cast<MovableObject*>(item->Clone());
+			live->AdoptPersistedUniqueID(); m_AddedItems.push_back(live); m_ValidItems.insert(live);
+		}
+		for (const MovableObject* particle: in.addedParticles) {
+			MovableObject* live = dynamic_cast<MovableObject*>(particle->Clone());
+			live->AdoptPersistedUniqueID(); m_AddedParticles.push_back(live); m_ValidParticles.insert(live);
+		}
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
 	m_LockstepJoinQuarantine = in.joinQuarantine;
-	// Every live scripted original steps out of its _ScriptedObjects slot (the re-run's objects take the slots); a captured object's clone takes it now with the captured fields, Create not re-run.
-	const auto stashState = [this](LuaStateWrapper& state) {
-		for (const MovableObject* mo: SortedRegisteredMOs(state)) {
-			if (mo->ObjectScriptsInitialized()) {
-				state.StashScriptObject(mo->GetUniqueID());
-				m_RestoredScriptObjects.emplace_back(&state, mo->GetUniqueID());
-			}
-		}
-	};
-	stashState(g_LuaMan.GetMasterScriptState());
-	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
-		stashState(state);
+	if (!LoadWorldStructure(in.structure)) return false;
+	if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->PrepareCheckpointUI()) return false;
+	if (!g_ActivityMan.PrepareCheckpointPrimitives(in.runtimeGlobals)) return false;
+	std::string luaError;
+	if (!RestoreScriptGraphs(in.luaGraphs, &luaError)) {
+		std::cout << "[scriptgraph] restore failed: " << luaError << std::endl;
+		return false;
 	}
-	for (const WorldSnapshot::LuaFields& fields: in.luaFields) {
-		MovableObject* clone = FindObjectByUniqueID(fields.uid);
-		if (!clone || clone->ObjectScriptsInitialized()) {
-			continue;
-		}
-		clone->AdoptScriptObject();
-		fields.state->RestoreScriptObjectFields(fields.uid, fields.ref);
-	}
+	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
+	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
 	for (Actor* actor: m_Actors) {
 		actor->ResolveFaithfulLinks();
 	}
@@ -1235,12 +1302,65 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	for (MovableObject* particle: m_Particles) {
 		particle->ResolveFaithfulLinks();
 	}
-	return true;
+	for (Actor* actor: m_AddedActors) actor->ResolveFaithfulLinks();
+	for (MovableObject* item: m_AddedItems) item->ResolveFaithfulLinks();
+	for (MovableObject* particle: m_AddedParticles) particle->ResolveFaithfulLinks();
+	if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->ResolveCheckpointReferences()) return false;
+	if (!g_PrimitiveMan.ResolveCheckpointReferences()) return false;
+	ResolvePendingSnapshotLinks();
+	RedrawRestoredMOIDs();
+	return g_FrameMan.LoadCheckpoint(in.frameState) && g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals);
 }
 
-void MovableMan::SetAsideWorld(WorldSetAside& out) {
+bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
+	if (out.held || m_HasWorldSetAside) {
+		return false;
+	}
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
+	{
+	AudioMan::CheckpointRegistryScope captureSounds;
+	out.soundRegistrations = g_AudioMan.CaptureCheckpointSoundRegistry();
+	std::vector<std::string> luaProblems;
+	m_ScriptGraphFailure.clear();
+	if (!SerializeScriptGraphs(out.luaGraphs, luaProblems)) {
+		for (const std::string& problem: luaProblems) {
+			m_ScriptGraphFailure += (m_ScriptGraphFailure.empty() ? "" : "; ") + problem;
+		}
+		std::cout << "[scriptgraph] set-aside capture refused: " << m_ScriptGraphFailure << std::endl;
+		out.luaGraphs.clear();
+		return false;
+	}
+	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
+	out.frameState = g_FrameMan.SaveCheckpoint();
+	if (holdActivity && !out.terrain.Capture()) return false;
+	if (holdActivity && g_SceneMan.GetScene()) out.sceneRuntime = g_SceneMan.GetScene()->SaveRuntimeCheckpoint();
+	}
+	out.primitiveQueues = std::make_shared<PrimitiveQueuesSetAside>();
+	g_PrimitiveMan.SetAsideQueues(*out.primitiveQueues);
+	out.musicOwners = g_MusicMan.TakeCheckpointOwners();
+	out.uniqueIDCounter = MovableObject::GetUniqueIDCounter();
+	g_LuaMan.SwapPathCallbacks(out.pathCallbacks);
+	if (Scene* scene = g_SceneMan.GetScene()) {
+		scene->SwapAreas(out.sceneAreas);
+	}
+	out.luaStateCursor = g_LuaMan.GetScriptStateCursor();
+	out.scriptRegistrations.clear();
+	const auto stashState = [this, &out](LuaStateWrapper& state) {
+		state.RunScriptString("_ScriptGraph.stashObjects()");
+		for (const MovableObject* mo: SortedRegisteredMOs(state, true)) {
+			if (mo->ObjectScriptsInitialized()) {
+				state.StashScriptObject(mo->GetUniqueID());
+				out.scriptObjects.emplace_back(&state, mo->GetUniqueID());
+			}
+		}
+		auto& lists = out.scriptRegistrations.emplace_back();
+		state.SwapRegisteredMOs(lists.first, lists.second);
+	};
+	stashState(g_LuaMan.GetMasterScriptState());
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		stashState(state);
+	}
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
 	out.actors.swap(m_Actors);
 	out.items.swap(m_Items);
@@ -1256,20 +1376,50 @@ void MovableMan::SetAsideWorld(WorldSetAside& out) {
 		m_SortTeamRoster[team] = false;
 	}
 	out.joinQuarantine.swap(m_LockstepJoinQuarantine);
+	out.pendingLinks.swap(m_PendingLinkResolves);
 	{
+		std::unordered_set<const Entity*> visited;
+		std::unordered_set<const MovableObject*> heldObjects;
+		const auto collect = [&visited, &heldObjects](const auto& roots) {
+			for (const Entity* root: roots) CollectOwnedMovableObjects(root, visited, heldObjects);
+		};
+		collect(out.actors); collect(out.items); collect(out.particles);
+		collect(out.addedActors); collect(out.addedItems); collect(out.addedParticles);
+		// File restores hold Scene/Activity in an outer transaction. Their owning
+		// trees still leave this registry even when that outer hold has not run yet.
+		CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, heldObjects);
+		CollectOwnedMovableObjects(g_ActivityMan.GetActivity(), visited, heldObjects);
+		CollectOwnedMovableObjects(g_ActivityMan.GetCheckpointStartActivity(), visited, heldObjects);
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		out.knownObjects = m_KnownObjects;
+		for (auto entry = m_KnownObjects.begin(); entry != m_KnownObjects.end();) {
+			if (heldObjects.contains(entry->second)) entry = m_KnownObjects.erase(entry);
+			else ++entry;
+		}
 	}
-	m_ValidActors.clear();
-	m_ValidItems.clear();
-	m_ValidParticles.clear();
-	m_MOIDIndex.clear();
+	out.validActors.swap(m_ValidActors);
+	out.validItems.swap(m_ValidItems);
+	out.validParticles.swap(m_ValidParticles);
+	out.moidIndex.swap(m_MOIDIndex);
+	out.contiguousActorIDs.swap(m_ContiguousActorIDs);
+	for (int team = 0; team < Activity::MaxTeamCount; ++team) out.teamMOIDCount[team] = m_TeamMOIDCount[team];
+	g_SceneMan.SwapMOIDGrid(out.moidGrid);
+	if (holdActivity) {
+		g_ActivityMan.SwapCheckpointActivity(out.activity);
+		g_ActivityMan.SwapCheckpointStartActivity(out.startActivity);
+		if (Scene* scene = g_SceneMan.GetScene()) {
+			out.sceneOwners = std::make_unique<Scene::RuntimeOwners>();
+			scene->SwapRuntimeOwners(*out.sceneOwners);
+		}
+	}
 	out.held = true;
+	m_HasWorldSetAside = true;
+	return true;
 }
 
-void MovableMan::ReinstateWorld(WorldSetAside& in) {
+bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	if (!in.held) {
-		return;
+		return false;
 	}
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
@@ -1279,7 +1429,7 @@ void MovableMan::ReinstateWorld(WorldSetAside& in) {
 		return known != in.knownObjects.end() && known->second == mo;
 	};
 	const auto discardState = [&isOriginal](LuaStateWrapper& state) {
-		for (MovableObject* mo: SortedRegisteredMOs(state)) {
+		for (MovableObject* mo: SortedRegisteredMOs(state, true)) {
 			if (isOriginal(mo)) {
 				continue;
 			}
@@ -1294,14 +1444,32 @@ void MovableMan::ReinstateWorld(WorldSetAside& in) {
 		discardState(state);
 	}
 	PurgeAllMOs();
+	std::unique_ptr<Activity> rejectedActivity;
+	std::unique_ptr<Activity> rejectedStart;
+	std::unique_ptr<Scene::RuntimeOwners> rejectedSceneOwners;
+	if (in.activity) {
+		g_ActivityMan.SwapCheckpointActivity(rejectedActivity);
+		g_ActivityMan.SwapCheckpointActivity(in.activity);
+		g_ActivityMan.SwapCheckpointStartActivity(rejectedStart);
+		g_ActivityMan.SwapCheckpointStartActivity(in.startActivity);
+	}
+	if (in.sceneOwners && g_SceneMan.GetScene()) {
+		g_SceneMan.GetScene()->SwapRuntimeOwners(*in.sceneOwners);
+		rejectedSceneOwners = std::move(in.sceneOwners);
+	}
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		m_KnownObjects = std::move(in.knownObjects);
 	}
-	for (const auto& [state, uid]: m_RestoredScriptObjects) {
+	for (size_t index = 0; index < in.scriptRegistrations.size(); ++index) {
+		auto& lists = in.scriptRegistrations[index];
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).SwapRegisteredMOs(lists.first, lists.second);
+	}
+	in.scriptRegistrations.clear();
+	for (const auto& [state, uid]: in.scriptObjects) {
 		state->UnstashScriptObject(uid);
 	}
-	m_RestoredScriptObjects.clear();
+	in.scriptObjects.clear();
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex, m_AddedAlarmEventsMutex);
 	m_Actors.swap(in.actors);
 	m_Items.swap(in.items);
@@ -1316,6 +1484,8 @@ void MovableMan::ReinstateWorld(WorldSetAside& in) {
 		m_SortTeamRoster[team] = in.sortRoster[team];
 	}
 	m_LockstepJoinQuarantine.swap(in.joinQuarantine);
+	m_PendingLinkResolves.swap(in.pendingLinks);
+	in.pendingLinks.clear();
 	for (Actor* actor: m_Actors) {
 		m_ValidActors.insert(actor);
 	}
@@ -1334,7 +1504,152 @@ void MovableMan::ReinstateWorld(WorldSetAside& in) {
 	for (MovableObject* particle: m_AddedParticles) {
 		m_ValidParticles.insert(particle);
 	}
+	m_ValidActors.swap(in.validActors);
+	m_ValidItems.swap(in.validItems);
+	m_ValidParticles.swap(in.validParticles);
+	m_MOIDIndex.swap(in.moidIndex);
+	m_ContiguousActorIDs.swap(in.contiguousActorIDs);
+	for (int team = 0; team < Activity::MaxTeamCount; ++team) m_TeamMOIDCount[team] = in.teamMOIDCount[team];
+	g_SceneMan.SwapMOIDGrid(in.moidGrid);
 	in.held = false;
+	m_HasWorldSetAside = false;
+	if (!g_ActivityMan.PrepareCheckpointMaterials(in.runtimeGlobals)) return false;
+	if (Scene* scene = g_SceneMan.GetScene()) {
+		scene->SwapAreas(in.sceneAreas);
+		in.sceneAreas.areas.clear();
+		if (!in.sceneRuntime.empty() && !scene->LoadRuntimeCheckpoint(in.sceneRuntime, false, false)) return false;
+	}
+	// The originals' Lua state as it was when they stepped aside, entity references pointing at them again.
+	g_LuaMan.SwapPathCallbacks(in.pathCallbacks);
+	in.pathCallbacks.reset();
+	if (in.primitiveQueues) g_PrimitiveMan.ReinstateQueues(*in.primitiveQueues);
+	auto rejectedPrimitives = std::move(in.primitiveQueues);
+	std::string luaError;
+	if (!RestoreScriptGraphs(in.luaGraphs, &luaError, true)) {
+		std::cout << "[scriptgraph] reinstate failed: " << luaError << std::endl;
+		return false;
+	}
+	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
+	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
+	if (in.terrain.width && !in.terrain.Restore()) return false;
+	if (!g_MusicMan.RestoreCheckpointOwners(in.musicOwners)) return false;
+	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(in.soundRegistrations));
+	return g_FrameMan.LoadCheckpoint(in.frameState) && g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals);
+}
+
+bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const {
+	AudioMan::CheckpointRegistryScope captureSounds;
+	struct PathCapture {
+		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
+		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
+	} pathCapture;
+	graphs.clear();
+	bool complete = true;
+	graphs.emplace_back();
+	complete = g_LuaMan.GetMasterScriptState().SerializeScriptGraph(graphs.back(), problems) && complete;
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		graphs.emplace_back();
+		complete = state.SerializeScriptGraph(graphs.back(), problems) && complete;
+	}
+	return complete;
+}
+
+std::vector<MovableObject*> MovableMan::SnapshotKnownObjects() {
+	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+	std::vector<MovableObject*> objects;
+	objects.reserve(m_KnownObjects.size());
+	for (const auto& [uid, object]: m_KnownObjects) {
+		objects.push_back(object);
+	}
+	return objects;
+}
+
+bool MovableMan::ValidateScriptGraphs(const std::vector<std::string>& graphs, std::string* error) {
+	std::vector<std::string> errors;
+	if (graphs.size() > g_LuaMan.GetThreadedScriptStates().size() + 1) {
+		errors.emplace_back("the snapshot contains more script states than this runtime");
+	} else {
+		for (size_t index = 0; index < graphs.size(); ++index) {
+			if (!graphs[index].empty()) g_LuaMan.GetStateByIndex(static_cast<int>(index)).ValidateScriptGraph(graphs[index], errors);
+		}
+	}
+	if (!errors.empty()) {
+		if (error) {
+			error->clear();
+			for (const auto& message: errors) *error += (error->empty() ? "" : "; ") + message;
+		}
+		return false;
+	}
+	return true;
+}
+
+bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld) {
+	if (!ValidateScriptGraphs(graphs, error)) return false;
+	std::vector<std::string> errors;
+	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();
+	struct AllocationState {
+		long uidCounter = MovableObject::GetUniqueIDCounter();
+		int luaStateCursor = g_LuaMan.GetScriptStateCursor();
+		~AllocationState() {
+			MovableObject::PinUniqueIDCounter(uidCounter);
+			g_LuaMan.SetScriptStateCursor(luaStateCursor);
+		}
+	} allocationState;
+	// A receiving peer may never have captured its VM. Detach every old Lua-owned
+	// tree across all states before any replacement can adopt a saved native ID.
+	if (!reuseHeld) {
+		for (size_t index = 0; index < graphs.size(); ++index) {
+			if (!graphs[index].empty()) g_LuaMan.GetStateByIndex(static_cast<int>(index)).ReleaseScriptOwnedObjects();
+		}
+	}
+	for (size_t index = 0; index < graphs.size(); ++index) {
+		if (!graphs[index].empty()) {
+			g_LuaMan.GetStateByIndex(static_cast<int>(index)).PrepareScriptGraph(&graphs[index], errors, reuseHeld);
+		}
+	}
+	if (errors.empty()) {
+		for (size_t index = 0; index < graphs.size(); ++index) {
+			if (!graphs[index].empty()) {
+				g_LuaMan.GetStateByIndex(static_cast<int>(index)).PrepareScriptGraph(nullptr, errors);
+			}
+		}
+	}
+	const bool prepared = errors.empty();
+	for (size_t index = 0; index < graphs.size(); ++index) {
+		if (graphs[index].empty()) {
+			continue;
+		}
+		LuaStateWrapper& state = g_LuaMan.GetStateByIndex(static_cast<int>(index));
+		if (prepared) {
+			state.RestoreScriptGraph(graphs[index], errors, reuseHeld);
+		}
+		state.RunScriptString("_ScriptGraph.clearPrepared()");
+		if (reuseHeld) {
+			state.RunScriptString("_ScriptGraph.releaseObjects()");
+		}
+	}
+	if (!errors.empty()) {
+		std::string joined;
+		for (const std::string& message: errors) {
+			joined += (joined.empty() ? "" : "; ") + message;
+		}
+		if (error) {
+			*error = joined;
+		}
+		return false;
+	}
+	if (!reuseHeld) g_LuaMan.ResumePathCallbacks();
+	return true;
+}
+
+bool MovableMan::IsKnownObject(const MovableObject* object) {
+	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+	for (const auto& [uid, known]: m_KnownObjects) {
+		if (known == object) {
+			return true;
+		}
+	}
+	return false;
 }
 
 std::string MovableMan::DescribeLuaIdentity() const {
@@ -1718,6 +2033,8 @@ void MovableMan::PurgeAllMOs() {
 	m_SortTeamRoster[Activity::TeamTwo] = false;
 	m_SortTeamRoster[Activity::TeamThree] = false;
 	m_SortTeamRoster[Activity::TeamFour] = false;
+	for (AlarmEvent* event: m_AddedAlarmEvents) delete event;
+	for (AlarmEvent* event: m_AlarmEvents) delete event;
 	m_AddedAlarmEvents.clear();
 	m_AlarmEvents.clear();
 	m_LockstepJoinQuarantine.clear();
@@ -2155,6 +2472,9 @@ bool MovableMan::AddMO(MovableObject* movableObjectToAdd) {
 
 void MovableMan::ReapplyPersistedControllerModes() {
 	for (Actor* actor: m_Actors) {
+		actor->ApplyPersistedControllerMode();
+	}
+	for (Actor* actor: m_AddedActors) {
 		actor->ApplyPersistedControllerMode();
 	}
 }
@@ -2951,13 +3271,17 @@ void MovableMan::AbsorbAddedMOs() {
 	}
 	m_AddedParticles.clear();
 
-	// A restored world's saved links resolve once every resident is in.
+	ResolvePendingSnapshotLinks();
+	m_PendingLinkResolves.clear();
+}
+
+void MovableMan::ResolvePendingSnapshotLinks() {
+	// Keep the pending cohort until absorption so the saved resident order is retained.
 	for (MovableObject* mo: m_PendingLinkResolves) {
 		if (ValidMO(mo)) {
 			mo->ResolveFaithfulLinks();
 		}
 	}
-	m_PendingLinkResolves.clear();
 }
 
 void MovableMan::ClearLockstepJoinQuarantine() {
@@ -4039,4 +4363,210 @@ bool MovableMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		std::cout << "[native-references] " << error.what() << std::endl;
 		return false;
 	}
+}
+
+
+namespace {
+	struct WorldStructure {
+		std::array<std::vector<long>, 6> cohorts;
+		std::array<std::vector<long>, Activity::MaxTeamCount> rosters;
+		std::array<bool, Activity::MaxTeamCount> sortRoster{};
+		std::array<std::vector<std::pair<Vector, std::pair<int, float>>>, 2> alarms;
+		std::vector<std::pair<uint64_t, long>> quarantine;
+		std::vector<long> moidIndex;
+		std::map<long, int> contiguousActorIDs;
+		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
+		std::array<std::set<long>, 3> validObjects;
+		template <class Archive> void Fields(Archive& archive) {
+			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, teamMOIDCount, validObjects);
+		}
+	};
+}
+
+std::string MovableMan::SaveWorldStructure() const {
+	WorldStructure state;
+	const auto identities = [](const auto& source, auto& target) {
+		for (const auto* object: source) target.insert(target.end(), object ? object->GetUniqueID() : 0);
+	};
+	identities(m_Actors, state.cohorts[0]); identities(m_Items, state.cohorts[1]); identities(m_Particles, state.cohorts[2]);
+	identities(m_AddedActors, state.cohorts[3]); identities(m_AddedItems, state.cohorts[4]); identities(m_AddedParticles, state.cohorts[5]);
+	identities(m_ValidActors, state.validObjects[0]); identities(m_ValidItems, state.validObjects[1]); identities(m_ValidParticles, state.validObjects[2]);
+	identities(m_MOIDIndex, state.moidIndex);
+	for (int team = 0; team < Activity::MaxTeamCount; ++team) {
+		identities(m_ActorRoster[team], state.rosters[team]); state.sortRoster[team] = m_SortTeamRoster[team];
+		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
+	}
+	for (const auto& [actor, id]: m_ContiguousActorIDs) state.contiguousActorIDs.emplace(actor->GetUniqueID(), id);
+	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
+	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
+	state.quarantine = m_LockstepJoinQuarantine;
+	CheckpointWriter writer("WorldStructure1"); state.Fields(writer); return writer.Text();
+}
+
+bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
+	try {
+		WorldStructure state;
+		CheckpointReader reader(text, "WorldStructure1"); state.Fields(reader); reader.Finish();
+		std::set<long> incoming;
+		for (const auto& cohort: state.cohorts) for (long uid: cohort) {
+			if (uid <= 0 || !incoming.insert(uid).second) throw std::runtime_error("invalid or duplicate world member");
+		}
+		for (int kind = 0; kind < 3; ++kind) {
+			std::set<long> allowed(state.cohorts[kind].begin(), state.cohorts[kind].end());
+			allowed.insert(state.cohorts[kind + 3].begin(), state.cohorts[kind + 3].end());
+			for (long uid: state.validObjects[kind]) if (!allowed.contains(uid)) throw std::runtime_error("invalid world validity member");
+		}
+		if (validateOnly) return true;
+		const auto resolve = [this](long uid) {
+			MovableObject* object = uid ? FindObjectByUniqueID(uid) : nullptr;
+			if (uid && !object) throw std::runtime_error("missing world reference " + std::to_string(uid));
+			return object;
+		};
+		const auto actor = [&resolve](long uid) {
+			Actor* value = dynamic_cast<Actor*>(resolve(uid));
+			if (uid && !value) throw std::runtime_error("world actor reference has another type");
+			return value;
+		};
+		std::set<long> present;
+		const auto collect = [&present](const auto& objects) { for (const auto* object: objects) present.insert(object->GetUniqueID()); };
+		collect(m_Actors); collect(m_Items); collect(m_Particles); collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
+		if (present != incoming) throw std::runtime_error("loaded world membership differs from checkpoint");
+		std::array<std::deque<MovableObject*>, 6> cohorts;
+		for (int kind = 0; kind < 6; ++kind) for (long uid: state.cohorts[kind]) cohorts[kind].push_back(kind % 3 == 0 ? actor(uid) : resolve(uid));
+		std::array<std::list<Actor*>, Activity::MaxTeamCount> rosters;
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) for (long uid: state.rosters[team]) rosters[team].push_back(actor(uid));
+		std::vector<MovableObject*> index;
+		for (long uid: state.moidIndex) index.push_back(resolve(uid));
+		std::unordered_map<const Actor*, int> contiguous;
+		for (const auto& [uid, id]: state.contiguousActorIDs) contiguous.emplace(actor(uid), id);
+		// Allocate the incoming events before changing any live membership.
+		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;
+		for (int group = 0; group < 2; ++group) for (const auto& [position, detail]: state.alarms[group]) {
+			auto event = std::make_unique<AlarmEvent>(); event->m_ScenePos = position;
+			event->m_Team = static_cast<Activity::Teams>(detail.first); event->m_Range = detail.second;
+			events[group].push_back(std::move(event));
+		}
+		m_Actors.clear(); m_AddedActors.clear();
+		for (MovableObject* object: cohorts[0]) m_Actors.push_back(static_cast<Actor*>(object));
+		for (MovableObject* object: cohorts[3]) m_AddedActors.push_back(static_cast<Actor*>(object));
+		m_Items.swap(cohorts[1]); m_Particles.swap(cohorts[2]); m_AddedItems.swap(cohorts[4]); m_AddedParticles.swap(cohorts[5]);
+		m_ValidActors.clear(); m_ValidItems.clear(); m_ValidParticles.clear();
+		for (long uid: state.validObjects[0]) m_ValidActors.insert(actor(uid));
+		for (long uid: state.validObjects[1]) m_ValidItems.insert(resolve(uid));
+		for (long uid: state.validObjects[2]) m_ValidParticles.insert(resolve(uid));
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) {
+			m_ActorRoster[team].swap(rosters[team]); m_SortTeamRoster[team] = state.sortRoster[team]; m_TeamMOIDCount[team] = state.teamMOIDCount[team];
+		}
+		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
+		const auto replaceEvents = [](auto& live, auto& saved) {
+			while (live.size() > saved.size()) { delete live.back(); live.pop_back(); }
+			for (size_t i = 0; i < saved.size(); ++i) {
+				if (i < live.size()) *live[i] = *saved[i]; else live.push_back(saved[i].release());
+			}
+		};
+		replaceEvents(m_AlarmEvents, events[0]); replaceEvents(m_AddedAlarmEvents, events[1]);
+		return true;
+	} catch (const std::exception& error) {
+		std::cout << "[world-structure] rejected: " << error.what() << std::endl;
+		return false;
+	}
+}
+
+void MovableMan::RedrawRestoredMOIDs() {
+	ScopedRenderRNG renderRNG;
+	g_SceneMan.ClearAllMOIDDrawings();
+	const auto draw = [](const auto& objects) {
+		for (const auto* object: objects) if (!object->IsSetToDelete()) object->Draw(nullptr, Vector(), g_DrawMOID, true);
+	};
+	draw(m_Actors); draw(m_Items); draw(m_Particles);
+}
+
+MovableMan::ConstructionRegistryScope::ConstructionRegistryScope() :
+	m_OriginalSounds(g_AudioMan.CaptureCheckpointSoundRegistry()), m_SoundCursor(g_AudioMan.GetCheckpointSoundContainerCursor()),
+	m_Counter(MovableObject::GetUniqueIDCounter()), m_Cursor(g_LuaMan.GetScriptStateCursor()) {
+	g_MovableMan.CompleteQueuedMOIDDrawings();
+	g_MovableMan.WaitForActorsSeeTask();
+	{
+		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
+		m_Original = g_MovableMan.m_KnownObjects;
+	}
+	const auto mark = g_MovableMan.MarkAddQueues();
+	m_QueueSizes = {mark.actors, mark.items, mark.particles, mark.alarms};
+	m_Structure = g_MovableMan.SaveWorldStructure();
+}
+
+MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
+	g_MovableMan.DiscardAddedSince({m_QueueSizes[0], m_QueueSizes[1], m_QueueSizes[2], m_QueueSizes[3]});
+	{
+		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
+		g_MovableMan.m_KnownObjects.swap(m_Original);
+	}
+	g_MovableMan.LoadWorldStructure(m_Structure);
+	MovableObject::PinUniqueIDCounter(m_Counter);
+	g_LuaMan.SetScriptStateCursor(m_Cursor);
+	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(m_OriginalSounds));
+	g_AudioMan.SetCheckpointSoundContainerCursor(m_SoundCursor);
+}
+
+CheckpointSoundRegistry MovableMan::ConstructionRegistryScope::GetStagedSoundRegistrations() const {
+	return g_AudioMan.AddedCheckpointSoundRegistrations(m_OriginalSounds);
+}
+
+void MovableMan::DiscardWorld(WorldSetAside& in) {
+	if (!in.held) return;
+	CompleteQueuedMOIDDrawings();
+	WaitForActorsSeeTask();
+	for (const auto& [uid, object]: in.knownObjects) {
+		// Preset-owned trees remain registered while the runtime is held aside.
+		// Their script objects and cached callbacks belong to both worlds.
+		if (object && FindObjectByUniqueID(uid) != object) object->DiscardScriptState();
+	}
+	for (const auto& [state, uid]: in.scriptObjects) state->DiscardStashedScriptObject(uid);
+	in.scriptObjects.clear();
+	const auto retire = [](auto& objects) { for (auto* object: objects) delete object; objects.clear(); };
+	retire(in.actors); retire(in.items); retire(in.particles);
+	retire(in.addedActors); retire(in.addedItems); retire(in.addedParticles);
+	retire(in.alarmEvents); retire(in.addedAlarmEvents);
+	in.pathCallbacks.reset();
+	in.activity.reset();
+	in.startActivity.reset();
+	in.sceneOwners.reset();
+	in.pendingLinks.clear();
+	in.knownObjects.clear();
+	in.scriptRegistrations.clear();
+	in.validActors.clear(); in.validItems.clear(); in.validParticles.clear();
+	in.moidIndex.clear(); in.contiguousActorIDs.clear(); in.joinQuarantine.clear();
+	for (auto& roster: in.rosters) roster.clear();
+	in.sceneAreas.areas.clear(); in.sceneAreas.navigableAreas.clear();
+	for (size_t index = 0; index < in.luaGraphs.size(); ++index) {
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
+	}
+	in.primitiveQueues.reset();
+	in.musicOwners.reset();
+	in.luaGraphs.clear();
+	in.held = false;
+	m_HasWorldSetAside = false;
+}
+
+bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
+	std::string error;
+	if (!LoadWorldStructure(in.structure, true) || !ValidateScriptGraphs(in.luaGraphs, &error)) {
+		std::cout << "[scriptgraph] restore refused before replacement: " << error << std::endl;
+		return false;
+	}
+	// A caller running a speculative world already owns the originals and its rollback.
+	if (m_HasWorldSetAside) return RestoreWorldCandidate(in);
+	const std::string globals = g_ActivityMan.CaptureRuntimeGlobals();
+	WorldSetAside original;
+	if (!SetAsideWorld(original)) return false;
+	bool restored = false;
+	try { restored = RestoreWorldCandidate(in); }
+	catch (const std::exception& exception) { std::cout << "[scriptgraph] candidate failed: " << exception.what() << std::endl; }
+	if (restored) {
+		DiscardWorld(original);
+	} else {
+		if (!ReinstateWorld(original)) std::cout << "[scriptgraph] original world could not be reinstated" << std::endl;
+		g_ActivityMan.RestoreRuntimeGlobals(globals);
+	}
+	return restored;
 }

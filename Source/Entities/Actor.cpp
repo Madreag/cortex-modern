@@ -1,4 +1,8 @@
 #include "Actor.h"
+#include <iostream>
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
+#include "Base64/base64.h"
 
 #include <bit>
 
@@ -39,6 +43,43 @@
 
 using namespace RTE;
 
+namespace {
+	struct ActorIconReference {
+		int kind = 0;
+		int team = -1;
+		std::string module, preset;
+		template <class Archive> void Fields(Archive& archive) { archive(kind, team, module, preset); }
+		std::string Save() { CheckpointWriter archive("ActorIcon1"); Fields(archive); return archive.Text(); }
+		bool Load(std::string_view text) {
+			try { CheckpointReader archive(text, "ActorIcon1"); Fields(archive); archive.Finish(); return kind >= 0 && kind <= 2 && (kind != 1 || (team >= 0 && team < Activity::Teams::MaxTeamCount)); }
+			catch (const std::exception&) { return false; }
+		}
+	};
+	std::string CaptureActorIconReference(const Icon* icon) {
+		ActorIconReference reference;
+		if (!icon) return reference.Save();
+		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int team = 0; team < Activity::Teams::MaxTeamCount; ++team) {
+				if (icon == activity->GetTeamIcon(team)) { reference.kind = 1; reference.team = team; return reference.Save(); }
+			}
+		}
+		std::list<Entity*> presets;
+		g_PresetMan.GetAllOfType(presets, "Icon");
+		for (const Entity* preset: presets) {
+			if (preset == icon) { reference.kind = 2; reference.module = preset->GetModuleName(); reference.preset = preset->GetPresetName(); return reference.Save(); }
+		}
+		throw std::runtime_error("actor icon is not owned by the activity or preset registry");
+	}
+	const Icon* ResolveActorIconReference(const std::string& text) {
+		ActorIconReference reference;
+		if (!reference.Load(text)) throw std::runtime_error("invalid actor icon reference");
+		if (reference.kind == 0) return nullptr;
+		const Icon* icon = reference.kind == 1 ? (g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamIcon(reference.team) : nullptr) : dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", reference.preset, reference.module));
+		if (!icon) throw std::runtime_error("actor icon owner could not be restored");
+		return icon;
+	}
+}
+
 ConcreteClassInfo(Actor, MOSRotating, 20);
 
 std::vector<BITMAP*> Actor::m_apNoTeamIcon;
@@ -58,6 +99,9 @@ Actor::~Actor() {
 }
 
 void Actor::Clear() {
+	m_PersistedActorRuntime.clear();
+	m_PersistedActorIconReferences = {};
+	m_PersistedControllerCheckpoint.clear();
 	m_Controller.Reset();
 	m_PersistedControllerInputMode = -1;
 	m_PersistedControllerQuickDisabled = -1;
@@ -197,6 +241,7 @@ int Actor::Create(const Actor& reference) {
 		m_Controller.SetInputMode(Controller::CIM_AI);
 	}
 	m_Controller.SetControlledActor(this);
+	m_PersistedControllerCheckpoint = reference.m_PersistedControllerCheckpoint;
 	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
 	m_PersistedControllerQuickDisabled = reference.m_PersistedControllerQuickDisabled;
 	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
@@ -358,6 +403,9 @@ int Actor::Create(const Actor& reference) {
 		m_FaithfulMOMoveTargetUID = reference.m_FaithfulMOMoveTargetUID;
 		m_FaithfulWaypointUIDs = reference.m_FaithfulWaypointUIDs;
 	}
+	m_PersistedActorRuntime = reference.m_PersistedActorRuntime;
+	m_PersistedActorIconReferences = reference.m_PersistedActorIconReferences;
+	if (IsFaithfulClone() && m_PersistedActorRuntime.empty()) m_PersistedActorRuntime = reference.SaveActorRuntime();
 	return 0;
 }
 
@@ -373,27 +421,31 @@ static void ApplyControllerStateMask(Controller& controller, long long stateMask
 
 int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return MOSRotating::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ActorRuntime", {
+		m_PersistedActorRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadActorRuntime(m_PersistedActorRuntime, true)) reader.ReportError("invalid Actor runtime checkpoint");
+	});
 
 	MatchProperty("PlayerControllable", { reader >> m_PlayerControllable; });
 	MatchProperty("BodyHitSound", {
-		m_BodyHitSound = new SoundContainer;
-		reader >> m_BodyHitSound;
+		delete m_BodyHitSound;
+		m_BodyHitSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("AlarmSound", {
-		m_AlarmSound = new SoundContainer;
-		reader >> m_AlarmSound;
+		delete m_AlarmSound;
+		m_AlarmSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("PainSound", {
-		m_PainSound = new SoundContainer;
-		reader >> m_PainSound;
+		delete m_PainSound;
+		m_PainSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("DeathSound", {
-		m_DeathSound = new SoundContainer;
-		reader >> m_DeathSound;
+		delete m_DeathSound;
+		m_DeathSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("DeviceSwitchSound", {
-		m_DeviceSwitchSound = new SoundContainer;
-		reader >> m_DeviceSwitchSound;
+		delete m_DeviceSwitchSound;
+		m_DeviceSwitchSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
 	});
 	MatchProperty("Status", { reader >> m_Status; });
 	MatchProperty("ControllerStateMask", {
@@ -411,6 +463,10 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		Vector analogAim;
 		reader >> analogAim;
 		m_Controller.SetAnalogAim(analogAim);
+	});
+	MatchProperty("SpecialBehaviour_ControllerCheckpoint", {
+		m_PersistedControllerCheckpoint = base64_decode(reader.ReadPropValue());
+		if (!m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint, true)) reader.ReportError("invalid Controller checkpoint");
 	});
 	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
 	MatchProperty("ControllerQuickDisabled", { reader >> m_PersistedControllerQuickDisabled; });
@@ -591,6 +647,7 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSRotating::SaveSnapshotConfiguration(writer);
+	if (m_PieMenu) writer.NewPropertyWithValue("PieMenu", m_PieMenu.get());
 	writer.NewPropertyWithValue("GoldCarried", m_GoldCarried);
 	writer.NewPropertyWithValue("AIMode", m_AIMode);
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearAIOrders", true);
@@ -636,6 +693,7 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeathSound", m_DeathSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeviceSwitchSound", m_DeviceSwitchSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", base64_encode(m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime, true));
 }
 
 int Actor::Save(Writer& writer) const {
@@ -1518,6 +1576,10 @@ void Actor::AdoptPersistedUniqueID() {
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->AdoptPersistedUniqueID();
 	}
+	if (!m_PersistedActorRuntime.empty()) {
+		if (!LoadActorRuntime(m_PersistedActorRuntime)) throw std::runtime_error("could not restore Actor runtime checkpoint");
+		m_PersistedActorRuntime.clear();
+	}
 }
 
 MovableObject* Actor::FindPartByUniqueID(long uid) {
@@ -1538,6 +1600,11 @@ long Actor::GetItemInReachUniqueID() const {
 
 void Actor::ResolveFaithfulLinks() {
 	MOSRotating::ResolveFaithfulLinks();
+	if (!m_PersistedActorIconReferences[0].empty()) {
+		m_pTeamIcon = ResolveActorIconReference(m_PersistedActorIconReferences[0]);
+		m_pControllerIcon = ResolveActorIconReference(m_PersistedActorIconReferences[1]);
+		m_PersistedActorIconReferences = {};
+	}
 	if (m_FaithfulItemInReachUID > 0) {
 		m_pItemInReach = dynamic_cast<HeldDevice*>(g_MovableMan.FindObjectByUniqueID(m_FaithfulItemInReachUID));
 		m_FaithfulItemInReachUID = 0;
@@ -1563,6 +1630,8 @@ void Actor::ResolveFaithfulLinks() {
 }
 
 void Actor::DiscardPersistedSnapshotState() {
+	m_PersistedActorIconReferences = {};
+	m_PersistedControllerCheckpoint.clear();
 	MOSRotating::DiscardPersistedSnapshotState();
 	m_PersistedSharpAimTimerAnchor.pending = false;
 	m_PersistedAimTimerAnchor.pending = false;
@@ -1574,6 +1643,7 @@ void Actor::DiscardPersistedSnapshotState() {
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->DiscardPersistedSnapshotState();
 	}
+	m_PersistedActorRuntime.clear();
 }
 
 void Actor::ApplyPersistedControllerMode() {
@@ -1594,6 +1664,11 @@ void Actor::ApplyPersistedControllerMode() {
 		}
 		m_Controller.ApplyWireState(controlStates, m_Controller.GetAnalogMove(), m_Controller.GetAnalogAim(), m_Controller.GetAnalogCursor(), m_Controller.GetMouseMovement(), m_Controller.GetInputMode(), m_Controller.GetPlayerRaw(), m_PersistedControllerQuickDisabled != 0);
 		m_PersistedControllerQuickDisabled = -1;
+	}
+	if (!m_PersistedControllerCheckpoint.empty()) {
+		m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint);
+		m_Controller.SetControlledActor(this);
+		m_PersistedControllerCheckpoint.clear();
 	}
 }
 
@@ -2106,6 +2181,69 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 	}
 }
 
+std::string Actor::SaveActorRuntime() const {
+	CheckpointWriter archive("ActorRuntime1");
+	archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
+	archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
+	archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
+	archive(m_AimAngle, m_AimDistance, m_AimTmr, m_SharpAimTimer, m_SharpAimDelay, m_SharpAimProgress, m_SharpAimMaxedOut);
+	archive(m_PointingTarget, m_SeenTargetPos, m_AlarmTimer, m_LastAlarmPos, m_SightDistance, m_Perceptiveness, m_PainThreshold);
+	archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
+	archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
+	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
+	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
+	return archive.Text();
+}
+
+bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ActorRuntime1", validateOnly);
+		archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
+		archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
+		archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
+		archive(m_AimAngle, m_AimDistance, m_AimTmr, m_SharpAimTimer, m_SharpAimDelay, m_SharpAimProgress, m_SharpAimMaxedOut);
+		archive(m_PointingTarget, m_SeenTargetPos, m_AlarmTimer, m_LastAlarmPos, m_SightDistance, m_Perceptiveness, m_PainThreshold);
+		archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
+		archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
+		archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+		archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
+		std::array<std::string, 2> icons;
+		archive.Value(icons);
+		for (const std::string& icon: icons) { ActorIconReference reference; if (!reference.Load(icon)) return false; }
+		archive.OnCommit([this, icons = std::move(icons)] { m_PersistedActorIconReferences = icons; });
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+std::vector<long> Actor::GetCheckpointBorrowedReferences() const {
+	auto identities = MovableObject::GetCheckpointBorrowedReferences();
+	identities.push_back(m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : 0);
+	for (const auto& [position, target]: m_Waypoints) identities.push_back(target ? target->GetUniqueID() : 0);
+	return identities;
+}
+
+bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
+	if (identities.size() != m_Waypoints.size() + 2) return false;
+	for (long identity: identities) {
+		if (identity < 0) return false;
+		const auto* target = identity ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		if (identity && !target) return false;
+	}
+	if (!validateOnly) {
+		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(identities[0]);
+		m_MOToNotHitUID = identities[0];
+		m_FaithfulMOToNotHitUID = 0;
+		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(identities[1]);
+		m_FaithfulMOMoveTargetUID = 0;
+		size_t index = 2;
+		for (auto& [position, target]: m_Waypoints) target = g_MovableMan.FindObjectByUniqueID(identities[index++]);
+		m_FaithfulWaypointUIDs.clear();
+	}
+	return true;
+}
+
 bool Actor::RunBorrowedReferenceSelfTest() {
     MovableMan::ConstructionRegistryScope registryScope;
     try {
@@ -2149,31 +2287,4 @@ bool Actor::RunBorrowedReferenceSelfTest() {
         std::cout << "[native-reference-selftest] " << error.what() << std::endl;
         return false;
     }
-}
-
-std::vector<long> Actor::GetCheckpointBorrowedReferences() const {
-	auto identities = MovableObject::GetCheckpointBorrowedReferences();
-	identities.push_back(m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : 0);
-	for (const auto& [position, target]: m_Waypoints) identities.push_back(target ? target->GetUniqueID() : 0);
-	return identities;
-}
-
-bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
-	if (identities.size() != m_Waypoints.size() + 2) return false;
-	for (long identity: identities) {
-		if (identity < 0) return false;
-		const auto* target = identity ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
-		if (identity && !target) return false;
-	}
-	if (!validateOnly) {
-		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(identities[0]);
-		m_MOToNotHitUID = identities[0];
-		m_FaithfulMOToNotHitUID = 0;
-		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(identities[1]);
-		m_FaithfulMOMoveTargetUID = 0;
-		size_t index = 2;
-		for (auto& [position, target]: m_Waypoints) target = g_MovableMan.FindObjectByUniqueID(identities[index++]);
-		m_FaithfulWaypointUIDs.clear();
-	}
-	return true;
 }

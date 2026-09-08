@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 /// Header file for the SceneMan class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -14,6 +17,7 @@
 #include "ActivityMan.h"
 
 #include <map>
+#include <unordered_map>
 #include <array>
 #include <list>
 #include <vector>
@@ -54,6 +58,16 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+
+		std::string SaveCheckpoint() const;
+        std::string SaveMaterialCatalog() const;
+        bool LoadMaterialCatalog(std::string_view text, bool validateOnly = false);
+        bool PrepareCheckpointMaterials(std::string_view sceneManCheckpoint, bool validateOnly = false);
+        std::string SaveMaterialReference(const Material* material) const;
+        static bool ValidateMaterialReference(std::string_view text);
+        const Material* ResolveMaterialReference(std::string_view text, bool allowMissing = false) const;
+        bool RunMaterialCheckpointSelfTest();
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 
@@ -156,6 +170,21 @@ namespace RTE {
 		/// Gets the currently loaded scene, if any.
 		/// @return The scene, ownership IS NOT TRANSFERRED!
 		Scene* GetScene() const { return m_pCurrentScene; }
+		struct SceneSetAside {
+			Scene* scene = nullptr;
+			SceneLayerTracked* color = nullptr;
+			SceneLayer* debug = nullptr;
+			SoundContainer* revealSound = nullptr;
+			const Scene* toLoad = nullptr;
+			bool placeObjects = true;
+			bool placeUnits = true;
+			SceneSetAside() = default;
+			SceneSetAside(const SceneSetAside&) = delete;
+			SceneSetAside& operator=(const SceneSetAside&) = delete;
+			~SceneSetAside();
+		};
+		void SetAsideScene(SceneSetAside& state);
+		void ReinstateScene(SceneSetAside& state);
 
 		/// Gets the total dimensions (width and height) of the scene, in pixels.
 		/// @return A Vector describing the scene dimensions.
@@ -249,6 +278,7 @@ namespace RTE {
 		/// Gets this Scene's MOID SpatialPartitionGrid.
 		/// @return This Scene's MOID SpatialPartitionGrid.
 		const SpatialPartitionGrid& GetMOIDGrid() const { return m_MOIDsGrid; }
+		void SwapMOIDGrid(SpatialPartitionGrid& grid) { m_MOIDsGrid.Swap(grid); m_MOIDsGrid.EnsureDimensions(grid); }
 
 		/// Gets the global acceleration (in m/s^2) that is applied to all movable
 		/// objects' velocities during every frame. Typically models gravity.
@@ -1056,6 +1086,11 @@ namespace RTE {
 
 		// Non original materials added by inheritance
 		std::vector<Material*> m_MaterialCopiesVector;
+        std::unordered_map<const Material*, size_t> m_MaterialCopyIndices;
+        // Copies have always lived until SceneMan teardown. Keep inactive generations
+        // for held worlds and checkpoint clones, and revive their pointers on rollback.
+        std::map<size_t, std::vector<Material*>> m_RetiredMaterialCopies;
+        std::array<std::vector<Material*>, c_PaletteEntriesNumber> m_RetiredPaletteMaterials;
 
 		// Sound of an unseen pixel on an unseen layer being revealed.
 		SoundContainer* m_pUnseenRevealSound;
@@ -1083,6 +1118,11 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_LayerDrawMode, self.m_DrawRayCastVisualizations, self.m_DrawPixelCheckVisualizations, self.m_LastUpdatedScreen,
+				self.m_SecondStructPass, self.m_CalcTimer, self.m_CleanTimer, self.m_ScrapCompactingHeight);
+		}
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
 		/// Clears all the member variables of this SceneMan, effectively

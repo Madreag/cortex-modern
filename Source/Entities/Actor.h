@@ -986,6 +986,7 @@ namespace RTE {
 
 		AtomGroup* m_pHitBody;
 		Controller m_Controller;
+		std::string m_PersistedControllerCheckpoint;
 		long long m_PersistedControllerInputMode; //!< Saved wire-applied input mode, -1 when absent.
 		int m_PersistedControllerQuickDisabled; //!< Saved quick-disable flag, -1 when absent.
 		std::string m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
@@ -1179,6 +1180,11 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedActorRuntime;
+		std::array<std::string, 2> m_PersistedActorIconReferences;
+		std::string SaveActorRuntime() const;
+		bool LoadActorRuntime(std::string_view text, bool validateOnly = false);
+
 		std::unique_ptr<PieMenu> m_PieMenu;
 
 		/// Clears all the member variables of this Actor, effectively

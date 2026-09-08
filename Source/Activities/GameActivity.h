@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 /// Header file for the ActivityMan class.
 /// @author Daniel Tabar
 /// data@datarealms.com
@@ -13,6 +16,7 @@
 
 #include <array>
 #include <memory>
+#include <functional>
 namespace RTE {
 
 #define OBJARROWFRAMECOUNT 4
@@ -54,6 +58,12 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+
+		std::string SaveCheckpoint() const override;
+		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
+		bool ResolveCheckpointReferences() override;
+		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 
@@ -354,15 +364,8 @@ namespace RTE {
 		/// scene.
 		void UpdateEditing();
 
-		/// Updates the state of this Activity.
-		/// Keeps faithful copies of the pending deliveries, crafts cloned off-world, as the rollback snapshot.
-		void CaptureDeliveriesForRollback();
 
-		/// Replaces the pending deliveries with registered faithful clones of the rollback snapshot.
-		void RestoreDeliveriesFromRollback();
 
-		/// Drops the rollback delivery snapshot and its off-world crafts.
-		void ClearRollbackDeliveries();
 
 		virtual void Update();
 
@@ -500,6 +503,8 @@ namespace RTE {
 
 		/// A struct to keep all data about a mission objective.
 		struct ObjectivePoint {
+			std::string SaveCheckpoint() const;
+			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		friend struct ContractAudit;
 
 			ObjectivePoint() {
@@ -617,7 +622,6 @@ namespace RTE {
 
 		// The delivery queue which contains all the info about all the made orders currently in transit to delivery
 		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
-		std::array<std::deque<Delivery>, Teams::MaxTeamCount> m_RollbackDeliveries; //!< Off-world faithful copies of the pending deliveries for a rollback restore.
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
 		// How wide around the brain the automatic LZ is following
@@ -679,6 +683,24 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string SaveValueCheckpoint() const;
+		bool LoadValueCheckpoint(std::string_view text, bool validateOnly = false);
+		std::array<long, Players::MaxPlayerCount> m_CheckpointMarkedActorIDs{};
+		bool m_HasCheckpointMarkedActorIDs = false;
+
+		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
+			archive(self.m_CPUTeam, self.m_TeamIsCPU, self.m_ObservationTarget, self.m_DeathViewTarget,
+				self.m_ActorSelectTimer, self.m_ActorCursor, self.m_LandingZone, self.m_AIReturnCraft,
+				self.m_NextMultiOrderYOffset, self.m_LuaLockActor, self.m_LuaLockActorMode, self.m_BannerRepeats,
+				self.m_ReadyToStart, self.m_LandingZoneArea, self.m_BrainLZWidth, self.m_Objectives,
+				self.m_TeamTech, self.m_TeamTechSwitchEnabled, self.m_StartingGold, self.m_FogOfWarEnabled,
+				self.m_RequireClearPathToOrbit, self.m_DefaultFogOfWar, self.m_DefaultRequireClearPathToOrbit, self.m_DefaultDeployUnits,
+				self.m_DefaultGoldCakeDifficulty, self.m_DefaultGoldEasyDifficulty, self.m_DefaultGoldMediumDifficulty, self.m_DefaultGoldHardDifficulty,
+				self.m_DefaultGoldNutsDifficulty, self.m_DefaultGoldMaxDifficulty, self.m_FogOfWarSwitchEnabled, self.m_DeployUnitsSwitchEnabled,
+				self.m_GoldSwitchEnabled, self.m_RequireClearPathToOrbitSwitchEnabled, self.m_BuyMenuEnabled, self.m_LZCursorWidth,
+				self.m_DeliveryDelay, self.m_CursorTimer, self.m_GameTimer, self.m_GameOverTimer,
+				self.m_GameOverPeriod, self.m_WinnerTeam, self.m_NetworkPlayerNames);
+		}
 		/// Clears all the member variables of this Activity, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

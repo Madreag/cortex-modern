@@ -19,6 +19,7 @@ namespace RTE {
 	/// A scrolling layer of the Scene.
 	template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE = false>
 	class SceneLayerImpl : public Entity {
+		friend struct TerrainLayerSnapshot;
 		friend class NetworkServer;
 
 	public:

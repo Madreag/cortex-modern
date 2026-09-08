@@ -102,8 +102,13 @@ class GraphReader:
             return kind, self.string(), self.string(), self.string()
         if kind == "Q":
             return kind, self.string(), self.token()
-        if kind == "x":
-            return kind, self.token(), self.string(), self.token(), self.token()
+        if kind in "xY":
+            result = kind, self.token(), self.string(), self.token(), self.token()
+            if kind == "Y":
+                result += self.string(), self.string()
+                if re.match(rb"\d+ [A-Za-z0-9_:]+ ", result[-1]):
+                    snapshot_runtime.decode(result[-1])
+            return result
         if kind in "bkh":
             owner = self.token()
             middle = self.string() if kind == "h" else self.token()
@@ -385,6 +390,9 @@ def compare_graphs(first, second, actor_uids=None):
                         right["pairs"] = [pair for pair in right["pairs"] if pair[0] != ("s", b"AI")]
                     for node in (left, right):
                         if "ini" in node:
+                            if re.match(rb"\d+ [A-Za-z0-9_:]+ ", node["ini"]):
+                                snapshot_runtime.decode(node["ini"])
+                                continue
                             native = node["ini"].decode()
                             if actor_uids is not None:
                                 native = native_projection(native)[0]
@@ -511,9 +519,10 @@ def decode_base64(value):
 _SPRITE_CLASSES = _ACTOR_CLASSES | {"MOSprite", "MOSRotating", "MOSParticle", "Attachable", "AEmitter", "AEJetpack",
     "Arm", "Leg", "Turret", "HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive", "Magazine"}
 _NATIVE_RUNTIME_OWNERS = {
+    "MovableObject": _SPRITE_CLASSES | {"MovableObject", "MOPixel"},
     "Actor": _ACTOR_CLASSES, "AHuman": {"AHuman"}, "MOSprite": _SPRITE_CLASSES,
     "MOSRotating": _SPRITE_CLASSES - {"MOSprite", "MOSParticle"}, "HeldDevice": {"HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive"},
-    "HDFirearm": {"HDFirearm"}, "AEmitter": {"AEmitter", "AEJetpack"},
+    "HDFirearm": {"HDFirearm"}, "AEmitter": {"AEmitter", "AEJetpack"}, "PieMenu": {"PieMenu"},
 }
 
 
@@ -558,7 +567,38 @@ def inventory_reference_roles(text, state):
     return roles
 
 
+def canonical_custom_values(text):
+    """Compare unordered native key/value maps without dropping values or duplicate entries."""
+    lines, output, index = text.splitlines(keepends=True), [], 0
+    header = re.compile(r"^(\t*)AddCustomValue[ \t]*=[ \t]*(NumberValue|StringValue)(?:\r?\n)?$")
+    while index < len(lines):
+        first = header.fullmatch(lines[index])
+        if first is None:
+            output.append(lines[index])
+            index += 1
+            continue
+        entries, identities, depth = [], set(), first[1]
+        while index < len(lines):
+            match = header.fullmatch(lines[index])
+            if match is None or match[1] != depth:
+                break
+            if index + 1 == len(lines):
+                raise ValueError("custom value is missing its key and value")
+            value = re.fullmatch(re.escape(depth + "\t") + r"([^\t=\r\n]+?)[ \t]*=[ \t]*([^\r\n]*)(?:\r?\n)?", lines[index + 1])
+            if value is None:
+                raise ValueError("invalid native custom value entry")
+            identity = match[2], value[1].strip()
+            if not identity[1] or identity in identities:
+                raise ValueError("empty or duplicate native custom value key")
+            identities.add(identity)
+            entries.append((identity, lines[index] + lines[index + 1]))
+            index += 2
+        output.extend(entry for _, entry in sorted(entries))
+    return "".join(output)
+
+
 def runtime_projection(text, name, shared):
+    text = canonical_custom_values(text)
     output, ancestry, projected = [], [], []
     for line in text.splitlines(keepends=True):
         match = re.match(r"^(\t*)([^=\r\n]+?)([ \t]*=[ \t]*)([^\r\n]*)(\r?\n)?$", line)
@@ -572,7 +612,8 @@ def runtime_projection(text, name, shared):
             controller = key == "SpecialBehaviour_ControllerCheckpoint" and owner[1] in _ACTOR_CLASSES
             native = any(key == f"SpecialBehaviour_{kind}Runtime" and owner[1] in owners for kind, owners in _NATIVE_RUNTIME_OWNERS.items())
             emission = key == "SpecialBehaviour_EmissionCheckpoint" and owner[1] == "Emission"
-            if root or (key == "SpecialBehaviour_RuntimeCheckpoint" and activity) or controller or native or emission:
+            sound = key == "SpecialBehaviour_SoundCheckpoint" and owner[1] == "SoundContainer"
+            if root or (key == "SpecialBehaviour_RuntimeCheckpoint" and activity) or controller or native or emission or sound:
                 state = snapshot_runtime.decode(decode_base64(value.strip()))
                 masks = []
                 roles = inventory_reference_roles(text, state) if shared and activity else None

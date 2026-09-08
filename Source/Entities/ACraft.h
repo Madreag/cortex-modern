@@ -22,6 +22,9 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		const std::deque<MovableObject*>& GetCollectedInventory() const { return m_CollectedInventory; }
+		MovableObject* FindPartByUniqueID(long uid) override;
+		void DestroyScriptState() override;
 		SerializableOverrideMethods;
 		void SaveSnapshotConfiguration(Writer& writer) const override;
 		ClassInfoGetters;
@@ -448,6 +451,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedACraftRuntime;
+		std::string SaveACraftRuntime() const;
+		bool LoadACraftRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this ACraft, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

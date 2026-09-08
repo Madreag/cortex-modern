@@ -199,8 +199,12 @@ LuaEntityCastFunctionsDefinitionsForType(PieMenu);
 	}
 
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(MOSRotating, SoundContainer, SetGibSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Attachable, AEmitter, SetBreakWound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Attachable, AEmitter, SetParentBreakWound);
+void LuaAdaptersPropertyOwnershipSafetyFaker::AttachableSetBreakWound(Attachable* object, AEmitter* wound) {
+	object->SetOwnedBreakWound(wound ? static_cast<AEmitter*>(wound->Clone()) : nullptr);
+}
+void LuaAdaptersPropertyOwnershipSafetyFaker::AttachableSetParentBreakWound(Attachable* object, AEmitter* wound) {
+	object->SetOwnedParentBreakWound(wound ? static_cast<AEmitter*>(wound->Clone()) : nullptr);
+}
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, Attachable, SetFlash);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SoundContainer, SetEmissionSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SoundContainer, SetBurstSound);
@@ -290,26 +294,15 @@ int LuaAdaptersScene::CalculatePath(Scene* luaSelfObject, const Vector& start, c
 void LuaAdaptersScene::CalculatePathAsync(Scene* luaSelfObject, const luabind::object& callback, const Vector& start, const Vector& end, float jumpHeight, float digStrength, Activity::Teams team) {
 	team = std::clamp(team, Activity::Teams::NoTeam, Activity::Teams::TeamFour);
 
-	// So, luabind::object is a weak reference, holding just a stack and a position in the stack
-	// This means it's unsafe to store on the C++ side if we do basically anything with the lua state before using it
-	// As such, we need to store this function somewhere safely within our Lua state for us to access later when we need it
 	lua_State* luaState = mainthread(G(callback.interpreter())); // Get the main thread for the state, in case we're a temp lua thread
 
-	static std::atomic<int> currentCallbackId{0};
-	int thisCallbackId = currentCallbackId.fetch_add(1, std::memory_order_relaxed);
+	const auto context = g_LuaMan.GetPathCallbackContext();
+	const int thisCallbackId = LuaMan::AllocatePathCallback(context, luaState);
 	if (luabind::type(callback) == LUA_TFUNCTION && callback.is_valid()) {
 		luabind::call_function<void>(luaState, "_AddAsyncPathCallback", thisCallbackId, callback);
 	}
 
-	auto callLuaCallback = [luaState, thisCallbackId](std::shared_ptr<volatile PathRequest> pathRequestVol) {
-		// This callback is called from the async pathing thread, so we need to further delay this logic into the main thread (via AddLuaScriptCallback)
-		g_LuaMan.AddLuaScriptCallback([luaState, thisCallbackId, pathRequestVol]() {
-			PathRequest pathRequest = const_cast<PathRequest&>(*pathRequestVol); // erh, to work with luabind etc
-			luabind::call_function<void>(luaState, "_TriggerAsyncPathCallback", thisCallbackId, pathRequest);
-		});
-	};
-
-	luaSelfObject->CalculatePathAsync(start, end, jumpHeight, digStrength, team, callLuaCallback);
+	LuaMan::StartPathCallback(context, luaState, thisCallbackId, luaSelfObject, start, end, jumpHeight, digStrength, team);
 }
 
 void LuaAdaptersAHuman::ReloadFirearms(AHuman* luaSelfObject) {

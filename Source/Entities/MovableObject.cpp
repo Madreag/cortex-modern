@@ -1,4 +1,5 @@
 #include "MovableObject.h"
+#include "CheckpointArchive.h"
 
 #include <bit>
 #include <mutex>
@@ -30,6 +31,7 @@ std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
 int MovableObject::s_FaithfulCloneDepth = 0;
 bool MovableObject::s_FaithfulCloneRegisters = false;
 std::string MovableObject::ms_EmptyString = "";
+
 
 namespace {
 std::array<std::mutex, 256> g_MovableReferenceLocks;
@@ -108,6 +110,22 @@ void MovableObjectReference::Expire(const MovableObject* object) {
     }
 }
 
+std::vector<long> MovableObject::GetCheckpointBorrowedReferences() const {
+	return {m_pMOToNotHit ? m_pMOToNotHit->GetUniqueID() : 0};
+}
+
+bool MovableObject::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
+	if (identities.size() != 1 || identities[0] < 0) return false;
+	auto* target = identities[0] ? g_MovableMan.FindObjectByUniqueID(identities[0]) : nullptr;
+	if (identities[0] && !target) return false;
+	if (!validateOnly) {
+		m_pMOToNotHit = target;
+		m_MOToNotHitUID = identities[0];
+		m_FaithfulMOToNotHitUID = 0;
+	}
+	return true;
+}
+
 MovableObject::MovableObject() {
 	Clear();
 }
@@ -119,6 +137,7 @@ MovableObject::~MovableObject() {
 void MovableObject::Clear() {
 	MovableObjectReference::Expire(this);
 	m_pMOToNotHit.m_ExpiryIdentity = &m_MOToNotHitUID;
+	m_PersistedMovableObjectRuntime.clear();
 	if (m_UniqueID > 0) g_MovableMan.UnregisterObject(this);
 	m_MOType = TypeGeneric;
 	m_Mass = 0;
@@ -189,7 +208,9 @@ void MovableObject::Clear() {
 
 	m_UniqueID = 0;
 	m_PersistedUniqueID = 0;
+	m_ScriptStateRestored = false;
 	m_PersistedScriptState.clear();
+	m_PersistedLuaStateIndex = -1;
 	m_PersistedRestTimerStart = 0;
 	m_HasPersistedRestTimerStart = false;
 	m_PersistedVelOscillations = 0;
@@ -375,17 +396,24 @@ int MovableObject::Create(const MovableObject& reference) {
 	// Saved state rides every copy a restored scene makes; the fresh ID below is provisional
 	// until the object enters the world and adopts it.
 	m_PersistedUniqueID = reference.m_PersistedUniqueID;
+	m_ScriptStateRestored = reference.m_ScriptStateRestored;
 	m_PersistedScriptState = reference.m_PersistedScriptState;
+	m_PersistedLuaStateIndex = reference.m_PersistedLuaStateIndex;
 	m_PersistedRestTimerStart = reference.m_PersistedRestTimerStart;
 	m_HasPersistedRestTimerStart = reference.m_HasPersistedRestTimerStart;
 	m_PersistedVelOscillations = reference.m_PersistedVelOscillations;
 	m_HasPersistedVelOscillations = reference.m_HasPersistedVelOscillations;
 	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
 	m_PersistedMOIgnoreTimerAnchor = reference.m_PersistedMOIgnoreTimerAnchor;
+	m_PersistedMovableObjectRuntime = reference.m_PersistedMovableObjectRuntime;
+	if (IsFaithfulClone() && m_PersistedMovableObjectRuntime.empty()) m_PersistedMovableObjectRuntime = reference.SaveMovableObjectRuntime();
 	g_MovableMan.UnregisterObject(this);
 	if (IsFaithfulClone()) {
 		// A snapshot clone carries the live sim state a spawn copy deliberately resets.
 		m_UniqueID = reference.m_UniqueID;
+		m_MOID = reference.m_MOID;
+		m_RootMOID = reference.m_RootMOID;
+		m_MOIDFootprint = reference.m_MOIDFootprint;
 		m_AgeTimer = reference.m_AgeTimer;
 		m_RestTimer = reference.m_RestTimer;
 		m_PrevVel = reference.m_PrevVel;
@@ -419,6 +447,10 @@ int MovableObject::Create(const MovableObject& reference) {
 }
 
 void MovableObject::AdoptPersistedUniqueID() {
+	if (!m_PersistedMovableObjectRuntime.empty()) {
+		if (!LoadMovableObjectRuntime(m_PersistedMovableObjectRuntime)) throw std::runtime_error("could not restore MovableObject runtime checkpoint");
+		m_PersistedMovableObjectRuntime.clear();
+	}
 	if (m_HasPersistedRestTimerStart) {
 		// Absolute sim ticks, so the value holds across the rollback clock rewind.
 		m_RestTimer.SetStartSimTimeTicks(m_PersistedRestTimerStart);
@@ -431,6 +463,10 @@ void MovableObject::AdoptPersistedUniqueID() {
 	}
 	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
 	m_PersistedMOIgnoreTimerAnchor.Apply(m_MOIgnoreTimer);
+	if (m_PersistedLuaStateIndex >= 0) {
+		MoveScriptsToState(g_LuaMan.GetStateByIndex(m_PersistedLuaStateIndex));
+		m_PersistedLuaStateIndex = -1;
+	}
 	if (m_PersistedUniqueID <= 0) {
 		return;
 	}
@@ -455,8 +491,11 @@ void MovableObject::ResolveFaithfulLinks() {
 }
 
 void MovableObject::DiscardPersistedSnapshotState() {
+	m_PersistedMovableObjectRuntime.clear();
 	m_PersistedUniqueID = 0;
+	m_ScriptStateRestored = false;
 	m_PersistedScriptState.clear();
+	m_PersistedLuaStateIndex = -1;
 	m_HasPersistedRestTimerStart = false;
 	m_HasPersistedVelOscillations = false;
 	m_PersistedAgeTimerAnchor.pending = false;
@@ -465,11 +504,21 @@ void MovableObject::DiscardPersistedSnapshotState() {
 }
 
 int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader) {
+	if (propName == "SpecialBehaviour_MovableObjectRuntime") {
+		m_PersistedMovableObjectRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadMovableObjectRuntime(m_PersistedMovableObjectRuntime, true)) reader.ReportError("invalid MovableObject runtime checkpoint");
+		return 0;
+	}
+	if (propName == "SpecialBehaviour_MOID") { reader >> m_MOID; return 0; }
+	if (propName == "SpecialBehaviour_RootMOID") { reader >> m_RootMOID; return 0; }
+	if (propName == "SpecialBehaviour_MOIDFootprint") { reader >> m_MOIDFootprint; return 0; }
 	StartPropertyList(return SceneObject::ReadProperty(propName, reader));
 
 	MatchProperty("Mass", { reader >> m_Mass; });
 	MatchProperty("UniqueID", { reader >> m_PersistedUniqueID; });
+	MatchProperty("ScriptsRestored", { reader >> m_ScriptStateRestored; });
 	MatchProperty("ScriptState", { reader >> m_PersistedScriptState; });
+	MatchProperty("LuaState", { reader >> m_PersistedLuaStateIndex; });
 	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
 	MatchProperty("SpecialBehaviour_CheckTerrainIntersection", { reader >> m_CheckTerrIntersection; });
 	MatchProperty("SpecialBehaviour_VelOscillations", {
@@ -637,7 +686,61 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 	reader.NextProperty();
 }
 
+std::string MovableObject::SaveMovableObjectRuntime() const {
+	CheckpointWriter archive("MovableObjectRuntime1");
+	archive(Entity::SaveCheckpoint(), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
+	archive(m_MOType, m_Mass, m_Vel, m_PrevPos, m_PrevVel, m_DistanceTravelled, m_Scale, m_GlobalAccScalar,
+		m_AirResistance, m_AirThreshold, m_PinStrength, m_RestThreshold, m_Forces, m_ImpulseForces,
+		m_AgeTimer, m_RestTimer, m_Lifetime, m_Sharpness, m_CheckTerrIntersection, m_HitsMOs, m_MOIgnoreTimer,
+		m_GetsHitByMOs, m_IgnoresTeamHits, m_IgnoresAtomGroupHits, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits,
+		m_MissionCritical, m_CanBeSquished, m_IsUpdated, m_WrapDoubleDraw, m_DidWrap, m_MOID, m_RootMOID, m_MOIDFootprint,
+		m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
+	archive(static_cast<bool>(m_RequestedSyncedUpdate), m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile,
+		m_pScreenEffect != nullptr, m_ScreenEffectHash, m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength,
+		m_EffectAlwaysShows, m_EffectRotAngle, m_InheritEffectRotAngle, m_RandomizeEffectRotAngle,
+		m_RandomizeEffectRotAngleEveryFrame, m_PostEffectEnabled, m_RemoveOrphanTerrainRadius, m_RemoveOrphanTerrainMaxArea,
+		m_RemoveOrphanTerrainRate, m_DamageOnCollision, m_DamageOnPenetration, m_WoundDamageMultiplier,
+		m_ApplyWoundDamageOnCollision, m_ApplyWoundBurstDamageOnCollision, m_IgnoreTerrain, m_MOIDHit, m_TerrainMatHit,
+		m_ParticleUniqueIDHit, m_LastCollisionSimFrameNumber, m_SimUpdatesBetweenScriptedUpdates, m_SimUpdatesSinceLastScriptedUpdate);
+	return archive.Text();
+}
+
+bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "MovableObjectRuntime1", validateOnly);
+		std::string identity;
+		archive.Value(identity);
+		if (!Entity::LoadCheckpoint(identity, true)) return false;
+		archive.OnCommit([this, identity] { if (!Entity::LoadCheckpoint(identity)) throw std::runtime_error("could not restore movable object identity"); });
+		archive(m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
+		archive(m_MOType, m_Mass, m_Vel, m_PrevPos, m_PrevVel, m_DistanceTravelled, m_Scale, m_GlobalAccScalar,
+			m_AirResistance, m_AirThreshold, m_PinStrength, m_RestThreshold, m_Forces, m_ImpulseForces,
+			m_AgeTimer, m_RestTimer, m_Lifetime, m_Sharpness, m_CheckTerrIntersection, m_HitsMOs, m_MOIgnoreTimer,
+			m_GetsHitByMOs, m_IgnoresTeamHits, m_IgnoresAtomGroupHits, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits,
+			m_MissionCritical, m_CanBeSquished, m_IsUpdated, m_WrapDoubleDraw, m_DidWrap, m_MOID, m_RootMOID, m_MOIDFootprint,
+			m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
+		bool requested, hasEffect;
+		archive.Value(requested);
+		archive(m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile);
+		archive.Value(hasEffect);
+		archive(m_ScreenEffectHash, m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength,
+			m_EffectAlwaysShows, m_EffectRotAngle, m_InheritEffectRotAngle, m_RandomizeEffectRotAngle,
+			m_RandomizeEffectRotAngleEveryFrame, m_PostEffectEnabled, m_RemoveOrphanTerrainRadius, m_RemoveOrphanTerrainMaxArea,
+			m_RemoveOrphanTerrainRate, m_DamageOnCollision, m_DamageOnPenetration, m_WoundDamageMultiplier,
+			m_ApplyWoundDamageOnCollision, m_ApplyWoundBurstDamageOnCollision, m_IgnoreTerrain, m_MOIDHit, m_TerrainMatHit,
+			m_ParticleUniqueIDHit, m_LastCollisionSimFrameNumber, m_SimUpdatesBetweenScriptedUpdates, m_SimUpdatesSinceLastScriptedUpdate);
+		archive.OnCommit([this, requested, hasEffect] {
+			m_RequestedSyncedUpdate = requested;
+			m_pScreenEffect = hasEffect ? m_ScreenEffectFile.GetAsBitmap() : nullptr;
+			if (hasEffect && !m_pScreenEffect) throw std::runtime_error("could not restore movable object screen effect");
+		});
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
 void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
+	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", base64_encode(m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime, true));
 	writer.NewPropertyWithValue("Mass", m_Mass);
 	writer.NewPropertyWithValue("Scale", m_Scale);
 	writer.NewPropertyWithValue("RestThreshold", m_RestThreshold);
@@ -824,6 +927,12 @@ int MovableObject::LoadScript(const std::string& scriptPath, bool loadAsEnabledS
 		return -3;
 	}
 
+	if (s_ScriptLoadDeferralDepth > 0) {
+		m_EnabledScripts.try_emplace(scriptPath, loadAsEnabledScript);
+		m_AllLoadedScripts.push_back(scriptPath);
+		return 0;
+	}
+
 	LuaStateWrapper& usedState = GetAndLockStateForScript(scriptPath);
 	std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
 
@@ -897,8 +1006,18 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 	}
 
 	if (!m_PersistedScriptState.empty()) {
-		m_ThreadedLuaState->RestoreScriptObjectFieldsFromString(m_UniqueID, m_PersistedScriptState);
+		const bool restored = m_ThreadedLuaState->RestoreLegacyScriptObjectFields(m_UniqueID, m_PersistedScriptState);
 		m_PersistedScriptState.clear();
+		m_ScriptStateRestored = false;
+		if (!restored) {
+			m_ScriptObjectName = "ERROR";
+		}
+		return restored ? 0 : -1;
+	}
+
+	// The saved graph lays the fields in; Create ran before the save.
+	if (m_ScriptStateRestored) {
+		m_ScriptStateRestored = false;
 		return 0;
 	}
 
@@ -910,11 +1029,23 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 	return 0;
 }
 
-std::string MovableObject::SerializeScriptState() const {
-	if (!ObjectScriptsInitialized() || !m_ThreadedLuaState) {
-		return "";
+void MovableObject::MoveScriptsToState(LuaStateWrapper& state) {
+	if (m_ThreadedLuaState == &state || m_ForceIntoMasterLuaState) {
+		return;
 	}
-	return m_ThreadedLuaState->SerializeScriptObjectFields(m_UniqueID);
+	RTEAssert(!ObjectScriptsInitialized(), "Cannot move an object's scripts to another state once they run.");
+	const std::vector<std::string> scripts = m_AllLoadedScripts;
+	const std::unordered_map<std::string, bool> enabled = m_EnabledScripts;
+	if (m_ThreadedLuaState) {
+		std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
+		m_FunctionsAndScripts.clear();
+	}
+	m_AllLoadedScripts.clear();
+	m_EnabledScripts.clear();
+	m_ThreadedLuaState = &state;
+	for (const std::string& scriptPath: scripts) {
+		LoadScript(scriptPath, enabled.at(scriptPath));
+	}
 }
 
 bool MovableObject::EnableOrDisableScript(const std::string& scriptPath, bool enableScript) {
@@ -1463,20 +1594,4 @@ void MovableObject::SetPostScreenEffectToDraw() const {
 			g_PostProcessMan.RegisterPostEffect(m_Pos, m_pScreenEffect, m_ScreenEffectHash, Lerp(m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength, m_AgeTimer.GetElapsedSimTimeMS()), m_EffectRotAngle, m_MOID);
 		}
 	}
-}
-
-std::vector<long> MovableObject::GetCheckpointBorrowedReferences() const {
-	return {m_pMOToNotHit ? m_pMOToNotHit->GetUniqueID() : 0};
-}
-
-bool MovableObject::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
-	if (identities.size() != 1 || identities[0] < 0) return false;
-	auto* target = identities[0] ? g_MovableMan.FindObjectByUniqueID(identities[0]) : nullptr;
-	if (identities[0] && !target) return false;
-	if (!validateOnly) {
-		m_pMOToNotHit = target;
-		m_MOToNotHitUID = identities[0];
-		m_FaithfulMOToNotHitUID = 0;
-	}
-	return true;
 }

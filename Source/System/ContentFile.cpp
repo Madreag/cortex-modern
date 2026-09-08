@@ -249,14 +249,20 @@ bool ContentFile::MemoryPNGScope::Add(const std::string& filePath, SDL_Surface* 
 	return true;
 }
 
-ContentFile::MemoryPNGScope::~MemoryPNGScope() {
+void ContentFile::MemoryPNGScope::SetActive(bool active) {
+	if (active == m_Active) return;
 	for (auto entry = m_Entries.rbegin(); entry != m_Entries.rend(); ++entry) {
-		if (!m_Committed) {
-			std::swap(s_MemoryPNGs[entry->path], entry->previousImage);
-			std::swap(s_LoadedBitmaps[BitDepths::Eight][entry->path], entry->previousBitmap);
-			if (!s_MemoryPNGs[entry->path]) s_MemoryPNGs.erase(entry->path);
-			if (!s_LoadedBitmaps[BitDepths::Eight][entry->path]) s_LoadedBitmaps[BitDepths::Eight].erase(entry->path);
-		}
+		std::swap(s_MemoryPNGs[entry->path], entry->previousImage);
+		std::swap(s_LoadedBitmaps[BitDepths::Eight][entry->path], entry->previousBitmap);
+		if (!s_MemoryPNGs[entry->path]) s_MemoryPNGs.erase(entry->path);
+		if (!s_LoadedBitmaps[BitDepths::Eight][entry->path]) s_LoadedBitmaps[BitDepths::Eight].erase(entry->path);
+	}
+	m_Active = active;
+}
+
+ContentFile::MemoryPNGScope::~MemoryPNGScope() {
+	if (m_Active && !m_Committed) SetActive(false);
+	for (auto entry = m_Entries.rbegin(); entry != m_Entries.rend(); ++entry) {
 		SDL_DestroySurface(entry->previousImage);
 		if (entry->previousBitmap) destroy_bitmap(entry->previousBitmap);
 	}

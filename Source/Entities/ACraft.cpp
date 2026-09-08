@@ -1,4 +1,6 @@
 #include "ACraft.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 #include <algorithm>
 
 #include "AtomGroup.h"
@@ -185,6 +187,7 @@ MOSRotating* ACraft::Exit::SuckInMOs(ACraft* pExitOwner) {
 }
 
 void ACraft::Clear() {
+	m_PersistedACraftRuntime.clear();
 	m_AIMode = AIMODE_DELIVER;
 
 	m_MovementState = NOMOVE;
@@ -294,11 +297,28 @@ int ACraft::Create(const ACraft& reference) {
 			exit.m_FaithfulIncomingMOUID = 0;
 		}
 	}
+	m_PersistedACraftRuntime = reference.m_PersistedACraftRuntime;
+	if (IsFaithfulClone() && m_PersistedACraftRuntime.empty()) m_PersistedACraftRuntime = reference.SaveACraftRuntime();
 	return 0;
 }
 
 int ACraft::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ClearCollectedInventory", {
+		bool clear; reader >> clear;
+		if (clear) { for (MovableObject* item: m_CollectedInventory) delete item; m_CollectedInventory.clear(); }
+	});
+	MatchProperty("SpecialBehaviour_AddCollectedInventory", {
+		std::unique_ptr<Entity> entity(g_PresetMan.ReadReflectedPreset(reader));
+		auto* item = dynamic_cast<MovableObject*>(entity.get());
+		if (!item) reader.ReportError("collected inventory checkpoint contains a non-movable object");
+		m_CollectedInventory.push_back(item);
+		entity.release();
+	});
+	MatchProperty("SpecialBehaviour_ACraftRuntime", {
+		m_PersistedACraftRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadACraftRuntime(m_PersistedACraftRuntime, true)) reader.ReportError("invalid ACraft runtime checkpoint");
+	});
 
 	MatchProperty("HatchDelay", { reader >> m_HatchDelay; });
 	MatchProperty("HatchOpenSound", {
@@ -386,18 +406,30 @@ std::vector<long> ACraft::GetExitIncomingMOUniqueIDs() const {
 
 void ACraft::AdoptPersistedUniqueID() {
 	Actor::AdoptPersistedUniqueID();
+	for (MovableObject* item: m_CollectedInventory) item->AdoptPersistedUniqueID();
 	m_PersistedHatchTimerAnchor.Apply(m_HatchTimer);
 	m_PersistedExitTimerAnchor.Apply(m_ExitTimer);
+	if (!m_PersistedACraftRuntime.empty()) {
+		if (!LoadACraftRuntime(m_PersistedACraftRuntime)) throw std::runtime_error("could not restore ACraft runtime checkpoint");
+		m_PersistedACraftRuntime.clear();
+	}
 }
 
 void ACraft::DiscardPersistedSnapshotState() {
 	Actor::DiscardPersistedSnapshotState();
+	for (MovableObject* item: m_CollectedInventory) item->DiscardPersistedSnapshotState();
 	m_PersistedHatchTimerAnchor.pending = false;
 	m_PersistedExitTimerAnchor.pending = false;
+	m_PersistedACraftRuntime.clear();
 }
 
 void ACraft::SaveSnapshotConfiguration(Writer& writer) const {
 	Actor::SaveSnapshotConfiguration(writer);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearCollectedInventory", true);
+	for (const MovableObject* item: m_CollectedInventory) {
+		writer.NewProperty("SpecialBehaviour_AddCollectedInventory");
+		Scene::SaveSceneObject(writer, item, false, true);
+	}
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearExits", true);
 	for (const Exit& exit: m_Exits) writer.NewPropertyWithValue("AddExit", exit);
 	writer.NewPropertyWithValue("HatchDelay", m_HatchDelay);
@@ -411,6 +443,7 @@ void ACraft::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("MaxPassengers", m_MaxPassengers);
 	writer.NewPropertyWithValue("ScuttleIfFlippedTime", m_ScuttleIfFlippedTime);
 	writer.NewPropertyWithValue("ScuttleOnDeath", m_ScuttleOnDeath);
+	writer.NewPropertyWithValue("SpecialBehaviour_ACraftRuntime", base64_encode(m_PersistedACraftRuntime.empty() ? SaveACraftRuntime() : m_PersistedACraftRuntime, true));
 }
 
 int ACraft::Save(Writer& writer) const {
@@ -450,6 +483,7 @@ int ACraft::Save(Writer& writer) const {
 }
 
 void ACraft::Destroy(bool notInherited) {
+	for (MovableObject* item: m_CollectedInventory) delete item;
 	delete m_HatchOpenSound;
 	delete m_HatchCloseSound;
 	delete m_CrashSound;
@@ -457,6 +491,17 @@ void ACraft::Destroy(bool notInherited) {
 	if (!notInherited)
 		Actor::Destroy();
 	Clear();
+}
+
+void ACraft::DestroyScriptState() {
+	for (MovableObject* item: m_CollectedInventory) item->DestroyScriptState();
+	Actor::DestroyScriptState();
+}
+
+MovableObject* ACraft::FindPartByUniqueID(long uid) {
+	if (MovableObject* found = Actor::FindPartByUniqueID(uid)) return found;
+	for (MovableObject* item: m_CollectedInventory) if (MovableObject* found = item->FindPartByUniqueID(uid)) return found;
+	return nullptr;
 }
 
 float ACraft::GetTotalValue(int nativeModule, float foreignMult, float nativeMult) const {
@@ -989,10 +1034,30 @@ void ACraft::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 
 void ACraft::ResolveFaithfulLinks() {
 	Actor::ResolveFaithfulLinks();
+	for (MovableObject* item: m_CollectedInventory) item->ResolveFaithfulLinks();
 	for (Exit& exit: m_Exits) {
 		if (exit.m_FaithfulIncomingMOUID > 0) {
 			exit.m_pIncomingMO = dynamic_cast<MOSRotating*>(g_MovableMan.FindObjectByUniqueID(exit.m_FaithfulIncomingMOUID));
 			exit.m_FaithfulIncomingMOUID = 0;
 		}
 	}
+}
+
+std::string ACraft::SaveACraftRuntime() const {
+	CheckpointWriter archive("ACraftRuntime1");
+	archive(m_HatchState, m_HatchTimer, m_HatchDelay, m_ExitInterval, m_ExitTimer, m_ReadExitIncomingCursor, m_ExitLinePhase);
+	archive(m_HasDelivered, m_LandingCraft, m_FlippedTimer, m_CrashTimer, m_CanEnterOrbit, m_MaxPassengers, m_ScuttleIfFlippedTime);
+	archive(m_ScuttleOnDeath, m_DeliveryState, m_AltitudeMoveState, m_AltitudeControl, m_DeliveryDelayMultiplier, m_NetworkDelivery, m_NetworkDeliveryTimer);
+	return archive.Text();
+}
+
+bool ACraft::LoadACraftRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ACraftRuntime1", validateOnly);
+		archive(m_HatchState, m_HatchTimer, m_HatchDelay, m_ExitInterval, m_ExitTimer, m_ReadExitIncomingCursor, m_ExitLinePhase);
+		archive(m_HasDelivered, m_LandingCraft, m_FlippedTimer, m_CrashTimer, m_CanEnterOrbit, m_MaxPassengers, m_ScuttleIfFlippedTime);
+		archive(m_ScuttleOnDeath, m_DeliveryState, m_AltitudeMoveState, m_AltitudeControl, m_DeliveryDelayMultiplier, m_NetworkDelivery, m_NetworkDeliveryTimer);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

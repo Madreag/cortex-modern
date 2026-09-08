@@ -1,4 +1,6 @@
 #include "ACRocket.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 #include "RTETools.h"
 #include "AtomGroup.h"
 #include "Attachable.h"
@@ -27,6 +29,7 @@ ACRocket::~ACRocket() {
 }
 
 void ACRocket::Clear() {
+	m_PersistedACRocketRuntime.clear();
 	//    m_pCapsule = 0;
 	m_pRLeg = 0;
 	m_pLLeg = 0;
@@ -164,6 +167,8 @@ int ACRocket::Create(const ACRocket& reference) {
 
 	m_MaxGimbalAngle = reference.m_MaxGimbalAngle;
 
+	m_PersistedACRocketRuntime = reference.m_PersistedACRocketRuntime;
+	if (IsFaithfulClone() && m_PersistedACRocketRuntime.empty()) m_PersistedACRocketRuntime = reference.SaveACRocketRuntime();
 	return 0;
 }
 
@@ -275,6 +280,10 @@ void ACRocket::AdoptPersistedUniqueID() {
 	m_PersistedLimbGroupPositions.clear();
 	ApplyPackedLimbState(m_PersistedLimbGroupInertia, {m_pRFootGroup, m_pLFootGroup}, true);
 	m_PersistedLimbGroupInertia.clear();
+	if (!m_PersistedACRocketRuntime.empty()) {
+		if (!LoadACRocketRuntime(m_PersistedACRocketRuntime)) throw std::runtime_error("could not restore ACRocket runtime checkpoint");
+		m_PersistedACRocketRuntime.clear();
+	}
 }
 
 void ACRocket::DiscardPersistedSnapshotState() {
@@ -284,10 +293,15 @@ void ACRocket::DiscardPersistedSnapshotState() {
 	m_PersistedLimbPathStates.clear();
 	m_PersistedLimbGroupPositions.clear();
 	m_PersistedLimbGroupInertia.clear();
+	m_PersistedACRocketRuntime.clear();
 }
 
 int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return ACraft::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ACRocketRuntime", {
+		m_PersistedACRocketRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadACRocketRuntime(m_PersistedACRocketRuntime, true)) reader.ReportError("invalid ACRocket runtime checkpoint");
+	});
 	MatchProperty("SpecialBehaviour_MaxGimbalAngleRaw", { reader >> m_MaxGimbalAngle; });
 
 	MatchForwards("RLeg") MatchProperty("RightLeg", { SetRightLeg(dynamic_cast<Leg*>(g_PresetMan.ReadReflectedPreset(reader))); });
@@ -348,6 +362,7 @@ int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 void ACRocket::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("SpecialBehaviour_MaxGimbalAngleRaw", m_MaxGimbalAngle);
+	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", base64_encode(m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime, true));
 }
 
 int ACRocket::Save(Writer& writer) const {
@@ -742,4 +757,33 @@ void ACRocket::Draw(BITMAP* pTargetBitmap, const Vector& targetPos, DrawMode mod
 		m_pRFootGroup->Draw(pTargetBitmap, targetPos, true, 13);
 		m_pLFootGroup->Draw(pTargetBitmap, targetPos, true, 13);
 	}
+}
+
+void ACRocket::ResolveFaithfulLinks() {
+	ACraft::ResolveFaithfulLinks();
+	if (m_pRFootGroup) m_pRFootGroup->ResolveCheckpointLinks();
+	if (m_pLFootGroup) m_pLFootGroup->ResolveCheckpointLinks();
+}
+
+std::string ACRocket::SaveACRocketRuntime() const {
+	CheckpointWriter archive("ACRocketRuntime1");
+	archive(m_GearState, m_Paths, m_MaxGimbalAngle);
+	archive(CaptureOwnedCheckpoint(m_pRFootGroup), CaptureOwnedCheckpoint(m_pLFootGroup));
+	return archive.Text();
+}
+
+bool ACRocket::LoadACRocketRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ACRocketRuntime1", validateOnly);
+		archive(m_GearState, m_Paths, m_MaxGimbalAngle);
+		std::array<std::string, 2> groups;
+		archive.Value(groups);
+		for (const std::string& group: groups) if (!ValidateOwnedCheckpoint<AtomGroup>(group)) return false;
+		archive.OnCommit([this, groups = std::move(groups)]() mutable {
+			RestoreOwnedCheckpoint(m_pRFootGroup, groups[0]);
+			RestoreOwnedCheckpoint(m_pLFootGroup, groups[1]);
+		});
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "SceneMan.h"
 #include "ThreadMan.h"
+#include "CheckpointArchive.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -48,7 +49,7 @@ thread_local int s_JumpHeightDiagonal = 0;
 thread_local float s_DigStrength = 0.0F;
 
 RTE::PathNode::PathNode(const Vector& pos) :
-    Pos(pos) {
+    Pos(pos), m_Navigable(true) {
 	const Material* outOfBounds = g_SceneMan.GetMaterialFromID(MaterialColorKeys::g_MaterialOutOfBounds);
 	for (int i = 0; i < c_MaxAdjacentNodeCount; i++) {
 		AdjacentNodes[i] = nullptr;
@@ -65,9 +66,67 @@ PathFinder::~PathFinder() {
 	Destroy();
 }
 
+std::string PathFinder::SaveCheckpoint() const {
+	WaitForPathingRequests();
+	CheckpointWriter writer("PathFinder1");
+	writer(m_NodeDimension, m_Offset, m_GridWidth, m_GridHeight, m_WrapsX, m_WrapsY, m_NodeGrid.size());
+	for (const PathNode& node: m_NodeGrid) {
+		writer(node.Pos, node.m_Navigable);
+		for (const PathNode* adjacent: node.AdjacentNodes) writer(adjacent ? static_cast<int64_t>(adjacent - m_NodeGrid.data()) : int64_t{-1});
+		for (const Material* material: node.AdjacentNodeBlockingMaterials) writer(material ? static_cast<int>(material->GetIndex()) : -1);
+	}
+	return writer.Text();
+}
+
+bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "PathFinder1", validateOnly);
+		unsigned dimension;
+		Vector offset;
+		int width, height;
+		bool wrapsX, wrapsY;
+		size_t count;
+		reader.Value(dimension); reader.Value(offset); reader.Value(width); reader.Value(height);
+		reader.Value(wrapsX); reader.Value(wrapsY); reader.Value(count);
+		if (!dimension || width <= 0 || height <= 0 || static_cast<uint64_t>(width) * height != count || count > text.size() / 8) return false;
+		struct NodeState { Vector pos; bool navigable; std::array<int64_t, 8> adjacent; std::array<int, 8> material; };
+		std::vector<NodeState> nodes(count);
+		for (NodeState& node: nodes) {
+			reader.Value(node.pos); reader.Value(node.navigable); reader.Value(node.adjacent); reader.Value(node.material);
+			for (int64_t index: node.adjacent) if (index < -1 || (index >= 0 && static_cast<uint64_t>(index) >= count)) return false;
+			for (int index: node.material) if (index < -1 || index >= 256) return false;
+		}
+		reader.Finish();
+		if (validateOnly) return true;
+		WaitForPathingRequests();
+		// PathNode contains references to its own array elements: construct in place,
+		// then swap storage, so neither vector growth nor a value copy can dangle them.
+		std::vector<PathNode> replacement;
+		replacement.reserve(count);
+		for (const NodeState& node: nodes) replacement.emplace_back(node.pos);
+		for (size_t index = 0; index < count; ++index) {
+			PathNode& target = replacement[index];
+			const NodeState& node = nodes[index];
+			target.m_Navigable = node.navigable;
+			for (size_t direction = 0; direction < 8; ++direction) {
+				target.AdjacentNodes[direction] = node.adjacent[direction] < 0 ? nullptr : &replacement[node.adjacent[direction]];
+				target.AdjacentNodeBlockingMaterials[direction] = node.material[direction] < 0 ? nullptr : g_SceneMan.GetMaterialFromID(static_cast<unsigned char>(node.material[direction]));
+			}
+		}
+		m_NodeGrid.swap(replacement);
+		m_NodeDimension = dimension; m_Offset = offset; m_GridWidth = width; m_GridHeight = height;
+		m_WrapsX = wrapsX; m_WrapsY = wrapsY;
+		// Every CalculatePathImpl already resets its thread's scratch pather before use.
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
 void PathFinder::Clear() {
 	WaitForPathingRequests();
 	m_NodeGrid.clear();
+	m_Pather = nullptr;
+	m_GridWidth = m_GridHeight = 0;
+	m_WrapsX = m_WrapsY = false;
 	m_NodeDimension = SCENEGRIDSIZE;
 	m_Offset = Vector();
 }

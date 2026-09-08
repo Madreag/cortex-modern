@@ -12,6 +12,10 @@ namespace RTE {
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
 		std::string SaveCheckpoint() const;
+        void SwapCheckpoint(Color& other) noexcept {
+            using std::swap;
+            swap(m_R, other.m_R); swap(m_G, other.m_G); swap(m_B, other.m_B); swap(m_Index, other.m_Index);
+        }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 #pragma region Creation

@@ -1,4 +1,6 @@
 #include "ADoor.h"
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
 #include "AtomGroup.h"
 #include "Attachable.h"
 #include "Matrix.h"
@@ -22,6 +24,7 @@ ADoor::~ADoor() {
 }
 
 void ADoor::Clear() {
+	m_PersistedADoorRuntime.clear();
 	m_InitialSpriteAnimDuration = 0;
 	m_Sensors.clear();
 	m_SensorTimer.Reset();
@@ -120,11 +123,17 @@ int ADoor::Create(const ADoor& reference) {
 		m_DoorMaterialRedrawTimer = reference.m_DoorMaterialRedrawTimer;
 		m_LastDoorMaterialPos = reference.m_LastDoorMaterialPos;
 	}
+	m_PersistedADoorRuntime = reference.m_PersistedADoorRuntime;
+	if (IsFaithfulClone() && m_PersistedADoorRuntime.empty()) m_PersistedADoorRuntime = reference.SaveADoorRuntime();
 	return 0;
 }
 
 int ADoor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Actor::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ADoorRuntime", {
+		m_PersistedADoorRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadADoorRuntime(m_PersistedADoorRuntime, true)) reader.ReportError("invalid ADoor runtime checkpoint");
+	});
 
 	MatchProperty("Door", { SetDoor(dynamic_cast<Attachable*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchProperty("OpenOffset", { reader >> m_OpenOffset; });
@@ -193,6 +202,7 @@ void ADoor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("DoorMoveSound", m_DoorMoveSound.get());
 	writer.NewPropertyWithValue("DoorDirectionChangeSound", m_DoorDirectionChangeSound.get());
 	writer.NewPropertyWithValue("DoorMoveEndSound", m_DoorMoveEndSound.get());
+	writer.NewPropertyWithValue("SpecialBehaviour_ADoorRuntime", base64_encode(m_PersistedADoorRuntime.empty() ? SaveADoorRuntime() : m_PersistedADoorRuntime, true));
 }
 
 int ADoor::Save(Writer& writer) const {
@@ -636,4 +646,38 @@ void ADoor::DrawHUD(BITMAP* targetBitmap, const Vector& targetPos, int whichScre
 	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam && (!g_SettingsMan.ShowEnemyHUD() || g_SceneMan.IsUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))) {
 		return;
 	}
+}
+
+void ADoor::AdoptPersistedUniqueID() {
+	Actor::AdoptPersistedUniqueID();
+	if (!m_PersistedADoorRuntime.empty()) {
+		if (!LoadADoorRuntime(m_PersistedADoorRuntime)) throw std::runtime_error("could not restore ADoor runtime checkpoint");
+		m_PersistedADoorRuntime.clear();
+	}
+}
+
+void ADoor::DiscardPersistedSnapshotState() {
+	Actor::DiscardPersistedSnapshotState();
+	m_PersistedADoorRuntime.clear();
+}
+
+std::string ADoor::SaveADoorRuntime() const {
+	CheckpointWriter archive("ADoorRuntime1");
+	archive(m_InitialSpriteAnimDuration, m_SensorTimer, m_SensorInterval, m_DoorState, m_DoorStateOnStop, m_ClosedByDefault, m_OpenOffset);
+	archive(m_ClosedOffset, m_OpenAngle, m_ClosedAngle, m_DoorMoveTimer, m_DoorMoveTime, m_ResumeAfterStop, m_ChangedDirectionAfterStop);
+	archive(m_DoorMoveStopTime, m_ResetToDefaultStateTimer, m_ResetToDefaultStateDelay, m_DrawMaterialLayerWhenOpen, m_DrawMaterialLayerWhenClosed, m_DoorMaterialID, m_DoorMaterialDrawn);
+	archive(m_DoorMaterialTempErased, m_DoorMaterialRedrawTimer, m_LastDoorMaterialPos);
+	return archive.Text();
+}
+
+bool ADoor::LoadADoorRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ADoorRuntime1", validateOnly);
+		archive(m_InitialSpriteAnimDuration, m_SensorTimer, m_SensorInterval, m_DoorState, m_DoorStateOnStop, m_ClosedByDefault, m_OpenOffset);
+		archive(m_ClosedOffset, m_OpenAngle, m_ClosedAngle, m_DoorMoveTimer, m_DoorMoveTime, m_ResumeAfterStop, m_ChangedDirectionAfterStop);
+		archive(m_DoorMoveStopTime, m_ResetToDefaultStateTimer, m_ResetToDefaultStateDelay, m_DrawMaterialLayerWhenOpen, m_DrawMaterialLayerWhenClosed, m_DoorMaterialID, m_DoorMaterialDrawn);
+		archive(m_DoorMaterialTempErased, m_DoorMaterialRedrawTimer, m_LastDoorMaterialPos);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

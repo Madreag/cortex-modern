@@ -1,6 +1,10 @@
 #include "Scene.h"
+#include "CheckpointArchive.h"
+#include "BitmapCheckpoint.h"
+#include "TerrainLayerSnapshot.h"
 
 #include "PresetMan.h"
+#include "LuaMan.h"
 #include "MovableMan.h"
 
 #include <optional>
@@ -49,6 +53,148 @@ using namespace RTE;
 
 ConcreteClassInfo(Scene, Entity, 0);
 const std::string Scene::Area::c_ClassName = "Area";
+
+Scene::RuntimeOwners::~RuntimeOwners() {
+	for (SceneObject* object: brains) delete object;
+	for (const auto& set: placed) for (SceneObject* object: set) delete object;
+	for (SLBackground* layer: backgrounds) delete layer;
+	for (Deployment* object: deployments) delete object;
+}
+
+void Scene::SwapRuntimeOwners(RuntimeOwners& state) {
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) std::swap(m_ResidentBrains[player], state.brains[player]);
+	for (int set = 0; set < PLACEDSETSCOUNT; ++set) m_PlacedObjects[set].swap(state.placed[set]);
+	m_BackLayerList.swap(state.backgrounds);
+	m_Deployments.swap(state.deployments);
+}
+
+namespace {
+	std::string SaveSceneOwnedObject(const SceneObject* object) {
+		if (!object) return {};
+		Writer writer(std::make_unique<std::stringstream>());
+		Writer::SnapshotScope scope(writer);
+		writer.NewProperty("OwnedSceneObject");
+		Scene::SaveSceneObject(writer, object, false, true);
+		return static_cast<std::stringstream*>(writer.GetStream())->str();
+	}
+	std::unique_ptr<SceneObject> LoadSceneOwnedObject(const std::string& text) {
+		if (text.empty()) return {};
+		Reader reader(std::make_unique<std::istringstream>(text), "Base.rte/SceneCheckpoint.ini", true, nullptr, true);
+		reader.SetThrowOnError(true); reader.SetSkipIncludes(true);
+		reader.SetCheckpoint(true);
+		if (!reader.NextProperty() || reader.ReadPropName() != "OwnedSceneObject") throw std::runtime_error("invalid scene object checkpoint");
+		std::unique_ptr<Entity> value(g_PresetMan.ReadReflectedPreset(reader));
+		SceneObject* object = dynamic_cast<SceneObject*>(value.get());
+		if (!object || reader.NextProperty()) throw std::runtime_error("invalid scene object checkpoint");
+		if (auto* movable = dynamic_cast<MovableObject*>(object)) movable->AdoptPersistedUniqueID();
+		value.release();
+		return std::unique_ptr<SceneObject>(object);
+	}
+}
+
+std::string Scene::SaveRuntimeCheckpoint() const {
+	std::vector<std::string> pathfinders;
+	for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(pathfinder ? pathfinder->SaveCheckpoint() : "");
+	std::vector<std::pair<std::string, std::string>> backgrounds;
+	for (const SLBackground* layer: m_BackLayerList) backgrounds.emplace_back(layer->Entity::SaveCheckpoint(), layer->SaveCheckpoint());
+	std::array<std::string, Players::MaxPlayerCount> brains;
+	for (size_t player = 0; player < brains.size(); ++player) brains[player] = SaveSceneOwnedObject(m_ResidentBrains[player]);
+	std::array<std::vector<std::string>, PLACEDSETSCOUNT> placed;
+	for (int set = 0; set < PLACEDSETSCOUNT; ++set) for (const SceneObject* object: m_PlacedObjects[set]) placed[set].push_back(SaveSceneOwnedObject(object));
+	std::vector<std::string> deployments;
+	for (const Deployment* object: m_Deployments) deployments.push_back(SaveSceneOwnedObject(object));
+	std::map<std::string, std::string> assemblies;
+	for (const auto& [name, assembly]: m_SelectedAssemblies) assemblies[name] = assembly ? assembly->GetModuleAndPresetName() : "";
+	BitmapCheckpoint preview; preview.Capture(m_pPreviewBitmap);
+	TerrainLayerSnapshot terrain;
+	if (!terrain.Capture()) throw std::runtime_error("could not capture scene terrain metadata");
+	CheckpointWriter writer("SceneRuntime1");
+	writer(Entity::SaveCheckpoint(), m_Location, m_LocationOffset, m_MetagamePlayable, m_Revealed, m_OwnedByTeam, m_RoundIncome,
+		m_BuildBudget, m_BuildBudgetRatio, m_AutoDesigned, m_TotalInvestment, m_PathfindingUpdated, m_PartialPathUpdateTimer,
+		m_NavigableAreas, m_NavigableAreasUpToDate, m_GlobalAcc, m_AssembliesCounts, m_PreviewBitmapFile, m_MetasceneParent,
+		m_IsMetagameInternal, m_IsSavedGameInternal, assemblies, pathfinders, backgrounds, brains, placed, deployments,
+		preview, terrain.SaveMetadata());
+	return writer.Text();
+}
+
+bool Scene::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly, bool restoreOwners) {
+	try {
+		CheckpointReader reader(text, "SceneRuntime1", validateOnly);
+		std::string entity;
+		reader.Value(entity);
+		if (!Entity::LoadCheckpoint(entity, true)) return false;
+		reader(m_Location, m_LocationOffset, m_MetagamePlayable, m_Revealed, m_OwnedByTeam, m_RoundIncome,
+			m_BuildBudget, m_BuildBudgetRatio, m_AutoDesigned, m_TotalInvestment, m_PathfindingUpdated, m_PartialPathUpdateTimer,
+			m_NavigableAreas, m_NavigableAreasUpToDate, m_GlobalAcc, m_AssembliesCounts, m_PreviewBitmapFile, m_MetasceneParent,
+			m_IsMetagameInternal, m_IsSavedGameInternal);
+		std::map<std::string, std::string> assemblyNames;
+		reader.Value(assemblyNames);
+		std::map<std::string, const BunkerAssembly*> assemblies;
+		for (const auto& [name, preset]: assemblyNames) {
+			const auto* assembly = preset.empty() ? nullptr : dynamic_cast<const BunkerAssembly*>(g_PresetMan.GetEntityPreset("BunkerAssembly", preset));
+			if (!preset.empty() && !assembly) return false;
+			assemblies[name] = assembly;
+		}
+		std::vector<std::string> pathfinders;
+		std::vector<std::pair<std::string, std::string>> backgrounds;
+		std::array<std::string, Players::MaxPlayerCount> brains;
+		std::array<std::vector<std::string>, PLACEDSETSCOUNT> placed;
+		std::vector<std::string> deployments;
+		reader.Value(pathfinders); reader.Value(backgrounds); reader.Value(brains); reader.Value(placed); reader.Value(deployments);
+		if (pathfinders.size() != m_pPathFinders.size()) return false;
+		for (const std::string& state: pathfinders) { PathFinder value; if (!state.empty() && !value.LoadCheckpoint(state, true)) return false; }
+		for (const auto& [identity, state]: backgrounds) {
+			SLBackground value;
+			if (!value.Entity::LoadCheckpoint(identity, true) || !value.LoadCheckpoint(state, true)) return false;
+		}
+		BitmapCheckpoint preview;
+		reader.Value(preview);
+		std::string metadata;
+		reader.Value(metadata);
+		TerrainLayerSnapshot terrain;
+		if (!terrain.LoadMetadata(metadata, true)) return false;
+		// Owned candidates are built before committing live scene fields. The enclosing
+		// world transaction retains original native owners until all Lua links resolve.
+		std::unique_ptr<RuntimeOwners> owners;
+		if (!validateOnly && restoreOwners) {
+			owners = std::make_unique<RuntimeOwners>();
+			for (size_t player = 0; player < brains.size(); ++player) owners->brains[player] = LoadSceneOwnedObject(brains[player]).release();
+			for (int set = 0; set < PLACEDSETSCOUNT; ++set) for (const std::string& state: placed[set]) owners->placed[set].push_back(LoadSceneOwnedObject(state).release());
+			for (const std::string& state: deployments) {
+				auto object = LoadSceneOwnedObject(state);
+				auto* deployment = dynamic_cast<Deployment*>(object.get());
+				if (!deployment) return false;
+				object.release(); owners->deployments.push_back(deployment);
+			}
+			for (const auto& [identity, state]: backgrounds) {
+				auto layer = std::make_unique<SLBackground>();
+				if (!layer->LoadCheckpoint(state) || !layer->Entity::LoadCheckpoint(identity)) return false;
+				owners->backgrounds.push_back(layer.release());
+			}
+		}
+		reader.Finish();
+		if (validateOnly) return true;
+		if (owners) SwapRuntimeOwners(*owners);
+		if (!Entity::LoadCheckpoint(entity)) return false;
+		m_SelectedAssemblies = std::move(assemblies);
+		for (size_t index = 0; index < pathfinders.size(); ++index) {
+			if (pathfinders[index].empty()) m_pPathFinders[index].reset();
+			else {
+				if (!m_pPathFinders[index]) m_pPathFinders[index] = std::make_unique<PathFinder>();
+				if (!m_pPathFinders[index]->LoadCheckpoint(pathfinders[index])) return false;
+			}
+		}
+		if (!restoreOwners) {
+			if (backgrounds.size() != m_BackLayerList.size()) return false;
+			auto layer = m_BackLayerList.begin();
+			for (const auto& [identity, state]: backgrounds) { if (!(*layer)->LoadCheckpoint(state) || !(*layer)->Entity::LoadCheckpoint(identity)) return false; ++layer; }
+		}
+		BITMAP* bitmap = preview.Create();
+		destroy_bitmap(m_pPreviewBitmap); m_pPreviewBitmap = bitmap;
+		if (!terrain.Capture() || !terrain.LoadMetadata(metadata) || !terrain.Restore()) return false;
+		return true;
+	} catch (const std::exception&) { return false; }
+}
 
 // Holds the path calculated by CalculateScenePath
 thread_local std::list<Vector> s_ScenePath;
@@ -1229,9 +1375,9 @@ int Scene::Save(Writer& writer) const {
 	return 0;
 }
 
-void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) const {
+void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) {
 	Writer::SnapshotScope snapshotScope(writer, saveFullData);
-	auto WriteHardcodedAttachableOrNone = [this, &writer, &saveFullData](const std::string& propertyName, const Attachable* harcodedAttachable) {
+	auto WriteHardcodedAttachableOrNone = [&writer, &saveFullData](const std::string& propertyName, const Attachable* harcodedAttachable) {
 		if (harcodedAttachable) {
 			writer.NewProperty(propertyName);
 			SaveSceneObject(writer, harcodedAttachable, true, saveFullData);
@@ -1282,10 +1428,14 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 		if (movableObjectToSave->ObjectScriptsInitialized()) {
-			if (const std::string scriptState = movableObjectToSave->SerializeScriptState(); !scriptState.empty()) {
-				writer.NewPropertyWithValue("ScriptState", scriptState);
-			}
+			writer.NewPropertyWithValue("ScriptsRestored", true);
 		}
+		if (const int luaState = g_LuaMan.GetStateIndex(movableObjectToSave->GetLuaState()); luaState >= 0) {
+			writer.NewPropertyWithValue("LuaState", luaState);
+		}
+		writer.NewPropertyWithValue("SpecialBehaviour_MOID", movableObjectToSave->GetID());
+		writer.NewPropertyWithValue("SpecialBehaviour_RootMOID", movableObjectToSave->GetRootID());
+		writer.NewPropertyWithValue("SpecialBehaviour_MOIDFootprint", movableObjectToSave->GetMOIDFootprint());
 		writer.NewPropertyWithValue("HUDVisible", movableObjectToSave->GetHUDVisible());
 		writer.NewPropertyWithValue("Velocity", movableObjectToSave->GetVel());
 		writer.NewPropertyWithValue("PrevPosition", movableObjectToSave->GetPrevPos());
@@ -1463,7 +1613,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("JointStrength", attachableToSave->GetJointStrength());
 		writer.NewPropertyWithValue("JointStiffness", attachableToSave->GetJointStiffness());
 		writer.NewPropertyWithValue("JointOffset", attachableToSave->GetJointOffset());
-		writer.NewPropertyWithValue("InheritsHFlipped", attachableToSave->InheritsHFlipped());
+		writer.NewPropertyWithValue("SpecialBehaviour_InheritsHFlipped", attachableToSave->InheritsHFlipped());
 		writer.NewPropertyWithValue("InheritsRotAngle", attachableToSave->InheritsRotAngle());
 		writer.NewPropertyWithValue("InheritedRotAngleOffset", attachableToSave->GetInheritedRotAngleOffset());
 		writer.NewPropertyWithValue("InheritsFrame", attachableToSave->InheritsFrame());
@@ -1583,24 +1733,22 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("Status", actorToSave->GetStatus());
 			writer.NewPropertyWithValue("PlayerControllable", actorToSave->IsPlayerControllable());
 
-			// Only wire-applied controller state is cross-peer canonical; an actor still inside its
-			// input-delay window holds per-machine AI residue that must not ride the save.
+			// Full checkpoints retain the controller even before its first committed wire frame.
 			// Read-only; a const accessor would make the luabind GetController overload ambiguous.
 			const Controller* actorController = const_cast<Actor*>(actorToSave)->GetController();
+			writer.NewPropertyWithValue("SpecialBehaviour_ControllerCheckpoint", base64_encode(actorController->SaveCheckpoint(), true));
 			writer.NewPropertyWithValue("ControllerQuickDisabled", static_cast<int>(actorController->IsQuickDisabled()));
-			if (actorController->GetWireApplyTick() == static_cast<int64_t>(g_TimerMan.GetSimUpdateCount())) {
-				long long controllerStateMask = 0;
-				for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
-					if (actorController->IsState(static_cast<ControlState>(state))) {
-						controllerStateMask |= (1LL << state);
-					}
+			long long controllerStateMask = 0;
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+				if (actorController->IsState(static_cast<ControlState>(state))) {
+					controllerStateMask |= (1LL << state);
 				}
-				writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
-				writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
-				writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
-				writer.NewPropertyWithValue("ControllerInputMode", static_cast<int>(actorController->GetInputMode()));
-				writer.NewPropertyWithValue("ControllerPlayer", actorController->GetPlayerRaw());
 			}
+			writer.NewPropertyWithValue("ControllerStateMask", controllerStateMask);
+			writer.NewPropertyWithValue("ControllerAnalogMove", actorController->GetAnalogMove());
+			writer.NewPropertyWithValue("ControllerAnalogAim", actorController->GetAnalogAim());
+			writer.NewPropertyWithValue("ControllerInputMode", static_cast<int>(actorController->GetInputMode()));
+			writer.NewPropertyWithValue("ControllerPlayer", actorController->GetPlayerRaw());
 
 			writer.NewPropertyWithValue("AimAngle", actorToSave->GetAimAngle(false));
 			writer.NewPropertyWithValue("SpecialBehaviour_AimState", actorToSave->GetAimState());
@@ -2869,4 +3017,34 @@ PathFinder& Scene::GetPathFinder(Activity::Teams team) {
 
 	// Note - we use + 1 when getting pathfinders by index, because our shared NoTeam pathfinder occupies index 0, and the rest come after that.
 	return *m_pPathFinders[static_cast<int>(team) + 1];
+}
+
+std::string Scene::Area::SaveCheckpoint() const {
+	CheckpointWriter writer("Area1");
+	std::vector<Box> boxes;
+	for (const Box* box: m_BoxList) boxes.push_back(*box);
+	writer(m_Name, boxes);
+	return writer.Text();
+}
+
+bool Scene::Area::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "Area1", validateOnly);
+		std::string name;
+		std::vector<Box> boxes;
+		reader.Value(name);
+		reader.Value(boxes);
+		reader.Finish();
+		if (!validateOnly) {
+			m_Name = std::move(name);
+			while (m_BoxList.size() > boxes.size()) { delete m_BoxList.back(); m_BoxList.pop_back(); }
+			for (size_t index = 0; index < boxes.size(); ++index) {
+				if (index == m_BoxList.size()) m_BoxList.push_back(new Box());
+				m_BoxList[index]->m_Corner = boxes[index].m_Corner;
+				m_BoxList[index]->m_Width = boxes[index].m_Width;
+				m_BoxList[index]->m_Height = boxes[index].m_Height;
+			}
+		}
+		return true;
+	} catch (const std::exception&) { return false; }
 }

@@ -22,7 +22,7 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_states=None, hold_path_callbacks_until=None, hold_path_results_until=None, global_script=None):
+def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_states=None, hold_path_callbacks_until=None, hold_path_results_until=None, global_script=None, global_late=False):
     trace = out / "trace.json"
     dump = Path(str(trace) + ".simdump.txt")
     args = ["-net-replay", recording, "-tick-hashes", "-max-ticks", ticks, "-out", trace]
@@ -50,7 +50,8 @@ def run_case(repo, recording, script, out, ticks, capture=None, mode=None, lua_s
         shutil.copy2(global_script, target)
         (module / "Index.ini").write_text("DataModule\n\tModuleName = User Scenes\n\tIgnoreMissingItems = 1\n"
             "\tAddGlobalScript = GlobalScript\n\t\tPresetName = Checkpoint Global\n"
-            f"\t\tScriptPath = UserScenes.rte/ScriptState/{global_script.name}\n\t\tLuaClassName = CheckpointGlobalScript\n")
+            f"\t\tScriptPath = UserScenes.rte/ScriptState/{global_script.name}\n\t\tLuaClassName = CheckpointGlobalScript\n"
+            + ("\t\tLateUpdate = 1\n" if global_late else ""))
         settings = Path(run.cwd) / "Userdata/Settings.ini"
         with settings.open("a") as stream:
             stream.write("\n\tEnableGlobalScript = UserScenes.rte/Checkpoint Global\n")
@@ -89,6 +90,8 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--script", type=Path)
     parser.add_argument("--global-script", type=Path, help="CheckpointGlobalScript fixture to enable in the private runtime")
+    parser.add_argument("--late", action="store_true", help="run the configured global fixture during LateUpdate")
+    parser.add_argument("--build-manifest", type=Path, help="immutable compiled-source manifest; the executable and retained build artifacts must stay unchanged")
     parser.add_argument("--ticks", type=int, default=521)
     parser.add_argument("--captures", type=int, nargs="+", default=[50, 150, 250, 400])
     parser.add_argument("--modes", nargs="+", choices=["memory", "file", "launch"], default=["memory", "file"])
@@ -98,13 +101,29 @@ def main():
     options = parser.parse_args()
     if any(c < 1 or c + 31 >= options.ticks for c in options.captures):
         parser.error("every capture and window must finish before the continuation dump")
-    changed = subprocess.check_output(["git", "ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd=options.repo).decode().split("\0")
+    if options.late and not options.global_script:
+        parser.error("--late requires --global-script")
+    build = json.loads(options.build_manifest.read_text()) if options.build_manifest else None
+    frozen_files = dict(build["artifacts"]) if build else {}
+    if build:
+        frozen_files[str(options.build_manifest.resolve())] = sha256(options.build_manifest)
+        assert all(Path(name).is_file() and sha256(name) == digest for name, digest in frozen_files.items()), "compiled source artifacts changed"
+        assert sha256(options.repo / "Cortex Command.exe") == build["exe_sha256"], "executable differs from compiled-source manifest"
+    for path in (options.recording, options.script, options.global_script, options.repo / "Cortex Command.exe"):
+        if path: frozen_files[str(path.resolve())] = sha256(path)
+    changed = [] if build else subprocess.check_output(["git", "ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd=options.repo).decode().split("\0")
     root = options.out / (datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8])
     root.mkdir(parents=True, exist_ok=False)
-    provenance = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=options.repo, text=True).strip(), "recording": {"path": str(options.recording.resolve()), "sha256": sha256(options.recording)}, "script": {"path": str(options.script.resolve()), "sha256": sha256(options.script)} if options.script else None}
+    shutil.copy2(__file__, root / "harness_source.py")
+    frozen_files[str(root / "harness_source.py")] = sha256(root / "harness_source.py")
+    if build: shutil.copy2(options.build_manifest, root / "compiled-build.json")
+    provenance = {"head": build["head"] if build else subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=options.repo, text=True).strip(), "recording": {"path": str(options.recording.resolve()), "sha256": sha256(options.recording)}, "script": {"path": str(options.script.resolve()), "sha256": sha256(options.script)} if options.script else None}
+    provenance["source_basis"] = str(options.build_manifest.resolve()) if build else "live source held unchanged for this run"
+    provenance["frozen_files"] = frozen_files
+    provenance["global_late"] = options.late
     if options.global_script:
         provenance["global_script"] = {"path": str(options.global_script.resolve()), "sha256": sha256(options.global_script)}
-    patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=options.repo)
+    patch = Path(build["source_patch"]).read_bytes() if build else subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=options.repo)
     (root / "source.patch").write_bytes(patch)
     provenance["source_patch_sha256"] = hashlib.sha256(patch).hexdigest()
     provenance["changed_files"] = {}
@@ -120,7 +139,7 @@ def main():
     cases = [(None, None)] + [(m, c) for m in options.modes for c in options.captures]
     for mode, capture in cases:
         label = f"{mode}_{capture}" if mode else "reference"
-        result = run_case(options.repo, options.recording, options.script, root / label, options.ticks, capture, mode, options.lua_states, options.hold_path_callbacks_until, options.hold_path_results_until, options.global_script)
+        result = run_case(options.repo, options.recording, options.script, root / label, options.ticks, capture, mode, options.lua_states, options.hold_path_callbacks_until, options.hold_path_results_until, options.global_script, options.late)
         if mode:
             reference = results["reference"]
             same, comparison = strict_compare(reference["trace"], result["trace"], options.ticks)
@@ -130,7 +149,7 @@ def main():
             result["checks"]["same_binary"] = reference["detail"]["exe_sha256"] == result["detail"]["exe_sha256"]
         result["pass"] = all(result["checks"].values())
         results[label] = result
-        unchanged = all((options.repo / name).is_file() and sha256(options.repo / name) == digest for name, digest in provenance["changed_files"].items())
+        unchanged = all((options.repo / name).is_file() and sha256(options.repo / name) == digest for name, digest in provenance["changed_files"].items()) and all(Path(name).is_file() and sha256(name) == digest for name, digest in frozen_files.items())
         complete = len(results) == len(cases)
         passed = complete and unchanged and all(r["pass"] for r in results.values())
         (root / "result.json").write_text(json.dumps({"pass": passed, "complete": complete, "source_unchanged": unchanged, "planned_cases": len(cases), "results": results}, indent=2))

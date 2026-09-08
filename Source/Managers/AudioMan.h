@@ -32,6 +32,10 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
+		void SetCheckpointTraceEnabled(bool enabled);
+		void TraceCheckpointBoundary(const char* stage) const;
+		bool PerturbCheckpointCursorForSelfTest();
+		bool RunCheckpointPlaybackContinuationSelfTest() const;
 		uint64_t GetCheckpointSoundContainerCursor() const { return m_NextSoundContainerIdentity; }
 		void SetCheckpointSoundContainerCursor(uint64_t value) { m_NextSoundContainerIdentity = value; }
 		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { return m_CheckpointSoundContainers; }
@@ -134,6 +138,8 @@ namespace RTE {
 		/// Reports whether audio is enabled.
 		/// @return Whether audio is enabled.
 		bool IsAudioEnabled() const { return m_AudioEnabled; }
+		/// True only after the explicit silent-output test flag is verified against FMOD.
+		bool IsInaudibleTestOutputVerified() const { return m_InaudibleTestOutputVerified; }
 
 		/// Gets the virtual and real playing channel counts, filling in the passed-in out-parameters.
 		/// @param outVirtualChannelCount The out-parameter that will hold the virtual channel count.
@@ -368,6 +374,7 @@ namespace RTE {
 		FMOD::ChannelGroup* m_MusicChannelGroup; //!< The FMOD ChannelGroup for music.
 
 		bool m_AudioEnabled; //!< Bool to tell whether audio is enabled or not.
+		bool m_InaudibleTestOutputVerified = false;
 		bool m_OutputSilenced = false; //!< Whether this process's output is silenced (a headless run); not a saved setting.
 		std::vector<std::unique_ptr<const Vector>> m_CurrentActivityHumanPlayerPositions; //!< The stored positions of each human player in the current activity. Only filled when there's an activity running.
 		std::unordered_map<int, float> m_SoundChannelMinimumAudibleDistances; //!<  An unordered map of sound channel indices to floats representing each Sound Channel's minimum audible distances. This is necessary to keep safe data in case the SoundContainer is destroyed while the sound is still playing, as happens often with TDExplosives.

@@ -1,3 +1,4 @@
+#include "CheckpointArchive.h"
 #include "SceneMan.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
@@ -19,6 +20,7 @@
 #include "SoundContainer.h"
 #include "SimChecksum.h"
 #include "TimerMan.h"
+#include "LuaMan.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -192,6 +194,9 @@ void SceneMan::Clear() {
 	m_MaterialCount = 0;
 
 	m_MaterialCopiesVector.clear();
+	m_MaterialCopyIndices.clear();
+	m_RetiredMaterialCopies.clear();
+	for (auto& retired: m_RetiredPaletteMaterials) retired.clear();
 
 	m_pUnseenRevealSound = nullptr;
 	m_DrawRayCastVisualizations = false;
@@ -236,8 +241,10 @@ int SceneMan::Create(const std::string& readerFile) {
 
 Material* SceneMan::AddMaterialCopy(Material* mat) {
 	Material* matCopy = dynamic_cast<Material*>(mat->Clone());
-	if (matCopy)
+	if (matCopy) {
+		m_MaterialCopyIndices[matCopy] = m_MaterialCopiesVector.size();
 		m_MaterialCopiesVector.push_back(matCopy);
+	}
 
 	return matCopy;
 }
@@ -248,6 +255,7 @@ int SceneMan::LoadScene(Scene* pNewScene, bool placeObjects, bool placeUnits) {
 	}
 
 	g_MovableMan.PurgeAllMOs();
+	g_LuaMan.ResetPathCallbacks(true);
 	g_PostProcessMan.ClearScenePostEffects();
 
 	if (m_pCurrentScene) {
@@ -422,6 +430,10 @@ void SceneMan::Destroy() {
 		delete materialCopy;
 	}
 	m_MaterialCopiesVector.clear();
+	for (const auto& [index, copies]: m_RetiredMaterialCopies) for (Material* copy: copies) delete copy;
+	for (auto& retired: m_RetiredPaletteMaterials) { for (Material* material: retired) delete material; retired.clear(); }
+	m_RetiredMaterialCopies.clear();
+	m_MaterialCopyIndices.clear();
 
 	delete m_pCurrentScene;
 	delete m_pDebugLayer;
@@ -605,6 +617,13 @@ void SceneMan::HashTerrainBitmap(BITMAP* bitmap) {
 }
 
 namespace {
+	float PenetrationRetardation(float integrity, float squaredImpulse) {
+		// Zero-sharpness particles can meet a zero-strength material, including an
+		// undefined terrain index resolved to Air. That material has no resistance.
+		if (integrity == 0.0F && squaredImpulse == 0.0F) return 0.0F;
+		return -(integrity / std::sqrt(squaredImpulse));
+	}
+
 	// Feeds one penetration decision into the `carve_math` subsystem. kind: 0 = WillPenetrate,
 	// 1 = TryPenetrate, 2 = DislodgePixel. High call volume — determinism-trace only.
 	void FeedCarveMath(int kind, int posX, int posY, const Vector& impulse, const Vector& velocity,
@@ -769,6 +788,13 @@ bool SceneMan::TryPenetrate(int posX,
 
 	float sprayScale = 0.1F;
 	float sqrImpMag = impulse.GetSqrMagnitude();
+	const bool tracePenetration = IsTrackedUID(s_TerrainEventContextUID);
+	if (tracePenetration) {
+		const auto bits = [](float value) { return std::bit_cast<int32_t>(value); };
+		TraceTerrainEvent("pimp", bits(impulse.m_X), bits(impulse.m_Y), bits(velocity.m_X), bits(velocity.m_Y), static_cast<int>(s_TerrainEventContextUID));
+		TraceTerrainEvent("pmat", posX, posY, materialID, sceneMat->GetIndex(), static_cast<int>(s_TerrainEventContextUID));
+		TraceTerrainEvent("pmag", bits(sqrImpMag), bits(sceneMat->GetIntegrity()), bits(sceneMat->GetIntegrity() * sceneMat->GetIntegrity()), 0, static_cast<int>(s_TerrainEventContextUID));
+	}
 
 	// Test if impulse force is enough to penetrate
 	if (sqrImpMag >= (sceneMat->GetIntegrity() * sceneMat->GetIntegrity())) {
@@ -828,7 +854,11 @@ bool SceneMan::TryPenetrate(int posX,
 
 		// Save the impulse force effects of the penetrating particle.
 		//        retardation = -sceneMat.density;
-		retardation = -(sceneMat->GetIntegrity() / std::sqrt(sqrImpMag));
+		retardation = PenetrationRetardation(sceneMat->GetIntegrity(), sqrImpMag);
+		if (tracePenetration) {
+			const auto bits = [](float value) { return std::bit_cast<int32_t>(value); };
+			TraceTerrainEvent("pres", bits(std::sqrt(sqrImpMag)), bits(retardation), bits(sceneMat->GetIntegrity()), bits(sqrImpMag), static_cast<int>(s_TerrainEventContextUID));
+		}
 
 		// If this is a scrap pixel, or there is no background pixel 'supporting' the knocked-loose pixel, make the column above also turn into particles.
 		if (m_ScrapCompactingHeight > 0 && (sceneMat->IsScrap() || _getpixel(m_pCurrentScene->GetTerrain()->GetBGColorBitmap(), posX, posY) == g_MaskColor)) {
@@ -2911,4 +2941,259 @@ BITMAP* SceneMan::GetIntermediateBitmapForSettlingIntoTerrain(int moDiameter) co
 		}
 	}
 	return m_IntermediateSettlingBitmaps.back().second;
+}
+
+std::string SceneMan::SaveCheckpoint() const {
+    CheckpointWriter writer("SceneMan2");
+    VisitCheckpoint(writer, *this);
+    writer(SaveMaterialCatalog());
+    return writer.Text();
+}
+
+bool SceneMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+    try {
+        const bool legacy = text.starts_with("9 SceneMan1 ");
+        CheckpointReader reader(text, legacy ? "SceneMan1" : "SceneMan2", validateOnly);
+        VisitCheckpoint(reader, *this);
+        if (!legacy) {
+            std::string materials; reader.Value(materials);
+            if (!LoadMaterialCatalog(materials, true)) return false;
+            reader.OnCommit([this, materials] { if (!LoadMaterialCatalog(materials)) throw std::runtime_error("could not restore material catalog"); });
+        }
+        reader.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+bool SceneMan::PrepareCheckpointMaterials(std::string_view text, bool validateOnly) {
+    try {
+        const bool legacy = text.starts_with("9 SceneMan1 ");
+        CheckpointReader reader(text, legacy ? "SceneMan1" : "SceneMan2", true);
+        VisitCheckpoint(reader, *this);
+        std::string materials;
+        if (!legacy) reader.Value(materials);
+        reader.Finish();
+        return legacy || LoadMaterialCatalog(materials, validateOnly);
+    } catch (const std::exception&) { return false; }
+}
+
+SceneMan::SceneSetAside::~SceneSetAside() {
+	delete scene; delete color; delete debug; delete revealSound;
+}
+
+void SceneMan::SetAsideScene(SceneSetAside& state) {
+	state.scene = std::exchange(m_pCurrentScene, nullptr);
+	state.color = std::exchange(m_pMOColorLayer, nullptr);
+	state.debug = std::exchange(m_pDebugLayer, nullptr);
+	// The fixed-size orphan search buffer belongs to the manager and is cleared before each search.
+	state.revealSound = std::exchange(m_pUnseenRevealSound, nullptr);
+	state.toLoad = m_pSceneToLoad;
+	state.placeObjects = m_PlaceObjects;
+	state.placeUnits = m_PlaceUnits;
+}
+
+void SceneMan::ReinstateScene(SceneSetAside& state) {
+	std::swap(m_pCurrentScene, state.scene);
+	std::swap(m_pMOColorLayer, state.color);
+	std::swap(m_pDebugLayer, state.debug);
+	std::swap(m_pUnseenRevealSound, state.revealSound);
+	m_pSceneToLoad = state.toLoad;
+	m_PlaceObjects = state.placeObjects;
+	m_PlaceUnits = state.placeUnits;
+}
+
+namespace {
+    struct CheckpointMaterialReference {
+        int kind = 0; // null, palette, copied material, PresetMan material
+        size_t index = 0;
+        bool Load(std::string_view text) {
+            try {
+                CheckpointReader reader(text, "MaterialReference1");
+                reader.Value(kind); reader.Value(index); reader.Finish();
+                return kind >= 0 && kind <= 3 && (kind != 0 || index == 0) && (kind != 1 || index < c_PaletteEntriesNumber);
+            } catch (const std::exception&) { return false; }
+        }
+        std::string Save() const { CheckpointWriter writer("MaterialReference1"); writer(kind, index); return writer.Text(); }
+    };
+
+    std::vector<Material*> CheckpointMaterialPresets() {
+        std::list<Entity*> entities;
+        g_PresetMan.GetAllOfType(entities, "Material");
+        std::vector<Material*> materials;
+        materials.reserve(entities.size());
+        for (Entity* entity: entities) {
+            auto* material = dynamic_cast<Material*>(entity);
+            if (!material) throw std::runtime_error("non-material in Material preset collection");
+            materials.push_back(material);
+        }
+        return materials;
+    }
+
+    struct CheckpointMaterialCatalog {
+        int count = 0;
+        std::map<std::string, unsigned char> names;
+        std::array<std::string, c_PaletteEntriesNumber> palette;
+        std::vector<std::string> copies, presets;
+        template <class Archive> void Fields(Archive& archive) { archive(count, names, palette, copies, presets); }
+        std::string Save() { CheckpointWriter writer("MaterialCatalog1"); Fields(writer); return writer.Text(); }
+        bool Load(std::string_view text) {
+            try {
+                CheckpointReader reader(text, "MaterialCatalog1"); Fields(reader); reader.Finish();
+                if (count < 0 || count > c_PaletteEntriesNumber || std::count_if(palette.begin(), palette.end(), [](const std::string& value) { return !value.empty(); }) != count) return false;
+                Material validator;
+                for (const std::string& value: palette) if (!value.empty() && !validator.LoadCheckpoint(value, true)) return false;
+                for (const auto& values: {&copies, &presets}) for (const std::string& value: *values) if (!validator.LoadCheckpoint(value, true)) return false;
+                for (const auto& [name, index]: names) if (palette[index].empty()) return false;
+                return true;
+            } catch (const std::exception&) { return false; }
+        }
+    };
+}
+
+std::string SceneMan::SaveMaterialReference(const Material* material) const {
+    if (!material) return CheckpointMaterialReference{}.Save();
+    for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index] == material) return CheckpointMaterialReference{1, index}.Save();
+    if (const auto copy = m_MaterialCopyIndices.find(material); copy != m_MaterialCopyIndices.end()) return CheckpointMaterialReference{2, copy->second}.Save();
+    const auto presets = CheckpointMaterialPresets();
+    const auto preset = std::find(presets.begin(), presets.end(), material);
+    if (preset != presets.end()) return CheckpointMaterialReference{3, static_cast<size_t>(preset - presets.begin())}.Save();
+    throw std::runtime_error("material has no checkpoint owner");
+}
+
+bool SceneMan::ValidateMaterialReference(std::string_view text) {
+    CheckpointMaterialReference reference;
+    return reference.Load(text);
+}
+
+const Material* SceneMan::ResolveMaterialReference(std::string_view text, bool allowMissing) const {
+    CheckpointMaterialReference reference;
+    if (!reference.Load(text)) throw std::runtime_error("invalid material checkpoint reference");
+    if (reference.kind == 0) return nullptr;
+    if (reference.kind == 1) {
+        if (!m_apMatPalette[reference.index] && !allowMissing) throw std::runtime_error("material palette checkpoint target is missing");
+        return m_apMatPalette[reference.index];
+    }
+    if (reference.kind == 2) {
+        if (reference.index >= m_MaterialCopiesVector.size()) { if (allowMissing) return nullptr; throw std::runtime_error("copied material checkpoint target is missing"); }
+        return m_MaterialCopiesVector[reference.index];
+    }
+    const auto presets = CheckpointMaterialPresets();
+    if (reference.index >= presets.size()) { if (allowMissing) return nullptr; throw std::runtime_error("material preset checkpoint target is missing"); }
+    return presets[reference.index];
+}
+
+std::string SceneMan::SaveMaterialCatalog() const {
+    CheckpointMaterialCatalog state;
+    state.count = m_MaterialCount;
+    state.names = m_MatNameMap;
+    for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) state.palette[index] = m_apMatPalette[index]->SaveCheckpoint();
+    for (const Material* material: m_MaterialCopiesVector) state.copies.push_back(material->SaveCheckpoint());
+    for (const Material* material: CheckpointMaterialPresets()) state.presets.push_back(material->SaveCheckpoint());
+    return state.Save();
+}
+
+bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
+    CheckpointMaterialCatalog state;
+    if (!state.Load(text)) return false;
+    const auto presets = CheckpointMaterialPresets();
+    if (presets.size() != state.presets.size()) return false;
+    if (validateOnly) return true;
+    try {
+        // Resolve all borrowed assets and allocate all new owners before changing a
+        // live Material. Existing owners are updated in place to retain native aliases.
+        const auto makeValue = [](const std::string& saved) {
+            std::unique_ptr<Material> value;
+            if (!saved.empty()) {
+                value = std::make_unique<Material>();
+                if (!value->LoadCheckpoint(saved)) throw std::runtime_error("could not prepare material checkpoint");
+            }
+            return value;
+        };
+        std::array<std::unique_ptr<Material>, c_PaletteEntriesNumber> paletteValues;
+        std::vector<std::unique_ptr<Material>> copyValues, presetValues;
+        for (size_t index = 0; index < paletteValues.size(); ++index) paletteValues[index] = makeValue(state.palette[index]);
+        for (const auto& saved: state.copies) copyValues.push_back(makeValue(saved));
+        for (const auto& saved: state.presets) presetValues.push_back(makeValue(saved));
+
+        auto retiredCopies = m_RetiredMaterialCopies;
+        auto retiredPalette = m_RetiredPaletteMaterials;
+        auto copyIndices = m_MaterialCopyIndices;
+        std::vector<Material*> copies = m_MaterialCopiesVector;
+        auto palette = m_apMatPalette;
+        for (size_t index = state.copies.size(); index < copies.size(); ++index) retiredCopies[index].push_back(copies[index]);
+        copies.resize(state.copies.size());
+        for (size_t index = 0; index < copies.size(); ++index) {
+            if (!copies[index]) {
+                auto& retired = retiredCopies[index];
+                copies[index] = retired.empty() ? copyValues[index].get() : retired.back();
+                if (!retired.empty()) retired.pop_back();
+                copyIndices[copies[index]] = index;
+            }
+        }
+        for (size_t index = 0; index < palette.size(); ++index) {
+            if (!paletteValues[index] && palette[index]) {
+                retiredPalette[index].push_back(palette[index]); palette[index] = nullptr;
+            } else if (paletteValues[index] && !palette[index]) {
+                palette[index] = retiredPalette[index].empty() ? paletteValues[index].get() : retiredPalette[index].back();
+                if (!retiredPalette[index].empty()) retiredPalette[index].pop_back();
+            }
+        }
+
+        const auto apply = [](Material& destination, Material& value) noexcept {
+            if (&destination != &value) destination.SwapCheckpoint(value);
+        };
+        for (size_t index = 0; index < palette.size(); ++index) if (palette[index]) apply(*palette[index], *paletteValues[index]);
+        for (size_t index = 0; index < copies.size(); ++index) apply(*copies[index], *copyValues[index]);
+        for (size_t index = 0; index < presets.size(); ++index) apply(*presets[index], *presetValues[index]);
+        for (size_t index = 0; index < palette.size(); ++index) if (palette[index] == paletteValues[index].get()) paletteValues[index].release();
+        for (size_t index = 0; index < copies.size(); ++index) if (copies[index] == copyValues[index].get()) copyValues[index].release();
+        m_apMatPalette.swap(palette);
+        m_MaterialCopiesVector.swap(copies);
+        m_MaterialCopyIndices.swap(copyIndices);
+        m_RetiredMaterialCopies.swap(retiredCopies);
+        m_RetiredPaletteMaterials.swap(retiredPalette);
+        m_MatNameMap.swap(state.names);
+        m_MaterialCount = state.count;
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
+bool SceneMan::RunMaterialCheckpointSelfTest() {
+    const std::string original = SaveMaterialCatalog();
+    bool passed = true;
+    struct PenetrationCase { const char* name; float integrity, squaredImpulse, expected; };
+    for (const auto& test: std::array<PenetrationCase, 6>{{
+        {"zero_impulse_zero_strength", 0.0F, 0.0F, 0.0F},
+        {"moving_particle_zero_strength", 0.0F, 16.0F, -0.0F},
+        {"partial_resistance", 2.0F, 16.0F, -0.5F},
+        {"penetration_threshold", 4.0F, 16.0F, -1.0F},
+        {"fractional_resistance", 1.25F, 64.0F, -0.15625F},
+        {"small_impulse", 0.125F, 0.0625F, -0.5F}
+    }}) {
+        const float actual = PenetrationRetardation(test.integrity, test.squaredImpulse);
+        const bool result = std::bit_cast<uint32_t>(actual) == std::bit_cast<uint32_t>(test.expected);
+        passed = result && passed;
+        std::cout << "[penetration-selftest] " << (result ? "PASS " : "FAIL ") << test.name << std::endl;
+    }
+    try {
+        Material* source = const_cast<Material*>(GetMaterialFromID(g_MaterialAir));
+        if (!source) throw std::runtime_error("no source Material");
+        Material* first = AddMaterialCopy(source);
+        Material* second = AddMaterialCopy(source);
+        const std::string firstReference = SaveMaterialReference(first), secondReference = SaveMaterialReference(second);
+        if (firstReference == secondReference || ResolveMaterialReference(firstReference) != first || ResolveMaterialReference(secondReference) != second) throw std::runtime_error("distinct copied Materials lost their identities");
+        const std::string captured = SaveMaterialCatalog();
+        if (LoadMaterialCatalog(captured + "trailing") || SaveMaterialCatalog() != captured) throw std::runtime_error("failed material load changed the catalog");
+        if (!LoadMaterialCatalog(original) || !LoadMaterialCatalog(captured) || SaveMaterialCatalog() != captured || ResolveMaterialReference(firstReference) != first || ResolveMaterialReference(secondReference) != second) throw std::runtime_error("material rollback changed values or aliases");
+        Atom before(Vector(), first, nullptr), after;
+        if (!after.LoadCheckpoint(before.SaveCheckpoint())) throw std::runtime_error("copied material Atom checkpoint was rejected");
+        after.ResolveCheckpointLinks();
+        if (after.GetMaterial() != first) throw std::runtime_error("Atom material resolved to a palette entry");
+    } catch (const std::exception& error) {
+        passed = false;
+        std::cout << "[material-checkpoint] failure: " << error.what() << std::endl;
+    }
+    passed = LoadMaterialCatalog(original) && passed;
+    std::cout << "[material-checkpoint] native values, distinct copies, alias restoration, rejected-load rollback: " << (passed ? "PASS" : "FAIL") << std::endl;
+    return passed;
 }

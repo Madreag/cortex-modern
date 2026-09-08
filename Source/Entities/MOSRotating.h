@@ -153,6 +153,7 @@ namespace RTE {
 		/// Gets direct access to the list of object this is to generate upon gibbing.
 		/// @return A pointer to the list of gibs. Ownership is NOT transferred!
 		std::list<Gib*>* GetGibList() { return &m_Gibs; }
+		const std::list<Gib*>* GetGibList() const { return &m_Gibs; }
 
 		/// Adds graphical recoil offset to this MOSprite according to its angle.
 		void AddRecoil();
@@ -568,6 +569,8 @@ namespace RTE {
 		//    float m_ImpulseTorque; // In kg * r/s.
 		// The group of Atom:s that will be the physical reperesentation of this MOSRotating.
 		AtomGroup* m_pAtomGroup;
+		std::string m_PersistedAtomGroupCheckpoint;
+		std::string m_PersistedDeepGroupCheckpoint;
 		std::vector<long long> m_PersistedAtomGroupResidue; //!< Saved per-atom travel residue, applied on snapshot adopt.
 		std::vector<Vector> m_PersistedAtomGroupOffsets; //!< Saved per-atom offsets, applied on snapshot adopt.
 		std::vector<long long> m_PersistedAtomGroupSubIDs; //!< Saved per-atom subgroup IDs binding the arrays above by identity.
@@ -661,6 +664,10 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		std::string m_PersistedMOSRotatingRuntime;
+		std::string SaveMOSRotatingRuntime() const;
+		bool LoadMOSRotatingRuntime(std::string_view text, bool validateOnly = false);
+
 		/// Clears all the member variables of this MOSRotating, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

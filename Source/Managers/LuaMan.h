@@ -17,6 +17,9 @@ namespace RTE {
 
 	class LuabindObjectWrapper;
 	class MovableObject;
+	class Scene;
+	struct PathRequest;
+	struct LuaPathCallbackContext;
 
 	/// A single lua state. Multiple of these can exist at once for multithreaded scripting.
 	class LuaStateWrapper {
@@ -68,6 +71,12 @@ namespace RTE {
 		/// Serializes this state's RNG into a string for the per-tick lua_state checksum.
 		std::string GetRandomGeneratorStateForHashing() const;
 
+		/// Captures this state's random generator for restoration.
+		std::string GetRandomGeneratorCheckpoint() const { return m_RandomGenerator.SerializeCheckpoint(); }
+
+		/// Restores this state's random generator from a checkpoint.
+		bool RestoreRandomGeneratorCheckpoint(std::string_view text) { return m_RandomGenerator.RestoreCheckpoint(text); }
+
 		/// Gets m_ScriptTimings.
 		/// @return m_ScriptTimings.
 		const std::unordered_map<std::string, PerformanceMan::ScriptTiming>& GetScriptTimings() const;
@@ -92,31 +101,58 @@ namespace RTE {
 		/// Gets a list of the MOs registed as using us.
 		/// @return The MOs registed as using us.
 		const std::unordered_set<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
+		/// Gets the objects waiting to join the script update list.
+		const std::unordered_set<MovableObject*>& GetPendingRegisteredMOs() const { return m_AddedRegisteredMOs; }
+		/// Swaps both script update lists between worlds while the simulation is stopped.
+		void SwapRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			m_RegisteredMOs.swap(registered);
+			m_AddedRegisteredMOs.swap(pending);
+		}
 		/// The address of the object's Lua table (as a hex string), or "-" when it has none; the identity oracles compare it.
 		std::string DescribeScriptObjectIdentity(long uniqueID);
 
-		/// Deep-copies the fields a script keeps on the object's self: values and nested tables by value, entities by unique id, everything else by reference.
-		/// @return A registry reference to the copy, or LUA_NOREF when the object holds no fields.
-		int CaptureScriptObjectFields(long uniqueID);
+		/// Installs the script graph codec into this state once.
+		void LoadScriptGraphHelper();
 
-		/// Installs the capture helper and its class-name hook into this state once.
-		void LoadScriptFieldsHelper();
+		/// Runs the script graph's contract tests in this state and prints their lines; true when all pass.
+		bool RunScriptGraphSelfTest();
 
-		/// Serializes the fields set on the object's script instance as one save line; empty when the object has none.
-		std::string SerializeScriptObjectFields(long uniqueID);
+		/// Records which globals and loaded modules the engine itself installed; the graph carries only what scripts added.
+		void CaptureScriptGraphBaseline();
 
-		/// Restores the fields a SerializeScriptObjectFields line carries onto the object's script instance.
-		void RestoreScriptObjectFieldsFromString(long uniqueID, const std::string& serialized);
+		/// Serializes the state's script graph: every scripted object's fields and every script-made global.
+		/// @param problems Receives what could not be carried; any entry means the capture is not faithful.
+		/// @return Whether the graph carries everything.
+		bool SerializeScriptGraph(std::string& text, std::vector<std::string>& problems);
 
-		/// Gives the object's self the fields of a capture, resolving entity references against the live world.
-		void RestoreScriptObjectFields(long uniqueID, int captureRef);
+		/// The unique ids of the objects a graph text holds fields for.
+		std::vector<long> ListScriptGraphRoots(const std::string& text);
 
-		/// Releases a capture reference.
-		void ReleaseCapture(int captureRef);
+		/// Prepares owned objects, or binds roots when text is null, before any state's graph is restored.
+		bool PrepareScriptGraph(const std::string* text, std::vector<std::string>& problems, bool reuseHeld = false);
+
+		/// Validates graph structure, bytecode and generator state without changing live objects.
+		bool ValidateScriptGraph(const std::string& text, std::vector<std::string>& problems);
+
+		/// Detaches the old VM's Lua-owned native identities before replacement objects adopt them.
+		void ReleaseScriptOwnedObjects();
+
+		/// Restores a graph into this state, laying each root's fields onto its live object; false with the reasons when anything did not restore.
+		bool RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld = false);
+
+		/// Restores the per-object script fields carried by older saves.
+		bool RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text);
+
+		/// Exposes cached functions and object callbacks to the script graph.
+		void CaptureScriptCallbacks();
+
+		/// Rebinds cached functions and object callbacks from the restored graph.
+		void RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync = true);
 
 		/// Moves _ScriptedObjects[uid] into a stash so a stand-in self can take the slot; UnstashScriptObject puts it back.
 		void StashScriptObject(long uniqueID);
 		void UnstashScriptObject(long uniqueID);
+		void DiscardStashedScriptObject(long uniqueID);
 
 		/// Reads a number field off the object's self.
 		/// @return The field, or the fallback when the object or the field is absent.
@@ -287,7 +323,7 @@ namespace RTE {
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
-		bool m_ScriptFieldsHelperLoaded = false; //!< Whether the field capture helper has been defined in this state.
+		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
 		std::string m_LastError; //!< Description of the last error that occurred in the script execution.
@@ -345,6 +381,21 @@ namespace RTE {
 		/// @return A list of threaded script states.
 		LuaStatesArray& GetThreadedScriptStates();
 
+		/// The save index of a state: 0 for the master state, 1 onwards for the threaded ones, -1 for none.
+		int GetStateIndex(const LuaStateWrapper* state) const;
+
+		/// Gets the threaded state cursor used by the next unassigned script.
+		int GetScriptStateCursor() const { return m_LastAssignedLuaState; }
+
+		/// Restores the threaded state cursor after a checkpoint.
+		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = cursor % m_ScriptStates.size(); }
+
+		/// The state a save index names, wrapping when this machine has fewer threaded states.
+		LuaStateWrapper& GetStateByIndex(int index);
+
+		/// Runs the script graph's contract tests in the master state and prints their lines; true when all pass.
+		bool RunScriptGraphSelfTest();
+
 		/// Gets the current thread lua state override that new objects created will be assigned to.
 		/// @return The current lua state to force objects to be assigned to.
 		LuaStateWrapper* GetThreadLuaStateOverride() const;
@@ -366,9 +417,36 @@ namespace RTE {
 		/// Clears internal Lua package tables from all user-defined modules. Those must be reloaded with ReloadAllScripts().
 		void ClearUserModuleCache();
 
-		/// Adds a function to be called prior to executing lua scripts. This is used to callback into lua from other threads safely.
-		/// @param callback The callback function that will be executed.
-		void AddLuaScriptCallback(const std::function<void()>& callback);
+		/// Gets the callback queue for the current world.
+		std::shared_ptr<LuaPathCallbackContext> GetPathCallbackContext() const { return m_PathCallbacks; }
+
+		/// Allocates a callback ID within one Lua state and world.
+		static int AllocatePathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state);
+
+		/// Registers a path request before dispatching its asynchronous work.
+		static void StartPathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int id, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team);
+
+		/// Queues an immutable path result for delivery on the main thread.
+		static void CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int id, const PathRequest& result);
+
+		/// Starts a fresh callback queue, optionally releasing old Lua closures.
+		void ResetPathCallbacks(bool clearLua = false);
+
+		/// Swaps the live world's callback queue with a held world.
+		void SwapPathCallbacks(std::shared_ptr<LuaPathCallbackContext>& context);
+
+		/// Captures one consistent queue view for all Lua states.
+		void BeginPathCallbackCapture();
+		void EndPathCallbackCapture();
+
+		/// Pushes a Lua state's queued callbacks and allocation cursor.
+		void PushPathCallbacks(lua_State* state);
+
+		/// Restores a Lua state's queue from the table at index.
+		bool RestorePathCallbacks(lua_State* state, int index);
+
+		/// Resubmits pending requests after their Lua graphs have been restored.
+		void ResumePathCallbacks();
 
 		/// Executes and clears all pending script callbacks.
 		void ExecuteLuaScriptCallbacks();
@@ -496,8 +574,8 @@ namespace RTE {
 		LuaStateWrapper m_MasterScriptState;
 		LuaStatesArray m_ScriptStates;
 
-		std::vector<std::function<void()>> m_ScriptCallbacks; //!< A list of callback functions we'll trigger before processing lua scripts. This allows other threads (i.e pathing requests) to safely trigger callbacks in lua
-		std::mutex m_ScriptCallbacksMutex; //!< Mutex to ensure multiple threads aren't modifying the script callback vector at the same time.
+		std::shared_ptr<LuaPathCallbackContext> m_PathCallbacks; //!< The current world's asynchronous callbacks.
+		std::shared_ptr<LuaPathCallbackContext> m_PathCallbackCapture; //!< The queue view used during graph capture.
 
 		int m_LastAssignedLuaState = 0;
 

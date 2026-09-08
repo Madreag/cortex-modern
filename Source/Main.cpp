@@ -59,6 +59,8 @@
 #include "ThreadMan.h"
 #include "LuaMan.h"
 #include "MusicMan.h"
+#include "AudioMan.h"
+#include "AudioCheckpoint.h"
 #include "System.h"
 
 #include "ControllerFrame.h"
@@ -134,6 +136,11 @@ static std::string s_saveIoSelfTestName;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
+static std::string s_snapshotRoundtripSelfTestName;
+static bool s_snapshotRoundtripSelfTestPassed = false;
+static bool s_snapshotRoundtripLockAudio = false;
+static bool s_snapshotRoundtripPerturbAudio = false;
+static bool s_snapshotRoundtripCheckPlayback = false;
 static std::string s_contractAuditOperation;
 static long long s_contractAuditTick = 50;
 static bool s_contractAuditFinished = false;
@@ -192,21 +199,16 @@ static bool s_rbProbeRequested = false;
 static int s_rbProbePhase = 0; //!< 0 idle, 1 first pass, 2 restore staged, 3 re-run pass.
 static std::vector<SimChecksum::Result> s_rbProbeFirst;
 static std::vector<SimChecksum::Result> s_rbProbeSecond;
-static std::mt19937 s_rbProbeRngState;
-static bool s_rbProbeCaptureRngNextTick = false;
-static uint64_t s_rbProbeRngDrawsAtCapture = 0;
 static long long s_rbProbeSimCount = 0;
 static long long s_rbProbeSimTimeTicks = 0;
-static long s_rbProbeUidCounter = 0;
 static bool s_rbProbeInMemory = true;
 static bool s_rbProbeUseLoadGame = false;
 static bool s_rbProbeLaunchRestorePending = false;
 static bool s_rbProbeMemoryRestorePending = false;
 static MovableMan::WorldSnapshot s_rbProbeWorld;
 static MovableMan::WorldSetAside s_rbProbeOriginals;
-static Activity::RollbackState s_rbProbeActivity;
-static Activity::RollbackState s_rbProbeActivityAtWindowEnd;
 static std::string s_rbProbeLuaIdentityAtCapture;
+static std::vector<std::string> s_rbProbeLuaGraphsAtCapture;
 static std::deque<long long> s_rbProbeSchedule;
 static int s_rbProbeFuzzCount = 0;
 static uint64_t s_rbProbeFuzzSeed = 1;
@@ -218,7 +220,6 @@ static std::vector<std::string> s_rbProbeFirstDeep;
 static long long s_rbProbeDeepDivergence = -1;
 static bool s_rbProbeRestoreMismatch = false;
 
-static TerrainLayerSnapshot s_rbProbeTerrain;
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static int s_netMatchResyncs = 0;
@@ -370,6 +371,7 @@ int ShutDown(int exitCode) {
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
+	if (!s_snapshotRoundtripSelfTestName.empty() && !s_snapshotRoundtripSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (!s_loadSelfTestName.empty() && !s_loadSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_saveCallbacksSelfTest && !s_saveCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_purgeSelfTest && !s_purgeSelfTestPassed) exitCode = EXIT_FAILURE;
@@ -461,6 +463,18 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-contract-audit-tick" && i + 1 < argCount) {
 			s_contractAuditTick = std::stoll(argValue[i + 1]);
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-snapshot-roundtrip-lock-audio" || currentArg == "-snapshot-roundtrip-perturb-audio" || currentArg == "-snapshot-roundtrip-check-playback") {
+			if (currentArg == "-snapshot-roundtrip-lock-audio") s_snapshotRoundtripLockAudio = true;
+			if (currentArg == "-snapshot-roundtrip-perturb-audio") s_snapshotRoundtripPerturbAudio = true;
+			if (currentArg == "-snapshot-roundtrip-check-playback") s_snapshotRoundtripCheckPlayback = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-snapshot-roundtrip-selftest" && i + 1 < argCount) {
+			s_snapshotRoundtripSelfTestName = argValue[i + 1];
 			i += 2;
 			continue;
 		}
@@ -1294,7 +1308,7 @@ static void TrackUidsIfArmed(uint64_t simTick) {
 // One-shot per-MO state dump for the Desync stop; pacing-neutral, unlike the per-tick CC_SIM_DUMP.
 static void DumpSimStateNow(const std::string& suffix) {
 	const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
-	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::trunc);
+	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::binary | std::ios::trunc);
 	if (out.is_open()) {
 		g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), out);
 		std::cout << "[sim-dump] " << suffix << " saved" << std::endl;
@@ -1325,14 +1339,42 @@ static void CheckRestoredDeepState() {
 	}
 }
 
+// The restored Lua state must serialize exactly as the captured one did: the graph text is canonical.
+static void CheckRestoredScriptGraphs() {
+	std::vector<std::string> restored;
+	std::vector<std::string> problems;
+	if (!g_MovableMan.SerializeScriptGraphs(restored, problems)) {
+		s_rbProbeRestoreMismatch = true;
+		for (const std::string& problem: problems) {
+			std::cout << "[rbprobe] RESTORE MISMATCH: the restored Lua state cannot be carried: " << problem << std::endl;
+		}
+	}
+	if (!g_MovableMan.GetScriptGraphFailure().empty()) {
+		s_rbProbeRestoreMismatch = true;
+		std::cout << "[rbprobe] RESTORE MISMATCH: the set-aside could not carry the Lua state: " << g_MovableMan.GetScriptGraphFailure() << std::endl;
+	}
+	const size_t count = std::max(restored.size(), s_rbProbeLuaGraphsAtCapture.size());
+	for (size_t i = 0; i < count; ++i) {
+		const std::string& before = i < s_rbProbeLuaGraphsAtCapture.size() ? s_rbProbeLuaGraphsAtCapture[i] : std::string();
+		const std::string& after = i < restored.size() ? restored[i] : std::string();
+		if (before != after) {
+			s_rbProbeRestoreMismatch = true;
+			WriteProbeText("rb_luagraph_" + std::to_string(i) + "_capture", before);
+			WriteProbeText("rb_luagraph_" + std::to_string(i) + "_restored", after);
+			std::cout << "[rbprobe] RESTORE MISMATCH: Lua state " << i << " serializes differently after the restore (rb_luagraph_" << i << "_capture vs _restored)" << std::endl;
+		}
+	}
+}
+
 // Everything a preview may touch besides the MO dump: clocks, RNG, identity counter, queues, activity
 // scalars, terrain layers and the Lua bindings. The camera and the previews themselves are the only
 // presentation-side changes a preview is allowed to make.
-static std::string DescribeCanonicalExtras() {
+static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 	std::ostringstream out;
 	out << "sim_count=" << g_TimerMan.GetSimUpdateCount() << " sim_ticks=" << g_TimerMan.GetSimTimeTicks() << " accumulator=" << g_TimerMan.GetSimAccumulator() << "\n";
 	out << "rng_draws=" << g_SimRNG.GetDrawCount() << " rng_state=" << g_SimRNG.GetEngineState() << "\n";
 	out << "uid_counter=" << MovableObject::GetUniqueIDCounter() << "\n";
+	out << "lua_state_cursor=" << g_LuaMan.GetScriptStateCursor() << "\n";
 	const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
 	out << "queues actors=" << mark.actors << " items=" << mark.items << " particles=" << mark.particles << " alarms=" << mark.alarms << "\n";
 	if (const Activity* activity = g_ActivityMan.GetActivity()) {
@@ -1363,6 +1405,22 @@ static std::string DescribeCanonicalExtras() {
 		out << "terrain mat=" << std::hex << fnv(terrain.mat) << " fg=" << fnv(terrain.fg) << " bg=" << fnv(terrain.bg) << std::dec << "\n";
 	}
 	out << "scripts\n" << g_MovableMan.DescribeScriptBindings();
+	if (const Scene* scene = g_SceneMan.GetScene()) {
+		auto stream = std::make_unique<std::stringstream>();
+		std::stringstream* raw = stream.get();
+		Writer writer(std::move(stream));
+		for (const Scene::Area* area: scene->GetAreas()) {
+			writer.NewProperty("Area");
+			area->SaveSnapshot(writer);
+			writer.ObjectEnd();
+		}
+		out << "scene_areas\n" << raw->str();
+	}
+	std::vector<std::string> graphs;
+	g_MovableMan.SerializeScriptGraphs(graphs, problems);
+	for (size_t index = 0; index < graphs.size(); ++index) {
+		out << "lua_graph " << index << " " << graphs[index].size() << "\n" << graphs[index] << "\n";
+	}
 	return out.str();
 }
 
@@ -1435,7 +1493,17 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	const int savedDepth = LocalPrediction::GetDepthOverride();
 	g_MovableMan.WaitForActorsSeeTask();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
-	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras();
+	std::vector<std::string> problems;
+	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+	if (!problems.empty()) {
+		for (const std::string& problem: problems) {
+			std::cout << "[lpinv] FAIL: cannot capture canonical Lua state: " << problem << std::endl;
+		}
+		s_lpInvarianceFailures = 1;
+		s_netReplayExitCode = 5;
+		g_MetricsCollector.RecordString("lpinv_result", "fail");
+		return;
+	}
 	WriteProbeText("lpinv_before", before);
 	int failures = 0;
 	int cases = 0;
@@ -1466,9 +1534,16 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 					victim->SetVel(victim->GetVel() + Vector(0.001F, 0.0F));
 				}
 			}
+			if (FaultInjected("preview_mutate_lua") && depth == s_lpInvarianceDepths.front() && repeats == s_lpInvarianceRepeats.front()) {
+				g_LuaMan.GetMasterScriptState().RunScriptString("_InvarianceFault = { changed = true }");
+			}
 			LocalPrediction::Clear();
-			const std::string after = DumpSimStateToString() + DescribeCanonicalExtras();
+			problems.clear();
+			const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 			++cases;
+			for (const std::string& problem: problems) {
+				fail("cannot capture canonical Lua state: " + problem);
+			}
 			if (previewsRun != static_cast<uint64_t>(repeats)) {
 				fail(std::to_string(previewsRun) + " previews ran, expected " + std::to_string(repeats) + " (no local actor to preview?)");
 			}
@@ -1559,9 +1634,8 @@ static bool LuaIdentityPreserved(const std::string& atCapture, const std::string
 	return true;
 }
 
-// Runs the rollback fidelity probe's phase machine on each hashed tick (needs -tick-hashes so
-// every tick hashes). The restore itself completes in the deferred-restart block, which flips
-// phase 2 to 3 after rewinding the clock, the RNG, and the unique ID counter.
+// Observes completed tick boundaries. All state restoration belongs to the production
+// checkpoint APIs; the probe only rewinds its recorded input stream and compares observations.
 void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tickResult) {
 	if (s_rbProbeFuzzCount > 0 && s_rbProbeSchedule.empty() && s_rbProbeAtTick <= 0 && s_rbProbePhase == 0) {
 		// Lay out the random capture ticks once the run's cap is known; cycles never overlap.
@@ -1595,6 +1669,16 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 	if (s_rbProbePhase == 0 && simTick == static_cast<uint64_t>(s_rbProbeAtTick)) {
 		const auto captureStart = std::chrono::steady_clock::now();
 		double worldCaptureMs = 0.0;
+		{
+			std::vector<std::string> luaProblems;
+			if (!g_MovableMan.SerializeScriptGraphs(s_rbProbeLuaGraphsAtCapture, luaProblems)) {
+				for (const std::string& problem: luaProblems) {
+					std::cout << "[rbprobe] FAIL: script graph capture refused: " << problem << std::endl;
+				}
+				System::SetQuit(true);
+				return;
+			}
+		}
 		if (s_rbProbeInMemory) {
 			const auto worldStart = std::chrono::steady_clock::now();
 			if (!g_MovableMan.CaptureWorld(s_rbProbeWorld)) {
@@ -1602,40 +1686,19 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				System::SetQuit(true);
 				return;
 			}
-			if (Activity* activity = g_ActivityMan.GetActivity()) {
-				activity->CaptureRollbackState(s_rbProbeActivity);
-				if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
-					gameActivity->CaptureDeliveriesForRollback();
-				}
-			}
 			worldCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldStart).count();
 		} else if (!g_ActivityMan.SaveCurrentGame(RollbackProbeSaveName())) {
 			std::cout << "[rbprobe] FAIL: the capture save was refused" << std::endl;
 			System::SetQuit(true);
 			return;
 		}
-		// The GC tail can consume sim RNG after this callback; the true re-run stream starts at
-		// the next tick's entry, so capture the engine there.
-		s_rbProbeCaptureRngNextTick = true;
 		s_rbProbeSimCount = g_TimerMan.GetSimUpdateCount();
 		s_rbProbeSimTimeTicks = g_TimerMan.GetSimTimeTicks();
-		s_rbProbeUidCounter = MovableObject::GetUniqueIDCounter();
-		const auto terrainStart = std::chrono::steady_clock::now();
-		if (!s_rbProbeTerrain.Capture()) {
-			std::cout << "[rbprobe] FAIL: terrain layer capture refused" << std::endl;
-			System::SetQuit(true);
-			return;
-		}
 		if (ScenarioRunner::IsLockstepReplayPlayback()) {
 			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
 		}
-		const double terrainCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - terrainStart).count();
-		// A second, warm copy shows the steady-state cost a per-frame ring would pay.
-		const auto warmStart = std::chrono::steady_clock::now();
-		s_rbProbeTerrain.Capture();
-		const double terrainWarmMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmStart).count();
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
-		std::cout << "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " terrain_ms=" << terrainCaptureMs << " terrain_warm_ms=" << terrainWarmMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size()) << std::endl;
+		std::cout << "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size()) << std::endl;
 		if (FaultInjected("snapshot_skew") && !s_rbProbeWorld.actors.empty()) {
 			// A deliberately wrong captured field: the restore must be caught by the deep compare.
 			Actor* skewed = s_rbProbeWorld.actors.front();
@@ -1662,9 +1725,6 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 				return;
 			}
 			if (s_rbProbeInMemory) {
-				if (Activity* activity = g_ActivityMan.GetActivity()) {
-					activity->CaptureRollbackState(s_rbProbeActivityAtWindowEnd);
-				}
 				s_rbProbeMemoryRestorePending = true;
 			} else if (s_rbProbeUseLoadGame) {
 				s_rbProbeLaunchRestorePending = true;
@@ -1703,11 +1763,10 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			}
 			if (s_rbProbeInMemory) {
 				// The re-run is discarded; the run continues on the originals, whose Lua objects never left.
-				g_MovableMan.ReinstateWorld(s_rbProbeOriginals);
-				if (Activity* activity = g_ActivityMan.GetActivity()) {
-					activity->RestoreRollbackState(s_rbProbeActivityAtWindowEnd);
+				if (!g_MovableMan.ReinstateWorld(s_rbProbeOriginals)) {
+					s_rbProbeRestoreMismatch = true;
+					System::SetQuit(true);
 				}
-				g_MovableMan.UpdateDrawMOIDs();
 				const std::string identityNow = g_MovableMan.DescribeLuaIdentity();
 				if (!LuaIdentityPreserved(s_rbProbeLuaIdentityAtCapture, identityNow)) {
 					s_rbProbeRestoreMismatch = true;
@@ -1979,12 +2038,6 @@ void RunGameLoop() {
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
 
-			if (s_rbProbeCaptureRngNextTick) {
-				s_rbProbeRngState = g_SimRNG.GetEngineState();
-				s_rbProbeRngDrawsAtCapture = g_SimRNG.GetDrawCount();
-				s_rbProbeCaptureRngNextTick = false;
-				std::cout << "[rbprobe] rng captured at tick entry; draws=" << s_rbProbeRngDrawsAtCapture << std::endl;
-			}
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
@@ -2155,15 +2208,6 @@ void RunGameLoop() {
 					g_ActivityMan.EndActivity();
 					g_ActivityMan.SetInActivity(false);
 				}
-				// P5 control: save the full game at tick 300 on BOTH peers (the same synced frame); the
-				// harness byte-compares the sim payloads. Timed here — these numbers size the P7 technique.
-				if (ScenarioRunner::GetArgs().selftestSnapshot && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
-					const auto saveStart = std::chrono::steady_clock::now();
-					const std::string saveName = "p5snap_p" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId());
-					const bool saved = g_ActivityMan.SaveCurrentGame(saveName) && g_ActivityMan.WaitForSaveGameTask();
-					const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
-					std::cout << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick << std::endl;
-				}
 				// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
 				// through the original brain's death because the team still has the spawned one.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainSpawnCommand && simTick == 40) {
@@ -2260,6 +2304,7 @@ void RunGameLoop() {
 
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
+			std::optional<SimChecksum::Result> probeTickResult;
 			if (hashThisTick) {
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
@@ -2270,7 +2315,7 @@ void RunGameLoop() {
 					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
 				}
 				if ((s_rbProbeAtTick > 0 || s_rbProbeFuzzCount > 0) && (ScenarioRunner::IsActive() || ScenarioRunner::IsLockstepReplayPlayback())) {
-					RollbackProbeOnHashedTick(simTick, tickResult);
+					probeTickResult = tickResult;
 				}
 			}
 
@@ -2292,12 +2337,22 @@ void RunGameLoop() {
 
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
+			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
 				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+			}
+
+			// Capture both peers after the complete tick, including global callbacks and worker joins.
+			if (ScenarioRunner::GetArgs().selftestSnapshot && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
+				const auto saveStart = std::chrono::steady_clock::now();
+				const std::string saveName = "p5snap_p" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId());
+				const bool saved = g_ActivityMan.SaveCurrentGame(saveName) && g_ActivityMan.WaitForSaveGameTask();
+				const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
+				std::cout << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick << std::endl;
 			}
 
 			if (ScenarioRunner::FinishLockstepSimulationTick(simTick)) {
@@ -2339,15 +2394,26 @@ void RunGameLoop() {
 				g_ActivityMan.EndActivity();
 				break;
 			}
-			if (!s_contractAuditOperation.empty() && simTick >= s_contractAuditTick) {
+			if (!s_contractAuditOperation.empty() && simTick >= s_contractAuditTick &&
+			    (!s_contractAuditFinished || (ScenarioRunner::GetArgs().contractAuditContinueThrough > 0 &&
+			      static_cast<uint64_t>(simTick) >= ScenarioRunner::GetArgs().contractAuditContinueThrough))) {
 				const std::string base = ScenarioRunner::GetArgs().outPath + ".contract";
+				ContractAudit::State pendingBefore;
+				bool havePendingBefore = false;
 				const auto observe = [&](const std::string& suffix) {
-					for (int index = 0; index <= static_cast<int>(g_LuaMan.GetThreadedScriptStates().size()); ++index) {
-						g_LuaMan.GetStateByIndex(index).RunScriptString("if _ContractAuditCheck then _ContractAuditCheck('" + suffix + "') end");
-					}
 					auto state = ContractAudit::Observe(base + "." + suffix + ".gaps.txt");
 					ContractAudit::Write(ContractAudit::Identity(), base + "." + suffix + ".identity.txt");
 					ContractAudit::Write(state, base + "." + suffix + ".state.txt");
+					if (s_contractAuditOperation.starts_with("stage-")) {
+						const auto pending = ContractAudit::ObservePendingCheckpoint(base + "." + suffix + ".pending.gaps.txt");
+						ContractAudit::Write(pending, base + "." + suffix + ".pending.state.txt");
+						if (suffix == "staged_before") { pendingBefore = pending; havePendingBefore = true; }
+						else if (suffix == "staged_after" && havePendingBefore) {
+							const size_t differences = ContractAudit::Compare(pendingBefore, pending, base + ".pending.diff.txt");
+							std::cout << "[contract-audit-pending] differences=" << differences << " before_fields=" << pendingBefore.size()
+							          << " after_fields=" << pending.size() << std::endl;
+						}
+					}
 					std::vector<std::string> graphs, problems;
 					const bool graph = g_MovableMan.SerializeScriptGraphs(graphs, problems);
 					for (const std::string& problem: problems) std::cout << "[contract-audit] graph-problem=" << suffix << " " << problem << std::endl;
@@ -2357,23 +2423,47 @@ void RunGameLoop() {
 					}
 					std::ofstream deep(base + "." + suffix + ".simstate.txt");
 					g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), deep);
+					for (int index = 0; index <= static_cast<int>(g_LuaMan.GetThreadedScriptStates().size()); ++index) {
+						g_LuaMan.GetStateByIndex(index).RunScriptString("if _ContractAuditCheck then _ContractAuditCheck('" + suffix + "') end; "
+							"ConsoleMan:PrintString('[contract-audit-marker] observation=" + suffix + " vm=" + std::to_string(index) +
+							" value=' .. tostring(_ContractAuditCandidateMarker))");
+					}
 					std::cout << "[contract-audit] observation=" << suffix << " fields=" << state.size() << " graph=" << graph << " problems=" << problems.size() << std::endl;
 					return state;
 				};
-				const auto before = observe("before");
+				if (s_contractAuditFinished) {
+					observe("continued");
+					std::cout << "[contract-audit-continuation] completed_tick=" << g_TimerMan.GetSimUpdateCount()
+					          << " requested_tick=" << ScenarioRunner::GetArgs().contractAuditContinueThrough << std::endl;
+				} else {
+				ScenarioRunner::SetContractAuditSeedMarker();
+                const bool inputFixture = std::getenv("CC_CONTRACT_INPUT_FIXTURE") != nullptr;
+                if (inputFixture) ContractAudit::SetInputFixture(false);
+                const auto before = observe("before");
 				bool prepared = true, applied = false;
 				if (s_contractAuditOperation == "observe") {
 					applied = true;
-				} else if (s_contractAuditOperation == "memory") {
+				} else if (ScenarioRunner::RunContractAuditLoad(s_contractAuditOperation,
+				    [&](const std::string& suffix) { observe(suffix); }, prepared, applied)) {
+				} else if (s_contractAuditOperation == "memory" || s_contractAuditOperation == "memory-perturb") {
 					MovableMan::WorldSnapshot snapshot;
 					prepared = g_MovableMan.CaptureWorld(snapshot);
 					const auto captured = observe("captured");
 					ContractAudit::Compare(before, captured, base + ".capture.diff.txt");
+					if (prepared && s_contractAuditOperation == "memory-perturb") {
+                        for (int index = 0; index <= static_cast<int>(g_LuaMan.GetThreadedScriptStates().size()); ++index) {
+                            g_LuaMan.GetStateByIndex(index).RunScriptString("if _ContractAuditPerturb then _ContractAuditPerturb() end");
+                        }
+                        if (inputFixture) ContractAudit::SetInputFixture(true);
+						const auto perturbed = observe("perturbed");
+						ContractAudit::Compare(before, perturbed, base + ".perturb.diff.txt");
+					}
 					if (prepared) applied = g_MovableMan.RestoreWorld(snapshot);
 				} else if (s_contractAuditOperation == "hold") {
-					MovableMan::WorldSetAside held;
-					prepared = g_MovableMan.SetAsideWorld(held);
-					if (prepared) applied = g_MovableMan.ReinstateWorld(held);
+                    MovableMan::WorldSetAside held;
+                    prepared = g_MovableMan.SetAsideWorld(held);
+                    if (prepared && inputFixture) ContractAudit::SetInputFixture(true);
+                    if (prepared) applied = g_MovableMan.ReinstateWorld(held);
 				} else if (s_contractAuditOperation == "preview") {
 					const auto count = LocalPrediction::GetPreviewCount();
 					LocalPrediction::SetCommandLineOverride(1);
@@ -2391,8 +2481,9 @@ void RunGameLoop() {
 					prepared = g_ActivityMan.SaveCurrentGame("contract_audit") && g_ActivityMan.WaitForSaveGameTask();
 					const auto saved = observe("saved");
 					ContractAudit::Compare(before, saved, base + ".save.diff.txt");
-					if (prepared && s_contractAuditOperation == "file") {
-						for (int draw = 0; draw < 73; ++draw) g_SimRNG.RandomNum<uint32_t>();
+                    if (prepared && s_contractAuditOperation == "file") {
+                        for (int draw = 0; draw < 73; ++draw) g_SimRNG.RandomNum<uint32_t>();
+                        if (inputFixture) ContractAudit::SetInputFixture(true);
 						applied = g_ActivityMan.LoadAndLaunchGame("contract_audit");
 					} else if (prepared && s_contractAuditOperation == "stage") {
 						applied = g_ActivityMan.LoadGameToRestart("contract_audit");
@@ -2404,6 +2495,64 @@ void RunGameLoop() {
 				const size_t differences = ContractAudit::Compare(before, after, base + ".diff.txt");
 				std::cout << "[contract-audit] complete operation=" << s_contractAuditOperation << " prepared=" << prepared << " applied=" << applied << " differences=" << differences << std::endl;
 				s_contractAuditFinished = true;
+				ScenarioRunner::PerturbContractAuditContinuation();
+				if (ScenarioRunner::GetArgs().contractAuditContinueThrough == 0) {
+					System::SetQuit(true);
+					g_ActivityMan.EndActivity();
+					break;
+				}
+				if (g_TimerMan.GetSimUpdateCount() != simTick) {
+					std::cout << "[contract-audit-continuation] invalid_tick_change=1 before=" << simTick
+					          << " after=" << g_TimerMan.GetSimUpdateCount() << std::endl;
+					s_contractAuditFinished = false;
+					System::SetQuit(true);
+					g_ActivityMan.EndActivity();
+					break;
+				}
+				std::cout << "[contract-audit-continuation] started_tick=" << simTick
+				          << " requested_tick=" << ScenarioRunner::GetArgs().contractAuditContinueThrough << std::endl;
+				}
+			}
+			if (!s_snapshotRoundtripSelfTestName.empty() && simTick > 0) {
+				bool readerPassed = true;
+				for (const std::string ending: {"\n", "\r\n", " \t\n", " // empty\n", " /* empty */\n"}) {
+					for (bool useValueReader: {false, true}) {
+						Reader reader(std::make_unique<std::stringstream>("Empty =" + ending + "Next = present\n"), "reader-empty-selftest.ini");
+						const bool first = reader.ReadPropName() == "Empty";
+						std::string value;
+						if (useValueReader) value = reader.ReadPropValue();
+						else reader >> value;
+						const bool empty = value.empty();
+						const bool next = reader.NextProperty() && reader.ReadPropName() == "Next";
+						reader >> value;
+						readerPassed = first && empty && next && value == "present" && readerPassed;
+					}
+				}
+				std::cout << "[reader-empty-selftest] " << (readerPassed ? "PASS" : "FAIL") << " cases=10" << std::endl;
+				const std::string output = s_snapshotRoundtripSelfTestName + "_roundtrip";
+				g_AudioMan.SetCheckpointTraceEnabled(true);
+				bool loaded = false, saved = false, audioUnchanged = true;
+				{
+					// The ordinary load/save path remains intact. This test holds the
+					// independent mixer clock at one observation boundary.
+					std::unique_ptr<AudioCheckpoint::MixerLock> audioBoundary;
+					if (s_snapshotRoundtripLockAudio) audioBoundary = std::make_unique<AudioCheckpoint::MixerLock>(g_AudioMan.IsAudioEnabled() ? g_AudioMan.GetAudioSystem() : nullptr);
+					g_AudioMan.TraceCheckpointBoundary("roundtrip-before-load");
+					loaded = readerPassed && g_ActivityMan.LoadAndLaunchGame(s_snapshotRoundtripSelfTestName);
+					g_AudioMan.TraceCheckpointBoundary("roundtrip-load-returned");
+					const bool perturbed = !s_snapshotRoundtripPerturbAudio || (loaded && g_AudioMan.PerturbCheckpointCursorForSelfTest());
+					const std::string audioBeforeSave = loaded && s_snapshotRoundtripLockAudio ? g_AudioMan.SaveCheckpoint() : "";
+					saved = loaded && perturbed && g_ActivityMan.SaveCurrentGame(output) && g_ActivityMan.WaitForSaveGameTask();
+					if (saved && s_snapshotRoundtripLockAudio) audioUnchanged = g_AudioMan.SaveCheckpoint() == audioBeforeSave;
+					g_AudioMan.TraceCheckpointBoundary("roundtrip-save-returned");
+					const bool audioChecked = s_snapshotRoundtripLockAudio && saved;
+					std::cout << "[snapshot-audio-boundary] locked=" << s_snapshotRoundtripLockAudio << " checked=" << audioChecked << " unchanged=" << (audioChecked ? std::to_string(audioUnchanged) : "unchecked") << " perturbed=" << s_snapshotRoundtripPerturbAudio << std::endl;
+				}
+				g_AudioMan.TraceCheckpointBoundary("roundtrip-mixer-released");
+				const bool playbackContinued = !s_snapshotRoundtripCheckPlayback || (saved && g_AudioMan.RunCheckpointPlaybackContinuationSelfTest());
+				g_AudioMan.SetCheckpointTraceEnabled(false);
+				s_snapshotRoundtripSelfTestPassed = loaded && saved && audioUnchanged && playbackContinued;
+				std::cout << "[snapshot-roundtrip] " << (s_snapshotRoundtripSelfTestPassed ? "PASS" : "FAIL") << " save=" << output << std::endl;
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
 				break;
@@ -2626,31 +2775,18 @@ void RunGameLoop() {
 			if (s_rbProbeMemoryRestorePending) {
 				s_rbProbeMemoryRestorePending = false;
 				const auto restoreStart = std::chrono::steady_clock::now();
-				// The world swaps between ticks: clock, RNG, identity counter, terrain, activity, then the residents.
-				g_SimRNG.SetEngineState(s_rbProbeRngState);
-				std::cout << "[rbprobe] rng rewound; draws=" << g_SimRNG.GetDrawCount()
-				          << " (capture baseline " << s_rbProbeRngDrawsAtCapture << ")" << std::endl;
-				g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
-				const auto terrainRestoreStart = std::chrono::steady_clock::now();
-				if (!s_rbProbeTerrain.Restore()) {
-					std::cout << "[rbprobe] FAIL: terrain layer restore refused" << std::endl;
+				if (!g_MovableMan.SetAsideWorld(s_rbProbeOriginals)) {
+					std::cout << "[rbprobe] FAIL: world set-aside refused" << std::endl;
 					System::SetQuit(true);
+					break;
 				}
-				const double terrainRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - terrainRestoreStart).count();
 				const auto worldRestoreStart = std::chrono::steady_clock::now();
-				// The originals step aside untouched; the re-run happens on the snapshot's clones.
-				g_MovableMan.SetAsideWorld(s_rbProbeOriginals);
 				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
 					std::cout << "[rbprobe] FAIL: world restore refused" << std::endl;
+					g_MovableMan.ReinstateWorld(s_rbProbeOriginals);
 					System::SetQuit(true);
+					break;
 				}
-				if (Activity* activity = g_ActivityMan.GetActivity()) {
-					activity->RestoreRollbackState(s_rbProbeActivity);
-					if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
-						gameActivity->RestoreDeliveriesFromRollback();
-					}
-				}
-				MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
 				const double worldRestoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldRestoreStart).count();
 				std::string rewindError;
 				if (ScenarioRunner::IsLockstepReplayPlayback() &&
@@ -2659,13 +2795,10 @@ void RunGameLoop() {
 					System::SetQuit(true);
 					break;
 				}
-				// The re-run's first travel tests the MO-hit layer; rebuild it over the restored world.
-				const auto moidStart = std::chrono::steady_clock::now();
-				g_MovableMan.UpdateDrawMOIDs();
-				const double moidMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - moidStart).count();
 				const double restoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count();
-				std::cout << "[rbprobe] restore_ms=" << restoreMs << " terrain_ms=" << terrainRestoreMs << " world_ms=" << worldRestoreMs << " moid_ms=" << moidMs << std::endl;
+				std::cout << "[rbprobe] restore_ms=" << restoreMs << " world_ms=" << worldRestoreMs << std::endl;
 				CheckRestoredDeepState();
+				CheckRestoredScriptGraphs();
 				DumpTerrainNow("rb_res");
 				s_rbProbePhase = 3;
 				std::cout << "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount << std::endl;
@@ -2679,20 +2812,15 @@ void RunGameLoop() {
 					g_ActivityMan.RemoveSavedGame(RollbackProbeSaveName());
 				}
 				if (!restarted) {
+					if (s_rbProbePhase == 2) {
+						++s_rbProbeFailCount;
+						s_rbProbeFirstFailure = "the saved activity could not restart";
+						std::cout << "[rbprobe] FAIL: " << s_rbProbeFirstFailure << std::endl;
+						System::SetQuit(true);
+					}
 					break;
 				}
 				if (s_rbProbePhase == 2) {
-					// The world is reloaded; rewind the clock, the RNG stream, and the identity
-					// counter so the re-run replays the exact ticks the first pass saw.
-					g_SimRNG.SetEngineState(s_rbProbeRngState);
-					std::cout << "[rbprobe] rng rewound; draws=" << g_SimRNG.GetDrawCount()
-					          << " (capture baseline " << s_rbProbeRngDrawsAtCapture << ")" << std::endl;
-					g_TimerMan.RewindSimTo(s_rbProbeSimCount, s_rbProbeSimTimeTicks);
-					MovableObject::PinUniqueIDCounter(s_rbProbeUidCounter);
-					if (!s_rbProbeTerrain.Restore()) {
-						std::cout << "[rbprobe] FAIL: terrain layer restore refused" << std::endl;
-						System::SetQuit(true);
-					}
 					std::string rewindError;
 					if (ScenarioRunner::IsLockstepReplayPlayback() &&
 					    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
@@ -2700,15 +2828,8 @@ void RunGameLoop() {
 						System::SetQuit(true);
 						break;
 					}
-					// The reloaded world sits in the add queues; the first pass's residents were in
-					// the live lists, so absorb now and drop the joiner quarantine.
-					g_MovableMan.AbsorbAddedMOs();
-					g_MovableMan.ClearLockstepJoinQuarantine();
-					g_MovableMan.ReapplyPersistedControllerModes();
-					// The re-run's first travel tests the MO-hit layer; rebuild it over the restored world.
-					g_MovableMan.CompleteQueuedMOIDDrawings();
-					g_MovableMan.UpdateDrawMOIDs();
 					CheckRestoredDeepState();
+					CheckRestoredScriptGraphs();
 					DumpTerrainNow("rb_res");
 					s_rbProbePhase = 3;
 					std::cout << "[rbprobe] restored and rewound to tick " << s_rbProbeSimCount << std::endl;

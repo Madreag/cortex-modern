@@ -1,3 +1,4 @@
+#include "CheckpointArchive.h"
 #include "CameraMan.h"
 
 #include "Activity.h"
@@ -268,4 +269,36 @@ void CameraMan::Update(int screenId) {
 
 	screen.DeltaOffset = screen.Offset - oldOffset;
 	screen.ScrollTimer.Reset();
+}
+
+std::string CameraMan::SaveCheckpoint() const {
+	CheckpointWriter writer("CameraMan1");
+	VisitCheckpoint(writer, *this);
+	return writer.Text();
+}
+
+bool CameraMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "CameraMan1", validateOnly);
+		VisitCheckpoint(reader, *this);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) {
+		return false;
+	}
+}
+
+std::string CameraMan::Screen::SaveCheckpoint() const {
+	CheckpointWriter writer("Screen1");
+	writer(ScreenTeam, Offset, PrevOffset, DeltaOffset, ScrollTarget, ScrollTimer, ScrollSpeed, TargetXWrapped, TargetYWrapped, SeamCrossCount, ScreenOcclusion, ScreenShakeMagnitude);
+	return writer.Text();
+}
+
+bool CameraMan::Screen::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "Screen1", validateOnly);
+		reader(ScreenTeam, Offset, PrevOffset, DeltaOffset, ScrollTarget, ScrollTimer, ScrollSpeed, TargetXWrapped, TargetYWrapped, SeamCrossCount, ScreenOcclusion, ScreenShakeMagnitude);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }

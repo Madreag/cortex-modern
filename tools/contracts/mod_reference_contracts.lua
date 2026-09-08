@@ -35,6 +35,15 @@ function Update(self)
     assert(value ~= nil, "reference contract source unavailable " .. key)
     if key == "owned_game_activity" then value.Difficulty = 77 end
     if key == "owned_sound_set" then value.SoundSelectionCycleMode = SoundSet.FORWARDS end
+    if key == "owned_controller" then
+        value.AnalogMove = Vector(0.375, -0.625)
+        value.AnalogAim = Vector(-0.75, 0.125)
+        value.ControlledActor = self
+        value:SetState(Controller.WEAPON_FIRE, true)
+    end
+    if key == "cursor_timer" or key == "game_timer" or key == "game_over_timer" then
+        value.SimTimeLimitMS = 12345.75
+    end
     self.referenceContracts = {value=value, alias=value, key=key}
     local root = self
     _G._ContractAuditCheck = function(stage)
@@ -48,6 +57,19 @@ function Update(self)
             end
         end
         check("alias", rawequal(saved.value, saved.alias))
+        if string.sub(saved.key, 1, 6) ~= "owned_" and saved.key ~= "background_iterator" then
+            local actual = factories[saved.key](ToGameActivity(ActivityMan:GetActivity()))
+            check("native-owner", _ScriptGraphNativeAddress(saved.value) == _ScriptGraphNativeAddress(actual))
+        end
+        if saved.key == "owned_controller" then
+            check("AnalogMove", saved.value.AnalogMove.X == 0.375 and saved.value.AnalogMove.Y == -0.625)
+            check("AnalogAim", saved.value.AnalogAim.X == -0.75 and saved.value.AnalogAim.Y == 0.125)
+            check("WEAPON_FIRE", saved.value:IsState(Controller.WEAPON_FIRE))
+            check("actor-cycle", _ScriptGraphNativeAddress(saved.value.ControlledActor) == _ScriptGraphNativeAddress(root))
+        end
+        if saved.key == "cursor_timer" or saved.key == "game_timer" or saved.key == "game_over_timer" then
+            check("SimTimeLimitMS", saved.value.SimTimeLimitMS == 12345.75)
+        end
         if saved.key == "owned_game_activity" then check("Difficulty", saved.value.Difficulty == 77) end
         if saved.key == "owned_sound_set" then check("SoundSelectionCycleMode", saved.value.SoundSelectionCycleMode == SoundSet.FORWARDS) end
         if saved.key == "material" then check("material", saved.value.PresetName ~= "") end
