@@ -117,6 +117,7 @@ namespace RTE {
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
 		void SetLiveMatch(bool live) { m_LiveMatch = live; }
+		bool IsLiveMatch() const { return m_LiveMatch; }
 		void SetHostAddress(std::string address) { m_HostAddress = std::move(address); }
 		void SetMatchConfigHash(const NetHash32& hash) { m_MatchConfigHash = hash; }
 		/// The actors the ledger records when a seat drops. Supplied by the match runner at the drop

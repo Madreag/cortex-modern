@@ -57,6 +57,7 @@ namespace RTE {
 		uint32_t admissionMessages = 0; //!< H4 admission messages handed to the reconnect plane.
 		uint32_t oldWireRejectionsSent = 0; //!< Host: explicit rejections stamped at the peer's own header version (§10).
 		uint32_t oldWireDisconnects = 0; //!< Host: old-wire peers whose version we cannot answer in, disconnected with the reason text.
+		uint32_t pendingAdmissionJoins = 0; //!< Host: mid-match joiners admitted on a provisional id to prove a ticket on (§6).
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -72,6 +73,9 @@ namespace RTE {
 		// Twice the peer cap, so a full lobby plus a reconnect attempt per seat all fit while an
 		// unauthenticated connection still cannot make the host track an unbounded number of them.
 		static constexpr uint32_t c_MaxUnauthenticatedPeers = 8;
+		// §6: a ticket holder can arrive while the incarnation it supersedes still holds the seat's peer
+		// id, so a live match keeps this many ids past the peer cap for joiners that have yet to prove.
+		static constexpr uint8_t c_MaxPendingAdmissions = 4;
 
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
@@ -168,6 +172,9 @@ namespace RTE {
 		const PeerState* FindPeer(NetPeerId peerId) const;
 		uint32_t ActivePeerCount() const;
 		uint8_t AllocatePeerId() const;
+		/// An id past the peer cap for a mid-match joiner to run its admission transaction on; a commit
+		/// replaces it with the seat's own id. Zero outside a live match, or when the range is full.
+		uint8_t AllocatePendingAdmissionPeerId() const;
 		void RefreshHostState();
 
 		NetClientHello BuildClientHello() const;

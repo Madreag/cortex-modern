@@ -2674,6 +2674,134 @@ namespace RTE {
 			return 0;
 		}
 
+		// §6 over two real sessions, on a peer-id space the first incarnation has saturated: the seat's
+		// own id is taken, so the returner proves on a provisional one and the commit hands it the
+		// seat's. Without this the host answers SessionFull and 1v1 fencing cannot happen at all.
+		int TestReturningHolderOnAFullSession() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42134;
+			LoopbackTransport hostTransport;
+			LoopbackTransport firstTransport;
+			NetSession host;
+			NetSession first;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("fence-live"));
+			NetReconnectClient firstClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			firstClient.Configure(&store, MakeIdentity(), "Player");
+			firstClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			firstClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			first.SetReconnectClient(&firstClient);
+			// The 1v1 shape: exactly one remote peer id exists, and the first holder is on it.
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 1;
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !first.StartClient(firstTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the first holder: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+			}
+			if (firstClient.GetState() != NetH4ClientState::Joined || !store.HasRecord() || host.GetReadyPeerCount() != 1) {
+				return Fail("the first holder never committed the only seat");
+			}
+
+			// The negative control first: outside a live match a full session is simply full.
+			{
+				LoopbackTransport lobbyTransport;
+				NetSession lobbyJoiner;
+				NetReconnectTicketStore lobbyStore;
+				lobbyStore.SetPath(StorePath("fence-live-lobby"));
+				NetReconnectClient lobbyClient;
+				lobbyClient.Configure(&lobbyStore, MakeIdentity(), "Player");
+				lobbyClient.SetUnixClock(&FixedUnixClock, &unixNow);
+				lobbyClient.SetHostContext("loopback", MakeHash(5));
+				lobbyJoiner.SetReconnectClient(&lobbyClient);
+				if (!lobbyJoiner.StartClient(lobbyTransport, "loopback", MakeSessionConfig(port, 404, "Player"), &error)) {
+					return Fail("the lobby control could not connect: " + error);
+				}
+				for (const uint64_t until = nowMs + 600; nowMs <= until; nowMs += 10) {
+					host.Tick(nowMs);
+					first.Tick(nowMs);
+					lobbyJoiner.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					firstTransport.AdvanceTimeMs(10);
+					lobbyTransport.AdvanceTimeMs(10);
+				}
+				if (lobbyJoiner.GetRejectReason() != NetRejectReason::SessionFull) {
+					return Fail(std::string("a full lobby admitted a third connection: ") + lobbyJoiner.BuildRejectText());
+				}
+				if (host.GetStats().pendingAdmissionJoins != 0) {
+					return Fail("a lobby joiner was given a provisional admission id");
+				}
+			}
+
+			// Live match, and the second incarnation arrives while the first is STILL connected.
+			admission.SetLiveMatch(true);
+			LoopbackTransport secondTransport;
+			NetSession second;
+			NetReconnectClient secondClient;
+			secondClient.Configure(&store, MakeIdentity(), "Player");
+			secondClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			secondClient.SetHostContext("loopback", MakeHash(5));
+			second.SetReconnectClient(&secondClient);
+			if (!second.StartClient(secondTransport, "loopback", MakeSessionConfig(port, 303, "Player"), &error)) {
+				return Fail("the second incarnation could not connect: " + error);
+			}
+			for (const uint64_t until = nowMs + 4000; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				second.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+				secondTransport.AdvanceTimeMs(10);
+			}
+			if (secondClient.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the second incarnation did not commit: ") + NetReconnectClientStateName(secondClient.GetState()) +
+				            " session=" + NetSession::StateName(second.GetState()) + " reject=" + second.BuildRejectText());
+			}
+			if (!secondClient.UsedStoredTicket() || secondClient.GetIncarnation() != 2) {
+				return Fail("the second incarnation did not supersede the first");
+			}
+			if (host.GetStats().pendingAdmissionJoins != 1) {
+				return Fail("the returner was not admitted on a provisional id");
+			}
+			if (admission.GetStats().incarnationsBound != 2 || admission.GetStats().reclaimsAccepted != 1) {
+				return Fail("the host did not bind a second incarnation of the seat");
+			}
+			if (!second.IsReady() || second.GetLocalPeerId() != MakeSeatTable()[0].peerId) {
+				return Fail("the returner did not end up Ready on the seat's own peer id");
+			}
+			if (host.GetStats().fencedDisconnects + host.GetStats().fencedPackets == 0) {
+				return Fail("the superseded transport was never counted as fenced");
+			}
+			NetPeerId holder = c_InvalidNetPeerId;
+			uint32_t generation = 0;
+			uint32_t incarnation = 0;
+			if (!admission.GetSeatHolder(0, holder, generation, incarnation) || incarnation != 2) {
+				return Fail("the seat did not move to the newer incarnation");
+			}
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("the host ended up with something other than one live holder");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2741,6 +2869,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReturningHolderOnAFullSession(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
