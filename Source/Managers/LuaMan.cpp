@@ -4813,6 +4813,37 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (settleRunsFirst ? "PASS" : "FAIL") << " set_aside_settles_before_the_graph_capture" << std::endl;
 	checkpointValues = settleRunsFirst && checkpointValues;
+	// A reinstate that can see it will fail has to say so before it moves anything, so the world it was
+	// asked to put back is still held and can be put back afterwards.
+	bool refusesBeforeMoving = false;
+	{
+		MovableMan::WorldSetAside aside;
+		if (g_MovableMan.SetAsideWorld(aside, false)) {
+			const std::string globals = aside.runtimeGlobals;
+			aside.runtimeGlobals = "not a runtime globals archive";
+			refusesBeforeMoving = !g_MovableMan.ReinstateWorld(aside) && aside.held && g_MovableMan.HasWorldSetAside();
+			aside.runtimeGlobals = globals;
+			refusesBeforeMoving = g_MovableMan.ReinstateWorld(aside) && refusesBeforeMoving;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (refusesBeforeMoving ? "PASS" : "FAIL") << " reinstate_refuses_before_it_moves_the_world" << std::endl;
+	checkpointValues = refusesBeforeMoving && checkpointValues;
+	// A refusal it cannot see coming still has to finish the restore: the counter and the cursor are the
+	// originals' state, not the candidate's, whatever the graph did.
+	bool refusalFinishesRestore = false;
+	{
+		MovableMan::WorldSetAside aside;
+		if (g_MovableMan.SetAsideWorld(aside, false) && !aside.luaGraphs.empty()) {
+			const long counter = aside.uniqueIDCounter;
+			const int cursor = aside.luaStateCursor;
+			MovableObject::PinUniqueIDCounter(counter + 64);
+			g_LuaMan.SetScriptStateCursor(cursor + 1);
+			aside.luaGraphs.front().insert(0, "X");
+			refusalFinishesRestore = !g_MovableMan.ReinstateWorld(aside) && MovableObject::GetUniqueIDCounter() == counter && g_LuaMan.GetScriptStateCursor() == cursor;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (refusalFinishesRestore ? "PASS" : "FAIL") << " refused_reinstate_finishes_the_restore" << std::endl;
+	checkpointValues = refusalFinishesRestore && checkpointValues;
 	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
 	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
 	bool soundRegistryForgetsDestroyed = false;
