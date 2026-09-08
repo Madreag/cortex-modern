@@ -4684,6 +4684,68 @@ _PrimitiveQueueCapture = nil
 		scopeForgetsDestroyed = identity > 0 && g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
 	}
 	std::cout << "[script-graph-selftest] " << (scopeForgetsDestroyed ? "PASS" : "FAIL") << " construction_scope_forgets_destroyed_owner" << std::endl;
+	// A world held aside keeps the same copies for the whole hold, and the collector can sweep an object
+	// that stayed live in that window: reinstating them would put the freed pointer back in the registry
+	// and in the script update list, and retiring the world calls DiscardScriptState on every recorded
+	// object the live registry no longer names.
+	bool setAsideForgetsDestroyed = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		object->MoveScriptsToState(g_LuaMan.GetMasterScriptState());
+		g_LuaMan.GetMasterScriptState().RegisterMO(object);
+		MovableObject* const address = object;
+		const long identity = object->GetUniqueID();
+		MovableMan::WorldSetAside aside;
+		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+			auto& lists = aside.scriptRegistrations.front();
+			const bool recorded = aside.knownObjects.contains(identity) && lists.second.contains(object);
+			delete object;
+			setAsideForgetsDestroyed = recorded && !aside.knownObjects.contains(identity) && !lists.second.contains(address);
+			// Anything the record still names would be walked by the reinstate, so drop it rather than leave the world held.
+			aside.knownObjects.erase(identity);
+			for (auto& held: aside.scriptRegistrations) { held.first.erase(address); held.second.erase(address); }
+			setAsideForgetsDestroyed = g_MovableMan.ReinstateWorld(aside) && setAsideForgetsDestroyed;
+			setAsideForgetsDestroyed = g_MovableMan.FindObjectByUniqueID(identity) == nullptr && setAsideForgetsDestroyed;
+			setAsideForgetsDestroyed = !g_LuaMan.GetMasterScriptState().GetPendingRegisteredMOs().contains(address) && setAsideForgetsDestroyed;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (setAsideForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_forgets_destroyed_owner" << std::endl;
+	checkpointValues = setAsideForgetsDestroyed && checkpointValues;
+	// Retiring a held world reads the same record, so the object the sweep destroyed must be gone from it there too.
+	bool discardForgetsDestroyed = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		const long identity = object->GetUniqueID();
+		MovableMan::WorldSetAside aside;
+		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+			delete object;
+			discardForgetsDestroyed = !aside.knownObjects.contains(identity);
+			aside.knownObjects.erase(identity);
+			g_MovableMan.DiscardWorld(aside);
+			discardForgetsDestroyed = !aside.held && !g_MovableMan.HasWorldSetAside() && g_MovableMan.FindObjectByUniqueID(identity) == nullptr && discardForgetsDestroyed;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (discardForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_discard_forgets_destroyed_owner" << std::endl;
+	checkpointValues = discardForgetsDestroyed && checkpointValues;
+	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
+	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
+	bool soundRegistryForgetsDestroyed = false;
+	{
+		auto* container = new SoundContainer;
+		const uint64_t identity = container->GetCheckpointIdentity();
+		const bool registered = identity != 0 && g_AudioMan.FindSimulationSoundContainer(identity) == container;
+		bool goneWhileHeld = false;
+		{
+			AudioMan::CheckpointRegistryScope soundScope;
+			delete container;
+			goneWhileHeld = g_AudioMan.FindSimulationSoundContainer(identity) == nullptr;
+		}
+		soundRegistryForgetsDestroyed = registered && goneWhileHeld && g_AudioMan.FindSimulationSoundContainer(identity) == nullptr;
+	}
+	std::cout << "[script-graph-selftest] " << (soundRegistryForgetsDestroyed ? "PASS" : "FAIL") << " sound_registry_copy_forgets_destroyed_owner" << std::endl;
+	checkpointValues = soundRegistryForgetsDestroyed && checkpointValues;
 	// A world set aside for an in-memory restore leaves its script-owned trees in the heap while the
 	// restored copies hold their identities. Only the live registration reaches the reference map,
 	// so the shadowed original is not an owner any restore can fail to find.

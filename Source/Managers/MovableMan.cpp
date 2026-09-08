@@ -1438,6 +1438,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		}
 		auto& lists = out.scriptRegistrations.emplace_back();
 		state.SwapRegisteredMOs(lists.first, lists.second);
+		state.HoldRegisteredMOs(lists.first, lists.second);
 	};
 	stashState(g_LuaMan.GetMasterScriptState());
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
@@ -1474,6 +1475,8 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		CollectOwnedMovableObjects(g_ActivityMan.GetCheckpointStartActivity(), visited, heldObjects);
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		out.knownObjects = m_KnownObjects;
+		// The copy waits for the whole hold, so a destruction in that window has to reach it too.
+		m_HeldRegistries.push_back(&out.knownObjects);
 		for (auto entry = m_KnownObjects.begin(); entry != m_KnownObjects.end();) {
 			if (heldObjects.contains(entry->second)) entry = m_KnownObjects.erase(entry);
 			else ++entry;
@@ -1499,12 +1502,24 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	return true;
 }
 
+void MovableMan::ForgetHeldWorld(WorldSetAside& in) {
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		std::erase(m_HeldRegistries, &in.knownObjects);
+	}
+	for (size_t index = 0; index < in.scriptRegistrations.size(); ++index) {
+		auto& lists = in.scriptRegistrations[index];
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).ForgetHeldRegisteredMOs(lists.first, lists.second);
+	}
+}
+
 bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	if (!in.held) {
 		return false;
 	}
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
+	ForgetHeldWorld(in);
 	// The re-run never happened: every scripted object of its world (nested ones included) drops its script object without Destroy, and the originals' slots come back.
 	const auto isOriginal = [&in](const MovableObject* mo) {
 		const auto known = in.knownObjects.find(mo->GetUniqueID());
@@ -4662,6 +4677,7 @@ void MovableMan::DiscardWorld(WorldSetAside& in) {
 	if (!in.held) return;
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
+	ForgetHeldWorld(in);
 	for (const auto& [uid, object]: in.knownObjects) {
 		// Preset-owned trees remain registered while the runtime is held aside.
 		// Their script objects and cached callbacks belong to both worlds.

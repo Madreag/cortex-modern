@@ -96,6 +96,10 @@ namespace RTE {
 		void UnregisterMO(MovableObject* moToUnregister) {
 			m_RegisteredMOs.erase(moToUnregister);
 			m_AddedRegisteredMOs.erase(moToUnregister);
+			// A list waiting to be swapped back must forget it too, or the world that returns names a freed object.
+			for (auto* held: m_HeldRegisteredMOs) {
+				held->erase(moToUnregister);
+			}
 		}
 
 		/// Gets a list of the MOs registed as using us.
@@ -107,6 +111,15 @@ namespace RTE {
 		void SwapRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
+		}
+		/// Marks lists a set-aside world will swap back, so a destroyed object leaves them as well.
+		void HoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			m_HeldRegisteredMOs.push_back(&registered);
+			m_HeldRegisteredMOs.push_back(&pending);
+		}
+		void ForgetHeldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			std::erase(m_HeldRegisteredMOs, &registered);
+			std::erase(m_HeldRegisteredMOs, &pending);
 		}
 		/// The address of the object's Lua table (as a hex string), or "-" when it has none; the identity oracles compare it.
 		std::string DescribeScriptObjectIdentity(long uniqueID);
@@ -320,6 +333,7 @@ namespace RTE {
 		void Clear();
 
 		std::unordered_set<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
+		std::vector<std::unordered_set<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
@@ -388,7 +402,7 @@ namespace RTE {
 		int GetScriptStateCursor() const { return m_LastAssignedLuaState; }
 
 		/// Restores the threaded state cursor after a checkpoint.
-		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = cursor % m_ScriptStates.size(); }
+		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : cursor % m_ScriptStates.size(); }
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);

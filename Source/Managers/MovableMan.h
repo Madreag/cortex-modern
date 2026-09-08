@@ -219,7 +219,8 @@ namespace RTE {
 			std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 			SpatialPartitionGrid moidGrid;
 			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph as the originals left it.
-			std::vector<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
+			//!< A deque so the lists stay put: each state is handed its own the moment it hands them over.
+			std::deque<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
 			std::vector<std::pair<LuaStateWrapper*, long>> scriptObjects;
 			long uniqueIDCounter = 0;
 			int luaStateCursor = 0;
@@ -830,6 +831,8 @@ namespace RTE {
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
 		bool m_HasWorldSetAside = false;
+		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
+		void ForgetHeldWorld(WorldSetAside& in);
 		bool RestoreWorldCandidate(const WorldSnapshot& in);
 		struct Speculation {
 			struct Shadow {
