@@ -57,6 +57,9 @@ namespace RTE {
 		MalformedMessage = 13,
 		Timeout = 14,
 		InternalError = 15,
+		// The one signal that lets a client delete its recovery record: the host sends it from the
+		// same place it clears the seat registry, so no credential can verify afterwards.
+		SessionEnded = 16,
 	};
 
 	enum class NetProtocolErrorCode {

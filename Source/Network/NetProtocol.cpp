@@ -822,6 +822,7 @@ namespace RTE {
 			case NetRejectReason::MalformedMessage: return "MalformedMessage";
 			case NetRejectReason::Timeout: return "Timeout";
 			case NetRejectReason::InternalError: return "InternalError";
+			case NetRejectReason::SessionEnded: return "SessionEnded";
 		}
 		return "Unknown";
 	}
