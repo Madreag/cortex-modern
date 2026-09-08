@@ -1134,6 +1134,13 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	if (entry != m_KnownObjects.end() && entry->second == mo) {
 		m_KnownObjects.erase(entry);
 	}
+	// A copy waiting to be put back must forget this object too, or reinstating it resurrects the freed pointer.
+	for (auto* held: m_HeldRegistries) {
+		auto entry = held->find(mo->GetUniqueID());
+		if (entry != held->end() && entry->second == mo) {
+			held->erase(entry);
+		}
+	}
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int ignoreTeam, bool getsHitByMOsOnly) const {
@@ -4547,6 +4554,7 @@ MovableMan::ConstructionRegistryScope::ConstructionRegistryScope() :
 	{
 		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
 		m_Original = g_MovableMan.m_KnownObjects;
+		g_MovableMan.m_HeldRegistries.push_back(&m_Original);
 	}
 	const auto mark = g_MovableMan.MarkAddQueues();
 	m_QueueSizes = {mark.actors, mark.items, mark.particles, mark.alarms};
@@ -4557,6 +4565,7 @@ MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
 	g_MovableMan.DiscardAddedSince({m_QueueSizes[0], m_QueueSizes[1], m_QueueSizes[2], m_QueueSizes[3]});
 	{
 		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
+		std::erase(g_MovableMan.m_HeldRegistries, &m_Original);
 		g_MovableMan.m_KnownObjects.swap(m_Original);
 	}
 	g_MovableMan.LoadWorldStructure(m_Structure);

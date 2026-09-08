@@ -927,6 +927,7 @@ namespace RTE {
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;
+		std::vector<std::map<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
 		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
 
 		/// Private member variable and method declarations
