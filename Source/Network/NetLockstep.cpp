@@ -414,6 +414,20 @@ namespace RTE {
 						}
 						break;
 					}
+					case NetGameCommandType::Reseat: {
+						const NetGameReseat& reseat = std::get<NetGameReseat>(command.payload);
+						if (reseat.actorUIDs.size() > NetLockstepCodec::c_MaxReseatActors) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "reseat names too many actors");
+							return false;
+						}
+						AppendU32LE(out, static_cast<uint32_t>(reseat.team));
+						AppendU8(out, reseat.newOwnerPeerId);
+						AppendU16LE(out, static_cast<uint16_t>(reseat.actorUIDs.size()));
+						for (const int64_t actorUID : reseat.actorUIDs) {
+							AppendU64LE(out, static_cast<uint64_t>(actorUID));
+						}
+						break;
+					}
 					case NetGameCommandType::AIOrder: {
 						const NetGameAIOrder& order = std::get<NetGameAIOrder>(command.payload);
 						AppendU64LE(out, static_cast<uint64_t>(order.actorUID));
@@ -794,6 +808,31 @@ namespace RTE {
 						order.y = FloatFromBitsLE(yBits);
 						order.targetUID = static_cast<int64_t>(targetUID);
 						command.payload = order;
+						break;
+					}
+					case NetGameCommandType::Reseat: {
+						NetGameReseat reseat;
+						uint32_t team = 0;
+						uint16_t actorCount = 0;
+						if (!ReadOrTruncated(reader.ReadU32LE(team), reader, error, "reseat_team") ||
+						    !ReadOrTruncated(reader.ReadU8(reseat.newOwnerPeerId), reader, error, "reseat_new_owner") ||
+						    !ReadOrTruncated(reader.ReadU16LE(actorCount), reader, error, "reseat_actor_count")) {
+							return false;
+						}
+						if (actorCount > NetLockstepCodec::c_MaxReseatActors) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "reseat_actor_count exceeds maximum");
+							return false;
+						}
+						reseat.actorUIDs.reserve(actorCount);
+						for (uint16_t a = 0; a < actorCount; ++a) {
+							uint64_t actorUID = 0;
+							if (!ReadOrTruncated(reader.ReadU64LE(actorUID), reader, error, "reseat_actor_uid")) {
+								return false;
+							}
+							reseat.actorUIDs.push_back(static_cast<int64_t>(actorUID));
+						}
+						reseat.team = static_cast<int32_t>(team);
+						command.payload = std::move(reseat);
 						break;
 					}
 					default:

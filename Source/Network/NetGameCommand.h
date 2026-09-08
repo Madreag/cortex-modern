@@ -20,6 +20,7 @@ namespace RTE {
 		SwitchControl = 8,
 		AIEquip = 9,
 		AIOrder = 10,
+		Reseat = 11,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -189,7 +190,17 @@ namespace RTE {
 		bool operator==(const NetGameAIOrder&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder>;
+	// Hand a returning holder back the actors its seat controlled at the drop frame. System-authored: the
+	// host issues it for a team it need not own, so every peer applies the identical ownership at one tick.
+	struct NetGameReseat {
+		int32_t team = 0;
+		uint8_t newOwnerPeerId = 0;
+		std::vector<int64_t> actorUIDs;
+
+		bool operator==(const NetGameReseat&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
