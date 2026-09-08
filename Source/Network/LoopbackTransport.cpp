@@ -69,6 +69,10 @@ namespace RTE {
 			SetError(error, "loopback transport is not started");
 			return false;
 		}
+		if (m_Config.refuseSendsToPeer != c_InvalidNetPeerId && peerId == m_Config.refuseSendsToPeer) {
+			SetError(error, "loopback send buffer is full");
+			return false;
+		}
 		const uint32_t sendOrdinal = ++m_SendCounter;
 		if (ShouldDrop(lane, sendOrdinal)) {
 			return true;

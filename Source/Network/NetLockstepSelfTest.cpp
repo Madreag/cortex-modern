@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <string>
@@ -1091,6 +1092,293 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// A host-star fixture on the injected clock: host=1, clientA=2, clientB=3 over loopback.
+		struct StarFixture {
+			LoopbackTransport hostT, clientAT, clientBT;
+			NetLockstepCoordinator host, clientA, clientB;
+			uint64_t now = 0;
+			uint64_t produced[3] = {0, 0, 0};
+
+			bool Start(uint16_t port, uint64_t sessionId, uint32_t timeoutMs, std::string* error) {
+				if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = sessionId;
+					c.timeoutMs = timeoutMs;
+					c.localPeerId = local;
+					c.peerCount = 3;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.scenario = "LockstepSelfTest";
+					c.ownershipPolicy = "unique-id-split";
+					return c;
+				};
+				return host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) &&
+				       clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) &&
+				       clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error);
+			}
+
+			// Drives only the named peers, so a peer left out is one whose process has wedged: its
+			// socket stays open and its packets stop.
+			bool Drive(bool driveHost, bool driveA, bool driveB, const std::function<bool()>& done, uint64_t untilMs) {
+				for (; now <= untilMs; now += 5) {
+					if (driveHost) host.Tick(now);
+					if (driveA) clientA.Tick(now);
+					if (driveB) clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (driveHost) hostT.AdvanceTimeMs(5);
+					if (driveA) clientAT.AdvanceTimeMs(5);
+					if (driveB) clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			}
+
+			// Produces while this peer's pipeline has room, and stops when it does not: a peer blocked
+			// on a frame it cannot commit stops sending, exactly as the sim loop does while it waits.
+			void Feed(NetLockstepCoordinator& peer, uint8_t peerId, int64_t actorId) {
+				uint64_t& next = produced[peerId - 1];
+				if (!peer.IsRunning() || next > peer.GetStats().nextFrame + 4) {
+					return;
+				}
+				std::string ignored;
+				if (peer.QueueLocalInput(next, {MakeFrame(actorId, next + 1)}, {}, &ignored)) {
+					++next;
+				}
+			}
+
+			// Every live peer keeps producing, as a real match does. Without this the injected clock
+			// runs on while nobody sends, and a peer that has simply run out of scripted input reads
+			// as wedged - which is the very thing these tests have to tell apart.
+			bool DriveProducing(bool driveB, const std::function<bool()>& done, uint64_t untilMs) {
+				return Drive(true, true, driveB, [&] {
+					Feed(host, 1, 100);
+					Feed(clientA, 2, 200);
+					if (driveB) {
+						Feed(clientB, 3, 300);
+					}
+					return done();
+				}, untilMs);
+			}
+
+			void Collect(NetLockstepCoordinator& peer, std::vector<uint64_t>& out) {
+				NetLockstepReadyFrame ready;
+				while (peer.PopReadyFrame(ready)) {
+					out.push_back(ready.frame);
+				}
+			}
+
+			bool Running() { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); }
+		};
+
+		// A wedged client stops sending but keeps its socket, so the transport says nothing for as long
+		// as its process lives - longer than every survivor's missing-frame grace. The relay host must
+		// call it gone on its OWN bounded budget, or the healthy clients time out waiting for a peer
+		// nobody has told them about. Only the host adjudicates: one relayed notice, one leave frame.
+		bool TestCoordinatorHostAdjudicatesSilentPeer(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 400;
+			if (!fx.Start(43012, 0x7000000000000012ULL, timeoutMs, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "silent-peer fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady, aReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					return hostReady.size() >= 2 && aReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "silent-peer fixture did not get the round moving";
+				return false;
+			}
+			// B wedges here: never ticked again, never sends again. Host and A keep playing.
+			const uint64_t silentFrom = fx.now;
+			if (!fx.DriveProducing(false, [&] { return fx.clientA.GetPeerLeaveFrames().count(3) != 0; }, silentFrom + 4 * timeoutMs)) {
+				*error = "the survivor never learned the wedged peer had left (host=" + fx.host.BuildReportJson() + ")";
+				return false;
+			}
+			if (fx.now - silentFrom >= timeoutMs) {
+				*error = "the drop notice reached the survivor after its own grace (" + std::to_string(fx.now - silentFrom) +
+				         "ms of " + std::to_string(timeoutMs) + "ms)";
+				return false;
+			}
+			if (fx.host.GetStats().peersDroppedSilent != 1 ||
+			    fx.host.GetStats().timeoutReason.find("MissingFrameTimeout") != std::string::npos) {
+				*error = "the host did not adjudicate the wedged peer: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// Every survivor drops the requirement at the SAME frame, or their committed sets diverge.
+			if (fx.host.GetPeerLeaveFrames().at(3) != fx.clientA.GetPeerLeaveFrames().at(3)) {
+				*error = "host and survivor disagreed on the leave frame";
+				return false;
+			}
+			const size_t committedAtLeave = aReady.size();
+			if (!fx.DriveProducing(false, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					return aReady.size() >= committedAtLeave + 4 && hostReady.size() >= committedAtLeave + 4;
+				}, fx.now + 4 * timeoutMs)) {
+				*error = "the survivors did not keep playing past the wedged peer (host=" + std::to_string(hostReady.size()) +
+				         " a=" + std::to_string(aReady.size()) + ")";
+				return false;
+			}
+			if (fx.host.IsFailed() || fx.clientA.IsFailed() || fx.host.GetPeerLeaveFrames().count(2) != 0) {
+				*error = "a survivor was failed or dropped after the wedged peer was adjudicated: " + fx.host.BuildReportJson();
+				return false;
+			}
+			return true;
+		}
+
+		// The negative control for the rule above: a client NEVER adjudicates. Two survivors judging
+		// independently would drop the same peer at different frames and diverge, so a client whose
+		// host has gone quiet must still die on its own missing-frame grace, with the same text.
+		bool TestCoordinatorSilentHostStillTimesOut(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 300;
+			if (!fx.Start(43013, 0x7000000000000013ULL, timeoutMs, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "silent-host fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> aReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.clientA, aReady);
+					return aReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "silent-host fixture did not get the round moving";
+				return false;
+			}
+			// The host wedges: A now waits on the host and, through it, on B.
+			if (!fx.Drive(false, true, true, [&] { return fx.clientA.IsFailed(); }, fx.now + 6 * timeoutMs)) {
+				*error = "a client with a silent host did not time out";
+				return false;
+			}
+			if (fx.clientA.GetStats().timeoutReason.find("MissingFrameTimeout") == std::string::npos) {
+				*error = "a client with a silent host stopped for the wrong reason: " + fx.clientA.GetStats().timeoutReason;
+				return false;
+			}
+			if (!fx.clientA.GetPeerLeaveFrames().empty() || fx.clientA.GetStats().peersDroppedSilent != 0) {
+				*error = "a client adjudicated a peer drop, which only the relay host may do";
+				return false;
+			}
+			return true;
+		}
+
+		// Runs a 3-peer star to a moving round, then refuses every host send to clientB while all three
+		// keep producing - so the ONLY thing wrong is the forward, not a peer that went quiet.
+		bool StartRelayRefusal(StarFixture& fx, uint16_t port, uint64_t sessionId, uint32_t timeoutMs, std::vector<uint64_t>& hostReady, std::string* error) {
+			if (!fx.Start(port, sessionId, timeoutMs, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "relay-refusal fixture did not reach Running";
+				return false;
+			}
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "relay-refusal fixture did not get the round moving";
+				return false;
+			}
+			LoopbackTransportConfig refuseB;
+			refuseB.refuseSendsToPeer = 2; // clientB's host-side transport id.
+			fx.hostT.SetFaultConfig(refuseB);
+			return true;
+		}
+
+		// A refused forward was never queued and the receiver cannot ask for it again, so the host
+		// holds it and retries: a send buffer that frees up costs a hitch, not a player.
+		bool TestCoordinatorRelayBacklogHeals(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 2000; // Refusals are bounded at half of this; heal well inside it.
+			std::vector<uint64_t> hostReady, bReady;
+			if (!StartRelayRefusal(fx, 43014, 0x7000000000000014ULL, timeoutMs, hostReady, error)) {
+				return false;
+			}
+			const uint64_t refusedFrom = fx.now;
+			fx.DriveProducing(true, [&] { return fx.now >= refusedFrom + 200; }, refusedFrom + 200);
+			if (fx.host.GetStats().relaySendFailures == 0) {
+				*error = "the refusal never reached the relay: " + fx.host.BuildReportJson();
+				return false;
+			}
+			fx.hostT.SetFaultConfig({});
+			fx.Collect(fx.clientB, bReady);
+			const size_t behind = bReady.size();
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.clientB, bReady);
+					return bReady.size() >= behind + 4;
+				}, fx.now + timeoutMs)) {
+				*error = "a peer whose forwards were refused only briefly did not catch up: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const NetLockstepStats& stats = fx.host.GetStats();
+			if (stats.relayResends == 0 || stats.peers.at(3).relayResends == 0) {
+				*error = "the retried forwards were not counted: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.GetPeerLeaveFrames().empty() || fx.host.IsFailed() || fx.clientB.IsFailed()) {
+				*error = "a peer was dropped for a refusal that healed: " + fx.host.BuildReportJson();
+				return false;
+			}
+			return true;
+		}
+
+		// A forward the transport keeps refusing IS a gap the receiver can never fill; it would hang
+		// on that frame until its grace ran out and take the other clients with it. Bound it.
+		bool TestCoordinatorRelayFailureDropsPeer(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 400; // Refusals are bounded on the same budget as silence: 200ms.
+			std::vector<uint64_t> hostReady, aReady;
+			if (!StartRelayRefusal(fx, 43015, 0x7000000000000015ULL, timeoutMs, hostReady, error)) {
+				return false;
+			}
+			if (!fx.DriveProducing(true, [&] { return fx.host.GetPeerLeaveFrames().count(3) != 0; }, fx.now + 4 * timeoutMs)) {
+				*error = "the host kept a peer it could not reach: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const NetLockstepStats& stats = fx.host.GetStats();
+			if (stats.relaySendFailures == 0 || stats.peers.at(3).relaySendFailures == 0 || stats.lastRelayError.empty()) {
+				*error = "the refused relay was not counted: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// It has to be the unreachable bound: clientB's own frames keep reaching the host, so it
+			// is never the silent one, and the two paths must stay distinguishable in the report.
+			if (stats.peersDroppedSilent != 0 || stats.relayPacketsSent == 0 || stats.peers.at(2).relayPacketsSent == 0) {
+				*error = "the peer was dropped for the wrong reason: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const size_t committedAtLeave = aReady.size();
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					return aReady.size() >= committedAtLeave + 4;
+				}, fx.now + 4 * timeoutMs)) {
+				*error = "the survivors did not keep playing past the unreachable peer: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.IsFailed() || fx.clientA.IsFailed() || fx.clientA.GetPeerLeaveFrames().count(3) == 0) {
+				*error = "the survivor did not follow the host past the unreachable peer";
+				return false;
+			}
+			const std::string report = fx.host.BuildReportJson();
+			if (report.find("\"relay_send_failures\":") == std::string::npos ||
+			    report.find("\"peers\":{") == std::string::npos ||
+			    report.find("\"frames_contributed\":") == std::string::npos) {
+				*error = "the per-peer relay counters are missing from the report: " + report;
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1115,7 +1403,11 @@ namespace RTE {
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
-		    !TestCoordinatorPeerLeave(&error)) {
+		    !TestCoordinatorPeerLeave(&error) ||
+		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
+		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
+		    !TestCoordinatorRelayBacklogHeals(&error) ||
+		    !TestCoordinatorRelayFailureDropsPeer(&error)) {
 			return fail(error);
 		}
 
