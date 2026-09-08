@@ -2475,6 +2475,333 @@ namespace RTE {
 			return 0;
 		}
 
+		// §4's other half: a seat whose holder DROPPED stays worth waiting for until the P2 window
+		// closes, so a round with nobody left does not end under a player who is coming back. The window
+		// governs the round, not the ticket - the seat stays reclaimable either way.
+		int TestSeatHoldWindow() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 91;
+			ConfigureEndpoint(player, "hold", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the seeding join did not settle: " + error);
+			}
+			NetH4TicketRecord record;
+			if (player.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			const std::vector<NetH4Seat> seats = MakeSeatTable();
+			const uint8_t held = seats[0].lockstepPeerId;
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a committed seat did not read as worth waiting for");
+			}
+			if (wire.host.IsSeatHeldForReclaim(seats[1].lockstepPeerId)) {
+				return Fail("a seat nobody has ever held read as worth waiting for");
+			}
+			wire.host.SetLiveMatch(true);
+
+			// The drop, then the whole P2 window: held throughout, and not one millisecond past it.
+			wire.host.NotifyDisconnect(player.connection, 120);
+			player.connected = false;
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a dropped holder stopped being worth waiting for the moment it dropped");
+			}
+			wire.host.Tick(wire.nowMs + NetReconnectHost::c_ProvisionalExpiryMs);
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("the hold ended inside the P2 window");
+			}
+			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
+			wire.host.Tick(wire.nowMs);
+			if (wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("the hold outlived the P2 window");
+			}
+			if (wire.host.GetStats().seatHoldsExpired != 1) {
+				return Fail("the closed window was not counted");
+			}
+			wire.host.Tick(wire.nowMs + 5000);
+			if (wire.host.GetStats().seatHoldsExpired != 1) {
+				return Fail("the closed window was counted more than once");
+			}
+
+			// The narrowness this case exists for: a closed window ends the ROUND's wait, not the seat's
+			// ticket. The same holder still reclaims, and the seat is worth waiting for again.
+			Endpoint returner;
+			returner.connection = 92;
+			ConfigureEndpoint(returner, "hold-return", &unixNow);
+			wire.Add(&returner);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the reclaim after the window closed did not settle: " + error);
+			}
+			if (returner.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("a closed hold window refused the seat's own ticket");
+			}
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a reclaimed seat did not become worth waiting for again");
+			}
+
+			// A clean leave closes the seat, so a round with nobody left ends at once rather than waiting.
+			if (!returner.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the leave did not settle: " + error);
+			}
+			if (wire.host.GetStats().seatsClosedByLeave != 1) {
+				return Fail("the leave did not close the seat");
+			}
+			if (wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a seat closed by a clean leave is still being waited for");
+			}
+			return 0;
+		}
+
+		// §7's ordering: the leave has to be answered while the link is still up. The negative control
+		// is the defect this replaces - tearing the link down first leaves the ticket unanswered.
+		int TestLeaveExchangeBeatsTeardown() {
+			static_assert(NetReconnectClient::c_LeaveAckBudgetMs == 2000, "P21's ack budget");
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			auto seat = [&](const char* name, uint16_t port, uint64_t nonce, LoopbackTransport& hostTransport,
+			                LoopbackTransport& clientTransport, NetSession& host, NetSession& client,
+			                NetSeatAuthRegistry& registry, NetReconnectHost& admission, NetReconnectTicketStore& store,
+			                NetReconnectClient& reconnect, uint64_t* unixNow, uint64_t& nowMs) {
+				registry.BeginHostedSession();
+				admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+				admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+				store.SetPath(StorePath(name));
+				reconnect.Configure(&store, MakeIdentity(), "Player");
+				reconnect.SetUnixClock(&FixedUnixClock, unixNow);
+				reconnect.SetHostContext("loopback", MakeHash(5));
+				host.SetReconnectHost(&admission);
+				client.SetReconnectClient(&reconnect);
+				if (!host.StartHost(hostTransport, MakeSessionConfig(port, nonce, "Host"), &error) ||
+				    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, nonce + 1, "Player"), &error)) {
+					return false;
+				}
+				for (nowMs = 0; nowMs <= 600; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				return reconnect.GetState() == NetH4ClientState::Joined && store.HasRecord();
+			};
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			// The leave the engine now runs: the link is still up, so the ack arrives and clears the record.
+			{
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				NetSeatAuthRegistry registry;
+				NetReconnectHost admission;
+				NetReconnectTicketStore store;
+				NetReconnectClient reconnect;
+				uint64_t nowMs = 0;
+				if (!seat("leave-live", 42135, 111, hostTransport, clientTransport, host, client, registry, admission, store, reconnect, &unixNow, nowMs)) {
+					return Fail("the leaving holder never committed a seat: " + error);
+				}
+				if (!reconnect.BeginLeave(client.GetClockMs(), &error)) {
+					return Fail("the leave would not start: " + error);
+				}
+				const uint64_t startedMs = nowMs;
+				uint64_t acknowledgedMs = 0;
+				for (const uint64_t until = nowMs + NetReconnectClient::c_LeaveAckBudgetMs; nowMs <= until; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+					if (acknowledgedMs == 0 && reconnect.GetState() == NetH4ClientState::Left) {
+						acknowledgedMs = nowMs;
+					}
+				}
+				if (acknowledgedMs == 0) {
+					return Fail("the leave was never acknowledged on a live link");
+				}
+				if (acknowledgedMs - startedMs > NetReconnectClient::c_LeaveAckBudgetMs) {
+					return Fail("the leave outran P21's ack budget");
+				}
+				if (store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 1 || reconnect.GetStats().ticketsCleared != 1) {
+					return Fail("an acknowledged leave did not clear the recovery record");
+				}
+				if (admission.GetStats().seatsClosedByLeave != 1) {
+					return Fail("the host did not close the seat on the leave");
+				}
+			}
+
+			// The negative control: the link goes down FIRST, which is what running the exchange from
+			// teardown amounts to. Nothing is acknowledged and §7 keeps the record.
+			{
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				NetSeatAuthRegistry registry;
+				NetReconnectHost admission;
+				NetReconnectTicketStore store;
+				NetReconnectClient reconnect;
+				uint64_t nowMs = 0;
+				if (!seat("leave-late", 42136, 121, hostTransport, clientTransport, host, client, registry, admission, store, reconnect, &unixNow, nowMs)) {
+					return Fail("the late-leaving holder never committed a seat: " + error);
+				}
+				clientTransport.Stop();
+				reconnect.NotifyAmbiguousLoss();
+				(void)reconnect.BeginLeave(client.GetClockMs(), &error);
+				for (const uint64_t until = nowMs + NetReconnectClient::c_LeaveAckBudgetMs + 500; nowMs <= until; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				if (reconnect.GetState() == NetH4ClientState::Left) {
+					return Fail("a leave sent after the link went down was somehow acknowledged");
+				}
+				if (!store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 0) {
+					return Fail("an unacknowledged leave deleted the recovery record");
+				}
+				if (admission.GetStats().seatsClosedByLeave != 0) {
+					return Fail("the host closed a seat nobody asked it to close");
+				}
+			}
+			return 0;
+		}
+
+		// §6 over two real sessions, on a peer-id space the first incarnation has saturated: the seat's
+		// own id is taken, so the returner proves on a provisional one and the commit hands it the
+		// seat's. Without this the host answers SessionFull and 1v1 fencing cannot happen at all.
+		int TestReturningHolderOnAFullSession() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42134;
+			LoopbackTransport hostTransport;
+			LoopbackTransport firstTransport;
+			NetSession host;
+			NetSession first;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("fence-live"));
+			NetReconnectClient firstClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			firstClient.Configure(&store, MakeIdentity(), "Player");
+			firstClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			firstClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			first.SetReconnectClient(&firstClient);
+			// The 1v1 shape: exactly one remote peer id exists, and the first holder is on it.
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 1;
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !first.StartClient(firstTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the first holder: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+			}
+			if (firstClient.GetState() != NetH4ClientState::Joined || !store.HasRecord() || host.GetReadyPeerCount() != 1) {
+				return Fail("the first holder never committed the only seat");
+			}
+
+			// The negative control first: outside a live match a full session is simply full.
+			{
+				LoopbackTransport lobbyTransport;
+				NetSession lobbyJoiner;
+				NetReconnectTicketStore lobbyStore;
+				lobbyStore.SetPath(StorePath("fence-live-lobby"));
+				NetReconnectClient lobbyClient;
+				lobbyClient.Configure(&lobbyStore, MakeIdentity(), "Player");
+				lobbyClient.SetUnixClock(&FixedUnixClock, &unixNow);
+				lobbyClient.SetHostContext("loopback", MakeHash(5));
+				lobbyJoiner.SetReconnectClient(&lobbyClient);
+				if (!lobbyJoiner.StartClient(lobbyTransport, "loopback", MakeSessionConfig(port, 404, "Player"), &error)) {
+					return Fail("the lobby control could not connect: " + error);
+				}
+				for (const uint64_t until = nowMs + 600; nowMs <= until; nowMs += 10) {
+					host.Tick(nowMs);
+					first.Tick(nowMs);
+					lobbyJoiner.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					firstTransport.AdvanceTimeMs(10);
+					lobbyTransport.AdvanceTimeMs(10);
+				}
+				if (lobbyJoiner.GetRejectReason() != NetRejectReason::SessionFull) {
+					return Fail(std::string("a full lobby admitted a third connection: ") + lobbyJoiner.BuildRejectText());
+				}
+				if (host.GetStats().pendingAdmissionJoins != 0) {
+					return Fail("a lobby joiner was given a provisional admission id");
+				}
+			}
+
+			// Live match, and the second incarnation arrives while the first is STILL connected.
+			admission.SetLiveMatch(true);
+			LoopbackTransport secondTransport;
+			NetSession second;
+			NetReconnectClient secondClient;
+			secondClient.Configure(&store, MakeIdentity(), "Player");
+			secondClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			secondClient.SetHostContext("loopback", MakeHash(5));
+			second.SetReconnectClient(&secondClient);
+			if (!second.StartClient(secondTransport, "loopback", MakeSessionConfig(port, 303, "Player"), &error)) {
+				return Fail("the second incarnation could not connect: " + error);
+			}
+			for (const uint64_t until = nowMs + 4000; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				second.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+				secondTransport.AdvanceTimeMs(10);
+			}
+			if (secondClient.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the second incarnation did not commit: ") + NetReconnectClientStateName(secondClient.GetState()) +
+				            " session=" + NetSession::StateName(second.GetState()) + " reject=" + second.BuildRejectText());
+			}
+			if (!secondClient.UsedStoredTicket() || secondClient.GetIncarnation() != 2) {
+				return Fail("the second incarnation did not supersede the first");
+			}
+			if (host.GetStats().pendingAdmissionJoins != 1) {
+				return Fail("the returner was not admitted on a provisional id");
+			}
+			if (admission.GetStats().incarnationsBound != 2 || admission.GetStats().reclaimsAccepted != 1) {
+				return Fail("the host did not bind a second incarnation of the seat");
+			}
+			if (!second.IsReady() || second.GetLocalPeerId() != MakeSeatTable()[0].peerId) {
+				return Fail("the returner did not end up Ready on the seat's own peer id");
+			}
+			if (host.GetStats().fencedDisconnects + host.GetStats().fencedPackets == 0) {
+				return Fail("the superseded transport was never counted as fenced");
+			}
+			NetPeerId holder = c_InvalidNetPeerId;
+			uint32_t generation = 0;
+			uint32_t incarnation = 0;
+			if (!admission.GetSeatHolder(0, holder, generation, incarnation) || incarnation != 2) {
+				return Fail("the seat did not move to the newer incarnation");
+			}
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("the host ended up with something other than one live holder");
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2536,6 +2863,15 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestReconnectUxSchedule(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSeatHoldWindow(); result != 0) {
+			return result;
+		}
+		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReturningHolderOnAFullSession(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

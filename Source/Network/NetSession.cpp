@@ -162,6 +162,16 @@ namespace RTE {
 		FlushReconnectOutbound();
 	}
 
+	void NetSession::TickAdmissionPlane(uint64_t nowMs) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (!m_Transport || !m_ReconnectHost || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+			return;
+		}
+		m_ReconnectHost->Tick(m_NowMs);
+		FlushReconnectOutbound();
+	}
+
 	void NetSession::EndHostedSession(const std::string& reason) {
 		if (m_Transport && m_Role == NetSessionRole::Host) {
 			for (const PeerState& peer : m_Peers) {
@@ -451,10 +461,16 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "handshake", StateName(peer->state), "host is not accepting another hello for this peer");
 				return;
 			}
-			const uint8_t assignedPeerId = AllocatePeerId();
+			uint8_t assignedPeerId = AllocatePeerId();
 			if (assignedPeerId == 0) {
-				RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
-				return;
+				// §6: the seat's own id is still held by the incarnation this joiner may be about to
+				// supersede, so it proves on a provisional one and takes the seat's id from the commit.
+				assignedPeerId = AllocatePendingAdmissionPeerId();
+				if (assignedPeerId == 0) {
+					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", std::to_string(m_Config.maxPeers), std::to_string(ActivePeerCount()), "session is full");
+					return;
+				}
+				++m_Stats.pendingAdmissionJoins;
 			}
 			for (const PeerState& other : m_Peers) {
 				if (&other != peer && IsActive(other.state) && other.clientNonce == hello->clientNonce) {
@@ -780,6 +796,22 @@ namespace RTE {
 		}));
 	}
 
+	uint8_t NetSession::AllocatePendingAdmissionPeerId() const {
+		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->IsLiveMatch()) {
+			return 0;
+		}
+		for (uint16_t candidate = static_cast<uint16_t>(m_Config.maxPeers) + 1;
+		     candidate <= static_cast<uint16_t>(m_Config.maxPeers) + c_MaxPendingAdmissions && candidate <= UINT8_MAX; ++candidate) {
+			const bool used = std::any_of(m_Peers.begin(), m_Peers.end(), [candidate](const PeerState& peer) {
+				return IsActive(peer.state) && peer.assignedPeerId == candidate;
+			});
+			if (!used) {
+				return static_cast<uint8_t>(candidate);
+			}
+		}
+		return 0;
+	}
+
 	uint8_t NetSession::AllocatePeerId() const {
 		for (uint16_t candidate = 1; candidate <= m_Config.maxPeers; ++candidate) {
 			const bool used = std::any_of(m_Peers.begin(), m_Peers.end(), [candidate](const PeerState& peer) {
@@ -1004,6 +1036,7 @@ namespace RTE {
 				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
 				{"reseats_issued", stats.reseatsIssued},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
@@ -1050,6 +1083,7 @@ namespace RTE {
 				{"admission_messages", m_Stats.admissionMessages},
 				{"old_wire_rejections_sent", m_Stats.oldWireRejectionsSent},
 				{"old_wire_disconnects", m_Stats.oldWireDisconnects},
+				{"pending_admission_joins", m_Stats.pendingAdmissionJoins},
 			}},
 		};
 		return report.dump(2);

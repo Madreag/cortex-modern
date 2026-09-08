@@ -374,33 +374,60 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RunCleanLeave() {
-		NetSession* session = nullptr;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_LeaveExchangeRun) {
+				return;
+			}
+			m_LeaveExchangeRun = true;
 			// A leave needs a live link. Without one this is an ambiguous loss, and §7 is explicit that
 			// the ticket must survive that - which is exactly when it is needed.
 			if (!m_AdmissionAttached || m_IsHost || !m_Session || !m_Session->IsReady() || !m_TicketStore.HasRecord()) {
 				return;
 			}
-			session = m_Session.get();
+			// §7: leaving is a protocol, not a flag. Only an acknowledged LeaveAck clears the ticket, and
+			// an unacknowledged one is an ambiguous loss that KEEPS it - so this waits exactly the P21
+			// budget and no longer, whatever the answer.
+			std::string error;
+			if (!m_ReconnectClient.BeginLeave(m_Session->GetClockMs(), &error)) {
+				return;
+			}
 		}
-		// §7: leaving is a protocol, not a flag. Only an acknowledged LeaveAck clears the ticket, and an
-		// unacknowledged one is an ambiguous loss that KEEPS it - so this waits exactly the P21 budget
-		// and no longer, whatever the answer.
-		std::string error;
 		const uint64_t startMs = SteadyNowMs();
-		if (!m_ReconnectClient.BeginLeave(session->GetClockMs(), &error)) {
-			return;
-		}
 		while (SteadyNowMs() - startMs <= NetReconnectClient::c_LeaveAckBudgetMs) {
-			session->Tick(session->GetClockMs() + 5);
-			if (m_ReconnectClient.GetState() == NetH4ClientState::Left || m_ReconnectClient.WantsLinkClosed()) {
-				break;
+			{
+				// The lock is dropped for the wait, so the game thread's own reads never stall on it.
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (!m_Session) {
+					break;
+				}
+				m_Session->Tick(m_Session->GetClockMs() + 5);
+				if (m_ReconnectClient.GetState() == NetH4ClientState::Left || m_ReconnectClient.WantsLinkClosed()) {
+					break;
+				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
 		std::cout << "[net-reconnect] leave: " << NetReconnectClientStateName(m_ReconnectClient.GetState())
 		          << (m_TicketStore.HasRecord() ? " (ticket kept)" : " (ticket cleared)") << std::endl;
+	}
+
+	void NetMatchService::LeaveWorkerMain(std::string result) {
+		RunCleanLeave();
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_Coordinator) {
+			m_Coordinator->Leave(result);
+		}
+		m_WorkerDone = true;
+	}
+
+	void NetMatchService::WaitForPendingWork() {
+		if (m_Worker.joinable()) {
+			m_Worker.join();
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_WorkerDone = false;
 	}
 
 	void NetMatchService::Destroy() {
@@ -433,6 +460,7 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
+			m_LeaveExchangeRun = false;
 			EndAdmissionSession();
 		}
 		runner.reset();
@@ -505,15 +533,29 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_Coordinator) {
-			m_Coordinator->Leave(result.empty() ? "player left" : result);
+		const std::string reason = result.empty() ? std::string("player left") : result;
+		bool exchangeOwed = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			// §7 runs while the link is still up, so the round is told only once the ack has settled or
+			// the P21 budget has run out. Without a ticket to answer for there is nothing to wait on.
+			exchangeOwed = !m_LeaveExchangeRun && m_AdmissionAttached && !m_IsHost && m_Session &&
+			               m_Session->IsReady() && m_TicketStore.HasRecord();
+			if (!exchangeOwed && m_Coordinator) {
+				m_Coordinator->Leave(reason);
+			}
+			if (m_State == NetMatchServiceState::Running) {
+				m_State = NetMatchServiceState::Completed;
+				m_StatusText = result.empty() ? "Left the match" : result;
+				m_ErrorText.clear();
+			}
 		}
-		if (m_State == NetMatchServiceState::Running) {
-			m_State = NetMatchServiceState::Completed;
-			m_StatusText = result.empty() ? "Left the match" : result;
-			m_ErrorText.clear();
+		if (!exchangeOwed) {
+			return;
 		}
+		// The wait belongs to the worker: a sim thread must never sleep on a network answer.
+		WaitForPendingWork();
+		m_Worker = std::thread(&NetMatchService::LeaveWorkerMain, this, reason);
 	}
 
 	void NetMatchService::Update() {
@@ -624,6 +666,7 @@ static std::string ResyncSaveName() {
 		}
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get());
 		m_Coordinator->DeferStopsToTickBoundary();
+		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
 		m_PendingSessionEvents.clear();
@@ -660,6 +703,12 @@ static std::string ResyncSaveName() {
 			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
 		m_SessionPumpNowMs += 15;
+		if (hostAdmission) {
+			// The coordinator owns the transport queue mid-match, so the session's own Tick never runs;
+			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
+			// dropped seat's reclaim window would wait for the match to end.
+			m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+		}
 		for (const NetTransportEvent& event: events) {
 			m_Session->InjectEvent(event, m_SessionPumpNowMs);
 		}
@@ -932,6 +981,21 @@ static std::string ResyncSaveName() {
 			actors.push_back({owner.actorUID, owner.team, owner.ownerPeerId, true});
 		}
 		return actors;
+	}
+
+	NetLockstepSeatState NetMatchService::QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId) {
+		auto* service = static_cast<NetMatchService*>(context);
+		NetLockstepSeatState state;
+		if (!service) {
+			return state;
+		}
+		std::lock_guard<std::mutex> lock(service->m_Mutex);
+		if (!service->m_AdmissionAttached || !service->m_IsHost) {
+			return state;
+		}
+		state.fencedTransport = transportPeerId != c_InvalidNetPeerId && service->m_ReconnectHost.IsFenced(transportPeerId);
+		state.heldForReclaim = service->m_ReconnectHost.IsSeatHeldForReclaim(lockstepPeerId);
+		return state;
 	}
 
 	void NetMatchService::AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest) {
