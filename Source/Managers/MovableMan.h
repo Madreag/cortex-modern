@@ -219,7 +219,8 @@ namespace RTE {
 			std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 			SpatialPartitionGrid moidGrid;
 			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph as the originals left it.
-			std::vector<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
+			//!< A deque so the lists stay put: each state is handed its own the moment it hands them over.
+			std::deque<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
 			std::vector<std::pair<LuaStateWrapper*, long>> scriptObjects;
 			long uniqueIDCounter = 0;
 			int luaStateCursor = 0;

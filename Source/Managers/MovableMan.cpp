@@ -1438,6 +1438,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		}
 		auto& lists = out.scriptRegistrations.emplace_back();
 		state.SwapRegisteredMOs(lists.first, lists.second);
+		state.HoldRegisteredMOs(lists.first, lists.second);
 	};
 	stashState(g_LuaMan.GetMasterScriptState());
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
@@ -1502,8 +1503,14 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 }
 
 void MovableMan::ForgetHeldWorld(WorldSetAside& in) {
-	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
-	std::erase(m_HeldRegistries, &in.knownObjects);
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		std::erase(m_HeldRegistries, &in.knownObjects);
+	}
+	for (size_t index = 0; index < in.scriptRegistrations.size(); ++index) {
+		auto& lists = in.scriptRegistrations[index];
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).ForgetHeldRegisteredMOs(lists.first, lists.second);
+	}
 }
 
 bool MovableMan::ReinstateWorld(WorldSetAside& in) {

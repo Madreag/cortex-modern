@@ -4684,23 +4684,30 @@ _PrimitiveQueueCapture = nil
 		scopeForgetsDestroyed = identity > 0 && g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
 	}
 	std::cout << "[script-graph-selftest] " << (scopeForgetsDestroyed ? "PASS" : "FAIL") << " construction_scope_forgets_destroyed_owner" << std::endl;
-	// A world held aside keeps the same registry copy for the whole hold, and the collector can sweep an
-	// object that stayed live in that window: reinstating the copy would put the freed pointer back, and
-	// retiring the world calls DiscardScriptState on every recorded object the live registry no longer names.
+	// A world held aside keeps the same copies for the whole hold, and the collector can sweep an object
+	// that stayed live in that window: reinstating them would put the freed pointer back in the registry
+	// and in the script update list, and retiring the world calls DiscardScriptState on every recorded
+	// object the live registry no longer names.
 	bool setAsideForgetsDestroyed = false;
 	{
 		auto* object = new MOPixel;
 		object->Create();
+		object->MoveScriptsToState(g_LuaMan.GetMasterScriptState());
+		g_LuaMan.GetMasterScriptState().RegisterMO(object);
+		MovableObject* const address = object;
 		const long identity = object->GetUniqueID();
 		MovableMan::WorldSetAside aside;
 		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
-			const bool recorded = aside.knownObjects.contains(identity);
+			auto& lists = aside.scriptRegistrations.front();
+			const bool recorded = aside.knownObjects.contains(identity) && lists.second.contains(object);
 			delete object;
-			setAsideForgetsDestroyed = recorded && !aside.knownObjects.contains(identity);
+			setAsideForgetsDestroyed = recorded && !aside.knownObjects.contains(identity) && !lists.second.contains(address);
 			// Anything the record still names would be walked by the reinstate, so drop it rather than leave the world held.
 			aside.knownObjects.erase(identity);
+			for (auto& held: aside.scriptRegistrations) { held.first.erase(address); held.second.erase(address); }
 			setAsideForgetsDestroyed = g_MovableMan.ReinstateWorld(aside) && setAsideForgetsDestroyed;
 			setAsideForgetsDestroyed = g_MovableMan.FindObjectByUniqueID(identity) == nullptr && setAsideForgetsDestroyed;
+			setAsideForgetsDestroyed = !g_LuaMan.GetMasterScriptState().GetPendingRegisteredMOs().contains(address) && setAsideForgetsDestroyed;
 		}
 	}
 	std::cout << "[script-graph-selftest] " << (setAsideForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_forgets_destroyed_owner" << std::endl;
