@@ -78,6 +78,28 @@ namespace RTE {
 		return NetAuthConstantTimeEquals(expected.data(), mac.data(), expected.size());
 	}
 
+	bool NetH4MacTicketRecord(const NetAuthBytes32& credential, const std::vector<uint8_t>& recordBytes, NetAuthBytes32& mac) {
+		std::vector<uint8_t> tagged;
+		tagged.reserve(c_NetH4DomainTagBytes + recordBytes.size());
+		const char* tag = NetH4DomainTag(NetH4ProofDomain::Ticket);
+		tagged.insert(tagged.end(), tag, tag + c_NetH4DomainTagBytes);
+		tagged.insert(tagged.end(), recordBytes.begin(), recordBytes.end());
+		uint8_t raw[32] = {};
+		if (!GetNetAuthCrypto().HmacSha256(credential.data(), credential.size(), tagged.data(), tagged.size(), raw)) {
+			return false;
+		}
+		std::memcpy(mac.data(), raw, sizeof(raw));
+		return true;
+	}
+
+	bool NetH4VerifyTicketRecord(const NetAuthBytes32& credential, const std::vector<uint8_t>& recordBytes, const NetAuthBytes32& mac) {
+		NetAuthBytes32 expected{};
+		if (!NetH4MacTicketRecord(credential, recordBytes, expected)) {
+			return false;
+		}
+		return NetAuthConstantTimeEquals(expected.data(), mac.data(), expected.size());
+	}
+
 	bool NetH4DrawChallenge(NetAuthBytes32& challenge) {
 		return GetNetAuthCrypto().RandomBytes(challenge.data(), challenge.size());
 	}
