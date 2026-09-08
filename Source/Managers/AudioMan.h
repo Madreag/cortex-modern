@@ -5,8 +5,13 @@
 #include "Timer.h"
 #include "Vector.h"
 #include "Singleton.h"
+#include "SoundContainerRegistry.h"
 
 #include "fmod/fmod.hpp"
+#include <map>
+#include <string_view>
+#include <vector>
+#include <utility>
 #include "fmod/fmod_errors.h"
 
 #define g_AudioMan AudioMan::Instance()
@@ -14,6 +19,7 @@
 namespace RTE {
 
 	class SoundContainer;
+	struct SoundData;
 
 	/// The singleton manager of sound effect and music playback.
 	class AudioMan : public Singleton<AudioMan> {
@@ -21,6 +27,26 @@ namespace RTE {
 		friend class SoundContainer;
 
 	public:
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr);
+		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
+		bool RunCheckpointSelfTest();
+		uint64_t GetCheckpointSoundContainerCursor() const { return m_NextSoundContainerIdentity; }
+		void SetCheckpointSoundContainerCursor(uint64_t value) { m_NextSoundContainerIdentity = value; }
+		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { return m_CheckpointSoundContainers; }
+		CheckpointSoundRegistry AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const;
+		void RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original);
+		void ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates);
+		class CheckpointRegistryScope {
+		public:
+			CheckpointRegistryScope();
+			~CheckpointRegistryScope();
+			CheckpointRegistryScope(const CheckpointRegistryScope&) = delete;
+			CheckpointRegistryScope& operator=(const CheckpointRegistryScope&) = delete;
+		private:
+			CheckpointSoundRegistry m_Original;
+			uint64_t m_Cursor;
+		};
 		/// Hardcoded playback priorities for sounds. Note that sounds don't have to use these specifically; their priority can be anywhere between high and low.
 		enum PlaybackPriority {
 			PRIORITY_HIGH = 0,
@@ -371,6 +397,31 @@ namespace RTE {
 		std::mutex m_SoundChannelMinimumAudibleDistancesMutex; //!, As above but for m_SoundChannelMinimumAudibleDistances
 
 	private:
+
+		// Voice identities belong to the engine. Backend channel numbers never enter a checkpoint.
+		struct PlayingVoice {
+			FMOD::Channel* channel = nullptr;
+			SoundContainer* owner = nullptr;
+			std::string soundPath;
+			float minimumAudibleDistance = 0;
+		};
+		std::map<int, PlayingVoice> m_PlayingVoices;
+		std::unordered_map<int, int> m_BackendVoiceIdentities;
+		int m_NextVoiceIdentity = 0;
+		CheckpointSoundRegistry m_CheckpointSoundContainers;
+		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
+		uint64_t m_NextSoundContainerIdentity = 0;
+		uint64_t AllocateCheckpointSoundContainerID();
+		void RegisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity);
+		void UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity);
+		SoundContainer* FindCheckpointSoundContainer(uint64_t identity) const;
+		int RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance);
+		int FindVoiceIdentity(const FMOD::Channel* channel) const;
+		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;
+		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;
+		void RetireVoice(int identity);
+		bool MakeVoiceSlotAvailable();
+
 #pragma region Sound Container Actions and Modifications
 		/// Starts playing the next SoundSet of the given SoundContainer for the give player.
 		/// @param soundContainer Pointer to the SoundContainer to start playing. Ownership is NOT transferred!

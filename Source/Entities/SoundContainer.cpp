@@ -1,4 +1,7 @@
 #include "SoundContainer.h"
+#include "CheckpointArchive.h"
+#include "Base64/base64.h"
+#include "MovableObject.h"
 
 #include "SoundSet.h"
 #include "SettingsMan.h"
@@ -27,12 +30,27 @@ SoundContainer::SoundContainer(const SoundContainer& reference) {
 	Create(reference);
 }
 
+SoundContainer& SoundContainer::operator=(const SoundContainer& reference) {
+	if (this != &reference) { Destroy(); Create(reference); }
+	return *this;
+}
+
 SoundContainer::~SoundContainer() {
+	m_IsDestroying = true;
 	g_AudioMan.DisownSoundContainerPlayingChannels(this);
 	Destroy(true);
 }
 
 void SoundContainer::Clear() {
+	if (m_CheckpointRegistered) {
+		g_AudioMan.DisownSoundContainerPlayingChannels(this);
+		g_AudioMan.UnregisterCheckpointSoundContainer(this, m_CheckpointIdentity);
+		m_CheckpointRegistered = false;
+	}
+	m_CheckpointIdentity = 0;
+	if (!m_IsDestroying && (!MovableObject::IsFaithfulClone() || MovableObject::FaithfulCloneRegisters())) {
+		ReidentifyCheckpoint(g_AudioMan.AllocateCheckpointSoundContainerID());
+	}
 	m_TopLevelSoundSet = std::make_shared<SoundSet>();
 	m_TopLevelSoundSet->Destroy();
 
@@ -88,6 +106,10 @@ int SoundContainer::Create(const SoundContainer& reference) {
 	m_Paused = reference.m_Paused;
 	m_MusicPreEntryTime = reference.m_MusicPreEntryTime;
 	m_MusicExitTime = reference.m_MusicExitTime;
+	if (Entity::IsCheckpointClone()) {
+		if (!LoadCheckpoint(reference.SaveCheckpoint())) throw std::runtime_error("could not clone sound container checkpoint");
+	}
+
 
 	return 0;
 }
@@ -102,6 +124,10 @@ int SoundContainer::Create(const std::string& soundFilePath, bool immobile, bool
 
 int SoundContainer::ReadProperty(const std::string_view& propName, Reader& reader) {
 	StartPropertyList(return Entity::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_SoundCheckpoint", {
+		if (!LoadCheckpoint(base64_decode(reader.ReadPropValue()))) reader.ReportError("invalid sound container checkpoint");
+	});
+
 
 	MatchProperty("SpecialBehaviour_TopLevelSoundSet", {
 		SoundSet topLevelSoundSet;
@@ -218,6 +244,7 @@ int SoundContainer::Save(Writer& writer) const {
 	writer << m_MusicPreEntryTime;
 	writer.NewProperty("MusicExitTime");
 	writer << m_MusicExitTime;
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", base64_encode(SaveCheckpoint(), true));
 
 	return 0;
 }
@@ -333,6 +360,11 @@ bool SoundContainer::Stop(int player) {
 	return (HasAnySounds() && IsBeingPlayed()) ? g_AudioMan.StopSoundContainerPlayingChannels(this, player) : false;
 }
 
+bool SoundContainer::IsBeingPlayed() const {
+	for (int identity: m_PlayingChannels) if (g_AudioMan.OwnsVoice(identity, this)) return true;
+	return false;
+}
+
 bool SoundContainer::Restart(int player) {
 	return (HasAnySounds() && IsBeingPlayed()) ? g_AudioMan.StopSoundContainerPlayingChannels(this, player) && g_AudioMan.PlaySoundContainer(this, player) : false;
 }
@@ -374,4 +406,38 @@ FMOD_RESULT SoundContainer::UpdateSoundProperties() {
 	m_SoundPropertiesUpToDate = result == FMOD_OK;
 
 	return result;
+}
+
+void SoundContainer::ReidentifyCheckpoint(uint64_t identity) {
+	if (m_CheckpointRegistered) g_AudioMan.UnregisterCheckpointSoundContainer(this, m_CheckpointIdentity);
+	m_CheckpointIdentity = identity;
+	m_CheckpointRegistered = !m_IsDestroying && (!MovableObject::IsFaithfulClone() || MovableObject::FaithfulCloneRegisters());
+	if (m_CheckpointRegistered) g_AudioMan.RegisterCheckpointSoundContainer(this, identity);
+}
+
+std::string SoundContainer::SaveCheckpoint() const {
+	CheckpointWriter archive("SoundContainer1");
+	archive(Entity::SaveCheckpoint(), m_CheckpointIdentity, std::set<int>(m_PlayingChannels.begin(), m_PlayingChannels.end()));
+	archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
+	return archive.Text();
+}
+
+bool SoundContainer::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "SoundContainer1", validateOnly);
+		std::string identity;
+		uint64_t checkpointIdentity;
+		std::set<int> playing;
+		archive.Value(identity); archive.Value(checkpointIdentity); archive.Value(playing);
+		if (!checkpointIdentity || !Entity::LoadCheckpoint(identity, true)) return false;
+		for (int voice: playing) if (voice <= 0) return false;
+		archive.OnCommit([this, identity, checkpointIdentity, playing = std::move(playing)] {
+			Entity::LoadCheckpoint(identity);
+			ReidentifyCheckpoint(checkpointIdentity);
+			m_PlayingChannels.clear(); m_PlayingChannels.insert(playing.begin(), playing.end());
+		});
+		archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
 }
