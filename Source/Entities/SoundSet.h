@@ -103,6 +103,9 @@ namespace RTE {
 		/// @param abortGameForInvalidSound Whether to abort the game if the sound couldn't be added, or just show a console error.
 		void AddSound(const std::string& soundFilePath, const Vector& offset, float minimumAudibleDistance, float attenuationStartDistance, bool abortGameForInvalidSound);
 
+		/// Adds the sound for real, without deferring an AI hook's call.
+		void AddSoundNow(const std::string& soundFilePath, const Vector& offset, float minimumAudibleDistance, float attenuationStartDistance, bool abortGameForInvalidSound);
+
 		/// Removes all instances of the sound with the given filepath from this SoundSet. Does not remove it from any sub-SoundSets.
 		/// @param soundFilePath The path to the sound to be removed from this SoundSet.
 		/// @return Whether or not a sound with the given filepath was found in this SoundSet.
@@ -114,13 +117,22 @@ namespace RTE {
 		/// @return Whether or not a sound with the given filepath was found in this SoundSet or, if set to remove from sub-SoundSets, any of its sub-SoundSets.
 		bool RemoveSound(const std::string& soundFilePath, bool removeFromSubSoundSets);
 
+		/// Removes the sound for real, without deferring an AI hook's call.
+		bool RemoveSoundNow(const std::string& soundFilePath, bool removeFromSubSoundSets);
+
+		/// Whether this SoundSet holds the named sound.
+		bool HasSound(const std::string& soundFilePath, bool includeSubSoundSets) const;
+
 		/// Adds a copy of the given SoundData to this SoundSet.
 		/// @param soundDataToAdd The SoundData to copy to this SoundSet.
 		void AddSoundData(const SoundData& soundDataToAdd) { m_SoundData.push_back(soundDataToAdd); }
 
 		/// Adds a copy of the passed in SoundSet as a sub SoundSet of this SoundSet. Ownership IS transferred!
 		/// @param soundSetToAdd A reference to the SoundSet to be copied in as a sub SoundSet of this SoundSet. Ownership IS transferred!
-		void AddSoundSet(const SoundSet& soundSetToAdd) {
+		void AddSoundSet(const SoundSet& soundSetToAdd);
+
+		/// Adds the sub SoundSet for real, without deferring an AI hook's call.
+		void AddSoundSetNow(const SoundSet& soundSetToAdd) {
 			SoundSet* added = new SoundSet(soundSetToAdd);
 			added->SetOwnerContainer(m_OwnerContainer);
 			m_SubSoundSets.push_back(added);
@@ -134,16 +146,32 @@ namespace RTE {
 
 		/// Gets the current SoundSelectionCycleMode for this SoundSet, which is used to determine what SoundSet to select next time SelectNextSounds is called.
 		/// @return The current sound selection cycle mode.
-		SoundSelectionCycleMode GetSoundSelectionCycleMode() const { return m_SoundSelectionCycleMode; }
+		SoundSelectionCycleMode GetSoundSelectionCycleMode() const { return m_PendingCycleModeWritten && SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation ? m_PendingCycleMode : m_SoundSelectionCycleMode; }
 
 		/// Sets the SoundSelectionCycleMode for this SoundSet, which is used to determine what SoundSet to select next time SelectNextSounds is called.
 		/// @param newSoundSelectionCycleMOde The new SoundSelectionCycleMode for this SoundSet.
-		void SetSoundSelectionCycleMode(SoundSelectionCycleMode newSoundSelectionCycleMode) {
+		void SetSoundSelectionCycleMode(SoundSelectionCycleMode newSoundSelectionCycleMode);
+
+		/// Sets the cycle mode for real, without deferring an AI hook's call.
+		void SetSoundSelectionCycleModeNow(SoundSelectionCycleMode newSoundSelectionCycleMode) {
 			m_SoundSelectionCycleMode = newSoundSelectionCycleMode;
 			if (m_SoundSelectionCycleMode == SoundSelectionCycleMode::FORWARDS) {
 				CurrentSelection().second = -1;
 			}
 		}
+
+		/// Drops the cycle mode an AI pass read back, once its call has landed.
+		void ClearPendingCycleMode() {
+			m_PendingCycleModeWritten = false;
+			for (SoundSet* subSoundSet: m_SubSoundSets) subSoundSet->ClearPendingCycleMode();
+		}
+
+		/// The whole set as one string: cycle mode, every sound and every sub set, so a structural
+		/// call an AI hook made can be carried to the committed tick and across the wire.
+		std::string SaveStructure() const;
+		bool LoadStructure(std::string_view text);
+		static std::string SaveSoundData(const SoundData& soundData);
+		static bool LoadSoundData(std::string_view text, SoundData& soundData);
 
 		/// Fills the passed in vector with the flattened SoundData in the SoundSet, optionally only getting currently selected SoundData.
 		/// @param flattenedSoundData A reference vector of SoundData references to be filled with this SoundSet's flattened SoundData.
@@ -193,6 +221,10 @@ namespace RTE {
         // selected and its own selection lands there at the committed tick.
         std::pair<bool, int> m_SimulationSelection{false, -1};
         SoundContainer* m_OwnerContainer = nullptr;
+        SoundSelectionCycleMode m_PendingCycleMode = RANDOM; //!< What an AI hook's cycle-mode call reads back before it lands.
+        bool m_PendingCycleModeWritten = false;
+        /// The container an AI hook's structural call on this set must defer to, or none.
+        SoundContainer* DeferringOwner() const;
         std::pair<bool, int>& CurrentSelection() { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
         const std::pair<bool, int>& CurrentSelection() const { return SoundSimulationScope::IsSimulation() ? m_SimulationSelection : m_CurrentSelection; }
 
