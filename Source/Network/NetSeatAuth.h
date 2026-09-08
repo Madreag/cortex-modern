@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NetReconnectTranscript.h"
+
 #include <array>
 #include <cstdint>
 #include <unordered_map>
@@ -33,6 +35,10 @@ namespace RTE {
 
 		/// Whether the credential matches the seat's active generation, compared in constant time.
 		bool MatchesActiveCredential(uint16_t seat, uint32_t holderGeneration, const NetSeatCredential& credential) const;
+
+		/// Verifies a reclaim proof against the seat's active credential. The credential never leaves
+		/// the registry, so no caller can copy it out to log or serialize it.
+		bool VerifySeatProof(uint16_t seat, uint32_t holderGeneration, const NetH4Transcript& transcript, const NetAuthBytes32& mac) const;
 
 		/// The seat's active holder generation; 0 when the seat holds none.
 		uint32_t GetActiveGeneration(uint16_t seat) const;
