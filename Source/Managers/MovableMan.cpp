@@ -1172,13 +1172,21 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	if (entry != m_KnownObjects.end() && entry->second == mo) {
 		m_KnownObjects.erase(entry);
 	}
-	// A copy waiting to be put back must forget this object too, or reinstating it resurrects the freed pointer.
-	for (auto* held: m_HeldRegistries) {
-		auto entry = held->find(mo->GetUniqueID());
-		if (entry != held->end() && entry->second == mo) {
-			held->erase(entry);
+}
+
+// Only a destruction may take an object out of a held copy. Unregistering also happens to live objects:
+// a restore detaches every Lua-owned tree, and those have to come back with the world that named them.
+void MovableMan::ForgetDestroyedObject(MovableObject* mo, long identity) {
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		for (auto* held: m_HeldRegistries) {
+			auto entry = held->find(identity);
+			if (entry != held->end() && entry->second == mo) {
+				held->erase(entry);
+			}
 		}
 	}
+	g_LuaMan.ForgetDestroyedRegisteredMO(mo);
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int ignoreTeam, bool getsHitByMOsOnly) const {
