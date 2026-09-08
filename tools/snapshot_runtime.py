@@ -115,6 +115,8 @@ SCHEMAS["AudioEvent1"] = [*fields("state sound_file_hash channel immobile attenu
 SCHEMAS["AudioRuntime1"] = [*fields("enabled next_voice next_sound_container mute_master mute_music mute_sounds mute_on_focus_loss master_volume music_volume sounds_volume global_pitch panning listener_z minimum_panning music_muffled multiplayer"),
     ("player_positions", sequence(VECTOR)), ("listeners", sequence(array(4, array(3)))), ("groups", array(4, "o")),
     *fields("samples voices", sequence("o")), ("minimum_distances", sequence(array(2))), ("events", array(4, sequence("o")))]
+SCHEMAS["AudioRuntime2"] = [*SCHEMAS["AudioRuntime1"], ("audibility", sequence("o"))]
+SCHEMAS["CommittedAudibility1"] = fields("object_uid tick phase occurrence ordinal peer frame value")
 SCHEMAS["SoundPlayback1"] = [("voices", sequence("o"))]
 SCHEMAS["SoundContainer1"] = [("entity", "o"), ("identity", "n"), ("playing_channels", sequence("n")),
     *fields("overlap_mode bus immobile attenuation_start custom_pan panning_multiplier loops properties_current priority affected_by_global_pitch"),
@@ -412,6 +414,11 @@ def decode(data):
     return result
 
 
+# AudioMan drives parameter 1 of a voice's multiband EQ as the distance-muffling lowpass
+# (AudioMan.cpp: setParameterFloat(1, lowpassFrequency), "Functionally inactive lowpass filter" at 22000).
+_MULTIBAND_EQ, _MULTIBAND_EQ_LOWPASS = 36, 1
+
+
 _LOCAL_FIELDS = {
     "TimerMan1": set("real_time sim_accumulator sim_updates_since_drawn drawn_sim_update sim_speed pace_accrued pace_trimmed pace_wall_seen pace_cap_lost pace_paused_lost pace_update_calls pace_reset_calls".split()),
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
@@ -419,6 +426,12 @@ _LOCAL_FIELDS = {
     "FrameMan1": {"flashed_last_frame", "flash_timer"},
     "FrameMan2": {"flashed_last_frame", "flash_timer"},
     "FrameMan3": {"flashed_last_frame", "flash_timer"},
+    # The live Allegro colour table and blend alpha are whatever the last blit selected.
+    "FramePalette1": {"selected_key", "alpha"},
+    # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
+    "AudioRuntime1": {"player_positions", "listeners"},
+    "AudioRuntime2": {"player_positions", "listeners"},
+    "AudioVoice1": {"position"},
     "ActorRuntime1": {"hud_stack"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},
     "HDFirearmRuntime1": {"ai_fire_velocity", "ai_bullet_lifetime", "ai_bullet_acceleration"},
@@ -449,6 +462,16 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             mask(key)
         if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9"):
             mask("render_rng")
+        # A voice's mixer gain and 3D blend are attenuated against that peer's own listener; the four
+        # group buses carry settings, so only a control reached through audio.voices is local.
+        if version == "AudioControl1" and len(path) >= 3 and path[-3] == "voices" and path[-1] == "control":
+            for key in ("volume", "level"):
+                mask(key)
+        if version == "AudioEffect1" and value.get("type") == _MULTIBAND_EQ and len(path) >= 5 and path[-5] == "voices":
+            for index, parameter in enumerate(result["parameters"]):
+                if isinstance(parameter, dict) and parameter.get("index") == _MULTIBAND_EQ_LOWPASS:
+                    parameter["number"] = "LOCAL"
+                    masked.append((*path, "parameters", index, "number"))
         if version == "Controller1":
             for key in ("release_timer", "joy_accel_timer", "key_accel_timer"):
                 result[key]["sim_start"] = "LOCAL"
