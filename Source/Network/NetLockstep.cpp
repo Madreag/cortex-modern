@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -14,6 +15,11 @@
 #include <utility>
 
 namespace RTE {
+
+	uint64_t NetLockstepNowMs() {
+		static const std::chrono::steady_clock::time_point base = std::chrono::steady_clock::now();
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
+	}
 
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
