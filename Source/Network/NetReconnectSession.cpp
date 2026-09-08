@@ -28,9 +28,17 @@ namespace RTE {
 		seats.reserve(config.players.size());
 		for (size_t index = 0; index < config.players.size(); ++index) {
 			const NetMatchPlayerSlot& slot = config.players[index];
-			// The stable id is the slot index: peer ids are reassigned whenever a slot frees, so a
-			// ticket naming one would silently re-point after someone else's drop.
-			seats.push_back({static_cast<uint16_t>(index), slot.peerId, static_cast<int32_t>(slot.team), slot.cpu});
+			// The match config carries the LOCKSTEP id; the session's is one lower. A commit hands back
+			// the session id, the ledger and the reseat name the lockstep one - the two are not the same
+			// number and swapping them would re-point every actor the returner had.
+			NetH4Seat seat;
+			seat.stableSeat = static_cast<uint16_t>(index);
+			seat.peerId = slot.peerId > 0 ? static_cast<uint8_t>(slot.peerId - 1) : 0;
+			seat.team = static_cast<int32_t>(slot.team);
+			seat.cpu = slot.cpu;
+			seat.lockstepPeerId = slot.peerId;
+			seat.local = !slot.cpu && slot.peerId == config.hostPeerId;
+			seats.push_back(seat);
 		}
 		return seats;
 	}
@@ -84,7 +92,8 @@ namespace RTE {
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindFreeNeverHeldSeat() {
 		for (SeatState& state : m_Seats) {
-			if (state.seat.cpu || state.committed || state.closed || state.holderGeneration != 0) {
+			// The host's own seat is never offered: nobody joins it, and host loss is out of scope.
+			if (state.seat.cpu || state.seat.local || state.committed || state.closed || state.holderGeneration != 0) {
 				continue;
 			}
 			const bool provisional = std::any_of(m_Provisionals.begin(), m_Provisionals.end(), [&state](const Provisional& pending) {
@@ -503,9 +512,9 @@ namespace RTE {
 	void NetReconnectHost::RecordDrop(SeatState& seat, uint64_t frame) {
 		std::vector<int64_t> owned;
 		if (m_DropOwnershipSource != nullptr) {
-			owned = NetReconnectLedger::CollectOwnedActorUIDs(m_DropOwnershipSource(m_DropOwnershipContext), seat.seat.peerId);
+			owned = NetReconnectLedger::CollectOwnedActorUIDs(m_DropOwnershipSource(m_DropOwnershipContext), seat.seat.lockstepPeerId);
 		}
-		m_Ledger.RecordDrop(seat.seat.stableSeat, seat.seat.peerId, seat.seat.team, frame, std::move(owned));
+		m_Ledger.RecordDrop(seat.seat.stableSeat, seat.seat.lockstepPeerId, seat.seat.team, frame, std::move(owned));
 		++m_Stats.ledgerDropsRecorded;
 	}
 
@@ -524,7 +533,7 @@ namespace RTE {
 		}
 		NetGameReseat reseat;
 		reseat.team = seat.seat.team;
-		reseat.newOwnerPeerId = seat.seat.peerId;
+		reseat.newOwnerPeerId = seat.seat.lockstepPeerId;
 		reseat.actorUIDs = std::move(restored);
 		m_PendingReseats.push_back(std::move(reseat));
 		++m_Stats.reseatsIssued;
