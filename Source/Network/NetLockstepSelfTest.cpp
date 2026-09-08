@@ -121,7 +121,7 @@ namespace RTE {
 			if (!NetLockstepCodec::Encode({stripped}, bytes)) {
 				return {};
 			}
-			bytes.resize(bytes.size() - 2); // The empty version 14 observation block.
+			bytes.resize(bytes.size() - 3); // The empty observation block: a zero binding sequence and a zero count.
 			const auto appendU16 = [&bytes](uint16_t value) { bytes.push_back(static_cast<uint8_t>(value)); bytes.push_back(static_cast<uint8_t>(value >> 8)); };
 			const auto appendU32 = [&bytes](uint32_t value) { for (int i = 0; i < 4; ++i) { bytes.push_back(static_cast<uint8_t>(value >> (i * 8))); } };
 			const auto appendU64 = [&bytes](uint64_t value) { for (int i = 0; i < 8; ++i) { bytes.push_back(static_cast<uint8_t>(value >> (i * 8))); } };
@@ -159,7 +159,6 @@ namespace RTE {
 			const uint64_t roundId = 0x5EED0000C0FFEE14ULL;
 			NetSoundObservationDictionary encoder;
 			NetSoundObservationTables decoderTables;
-			decoderTables.roundId = roundId;
 
 			const auto roundTripThrough = [&](const NetLockstepFrame& frame, size_t& outBytes, size_t& outEncoded) {
 				std::vector<uint8_t> bytes;
@@ -265,7 +264,9 @@ namespace RTE {
 				*error = "the observation byte budget did not stop a flood of new keys: encoded " + std::to_string(floodEncoded);
 				return false;
 			}
-			if (floodBytes - emptyBytes > NetLockstepCodec::c_MaxObservationBytesPerPacket) {
+			// The slack is the block's own binding sequence, which is wider here than in an empty block.
+			if (floodBytes - emptyBytes > NetLockstepCodec::c_MaxObservationBytesPerPacket + 16 ||
+			    floodBytes > NetLockstepCodec::c_HeaderBytes + NetLockstepCodec::c_MaxPayloadBytes) {
 				*error = "an observation block passed its byte budget";
 				return false;
 			}
@@ -283,7 +284,8 @@ namespace RTE {
 			// A version 13 recording still decodes, with and without a table to read slots against.
 			const NetLockstepFrame legacy = MakeObservationFrame(40, roundId, MakeObservationSet(2, 5, 77, 0.5F));
 			const std::vector<uint8_t> legacyBytes = MakeVersion13Frame(legacy);
-			if (legacyBytes.size() != FrameBytesWithoutObservations(legacy) + 44 * 5) {
+			// One byte less than an empty version 15 block, because version 13 has no binding sequence.
+			if (legacyBytes.size() != FrameBytesWithoutObservations(legacy) - 1 + 44 * 5) {
 				*error = "the version 13 frame is not forty-four bytes per observation";
 				return false;
 			}
@@ -323,8 +325,9 @@ namespace RTE {
 				*error = "a slot reference without any table was not refused";
 				return false;
 			}
+			// A table that has never been fed sees the gap before it ever reaches the slot.
 			NetSoundObservationTables emptyTables;
-			if (NetLockstepCodec::Decode(refBytes, ControllerFrame::c_Version, &emptyTables).error.code != NetLockstepErrorCode::UnboundObservationSlot) {
+			if (NetLockstepCodec::Decode(refBytes, ControllerFrame::c_Version, &emptyTables).error.code != NetLockstepErrorCode::ObservationBindingGap) {
 				*error = "a slot reference against an empty table was not refused";
 				return false;
 			}
@@ -333,28 +336,125 @@ namespace RTE {
 				return false;
 			}
 
-			// A frame from another round is refused whole rather than read against this round's slots.
+			// The one packet that says a slot has been reused is the only place that is ever said, so a
+			// receiver that misses it must refuse rather than read the slot as the key it held before.
+			// This is the reviewer's lost_rebinding probe: it decodes with no error on version 14.
+			{
+				NetSoundObservationDictionary sender;
+				NetSoundObservationTables receiver;
+				uint64_t nextFrame = 100;
+				// Bind every slot, so the next key handed out reuses the one nobody has mentioned since.
+				for (size_t block = 0; block * 512 < NetSoundObservationDictionary::c_MaxSlots; ++block) {
+					std::vector<NetSoundObservation> keys;
+					for (size_t i = 0; i < 512; ++i) {
+						keys.push_back(MakeObservation(2, 700000 + block * 512 + i, 11, 0x5151ULL + i, 1, 0.125F));
+					}
+					std::vector<uint8_t> bytes;
+					size_t encoded = 0;
+					if (!NetLockstepCodec::Encode({MakeObservationFrame(nextFrame++, roundId, keys)}, bytes, nullptr, &sender, &encoded) || encoded != keys.size()) {
+						*error = "the rebinding probe could not fill the table";
+						return false;
+					}
+					if (!NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &receiver).ok) {
+						*error = "the rebinding probe's filling frames did not decode";
+						return false;
+					}
+				}
+				const NetSoundObservation reused = MakeObservation(2, 990001, 12, 0x6262ULL, 1, 0.25F);
+				std::vector<uint8_t> rebinding;
+				size_t rebindingEncoded = 0;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(nextFrame++, roundId, {reused})}, rebinding, nullptr, &sender, &rebindingEncoded)) {
+					*error = "the rebinding frame did not encode";
+					return false;
+				}
+				// The receiver never gets that frame. The next one refers to the reused slot.
+				NetSoundObservation later = reused;
+				later.value = 0.5F;
+				std::vector<uint8_t> after;
+				size_t afterEncoded = 0;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(nextFrame++, roundId, {later})}, after, nullptr, &sender, &afterEncoded)) {
+					*error = "the frame after the rebinding did not encode";
+					return false;
+				}
+				const NetLockstepDecodeResult lost = NetLockstepCodec::Decode(after, ControllerFrame::c_Version, &receiver);
+				if (lost.ok || lost.error.code != NetLockstepErrorCode::ObservationBindingGap) {
+					*error = "a lost rebinding was not refused: ok=" + std::to_string(lost.ok ? 1 : 0) + " " + NetLockstepCodec::ErrorCodeName(lost.error.code);
+					return false;
+				}
+				// Delivered in order, the same two frames read exactly what the sender meant.
+				NetSoundObservationDictionary replaySender;
+				NetSoundObservationTables replayReceiver;
+				uint64_t replayFrame = 200;
+				bool replayOk = true;
+				for (size_t block = 0; block * 512 < NetSoundObservationDictionary::c_MaxSlots && replayOk; ++block) {
+					std::vector<NetSoundObservation> keys;
+					for (size_t i = 0; i < 512; ++i) {
+						keys.push_back(MakeObservation(2, 700000 + block * 512 + i, 11, 0x5151ULL + i, 1, 0.125F));
+					}
+					std::vector<uint8_t> bytes;
+					size_t encoded = 0;
+					replayOk = NetLockstepCodec::Encode({MakeObservationFrame(replayFrame++, roundId, keys)}, bytes, nullptr, &replaySender, &encoded) &&
+					           NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &replayReceiver).ok;
+				}
+				std::vector<uint8_t> replayRebinding, replayAfter;
+				size_t ignored = 0;
+				replayOk = replayOk &&
+				           NetLockstepCodec::Encode({MakeObservationFrame(replayFrame++, roundId, {reused})}, replayRebinding, nullptr, &replaySender, &ignored) &&
+				           NetLockstepCodec::Decode(replayRebinding, ControllerFrame::c_Version, &replayReceiver).ok &&
+				           NetLockstepCodec::Encode({MakeObservationFrame(replayFrame++, roundId, {later})}, replayAfter, nullptr, &replaySender, &ignored);
+				if (!replayOk) {
+					*error = "the in-order replay of the rebinding stream failed";
+					return false;
+				}
+				const NetLockstepDecodeResult delivered = NetLockstepCodec::Decode(replayAfter, ControllerFrame::c_Version, &replayReceiver);
+				const NetLockstepFrame* deliveredFrame = delivered.ok ? std::get_if<NetLockstepFrame>(&delivered.packet.payload) : nullptr;
+				if (!deliveredFrame || deliveredFrame->observations.size() != 1 || !(deliveredFrame->observations.front() == later)) {
+					*error = "the reused slot did not read as the key the sender rebound it to";
+					return false;
+				}
+			}
+
+			// A sender that starts its round over has spelled nothing out yet; that is a fresh table, not a
+			// hole, and the keys it sends next are its own.
+			{
+				NetSoundObservationDictionary warm;
+				NetSoundObservationTables receiver;
+				std::vector<uint8_t> bytes;
+				size_t encoded = 0;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(300, roundId, MakeObservationSet(2, 8, 21, 0.0F))}, bytes, nullptr, &warm, &encoded) ||
+				    !NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &receiver).ok) {
+					*error = "the restart probe's first round did not survive the wire";
+					return false;
+				}
+				NetSoundObservationDictionary restarted;
+				const std::vector<NetSoundObservation> fresh = MakeObservationSet(2, 8, 44, 0.5F);
+				std::vector<uint8_t> restartedBytes;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(0, roundId + 1, fresh)}, restartedBytes, nullptr, &restarted, &encoded)) {
+					*error = "the restarted round did not encode";
+					return false;
+				}
+				const NetLockstepDecodeResult adopted = NetLockstepCodec::Decode(restartedBytes, ControllerFrame::c_Version, &receiver);
+				const NetLockstepFrame* adoptedFrame = adopted.ok ? std::get_if<NetLockstepFrame>(&adopted.packet.payload) : nullptr;
+				if (!adoptedFrame || adoptedFrame->observations != fresh) {
+					*error = "a sender that started over was not followed: " + std::string(NetLockstepCodec::ErrorCodeName(adopted.error.code));
+					return false;
+				}
+			}
+
+			// Corruptions inside the block are refused, not read as another sound.
 			NetSoundObservationDictionary roundEncoder;
 			std::vector<uint8_t> roundBytes;
 			size_t roundEncoded = 0;
 			if (!NetLockstepCodec::Encode({MakeObservationFrame(60, roundId, MakeObservationSet(2, 3, 9, 0.0F))}, roundBytes, nullptr, &roundEncoder, &roundEncoded)) {
-				*error = "could not encode the round frame";
+				*error = "could not encode the corruption frame";
 				return false;
 			}
-			NetSoundObservationTables otherRound;
-			otherRound.roundId = roundId + 1;
-			if (NetLockstepCodec::Decode(roundBytes, ControllerFrame::c_Version, &otherRound).error.code != NetLockstepErrorCode::StaleRound) {
-				*error = "a frame from another round was not refused";
-				return false;
-			}
-
-			// Corruptions inside the block are refused, not read as another sound.
+			// Past the frame's empty block, which is a zero binding sequence and a zero count.
 			const size_t blockStart = FrameBytesWithoutObservations(MakeObservationFrame(60, roundId, {}));
 			const auto expectBlockError = [&](size_t offset, uint8_t value, NetLockstepErrorCode code, const char* what) {
 				std::vector<uint8_t> corrupt = roundBytes;
 				corrupt[offset] = value;
 				NetSoundObservationTables tables;
-				tables.roundId = roundId;
 				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(corrupt, ControllerFrame::c_Version, &tables);
 				if (decoded.error.code == code) {
 					return true;
@@ -362,7 +462,8 @@ namespace RTE {
 				*error = std::string(what) + " gave " + NetLockstepCodec::ErrorCodeName(decoded.error.code);
 				return false;
 			};
-			if (!expectBlockError(blockStart, 0xFEU, NetLockstepErrorCode::UnboundObservationSlot, "a corrupted slot reference") ||
+			if (!expectBlockError(blockStart - 3, 0x05U, NetLockstepErrorCode::ObservationBindingGap, "a binding sequence ahead of the table") ||
+			    !expectBlockError(blockStart, 0xFEU, NetLockstepErrorCode::UnboundObservationSlot, "a corrupted slot reference") ||
 			    !expectBlockError(blockStart + 1, 0xE0U, NetLockstepErrorCode::ReservedFieldNonZero, "a reserved key-mask bit")) {
 				return false;
 			}
@@ -373,13 +474,33 @@ namespace RTE {
 				nonCanonical[12 + i] = static_cast<uint8_t>((nonCanonical.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
 			}
 			NetSoundObservationTables varintTables;
-			varintTables.roundId = roundId;
 			if (NetLockstepCodec::Decode(nonCanonical, ControllerFrame::c_Version, &varintTables).error.code != NetLockstepErrorCode::InvalidValue) {
 				*error = "a non-canonical slot varint was not refused";
 				return false;
 			}
+
+			// A version 14 frame has no binding sequence and still decodes, with and without a table.
+			std::vector<uint8_t> version14 = roundBytes;
+			if (version14[blockStart - 3] != 0x00U) {
+				*error = "the corruption frame's binding sequence is not the single zero byte expected";
+				return false;
+			}
+			version14.erase(version14.begin() + static_cast<std::ptrdiff_t>(blockStart) - 3);
+			version14[4] = 14;
+			for (int i = 0; i < 4; ++i) {
+				version14[12 + i] = static_cast<uint8_t>((version14.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			for (NetSoundObservationTables* tables: {static_cast<NetSoundObservationTables*>(nullptr), &varintTables}) {
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(version14, ControllerFrame::c_Version, tables);
+				const NetLockstepFrame* out = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+				if (!out || out->observations != MakeObservationSet(2, 3, 9, 0.0F)) {
+					*error = "a version 14 frame did not decode: " + std::string(NetLockstepCodec::ErrorCodeName(decoded.error.code));
+					return false;
+				}
+			}
 			std::cout << "[net-lockstep-selftest] PASS observation_slot_codec repeat=" << (repeatBytes - emptyBytes) / 64
-			          << "B first_use=" << (firstBytes - emptyBytes) / 64 << "B legacy=44B budget_stop=" << floodEncoded << "/" << flood.size() << std::endl;
+			          << "B first_use=" << (firstBytes - emptyBytes) / 64 << "B legacy=44B budget_stop=" << floodEncoded << "/" << flood.size()
+			          << " lost_rebinding=refused" << std::endl;
 			return true;
 		}
 
@@ -444,7 +565,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x0E, 0x00,
+				0x0F, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -2176,7 +2297,8 @@ namespace RTE {
 								priced.roundId = 0x1400000000000001ULL + observationsPerFrame;
 								priced.frames = {MakeFrame(100 + static_cast<int64_t>(f), f + 1)};
 								priced.observations = observations;
-								legacyBytesPerFrame = FrameBytesWithoutObservations(priced) + 44 * observationsPerFrame;
+								// Less the binding sequence of an empty block, which version 13 did not have.
+								legacyBytesPerFrame = FrameBytesWithoutObservations(priced) - 1 + 44 * observationsPerFrame;
 							}
 							if (!peers[peer - 1]->QueueLocalInput(f, {MakeFrame(100 * peer + static_cast<int64_t>(f), f + 1)}, {}, error, observations)) {
 								return false;
