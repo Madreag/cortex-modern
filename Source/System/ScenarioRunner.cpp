@@ -1056,6 +1056,36 @@ namespace RTE {
 		s_LockstepWaitUs = 0;
 	}
 
+	bool ScenarioRunner::DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs) {
+		const auto start = std::chrono::steady_clock::now();
+		auto elapsed = [&start] {
+			return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+		};
+		if (!s_LockstepCoordinator) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(lingerMs));
+			return true;
+		}
+		while (s_LockstepCoordinator->HasPendingRelayWork() && elapsed() < budgetMs) {
+			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		const bool drained = !s_LockstepCoordinator->HasPendingRelayWork();
+		const uint32_t drainMs = elapsed();
+		if (!drained) {
+			std::cout << "[net-match] quit with " << s_LockstepCoordinator->GetStats().relayBacklogBytes
+			          << " bytes still owed to peers after " << drainMs << "ms" << std::endl;
+		} else if (drainMs > 0) {
+			std::cout << "[net-match] relay drained in " << drainMs << "ms" << std::endl;
+		}
+		// Keep relaying through the linger rather than idling it away: a client finishing its own last
+		// tick sends a frame its siblings still need, and we are the only route between them.
+		for (const uint32_t until = drainMs + lingerMs; elapsed() < until;) {
+			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return drained;
+	}
+
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";

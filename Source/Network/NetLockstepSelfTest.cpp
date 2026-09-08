@@ -1638,6 +1638,71 @@ namespace RTE {
 			}
 			return true;
 		}
+		// The relay host is the only route between its clients, so its own last tick is not the round's
+		// end: a client one input-delay behind still needs the forwards the host is holding. Quitting
+		// there took the last frames off every client that was waiting - the 4-peer lane's 179 of 180.
+		bool TestRelayHostFinishesWhatItOwes(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 20000; // Long enough that the unreachable bound cannot end this.
+			std::vector<uint64_t> hostReady, bReady;
+			if (!StartRelayRefusal(fx, 43016, 0x7000000000000016ULL, timeoutMs, hostReady, error)) {
+				return false;
+			}
+			const uint64_t refusedFrom = fx.now;
+			fx.DriveProducing(true, [&] { return fx.host.GetStats().relaySendFailures > 0; }, refusedFrom + 400);
+			if (fx.host.GetStats().relaySendFailures == 0) {
+				*error = "the refusal never reached the relay: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.HasPendingRelayWork()) {
+				*error = "a refused forward left the host owing nothing: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// Completing the round does not discharge the debt: the frames are still undelivered.
+			fx.host.Complete("host reached its tick cap");
+			if (!fx.host.HasPendingRelayWork()) {
+				*error = "Complete() dropped the forwards the host still owed";
+				return false;
+			}
+			fx.Collect(fx.clientB, bReady);
+			const size_t behind = bReady.size();
+			// The link comes back and the host is given the chance to hand over what it holds.
+			fx.hostT.SetFaultConfig({});
+			for (const uint64_t until = fx.now + 2000; fx.now <= until && fx.host.HasPendingRelayWork(); fx.now += 5) {
+				fx.host.Tick(fx.now);
+				fx.clientB.Tick(fx.now);
+				fx.hostT.AdvanceTimeMs(5);
+				fx.clientBT.AdvanceTimeMs(5);
+			}
+			if (fx.host.HasPendingRelayWork()) {
+				*error = "the held forwards never drained: " + fx.host.BuildReportJson();
+				return false;
+			}
+			for (const uint64_t until = fx.now + 500; fx.now <= until; fx.now += 5) {
+				fx.clientB.Tick(fx.now);
+				fx.clientBT.AdvanceTimeMs(5);
+				fx.Collect(fx.clientB, bReady);
+			}
+			if (bReady.size() <= behind) {
+				*error = "the peer that was owed forwards never received them";
+				return false;
+			}
+			// The accounting the next lane run reads: bytes, not just packet counts.
+			const NetLockstepStats& stats = fx.host.GetStats();
+			if (stats.relayBytesSent == 0 || stats.largestRelayPacketBytes == 0 ||
+			    stats.peers.at(3).relayBytesSent == 0 || stats.relayBacklogBytes != 0) {
+				*error = "the relay byte accounting is missing: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const std::string report = fx.host.BuildReportJson();
+			if (report.find("\"relay_bytes_sent\":") == std::string::npos ||
+			    report.find("\"largest_relay_packet_bytes\":") == std::string::npos ||
+			    report.find("\"relay_backlog_bytes\":") == std::string::npos) {
+				*error = "the relay byte counters are missing from the report: " + report;
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1668,7 +1733,8 @@ namespace RTE {
 		    !TestCoordinatorRelayBacklogHeals(&error) ||
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
 		    !TestCoordinatorDroppedSeatHold(&error) ||
-		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error)) {
+		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
+		    !TestRelayHostFinishesWhatItOwes(&error)) {
 			return fail(error);
 		}
 
