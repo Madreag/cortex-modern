@@ -271,6 +271,21 @@ static bool IsLockstepLocalActor(const Actor* actor) {
 	return ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
 }
 
+std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCensus() const {
+	// Only the settled list: an actor still in m_AddedActors has not been agreed on by every peer yet,
+	// and a ledger entry naming one would reseat something a returning peer never held.
+	std::vector<LockstepActorOwner> census;
+	census.reserve(m_Actors.size());
+	for (const Actor* actor: m_Actors) {
+		if (!actor) {
+			continue;
+		}
+		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
+		census.push_back({actorID, actor->GetTeam(), ScenarioRunner::GetLockstepActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled())});
+	}
+	return census;
+}
+
 static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::deque<Actor*>& actors, bool localOwned) {
 	std::vector<ControllerFrame> frames;
 	frames.reserve(actors.size());
