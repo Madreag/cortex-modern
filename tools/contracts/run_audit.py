@@ -63,6 +63,14 @@ def compare_state_files(first, second, destination):
             'first_sha256': hashes[0].hexdigest(), 'second_sha256': hashes[1].hexdigest(), 'artifact': str(destination),
             'classification': 'Exact unfiltered document comparison; differences are 64-KiB byte blocks, not a field count.'}
 
+# A transition named here must apply; every load transaction answers to --expect-load instead, and
+# 'observe'/'stage' record an outcome of their own.
+APPLYING_OPERATIONS = ('save', 'memory', 'file', 'hold', 'preview')
+LOAD_OPERATIONS = ('load', 'ordinary-load')
+# The refusal transactions print their engine refusal, so only they may log errors.
+REFUSING_OPERATIONS = ('load', 'ordinary-load', 'stage-reject', 'stage-ordinary-reject')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--replay', type=Path, required=True)
@@ -331,11 +339,44 @@ def main():
             continuation['scope'] = 'Full trace, final native simulation dump and five complete Lua graphs; unfiltered cross-run raw fields retained for separate classification.'
             (out / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps({'case': result['case'], 'continuation_status': continuation['status'], 'failed_checks': [key for key, passed in checks.items() if not passed]}), flush=True)
+
+    def gate(item):
+        """The recorded outcome of the transition, not just a clean process."""
+        base = item['operation'].split(':', 1)[0]
+        must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and options.expect_load == 'accepted')
+        return [name for name, passed in (
+            ('completed', item['completed']),
+            ('process_clean', item['process_clean']),
+            ('desktop_unchanged', item['desktop_unchanged']),
+            ('binary', item['binary'] == exe_hash),
+            ('applied', item.get('applied') is True or not must_apply),
+            ('errors', not item['errors'] or base in REFUSING_OPERATIONS),
+            ('graph_capture', not item['graph_capture_problems']),
+            ('graphs_serialized', all(observation['serialized'] and observation['problem_count'] == 0
+                                      for observation in item['graph_observations']))) if not passed]
+
+    for item in results:
+        item['gate_failures'] = gate(item)
+        (Path(item['out']) / 'result.json').write_text(json.dumps(item, indent=2))
     unchanged = unchanged_inputs()
-    complete = unchanged and all(item['completed'] and item['process_clean'] and item['desktop_unchanged'] and item['binary'] == exe_hash for item in results)
+    complete = unchanged and not any(item['gate_failures'] for item in results)
     continuation_passed = all(item['continuation']['passed'] for item in results) if options.continue_through else None
+    verdict = {'rule': 'Every case completes on the pinned binary with a clean process and desktop, applies the transitions expected to apply, '
+                       'logs no engine error outside a deliberate refusal, and serialises all five Lua graphs.',
+               'failed_cases': [{'case': item['case'], 'operation': item['operation'], 'gate_failures': item['gate_failures'],
+                                 'applied': item.get('applied'), 'errors': item['errors']} for item in results if item['gate_failures']],
+               'refused_transitions': [item['case'] for item in results if item.get('applied') is False],
+               'error_cases': {item['case']: item['errors'] for item in results if item['errors']},
+               'graph_problem_cases': {item['case']: item['graph_capture_problems'] + [observation for observation in item['graph_observations']
+                                                                                       if not observation['serialized'] or observation['problem_count']]
+                                       for item in results if item['graph_capture_problems']
+                                       or any(not observation['serialized'] or observation['problem_count'] for observation in item['graph_observations'])},
+               'raw_field_differences': {item['case']: item.get('raw_field_differences') for item in results},
+               'raw_field_differences_total': sum(item.get('raw_field_differences') or 0 for item in results),
+               'raw_note': 'Raw field differences are recorded, never gated: they require the retained classifiers.'}
     (options.out / 'result.json').write_text(json.dumps({'status': 'AUDIT OBSERVATIONS, not a complete fidelity pass', 'complete': complete,
-        'source_unchanged': unchanged, 'continuation_checks_passed': continuation_passed, 'references': list(references.values()), 'results': results}, indent=2))
+        'source_unchanged': unchanged, 'continuation_checks_passed': continuation_passed, 'verdict': verdict,
+        'references': list(references.values()), 'results': results}, indent=2))
     return 0 if complete and continuation_passed is not False else 1
 
 if __name__ == '__main__': raise SystemExit(main())
