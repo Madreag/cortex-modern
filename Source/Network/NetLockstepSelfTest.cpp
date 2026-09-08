@@ -340,6 +340,7 @@ namespace RTE {
 			// The one packet that says a slot has been reused is the only place that is ever said, so a
 			// receiver that misses it must refuse rather than read the slot as the key it held before.
 			// This is the reviewer's lost_rebinding probe: it decodes with no error on version 14.
+			uint64_t silentlyWrongKey = 0;
 			{
 				NetSoundObservationDictionary sender;
 				NetSoundObservationTables receiver;
@@ -382,6 +383,33 @@ namespace RTE {
 					*error = "a lost rebinding was not refused: ok=" + std::to_string(lost.ok ? 1 : 0) + " " + NetLockstepCodec::ErrorCodeName(lost.error.code);
 					return false;
 				}
+				// The control: the same packet as version 14 said nothing about the bindings behind it, so the
+				// same receiver reads the reused slot as the key it held before and commits the sent reading
+				// against the wrong sound, with no error at all. That is what the sequence above refuses.
+				const size_t prefix = FrameBytesWithoutObservations(MakeObservationFrame(0, roundId, {})) - 3;
+				std::vector<uint8_t> asVersion14 = after;
+				size_t sequenceBytes = 0;
+				while (prefix + sequenceBytes < asVersion14.size() && (asVersion14[prefix + sequenceBytes] & 0x80U) != 0) {
+					++sequenceBytes;
+				}
+				++sequenceBytes;
+				asVersion14.erase(asVersion14.begin() + static_cast<std::ptrdiff_t>(prefix),
+				                  asVersion14.begin() + static_cast<std::ptrdiff_t>(prefix + sequenceBytes));
+				asVersion14[4] = 14;
+				for (int i = 0; i < 4; ++i) {
+					asVersion14[12 + i] = static_cast<uint8_t>((asVersion14.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+				}
+				const NetLockstepDecodeResult silent = NetLockstepCodec::Decode(asVersion14, ControllerFrame::c_Version, &receiver);
+				const NetLockstepFrame* silentFrame = silent.ok ? std::get_if<NetLockstepFrame>(&silent.packet.payload) : nullptr;
+				if (!silentFrame || silentFrame->observations.size() != 1) {
+					*error = "the version 14 control did not decode, so it proves nothing";
+					return false;
+				}
+				if (silentFrame->observations.front().objectUID == later.objectUID) {
+					*error = "the version 14 control did not reproduce the wrong key it is there to show";
+					return false;
+				}
+				silentlyWrongKey = silentFrame->observations.front().objectUID;
 				// Delivered in order, the same two frames read exactly what the sender meant.
 				NetSoundObservationDictionary replaySender;
 				NetSoundObservationTables replayReceiver;
@@ -501,7 +529,7 @@ namespace RTE {
 			}
 			std::cout << "[net-lockstep-selftest] PASS observation_slot_codec repeat=" << (repeatBytes - emptyBytes) / 64
 			          << "B first_use=" << (firstBytes - emptyBytes) / 64 << "B legacy=44B budget_stop=" << floodEncoded << "/" << flood.size()
-			          << " lost_rebinding=refused" << std::endl;
+			          << " lost_rebinding=refused v14_control_committed_key=" << silentlyWrongKey << std::endl;
 			return true;
 		}
 
