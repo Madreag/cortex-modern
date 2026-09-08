@@ -56,7 +56,7 @@ int SoundSimulationScope::RandomNum(int minimum, int maximum) {
 	if (!IsSimulation()) return g_RenderRNG.RandomNum(minimum, maximum);
 	if (maximum <= minimum) return minimum;
 	const uint32_t range = static_cast<uint32_t>(static_cast<int64_t>(maximum) - minimum + 1);
-	const uint32_t threshold = static_cast<uint32_t>(-range) % range;
+	const uint32_t threshold = (0u - range) % range;
 	uint32_t draw; do { draw = s_Current->Draw(); } while (draw < threshold);
 	return minimum + static_cast<int>(draw % range);
 }
