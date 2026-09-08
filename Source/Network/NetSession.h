@@ -91,7 +91,7 @@ namespace RTE {
 		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
 		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
-        /// The frame a seat drop is recorded against; the match runner keeps it current.
+		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
 		NetSessionRole GetRole() const { return m_Role; }

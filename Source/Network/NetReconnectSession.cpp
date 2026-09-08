@@ -797,6 +797,11 @@ namespace RTE {
 			return true;
 		}
 		if (const auto* committed = std::get_if<NetH4JoinCommitted>(&payload)) {
+			// A commit for some other seat is not ours, whatever transaction it names. The txId itself
+			// cannot gate this: a relaunched client resumes its stored ticket under a fresh one.
+			if (m_HasRecord && (committed->stableSeat != m_Record.stableSeat || committed->holderGeneration != m_Record.holderGeneration)) {
+				return true;
+			}
 			m_HasPendingRequest = false;
 			m_Incarnation = committed->incarnation;
 			m_AssignedPeerId = committed->assignedPeerId;
