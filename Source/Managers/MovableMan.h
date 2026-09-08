@@ -285,6 +285,7 @@ namespace RTE {
 		/// facing writes as intents, and any write that reached the canonical actor outside those paths.
 		struct ControllerBoundaryStats {
 			uint64_t equipCommands = 0;
+			uint64_t soundCommands = 0;
 			uint64_t aimIntents = 0;
 			uint64_t flipIntents = 0;
 			uint64_t directWrites = 0;
@@ -927,6 +928,7 @@ namespace RTE {
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;
+		std::vector<std::map<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
 		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
 
 		/// Private member variable and method declarations

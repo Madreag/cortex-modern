@@ -48,7 +48,6 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
-		uint64_t s_LockstepPollNowMs = 0;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		std::map<int64_t, uint8_t> s_LockstepControlOverrides; //!< Synced per-actor control handoffs (co-op shared teams).
 		bool s_LockstepStallOverlayEnabled = false;
@@ -574,7 +573,6 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator) {
 		s_LockstepCoordinator = coordinator;
-		s_LockstepPollNowMs = 0;
 		s_LockstepControlOverrides.clear();
 		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
 		// Touch the timer singleton only when actually frozen — selftests run this before manager init.
@@ -1071,13 +1069,16 @@ namespace RTE {
 		}
 
 		const uint32_t timeoutMs = s_LockstepCoordinator->GetConfig().timeoutMs;
-		const uint32_t maxPolls = timeoutMs > 0 ? timeoutMs + 50 : 500;
+		// The grace is a wall-clock budget. Feeding the coordinator a poll counter made it a count of
+		// ~1ms sleeps instead, so a peer that stopped sending was waited on for far longer than the
+		// configured milliseconds - long enough for the host's drop notice to arrive too late.
+		const uint64_t giveUpMs = timeoutMs > 0 ? static_cast<uint64_t>(timeoutMs) + 50 : 500;
 		const auto waitStart = std::chrono::steady_clock::now();
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
-		for (uint32_t poll = 0; poll <= maxPolls; ++poll) {
-			s_LockstepCoordinator->Tick(s_LockstepPollNowMs++);
+		while (true) {
+			s_LockstepCoordinator->Tick(NetLockstepNowMs());
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
@@ -1126,6 +1127,9 @@ namespace RTE {
 					DrawLockstepStallOverlay(stallMs, timeoutMs, missing);
 				}
 				nextOverlayMs = stallMs + 200;
+			}
+			if (stallMs >= giveUpMs) {
+				break;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}

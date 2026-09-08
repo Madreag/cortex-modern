@@ -3130,6 +3130,9 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 	return 0;
 }
 
+// Set while a graph is serialized: the script-owned objects the walk actually reached.
+static thread_local std::unordered_set<const MovableObject*>* s_CarriedScriptOwnedObjects = nullptr;
+
 static int ScriptGraphNative(lua_State* L) {
 	luabind::detail::object_rep* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->crep()) {
@@ -3251,6 +3254,7 @@ static int ScriptGraphNative(lua_State* L) {
 		const MovableObject* mo = static_cast<const MovableObject*>(rep->ptr());
 		if (owned) {
 			const Entity* preset = mo->GetPresetForCopy();
+			if (s_CarriedScriptOwnedObjects) s_CarriedScriptOwnedObjects->insert(mo);
 			lua_pushstring(L, "copy");
 			lua_pushstring(L, mo->GetClassName().c_str());
 			lua_pushstring(L, preset ? preset->GetPresetName().c_str() : "");
@@ -3469,6 +3473,32 @@ static void ReleaseScriptOwnedTree(MovableObject* mo) {
 	if (ACraft* craft = dynamic_cast<ACraft*>(mo)) for (MovableObject* item: craft->GetCollectedInventory()) ReleaseScriptOwnedTree(item);
 }
 
+// Every script-owned MovableObject in this state's heap. A capture and the restore's release
+// both run this walk, so what a graph has to carry and what a restore detaches cannot disagree.
+static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(MovableObject*)>& visit) {
+	auto* registry = luabind::detail::class_registry::get_registry(state);
+	struct Walk {
+		const void* cpp;
+		const void* lua;
+		const std::function<void(MovableObject*)>* visit;
+	} walk;
+	lua_rawgeti(state, LUA_REGISTRYINDEX, registry->cpp_instance());
+	walk.cpp = lua_topointer(state, -1);
+	lua_pop(state, 1);
+	lua_rawgeti(state, LUA_REGISTRYINDEX, registry->lua_instance());
+	walk.lua = lua_topointer(state, -1);
+	lua_pop(state, 1);
+	walk.visit = &visit;
+	LuaThreadCodec::VisitUserdata(state, [](void* data, size_t size, const void* metatable, void* raw) {
+		const auto& context = *static_cast<const Walk*>(raw);
+		if (size < sizeof(luabind::detail::object_rep) || (metatable != context.cpp && metatable != context.lua)) return;
+		const auto* rep = static_cast<const luabind::detail::object_rep*>(data);
+		if (rep->ptr() && rep->crep() && (rep->flags() & luabind::detail::object_rep::owner) && ClassDerivesFrom(rep->crep(), "MovableObject")) {
+			(*context.visit)(static_cast<MovableObject*>(rep->ptr()));
+		}
+	}, &walk);
+}
+
 static int ScriptGraphNativeRelease(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (rep && rep->crep() && (rep->flags() & luabind::detail::object_rep::owner) && ClassDerivesFrom(rep->crep(), "MovableObject")) {
@@ -3684,6 +3714,11 @@ bool LuaStateWrapper::SerializeScriptGraph(std::string& text, std::vector<std::s
 	lua_getglobal(m_State, "_ScriptGraph");
 	lua_getfield(m_State, -1, "serialize");
 	lua_pushvalue(m_State, -3);
+	std::unordered_set<const MovableObject*> carried;
+	struct CarriedScope {
+		explicit CarriedScope(std::unordered_set<const MovableObject*>& objects) { s_CarriedScriptOwnedObjects = &objects; }
+		~CarriedScope() { s_CarriedScriptOwnedObjects = nullptr; }
+	} carriedScope{carried};
 	if (lua_pcall(m_State, 1, 2, 0) != 0) {
 		problems.push_back(std::string("script graph serialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
 		lua_settop(m_State, top);
@@ -3694,6 +3729,15 @@ bool LuaStateWrapper::SerializeScriptGraph(std::string& text, std::vector<std::s
 	text = data ? std::string(data, length) : std::string();
 	const size_t before = problems.size();
 	CollectStrings(m_State, -1, problems);
+	// The restore detaches every script-owned tree so this graph's copies can adopt their saved
+	// identities. One the roots never reached comes back as nothing, so a checkpoint that still
+	// has to rebind its borrowed pointers names an owner no peer can produce.
+	VisitScriptOwnedObjects(m_State, [&carried, &problems](MovableObject* mo) {
+		if (carried.contains(mo)) return;
+		const std::vector<long> links = mo->GetCheckpointBorrowedReferences();
+		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) return;
+		problems.push_back("a script-owned " + mo->GetClassName() + " (" + mo->GetPresetName() + ") that no script graph root reaches");
+	});
 	lua_settop(m_State, top);
 	return problems.size() == before;
 }
@@ -3764,22 +3808,7 @@ bool LuaStateWrapper::PrepareScriptGraph(const std::string* text, std::vector<st
 
 void LuaStateWrapper::ReleaseScriptOwnedObjects() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
-	auto* registry = luabind::detail::class_registry::get_registry(m_State);
-	struct Metatables { const void* cpp; const void* lua; } metatables;
-	lua_rawgeti(m_State, LUA_REGISTRYINDEX, registry->cpp_instance());
-	metatables.cpp = lua_topointer(m_State, -1);
-	lua_pop(m_State, 1);
-	lua_rawgeti(m_State, LUA_REGISTRYINDEX, registry->lua_instance());
-	metatables.lua = lua_topointer(m_State, -1);
-	lua_pop(m_State, 1);
-	LuaThreadCodec::VisitUserdata(m_State, [](void* data, size_t size, const void* metatable, void* context) {
-		const auto& tables = *static_cast<const Metatables*>(context);
-		if (size < sizeof(luabind::detail::object_rep) || (metatable != tables.cpp && metatable != tables.lua)) return;
-		const auto* rep = static_cast<const luabind::detail::object_rep*>(data);
-		if (rep->ptr() && rep->crep() && (rep->flags() & luabind::detail::object_rep::owner) && ClassDerivesFrom(rep->crep(), "MovableObject")) {
-			ReleaseScriptOwnedTree(static_cast<MovableObject*>(rep->ptr()));
-		}
-	}, &metatables);
+	VisitScriptOwnedObjects(m_State, ReleaseScriptOwnedTree);
 }
 
 bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld) {
@@ -4603,6 +4632,54 @@ _PrimitiveQueueCapture = nil
 		settledSoundOwner = g_AudioMan.LoadCheckpoint(originalAudio) && settledSoundOwner;
 	}
 	std::cout << "[script-graph-selftest] " << (settledSoundOwner ? "PASS" : "FAIL") << " checkpoint_settles_script_owned_sound" << std::endl;
+	// A script-owned object parked where no graph root reaches it is detached by the restore and
+	// never rebuilt, so the checkpoint must not demand it back and must refuse to promise it.
+	bool unreachableOwner = false;
+	{
+		MovableMan::ConstructionRegistryScope registryScope;
+		const bool created = RunScriptString(
+			"_ScriptedObjects = _ScriptedObjects or {};"
+			"_ScriptedObjects[\"scriptgraphselftest\"] = { held = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\") };"
+			"_ScriptGraphSelfTestUID = _ScriptedObjects[\"scriptgraphselftest\"].held.UniqueID") == 0;
+		lua_getglobal(m_State, "_ScriptGraphSelfTestUID");
+		MovableObject* hidden = g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(m_State, -1)));
+		lua_pop(m_State, 1);
+		std::vector<std::string> graphs;
+		std::vector<std::string> graphProblems;
+		if (created && hidden) {
+			const std::string references = g_MovableMan.SaveCheckpoint();
+			g_MovableMan.UnregisterObject(hidden);
+			unreachableOwner = g_MovableMan.LoadCheckpoint(references);
+			g_MovableMan.RegisterObject(hidden);
+			unreachableOwner = g_MovableMan.SerializeScriptGraphs(graphs, graphProblems) && unreachableOwner;
+			MOPixel target;
+			target.Create();
+			hidden->SetWhichMOToNotHit(&target, 10.0F);
+			graphs.clear();
+			graphProblems.clear();
+			unreachableOwner = !g_MovableMan.SerializeScriptGraphs(graphs, graphProblems) && unreachableOwner;
+			unreachableOwner = graphProblems.size() == 1 && graphProblems.front().starts_with("a script-owned MOPixel") && unreachableOwner;
+			hidden->SetWhichMOToNotHit(nullptr, 0.0F);
+		}
+		RunScriptString("_ScriptedObjects[\"scriptgraphselftest\"] = nil; _ScriptGraphSelfTestUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (unreachableOwner ? "PASS" : "FAIL") << " checkpoint_drops_unreachable_script_owner" << std::endl;
+	checkpointValues = unreachableOwner && checkpointValues;
+	// The collector can sweep a script-owned object while a construction scope holds a registry copy,
+	// so putting that copy back must not name the object the sweep destroyed.
+	bool scopeForgetsDestroyed = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		const long identity = object->GetUniqueID();
+		{
+			MovableMan::ConstructionRegistryScope registryScope;
+			delete object;
+		}
+		scopeForgetsDestroyed = identity > 0 && g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
+	}
+	std::cout << "[script-graph-selftest] " << (scopeForgetsDestroyed ? "PASS" : "FAIL") << " construction_scope_forgets_destroyed_owner" << std::endl;
 	bool nativeLifetime = true;
 	{
 		MOPixel object;
@@ -4731,7 +4808,7 @@ _PrimitiveQueueCapture = nil
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
-	const bool pass = checkpointValues && settledSoundOwner && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
+	const bool pass = checkpointValues && settledSoundOwner && scopeForgetsDestroyed && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;
 }

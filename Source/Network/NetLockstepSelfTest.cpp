@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <string>
@@ -97,7 +98,7 @@ namespace RTE {
 			frame.roundId = 0x5EED0000C0FFEE01ULL;
 			frame.observations = {NetSoundObservation{2, 1048601, 31, 0x1122334455667788ULL, 7, 3, 0.25F}, NetSoundObservation{2, 0, 12, 99, 0, 1, 0.75F}};
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
-			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}
@@ -135,7 +136,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x0C, 0x00,
+				0x0D, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1091,6 +1092,528 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		// A host-star fixture on the injected clock: host=1, clientA=2, clientB=3 over loopback.
+		struct StarFixture {
+			LoopbackTransport hostT, clientAT, clientBT;
+			NetLockstepCoordinator host, clientA, clientB;
+			uint64_t now = 0;
+			uint64_t produced[3] = {0, 0, 0};
+
+			bool Start(uint16_t port, uint64_t sessionId, uint32_t timeoutMs, std::string* error) {
+				if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = sessionId;
+					c.timeoutMs = timeoutMs;
+					c.localPeerId = local;
+					c.peerCount = 3;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.scenario = "LockstepSelfTest";
+					c.ownershipPolicy = "unique-id-split";
+					return c;
+				};
+				return host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) &&
+				       clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) &&
+				       clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error);
+			}
+
+			// Drives only the named peers, so a peer left out is one whose process has wedged: its
+			// socket stays open and its packets stop.
+			bool Drive(bool driveHost, bool driveA, bool driveB, const std::function<bool()>& done, uint64_t untilMs) {
+				for (; now <= untilMs; now += 5) {
+					if (driveHost) host.Tick(now);
+					if (driveA) clientA.Tick(now);
+					if (driveB) clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (driveHost) hostT.AdvanceTimeMs(5);
+					if (driveA) clientAT.AdvanceTimeMs(5);
+					if (driveB) clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			}
+
+			// Produces while this peer's pipeline has room, and stops when it does not: a peer blocked
+			// on a frame it cannot commit stops sending, exactly as the sim loop does while it waits.
+			void Feed(NetLockstepCoordinator& peer, uint8_t peerId, int64_t actorId) {
+				uint64_t& next = produced[peerId - 1];
+				if (!peer.IsRunning() || next > peer.GetStats().nextFrame + 4) {
+					return;
+				}
+				std::string ignored;
+				if (peer.QueueLocalInput(next, {MakeFrame(actorId, next + 1)}, {}, &ignored)) {
+					++next;
+				}
+			}
+
+			// Every live peer keeps producing, as a real match does. Without this the injected clock
+			// runs on while nobody sends, and a peer that has simply run out of scripted input reads
+			// as wedged - which is the very thing these tests have to tell apart.
+			bool DriveProducing(bool driveB, const std::function<bool()>& done, uint64_t untilMs) {
+				return Drive(true, true, driveB, [&] {
+					Feed(host, 1, 100);
+					Feed(clientA, 2, 200);
+					if (driveB) {
+						Feed(clientB, 3, 300);
+					}
+					return done();
+				}, untilMs);
+			}
+
+			void Collect(NetLockstepCoordinator& peer, std::vector<uint64_t>& out) {
+				NetLockstepReadyFrame ready;
+				while (peer.PopReadyFrame(ready)) {
+					out.push_back(ready.frame);
+				}
+			}
+
+			bool Running() { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); }
+		};
+
+		// A wedged client stops sending but keeps its socket, so the transport says nothing for as long
+		// as its process lives - longer than every survivor's missing-frame grace. The relay host must
+		// call it gone on its OWN bounded budget, or the healthy clients time out waiting for a peer
+		// nobody has told them about. Only the host adjudicates: one relayed notice, one leave frame.
+		bool TestCoordinatorHostAdjudicatesSilentPeer(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 400;
+			if (!fx.Start(43012, 0x7000000000000012ULL, timeoutMs, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "silent-peer fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady, aReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					return hostReady.size() >= 2 && aReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "silent-peer fixture did not get the round moving";
+				return false;
+			}
+			// B wedges here: never ticked again, never sends again. Host and A keep playing.
+			const uint64_t silentFrom = fx.now;
+			if (!fx.DriveProducing(false, [&] { return fx.clientA.GetPeerLeaveFrames().count(3) != 0; }, silentFrom + 4 * timeoutMs)) {
+				*error = "the survivor never learned the wedged peer had left (host=" + fx.host.BuildReportJson() + ")";
+				return false;
+			}
+			if (fx.now - silentFrom >= timeoutMs) {
+				*error = "the drop notice reached the survivor after its own grace (" + std::to_string(fx.now - silentFrom) +
+				         "ms of " + std::to_string(timeoutMs) + "ms)";
+				return false;
+			}
+			if (fx.host.GetStats().peersDroppedSilent != 1 ||
+			    fx.host.GetStats().timeoutReason.find("MissingFrameTimeout") != std::string::npos) {
+				*error = "the host did not adjudicate the wedged peer: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// Every survivor drops the requirement at the SAME frame, or their committed sets diverge.
+			if (fx.host.GetPeerLeaveFrames().at(3) != fx.clientA.GetPeerLeaveFrames().at(3)) {
+				*error = "host and survivor disagreed on the leave frame";
+				return false;
+			}
+			const size_t committedAtLeave = aReady.size();
+			if (!fx.DriveProducing(false, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					return aReady.size() >= committedAtLeave + 4 && hostReady.size() >= committedAtLeave + 4;
+				}, fx.now + 4 * timeoutMs)) {
+				*error = "the survivors did not keep playing past the wedged peer (host=" + std::to_string(hostReady.size()) +
+				         " a=" + std::to_string(aReady.size()) + ")";
+				return false;
+			}
+			if (fx.host.IsFailed() || fx.clientA.IsFailed() || fx.host.GetPeerLeaveFrames().count(2) != 0) {
+				*error = "a survivor was failed or dropped after the wedged peer was adjudicated: " + fx.host.BuildReportJson();
+				return false;
+			}
+			return true;
+		}
+
+		// The negative control for the rule above: a client NEVER adjudicates. Two survivors judging
+		// independently would drop the same peer at different frames and diverge, so a client whose
+		// host has gone quiet must still die on its own missing-frame grace, with the same text.
+		bool TestCoordinatorSilentHostStillTimesOut(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 300;
+			if (!fx.Start(43013, 0x7000000000000013ULL, timeoutMs, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "silent-host fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> aReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.clientA, aReady);
+					return aReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "silent-host fixture did not get the round moving";
+				return false;
+			}
+			// The host wedges: A now waits on the host and, through it, on B.
+			if (!fx.Drive(false, true, true, [&] { return fx.clientA.IsFailed(); }, fx.now + 6 * timeoutMs)) {
+				*error = "a client with a silent host did not time out";
+				return false;
+			}
+			if (fx.clientA.GetStats().timeoutReason.find("MissingFrameTimeout") == std::string::npos) {
+				*error = "a client with a silent host stopped for the wrong reason: " + fx.clientA.GetStats().timeoutReason;
+				return false;
+			}
+			if (!fx.clientA.GetPeerLeaveFrames().empty() || fx.clientA.GetStats().peersDroppedSilent != 0) {
+				*error = "a client adjudicated a peer drop, which only the relay host may do";
+				return false;
+			}
+			return true;
+		}
+
+		// Runs a 3-peer star to a moving round, then refuses every host send to clientB while all three
+		// keep producing - so the ONLY thing wrong is the forward, not a peer that went quiet.
+		bool StartRelayRefusal(StarFixture& fx, uint16_t port, uint64_t sessionId, uint32_t timeoutMs, std::vector<uint64_t>& hostReady, std::string* error) {
+			if (!fx.Start(port, sessionId, timeoutMs, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "relay-refusal fixture did not reach Running";
+				return false;
+			}
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "relay-refusal fixture did not get the round moving";
+				return false;
+			}
+			LoopbackTransportConfig refuseB;
+			refuseB.refuseSendsToPeer = 2; // clientB's host-side transport id.
+			fx.hostT.SetFaultConfig(refuseB);
+			return true;
+		}
+
+		// A refused forward was never queued and the receiver cannot ask for it again, so the host
+		// holds it and retries: a send buffer that frees up costs a hitch, not a player.
+		bool TestCoordinatorRelayBacklogHeals(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 2000; // Refusals are bounded at half of this; heal well inside it.
+			std::vector<uint64_t> hostReady, bReady;
+			if (!StartRelayRefusal(fx, 43014, 0x7000000000000014ULL, timeoutMs, hostReady, error)) {
+				return false;
+			}
+			const uint64_t refusedFrom = fx.now;
+			fx.DriveProducing(true, [&] { return fx.now >= refusedFrom + 200; }, refusedFrom + 200);
+			if (fx.host.GetStats().relaySendFailures == 0) {
+				*error = "the refusal never reached the relay: " + fx.host.BuildReportJson();
+				return false;
+			}
+			fx.hostT.SetFaultConfig({});
+			fx.Collect(fx.clientB, bReady);
+			const size_t behind = bReady.size();
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.clientB, bReady);
+					return bReady.size() >= behind + 4;
+				}, fx.now + timeoutMs)) {
+				*error = "a peer whose forwards were refused only briefly did not catch up: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const NetLockstepStats& stats = fx.host.GetStats();
+			if (stats.relayResends == 0 || stats.peers.at(3).relayResends == 0) {
+				*error = "the retried forwards were not counted: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.GetPeerLeaveFrames().empty() || fx.host.IsFailed() || fx.clientB.IsFailed()) {
+				*error = "a peer was dropped for a refusal that healed: " + fx.host.BuildReportJson();
+				return false;
+			}
+			return true;
+		}
+
+		// A forward the transport keeps refusing IS a gap the receiver can never fill; it would hang
+		// on that frame until its grace ran out and take the other clients with it. Bound it.
+		bool TestCoordinatorRelayFailureDropsPeer(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 400; // Refusals are bounded on the same budget as silence: 200ms.
+			std::vector<uint64_t> hostReady, aReady;
+			if (!StartRelayRefusal(fx, 43015, 0x7000000000000015ULL, timeoutMs, hostReady, error)) {
+				return false;
+			}
+			if (!fx.DriveProducing(true, [&] { return fx.host.GetPeerLeaveFrames().count(3) != 0; }, fx.now + 4 * timeoutMs)) {
+				*error = "the host kept a peer it could not reach: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const NetLockstepStats& stats = fx.host.GetStats();
+			if (stats.relaySendFailures == 0 || stats.peers.at(3).relaySendFailures == 0 || stats.lastRelayError.empty()) {
+				*error = "the refused relay was not counted: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// It has to be the unreachable bound: clientB's own frames keep reaching the host, so it
+			// is never the silent one, and the two paths must stay distinguishable in the report.
+			if (stats.peersDroppedSilent != 0 || stats.relayPacketsSent == 0 || stats.peers.at(2).relayPacketsSent == 0) {
+				*error = "the peer was dropped for the wrong reason: " + fx.host.BuildReportJson();
+				return false;
+			}
+			const size_t committedAtLeave = aReady.size();
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					return aReady.size() >= committedAtLeave + 4;
+				}, fx.now + 4 * timeoutMs)) {
+				*error = "the survivors did not keep playing past the unreachable peer: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.IsFailed() || fx.clientA.IsFailed() || fx.clientA.GetPeerLeaveFrames().count(3) == 0) {
+				*error = "the survivor did not follow the host past the unreachable peer";
+				return false;
+			}
+			const std::string report = fx.host.BuildReportJson();
+			if (report.find("\"relay_send_failures\":") == std::string::npos ||
+			    report.find("\"peers\":{") == std::string::npos ||
+			    report.find("\"frames_contributed\":") == std::string::npos) {
+				*error = "the per-peer relay counters are missing from the report: " + report;
+				return false;
+			}
+			return true;
+		}
+
+		// The H4 seat state the round asks for, stubbed. This case pins the coordinator half of the
+		// hold; the plane's own answer is pinned by -net-reconnect-session-selftest.
+		struct SeatStateStub {
+			bool held = false;
+			uint8_t heldPeerId = 0; //!< 0 holds every peer's seat; otherwise only this one's.
+			NetPeerId fenced = c_InvalidNetPeerId;
+		};
+
+		NetLockstepSeatState QuerySeatStateStub(void* context, uint8_t peerId, NetPeerId transportPeerId) {
+			auto* stub = static_cast<SeatStateStub*>(context);
+			NetLockstepSeatState state;
+			state.heldForReclaim = stub->held && (stub->heldPeerId == 0 || stub->heldPeerId == peerId);
+			state.fencedTransport = transportPeerId != c_InvalidNetPeerId && transportPeerId == stub->fenced;
+			return state;
+		}
+
+		// H4 §4: a 1v1 whose only remote DROPS holds its seat for the reclaim window instead of ending,
+		// so the returner has a match to come back to. A clean leave with nobody left still ends at once.
+		bool TestCoordinatorDroppedSeatHold(std::string* error) {
+			uint16_t port = 43020;
+			auto runDrop = [&](bool holdSeat, bool fenceTransport, bool cleanLeave, NetLockstepState& outState,
+			                   size_t& outLeaves, std::string& outReason, uint64_t& outFramesAlone) {
+				++port;
+				const uint64_t sessionId = 0x7000000000000020ULL + port;
+				LoopbackTransport hostT, clientT;
+				std::string ignored;
+				if (!hostT.StartHost(port, &ignored) || !clientT.Connect("loopback", port, &ignored)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = sessionId;
+					c.timeoutMs = 5000;
+					c.localPeerId = local;
+					c.peerCount = 2;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.scenario = "LockstepSelfTest";
+					c.ownershipPolicy = "unique-id-split";
+					return c;
+				};
+				SeatStateStub stub;
+				stub.held = holdSeat;
+				NetLockstepCoordinator host, client;
+				if (!host.Start(hostT, cfg(1, {{2, 1}}, true), &ignored) || !client.Start(clientT, cfg(2, {{1, 1}}, false), &ignored)) {
+					return false;
+				}
+				host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+				uint64_t now = 0;
+				auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						client.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						clientT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
+				if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+					return false;
+				}
+				for (uint64_t f = 0; f < 2; ++f) {
+					if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, &ignored) ||
+					    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, &ignored)) {
+						return false;
+					}
+				}
+				NetLockstepReadyFrame ready;
+				size_t committed = 0;
+				if (!drive(2000, [&] {
+						while (host.PopReadyFrame(ready)) {
+							++committed;
+						}
+						return committed >= 2;
+					})) {
+					return false;
+				}
+				// The drop: the transport goes away with no notice. A clean leave announces itself first.
+				stub.fenced = fenceTransport ? static_cast<NetPeerId>(1) : c_InvalidNetPeerId;
+				if (cleanLeave) {
+					client.Leave("bye");
+					drive(200, [] { return false; });
+				}
+				clientT.Stop();
+				drive(200, [] { return false; });
+				// Whatever the host decided, it must be able to keep producing frames on its own.
+				outFramesAlone = 0;
+				for (uint64_t f = 2; f < 5; ++f) {
+					if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, &ignored)) {
+						break;
+					}
+				}
+				drive(200, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++outFramesAlone;
+					}
+					return false;
+				});
+				outState = host.GetState();
+				outLeaves = host.GetPeerLeaveFrames().size();
+				outReason = host.GetStats().timeoutReason;
+				if (outState == NetLockstepState::Running && !cleanLeave && !fenceTransport) {
+					// The window closes: the very next Tick must end a round nobody is coming back to.
+					stub.held = false;
+					host.Tick(now + 5);
+					outState = host.GetState();
+					outReason = host.GetStats().timeoutReason;
+				}
+				return true;
+			};
+
+			NetLockstepState state = NetLockstepState::Idle;
+			size_t leaves = 0;
+			std::string reason;
+			uint64_t framesAlone = 0;
+
+			// Held: the round plays on without the dropped peer, then ends when the window closes.
+			if (!runDrop(true, false, false, state, leaves, reason, framesAlone)) {
+				*error = "the held-seat drop fixture did not run";
+				return false;
+			}
+			if (leaves != 1) {
+				*error = "a held drop did not stop requiring the dropped peer's frames";
+				return false;
+			}
+			if (framesAlone == 0) {
+				*error = "the host produced nothing while it held the seat";
+				return false;
+			}
+			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
+				*error = "the round did not end once the reclaim window closed: " + reason;
+				return false;
+			}
+
+			// The control: with no seat held this is exactly the old behaviour - the drop ends the match.
+			uint64_t controlFrames = 0;
+			if (!runDrop(false, false, false, state, leaves, reason, controlFrames)) {
+				*error = "the unheld-seat control did not run";
+				return false;
+			}
+			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
+				*error = "an unheld 1v1 drop no longer ends the match: " + reason;
+				return false;
+			}
+			if (controlFrames != 0) {
+				*error = "the host kept producing frames after an unheld drop";
+				return false;
+			}
+
+			// A clean leave with nobody left ends the match at once even while the seat would be held.
+			if (!runDrop(true, false, true, state, leaves, reason, framesAlone)) {
+				*error = "the clean-leave fixture did not run";
+				return false;
+			}
+			if (state != NetLockstepState::Stopped || reason.rfind("PeerLeft:", 0) != 0) {
+				*error = "a clean 1v1 leave no longer ends the match: " + reason;
+				return false;
+			}
+
+			// A superseded incarnation's socket closing is not a leave at all: the seat's live holder is
+			// another transport, so the round keeps requiring it.
+			if (!runDrop(false, true, false, state, leaves, reason, framesAlone)) {
+				*error = "the fenced-transport fixture did not run";
+				return false;
+			}
+			if (leaves != 0 || state != NetLockstepState::Running) {
+				*error = "a fenced transport's disconnect was adjudicated as a leave";
+				return false;
+			}
+			return true;
+		}
+
+		// The host's silence budget and the seat hold answer different questions, and a round that
+		// loses every remote is where the two meet: adjudication decides whether to keep WAITING for a
+		// peer, the hold decides whether the round may END because nobody is coming back. A peer the
+		// host called gone on its own budget still holds its seat.
+		bool TestCoordinatorAdjudicatedPeerKeepsItsSeat(std::string* error) {
+			StarFixture fx;
+			const uint32_t timeoutMs = 400;
+			SeatStateStub stub;
+			stub.held = true;
+			stub.heldPeerId = 3; // Only the peer that wedges is holding a ticket.
+			if (!fx.Start(43016, 0x7000000000000016ULL, timeoutMs, error)) {
+				return false;
+			}
+			fx.host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "adjudicated-seat fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= 2;
+				}, fx.now + timeoutMs)) {
+				*error = "adjudicated-seat fixture did not get the round moving";
+				return false;
+			}
+			// B wedges: the host calls it gone on its own budget rather than waiting on its socket.
+			if (!fx.DriveProducing(false, [&] { return fx.host.GetPeerLeaveFrames().count(3) != 0; }, fx.now + 4 * timeoutMs)) {
+				*error = "the host kept waiting for the wedged peer: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.GetStats().peersDroppedSilent != 1) {
+				*error = "the wedged peer was not adjudicated: " + fx.host.BuildReportJson();
+				return false;
+			}
+			// A's socket goes away too, so no remote is left - and the round must still play on,
+			// because the peer the host adjudicated is holding a seat someone can come back to.
+			fx.clientAT.Stop();
+			const size_t committedBefore = hostReady.size();
+			if (!fx.DriveProducing(false, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= committedBefore + 4;
+				}, fx.now + 4 * timeoutMs)) {
+				*error = "the host stopped producing once every remote was gone: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.IsRunning()) {
+				*error = "a round holding an adjudicated peer's seat ended with the last remote: " + fx.host.GetStats().timeoutReason;
+				return false;
+			}
+			// The window closes: the next tick ends a round nobody is coming back to.
+			stub.held = false;
+			fx.host.Tick(fx.now + 5);
+			if (fx.host.GetState() != NetLockstepState::Stopped || fx.host.GetStats().timeoutReason.rfind("PeerLeft:", 0) != 0) {
+				*error = "the round did not end once the reclaim window closed: " + fx.host.GetStats().timeoutReason;
+				return false;
+			}
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -1115,7 +1638,13 @@ namespace RTE {
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
-		    !TestCoordinatorPeerLeave(&error)) {
+		    !TestCoordinatorPeerLeave(&error) ||
+		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
+		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
+		    !TestCoordinatorRelayBacklogHeals(&error) ||
+		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
+		    !TestCoordinatorDroppedSeatHold(&error) ||
+		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error)) {
 			return fail(error);
 		}
 

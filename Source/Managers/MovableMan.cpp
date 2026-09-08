@@ -359,6 +359,31 @@ bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& 
 	return true;
 }
 
+// The wire form and the queued form of a sound call name the same operations.
+static_assert(static_cast<uint8_t>(SoundContainer::PendingOp::OpCount) == NetGameSoundOp::OpCount);
+static_assert(static_cast<uint8_t>(SoundContainer::PendingOp::PropertyCount) == NetGameSoundOp::c_PropertyCount);
+
+// Runs one AI sound call for real, in a shared scope every peer derives the same key from.
+static void ApplyDeferredSoundOp(const NetGameSoundOp& command) {
+	SoundContainer* container = g_AudioMan.FindSimulationSoundContainer(command.soundIdentity);
+	if (!container) {
+		g_ConsoleMan.PrintString("NETWORK: sound command names no live sound: " + std::to_string(command.soundIdentity));
+		return;
+	}
+	SoundContainer::PendingOp op;
+	op.op = static_cast<SoundContainer::PendingOp::Op>(command.op);
+	op.property = static_cast<SoundContainer::PendingOp::Property>(command.property);
+	op.actorUID = command.actorUID;
+	op.team = command.team;
+	op.player = command.player;
+	op.value = command.value;
+	op.x = command.x;
+	op.y = command.y;
+	op.soundSetPath = command.soundSetPath;
+	SoundSimulationScope sounds(static_cast<uint64_t>(command.actorUID), Hash("DeferredSoundOp"), SoundExecutionDomain::SharedSimulation, g_AudioMan.NextDeferredSoundOpOrdinal());
+	container->ApplyPendingSoundOp(op);
+}
+
 static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	if (readyFrame.localCommands.empty() && readyFrame.remoteCommands.empty()) {
 		return;
@@ -653,6 +678,18 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			deferred.moduleName = equip->moduleName;
 			deferred.presetName = equip->presetName;
 			human->ExecuteDeferredEquip(deferred);
+		} else if (const NetGameSoundOp* sound = std::get_if<NetGameSoundOp>(&command.payload)) {
+			// The AI's sound call runs here on every peer; only the peer driving the actor may issue it.
+			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(sound->actorUID)));
+			if (!actor) {
+				g_ConsoleMan.PrintString("NETWORK: sound command target not found: UID " + std::to_string(sound->actorUID));
+				continue;
+			}
+			if (actor->GetTeam() != sound->team || !ScenarioRunner::IsLockstepActorOwner(sound->actorUID, actor->GetTeam(), !actor->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a sound command from a peer that does not drive actor " + std::to_string(sound->actorUID));
+				continue;
+			}
+			ApplyDeferredSoundOp(*sound);
 		}
 	}
 }
@@ -1133,6 +1170,13 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	auto entry = m_KnownObjects.find(mo->GetUniqueID());
 	if (entry != m_KnownObjects.end() && entry->second == mo) {
 		m_KnownObjects.erase(entry);
+	}
+	// A copy waiting to be put back must forget this object too, or reinstating it resurrects the freed pointer.
+	for (auto* held: m_HeldRegistries) {
+		auto entry = held->find(mo->GetUniqueID());
+		if (entry != held->end() && entry->second == mo) {
+			held->erase(entry);
+		}
 	}
 }
 
@@ -4035,8 +4079,42 @@ void MovableMan::UpdateControllers() {
 				}
 			}
 		};
-		// An actor's scripts initialize in its first Update stage on every peer; the owner's AI pass must not run Create early on a worker thread.
+		auto drainDeferredSoundOps = [&]() {
+			// The sound calls the AI queued, in checkpoint-identity order: performed now, or sent as
+			// commands under lockstep. A container the AI only read hands out nothing.
+			for (SoundContainer* container: g_AudioMan.TakePendingSoundOpContainers()) {
+				for (const SoundContainer::PendingOp& op: container->TakePendingSoundOps()) {
+					if (!lockstepActive) {
+						SoundSimulationScope sounds(static_cast<uint64_t>(op.actorUID), Hash("DeferredSoundOp"), SoundExecutionDomain::SharedSimulation, g_AudioMan.NextDeferredSoundOpOrdinal());
+						container->ApplyPendingSoundOp(op);
+						continue;
+					}
+					if (!op.actorUID) {
+						g_ConsoleMan.PrintString("ERROR: Dropped a deferred sound call that no AI actor owns");
+						continue;
+					}
+					NetGameSoundOp command;
+					command.actorUID = op.actorUID;
+					command.team = op.team;
+					command.soundIdentity = container->GetCheckpointIdentity();
+					command.op = static_cast<uint8_t>(op.op);
+					command.property = static_cast<uint8_t>(op.property);
+					command.player = op.player;
+					command.value = op.value;
+					command.x = op.x;
+					command.y = op.y;
+					command.soundSetPath = op.soundSetPath;
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepLocalPeerId(), std::move(command)});
+					++m_ControllerBoundaryStats.soundCommands;
+				}
+			}
+		};
+		// Scripts initialize here, at one deterministic point on the sim thread on every peer, so a
+		// freshly added actor keeps its first AI pass and every peer numbers its sound scopes alike.
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
+		for (Actor* actor: m_Actors) {
+			actor->InitializeObjectScriptsIfNeeded();
+		}
 		for (Actor* actor: m_Actors) {
 			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
@@ -4066,6 +4144,7 @@ void MovableMan::UpdateControllers() {
 		    .wait();
 
 		drainDeferredEquips();
+		drainDeferredSoundOps();
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
 		for (Actor* actor: m_Actors) {
@@ -4080,10 +4159,12 @@ void MovableMan::UpdateControllers() {
 		if (lockstepActive) {
 			drainDeferredEquips();
 		}
+		drainDeferredSoundOps();
 		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
 		if (AIWriteScript::IsActive()) {
 			AIWriteScript::RunTick(simTick, m_Actors, isLocalControllerActor);
 			drainDeferredEquips();
+			drainDeferredSoundOps();
 		}
 
 		for (const DirectState& before: directBefore) {
@@ -4379,7 +4460,13 @@ std::string MovableMan::SaveCheckpoint() const {
 	CheckpointWriter writer("MovableMan2");
 	VisitCheckpoint(writer, *this);
 	std::map<long, std::vector<long>> references;
-	for (const auto& [identity, object]: m_KnownObjects) references.emplace(identity, object->GetCheckpointBorrowedReferences());
+	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
+	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
+	for (const auto& [identity, object]: m_KnownObjects) {
+		std::vector<long> links = object->GetCheckpointBorrowedReferences();
+		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) continue;
+		references.emplace(identity, std::move(links));
+	}
 	writer(references);
 	return writer.Text();
 }
@@ -4541,6 +4628,7 @@ MovableMan::ConstructionRegistryScope::ConstructionRegistryScope() :
 	{
 		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
 		m_Original = g_MovableMan.m_KnownObjects;
+		g_MovableMan.m_HeldRegistries.push_back(&m_Original);
 	}
 	const auto mark = g_MovableMan.MarkAddQueues();
 	m_QueueSizes = {mark.actors, mark.items, mark.particles, mark.alarms};
@@ -4551,6 +4639,7 @@ MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
 	g_MovableMan.DiscardAddedSince({m_QueueSizes[0], m_QueueSizes[1], m_QueueSizes[2], m_QueueSizes[3]});
 	{
 		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
+		std::erase(g_MovableMan.m_HeldRegistries, &m_Original);
 		g_MovableMan.m_KnownObjects.swap(m_Original);
 	}
 	g_MovableMan.LoadWorldStructure(m_Structure);
