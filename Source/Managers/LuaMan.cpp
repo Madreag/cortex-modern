@@ -8,6 +8,7 @@
 #include "SimChecksum.h"
 #include "RTETools.h"
 #include "LuaThreadCodec.h"
+#include "ContentFile.h"
 #include "MovableMan.h"
 #include "ActivityMan.h"
 #include "GAScripted.h"
@@ -4505,6 +4506,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
+	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;
 	checkpointValues = g_PostProcessMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_FrameMan.RunPaletteCheckpointSelfTest() && checkpointValues;
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
