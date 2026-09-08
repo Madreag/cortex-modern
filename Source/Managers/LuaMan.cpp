@@ -4504,6 +4504,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = g_MusicMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
+	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = g_PostProcessMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_FrameMan.RunPaletteCheckpointSelfTest() && checkpointValues;
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;

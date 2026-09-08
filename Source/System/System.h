@@ -85,6 +85,10 @@ namespace RTE {
 		/// @param pathToCheck The path to check.
 		/// @return Whether the file exists.
 		static bool PathExistsCaseSensitive(const std::string& pathToCheck);
+
+		/// Runs the working tree walk over a directory holding a path past the platform's limit and one this user may not list.
+		/// @return Whether every case passed.
+		static bool RunPathCaseSelfTest();
 #pragma endregion
 
 #pragma region Command-Line Interface
@@ -132,6 +136,9 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		/// Hashes every readable path under the working directory into s_WorkingTree.
+		static void HashWorkingTree();
+
 		static bool s_Quit; //!< Whether the user requested program termination through GUI or the window close button.
 		static bool s_LogToCLI; //!< Bool to tell whether to print the loading log and anything specified with PrintToCLI to command-line or not.
 		static bool s_ExternalModuleValidation; //!< Whether to run the program in a special mode where it will immediately quit without any messages after either successful loading of all modules or aborting during loading. For use by an external tool.
