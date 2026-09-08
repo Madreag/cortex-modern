@@ -862,6 +862,7 @@
     <ClInclude Include="Source\Network\NetReconnectAdmission.h" />
     <ClInclude Include="Source\Network\NetReconnectLedger.h" />
     <ClInclude Include="Source\Network\NetReconnectSession.h" />
+    <ClInclude Include="Source\Network\NetReconnectSessionSelfTest.h" />
     <ClInclude Include="Source\Network\NetReconnectTicketStore.h" />
     <ClInclude Include="Source\Network\NetReconnectSelfTest.h" />
     <ClInclude Include="Source\Network\NetReconnectTranscript.h" />
@@ -1437,6 +1438,7 @@
     <ClCompile Include="Source\Network\NetReconnectAdmission.cpp" />
     <ClCompile Include="Source\Network\NetReconnectLedger.cpp" />
     <ClCompile Include="Source\Network\NetReconnectSession.cpp" />
+    <ClCompile Include="Source\Network\NetReconnectSessionSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetReconnectTicketStore.cpp" />
     <ClCompile Include="Source\Network\NetReconnectSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetReconnectTranscript.cpp" />

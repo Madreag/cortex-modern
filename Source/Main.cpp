@@ -79,6 +79,7 @@
 #include "NetMatchSelfTest.h"
 #include "NetProtocolSelfTest.h"
 #include "NetReconnectSelfTest.h"
+#include "NetReconnectSessionSelfTest.h"
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
@@ -3573,6 +3574,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-reconnect-selftest") {
 			return NetReconnectSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-reconnect-session-selftest") {
+			return NetReconnectSessionSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
