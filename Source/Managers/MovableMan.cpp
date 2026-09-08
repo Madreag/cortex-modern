@@ -660,6 +660,7 @@ bool MovableMan::RunLockstepPausedTick() {
 		return false;
 	}
 	// Only the game commands apply on a paused tick; the sim itself holds still.
+	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	ApplyLockstepGameCommands(readyFrame);
 	return true;
 }
@@ -4114,6 +4115,7 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
+		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		ApplyLockstepGameCommands(readyFrame);
 
 		if (ScenarioRunner::IsControllerLogRecording()) {

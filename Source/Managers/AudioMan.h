@@ -7,6 +7,7 @@
 #include "Singleton.h"
 #include "SoundContainerRegistry.h"
 #include "SoundSimulation.h"
+#include "LogicalSound.h"
 
 #include "fmod/fmod.hpp"
 #include <map>
@@ -21,6 +22,7 @@ namespace RTE {
 
 	class SoundContainer;
 	struct SoundData;
+	struct NetSoundObservation;
 
 	/// The singleton manager of sound effect and music playback.
 	class AudioMan : public Singleton<AudioMan> {
@@ -43,6 +45,14 @@ namespace RTE {
 		void VisitSharedSimulationSounds(const std::function<void(const SoundContainer&)>& visitor) const;
 		float GetLocalSoundAudibility(const SoundContainer* container) const;
 		bool RunLogicalPlaybackSelfTest();
+		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
+		std::vector<NetSoundObservation> SampleSoundObservations();
+		/// Commits a tick's readings from every peer; the table is identical on all peers and pruned on the same frames.
+		void CommitSoundObservations(uint64_t frame, const std::vector<NetSoundObservation>& local, const std::vector<NetSoundObservation>& remote);
+		/// The reading a shared query returns: the controlling peer's, else the host's, else the latest committed, else 0.
+		float GetCommittedAudibility(const SoundContainer& container) const;
+		size_t GetCommittedAudibilityCount() const { return m_CommittedAudibility.size(); }
+		void ClearCommittedAudibility();
 		uint64_t GetCheckpointSoundContainerCursor() const { return m_NextSoundContainerIdentity; }
 		void SetCheckpointSoundContainerCursor(uint64_t value) { m_NextSoundContainerIdentity = value; }
 		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { return m_CheckpointSoundContainers; }
@@ -184,8 +194,9 @@ namespace RTE {
 		}
 
 		/// Silences this process's output without touching the mute setting: sounds still play, end and callback as usual.
+		/// A verified silent test backend is already inaudible, so it keeps its real gains and audibility.
 		void SetOutputSilenced(bool silenced) {
-			m_OutputSilenced = silenced;
+			m_OutputSilenced = silenced && !m_InaudibleTestOutputVerified;
 			if (m_AudioEnabled) {
 				m_MasterChannelGroup->setMute(m_MuteMaster || m_OutputSilenced);
 			}
@@ -421,6 +432,13 @@ namespace RTE {
 		uint64_t m_NextSoundContainerIdentity = 0;
 		mutable std::mutex m_LogicalSoundsMutex;
 		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
+		struct CommittedAudibility {
+			uint64_t frame = 0;
+			float value = 0.0F;
+		};
+		std::map<SoundObservationKey, std::map<uint8_t, CommittedAudibility>> m_CommittedAudibility;
+		std::map<SoundObservationKey, float> m_LastSentAudibility;
+		static uint8_t AudibilityAuthority(uint64_t objectUID);
 		FMOD_RESULT InitializeAudioSystem(bool silentOutput);
 		void RefreshLogicalSound(SoundContainer* container);
 		void UnregisterLogicalSound(SoundContainer* container);

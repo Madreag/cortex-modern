@@ -1,6 +1,7 @@
 #include "ScenarioRunner.h"
 #include "Actor.h"
 #include "ActivityMan.h"
+#include "AudioMan.h"
 #include "LuaMan.h"
 
 #include "Constants.h"
@@ -637,6 +638,21 @@ namespace RTE {
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled) == peerId;
 	}
 
+	uint8_t ScenarioRunner::GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		if (!s_LockstepCoordinator) {
+			return 0;
+		}
+		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
+		if (overrideIt != s_LockstepControlOverrides.end()) {
+			return overrideIt->second;
+		}
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
+	}
+
+	uint8_t ScenarioRunner::GetLockstepHostPeerId() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().matchConfig.hostPeerId : 0;
+	}
+
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}
@@ -788,7 +804,7 @@ namespace RTE {
 			if (!s_ReplayRewindBuffer.empty() && s_ReplayRewindBuffer.front().targetFrame == tick) {
 				NetLockstepFrame buffered = s_ReplayRewindBuffer.front();
 				s_ReplayRewindBuffer.pop_front();
-				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error);
+				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error, std::move(buffered.observations));
 			}
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
@@ -815,9 +831,10 @@ namespace RTE {
 			if (record.targetFrame >= s_ReplayRewindFrom && record.targetFrame < s_ReplayRewindFrom + s_ReplayRewindCount) {
 				s_ReplayRewindKeep.push_back(record);
 			}
-			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error);
+			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations));
 		}
-		return s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error);
+		// The input boundary also carries this peer's actual audibility of the shared sounds it answers for.
+		return s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error, g_AudioMan.SampleSoundObservations());
 	}
 
 	bool ScenarioRunner::PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames) {
@@ -1078,8 +1095,10 @@ namespace RTE {
 						});
 						std::vector<NetGameCommand> allCommands = ready.localCommands;
 						allCommands.insert(allCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+						std::vector<NetSoundObservation> allObservations = ready.localObservations;
+						allObservations.insert(allObservations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
 						std::string writeError;
-						if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, &writeError)) {
+						if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, &writeError)) {
 							std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
 							s_ReplayWriter.Close();
 						}

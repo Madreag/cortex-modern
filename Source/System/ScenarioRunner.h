@@ -133,6 +133,10 @@ namespace RTE {
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// Whether the peer produces the actor's frames (control handoffs included); every peer answers identically.
 		static bool IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId);
+		/// The peer that produces the actor's frames now (control handoffs included); 0 without a coordinator.
+		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
+		/// The synced match's host peer; 0 without a coordinator.
+		static uint8_t GetLockstepHostPeerId();
 		static uint8_t ResolveTeamCommandAuthority(int team);
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
 		static uint16_t GetLockstepInputDelayFrames();
