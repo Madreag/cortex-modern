@@ -2562,6 +2562,118 @@ namespace RTE {
 			return 0;
 		}
 
+		// §7's ordering: the leave has to be answered while the link is still up. The negative control
+		// is the defect this replaces - tearing the link down first leaves the ticket unanswered.
+		int TestLeaveExchangeBeatsTeardown() {
+			static_assert(NetReconnectClient::c_LeaveAckBudgetMs == 2000, "P21's ack budget");
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			auto seat = [&](const char* name, uint16_t port, uint64_t nonce, LoopbackTransport& hostTransport,
+			                LoopbackTransport& clientTransport, NetSession& host, NetSession& client,
+			                NetSeatAuthRegistry& registry, NetReconnectHost& admission, NetReconnectTicketStore& store,
+			                NetReconnectClient& reconnect, uint64_t* unixNow, uint64_t& nowMs) {
+				registry.BeginHostedSession();
+				admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+				admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+				store.SetPath(StorePath(name));
+				reconnect.Configure(&store, MakeIdentity(), "Player");
+				reconnect.SetUnixClock(&FixedUnixClock, unixNow);
+				reconnect.SetHostContext("loopback", MakeHash(5));
+				host.SetReconnectHost(&admission);
+				client.SetReconnectClient(&reconnect);
+				if (!host.StartHost(hostTransport, MakeSessionConfig(port, nonce, "Host"), &error) ||
+				    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, nonce + 1, "Player"), &error)) {
+					return false;
+				}
+				for (nowMs = 0; nowMs <= 600; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				return reconnect.GetState() == NetH4ClientState::Joined && store.HasRecord();
+			};
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			// The leave the engine now runs: the link is still up, so the ack arrives and clears the record.
+			{
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				NetSeatAuthRegistry registry;
+				NetReconnectHost admission;
+				NetReconnectTicketStore store;
+				NetReconnectClient reconnect;
+				uint64_t nowMs = 0;
+				if (!seat("leave-live", 42135, 111, hostTransport, clientTransport, host, client, registry, admission, store, reconnect, &unixNow, nowMs)) {
+					return Fail("the leaving holder never committed a seat: " + error);
+				}
+				if (!reconnect.BeginLeave(client.GetClockMs(), &error)) {
+					return Fail("the leave would not start: " + error);
+				}
+				const uint64_t startedMs = nowMs;
+				uint64_t acknowledgedMs = 0;
+				for (const uint64_t until = nowMs + NetReconnectClient::c_LeaveAckBudgetMs; nowMs <= until; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+					if (acknowledgedMs == 0 && reconnect.GetState() == NetH4ClientState::Left) {
+						acknowledgedMs = nowMs;
+					}
+				}
+				if (acknowledgedMs == 0) {
+					return Fail("the leave was never acknowledged on a live link");
+				}
+				if (acknowledgedMs - startedMs > NetReconnectClient::c_LeaveAckBudgetMs) {
+					return Fail("the leave outran P21's ack budget");
+				}
+				if (store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 1 || reconnect.GetStats().ticketsCleared != 1) {
+					return Fail("an acknowledged leave did not clear the recovery record");
+				}
+				if (admission.GetStats().seatsClosedByLeave != 1) {
+					return Fail("the host did not close the seat on the leave");
+				}
+			}
+
+			// The negative control: the link goes down FIRST, which is what running the exchange from
+			// teardown amounts to. Nothing is acknowledged and §7 keeps the record.
+			{
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				NetSeatAuthRegistry registry;
+				NetReconnectHost admission;
+				NetReconnectTicketStore store;
+				NetReconnectClient reconnect;
+				uint64_t nowMs = 0;
+				if (!seat("leave-late", 42136, 121, hostTransport, clientTransport, host, client, registry, admission, store, reconnect, &unixNow, nowMs)) {
+					return Fail("the late-leaving holder never committed a seat: " + error);
+				}
+				clientTransport.Stop();
+				reconnect.NotifyAmbiguousLoss();
+				(void)reconnect.BeginLeave(client.GetClockMs(), &error);
+				for (const uint64_t until = nowMs + NetReconnectClient::c_LeaveAckBudgetMs + 500; nowMs <= until; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				if (reconnect.GetState() == NetH4ClientState::Left) {
+					return Fail("a leave sent after the link went down was somehow acknowledged");
+				}
+				if (!store.HasRecord() || reconnect.GetStats().leaveAcksReceived != 0) {
+					return Fail("an unacknowledged leave deleted the recovery record");
+				}
+				if (admission.GetStats().seatsClosedByLeave != 0) {
+					return Fail("the host closed a seat nobody asked it to close");
+				}
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2626,6 +2738,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSeatHoldWindow(); result != 0) {
+			return result;
+		}
+		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
