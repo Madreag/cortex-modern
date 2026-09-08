@@ -50,6 +50,7 @@ namespace RTE {
 		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
 		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
+		uint32_t unauthenticatedConnectionsRefused = 0; //!< Host: connections refused because the half-open bound was already full.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -62,6 +63,10 @@ namespace RTE {
 
 	class NetSession {
 	public:
+		// Twice the peer cap, so a full lobby plus a reconnect attempt per seat all fit while an
+		// unauthenticated connection still cannot make the host track an unbounded number of them.
+		static constexpr uint32_t c_MaxUnauthenticatedPeers = 8;
+
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
 		void Tick(uint64_t nowMs, bool pollTransport = true);
@@ -90,6 +95,8 @@ namespace RTE {
 		bool HasReject() const { return m_HasReject; }
 		const std::string& GetRejectSummary() const { return m_RejectSummary; }
 		const NetSessionStats& GetStats() const { return m_Stats; }
+		/// The number of connections the host is tracking that have not yet passed a ClientHello.
+		uint32_t GetUnauthenticatedPeerCount() const;
 
 		/// Builds a one-line human-readable reject/failure reason from the recorded mismatch,
 		/// e.g. "deterministic config hash does not match (deterministic_config_hash: 4d31cc89.. vs 77ab01ff..)".
@@ -129,6 +136,7 @@ namespace RTE {
 		void HandleClientMessage(NetPeerId peerId, const NetMessage& message);
 		void CheckTimeouts();
 		void RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
+		void RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void SetRejected(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
 		void SetFailed(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary);
