@@ -40,6 +40,7 @@ private:
 	uint64_t m_QueryOrdinal = 0;
 	uint64_t m_PlayOrdinal = 0;
 	uint64_t m_ChildOrdinal = 0;
+	uint64_t m_LocalChildOrdinal = 0;
 	static thread_local SoundSimulationScope* s_Current;
 };
 
