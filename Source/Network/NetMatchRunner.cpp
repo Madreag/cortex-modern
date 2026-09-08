@@ -332,22 +332,23 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error) {
-		const auto startTime = std::chrono::steady_clock::now();
+		// The handshake and the round must feed the coordinator ONE clock, or its per-peer liveness
+		// and retransmit timers see time run backwards at the handoff into the sim loop.
+		const uint64_t startMs = NetLockstepNowMs();
 		while (!coordinator.IsRunning()) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now() - startTime).count());
+			const uint64_t nowMs = NetLockstepNowMs();
 			coordinator.Tick(nowMs);
 			if (coordinator.IsFailed() || coordinator.IsStopped()) {
 				SetFailed(coordinator.GetStats().timeoutReason);
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (nowMs > maxWaitMs) {
+			if (nowMs - startMs > maxWaitMs) {
 				SetFailed("timed out waiting for lockstep start");
 				if (error) *error = m_SetupError;
 				return false;
