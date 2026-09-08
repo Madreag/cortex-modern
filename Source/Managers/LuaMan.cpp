@@ -295,7 +295,7 @@ namespace {
 -- so serializing again after a restore reproduces it byte for byte.
 _ScriptGraph = _ScriptGraph or {}
 local Graph = _ScriptGraph
-local SKIP_GLOBALS = { _ScriptedObjects = true, _ScriptGraph = true, _ScriptGraphBaseline = true, _ScriptGraphNative = true, _G = true, _ScriptFieldsStash = true }
+local SKIP_GLOBALS = { _ScriptedObjects = true, _ScriptGraph = true, _ScriptGraphBaseline = true, _ScriptGraphNative = true, _ScriptGraphProgress = true, _G = true, _ScriptFieldsStash = true }
 local _G, type, pairs, ipairs, next, rawget, rawset, rawequal = _G, type, pairs, ipairs, next, rawget, rawset, rawequal
 local tonumber, tostring, error, pcall, xpcall, getfenv, setfenv, loadstring = tonumber, tostring, error, pcall, xpcall, getfenv, setfenv, loadstring
 local function libraryCopy(source)
@@ -1613,6 +1613,7 @@ end
 local results = {}
 local function check(name, ok, detail)
 	results[#results + 1] = string.format("[script-graph-selftest] %s %s%s", ok and "PASS" or "FAIL", name, detail and (" " .. tostring(detail)) or "")
+	if _ScriptGraphProgress then _ScriptGraphProgress(results[#results]) end
 end
 local function resumed(co, ...)
 	local ok, value = coroutine.resume(co, ...)
@@ -1823,7 +1824,8 @@ do
 			if not lx and type(x.slots[i]) ~= type(y.slots[i]) then return false, "value " .. i end
 			if not lx and type(x.slots[i]) == "number" and x.slots[i] ~= y.slots[i] then return false, "number " .. i end
 		end
-		return next(x.conts) == nil, "continuation left"
+		if next(x.conts) ~= nil then return false, "continuation left" end
+		return true
 	end
 	check("coroutine_stitch_capture_canonical", sameLayout(canonical, plain))
 	local fromCanonical = canonical and _ScriptGraphThreadRestore(canonical)
@@ -4646,6 +4648,12 @@ _PrimitiveQueueCapture = nil
 	const bool textRoundtrip = reader.ReadPropName() == "LuaStateGraph" && base64_decode(reader.ReadPropValue()) == bytes;
 	std::cout << "[script-graph-selftest] " << (textRoundtrip ? "PASS" : "FAIL") << " save_text_binary_roundtrip" << std::endl;
 	lua_State* L = m_State;
+	// Each check echoes as it runs so a crash mid-chunk still names the last check reached.
+	lua_pushcfunction(L, [](lua_State* state) -> int {
+		std::cout << "[script-graph-progress] " << luaL_checkstring(state, 1) << std::endl;
+		return 0;
+	});
+	lua_setglobal(L, "_ScriptGraphProgress");
 	if (luaL_loadstring(L, c_ScriptGraphSelfTest) != 0 || lua_pcall(L, 0, 1, 0) != 0) {
 		std::cout << "[script-graph-selftest] ERROR: " << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "?") << std::endl;
 		lua_pop(L, 1);
