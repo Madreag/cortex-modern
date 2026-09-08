@@ -2610,6 +2610,10 @@ void RunGameLoop() {
 				s_loadSelfTestPassed = g_ActivityMan.RunLoadSelfTest(s_loadSelfTestName, s_loadSelfTestExpected);
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
+				// A load leaves the saved game running, so the starting scenario never reaches its
+				// own verdict. The selftest owns this run's result.
+				g_MetricsCollector.Record("final_tick", static_cast<double>(simTick));
+				g_MetricsCollector.SetResult(s_loadSelfTestPassed);
 				break;
 			}
 			if (s_saveIoSelfTest && simTick > 0) {
