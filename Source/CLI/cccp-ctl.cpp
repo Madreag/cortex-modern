@@ -91,7 +91,7 @@ namespace {
 	const std::vector<SubsystemInfo> kSubsystems = {
 	    {"tick",        "core",    "The per-tick fold of the previous subsystems' hashes (the total hash)."},
 	    {"sim_rng",     "core",    "g_SimRNG state (the sim side of the sim/render RNG split)."},
-	    {"lua_state",   "lua",     "All Lua states' RNG + key tables."},
+	    {"lua_state",   "lua",     "The master Lua state's RNG only: threaded per-MO Lua draws from per-MO RNGs, and no Lua table is hashed."},
 	    {"actors",      "sim",     "All MovableMan actors' state (stable MOID iteration)."},
 	    {"particles",   "sim",     "MovableMan particles' state."},
 	    {"controller",  "sim",     "All Controller state per actor (53 control states + analog vectors + input mode)."},
