@@ -5,6 +5,7 @@
 #include "NetLobbySession.h"
 #include "NetSession.h"
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <iostream>
@@ -219,6 +220,133 @@ namespace RTE {
 			}
 			if (!sawHostHello || !sawJoinAccepted) {
 				*error = "scripted host did not send HostHello and JoinAccepted";
+				return false;
+			}
+			return true;
+		}
+
+		// Nothing bounded the host's tracked connections before a hello arrived, so a silent joiner could
+		// grow the list until it timed out. The bound must refuse the excess without disturbing anyone
+		// who is already playing.
+		bool TestUnauthenticatedConnectionBound(std::string* error) {
+			const uint16_t port = 42011;
+			ScriptedHostTransport transport;
+			NetSession host;
+			NetSessionConfig hostConfig = MakeConfig(port, 1601, "Host");
+			hostConfig.maxPeers = 2;
+			hostConfig.timeoutMs = 5000;
+			if (!host.StartHost(transport, hostConfig, error)) {
+				return false;
+			}
+
+			const auto encode = [error](NetPayload payload, std::vector<uint8_t>& bytes) {
+				NetMessage message;
+				message.sequence = 1;
+				message.payload = std::move(payload);
+				NetProtocolError encodeError;
+				if (!NetProtocol::Encode(message, bytes, &encodeError)) {
+					*error = "could not encode scripted message: " + encodeError.message;
+					return false;
+				}
+				return true;
+			};
+
+			// Two players are in and ready before the flood starts.
+			for (uint8_t slot = 0; slot < 2; ++slot) {
+				const NetPeerId transportPeerId = 100U + slot;
+				std::vector<uint8_t> helloBytes;
+				if (!encode(MakeClientHello(MakeConfig(port, 1700 + slot, "Player" + std::to_string(slot))), helloBytes)) {
+					return false;
+				}
+				transport.Push({NetTransportEventType::PeerConnected, transportPeerId, NetTransportLane::ControlReliable, {}, ""});
+				transport.Push({NetTransportEventType::PacketReceived, transportPeerId, NetTransportLane::ControlReliable, helloBytes, ""});
+				host.Tick(0);
+				std::vector<uint8_t> readyBytes;
+				if (!encode(NetReadyState{static_cast<uint8_t>(slot + 1), true, hostConfig.localIdentity.deterministicConfigHash, hostConfig.localIdentity.moduleManifestHash}, readyBytes)) {
+					return false;
+				}
+				transport.Push({NetTransportEventType::PacketReceived, transportPeerId, NetTransportLane::ControlReliable, readyBytes, ""});
+				host.Tick(0);
+			}
+			if (host.GetReadyPeerCount() != 2) {
+				*error = "the two players did not reach ready before the flood";
+				return false;
+			}
+
+			const std::vector<NetSessionPeerInfo> before = host.GetReadyPeers();
+			const auto sameSeats = [](const std::vector<NetSessionPeerInfo>& lhs, const std::vector<NetSessionPeerInfo>& rhs) {
+				return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin(), [](const NetSessionPeerInfo& a, const NetSessionPeerInfo& b) {
+					return a.transportPeerId == b.transportPeerId && a.assignedPeerId == b.assignedPeerId && a.displayName == b.displayName && a.ready == b.ready;
+				});
+			};
+
+			// Eight silent connections fill the bound; the ninth is refused the way a full session is.
+			for (uint32_t i = 0; i < NetSession::c_MaxUnauthenticatedPeers; ++i) {
+				transport.Push({NetTransportEventType::PeerConnected, 200U + i, NetTransportLane::ControlReliable, {}, ""});
+			}
+			host.Tick(10);
+			if (host.GetUnauthenticatedPeerCount() != NetSession::c_MaxUnauthenticatedPeers) {
+				*error = "the host did not track the allowed half-open connections: " + std::to_string(host.GetUnauthenticatedPeerCount());
+				return false;
+			}
+			if (host.GetStats().unauthenticatedConnectionsRefused != 0) {
+				*error = "a connection inside the bound was refused";
+				return false;
+			}
+
+			const size_t packetsBefore = transport.sentPackets.size();
+			transport.Push({NetTransportEventType::PeerConnected, 300, NetTransportLane::ControlReliable, {}, ""});
+			host.Tick(20);
+			if (host.GetUnauthenticatedPeerCount() != NetSession::c_MaxUnauthenticatedPeers) {
+				*error = "the ninth half-open connection was tracked past the bound";
+				return false;
+			}
+			if (host.GetStats().unauthenticatedConnectionsRefused != 1) {
+				*error = "the refused connection was not counted";
+				return false;
+			}
+			if (transport.sentPackets.size() != packetsBefore + 1) {
+				*error = "the refused connection did not get exactly one reply";
+				return false;
+			}
+			const NetDecodeResult refusal = NetProtocol::Decode(transport.sentPackets.back().bytes);
+			const auto* rejected = refusal.ok ? std::get_if<NetJoinRejected>(&refusal.message.payload) : nullptr;
+			if (transport.sentPackets.back().peerId != 300 || rejected == nullptr || rejected->rejectReason != NetRejectReason::SessionFull) {
+				*error = "the refused connection was not rejected the way a full session rejects";
+				return false;
+			}
+
+			// The players already in the match are untouched by the flood and the refusal.
+			if (host.GetReadyPeerCount() != 2 || !sameSeats(host.GetReadyPeers(), before)) {
+				*error = "the flood disturbed the players already in the session";
+				return false;
+			}
+			if (host.IsFailed() || host.IsClosed() || host.GetState() != NetSessionState::Ready) {
+				*error = "the host left the ready state under the flood";
+				return false;
+			}
+
+			// A silent connection still ages out at the session timeout, and its slot comes back.
+			std::vector<uint8_t> heartbeatBytes;
+			if (!encode(NetHeartbeat{5900, 0, 0}, heartbeatBytes)) {
+				return false;
+			}
+			for (uint8_t slot = 0; slot < 2; ++slot) {
+				transport.Push({NetTransportEventType::PacketReceived, 100U + slot, NetTransportLane::ControlReliable, heartbeatBytes, ""});
+			}
+			host.Tick(5900);
+			if (host.GetUnauthenticatedPeerCount() != 0) {
+				*error = "half-open connections did not time out";
+				return false;
+			}
+			transport.Push({NetTransportEventType::PeerConnected, 400, NetTransportLane::ControlReliable, {}, ""});
+			host.Tick(5910);
+			if (host.GetUnauthenticatedPeerCount() != 1 || host.GetStats().unauthenticatedConnectionsRefused != 1) {
+				*error = "a fresh connection was refused after the bound cleared";
+				return false;
+			}
+			if (host.GetReadyPeerCount() != 2 || !sameSeats(host.GetReadyPeers(), before)) {
+				*error = "the players did not survive the whole sequence";
 				return false;
 			}
 			return true;
@@ -714,6 +842,7 @@ namespace RTE {
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
+		if (!TestUnauthenticatedConnectionBound(&error)) return fail(error);
 		if (!TestDuplicateNonce(&error)) return fail(error);
 		if (!TestPeerTimeoutDoesNotStopHost(&error)) return fail(error);
 		if (!TestMalformedHandshake(&error)) return fail(error);

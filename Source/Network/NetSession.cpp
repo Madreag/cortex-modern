@@ -265,6 +265,13 @@ namespace RTE {
 					if (FindPeer(event.peerId)) {
 						break;
 					}
+					// Nothing else bounds this list: SessionFull only fires once a hello arrives, so a
+					// joiner that connects and stays silent would otherwise grow it until it timed out.
+					if (GetUnauthenticatedPeerCount() >= c_MaxUnauthenticatedPeers) {
+						++m_Stats.unauthenticatedConnectionsRefused;
+						RejectConnection(event.peerId, NetRejectReason::SessionFull, "unauthenticated_connections", std::to_string(c_MaxUnauthenticatedPeers), std::to_string(GetUnauthenticatedPeerCount()), "session is full");
+						break;
+					}
 					PeerState peer;
 					peer.transportPeerId = event.peerId;
 					peer.state = NetSessionState::Handshake;
@@ -530,14 +537,18 @@ namespace RTE {
 	}
 
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		RecordReject(reason, key, expected, actual, summary);
-		Send(peer.transportPeerId, NetJoinRejected{reason, summary, key, expected, actual});
-		if (m_Transport) {
-			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
-			m_Transport->Disconnect(peer.transportPeerId, BuildRejectText());
-		}
+		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
 		peer.state = NetSessionState::Rejected;
 		RefreshHostState();
+	}
+
+	void NetSession::RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		RecordReject(reason, key, expected, actual, summary);
+		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
+		if (m_Transport) {
+			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
+			m_Transport->Disconnect(peerId, BuildRejectText());
+		}
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
@@ -588,6 +599,12 @@ namespace RTE {
 			return peer.transportPeerId == peerId;
 		});
 		return it == m_Peers.end() ? nullptr : &*it;
+	}
+
+	uint32_t NetSession::GetUnauthenticatedPeerCount() const {
+		return static_cast<uint32_t>(std::count_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+			return peer.state == NetSessionState::Handshake;
+		}));
 	}
 
 	uint32_t NetSession::ActivePeerCount() const {
