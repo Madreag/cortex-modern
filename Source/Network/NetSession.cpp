@@ -134,6 +134,13 @@ namespace RTE {
 		}
 		CheckTimeouts();
 		MaybeSendHeartbeats();
+		if (m_ReconnectHost) {
+			m_ReconnectHost->Tick(m_NowMs);
+		}
+		if (m_ReconnectClient) {
+			m_ReconnectClient->Tick(m_NowMs);
+		}
+		FlushReconnectOutbound();
 	}
 
 	void NetSession::TickKeepalive(uint64_t nowMs) {
@@ -152,6 +159,22 @@ namespace RTE {
 			return;
 		}
 		ProcessEvent(event);
+		FlushReconnectOutbound();
+	}
+
+	void NetSession::EndHostedSession(const std::string& reason) {
+		if (m_Transport && m_Role == NetSessionRole::Host) {
+			for (const PeerState& peer : m_Peers) {
+				if (IsActive(peer.state)) {
+					Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::SessionEnded), reason});
+				}
+			}
+		}
+		if (m_ReconnectHost) {
+			m_ReconnectHost->EndHostedSession();
+			m_ReconnectHost->TakeOutbound();
+		}
+		Close(reason);
 	}
 
 	void NetSession::Close(const std::string& reason) {
@@ -265,6 +288,13 @@ namespace RTE {
 					if (FindPeer(event.peerId)) {
 						break;
 					}
+					// Nothing else bounds this list: SessionFull only fires once a hello arrives, so a
+					// joiner that connects and stays silent would otherwise grow it until it timed out.
+					if (GetUnauthenticatedPeerCount() >= c_MaxUnauthenticatedPeers) {
+						++m_Stats.unauthenticatedConnectionsRefused;
+						RejectConnection(event.peerId, NetRejectReason::SessionFull, "unauthenticated_connections", std::to_string(c_MaxUnauthenticatedPeers), std::to_string(GetUnauthenticatedPeerCount()), "session is full");
+						break;
+					}
 					PeerState peer;
 					peer.transportPeerId = event.peerId;
 					peer.state = NetSessionState::Handshake;
@@ -285,6 +315,11 @@ namespace RTE {
 				break;
 			case NetTransportEventType::PeerDisconnected:
 				if (m_Role == NetSessionRole::Host) {
+					if (m_ReconnectHost && m_ReconnectHost->NotifyDisconnect(event.peerId, m_LockstepFrame) == NetH4DisconnectOutcome::Fenced) {
+						// A superseded incarnation timing out; the seat's live holder is untouched.
+						++m_Stats.fencedDisconnects;
+						break;
+					}
 					if (PeerState* peer = FindPeer(event.peerId)) {
 						peer->state = NetSessionState::Closed;
 					}
@@ -298,6 +333,12 @@ namespace RTE {
 				}
 				break;
 			case NetTransportEventType::PacketReceived:
+				if (m_Role == NetSessionRole::Host && m_ReconnectHost && m_ReconnectHost->IsFenced(event.peerId)) {
+					// Delayed traffic from a transport the seat no longer answers to.
+					++m_Stats.fencedPackets;
+					m_ReconnectHost->CountFencedPacket();
+					break;
+				}
 				ProcessPacket(event.peerId, event.bytes);
 				break;
 			case NetTransportEventType::LocalTransportFault:
@@ -328,7 +369,7 @@ namespace RTE {
 				++m_Stats.ignoredPhasePackets;
 				return;
 			}
-			HandleMalformed(peerId, decoded.error);
+			HandleMalformed(peerId, decoded.error, bytes);
 			return;
 		}
 		++m_Stats.receivedMessages;
@@ -344,9 +385,13 @@ namespace RTE {
 		}
 	}
 
-	void NetSession::HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError) {
+	void NetSession::HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes) {
 		++m_Stats.malformedMessages;
 		const std::string summary = std::string("malformed ") + NetProtocol::ErrorCodeName(decodeError.code) + ": " + decodeError.message;
+		if (m_Role == NetSessionRole::Host && decodeError.code == NetProtocolErrorCode::UnsupportedVersion) {
+			RejectOldWirePeer(peerId, bytes);
+			return;
+		}
 		if (m_Role == NetSessionRole::Host) {
 			if (PeerState* peer = FindPeer(peerId)) {
 				if (peer->state == NetSessionState::Handshake) {
@@ -364,6 +409,36 @@ namespace RTE {
 				m_Transport->Disconnect(m_RemoteTransportPeerId, summary);
 			}
 		}
+	}
+
+	void NetSession::RejectOldWirePeer(NetPeerId peerId, const std::vector<uint8_t>& bytes) {
+		uint16_t claimedVersion = 0;
+		const bool haveVersion = NetProtocol::PeekHeaderVersion(bytes.data(), bytes.size(), claimedVersion);
+		const std::string summary = "protocol version " + (haveVersion ? std::to_string(claimedVersion) : std::string("?")) +
+		                            " does not match this build's " + std::to_string(NetProtocol::c_Version);
+		RecordReject(NetRejectReason::ProtocolMismatch, "protocol_version", std::to_string(NetProtocol::c_Version),
+		             haveVersion ? std::to_string(claimedVersion) : std::string("unknown"), summary);
+		// §10: the envelope's magic and version sit at fixed offsets, so an explicit rejection is
+		// possible whenever we can still write that version's payload schema. When we cannot, sending
+		// one stamped at OUR version would be undecodable noise, so the disconnect reason carries it.
+		if (haveVersion && NetProtocol::CanEncodeAtVersion(claimedVersion)) {
+			NetMessage rejection;
+			rejection.sequence = m_NextSequence++;
+			rejection.payload = NetJoinRejected{NetRejectReason::ProtocolMismatch, summary, "protocol_version", std::to_string(NetProtocol::c_Version), haveVersion ? std::to_string(claimedVersion) : std::string("unknown")};
+			std::vector<uint8_t> encoded;
+			if (NetProtocol::EncodeAtVersion(rejection, claimedVersion, encoded) &&
+			    m_Transport->Send(peerId, NetTransportLane::ControlReliable, encoded, nullptr)) {
+				++m_Stats.sentMessages;
+				++m_Stats.oldWireRejectionsSent;
+			}
+		} else {
+			++m_Stats.oldWireDisconnects;
+		}
+		if (PeerState* peer = FindPeer(peerId)) {
+			peer->state = NetSessionState::Closed;
+		}
+		m_Transport->Disconnect(peerId, summary);
+		RefreshHostState();
 	}
 
 	void NetSession::HandleHostMessage(NetPeerId peerId, const NetMessage& message) {
@@ -439,8 +514,86 @@ namespace RTE {
 			RefreshHostState();
 			return;
 		}
+		if (RouteAdmissionMessage(peerId, message.payload)) {
+			return;
+		}
 		if (peer->state == NetSessionState::Handshake) {
 			RejectPeer(*peer, NetRejectReason::MalformedMessage, "message_type", "ClientHello", NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload)), "unexpected handshake message");
+		}
+	}
+
+	bool NetSession::RouteAdmissionMessage(NetPeerId peerId, const NetPayload& payload) {
+		if (!NetProtocol::IsH4MessageType(NetProtocol::MessageTypeOf(payload))) {
+			return false;
+		}
+		bool handled = false;
+		if (m_Role == NetSessionRole::Host && m_ReconnectHost) {
+			handled = m_ReconnectHost->HandleMessage(peerId, payload, m_NowMs);
+		} else if (m_Role == NetSessionRole::Client && m_ReconnectClient) {
+			handled = m_ReconnectClient->HandleMessage(payload, m_NowMs);
+		}
+		if (handled) {
+			++m_Stats.admissionMessages;
+			FlushReconnectOutbound();
+		}
+		return handled;
+	}
+
+	void NetSession::FlushReconnectOutbound() {
+		if (m_ReconnectHost) {
+			for (NetH4Outbound& outbound : m_ReconnectHost->TakeOutbound()) {
+				Send(outbound.connection, std::move(outbound.payload));
+			}
+			for (const NetH4Commit& commit : m_ReconnectHost->TakeCommits()) {
+				// The seat's own peer id, never a freshly allocated one: ownership resolution keys on it,
+				// so a different id would silently re-point every actor the returner had.
+				if (PeerState* peer = FindPeer(commit.connection)) {
+					peer->assignedPeerId = commit.assignedPeerId;
+					peer->state = NetSessionState::Ready;
+					peer->lastReceiveMs = m_NowMs;
+					peer->lastHeartbeatMs = m_NowMs;
+				}
+				if (commit.supersededConnection != c_InvalidNetPeerId) {
+					if (PeerState* superseded = FindPeer(commit.supersededConnection)) {
+						superseded->state = NetSessionState::Closed;
+					}
+					if (m_Transport) {
+						m_Transport->Disconnect(commit.supersededConnection, "seat reclaimed by a newer connection");
+					}
+				}
+				RefreshHostState();
+			}
+		}
+		if (m_ReconnectClient && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+			for (NetH4Outbound& outbound : m_ReconnectClient->TakeOutbound()) {
+				Send(m_RemoteTransportPeerId, std::move(outbound.payload));
+			}
+			CompleteClientAdmission();
+		}
+	}
+
+	void NetSession::CompleteClientAdmission() {
+		if (m_Role != NetSessionRole::Client || m_State != NetSessionState::Accepted || !m_ReconnectClient) {
+			return;
+		}
+		if (m_ReconnectClient->IsAdmitted()) {
+			// The commit names the seat's own peer id (P4); adopt it before declaring ourselves Ready,
+			// or the host's ready check would see a different id than the seat it just committed.
+			m_LocalPeerId = m_ReconnectClient->GetAssignedPeerId();
+			Send(m_RemoteTransportPeerId, BuildReadyState(true));
+			m_State = NetSessionState::Ready;
+			m_StateStartedMs = m_NowMs;
+			m_NextHeartbeatMs = m_NowMs;
+			return;
+		}
+		if (!m_ReconnectClient->IsAdmissionPending()) {
+			// The ladder gave up or the local store failed: bounded by P3, never an open-ended wait.
+			const std::string summary = m_ReconnectClient->GetError().empty() ? "the host did not admit this seat" : m_ReconnectClient->GetError();
+			SetFailed(m_ReconnectClient->GetState() == NetH4ClientState::Failed ? NetRejectReason::InternalError : NetRejectReason::HostNotAccepting,
+			          "admission", "committed", NetReconnectClientStateName(m_ReconnectClient->GetState()), summary);
+			if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+				m_Transport->Disconnect(m_RemoteTransportPeerId, summary);
+			}
 		}
 	}
 
@@ -449,6 +602,12 @@ namespace RTE {
 			return;
 		}
 		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
+			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
+			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
+			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs)) {
+				FlushReconnectOutbound();
+				return;
+			}
 			SetRejected(rejected->rejectReason, rejected->mismatchKey, rejected->expected, rejected->actual, rejected->humanMessage);
 			m_Transport->Disconnect(peerId, rejected->humanMessage);
 			return;
@@ -476,6 +635,14 @@ namespace RTE {
 			m_LocalPeerId = accepted->assignedPeerId;
 			m_Config.heartbeatIntervalMs = accepted->heartbeatIntervalMs;
 			m_Config.timeoutMs = accepted->timeoutMs;
+			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,
+			// which is also what hands back the seat's own peer id instead of this freshly allocated one.
+			if (m_ReconnectClient && m_ReconnectClient->BeginAdmission(m_NowMs)) {
+				m_State = NetSessionState::Accepted;
+				m_StateStartedMs = m_NowMs;
+				FlushReconnectOutbound();
+				return;
+			}
 			Send(peerId, BuildReadyState(true));
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;
@@ -486,7 +653,14 @@ namespace RTE {
 			m_LastReceiveMs = m_NowMs;
 			return;
 		}
+		if (RouteAdmissionMessage(peerId, message.payload)) {
+			return;
+		}
 		if (const auto* disconnect = std::get_if<NetDisconnect>(&message.payload)) {
+			if (m_ReconnectClient && disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::SessionEnded)) {
+				// The one signal, other than a LeaveAck, that lets the recovery record be deleted.
+				m_ReconnectClient->NotifyConfirmedSessionEnd();
+			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
 				if (!m_HasReject && !disconnect->message.empty()) {
 					RecordReject(NetRejectReason::InternalError, "", "", "", disconnect->message);
@@ -530,14 +704,18 @@ namespace RTE {
 	}
 
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		RecordReject(reason, key, expected, actual, summary);
-		Send(peer.transportPeerId, NetJoinRejected{reason, summary, key, expected, actual});
-		if (m_Transport) {
-			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
-			m_Transport->Disconnect(peer.transportPeerId, BuildRejectText());
-		}
+		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
 		peer.state = NetSessionState::Rejected;
 		RefreshHostState();
+	}
+
+	void NetSession::RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		RecordReject(reason, key, expected, actual, summary);
+		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
+		if (m_Transport) {
+			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
+			m_Transport->Disconnect(peerId, BuildRejectText());
+		}
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
@@ -588,6 +766,12 @@ namespace RTE {
 			return peer.transportPeerId == peerId;
 		});
 		return it == m_Peers.end() ? nullptr : &*it;
+	}
+
+	uint32_t NetSession::GetUnauthenticatedPeerCount() const {
+		return static_cast<uint32_t>(std::count_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
+			return peer.state == NetSessionState::Handshake;
+		}));
 	}
 
 	uint32_t NetSession::ActivePeerCount() const {
@@ -790,6 +974,43 @@ namespace RTE {
 			});
 		}
 
+		// The reconnect counters the 9a gates read: nothing here is a secret, only how many of each
+		// kind of admission event the host saw.
+		json admission = json::object();
+		if (m_ReconnectHost) {
+			const NetReconnectHostStats& stats = m_ReconnectHost->GetStats();
+			admission = json{
+				{"new_joins", stats.newJoins},
+				{"ticket_offers_sent", stats.ticketOffersSent},
+				{"ticket_offer_retransmits", stats.ticketOfferRetransmits},
+				{"provisional_seats_opened", stats.provisionalSeatsOpened},
+				{"provisional_seats_committed", stats.provisionalSeatsCommitted},
+				{"provisional_seats_expired", stats.provisionalSeatsExpired},
+				{"provisional_seats_refused", stats.provisionalSeatsRefused},
+				{"provisional_seats_resumed", stats.provisionalSeatsResumed},
+				{"persistence_failures", stats.persistenceFailures},
+				{"reclaims_accepted", stats.reclaimsAccepted},
+				{"identity_rejections", stats.identityRejections},
+				{"denials_scheduled", stats.denialsScheduled},
+				{"denials_released", stats.denialsReleased},
+				{"replayed_results", stats.replayedResults},
+				{"stale_epoch_drops", stats.staleEpochDrops},
+				{"unknown_transaction_drops", stats.unknownTransactionDrops},
+				{"fenced_packets", stats.fencedPackets},
+				{"fenced_disconnects", stats.fencedDisconnects},
+				{"incarnations_bound", stats.incarnationsBound},
+				{"seats_dropped", stats.seatsDropped},
+				{"seats_closed_by_leave", stats.seatsClosedByLeave},
+				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
+				{"reseats_issued", stats.reseatsIssued},
+				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
+				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
+				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
+				{"ledger_seats", m_ReconnectHost->GetLedger().Size()},
+			};
+		}
+
 		json report{
 			{"schema", 1},
 			{"session_id", std::to_string(m_SessionId)},
@@ -815,12 +1036,20 @@ namespace RTE {
 			}},
 			{"remote_identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
 			{"peers", peers},
+			{"admission", admission},
 			{"stats", {
 				{"sent_messages", m_Stats.sentMessages},
 				{"received_messages", m_Stats.receivedMessages},
 				{"malformed_messages", m_Stats.malformedMessages},
 				{"ignored_phase_packets", m_Stats.ignoredPhasePackets},
 				{"timeouts", m_Stats.timeouts},
+				{"unbound_connection_faults", m_Stats.unboundConnectionFaults},
+				{"unauthenticated_connections_refused", m_Stats.unauthenticatedConnectionsRefused},
+				{"fenced_packets", m_Stats.fencedPackets},
+				{"fenced_disconnects", m_Stats.fencedDisconnects},
+				{"admission_messages", m_Stats.admissionMessages},
+				{"old_wire_rejections_sent", m_Stats.oldWireRejectionsSent},
+				{"old_wire_disconnects", m_Stats.oldWireDisconnects},
 			}},
 		};
 		return report.dump(2);

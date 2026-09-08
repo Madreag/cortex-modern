@@ -78,6 +78,8 @@
 #include "NetMatchService.h"
 #include "NetMatchSelfTest.h"
 #include "NetProtocolSelfTest.h"
+#include "NetReconnectSelfTest.h"
+#include "NetReconnectSessionSelfTest.h"
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
@@ -525,6 +527,17 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-session-report") {
 			s_netSessionReportPath = argValue[++i];
+			continue;
+		}
+
+		if (currentArg == "-net-no-reconnect-admission") {
+			NetMatchService::SetAdmissionEnabled(false);
+			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-reconnect-ticket") {
+			NetMatchService::SetTicketStorePath(argValue[++i]);
 			continue;
 		}
 
@@ -3569,6 +3582,12 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-admission-selftest") {
 			return NetAdmissionSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-reconnect-selftest") {
+			return NetReconnectSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-reconnect-session-selftest") {
+			return NetReconnectSessionSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.

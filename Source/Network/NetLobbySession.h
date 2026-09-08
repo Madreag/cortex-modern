@@ -53,6 +53,8 @@ namespace RTE {
 		uint32_t startPacketsSent = 0;
 		uint32_t startPacketsReceived = 0;
 		uint32_t timeouts = 0;
+		uint32_t unboundConnectionFaults = 0; //!< Host: faults from a transport this round never bound.
+		uint32_t unboundDisconnects = 0; //!< Host: disconnects from a transport this round never bound.
 	};
 
 	class NetLobbySession {
@@ -122,6 +124,7 @@ namespace RTE {
 		void Fail(const std::string& reason);
 
 		bool IsKnownRemote(uint8_t peerId) const;
+		bool IsCommittedTransport(NetPeerId transportPeerId) const;
 		bool AllConfigAcked() const;
 		bool AllRemoteReady() const;
 

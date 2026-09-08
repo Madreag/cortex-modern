@@ -50,6 +50,17 @@ namespace RTE {
 		return NetAuthConstantTimeEquals(entry->second.credential.data(), credential.data(), credential.size());
 	}
 
+	bool NetSeatAuthRegistry::VerifySeatProof(uint16_t seat, uint32_t holderGeneration, const NetH4Transcript& transcript, const NetAuthBytes32& mac) const {
+		if (!m_Active || holderGeneration == 0) {
+			return false;
+		}
+		const auto entry = m_Seats.find(seat);
+		if (entry == m_Seats.end() || !entry->second.active || entry->second.lastGeneration != holderGeneration) {
+			return false;
+		}
+		return NetH4VerifyProof(entry->second.credential, transcript, mac);
+	}
+
 	uint32_t NetSeatAuthRegistry::GetActiveGeneration(uint16_t seat) const {
 		if (!m_Active) {
 			return 0;

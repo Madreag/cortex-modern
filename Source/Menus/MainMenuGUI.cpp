@@ -169,6 +169,8 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReady"));
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"));
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerLeave"));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReconnect"));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCancelReconnect"));
 	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBack"));
 	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinBack"));
 
@@ -308,6 +310,10 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetVisible(true);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionAbs((m_RootBoxMaxWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetYPos() + 250);
 	const NetMatchServiceState netMatchState = g_NetMatchService.GetState();
+	if (netMatchState == NetMatchServiceState::Idle) {
+		// A relaunch after a crash lands here with the match still running elsewhere; §11 offers it back.
+		g_NetMatchService.ScanStoredTicket();
+	}
 	m_MultiplayerSubScreen = (netMatchState == NetMatchServiceState::Idle || netMatchState == NetMatchServiceState::Completed) ? MultiplayerSubScreen::Landing : MultiplayerSubScreen::Lobby;
 	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
@@ -596,6 +602,25 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_NetMatchService.Destroy();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]) {
+		// §11's manual retry, and the same button that takes up the stored ticket after a relaunch.
+		NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+		reconnect.RequestManualRetry(MenuClockMs());
+		reconnect.DismissOffer();
+		std::string rejoinError;
+		if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
+			reconnect.NoteAttemptFailed(MenuClockMs(), rejoinError);
+			m_MultiplayerLandingStatusLabel->SetText(rejoinError);
+		} else {
+			reconnect.NoteAttemptStarted(MenuClockMs());
+			m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+		}
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]) {
+		// A cancel stops the automatic attempts; the recovery record survives it, so Rejoin still works.
+		g_NetMatchService.GetReconnectUx().Cancel(MenuClockMs());
+		g_NetMatchService.GetReconnectUx().DismissOffer();
+		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MultiplayerLanGamesList) {
 		// Clicking a discovered host fills the join fields; Connect stays the explicit action.
 		const int selected = m_MultiplayerLanGamesList->GetSelectedIndex();
@@ -687,6 +712,32 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	MaybeLaunchMultiplayerActivity();
 }
 
+// The menu's own clock: the reconnect schedule is real time, not sim time.
+uint64_t MainMenuGUI::MenuClockMs() {
+	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void MainMenuGUI::RefreshReconnectControls() {
+	const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+	const bool offering = reconnect.GetOffer() == NetReconnectOffer::Available;
+	const bool landing = m_MultiplayerSubScreen == MultiplayerSubScreen::Landing;
+	const bool recovering = reconnect.IsActive();
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || reconnect.CanRetryManually());
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : "Retry");
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || recovering));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || reconnect.CanCancel());
+	if (!landing) {
+		return;
+	}
+	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
+	// scan of the recovery record found - including precisely why it cannot be used.
+	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
+	if (!status.empty()) {
+		m_MultiplayerLandingStatusLabel->SetText(status);
+	}
+}
+
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
@@ -694,6 +745,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	RefreshLanGamesList();
+	RefreshReconnectControls();
 	if (!lobby) {
 		if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250) {
 			m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250);
@@ -721,6 +773,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const std::string name = member.displayName.size() > 14 ? member.displayName.substr(0, 13) + "." : member.displayName;
 		std::string row = name + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
+		row += NetReconnectUx::RosterMark(member.dropped, member.reclaiming);
 		if (!member.isLocal && member.connected) {
 			row += " - ";
 			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));

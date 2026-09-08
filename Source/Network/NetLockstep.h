@@ -212,9 +212,10 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 11;
+		static constexpr uint16_t c_Version = 12;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
+		// Version 12 adds the system-authored Reseat command.
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
 		static constexpr size_t c_MaxObservationsPerPacket = 512;
@@ -226,6 +227,8 @@ namespace RTE {
 		static constexpr size_t c_MaxFramesPerPacket = 512;
 		static constexpr size_t c_MaxCommandsPerPacket = 256;
 		static constexpr size_t c_MaxCargoPerDelivery = 64;
+		// P26's per-seat ledger cap: the largest actor list a reseat can legitimately carry.
+		static constexpr size_t c_MaxReseatActors = 512;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60;
 		static constexpr uint8_t c_MaxPeerCount = 16;
 		// How far ahead of the committed frame a received frame/checksum may legitimately target
