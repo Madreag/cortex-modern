@@ -3890,6 +3890,17 @@ int main(int argc, char** argv) {
 
 			RunGameLoop();
 
+			// The menu-driven match writes the same lockstep counters the headless gates do, so a
+			// lobby lane can say which side of the relay a stall was on.
+			if (g_NetMatchService.WasEverStarted() && !s_netLockstepReportPath.empty()) {
+				std::string reportError;
+				if (!WriteTextFile(s_netLockstepReportPath, g_NetMatchService.BuildReportJson(), &reportError)) {
+					std::cerr << "[menu-mp] could not write report: " << reportError << std::endl;
+				} else {
+					std::cout << "[menu-mp] wrote report: " << s_netLockstepReportPath << std::endl;
+				}
+			}
+
 			if (traceMenuMp) {
 				g_MetricsCollector.EndRun();
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
