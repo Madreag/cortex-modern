@@ -2776,8 +2776,9 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
-					// Leaving a running net match: a clean leave lets N-peer survivors keep playing;
-					// with one peer left it ends their match as before, never a stall.
+					// Leaving a running net match: a clean leave lets N-peer survivors keep playing and,
+					// with nobody left, ends their match at once - unlike a drop, which holds the seat
+					// open for its reclaim window. The §7 exchange runs before the link goes down.
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
@@ -3520,6 +3521,9 @@ int RunNetMatchServiceE2E() {
 			g_MetricsCollector.SetRecordTickHashes(true);
 		}
 		RunGameLoop();
+		// A leave is answered on the service worker, and the report below must describe the settled
+		// exchange rather than one still in flight.
+		g_NetMatchService.WaitForPendingWork();
 		CheckRequiredProbesCompleted();
 		if (s_netReplayExitCode != 0 && s_netMatchServiceE2EExitCode == 0) {
 			s_netMatchServiceE2EExitCode = s_netReplayExitCode;
