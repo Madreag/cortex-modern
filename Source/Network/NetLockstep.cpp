@@ -1261,6 +1261,10 @@ namespace RTE {
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_PeerLastHeardMs.clear();
+		m_UnreachablePeers.clear();
+		m_RelayBacklog.clear();
+		m_RelayBacklogSinceMs.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
@@ -1361,6 +1365,10 @@ namespace RTE {
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_PeerLastHeardMs.clear();
+		m_UnreachablePeers.clear();
+		m_RelayBacklog.clear();
+		m_RelayBacklogSinceMs.clear();
 		m_PeerEffectiveStart.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
@@ -1582,6 +1590,9 @@ namespace RTE {
 				m_LastStartSentMs = nowMs;
 			}
 		}
+		FlushRelayBacklog(nowMs);
+		DropUnreachablePeers(nowMs);
+		AdjudicateSilentPeers(nowMs);
 		AdvanceReadyFrames(nowMs);
 	}
 
@@ -1850,7 +1861,11 @@ namespace RTE {
 		out << "\"last_missing_peers\":\"" << EscapeJson(m_Stats.lastMissingPeers) << "\",";
 		out << "\"relay_packets_sent\":" << m_Stats.relayPacketsSent << ",";
 		out << "\"relay_send_failures\":" << m_Stats.relaySendFailures << ",";
+		out << "\"relay_resends\":" << m_Stats.relayResends << ",";
+		out << "\"relay_backlog_peers\":" << m_RelayBacklog.size() << ",";
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";
+		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
+		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"peers_left\":" << m_PeerLeaveFrames.size() << ",";
 		out << "\"peer_leave_frames\":{";
 		for (auto it = m_PeerLeaveFrames.begin(); it != m_PeerLeaveFrames.end(); ++it) {
@@ -1873,6 +1888,7 @@ namespace RTE {
 			    << ",\"pre_start_buffered\":" << peer.preStartBuffered
 			    << ",\"relay_packets_sent\":" << peer.relayPacketsSent
 			    << ",\"relay_send_failures\":" << peer.relaySendFailures
+			    << ",\"relay_resends\":" << peer.relayResends
 			    << ",\"highest_target_frame\":" << peer.highestTargetFrame
 			    << ",\"last_heard_ms\":" << peer.lastHeardMs << "}";
 		}
@@ -1937,6 +1953,12 @@ namespace RTE {
 			if (peerId == fromPeerId) {
 				continue;
 			}
+			// Behind an undrained backlog, or this peer's stream would arrive out of order.
+			const auto backlogIt = m_RelayBacklog.find(peerId);
+			if (backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) {
+				QueueRelayBacklog(peerId, bytes);
+				continue;
+			}
 			NetLockstepPeerStats& peerStats = m_Stats.peers[peerId];
 			std::string sendError;
 			if (m_Transport->Send(transportId, m_Config.frameLane, bytes, &sendError)) {
@@ -1945,11 +1967,56 @@ namespace RTE {
 				continue;
 			}
 			// A refused forward was never queued, and on a reliable lane the receiver cannot ask for
-			// it again - it would wait on that frame until its own grace ran out. Say so.
+			// it again - it would wait on that frame until its own grace ran out. Hold it for retry.
 			++m_Stats.relaySendFailures;
 			++peerStats.relaySendFailures;
 			m_Stats.lastRelayError = sendError;
 			std::cout << "[net-match] relay to " << DescribePeer(peerId) << " refused at frame " << m_Stats.nextFrame << ": " << sendError << std::endl;
+			QueueRelayBacklog(peerId, bytes);
+		}
+	}
+
+	void NetLockstepCoordinator::QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes) {
+		std::deque<std::vector<uint8_t>>& backlog = m_RelayBacklog[peerId];
+		// Past the skew window this peer could never catch up even if the transport freed up.
+		if (backlog.size() >= NetLockstepCodec::c_MaxFutureFrameSkew) {
+			m_UnreachablePeers.insert(peerId);
+			return;
+		}
+		backlog.push_back(bytes);
+	}
+
+	void NetLockstepCoordinator::FlushRelayBacklog(uint64_t nowMs) {
+		for (auto it = m_RelayBacklog.begin(); it != m_RelayBacklog.end();) {
+			const uint8_t peerId = it->first;
+			const auto transportIt = m_RemoteTransports.find(peerId);
+			if (transportIt == m_RemoteTransports.end()) {
+				m_RelayBacklogSinceMs.erase(peerId);
+				it = m_RelayBacklog.erase(it);
+				continue;
+			}
+			while (!it->second.empty()) {
+				std::string sendError;
+				if (!m_Transport->Send(transportIt->second, m_Config.frameLane, it->second.front(), &sendError)) {
+					m_Stats.lastRelayError = sendError;
+					break;
+				}
+				++m_Stats.relayPacketsSent;
+				++m_Stats.relayResends;
+				++m_Stats.peers[peerId].relayPacketsSent;
+				++m_Stats.peers[peerId].relayResends;
+				it->second.pop_front();
+			}
+			if (it->second.empty()) {
+				m_RelayBacklogSinceMs.erase(peerId);
+				it = m_RelayBacklog.erase(it);
+				continue;
+			}
+			const uint64_t since = m_RelayBacklogSinceMs.emplace(peerId, nowMs).first->second;
+			if (m_Config.timeoutMs > 0 && nowMs >= since && nowMs - since >= PeerSilenceLeaveMs()) {
+				m_UnreachablePeers.insert(peerId);
+			}
+			++it;
 		}
 	}
 
@@ -1987,15 +2054,7 @@ namespace RTE {
 				// frames precede this notice on the reliable lane, so no survivor learns of the leave
 				// before it holds everything the leave references.
 				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::Running && m_Stats.nextFrame > 0) {
-					uint64_t firstMissingFrame = m_Stats.nextFrame;
-					while (true) {
-						const auto it = m_RemoteFrames.find(firstMissingFrame);
-						if (it == m_RemoteFrames.end() || it->second.find(lockstepPeer) == it->second.end()) {
-							break;
-						}
-						++firstMissingFrame;
-					}
-					ApplyPeerLeave(lockstepPeer, firstMissingFrame, "connection lost", nowMs);
+					ApplyPeerLeave(lockstepPeer, FirstFrameWithout(lockstepPeer), "connection lost", nowMs);
 					break;
 				}
 				// A transport peer outside the round — a leaver's stale socket finally timing out, a
@@ -2067,6 +2126,7 @@ namespace RTE {
 			[](const NetLockstepChecksum& checksum) { return checksum.senderPeerId; },
 		}, packet.payload);
 		if (IsKnownRemotePeer(sender) && SenderOwnsTransport(sender, fromTransport)) {
+			m_PeerLastHeardMs[sender] = nowMs;
 			m_Stats.peers[sender].lastHeardMs = nowMs;
 		}
 		std::visit(Overloaded{
@@ -2252,6 +2312,81 @@ namespace RTE {
 			return;
 		}
 		AdvanceReadyFrames(nowMs);
+	}
+
+	uint64_t NetLockstepCoordinator::FirstFrameWithout(uint8_t peerId) const {
+		uint64_t frame = m_Stats.nextFrame;
+		while (true) {
+			const auto it = m_RemoteFrames.find(frame);
+			if (it == m_RemoteFrames.end() || it->second.find(peerId) == it->second.end()) {
+				return frame;
+			}
+			++frame;
+		}
+	}
+
+	// Only the relay host may call a peer gone: every survivor has to drop the requirement at the same
+	// frame, and it can only do that from one relayed notice. The transport's own disconnect is no use
+	// here - it waits on the dead peer's process, which outlasts every survivor's missing-frame grace,
+	// so the star's other clients kill themselves waiting for someone the host knows nothing about yet.
+	// A 2-peer host has no survivor to protect and keeps failing with MissingFrameTimeout.
+	void NetLockstepCoordinator::AdjudicateSilentPeers(uint64_t nowMs) {
+		if (!m_RelayHost || m_State != NetLockstepState::Running || m_RemotePeerIds.size() < 2 || m_Config.timeoutMs == 0) {
+			return;
+		}
+		// Only judge a frame we have produced for ourselves: when OUR pipeline is the stalled one, the
+		// clients are not the ones at fault.
+		if (m_LastQueuedTargetFrame == std::numeric_limits<uint64_t>::max() || m_LastQueuedTargetFrame < m_Stats.nextFrame) {
+			return;
+		}
+		const uint64_t budget = PeerSilenceLeaveMs();
+		const auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
+		std::vector<uint8_t> silent;
+		for (uint8_t peerId: m_RemotePeerIds) {
+			// Only a peer that is actually blocking the round; a quiet peer nobody waits on is fine.
+			if (!IsRemoteRequiredForFrame(peerId, m_Stats.nextFrame)) {
+				continue;
+			}
+			if (remoteIt != m_RemoteFrames.end() && remoteIt->second.find(peerId) != remoteIt->second.end()) {
+				continue;
+			}
+			const auto heardIt = m_PeerLastHeardMs.find(peerId);
+			if (heardIt == m_PeerLastHeardMs.end() || nowMs < heardIt->second || nowMs - heardIt->second < budget) {
+				continue;
+			}
+			silent.push_back(peerId);
+		}
+		// If EVERY remaining peer looks silent at once, the fault is far more likely ours - our own
+		// transport, or a stall the whole match shares - than all of theirs. Leave it to the ordinary
+		// missing-frame timeout rather than emptying the round.
+		size_t live = 0;
+		for (uint8_t peerId: m_RemotePeerIds) {
+			live += m_PeerLeaveFrames.find(peerId) == m_PeerLeaveFrames.end() ? 1 : 0;
+		}
+		if (silent.size() >= live) {
+			return;
+		}
+		for (uint8_t peerId: silent) {
+			if (m_State != NetLockstepState::Running) {
+				break;
+			}
+			++m_Stats.peersDroppedSilent;
+			ApplyPeerLeave(peerId, FirstFrameWithout(peerId), "no frames for " + std::to_string(budget) + "ms", nowMs);
+		}
+	}
+
+	void NetLockstepCoordinator::DropUnreachablePeers(uint64_t nowMs) {
+		if (m_UnreachablePeers.empty() || m_State != NetLockstepState::Running) {
+			return;
+		}
+		std::set<uint8_t> unreachable;
+		unreachable.swap(m_UnreachablePeers);
+		for (uint8_t peerId: unreachable) {
+			if (m_State != NetLockstepState::Running || m_PeerLeaveFrames.find(peerId) != m_PeerLeaveFrames.end()) {
+				continue;
+			}
+			ApplyPeerLeave(peerId, FirstFrameWithout(peerId), "unreachable: " + m_Stats.lastRelayError, nowMs);
+		}
 	}
 
 	void NetLockstepCoordinator::AdvanceReadyFrames(uint64_t nowMs) {
