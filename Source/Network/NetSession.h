@@ -93,6 +93,7 @@ namespace RTE {
 		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
 		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
+		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
@@ -173,6 +174,9 @@ namespace RTE {
 		/// @return Whether the payload was an admission message the reconnect plane took.
 		bool RouteAdmissionMessage(NetPeerId peerId, const NetPayload& payload);
 		void FlushReconnectOutbound();
+		/// Client: turns a committed admission transaction into Ready on the seat's own peer id, and a
+		/// settled-but-uncommitted one into a legible session failure.
+		void CompleteClientAdmission();
 
 		NetIdentityMismatch ValidateClientHello(const NetClientHello& hello) const;
 		NetIdentityMismatch ValidateHostHello(const NetHostHello& hello) const;

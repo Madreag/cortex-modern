@@ -568,6 +568,32 @@ namespace RTE {
 			for (NetH4Outbound& outbound : m_ReconnectClient->TakeOutbound()) {
 				Send(m_RemoteTransportPeerId, std::move(outbound.payload));
 			}
+			CompleteClientAdmission();
+		}
+	}
+
+	void NetSession::CompleteClientAdmission() {
+		if (m_Role != NetSessionRole::Client || m_State != NetSessionState::Accepted || !m_ReconnectClient) {
+			return;
+		}
+		if (m_ReconnectClient->IsAdmitted()) {
+			// The commit names the seat's own peer id (P4); adopt it before declaring ourselves Ready,
+			// or the host's ready check would see a different id than the seat it just committed.
+			m_LocalPeerId = m_ReconnectClient->GetAssignedPeerId();
+			Send(m_RemoteTransportPeerId, BuildReadyState(true));
+			m_State = NetSessionState::Ready;
+			m_StateStartedMs = m_NowMs;
+			m_NextHeartbeatMs = m_NowMs;
+			return;
+		}
+		if (!m_ReconnectClient->IsAdmissionPending()) {
+			// The ladder gave up or the local store failed: bounded by P3, never an open-ended wait.
+			const std::string summary = m_ReconnectClient->GetError().empty() ? "the host did not admit this seat" : m_ReconnectClient->GetError();
+			SetFailed(m_ReconnectClient->GetState() == NetH4ClientState::Failed ? NetRejectReason::InternalError : NetRejectReason::HostNotAccepting,
+			          "admission", "committed", NetReconnectClientStateName(m_ReconnectClient->GetState()), summary);
+			if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+				m_Transport->Disconnect(m_RemoteTransportPeerId, summary);
+			}
 		}
 	}
 
@@ -576,6 +602,12 @@ namespace RTE {
 			return;
 		}
 		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
+			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
+			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
+			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs)) {
+				FlushReconnectOutbound();
+				return;
+			}
 			SetRejected(rejected->rejectReason, rejected->mismatchKey, rejected->expected, rejected->actual, rejected->humanMessage);
 			m_Transport->Disconnect(peerId, rejected->humanMessage);
 			return;
@@ -603,6 +635,14 @@ namespace RTE {
 			m_LocalPeerId = accepted->assignedPeerId;
 			m_Config.heartbeatIntervalMs = accepted->heartbeatIntervalMs;
 			m_Config.timeoutMs = accepted->timeoutMs;
+			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,
+			// which is also what hands back the seat's own peer id instead of this freshly allocated one.
+			if (m_ReconnectClient && m_ReconnectClient->BeginAdmission(m_NowMs)) {
+				m_State = NetSessionState::Accepted;
+				m_StateStartedMs = m_NowMs;
+				FlushReconnectOutbound();
+				return;
+			}
 			Send(peerId, BuildReadyState(true));
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;

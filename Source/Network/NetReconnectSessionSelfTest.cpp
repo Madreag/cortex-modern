@@ -1627,17 +1627,17 @@ namespace RTE {
 					clientTransport.AdvanceTimeMs(10);
 				}
 			};
-			drive(200);
+			// With a plane attached the transaction is part of the handshake now: the session starts it
+			// on JoinAccepted and holds Ready back until the commit, so nothing here starts it by hand.
+			drive(600);
 			if (!host.IsReady() || !client.IsReady()) {
-				return Fail("the wired pair did not reach the ordinary ready state");
+				return Fail("the wired pair did not reach the ready state");
 			}
-
-			if (!reconnect.BeginNewJoin(nowMs, &error)) {
-				return Fail("the wired join did not start: " + error);
-			}
-			drive(nowMs + 400);
 			if (reconnect.GetState() != NetH4ClientState::Joined) {
 				return Fail("the admission transaction did not commit through NetSession");
+			}
+			if (reconnect.GetStats().requestsSent != 1) {
+				return Fail("the handshake ran more than one admission transaction");
 			}
 			if (!store.HasRecord()) {
 				return Fail("the wired join left no durable ticket");
@@ -2142,6 +2142,93 @@ namespace RTE {
 			return 0;
 		}
 
+		// A2 wired the plane; this is the shape of the LIVE handshake it produces: with a plane
+		// attached, Ready waits for JoinCommitted (§4), and the peer id the client ends up on is the
+		// seat's own (P4), not the one AllocatePeerId handed out.
+		int TestAdmissionGatesReady() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42131;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("gate"));
+			NetReconnectClient reconnect;
+			uint64_t unixNow = 1700000000000ULL;
+			reconnect.Configure(&store, MakeIdentity(), "Player");
+			reconnect.SetUnixClock(&FixedUnixClock, &unixNow);
+			reconnect.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			client.SetReconnectClient(&reconnect);
+			if (!host.StartHost(hostTransport, MakeSessionConfig(port, 101, "Host"), &error) ||
+			    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not start the gated pair: " + error);
+			}
+			uint64_t nowMs = 0;
+			bool sawGatedAccept = false;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				client.Tick(nowMs);
+				// The window §4 opens: accepted by the session, not yet Ready, transaction in flight.
+				if (client.GetState() == NetSessionState::Accepted && reconnect.IsAdmissionPending() && host.GetReadyPeerCount() == 0) {
+					sawGatedAccept = true;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (!sawGatedAccept) {
+				return Fail("the client declared itself Ready without waiting for a JoinCommitted");
+			}
+			if (!client.IsReady() || !host.IsReady() || reconnect.GetState() != NetH4ClientState::Joined) {
+				return Fail("the gated handshake did not settle into a committed, ready session");
+			}
+			const std::vector<NetH4Seat> seats = MakeSeatTable();
+			if (client.GetLocalPeerId() != seats[0].peerId) {
+				return Fail("the client kept its allocated peer id instead of the seat's own");
+			}
+			const std::vector<NetSessionPeerInfo> readyPeers = host.GetReadyPeers();
+			if (readyPeers.size() != 1 || readyPeers.front().assignedPeerId != seats[0].peerId) {
+				return Fail("the host did not put the committed seat on its own peer id");
+			}
+			if (reconnect.UsedStoredTicket()) {
+				return Fail("a first join claimed to have used a stored ticket");
+			}
+
+			// The negative control: with NO plane attached the handshake is exactly what it always was.
+			{
+				const uint16_t plainPort = 42132;
+				LoopbackTransport plainHostTransport;
+				LoopbackTransport plainClientTransport;
+				NetSession plainHost;
+				NetSession plainClient;
+				if (!plainHost.StartHost(plainHostTransport, MakeSessionConfig(plainPort, 103, "Host"), &error) ||
+				    !plainClient.StartClient(plainClientTransport, "loopback", MakeSessionConfig(plainPort, 204, "Player"), &error)) {
+					return Fail("could not start the unwired pair: " + error);
+				}
+				for (uint64_t plainNow = 0; plainNow <= 300; plainNow += 10) {
+					plainHost.Tick(plainNow);
+					plainClient.Tick(plainNow);
+					plainHostTransport.AdvanceTimeMs(10);
+					plainClientTransport.AdvanceTimeMs(10);
+				}
+				if (!plainHost.IsReady() || !plainClient.IsReady() || plainClient.GetLocalPeerId() == 0) {
+					return Fail("the session without an admission plane no longer reaches Ready on its own");
+				}
+			}
+			return 0;
+		}
+
 	} // namespace
 
 	int NetReconnectSessionSelfTest::Run() {
@@ -2194,6 +2281,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestOldWireProbe(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAdmissionGatesReady(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
