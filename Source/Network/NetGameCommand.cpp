@@ -27,6 +27,8 @@ namespace RTE {
 				return NetGameCommandType::AIEquip;
 			} else if constexpr (std::is_same_v<T, NetGameAIOrder>) {
 				return NetGameCommandType::AIOrder;
+			} else if constexpr (std::is_same_v<T, NetGameReseat>) {
+				return NetGameCommandType::Reseat;
 			}
 		}, payload);
 	}
@@ -59,6 +61,8 @@ namespace RTE {
 				return "AIEquip";
 			case NetGameCommandType::AIOrder:
 				return "AIOrder";
+			case NetGameCommandType::Reseat:
+				return "Reseat";
 		}
 		return "Unknown";
 	}
