@@ -58,7 +58,12 @@ void SoundContainer::Clear() {
 	m_PendingPlays = 0;
 	m_PendingStopped = false;
 	m_PendingPositionWritten = false;
+	m_PendingTouchedByAI = false;
+	m_SharedAliasHeld = false;
+	m_PendingActorUID = 0;
+	m_PendingTeam = -1;
 	m_PendingAliasBaseline = Vector();
+	m_SharedAliasBaseline = Vector();
 	if (m_CheckpointRegistered) {
 		g_AudioMan.DisownSoundContainerPlayingChannels(this);
 		g_AudioMan.UnregisterCheckpointSoundContainer(this, m_CheckpointIdentity);
@@ -479,11 +484,21 @@ void SoundContainer::FadeOut(int fadeOutTime) {
 }
 
 const Vector& SoundContainer::GetScriptPosition() const {
-	if (!Deferring()) return m_Pos;
-	// The AI hook holds this pass's own position: a write through it is a decision, folded into a
-	// deferred write at the next read and at the drain, never landing on shared state early.
 	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
 	SoundContainer* self = const_cast<SoundContainer*>(this);
+	if (!Deferring()) {
+		// A write Lua made through the position this pass holds is a shared write when a shared hook
+		// makes it: it lands now, exactly as it did when the alias was the position itself.
+		self->SettleSharedAliasWrite();
+		self->m_SharedAliasHeld = true;
+		self->m_SharedAliasBaseline = m_Pos;
+		self->NotePending();
+		return m_Pos;
+	}
+	// The AI hook holds this pass's own position: a write through it is a decision, folded into a
+	// deferred write at the next read and at the drain, never landing on shared state early.
+	self->NoteAIActor();
+	self->AdoptSharedAliasWrite();
 	if (!(m_Pending.written & LocalPos)) {
 		self->m_Pending.m_Pos = m_Pos;
 		self->m_Pending.written |= LocalPos;
@@ -492,6 +507,29 @@ const Vector& SoundContainer::GetScriptPosition() const {
 	}
 	self->ReconcileAliasPosition();
 	return m_Pending.m_Pos;
+}
+
+void SoundContainer::AdoptSharedAliasWrite() {
+	// A position handed out in a shared scope is m_Pos itself, so an AI hook writing through it would
+	// reach shared state directly. Take the value back off m_Pos and defer it like any other AI write.
+	if (!m_SharedAliasHeld || m_Pos == m_SharedAliasBaseline) return;
+	const Vector written = m_Pos;
+	m_Pos = m_SharedAliasBaseline;
+	m_Pending.m_Pos = written;
+	m_Pending.written |= LocalPos;
+	m_PendingAliasBaseline = m_SharedAliasBaseline;
+	NotePending();
+	ReconcileAliasPosition();
+}
+
+void SoundContainer::SettleSharedAliasWrite() {
+	// Outside the AI pass a change to the position this container holds for Lua is a shared write, so
+	// it lands on shared state now rather than waiting for a drain that may never visit again.
+	if (m_Pos != m_SharedAliasBaseline) m_SharedAliasBaseline = m_Pos;
+	if (!(m_Pending.written & LocalPos) || m_Pending.m_Pos == m_PendingAliasBaseline) return;
+	m_Pos = m_Pending.m_Pos;
+	m_PendingAliasBaseline = m_Pending.m_Pos;
+	m_SharedAliasBaseline = m_Pos;
 }
 
 void SoundContainer::ReconcileAliasPosition() {
@@ -512,9 +550,44 @@ void SoundContainer::ReconcileAliasPosition() {
 	}
 }
 
+void SoundContainer::ApplyPendingControl(PendingOp::Property property, float x, float y, int32_t value) {
+	switch (property) {
+		case PendingOp::Volume: m_Pending.m_Volume = x; m_Pending.written |= LocalVolume; break;
+		case PendingOp::Pitch: m_Pending.m_Pitch = x; m_Pending.written |= LocalPitch; break;
+		case PendingOp::PitchVariation: m_Pending.m_PitchVariation = x; m_Pending.written |= LocalPitchVariation; break;
+		case PendingOp::Loops: m_Pending.m_Loops = value; m_Pending.written |= LocalLoops; break;
+		case PendingOp::Priority: m_Pending.m_Priority = value; m_Pending.written |= LocalPriority; break;
+		case PendingOp::Immobile: m_Pending.m_Immobile = value != 0; m_Pending.written |= LocalImmobile; break;
+		case PendingOp::BusRoute: m_Pending.m_BusRouting = static_cast<BusRouting>(value); m_Pending.written |= LocalBusRouting; break;
+		case PendingOp::OverlapMode: m_Pending.m_SoundOverlapMode = static_cast<SoundOverlapMode>(value); m_Pending.written |= LocalOverlapMode; break;
+		case PendingOp::AttenuationStart: m_Pending.m_AttenuationStartDistance = x; m_Pending.written |= LocalAttenuationStartDistance; break;
+		case PendingOp::CustomPan: m_Pending.m_CustomPanValue = x; m_Pending.written |= LocalCustomPanValue; break;
+		case PendingOp::PanningStrength: m_Pending.m_PanningStrengthMultiplier = x; m_Pending.written |= LocalPanningStrengthMultiplier; break;
+		case PendingOp::GlobalPitch: m_Pending.m_AffectedByGlobalPitch = value != 0; m_Pending.written |= LocalAffectedByGlobalPitch; break;
+		case PendingOp::Paused: m_Pending.m_Paused = value != 0; m_Pending.written |= LocalPaused; break;
+		case PendingOp::Position:
+		case PendingOp::PositionAlias: m_Pending.m_Pos = Vector(x, y); m_Pending.written |= LocalPos; break;
+		case PendingOp::MusicPreEntry: m_Pending.m_MusicPreEntryTime = x; m_Pending.written |= LocalMusicPreEntryTime; break;
+		case PendingOp::MusicExit: m_Pending.m_MusicExitTime = x; m_Pending.written |= LocalMusicExitTime; break;
+		default: break;
+	}
+	switch (property) {
+		case PendingOp::Loops:
+		case PendingOp::Immobile:
+		case PendingOp::AttenuationStart:
+		case PendingOp::PanningStrength:
+			m_Pending.m_SoundPropertiesUpToDate = false;
+			m_Pending.written |= LocalSoundPropertiesUpToDate;
+			break;
+		default: break;
+	}
+}
+
 bool SoundContainer::DeferProperty(PendingOp::Property property, float x, float y, int32_t value) {
 	if (!Deferring()) return false;
 	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	NoteAIActor();
+	AdoptSharedAliasWrite();
 	if (property == PendingOp::Position) {
 		ReconcileAliasPosition();
 		m_PendingPositionWritten = true;
@@ -530,9 +603,18 @@ bool SoundContainer::DeferProperty(PendingOp::Property property, float x, float 
 	return true;
 }
 
+void SoundContainer::NoteAIActor() {
+	m_PendingTouchedByAI = true;
+	if (!g_CurrentAIActor) return;
+	m_PendingActorUID = static_cast<int64_t>(g_CurrentAIActor->GetUniqueID());
+	m_PendingTeam = g_CurrentAIActor->GetTeam();
+}
+
 void SoundContainer::QueuePendingOp(PendingOp op) {
-	op.actorUID = g_CurrentAIActor ? static_cast<int64_t>(g_CurrentAIActor->GetUniqueID()) : 0;
-	op.team = g_CurrentAIActor ? g_CurrentAIActor->GetTeam() : -1;
+	// A call reconciled at the drain has no running AI actor, so it keeps the one that last touched
+	// this container: an unattributed call would be refused on the wire.
+	op.actorUID = g_CurrentAIActor ? static_cast<int64_t>(g_CurrentAIActor->GetUniqueID()) : m_PendingActorUID;
+	op.team = g_CurrentAIActor ? g_CurrentAIActor->GetTeam() : m_PendingTeam;
 	m_PendingOps.push_back(std::move(op));
 	NotePending();
 }
@@ -568,7 +650,13 @@ bool SoundContainer::FindSoundSetPath(const SoundSet& soundSet, std::vector<uint
 
 std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
 	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
-	ReconcileAliasPosition();
+	if (m_PendingTouchedByAI) {
+		AdoptSharedAliasWrite();
+		ReconcileAliasPosition();
+	} else {
+		// Nothing ran in an AI pass since the last drain, so a change found now was a shared write.
+		SettleSharedAliasWrite();
+	}
 	std::vector<PendingOp> taken;
 	taken.swap(m_PendingOps);
 	// The position Lua holds outlives the pass that took it, exactly as the shared one does, so the
@@ -579,13 +667,14 @@ std::vector<SoundContainer::PendingOp> SoundContainer::TakePendingSoundOps() {
 	if (aliasHeld) {
 		m_Pending.m_Pos = aliasPosition;
 		m_Pending.written = LocalPos;
-	} else {
-		g_AudioMan.ClearPendingSoundOps(this);
 	}
 	m_PendingPlays = 0;
 	m_PendingStopped = false;
 	m_PendingPositionWritten = false;
+	m_PendingTouchedByAI = false;
 	m_PendingAliasBaseline = aliasHeld ? aliasPosition : Vector();
+	if (aliasHeld || m_SharedAliasHeld) NotePending();
+	else g_AudioMan.ClearPendingSoundOps(this);
 	return taken;
 }
 
