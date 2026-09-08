@@ -4,6 +4,8 @@ import argparse
 import io
 import json
 from pathlib import Path
+import re
+import shutil
 import struct
 import zipfile
 
@@ -37,6 +39,27 @@ def png(data, pixel=None, mode=None, size=None):
         output = io.BytesIO()
         image.save(output, format="PNG")
         return output.getvalue()
+
+
+def audit_module(repo, runtime, save_ini):
+    """A contract-audit seed names the audit's own UserScenes.rte presets, so build them here too."""
+    text = save_ini.decode("utf-8", "replace")
+    if "UserScenes.rte/Checkpoint Global" not in text:
+        return None
+    entry = text.split("CopyOf = UserScenes.rte/Checkpoint Global", 1)[1]
+    script = re.search(r"ScriptPath = UserScenes\.rte/ScriptState/(\S+)", entry)
+    module = Path(runtime) / "Userdata/UserScenes.rte"
+    (module / "ScriptState").mkdir(parents=True, exist_ok=True)
+    for name in sorted(set(re.findall(r"UserScenes\.rte/ScriptState/(\S+\.lua)", text))):
+        source = next(path for path in (repo / "tools/fixtures" / name, repo / "tools/contracts" / name) if path.is_file())
+        shutil.copy2(source, module / "ScriptState" / name)
+    index = "DataModule\n\tModuleName = User Scenes\n\tIgnoreMissingItems = 1\n"
+    index += "\tAddGlobalScript = GlobalScript\n\t\tPresetName = Checkpoint Global\n"
+    index += f"\t\tScriptPath = UserScenes.rte/ScriptState/{script[1] if script else 'mod_global_callbacks.lua'}\n\t\tLuaClassName = CheckpointGlobalScript\n"
+    if re.search(r"LateUpdate = 1", entry.split("AddSavedGlobalScript", 1)[0]):
+        index += "\t\tLateUpdate = 1\n"
+    (module / "Index.ini").write_text(index)
+    return module
 
 
 def main():
@@ -100,6 +123,7 @@ def main():
         success = case in ("success", "legacy_rgb")
         run = make_run(options.repo, ["-scenario", "SimBaseline", "-seed", 42, "-max-ticks", 3,
                                      "-tick-hashes", "-out", out / "trace.json", "-load-io-success-selftest" if success else "-load-io-selftest", "load_candidate"], out, options.timeout)
+        audit_module(options.repo, run.cwd, seed["Save.ini"])
         directory = Path(run.cwd) / "Userdata/UserSavedGames.rte"
         directory.mkdir()
         (directory / "Index.ini").write_text("DataModule\n\tModuleName = Scripted Activity Saves\n")
