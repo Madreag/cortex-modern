@@ -76,6 +76,29 @@ namespace RTE {
 		bool substitute = false; //!< The seat changed hands by an explicit host action, not a reclaim.
 	};
 
+	/// A fault the §9b socket gates inject, so the failure windows can be driven over a real socket
+	/// instead of only on an in-process wire. Off unless a command line asks for one; nothing reads it
+	/// on a default build's happy path.
+	enum class NetH4Fault : uint8_t {
+		None = 0,
+		AckDrop = 1,      //!< The substitute never sends its ack: the offer ladder runs out and P2 closes the window.
+		AckDuplicate = 2, //!< It keeps re-sending the ack after the commit, so every duplicate meets the txId cache.
+		CommitDrop = 3,   //!< The host throws its first commit result away, so the substitute has to ask again.
+	};
+
+	void NetH4SetFault(NetH4Fault fault);
+	NetH4Fault NetH4GetFault();
+	NetH4Fault NetH4FaultFromName(const std::string& name);
+
+	/// What became of a held seat, for §11's roster line. The host turns each of these into the notice
+	/// every peer derives its line from; a client never has to ask what happened.
+	struct NetH4SeatHandover {
+		uint16_t stableSeat = 0;
+		uint8_t lockstepPeerId = 0;
+		std::string holderName; //!< Substitutions only: who holds the seat now.
+		bool substitute = false;
+	};
+
 	/// One player asking the host for a seat whose holder is gone (§4, P15). An applicant holds no
 	/// peer id, no team, no snapshot and no authority: it is a name on the host's list until an
 	/// approved substitution commits.
@@ -96,6 +119,7 @@ namespace RTE {
 		uint16_t stableSeat = 0;
 		uint8_t lockstepPeerId = 0;
 		int32_t team = 0;
+		std::string displayName; //!< The roster's name for the seat, so the host moderates a player and not a number.
 		bool committed = false;
 		bool dropped = false;
 		bool closed = false;
@@ -104,6 +128,9 @@ namespace RTE {
 		bool substituting = false;    //!< An approval is in flight for it.
 		uint32_t holderGeneration = 0;
 		uint32_t seatGeneration = 0;  //!< The value a pending approval compares against at commit.
+		uint64_t droppedAtMs = 0;     //!< When the holder's link went, on the admission plane's clock.
+		uint64_t droppedForMs = 0;    //!< How long ago that was, so the panel needs no clock of its own.
+		uint64_t holdFramesRemaining = 0; //!< Frames the round still holds the seat for; a frame, never a clock.
 		std::vector<NetH4ApplicantView> applicants;
 
 		bool operator==(const NetH4ModerationSeat&) const = default;
@@ -239,6 +266,8 @@ namespace RTE {
 		std::vector<NetH4Outbound> TakeOutbound();
 		/// The seats committed since the last call.
 		std::vector<NetH4Commit> TakeCommits();
+		/// The seats that changed hands since the last read, for §11's roster line.
+		std::vector<NetH4SeatHandover> TakeSeatHandovers();
 		/// The reseats a committed reclaim earned, for the match runner to enqueue as lockstep commands.
 		std::vector<NetGameReseat> TakePendingReseats();
 
@@ -426,6 +455,7 @@ namespace RTE {
 		std::vector<NetH4Outbound> m_Outbound;
 		std::vector<NetGameReseat> m_PendingReseats;
 		std::vector<NetH4Commit> m_Commits;
+		std::vector<NetH4SeatHandover> m_SeatHandovers;
 		NetReconnectHostStats m_Stats;
 	};
 

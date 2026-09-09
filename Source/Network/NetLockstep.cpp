@@ -270,6 +270,15 @@ namespace RTE {
 			return false;
 		}
 
+		std::optional<NetSeatNoticeKind> SeatNoticeKindOf(NetLockstepStopReason reason) {
+			switch (reason) {
+				case NetLockstepStopReason::SeatReclaiming: return NetSeatNoticeKind::Reclaiming;
+				case NetLockstepStopReason::SeatReclaimed: return NetSeatNoticeKind::Reclaimed;
+				case NetLockstepStopReason::SeatSubstituted: return NetSeatNoticeKind::Substituted;
+				default: return std::nullopt;
+			}
+		}
+
 		bool ReadStopReason(ByteReader& reader, NetLockstepStopReason& out, NetLockstepError* error) {
 			uint16_t rawReason = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(rawReason), reader, error, "stop reason")) {
@@ -285,6 +294,9 @@ namespace RTE {
 				case NetLockstepStopReason::PeerLeft:
 				case NetLockstepStopReason::ResyncRequested:
 				case NetLockstepStopReason::PeerDropped:
+				case NetLockstepStopReason::SeatReclaiming:
+				case NetLockstepStopReason::SeatReclaimed:
+				case NetLockstepStopReason::SeatSubstituted:
 					out = static_cast<NetLockstepStopReason>(rawReason);
 					return true;
 			}
@@ -1311,6 +1323,9 @@ namespace RTE {
 			case NetLockstepStopReason::PeerLeft: return "PeerLeft";
 			case NetLockstepStopReason::ResyncRequested: return "ResyncRequested";
 			case NetLockstepStopReason::PeerDropped: return "PeerDropped";
+			case NetLockstepStopReason::SeatReclaiming: return "SeatReclaiming";
+			case NetLockstepStopReason::SeatReclaimed: return "SeatReclaimed";
+			case NetLockstepStopReason::SeatSubstituted: return "SeatSubstituted";
 		}
 		return "Unknown";
 	}
@@ -3087,6 +3102,11 @@ namespace RTE {
 			}
 			return;
 		}
+		// A seat notice says what became of a held seat; it does not end anyone's round.
+		if (const std::optional<NetSeatNoticeKind> kind = SeatNoticeKindOf(stop.reason)) {
+			RecordSeatNotice(stop.senderPeerId, *kind, stop.frame, 0, stop.message);
+			return;
+		}
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(stop.reason)) + ":" + stop.message;
 		m_State = stop.reason == NetLockstepStopReason::Complete ? NetLockstepState::Stopped : NetLockstepState::Failed;
 	}
@@ -3128,6 +3148,39 @@ namespace RTE {
 		return false;
 	}
 
+	// The notice channel is bounded: a round can produce these faster than its reader drains them, and
+	// an unbounded UI queue is a leak with extra steps. The oldest goes, the newest is what matters.
+	void NetLockstepCoordinator::RecordSeatNotice(uint8_t peerId, NetSeatNoticeKind kind, uint64_t frame, uint64_t holdUntilFrame, std::string name) {
+		if (m_SeatNotices.size() >= 64) {
+			m_SeatNotices.erase(m_SeatNotices.begin());
+		}
+		m_SeatNotices.push_back({peerId, kind, frame, holdUntilFrame, std::move(name)});
+	}
+
+	std::vector<NetLockstepSeatNotice> NetLockstepCoordinator::TakeSeatNotices() {
+		std::vector<NetLockstepSeatNotice> taken;
+		taken.swap(m_SeatNotices);
+		return taken;
+	}
+
+	void NetLockstepCoordinator::AnnounceSeatChange(uint8_t peerId, NetLockstepStopReason reason, const std::string& holderName) {
+		const std::optional<NetSeatNoticeKind> kind = SeatNoticeKindOf(reason);
+		if (!kind) {
+			return;
+		}
+		RecordSeatNotice(peerId, *kind, m_Stats.nextFrame, 0, holderName);
+		if (!m_RelayHost || m_State != NetLockstepState::Running) {
+			return;
+		}
+		NetLockstepStop notice;
+		notice.senderPeerId = peerId;
+		notice.reason = reason;
+		notice.frame = m_Stats.nextFrame;
+		notice.message = holderName;
+		std::string ignored;
+		(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
+	}
+
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
 		return !m_LeftSeatsHeld.empty();
 	}
@@ -3156,6 +3209,8 @@ namespace RTE {
 		if (!announced) {
 			m_DroppedSeats.insert(peerId);
 		}
+		RecordSeatNotice(peerId, announced ? NetSeatNoticeKind::Left : NetSeatNoticeKind::Dropped, firstFrameWithout,
+		                 announced ? 0 : firstFrameWithout + c_ReclaimHoldFrames, std::string());
 		RefreshLeftSeatHolds();
 		std::cout << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
 		NetLockstepStop notice;
