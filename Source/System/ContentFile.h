@@ -23,6 +23,7 @@ namespace RTE {
 		friend class AudioMan;
 		friend class Material;
 		friend class GUICheckpoint;
+		friend class Icon;
 		friend struct ContractAudit;
 
 
@@ -292,5 +293,7 @@ namespace RTE {
 
 		/// Clears all the member variables of this ContentFile, effectively resetting the members of this abstraction level only.
 		void Clear();
+		bool LoadCheckpoint(std::string_view text, bool validateOnly, bool registerPath);
+		void SwapCheckpoint(ContentFile& other) noexcept;
 	};
 } // namespace RTE
