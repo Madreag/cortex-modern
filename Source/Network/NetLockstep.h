@@ -270,6 +270,7 @@ namespace RTE {
 		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
 		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
 		uint32_t relayResends = 0; //!< Host: refused forwards a later retry did deliver.
+		uint32_t relayBacklogOverflows = 0; //!< Host: forwards this peer's full backlog could not hold.
 		uint64_t longestCongestionHoldMs = 0; //!< Host: the longest this peer kept its seat behind our undrained queue.
 		std::string lastRelayError; //!< Host: why a forward to THIS peer was last refused.
 		uint64_t relayBytesSent = 0; //!< Host: encoded bytes forwarded to this peer, the send-buffer pressure it sees.

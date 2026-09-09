@@ -2367,6 +2367,7 @@ namespace RTE {
 			    << ",\"relay_packets_sent\":" << peer.relayPacketsSent
 			    << ",\"relay_send_failures\":" << peer.relaySendFailures
 			    << ",\"relay_resends\":" << peer.relayResends
+			    << ",\"relay_backlog_overflows\":" << peer.relayBacklogOverflows
 			    << ",\"longest_congestion_hold_ms\":" << peer.longestCongestionHoldMs
 			    << ",\"last_relay_error\":\"" << EscapeJson(peer.lastRelayError) << "\""
 			    << ",\"relay_bytes_sent\":" << peer.relayBytesSent
@@ -2554,14 +2555,17 @@ namespace RTE {
 
 	void NetLockstepCoordinator::QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes) {
 		std::deque<std::vector<uint8_t>>& backlog = m_RelayBacklog[peerId];
-		// Past the skew window this peer could never catch up even if the transport freed up - unless
-		// the queue is ours, in which case the cap is only a memory bound and the round's own grace,
-		// not this peer's seat, is what ends it.
+		// The frame lane is reliable and in order, so a forward we drop here is a hole this peer can
+		// never ask for again: its stream is finished whatever the link does next, and a healed link
+		// would only feed a seat that can no longer catch up. Take the seat while the round is whole.
 		if (backlog.size() >= NetLockstepCodec::c_MaxFutureFrameSkew) {
 			++m_Stats.relayBacklogOverflows;
-			if (m_CongestedPeers.find(peerId) == m_CongestedPeers.end()) {
-				m_UnreachablePeers.insert(peerId);
+			NetLockstepPeerStats& peerStats = m_Stats.peers[peerId];
+			if (++peerStats.relayBacklogOverflows == 1) {
+				NoteRelayError(peerId, "relay backlog full at " + std::to_string(backlog.size()) + " forwards: " +
+				                           (peerStats.lastRelayError.empty() ? m_Stats.lastRelayError : peerStats.lastRelayError));
 			}
+			m_UnreachablePeers.insert(peerId);
 			return;
 		}
 		backlog.push_back(bytes);
