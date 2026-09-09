@@ -1645,11 +1645,14 @@ bool GUICheckpoint::RunSelfTest() {
 				check("inventory_departed_items_restore_empty", inventory.LoadCheckpoint(departedItemState) && inventory.m_InventoryActorEquippedItems.size() == 1 &&
 				    !inventory.m_InventoryActorEquippedItems[0].first && !inventory.m_InventoryActorEquippedItems[0].second && !inventory.m_GUIInventoryItemButtons[0].first);
 
-				// A live reference takes the same path it always did.
+				// A live reference round-trips: putting the same objects back gives the same document
+				// again. This cannot say the live path matches the BASE behaviour - both sides of it are
+				// captured on this build - so that comparison stays where it belongs, in the fixture
+				// suite run against the retained pre-change executable.
 				inventory.m_InventoryActor = liveActor;
 				inventory.m_InventoryActorEquippedItems = liveEquipped;
 				inventory.m_GUIInventoryItemButtons[0].first = liveButtonItem;
-				check("inventory_live_reference_unchanged", inventory.SaveCheckpoint() == liveInventory);
+				check("inventory_live_reference_round_trips", inventory.SaveCheckpoint() == liveInventory);
 
 				// The writer keeps its teeth: an orphaned reference is still refused, and now says what.
 				bool refused = false;

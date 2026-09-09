@@ -3,6 +3,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetProtocol.h"
+#include "NetReconnectLedger.h"
 #include "System/ScenarioRunner.h"
 
 #include <algorithm>
@@ -2263,6 +2264,207 @@ namespace RTE {
 			return QuerySeatStateStub(&stub->seat, peerId, transportPeerId);
 		}
 
+		// Models NetMatchService::QuerySeatState's own early return on a client (`!m_IsHost` at
+		// NetMatchService.cpp:1158-1160): a client's admission plane knows nothing about seats, so it
+		// answers the default. The read count is what stops the arm below passing vacuously.
+		NetLockstepSeatState QueryNonHostSeatState(void* context, uint8_t peerId, NetPeerId transportPeerId) {
+			(void)peerId;
+			(void)transportPeerId;
+			++*static_cast<uint32_t*>(context);
+			return NetLockstepSeatState{};
+		}
+
+		// followup-5 item 6: IsHoldingSeatForReclaim() is answered from the HOST's admission plane and
+		// nowhere else, and three sim-visible decisions read it - who owns a leaver's units, whether they
+		// stand down, and whether they are ours to produce frames for. If a client could be in the round
+		// while the host holds, the two would resolve differently and the sims would part.
+		//
+		// They cannot, and this measures why rather than asserting it: the predicate also requires every
+		// remote to have left (NetLockstep.cpp:3013-3016, `m_PeerLeaveFrames.size() >= m_RemotePeerIds.size()`),
+		// so the hold and a peer that can disagree with it are mutually exclusive. Arm 1 keeps a survivor
+		// in the round and compares both peers' answers at every frame of a full hold window; arm 2 takes
+		// the survivor away, shows the answers really do part once the hold engages, and shows there is no
+		// longer anybody in the round to see it. Without arm 2 the first would prove nothing.
+		bool TestHeldSeatOwnershipAgreesAcrossPeers(std::string* error) {
+			const uint16_t port = 43044;
+			const uint64_t sessionId = 0x7000000000000044ULL;
+			LoopbackTransport hostT, aT, bT;
+			if (!hostT.StartHost(port, error) || !aT.Connect("loopback", port, error) || !bT.Connect("loopback", port, error)) {
+				return false;
+			}
+			// The leaver is alone on its team and the stayer is on another: this is the ONLY shape that
+			// reaches the branch reading the hold, because a surviving teammate answers before it.
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "team-owner";
+				c.matchConfig.hostPeerId = 1;
+				c.matchConfig.peerCount = 3;
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 2, false, "B"}};
+				return c;
+			};
+			SeatStateStub hostSeats;
+			hostSeats.held = true; // The admission plane holds every dropped seat for its window.
+			uint32_t stayerSeatReads = 0;
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !clientA.Start(aT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(bT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &hostSeats);
+			clientB.SetSeatStateSource(&QueryNonHostSeatState, &stayerSeatReads);
+
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					aT.AdvanceTimeMs(5);
+					bT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(4000, [&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+				*error = "the held-seat ownership fixture did not reach Running";
+				return false;
+			}
+			ControllerFrame frame;
+			frame.stateMask = 1;
+			for (uint64_t f = 0; f < 2; ++f) {
+				frame.actorUniqueID = 100;
+				if (!host.QueueLocalInput(f, {frame}, {}, error)) {
+					return false;
+				}
+				frame.actorUniqueID = 200;
+				if (!clientA.QueueLocalInput(f, {frame}, {}, error)) {
+					return false;
+				}
+				frame.actorUniqueID = 300;
+				if (!clientB.QueueLocalInput(f, {frame}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(4000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "the held-seat ownership fixture never committed a frame";
+				return false;
+			}
+
+			const int64_t leaverActor = 4242;
+			// Arm 1: peer 2 drops, peer 3 stays. Both peers still in the round answer every frame of a
+			// full hold window, and must answer the same.
+			aT.Stop();
+			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && clientB.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the survivor never learned of the drop, so the arm compares nothing";
+				return false;
+			}
+			const uint64_t windowMs = 20'000;
+			uint32_t samples = 0;
+			for (const uint64_t until = now + windowMs; now <= until; now += 20) {
+				host.Tick(now);
+				clientB.Tick(now);
+				const uint64_t at = host.GetStats().nextFrame;
+				const uint8_t hostOwner = host.ResolveActorOwner(leaverActor, 1, false);
+				const uint8_t stayerOwner = clientB.ResolveActorOwner(leaverActor, 1, false);
+				const bool hostGone = host.IsActorOwnerGone(leaverActor, 1, false, at);
+				const bool stayerGone = clientB.IsActorOwnerGone(leaverActor, 1, false, at);
+				if (hostOwner != stayerOwner || hostGone != stayerGone) {
+					*error = "the held-seat ownership decision disagrees across peers still in the round: host owner=" +
+					         std::to_string(hostOwner) + " gone=" + std::to_string(hostGone) + " stayer owner=" +
+					         std::to_string(stayerOwner) + " gone=" + std::to_string(stayerGone) + " at frame " + std::to_string(at);
+					return false;
+				}
+				// The third consumer: local production. It differs by construction - it is the owner
+				// compared with this peer's own id - so it must follow the owner both peers agree on.
+				if (host.IsLocalActor(leaverActor, 1, false) != (hostOwner == 1) ||
+				    clientB.IsLocalActor(leaverActor, 1, false) != (stayerOwner == 3)) {
+					*error = "local production did not follow the owner the peers agreed on";
+					return false;
+				}
+				// The branch under test was actually reached: the leaver's team has no survivor, so both
+				// peers fell through to the hold and both were told there is none.
+				if (hostOwner != 0 || !hostGone) {
+					*error = "the leaver's ownerless team did not reach the hold branch";
+					return false;
+				}
+				if (host.IsHoldingSeatForReclaim() || clientB.IsHoldingSeatForReclaim()) {
+					*error = "the round reported a reclaim hold while a peer was still in it";
+					return false;
+				}
+				++samples;
+				hostT.AdvanceTimeMs(20);
+				bT.AdvanceTimeMs(20);
+			}
+			if (samples < 500 || stayerSeatReads == 0) {
+				*error = "the hold window was not actually sampled: samples=" + std::to_string(samples) +
+				         " stayer_seat_reads=" + std::to_string(stayerSeatReads);
+				return false;
+			}
+			// And the host WAS told the seat is held throughout - it is the every-remote-gone half of the
+			// predicate that is false, not the seat half.
+			if (!hostSeats.held) {
+				*error = "the host's admission plane stopped holding the seat mid-window";
+				return false;
+			}
+
+			// Arm 2: the survivor goes too. Now the hold engages, the answers really do part - and there
+			// is nobody left in the round to hold the other one.
+			const uint64_t stayerFramesBeforeTheHold = clientB.GetStats().framesAccepted;
+			bT.Stop();
+			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(3) != 0 && host.IsHoldingSeatForReclaim(); })) {
+				*error = "the round with every remote gone never entered its reclaim hold";
+				return false;
+			}
+			const uint64_t heldAt = host.GetStats().nextFrame;
+			if (host.ResolveActorOwner(leaverActor, 1, false) != 1 || host.IsActorOwnerGone(leaverActor, 1, false, heldAt)) {
+				*error = "a held seat's units did not fall to the relay host";
+				return false;
+			}
+			// The disagreement is real, and it is exactly the one the brief names: the host plays the
+			// leaver's units, the client resolves them to nobody and disables their controllers.
+			if (clientB.ResolveActorOwner(leaverActor, 1, false) != 0 || !clientB.IsActorOwnerGone(leaverActor, 1, false, heldAt)) {
+				*error = "the disagreement this case exists to detect did not appear even with the hold engaged: stayer owner=" +
+				         std::to_string(clientB.ResolveActorOwner(leaverActor, 1, false)) + " gone=" +
+				         std::to_string(clientB.IsActorOwnerGone(leaverActor, 1, false, heldAt));
+				return false;
+			}
+			// And why that costs nothing: the predicate needs every remote gone, so the peer that would
+			// have disagreed has left the round and produces no further frame.
+			if (!host.IsPeerGoneAtFrame(2, heldAt) || !host.IsPeerGoneAtFrame(3, heldAt)) {
+				*error = "the round held a seat while a remote was still present";
+				return false;
+			}
+			// And what "left the round" has to mean for a sim: it commits no further frame, so there is no
+			// tick at which the two answers could be applied to anything. Measured, not asserted from the
+			// state name - the round object stays Running until its own timeout, it is simply starved.
+			drive(2000, [] { return false; });
+			if (clientB.GetStats().framesAccepted != stayerFramesBeforeTheHold) {
+				*error = "the peer whose answer differs committed " +
+				         std::to_string(clientB.GetStats().framesAccepted - stayerFramesBeforeTheHold) +
+				         " more frames while the host held the seat";
+				return false;
+			}
+			return true;
+		}
+
 		// A6: the drop of the last remote with nobody left on its team is the branch that asks whether the
 		// seat is held - and on the host it is asked from inside the pump that holds the service's lock.
 		// The round must answer that from what it already knows, never by asking back.
@@ -2351,6 +2553,19 @@ namespace RTE {
 			bool censusOwnerGone = true;
 			bool censusLocal = false;
 			bool censusHolding = false;
+			// The world the drop's census walks. MovableMan resolves each of these on the line below.
+			const std::vector<std::pair<int64_t, int32_t>> world = {{clientActor, 1}, {4243, 1}, {7777, 0}};
+			NetReconnectLedger ledger;
+			std::vector<int64_t> ledgered;
+			std::vector<int64_t> restored;
+			auto takeCensus = [&] {
+				std::vector<NetH4LedgerActor> census;
+				for (const auto& [uid, team]: world) {
+					// MovableMan::BuildLockstepOwnershipCensus's own line, per settled actor.
+					census.push_back({uid, team, ScenarioRunner::GetLockstepDropTimeActorOwner(uid, team, false), true});
+				}
+				return census;
+			};
 			// The census the drop takes, run from inside the service's critical section exactly as
 			// PumpSessionEvents runs it - and driven from the production wait loop, not a hand-rolled one.
 			ScenarioRunner::SetLockstepCoordinator(&host);
@@ -2361,6 +2576,12 @@ namespace RTE {
 				censusOwnerGone = host.IsActorOwnerGone(clientActor, 1, false, host.GetStats().nextFrame);
 				censusLocal = host.IsLocalActor(clientActor, 1, false);
 				censusHolding = host.IsHoldingSeatForReclaim();
+				// The rest of the abort stack: CollectDropOwnership's census, the drop it ledgers and the
+				// restoration IssueReseat builds from it all run inside the service's critical section too.
+				const std::vector<NetH4LedgerActor> dropCensus = takeCensus();
+				ledgered = NetReconnectLedger::CollectOwnedActorUIDs(dropCensus, 2);
+				ledger.RecordDrop(0, 2, 1, host.GetStats().nextFrame, ledgered);
+				restored = ledger.BuildRestoration(0, NetMatchMode::PvPSkirmish, takeCensus());
 			});
 			std::string reentry;
 			try {
@@ -2392,6 +2613,14 @@ namespace RTE {
 			// host's to play and nothing stands them down.
 			if (censusOwner != 1 || censusOwnerGone || !censusLocal || !censusHolding) {
 				*error = "the census did not see the held seat's units fall to the relay host";
+				return false;
+			}
+			// And what the ledger frames produced there: the leaver's own units, not the ones the leave
+			// renamed, and a restoration that hands exactly those back.
+			const std::vector<int64_t> expected = {clientActor, 4243};
+			if (ledgered != expected || restored != expected) {
+				*error = "the drop ledgered " + std::to_string(ledgered.size()) + " units and restored " +
+				         std::to_string(restored.size()) + " under the service's lock";
 				return false;
 			}
 			return true;
@@ -4585,6 +4814,7 @@ namespace RTE {
 		    !TestCoordinatorDroppedSeatHold(&error) ||
 		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
 		    !TestSeatStateNeverReadUnderTheServiceLock(&error) ||
+		    !TestHeldSeatOwnershipAgreesAcrossPeers(&error) ||
 		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
 		    !TestRelayHostFinishesWhatItOwes(&error) ||

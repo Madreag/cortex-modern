@@ -8,6 +8,7 @@
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
 #include "System.h"
+#include "System/FaultInjection.h"
 #include "TimerMan.h"
 
 #include "MovableMan.h"
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <random>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace RTE {
@@ -196,6 +198,11 @@ static std::string ResyncSaveName() {
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
+			}
+			if (FaultInjected("slow_resync_save")) {
+				// Test-only: a save that outlasts the session budget, so the arm can show the round that
+				// follows drops nobody. Nothing script-visible moves - the sim is already torn down here.
+				std::this_thread::sleep_for(std::chrono::seconds(7));
 			}
 			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + ResyncSaveName() + ".ccsave";
 			std::ifstream in(savePath, std::ios::binary);
@@ -396,7 +403,9 @@ static std::string ResyncSaveName() {
 			// an unacknowledged one is an ambiguous loss that KEEPS it - so this waits exactly the P21
 			// budget and no longer, whatever the answer.
 			std::string error;
-			if (!m_ReconnectClient.BeginLeave(m_Session->GetClockMs(), &error)) {
+			// Both ends of the leave read the clock its deadlines run on: the retransmit ladder below is
+			// driven from the plane's own tick, which is session-elapsed time and not the session's clock.
+			if (!m_ReconnectClient.BeginLeave(AdmissionNowMs(), &error)) {
 				return;
 			}
 		}
@@ -726,6 +735,14 @@ static std::string ResyncSaveName() {
 			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
 		const uint64_t nowMs = AdmissionNowMs();
+		// F1.5: the two clocks must be one. Sampled here, at the pump, because the report is written
+		// after the loop stops feeding the session and its difference reads the teardown by then.
+		if (const uint64_t sessionMs = m_Session->GetClockMs(); sessionMs > nowMs) {
+			const uint64_t divergenceMs = sessionMs - nowMs;
+			uint64_t seen = m_MaxClockDivergenceMs.load();
+			while (divergenceMs > seen && !m_MaxClockDivergenceMs.compare_exchange_weak(seen, divergenceMs)) {
+			}
+		}
 		if (hostAdmission) {
 			// The coordinator owns the transport queue mid-match, so the session's own Tick never runs;
 			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
@@ -843,17 +860,29 @@ static std::string ResyncSaveName() {
 			{"census_refusals", m_CensusRefusals.load()},
 			// Elapsed milliseconds, so a gate can tell a real deadline from a counted pump.
 			{"admission_clock_ms", AdmissionNowMs()},
+			// Zero whenever setup, play and every resync read one clock; the inflation itself otherwise.
+			{"clock_divergence_max_ms", m_MaxClockDivergenceMs.load()},
 			{"client_state", NetReconnectClientStateName(m_ReconnectClient.GetState())},
 			{"client_used_stored_ticket", m_ReconnectClient.UsedStoredTicket()},
 			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},
 			{"client_leave_acks", m_ReconnectClient.GetStats().leaveAcksReceived},
 			{"client_ambiguous_losses", m_ReconnectClient.GetStats().ambiguousLosses},
+			{"client_unacknowledged_leaves", m_ReconnectClient.GetStats().unacknowledgedLeaves},
+			{"client_retransmits", m_ReconnectClient.GetStats().retransmits},
 			{"client_confirmed_session_ends", m_ReconnectClient.GetStats().confirmedSessionEnds},
 			{"client_applications_sent", m_ReconnectClient.GetStats().applicationsSent},
 			{"client_applications_acknowledged", m_ReconnectClient.GetStats().applicationsAcknowledged},
 			{"client_substitution_offers", m_ReconnectClient.GetStats().substitutionOffersReceived},
 			{"client_substitution_acks", m_ReconnectClient.GetStats().substitutionAcksSent},
 			{"client_reject_reason", m_ReconnectClient.HasLastRejectReason() ? NetProtocol::RejectReasonName(m_ReconnectClient.GetLastRejectReason()) : ""},
+			// The host's drop-and-reseat accounting, which survives the session end the seat list does
+			// not: after the activity ends the seats read empty, so these are all a gate has left.
+			{"host_seats_dropped", m_ReconnectHost.GetStats().seatsDropped},
+			{"host_ledger_drops_recorded", m_ReconnectHost.GetStats().ledgerDropsRecorded},
+			{"host_reseats_issued", m_ReconnectHost.GetStats().reseatsIssued},
+			{"host_reseats_without_a_ledger", m_ReconnectHost.GetStats().reseatsWithoutALedger},
+			{"host_reseats_without_survivors", m_ReconnectHost.GetStats().reseatsWithoutSurvivors},
+			{"host_reseat_live_on_team_not_named", m_ReconnectHost.GetStats().reseatLiveOnTeamNotNamed},
 		};
 		json seats = json::array();
 		for (const NetH4SeatStatus& seat: m_SeatStatuses) {
