@@ -3,6 +3,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetProtocol.h"
+#include "NetReconnectLedger.h"
 #include "System/ScenarioRunner.h"
 
 #include <algorithm>
@@ -2351,6 +2352,19 @@ namespace RTE {
 			bool censusOwnerGone = true;
 			bool censusLocal = false;
 			bool censusHolding = false;
+			// The world the drop's census walks. MovableMan resolves each of these on the line below.
+			const std::vector<std::pair<int64_t, int32_t>> world = {{clientActor, 1}, {4243, 1}, {7777, 0}};
+			NetReconnectLedger ledger;
+			std::vector<int64_t> ledgered;
+			std::vector<int64_t> restored;
+			auto takeCensus = [&] {
+				std::vector<NetH4LedgerActor> census;
+				for (const auto& [uid, team]: world) {
+					// MovableMan::BuildLockstepOwnershipCensus's own line, per settled actor.
+					census.push_back({uid, team, ScenarioRunner::GetLockstepDropTimeActorOwner(uid, team, false), true});
+				}
+				return census;
+			};
 			// The census the drop takes, run from inside the service's critical section exactly as
 			// PumpSessionEvents runs it - and driven from the production wait loop, not a hand-rolled one.
 			ScenarioRunner::SetLockstepCoordinator(&host);
@@ -2361,6 +2375,12 @@ namespace RTE {
 				censusOwnerGone = host.IsActorOwnerGone(clientActor, 1, false, host.GetStats().nextFrame);
 				censusLocal = host.IsLocalActor(clientActor, 1, false);
 				censusHolding = host.IsHoldingSeatForReclaim();
+				// The rest of the abort stack: CollectDropOwnership's census, the drop it ledgers and the
+				// restoration IssueReseat builds from it all run inside the service's critical section too.
+				const std::vector<NetH4LedgerActor> dropCensus = takeCensus();
+				ledgered = NetReconnectLedger::CollectOwnedActorUIDs(dropCensus, 2);
+				ledger.RecordDrop(0, 2, 1, host.GetStats().nextFrame, ledgered);
+				restored = ledger.BuildRestoration(0, NetMatchMode::PvPSkirmish, takeCensus());
 			});
 			std::string reentry;
 			try {
@@ -2392,6 +2412,14 @@ namespace RTE {
 			// host's to play and nothing stands them down.
 			if (censusOwner != 1 || censusOwnerGone || !censusLocal || !censusHolding) {
 				*error = "the census did not see the held seat's units fall to the relay host";
+				return false;
+			}
+			// And what the ledger frames produced there: the leaver's own units, not the ones the leave
+			// renamed, and a restoration that hands exactly those back.
+			const std::vector<int64_t> expected = {clientActor, 4243};
+			if (ledgered != expected || restored != expected) {
+				*error = "the drop ledgered " + std::to_string(ledgered.size()) + " units and restored " +
+				         std::to_string(restored.size()) + " under the service's lock";
 				return false;
 			}
 			return true;
