@@ -4859,6 +4859,11 @@ namespace RTE {
 		// F2.3: the counters alone still do not settle WHICH world a run is in - all the ledgered units
 		// dead and a live unit the ledger never named read identically. The last arm is that second
 		// world, and the number that tells them apart is the live-on-team count the record does not name.
+		//
+		// F3.2b: every arm also counts how many times the reclaim asks for the ownership census. On the
+		// host that source refuses off the sim tick and increments census_refusals, which both reclaim
+		// gates assert is zero - so the empty-record answer must ask for nothing, and the other three
+		// must ask exactly once, off the one fetch the restoration needs anyway.
 		int TestAReseatSaysWhyItDidNotIssue() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -4880,28 +4885,40 @@ namespace RTE {
 				uint32_t withoutALedger;
 				uint32_t withoutSurvivors;
 				uint32_t liveOnTeamNotNamed;
+				uint32_t censusCallsDuringTheReclaim;
 				std::vector<int64_t> reseated;
 			};
 			const std::vector<Arm> arms = {
 			    // The good case, so the two counters below are read against a working reseat.
-			    {"survivors", 141, held, held, 1, 0, 0, 0, {101, 102, 103}},
+			    {"survivors", 141, held, held, 1, 0, 0, 0, 1, {101, 102, 103}},
 			    // reclaim_socket's shape: the ledger is right, the units did not live through the window.
-			    {"no-survivors", 142, held, {{201, 0, 1, true}}, 0, 0, 1, 0, {}},
-			    // A6's fault, kept measurable: the drop was seen where the world cannot be walked.
-			    {"no-ledger", 143, {}, held, 0, 1, 0, 3, {}},
+			    {"no-survivors", 142, held, {{201, 0, 1, true}}, 0, 0, 1, 0, 1, {}},
+			    // A6's fault, kept measurable: the drop was seen where the world cannot be walked. It asks
+			    // for no census, so a reclaim off the sim tick costs no refusal on the one path that can
+			    // reach one - and with nothing fetched there is nothing to count as unnamed either.
+			    {"no-ledger", 143, {}, held, 0, 1, 0, 0, 0, {}},
 			    // F2.3's second world: same three counters as no-survivors, and a unit alive on the
 			    // returner's team that its record never named. Only this number tells them apart.
-			    {"unnamed-survivor", 144, held, {{104, 1, leaverPeer, true}, {201, 0, 1, true}}, 0, 0, 1, 1, {}},
+			    {"unnamed-survivor", 144, held, {{104, 1, leaverPeer, true}, {201, 0, 1, true}}, 0, 0, 1, 1, 1, {}},
 			};
 
 			uint64_t unixNow = 1'700'000'000'000ULL;
 			for (const Arm& arm: arms) {
 				const std::string where = std::string(" (") + arm.label + " arm)";
-				std::vector<NetH4LedgerActor> census = arm.atTheDrop;
+				struct CountedCensus {
+					std::vector<NetH4LedgerActor> actors;
+					uint32_t calls = 0;
+				};
+				CountedCensus census{arm.atTheDrop, 0};
 				Wire wire;
 				ConfigureWire(wire);
 				wire.host.SetDropOwnershipSource(
-				    [](void* context) { return *static_cast<std::vector<NetH4LedgerActor>*>(context); }, &census);
+				    [](void* context) {
+					    auto* counted = static_cast<CountedCensus*>(context);
+					    ++counted->calls;
+					    return counted->actors;
+				    },
+				    &census);
 				Endpoint player;
 				player.connection = arm.connection;
 				ConfigureEndpoint(player, std::string("reseat-") + arm.label, &unixNow);
@@ -4918,8 +4935,10 @@ namespace RTE {
 					return Fail("the drop ledgered " + std::to_string(ledgered->actorUIDs.size()) + " units" + where);
 				}
 
-				// Whatever is left of the world when the holder comes back.
-				census = arm.atTheReclaim;
+				// Whatever is left of the world when the holder comes back, and a fresh call count so the
+				// number below is the reclaim's alone rather than the drop's as well.
+				census.actors = arm.atTheReclaim;
+				census.calls = 0;
 				wire.host.SetLiveMatch(true);
 				Endpoint returner;
 				returner.connection = static_cast<NetPeerId>(arm.connection + 100);
@@ -4939,6 +4958,12 @@ namespace RTE {
 				}
 				if (reseated != arm.reseated) {
 					return Fail("the reclaim reseated " + std::to_string(reseated.size()) + " units" + where);
+				}
+				// F3.2b first, because it is the profile the two reclaim gates depend on: an empty record
+				// must walk no world, and every other answer must walk it exactly once.
+				if (census.calls != arm.censusCallsDuringTheReclaim) {
+					return Fail("the reclaim asked the ownership census " + std::to_string(census.calls) +
+					            " times, not " + std::to_string(arm.censusCallsDuringTheReclaim) + where);
 				}
 				const NetReconnectHostStats stats = wire.host.GetStats();
 				if (stats.reseatsIssued != arm.issued || stats.reseatsWithoutALedger != arm.withoutALedger ||
