@@ -1118,7 +1118,8 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 				if (!g_MusicMan.LoadCheckpoint(music, true)) throw std::runtime_error("invalid MusicMan checkpoint");
 			}
 			std::string audio; reader.Value(audio);
-			if (!g_AudioMan.LoadCheckpoint(audio, true)) throw std::runtime_error("invalid AudioMan checkpoint");
+			std::string audioRefusal;
+			if (!g_AudioMan.LoadCheckpoint(audio, true, nullptr, &audioRefusal)) throw std::runtime_error("invalid AudioMan checkpoint: " + audioRefusal);
 			reader.OnCommit([audio, music, gui, hasMusic, hasGUI] {
 				const bool restored = hasGUI ? g_GUISound.LoadCheckpointWithAudio(gui, music, audio) :
 					hasMusic ? g_MusicMan.LoadCheckpointWithAudio(music, audio) : g_AudioMan.LoadCheckpoint(audio);
