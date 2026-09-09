@@ -661,8 +661,10 @@ namespace RTE {
 
 		// A block belonging to another round is read with `discard` and no dictionary: its shape is checked,
 		// nothing is resolved and no observation comes out, so a frame this round is going to drop cannot
-		// disturb its sender's live slots.
+		// disturb its sender's live slots. Bindings are staged and applied once the whole block has read, so a
+		// refusal part way through leaves the table exactly as it was.
 		bool ReadObservations(ByteReader& reader, NetLockstepFrame& payload, NetSoundObservationDictionary* dictionary, NetLockstepError* error, uint16_t version, bool discard) {
+			bool restart = false;
 			if (version >= NetLockstepCodec::c_ObservationBindingSequenceVersion) {
 				uint64_t bindingsBefore = 0;
 				if (!ReadVarOrFail(reader, bindingsBefore, error, "observation_bindings_before")) {
@@ -676,9 +678,12 @@ namespace RTE {
 						         "sound observation bindings jump from " + std::to_string(dictionary->BindingCount()) + " to " + std::to_string(bindingsBefore));
 						return false;
 					}
-					dictionary->Reset();
+					restart = true;
 				}
 			}
+			// What this block binds, in the order it binds it, and what each of its slots means as it reads.
+			std::vector<std::pair<uint16_t, NetSoundObservationKey>> staged;
+			std::map<uint16_t, NetSoundObservationKey> stagedNow;
 			uint16_t observationCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(observationCount), reader, error, "observation_count")) {
 				return false;
@@ -735,11 +740,19 @@ namespace RTE {
 						}
 						previous = key;
 						if (dictionary) {
-							dictionary->Bind(static_cast<uint16_t>(slot), key);
+							staged.emplace_back(static_cast<uint16_t>(slot), key);
+							stagedNow[static_cast<uint16_t>(slot)] = key;
 						}
-					} else if (!discard && (!dictionary || !dictionary->Resolve(static_cast<uint16_t>(slot), key))) {
-						SetError(error, NetLockstepErrorCode::UnboundObservationSlot, reader.Offset(), "observation names a slot this sender never spelled out");
-						return false;
+					} else if (!discard) {
+						// A slot this block already spelled out reads from the staged bindings; past a restart the
+						// table those slots came from is already gone.
+						const auto stagedKey = stagedNow.find(static_cast<uint16_t>(slot));
+						if (stagedKey != stagedNow.end()) {
+							key = stagedKey->second;
+						} else if (!dictionary || restart || !dictionary->Resolve(static_cast<uint16_t>(slot), key)) {
+							SetError(error, NetLockstepErrorCode::UnboundObservationSlot, reader.Offset(), "observation names a slot this sender never spelled out");
+							return false;
+						}
 					}
 				}
 				uint32_t valueBits = 0;
@@ -763,6 +776,14 @@ namespace RTE {
 				// The observation's sender is the authenticated frame sender, like a command's.
 				observation.senderPeerId = payload.senderPeerId;
 				payload.observations.push_back(observation);
+			}
+			if (dictionary) {
+				if (restart) {
+					dictionary->Reset();
+				}
+				for (const auto& [slot, key]: staged) {
+					dictionary->Bind(slot, key);
+				}
 			}
 			return true;
 		}
