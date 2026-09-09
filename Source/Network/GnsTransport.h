@@ -18,7 +18,7 @@ namespace RTE {
 
 		bool StartHost(uint16_t port, std::string* error = nullptr) override;
 		bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override;
-		bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr) override;
+		bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override;
 		void Disconnect(NetPeerId peerId, const std::string& reason) override;
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
