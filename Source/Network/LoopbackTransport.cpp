@@ -36,6 +36,15 @@ namespace RTE {
 		m_InFlight[peerId].emplace_back(deliverAtMs, bytes);
 	}
 
+	uint64_t LoopbackTransport::QueuedBytes() const {
+		uint64_t total = 0;
+		for (const auto& [peerId, queued] : m_QueuedBytes) {
+			(void)peerId;
+			total += queued;
+		}
+		return total;
+	}
+
 	uint64_t LoopbackTransport::InFlightBytes() const {
 		uint64_t total = 0;
 		for (const auto& [peerId, queue] : m_InFlight) {
@@ -53,6 +62,7 @@ namespace RTE {
 	void LoopbackTransport::SetBulkTransferMode(bool on) {
 		if (on) {
 			m_BulkDrainPending = false;
+			m_BulkDrainArmed = false;
 			if (!m_BulkTransfer) {
 				m_BulkTransfer = true;
 				m_RateChanges.push_back({m_NowMs, true});
@@ -65,12 +75,26 @@ namespace RTE {
 		}
 	}
 
+	// The socket transport's rule, on the model: the queue emptying says the transport has taken every
+	// chunk, and one delivery delay past that is the latest the last of them can still be travelling.
+	// Bytes in flight cannot be the test - the round's own frames keep that figure off zero forever.
 	void LoopbackTransport::LowerBulkRateWhenDrained() {
-		if (!m_BulkTransfer || !m_BulkDrainPending || InFlightBytes() > 0) {
+		if (!m_BulkTransfer || !m_BulkDrainPending) {
+			return;
+		}
+		if (!m_BulkDrainArmed) {
+			if (QueuedBytes() > 0) {
+				return;
+			}
+			m_BulkDrainArmed = true;
+			m_BulkDrainDeadlineMs = m_NowMs + m_Config.latencyMs;
+		}
+		if (m_NowMs < m_BulkDrainDeadlineMs) {
 			return;
 		}
 		m_BulkTransfer = false;
 		m_BulkDrainPending = false;
+		m_BulkDrainArmed = false;
 		m_RateChanges.push_back({m_NowMs, false});
 	}
 
@@ -219,6 +243,12 @@ namespace RTE {
 		m_ClientHostPeerId = c_InvalidNetPeerId;
 		m_HostSidePeerId = c_InvalidNetPeerId;
 		m_Events.clear();
+		m_BulkTransfer = false;
+		m_BulkDrainPending = false;
+		m_BulkDrainArmed = false;
+		m_BulkDrainDeadlineMs = 0;
+		m_QueuedBytes.clear();
+		m_InFlight.clear();
 	}
 
 	std::vector<NetTransportEvent> LoopbackTransport::PollEvents() {
