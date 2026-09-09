@@ -47,8 +47,10 @@ PORTS = {
     "substitute_host_cancel": 44520,
     "substitute_bounds": 44530,
 }
-TICKS = 1200
+TICKS = 3600
 DROP_AFTER_S = 22.0
+JOINER_STAGGER_S = 1.5
+DROP_ADJUDICATED = "left the match at frame"
 TIMEOUT_S = 600.0
 
 
@@ -67,6 +69,16 @@ def out_root(base: Path, name: str) -> Path:
 def log_text(out_dir: Path) -> str:
     log = Path(out_dir) / "stdout.log"
     return log.read_text(encoding="utf-8-sig", errors="replace") if log.exists() else ""
+
+
+def wait_for_log(out_dir: Path, needle: str, timeout_s: float) -> bool:
+    """Waits for a line the host writes, so a joiner starts on the match's state, not on a stopwatch."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if needle in log_text(out_dir):
+            return True
+        time.sleep(0.25)
+    return False
 
 
 def read_json(path: Path):
@@ -265,14 +277,19 @@ def run_gate(
             code=137, reason="injected mid-match drop of the seat under test"
         )
         records["leaver"] = runs["leaver"].finish()
-        time.sleep(1.0)
-        if gate == "substitute_returner_wins":
-            runs["returner"].start()
-            time.sleep(0.5)
-        for key in [k for k in runs if k.startswith("applicant")] or ["substitute"]:
-            if key in runs and key not in ("host", "leaver", "stayer"):
-                runs[key].start()
-                time.sleep(0.5)
+        # The joiners go once the host has actually adjudicated the drop, so the gate does not
+        # depend on how fast an engine loads.
+        checks.check(
+            "host_adjudicated_the_drop",
+            wait_for_log(root / "host", DROP_ADJUDICATED, 60.0),
+            DROP_ADJUDICATED,
+        )
+        joiners = [key for key in runs if key not in ("host", "leaver", "stayer")]
+        # The returner races the approval, so it goes first where there is one.
+        joiners.sort(key=lambda key: key != "returner")
+        for key in joiners:
+            runs[key].start()
+            time.sleep(JOINER_STAGGER_S)
         for key, run in runs.items():
             if key not in records:
                 records[key] = run.finish()
