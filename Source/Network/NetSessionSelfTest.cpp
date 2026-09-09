@@ -84,7 +84,7 @@ namespace RTE {
 				if (error) *error = "scripted transport does not connect";
 				return false;
 			}
-			bool Send(NetPeerId peerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string*) override {
+			bool Send(NetPeerId peerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string*, bool*) override {
 				sentPackets.push_back({peerId, bytes});
 				return true;
 			}
