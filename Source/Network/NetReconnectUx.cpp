@@ -1,5 +1,9 @@
 #include "NetReconnectUx.h"
 
+#include "NetMatchService.h"
+
+#include <algorithm>
+#include <iostream>
 #include <utility>
 
 namespace RTE {
@@ -146,6 +150,143 @@ namespace RTE {
 			return " - Reconnecting";
 		}
 		return dropped ? " - Disconnected" : "";
+	}
+
+	const char* NetModerationActionName(NetModerationAction action) {
+		switch (action) {
+			case NetModerationAction::Wait: return "wait";
+			case NetModerationAction::Substitute: return "substitute";
+			case NetModerationAction::Cancel: return "cancel";
+		}
+		return "unknown";
+	}
+
+	std::string NetModerationUx::DescribeSeat(const NetH4ModerationSeat& seat) {
+		std::string text = "Seat " + std::to_string(seat.stableSeat) + " - " +
+		                   (seat.displayName.empty() ? "peer " + std::to_string(seat.lockstepPeerId) : seat.displayName);
+		if (seat.dropped) {
+			text += " - dropped " + std::to_string(seat.droppedForMs / 1000) + "s ago";
+		} else if (seat.closed) {
+			text += " - left";
+		}
+		text += seat.holdFramesRemaining > 0
+		            ? " - hold " + std::to_string(seat.holdFramesRemaining) + "f (" + std::to_string(NetSeatPresence::HoldSeconds(seat.holdFramesRemaining)) + "s)"
+		            : " - hold over";
+		text += " - " + std::to_string(seat.applicants.size()) + " waiting";
+		return text;
+	}
+
+	void NetModerationUx::Refresh(const std::vector<NetH4ModerationSeat>& seats) {
+		m_Rows.clear();
+		for (const NetH4ModerationSeat& seat: seats) {
+			// Only a seat the host has something to decide about: the panel is a decision list.
+			if (!seat.substitutable && !seat.substituting && !seat.dropped) {
+				continue;
+			}
+			Row row;
+			row.stableSeat = seat.stableSeat;
+			row.lockstepPeerId = seat.lockstepPeerId;
+			row.text = DescribeSeat(seat);
+			row.applicants = seat.applicants.size();
+			row.substitutable = seat.substitutable;
+			row.substituting = seat.substituting;
+			// Keep the host's choice while that applicant is still asking; otherwise fall to the first.
+			const auto chosen = m_Chosen.find(seat.stableSeat);
+			size_t index = 0;
+			for (size_t i = 0; i < seat.applicants.size(); ++i) {
+				if (chosen != m_Chosen.end() && seat.applicants[i].connection == chosen->second) {
+					index = i;
+					break;
+				}
+			}
+			if (seat.applicants.empty()) {
+				m_Chosen.erase(seat.stableSeat);
+				row.applicantText = "No applicants";
+			} else {
+				const NetH4ApplicantView& applicant = seat.applicants[index];
+				row.applicant = applicant.connection;
+				m_Chosen[seat.stableSeat] = applicant.connection;
+				row.applicantText = applicant.displayName + " (" + std::to_string(index + 1) + "/" + std::to_string(seat.applicants.size()) + ")";
+				if (applicant.approved) {
+					row.applicantText += " *";
+				}
+			}
+			m_Rows.push_back(std::move(row));
+		}
+	}
+
+	size_t NetModerationUx::FindSeat(uint16_t stableSeat) const {
+		for (size_t i = 0; i < m_Rows.size(); ++i) {
+			if (m_Rows[i].stableSeat == stableSeat) {
+				return i;
+			}
+		}
+		return m_Rows.size();
+	}
+
+	void NetModerationUx::CycleApplicant(size_t index) {
+		if (index >= m_Rows.size() || m_Rows[index].applicants < 2) {
+			return;
+		}
+		// The rows are rebuilt from the host's view every refresh, so the choice moves there and not here.
+		const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
+		const uint16_t stableSeat = m_Rows[index].stableSeat;
+		for (const NetH4ModerationSeat& seat: seats) {
+			if (seat.stableSeat != stableSeat || seat.applicants.empty()) {
+				continue;
+			}
+			size_t at = 0;
+			for (size_t i = 0; i < seat.applicants.size(); ++i) {
+				if (seat.applicants[i].connection == m_Rows[index].applicant) {
+					at = i;
+					break;
+				}
+			}
+			m_Chosen[stableSeat] = seat.applicants[(at + 1) % seat.applicants.size()].connection;
+			break;
+		}
+		Refresh(seats);
+	}
+
+	NetH4ModerationResult NetModerationUx::Act(size_t index, NetModerationAction action) {
+		if (index >= m_Rows.size()) {
+			m_StatusText = "That seat is not one this host decides about.";
+			return NetH4ModerationResult::UnknownSeat;
+		}
+		const Row row = m_Rows[index];
+		NetH4ModerationResult result = NetH4ModerationResult::UnknownSeat;
+		switch (action) {
+			case NetModerationAction::Wait:
+				result = g_NetMatchService.WaitForSeat(row.stableSeat);
+				break;
+			case NetModerationAction::Substitute:
+				result = row.applicant == c_InvalidNetPeerId ? NetH4ModerationResult::UnknownApplicant
+				                                             : g_NetMatchService.SubstituteApplicant(row.stableSeat, row.applicant);
+				break;
+			case NetModerationAction::Cancel:
+				result = g_NetMatchService.CancelSubstitution(row.stableSeat);
+				break;
+		}
+		const char* name = NetModerationActionName(action);
+		m_StatusText = result == NetH4ModerationResult::Ok
+		                   ? "Seat " + std::to_string(row.stableSeat) + ": " + name + " accepted."
+		                   : "Seat " + std::to_string(row.stableSeat) + ": " + name + " refused - " + NetH4ModerationResultName(result) + ".";
+		std::cout << "[net-moderation] " << name << " seat=" << row.stableSeat
+		          << " applicant=" << static_cast<int>(row.applicant) << " result=" << NetH4ModerationResultName(result) << std::endl;
+		Refresh(g_NetMatchService.GetModerationSeats());
+		return result;
+	}
+
+	std::string NetModerationUx::GetSummaryText() const {
+		if (m_Rows.empty()) {
+			return "No seat needs a decision.";
+		}
+		size_t applicants = 0;
+		for (const Row& row: m_Rows) {
+			applicants += row.applicants;
+		}
+		return std::to_string(m_Rows.size()) + (m_Rows.size() == 1 ? " seat waiting, " : " seats waiting, ") +
+		       std::to_string(applicants) + (applicants == 1 ? " applicant" : " applicants");
 	}
 
 	void NetSeatPresence::Observe(const NetLockstepSeatNotice& notice) {
