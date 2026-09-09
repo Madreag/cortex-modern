@@ -2,6 +2,7 @@
 
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
+#include "System/FaultInjection.h"
 
 #include "nlohmann/json.hpp"
 
@@ -286,7 +287,9 @@ namespace RTE {
 					SendHeartbeat(peer.transportPeerId);
 				}
 			}
-		} else if (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+		} else if ((m_State == NetSessionState::Ready ||
+		            (m_State == NetSessionState::HelloSent && FaultInjected("client_never_says_hello"))) &&
+		           m_RemoteTransportPeerId != c_InvalidNetPeerId) {
 			SendHeartbeat(m_RemoteTransportPeerId);
 		}
 		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
@@ -319,7 +322,11 @@ namespace RTE {
 					}
 					m_RemoteTransportPeerId = event.peerId;
 					m_LastReceiveMs = m_NowMs;
-					Send(event.peerId, BuildClientHello());
+					// Test-only: P14's bound is "no decodable ClientHello within the budget", so the arm
+					// that proves it over a socket needs a connection that talks and never says hello.
+					if (!FaultInjected("client_never_says_hello")) {
+						Send(event.peerId, BuildClientHello());
+					}
 					m_State = NetSessionState::HelloSent;
 					m_StateStartedMs = m_NowMs;
 				}
@@ -386,9 +393,12 @@ namespace RTE {
 		++m_Stats.receivedMessages;
 		m_LastReceivedSequence = decoded.message.sequence;
 		m_LastReceiveMs = m_NowMs;
+		// It spoke, so it is owed a restart again the next time we stop listening.
+		m_ResumedWithoutTraffic = false;
 		if (m_Role == NetSessionRole::Host) {
 			if (PeerState* peer = FindPeer(peerId)) {
 				peer->lastReceiveMs = m_NowMs;
+				peer->resumedWithoutTraffic = false;
 			}
 			HandleHostMessage(peerId, decoded.message);
 		} else {
@@ -692,7 +702,39 @@ namespace RTE {
 		if (m_Config.timeoutMs == 0) {
 			return;
 		}
+		// A timeout is a silence we were listening through. The round owns the transport for a whole
+		// match, so nothing stamps a receive while it plays and the next evaluation - the resync round's
+		// first tick, or the leave exchange's - would otherwise measure the entire match and evict
+		// everyone still there. A step longer than the budget is a resumption: the peers get their
+		// window started again instead.
+		const bool resumed = m_TimeoutsEvaluated && m_NowMs > m_LastTimeoutCheckMs &&
+		                     m_NowMs - m_LastTimeoutCheckMs > m_Config.timeoutMs;
+		m_TimeoutsEvaluated = true;
+		m_LastTimeoutCheckMs = m_NowMs;
+		if (resumed) {
+			// One restart per silence, and no more: without a floor a caller that always evaluated more
+			// slowly than the budget would resume forever and evict nobody. Once a window has been
+			// restarted, the next full budget without a word ends the peer however slowly we evaluate
+			// from there; any packet from it clears the mark and it is owed a restart again.
+			bool restarted = false;
+			if (!m_ResumedWithoutTraffic) {
+				m_ResumedWithoutTraffic = true;
+				m_LastReceiveMs = m_NowMs;
+				restarted = true;
+			}
+			for (PeerState& peer : m_Peers) {
+				if (IsActive(peer.state) && peer.state != NetSessionState::Handshake && !peer.resumedWithoutTraffic) {
+					peer.resumedWithoutTraffic = true;
+					peer.lastReceiveMs = m_NowMs;
+					restarted = true;
+				}
+			}
+			if (restarted) {
+				++m_Stats.timeoutResumptions;
+			}
+		}
 		if (m_Role == NetSessionRole::Host) {
+			// P14 expires a handshake on the connection's own age, which no resumption extends.
 			ExpireSilentHandshakes();
 			for (PeerState& peer : m_Peers) {
 				if (!IsActive(peer.state) || peer.state == NetSessionState::Handshake) {
@@ -1060,6 +1102,9 @@ namespace RTE {
 				{"seats_closed_by_leave", stats.seatsClosedByLeave},
 				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
 				{"reseats_issued", stats.reseatsIssued},
+				{"reseats_without_a_ledger", stats.reseatsWithoutALedger},
+				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
+				{"reseat_live_on_team_not_named", stats.reseatLiveOnTeamNotNamed},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
@@ -1079,6 +1124,7 @@ namespace RTE {
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
 				{"ledger_seats", m_ReconnectHost->GetLedger().Size()},
+				{"ledger_empty_drops_refused", m_ReconnectHost->GetLedger().GetEmptyDropsRefused()},
 			};
 		}
 
@@ -1115,6 +1161,7 @@ namespace RTE {
 				{"malformed_messages", m_Stats.malformedMessages},
 				{"ignored_phase_packets", m_Stats.ignoredPhasePackets},
 				{"timeouts", m_Stats.timeouts},
+				{"timeout_resumptions", m_Stats.timeoutResumptions},
 				{"unbound_connection_faults", m_Stats.unboundConnectionFaults},
 				{"unauthenticated_connections_refused", m_Stats.unauthenticatedConnectionsRefused},
 				{"fenced_packets", m_Stats.fencedPackets},

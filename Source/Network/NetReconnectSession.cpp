@@ -1,5 +1,7 @@
 #include "NetReconnectSession.h"
 
+#include "System/FaultInjection.h"
+
 #include "NetAuthCrypto.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
@@ -502,9 +504,14 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::HandleLeaveRequest(NetPeerId connection, const NetH4LeaveRequest& message, uint64_t nowMs) {
+		// Test-only: the ack the host sends never arrives, which is §7's ambiguous loss. Everything else
+		// about the exchange is unchanged - the seat is still closed and the generation still revoked.
+		const bool dropAck = FaultInjected("drop_leave_ack");
 		const NetH4TxKey key = MakeKey(NetMessageType::LeaveRequest, message.stableSeat, message.holderGeneration, m_LocalIdentity);
 		if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
-			Send(connection, *cached);
+			if (!dropAck) {
+				Send(connection, *cached);
+			}
 			return;
 		}
 		if (!MatchesEpoch(message.epoch)) {
@@ -541,7 +548,9 @@ namespace RTE {
 		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, true};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
-		Send(connection, ack);
+		if (!dropAck) {
+			Send(connection, ack);
+		}
 	}
 
 	bool NetReconnectHost::BindIncarnation(SeatState& seat, NetPeerId connection) {
@@ -635,15 +644,35 @@ namespace RTE {
 
 	void NetReconnectHost::IssueReseat(const SeatState& seat) {
 		const NetH4SeatOwnership* record = m_Ledger.Find(seat.seat.stableSeat);
-		if (record == nullptr || record->actorUIDs.empty()) {
-			return;
-		}
 		std::vector<NetH4LedgerActor> actors;
-		if (m_DropOwnershipSource != nullptr) {
+		if (record != nullptr && m_DropOwnershipSource != nullptr) {
 			actors = m_DropOwnershipSource(m_DropOwnershipContext);
+		}
+		if (record != nullptr) {
+			// Recorded, not judged: how much of the returner's team is alive here and NOT in its record.
+			// Zero says the record named the world it came back to, which is what tells a reclaim whose
+			// units simply died apart from one whose drop under-recorded them - the two are otherwise
+			// indistinguishable from the counters below.
+			uint32_t unnamed = 0;
+			for (const NetH4LedgerActor& actor: actors) {
+				if (actor.alive && actor.team == record->team &&
+				    std::find(record->actorUIDs.begin(), record->actorUIDs.end(), actor.actorUID) == record->actorUIDs.end()) {
+					++unnamed;
+				}
+			}
+			m_Stats.reseatLiveOnTeamNotNamed = std::max(m_Stats.reseatLiveOnTeamNotNamed, unnamed);
+		}
+		if (record == nullptr || record->actorUIDs.empty()) {
+			// The drop recorded nothing, so the returner is reseated onto nothing. That is a fault, and
+			// counting it apart from the case below is what lets a gate tell the two answers apart.
+			++m_Stats.reseatsWithoutALedger;
+			return;
 		}
 		std::vector<int64_t> restored = m_Ledger.BuildRestoration(seat.seat.stableSeat, m_Mode, actors);
 		if (restored.empty()) {
+			// The ledger is good; none of the units it names is still alive on its team. There is
+			// nothing to hand back, which is not a fault.
+			++m_Stats.reseatsWithoutSurvivors;
 			return;
 		}
 		NetGameReseat reseat;

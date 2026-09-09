@@ -50,6 +50,7 @@ namespace RTE {
 		uint32_t malformedMessages = 0;
 		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
+		uint32_t timeoutResumptions = 0; //!< Evaluations that restarted a silence window because the caller had stopped feeding the session for longer than the budget. One per transition; a second in a row without a word restarts nothing.
 		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
 		uint32_t unauthenticatedConnectionsRefused = 0; //!< Host: connections refused because the half-open bound was already full.
 		uint32_t fencedPackets = 0; //!< Host: packets from a superseded incarnation of a seat, dropped for it.
@@ -147,6 +148,7 @@ namespace RTE {
 			NetSessionState state = NetSessionState::Handshake;
 			uint64_t connectedAtMs = 0;
 			uint64_t lastReceiveMs = 0;
+			bool resumedWithoutTraffic = false; //!< Its window was restarted by a resumption and it has not spoken since; the next one does not restart it again.
 			uint64_t lastHeartbeatMs = 0;
 			NetHash32 identityHash{};
 		};
@@ -209,6 +211,9 @@ namespace RTE {
 		uint64_t m_NowMs = 0;
 		uint64_t m_StateStartedMs = 0;
 		uint64_t m_LastReceiveMs = 0;
+		uint64_t m_LastTimeoutCheckMs = 0;
+		bool m_TimeoutsEvaluated = false;
+		bool m_ResumedWithoutTraffic = false;
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_SessionId = 0;
 		NetPeerId m_RemoteTransportPeerId = c_InvalidNetPeerId;

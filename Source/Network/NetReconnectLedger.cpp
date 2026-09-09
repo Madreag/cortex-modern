@@ -35,6 +35,14 @@ namespace RTE {
 			return seat.stableSeat == stableSeat;
 		});
 		if (existing != m_Seats.end()) {
+			// An empty second drop is what a census refused off the sim tick looks like, and it must not
+			// erase the record IssueReseat still needs. A genuinely empty one loses nothing by keeping
+			// the earlier list: the reseat filters it against the live world, so units that are gone or
+			// have changed team are not handed back either way.
+			if (record.actorUIDs.empty() && !existing->actorUIDs.empty()) {
+				++m_EmptyDropsRefused;
+				return;
+			}
 			*existing = std::move(record);
 		} else {
 			m_Seats.push_back(std::move(record));

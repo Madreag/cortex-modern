@@ -4604,6 +4604,457 @@ namespace RTE {
 			return 0;
 		}
 
+		// Source40 R1 and R2 are one defect: a timeout must measure a silence the session was WATCHING.
+		// The round owns the transport for the whole match, so the session is handed no traffic while it
+		// plays and - since the plane's clock became real elapsed time - a clock that runs on anyway. The
+		// first evaluation after that phase is the resync round's lobby tick, or the leave exchange's, and
+		// it measures the entire match: the host evicts every peer before the resync round can form, and
+		// the leaving client evicts the host before its LeaveRequest is flushed, so the announced leave is
+		// adjudicated as a lost connection. Both arms are driven exactly as the service drives them.
+		int TestARoundResumptionKeepsItsPeers() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			static_assert(NetReconnectClient::c_LeaveAckBudgetMs == 2000, "P21's ack budget");
+			// Long enough that the match alone outlasts the session's timeout, which is the whole point.
+			const uint64_t playedMs = 20'000;
+			const uint32_t budgetMs = MakeSessionConfig(0, 0, "Host").timeoutMs;
+			if (playedMs <= budgetMs) {
+				return Fail("the match phase must outlast the session timeout for this case to say anything");
+			}
+
+			struct SeatedPair {
+				LoopbackTransport hostTransport;
+				LoopbackTransport clientTransport;
+				NetSession host;
+				NetSession client;
+				NetSeatAuthRegistry registry;
+				NetReconnectHost admission;
+				NetReconnectTicketStore store;
+				NetReconnectClient reconnect;
+				uint64_t serviceMs = 0; //!< The admission clock: elapsed since the service started this match.
+
+				void Step(uint64_t byMs) {
+					serviceMs += byMs;
+					hostTransport.AdvanceTimeMs(byMs);
+					clientTransport.AdvanceTimeMs(byMs);
+				}
+
+				bool Seat(const std::string& name, uint16_t port, uint64_t* unixNow, std::string* error) {
+					registry.BeginHostedSession();
+					admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+					admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+					store.SetPath(StorePath(name));
+					reconnect.Configure(&store, MakeIdentity(), "Player");
+					reconnect.SetUnixClock(&FixedUnixClock, unixNow);
+					reconnect.SetHostContext("loopback", MakeHash(5));
+					host.SetReconnectHost(&admission);
+					client.SetReconnectClient(&reconnect);
+					if (!host.StartHost(hostTransport, MakeSessionConfig(port, 101, "Host"), error) ||
+					    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, 202, "Player"), error)) {
+						return false;
+					}
+					// WaitForSessionReady, clocked from the service's elapsed time as the runner clocks it.
+					for (uint64_t settled = 0; settled <= 600; settled += 10) {
+						host.Tick(serviceMs);
+						client.Tick(serviceMs);
+						Step(10);
+					}
+					if (reconnect.GetState() != NetH4ClientState::Joined || host.GetReadyPeerCount() != 1) {
+						*error = "the pair never committed its seat";
+						return false;
+					}
+					admission.SetLiveMatch(true);
+					return true;
+				}
+
+				// The match: PumpSessionEvents is all the session gets. The host's plane is ticked on the
+				// service clock and forwarded events injected on it; the client's pump has nothing to do
+				// and returns before touching its session at all.
+				void PlayFor(uint64_t forMs) {
+					for (const uint64_t until = serviceMs + forMs; serviceMs <= until;) {
+						for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+							host.InjectEvent(event, serviceMs);
+						}
+						host.TickAdmissionPlane(serviceMs);
+						Step(10);
+					}
+				}
+			};
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+
+			// R1: the resync round. StartNextMatch re-runs the lobby over the same session, and the lobby
+			// adds the session clock it captured at Start to its own round time - so the first tick lands
+			// on a clock the match advanced while nothing could stamp a receive.
+			{
+				SeatedPair pair;
+				if (!pair.Seat("resume-resync", 42152, &unixNow, &error)) {
+					return Fail("R1 arm: " + error);
+				}
+				const uint64_t seatedAtMs = pair.serviceMs;
+				pair.PlayFor(playedMs);
+				if (pair.host.GetClockMs() - seatedAtMs <= budgetMs) {
+					return Fail("R1 arm: the match never advanced the session clock past the timeout, so this arm is vacuous");
+				}
+
+				NetLobbySession hostLobby;
+				NetLobbySession clientLobby;
+				NetLobbySessionConfig hostLobbyConfig;
+				hostLobbyConfig.host = true;
+				hostLobbyConfig.localPeerId = 1;
+				hostLobbyConfig.remotePeerId = 2;
+				hostLobbyConfig.remoteTransportPeerId = static_cast<NetPeerId>(1);
+				hostLobbyConfig.matchConfig = MakeLobbyMatchConfig(0x5000000000000000ULL + 42152);
+				hostLobbyConfig.timeoutMs = 60'000;
+				hostLobbyConfig.session = &pair.host;
+				hostLobbyConfig.autoReady = true;
+				hostLobbyConfig.autoStart = true;
+				NetLobbySessionConfig clientLobbyConfig = hostLobbyConfig;
+				clientLobbyConfig.host = false;
+				clientLobbyConfig.localPeerId = 2;
+				clientLobbyConfig.remotePeerId = 1;
+				clientLobbyConfig.session = &pair.client;
+				if (!hostLobby.Start(pair.hostTransport, hostLobbyConfig, &error) ||
+				    !clientLobby.Start(pair.clientTransport, clientLobbyConfig, &error)) {
+					return Fail("R1 arm: the resync round would not start: " + error);
+				}
+				bool formed = false;
+				for (uint64_t roundMs = 0; roundMs <= 4000 && !formed; roundMs += 10) {
+					const NetMatchRunnerClocks clocks = NetMatchRunner::ResolveRoundClocks(roundMs, true, pair.serviceMs);
+					hostLobby.Tick(clocks.lobbyMs);
+					pair.host.TickAdmissionPlane(clocks.planeMs);
+					clientLobby.Tick(clocks.lobbyMs);
+					pair.client.TickAdmissionPlane(clocks.planeMs);
+					formed = hostLobby.IsStarted() && clientLobby.IsStarted();
+					pair.Step(10);
+				}
+				if (!formed) {
+					return Fail("R1 arm: the resync round never formed after the match: host=" +
+					            std::string(NetLobbySession::StateName(hostLobby.GetState())) + " (" + hostLobby.GetFailureReason() +
+					            ") client=" + NetLobbySession::StateName(clientLobby.GetState()) + " (" + clientLobby.GetFailureReason() +
+					            ") session timeouts host=" + std::to_string(pair.host.GetStats().timeouts) +
+					            " client=" + std::to_string(pair.client.GetStats().timeouts));
+				}
+				if (pair.host.GetReadyPeerCount() != 1 || !pair.client.IsReady()) {
+					return Fail("R1 arm: the round formed but the session dropped its peers");
+				}
+				if (pair.host.GetStats().timeouts != 0 || pair.client.GetStats().timeouts != 0) {
+					return Fail("R1 arm: a silence nobody was listening through was counted as a timeout");
+				}
+				// Exactly one resumption per match-to-round transition, and it is what let the round form.
+				if (pair.host.GetStats().timeoutResumptions != 1) {
+					return Fail("R1 arm: the round formed on " + std::to_string(pair.host.GetStats().timeoutResumptions) +
+					            " host resumptions, not the one the transition owes");
+				}
+
+				// The control: a resumption starts the window again, it does not remove it, and it does
+				// not move it either - the peer that goes quiet is evicted one budget later, measured.
+				const uint64_t quietFromMs = pair.serviceMs;
+				uint64_t evictedAfterMs = 0;
+				while (pair.serviceMs - quietFromMs <= budgetMs * 3ULL && evictedAfterMs == 0) {
+					pair.host.Tick(pair.serviceMs);
+					if (pair.host.GetReadyPeerCount() == 0) {
+						evictedAfterMs = pair.serviceMs - quietFromMs;
+					}
+					pair.Step(10);
+				}
+				if (evictedAfterMs == 0 || pair.host.GetStats().timeouts != 1) {
+					return Fail("R1 arm: a peer that went quiet under a ticking session was never evicted, so this case proves nothing");
+				}
+				// The tolerance is one heartbeat interval either side: the peer's last stamped receive is
+				// its last heartbeat, which lands somewhere inside the interval before the round ended.
+				if (evictedAfterMs + 200 < budgetMs || evictedAfterMs > budgetMs + 200) {
+					return Fail("R1 arm: the quiet peer was evicted after " + std::to_string(evictedAfterMs) +
+					            " ms, not the budget's " + std::to_string(budgetMs));
+				}
+				if (pair.host.GetStats().timeoutResumptions != 1) {
+					return Fail("R1 arm: the eviction window was restarted again while the session was watching");
+				}
+			}
+
+			// F2.1c: the predicate has a floor. A caller that always evaluates more slowly than the
+			// budget would otherwise resume forever and never evict anyone - twenty consecutive slow
+			// evaluations kept a never-speaking peer seated for 100 s in the reviewer's probe. A
+			// resumption is worth one restart per silence: once the window has been restarted, the next
+			// full budget without a word ends the peer however slowly the caller evaluates from there.
+			{
+				SeatedPair pair;
+				if (!pair.Seat("resume-floor", 42154, &unixNow, &error)) {
+					return Fail("floor arm: " + error);
+				}
+				// The client is never ticked again: a peer that died without a FIN.
+				pair.PlayFor(playedMs);
+				uint32_t slowTicks = 0;
+				while (slowTicks < 20 && pair.host.GetReadyPeerCount() != 0) {
+					pair.host.Tick(pair.serviceMs);
+					++slowTicks;
+					pair.Step(budgetMs + 10);
+				}
+				if (pair.host.GetReadyPeerCount() != 0 || pair.host.GetStats().timeouts != 1) {
+					return Fail("floor arm: " + std::to_string(slowTicks) + " evaluations at " +
+					            std::to_string(budgetMs + 10) + " ms kept a never-speaking peer seated for " +
+					            std::to_string(static_cast<uint64_t>(slowTicks) * (budgetMs + 10)) + " ms: resumptions=" +
+					            std::to_string(pair.host.GetStats().timeoutResumptions) + " timeouts=" +
+					            std::to_string(pair.host.GetStats().timeouts));
+				}
+				// One restart, then judged: the second slow evaluation is the one that evicts.
+				if (pair.host.GetStats().timeoutResumptions != 1 || slowTicks != 2) {
+					return Fail("floor arm: the peer went after " + std::to_string(slowTicks) + " evaluations and " +
+					            std::to_string(pair.host.GetStats().timeoutResumptions) + " resumptions, not 2 and 1");
+				}
+			}
+
+			// R2: the announced leave. RunCleanLeave opens the leave and then ticks the client's session on
+			// the admission clock, which the match has carried far past the last thing the session heard.
+			{
+				SeatedPair pair;
+				if (!pair.Seat("resume-leave", 42153, &unixNow, &error)) {
+					return Fail("R2 arm: " + error);
+				}
+				pair.PlayFor(playedMs);
+				if (!pair.reconnect.BeginLeave(pair.client.GetClockMs(), &error)) {
+					return Fail("R2 arm: the leave would not start: " + error);
+				}
+				for (const uint64_t until = pair.serviceMs + NetReconnectClient::c_LeaveAckBudgetMs;
+				     pair.serviceMs <= until && pair.reconnect.GetState() != NetH4ClientState::Left;) {
+					pair.client.Tick(pair.serviceMs);
+					// The host is still in its match, so its side of the exchange rides PumpSessionEvents.
+					for (const NetTransportEvent& event: pair.hostTransport.PollEvents()) {
+						pair.host.InjectEvent(event, pair.serviceMs);
+					}
+					pair.host.TickAdmissionPlane(pair.serviceMs);
+					pair.Step(10);
+				}
+				if (pair.reconnect.GetState() != NetH4ClientState::Left) {
+					return Fail(std::string("R2 arm: the announced leave was adjudicated as a lost connection: client=") +
+					            NetReconnectClientStateName(pair.reconnect.GetState()) +
+					            " acks=" + std::to_string(pair.reconnect.GetStats().leaveAcksReceived) +
+					            " session=" + NetSession::StateName(pair.client.GetState()) +
+					            " reject=" + pair.client.BuildRejectText());
+				}
+				if (pair.store.HasRecord() || pair.reconnect.GetStats().leaveAcksReceived != 1) {
+					return Fail("R2 arm: an acknowledged leave did not clear the recovery record");
+				}
+				if (pair.admission.GetStats().seatsClosedByLeave != 1) {
+					return Fail("R2 arm: the host did not close the seat on the leave");
+				}
+				if (pair.client.GetStats().timeouts != 0) {
+					return Fail("R2 arm: the leave exchange timed the host out instead of talking to it");
+				}
+			}
+			return 0;
+		}
+
+		// Source40 item 3: host_reseat_issued reads one log line, and IssueReseat has TWO ways of not
+		// printing it - the drop ledgered nothing (a fault: the returner is reseated onto nothing), or the
+		// ledger is good and none of the units it names is still alive (not a fault: there is nothing to
+		// hand back). The gates could not tell them apart, and on reclaim_socket the host ended with
+		// actors 2 of a peak 4 while drop3, which did print the line, ended with 5 of 6. Each answer gets
+		// its own counter here, and the reseat itself is unchanged.
+		//
+		// F2.3: the counters alone still do not settle WHICH world a run is in - all the ledgered units
+		// dead and a live unit the ledger never named read identically. The last arm is that second
+		// world, and the number that tells them apart is the live-on-team count the record does not name.
+		int TestAReseatSaysWhyItDidNotIssue() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint8_t leaverPeer = MakeSeatTable()[0].lockstepPeerId;
+			// What the leaver held at the drop: three of its own units and one the host always had.
+			const std::vector<NetH4LedgerActor> held = {
+			    {101, 1, leaverPeer, true}, {102, 1, leaverPeer, true}, {103, 1, leaverPeer, true}, {201, 0, 1, true}};
+
+			struct Arm {
+				const char* label;
+				NetPeerId connection;
+				std::vector<NetH4LedgerActor> atTheDrop;
+				std::vector<NetH4LedgerActor> atTheReclaim;
+				uint32_t issued;
+				uint32_t withoutALedger;
+				uint32_t withoutSurvivors;
+				uint32_t liveOnTeamNotNamed;
+				std::vector<int64_t> reseated;
+			};
+			const std::vector<Arm> arms = {
+			    // The good case, so the two counters below are read against a working reseat.
+			    {"survivors", 141, held, held, 1, 0, 0, 0, {101, 102, 103}},
+			    // reclaim_socket's shape: the ledger is right, the units did not live through the window.
+			    {"no-survivors", 142, held, {{201, 0, 1, true}}, 0, 0, 1, 0, {}},
+			    // A6's fault, kept measurable: the drop was seen where the world cannot be walked.
+			    {"no-ledger", 143, {}, held, 0, 1, 0, 3, {}},
+			    // F2.3's second world: same three counters as no-survivors, and a unit alive on the
+			    // returner's team that its record never named. Only this number tells them apart.
+			    {"unnamed-survivor", 144, held, {{104, 1, leaverPeer, true}, {201, 0, 1, true}}, 0, 0, 1, 1, {}},
+			};
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			for (const Arm& arm: arms) {
+				const std::string where = std::string(" (") + arm.label + " arm)";
+				std::vector<NetH4LedgerActor> census = arm.atTheDrop;
+				Wire wire;
+				ConfigureWire(wire);
+				wire.host.SetDropOwnershipSource(
+				    [](void* context) { return *static_cast<std::vector<NetH4LedgerActor>*>(context); }, &census);
+				Endpoint player;
+				player.connection = arm.connection;
+				ConfigureEndpoint(player, std::string("reseat-") + arm.label, &unixNow);
+				wire.Add(&player);
+				NetH4TicketRecord record;
+				if (SeatAndDrop(wire, player, record, unixNow, &error) != 0) {
+					return Fail("could not seat the player: " + error + where);
+				}
+				const NetH4SeatOwnership* ledgered = wire.host.GetLedger().Find(0);
+				if (ledgered == nullptr) {
+					return Fail("the drop recorded no seat at all" + where);
+				}
+				if (ledgered->actorUIDs.size() != (arm.atTheDrop.empty() ? 0U : 3U)) {
+					return Fail("the drop ledgered " + std::to_string(ledgered->actorUIDs.size()) + " units" + where);
+				}
+
+				// Whatever is left of the world when the holder comes back.
+				census = arm.atTheReclaim;
+				wire.host.SetLiveMatch(true);
+				Endpoint returner;
+				returner.connection = static_cast<NetPeerId>(arm.connection + 100);
+				ConfigureEndpoint(returner, std::string("reseat-") + arm.label, &unixNow);
+				wire.Add(&returner);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("the reclaim did not settle: " + error + where);
+				}
+				if (returner.client.GetState() != NetH4ClientState::Joined) {
+					return Fail(std::string("the returner did not commit: ") + NetReconnectClientStateName(returner.client.GetState()) + where);
+				}
+				const std::vector<NetGameReseat> reseats = wire.host.TakePendingReseats();
+				std::vector<int64_t> reseated;
+				for (const NetGameReseat& reseat: reseats) {
+					reseated.insert(reseated.end(), reseat.actorUIDs.begin(), reseat.actorUIDs.end());
+				}
+				if (reseated != arm.reseated) {
+					return Fail("the reclaim reseated " + std::to_string(reseated.size()) + " units" + where);
+				}
+				const NetReconnectHostStats stats = wire.host.GetStats();
+				if (stats.reseatsIssued != arm.issued || stats.reseatsWithoutALedger != arm.withoutALedger ||
+				    stats.reseatsWithoutSurvivors != arm.withoutSurvivors ||
+				    stats.reseatLiveOnTeamNotNamed != arm.liveOnTeamNotNamed) {
+					return Fail("the reseat counters read issued=" + std::to_string(stats.reseatsIssued) +
+					            " without_a_ledger=" + std::to_string(stats.reseatsWithoutALedger) +
+					            " without_survivors=" + std::to_string(stats.reseatsWithoutSurvivors) +
+					            " live_on_team_not_named=" + std::to_string(stats.reseatLiveOnTeamNotNamed) + where);
+				}
+			}
+			// The two worlds the counters cannot separate, side by side: identical on all three, and
+			// apart on the one number that says whether the record named the world it came back to.
+			return 0;
+		}
+
+		// followup-5 item 4: a seat drops twice. The first drop is seen from the sim tick and ledgers what
+		// the holder had; the second is seen from a setup worker - WaitForSessionReady ticking the session
+		// on the rematch or resync round, then CheckTimeouts, DropPeerTransport, NotifyDisconnect - where
+		// CollectDropOwnership refuses to walk the world and returns nothing. Replacing the record with
+		// that empty one starves IssueReseat, so the next returner is reseated onto nothing.
+		int TestASecondDropDoesNotEraseAGoodRecord() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint8_t leaverPeer = MakeSeatTable()[0].lockstepPeerId;
+			const std::vector<int64_t> held = {101, 102, 103};
+
+			// The rule on its own, where both drops are visible side by side.
+			{
+				NetReconnectLedger ledger;
+				ledger.RecordDrop(0, leaverPeer, 1, 100, held);
+				ledger.RecordDrop(0, leaverPeer, 1, 240, {});
+				const NetH4SeatOwnership* record = ledger.Find(0);
+				if (record == nullptr || record->actorUIDs != held || ledger.GetEmptyDropsRefused() != 1) {
+					return Fail("an empty second drop erased the seat's recorded units");
+				}
+				// A later drop that HAS units is the seat's own news and still replaces it.
+				ledger.RecordDrop(0, leaverPeer, 1, 300, {104});
+				if (ledger.Find(0)->actorUIDs != std::vector<int64_t>{104} || ledger.GetEmptyDropsRefused() != 1) {
+					return Fail("a later drop with units stopped replacing the seat's record");
+				}
+			}
+
+			// And through the host, in the order production takes it.
+			std::vector<NetH4LedgerActor> census = {
+			    {101, 1, leaverPeer, true}, {102, 1, leaverPeer, true}, {103, 1, leaverPeer, true}, {201, 0, 1, true}};
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			wire.host.SetDropOwnershipSource(
+			    [](void* context) { return *static_cast<std::vector<NetH4LedgerActor>*>(context); }, &census);
+			Endpoint player;
+			player.connection = 151;
+			ConfigureEndpoint(player, "second-drop", &unixNow);
+			wire.Add(&player);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, player, record, unixNow, &error) != 0) {
+				return Fail("could not seat the player: " + error);
+			}
+			wire.host.SetLiveMatch(true);
+
+			Endpoint first;
+			first.connection = 152;
+			ConfigureEndpoint(first, "second-drop", &unixNow);
+			wire.Add(&first);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!first.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the first reclaim did not settle: " + error);
+			}
+			if (wire.host.TakePendingReseats().size() != 1) {
+				return Fail("the first reclaim did not issue the ledgered reseat");
+			}
+			NetH4TicketRecord second;
+			if (first.store.Load(unixNow, second, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail("the reclaim left no record to come back with: " + error);
+			}
+
+			// The off-tick second drop: the census refuses, so the seat records nothing.
+			const std::vector<NetH4LedgerActor> live = census;
+			census.clear();
+			wire.host.NotifyDisconnect(first.connection, 240);
+			first.connected = false;
+			wire.Remove(first.connection);
+			census = live;
+			const NetH4SeatOwnership* ledgered = wire.host.GetLedger().Find(0);
+			if (ledgered == nullptr || ledgered->actorUIDs != held) {
+				return Fail("the off-tick second drop erased the units the holder actually had");
+			}
+			if (wire.host.GetLedger().GetEmptyDropsRefused() != 1) {
+				return Fail("the refusal was not counted, so a gate cannot see it");
+			}
+
+			// What the record is for: the next returner is reseated onto it.
+			Endpoint returner;
+			returner.connection = 153;
+			ConfigureEndpoint(returner, "second-drop", &unixNow);
+			wire.Add(&returner);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returner.client.BeginReclaim(second, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the second reclaim did not settle: " + error);
+			}
+			const std::vector<NetGameReseat> reseats = wire.host.TakePendingReseats();
+			if (reseats.size() != 1 || reseats.front().actorUIDs != held ||
+			    reseats.front().newOwnerPeerId != leaverPeer) {
+				return Fail("the returner after an off-tick second drop was reseated onto nothing");
+			}
+			if (wire.host.GetStats().reseatsWithoutALedger != 0) {
+				return Fail("the second reclaim found the ledger empty");
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4696,6 +5147,15 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestHeartbeatingHandshakeStillExpires(); result != 0) {
+			return result;
+		}
+		if (const int result = TestARoundResumptionKeepsItsPeers(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAReseatSaysWhyItDidNotIssue(); result != 0) {
+			return result;
+		}
+		if (const int result = TestASecondDropDoesNotEraseAGoodRecord(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
