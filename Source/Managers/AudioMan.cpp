@@ -1806,11 +1806,27 @@ bool AudioMan::RunCheckpointSelfTest() {
 		// A setting the manager never assigned reaches the writer as a raw byte, which is neither
 		// true nor false, and the reader has to refuse the archive rather than round it to a bool.
 		{
+			CheckpointWriter bools("Bool1");
+			bool ordinary = false;
+			bools(ordinary);
+			ordinary = true;
+			bools(ordinary, std::vector<bool>{true, false, true});
+			if (bools.Text() != "5 Bool1 0 1 3 1 0 1 ") throw std::runtime_error("an assigned bool did not write as 0 or 1: " + bools.Text());
+			bool first = true, second = false;
+			std::vector<bool> bits;
+			CheckpointReader boolReader(bools.Text(), "Bool1");
+			boolReader(first, second, bits);
+			boolReader.Finish();
+			if (first || !second || bits != std::vector<bool>{true, false, true}) throw std::runtime_error("an assigned bool did not survive the archive");
+			std::cout << "[audio-checkpoint-selftest] PASS assigned_bools_round_trip" << std::endl;
 			AudioRuntime unset;
 			const unsigned char rawByte = 100;
 			std::memcpy(&unset.muteOnFocusLoss, &rawByte, sizeof(rawByte));
+			const std::string unsetText = unset.Save();
+			if (!unsetText.starts_with("13 AudioRuntime3 0 0 0 0 0 0 100 ")) throw std::runtime_error("the writer did not carry the setting's own byte into the archive: " + unsetText.substr(0, 40));
+			std::cout << "[audio-checkpoint-selftest] PASS unset_setting_byte_reaches_the_archive" << std::endl;
 			std::string unsetRefusal;
-			if (unset.Load(unset.Save(), &unsetRefusal)) throw std::runtime_error("an audio setting that is neither true nor false was accepted");
+			if (unset.Load(unsetText, &unsetRefusal)) throw std::runtime_error("an audio setting that is neither true nor false was accepted");
 			if (unsetRefusal.find("'100'") == std::string::npos) throw std::runtime_error("the refusal did not name the offending value: " + unsetRefusal);
 			std::cout << "[audio-checkpoint-selftest] PASS unset_setting_byte_is_refused_and_named " << unsetRefusal << std::endl;
 			unsigned char liveByte = 0;
