@@ -42,6 +42,29 @@ namespace RTE {
 		PeerLeft = 7, // A clean leave: the frame field is the FIRST frame without the leaver's data; survivors continue.
 		PeerDropped = 9, // The same, for a transport that died: the seat may still be reclaimed, so survivors hold a scripted outcome until the reclaim frame.
 		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
+		SeatReclaiming = 10,  // A held seat's own player is proving its ticket. §11's roster line, relayed so every peer says the same thing.
+		SeatReclaimed = 11,   // It proved it: the player who dropped has its seat back.
+		SeatSubstituted = 12, // The host gave the seat to the named applicant instead.
+	};
+
+	/// What a peer learned about someone else's seat. Filled from the relayed notice on every peer
+	/// alike - the host's is the notice it sent - so §11's roster line is derived, never asked for.
+	enum class NetSeatNoticeKind : uint8_t {
+		Left = 0,        //!< Announced a clean leave.
+		Dropped = 1,     //!< The transport died; the seat is held until holdUntilFrame.
+		Reclaiming = 2,  //!< The dropped holder is proving its ticket.
+		Reclaimed = 3,   //!< It proved it.
+		Substituted = 4, //!< The host handed the seat to someone else.
+	};
+
+	struct NetLockstepSeatNotice {
+		uint8_t peerId = 0;
+		NetSeatNoticeKind kind = NetSeatNoticeKind::Left;
+		uint64_t frame = 0;          //!< Left/Dropped: the first frame without them; otherwise the frame it reached this peer at.
+		uint64_t holdUntilFrame = 0; //!< Dropped: the frame the reclaim hold runs to.
+		std::string name;            //!< Substituted: the new holder.
+
+		bool operator==(const NetLockstepSeatNotice&) const = default;
 	};
 
 	enum class NetLockstepErrorCode {
@@ -469,6 +492,12 @@ namespace RTE {
 		/// the relayed leave notice alone, so every peer in the round answers identically at the same
 		/// tick - the question above is about a round with nobody left and is answered host-side.
 		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
+		/// The seat notices this peer has learned and not yet read. A resync builds a new round, so
+		/// these outlive one: the roster line has to survive the round that produced it.
+		std::vector<NetLockstepSeatNotice> TakeSeatNotices();
+		/// Host: tell every peer what became of a held seat. The host records its own notice too, so
+		/// what it shows is what it sent, derived the same way a client derives it.
+		void AnnounceSeatChange(uint8_t peerId, NetLockstepStopReason reason, const std::string& holderName);
 		/// Whether the round has yet to commit a frame. A resync relaunch lands here: the ledgered
 		/// reseat rides the first committed frame, so nothing the round produced can be judged before it.
 		bool HasCommittedAFrame() const { return m_Stats.framesAccepted > 0; }
@@ -515,6 +544,7 @@ namespace RTE {
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced);
+		void RecordSeatNotice(uint8_t peerId, NetSeatNoticeKind kind, uint64_t frame, uint64_t holdUntilFrame, std::string name);
 		/// The first frame this peer has no data for, walking up from the committed one.
 		uint64_t FirstFrameWithout(uint8_t peerId) const;
 		/// How long the host lets a required remote go quiet before calling it gone. Half the
@@ -562,6 +592,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Left peers whose transport died rather than announcing; carried by the leave notice, so every peer has it.
+		std::vector<NetLockstepSeatNotice> m_SeatNotices; //!< Unread seat notices, bounded; the round may end before its reader runs.
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.

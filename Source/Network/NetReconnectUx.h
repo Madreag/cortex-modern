@@ -1,9 +1,11 @@
 #pragma once
 
+#include "NetLockstep.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace RTE {
@@ -97,6 +99,49 @@ namespace RTE {
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
+	};
+
+	/// What this peer says about another player's seat (§11).
+	enum class NetSeatPresenceState : uint8_t {
+		Present = 0,
+		Disconnected = 1, //!< The link died and the seat is inside its reclaim hold.
+		Reconnecting = 2, //!< That player is proving its ticket now.
+		Substituted = 3,  //!< Someone else has the seat.
+		Left = 4,         //!< Announced a clean leave, or the hold ran out.
+	};
+
+	/// §11's persistent roster indication, derived on every peer from the round's own notices: the
+	/// leave's kind and frame, the hold's frame deadline, and what became of the seat. A client shows
+	/// what the host shows because both read the same notices - nothing host-only decides it.
+	class NetSeatPresence {
+	public:
+		void Observe(const NetLockstepSeatNotice& notice);
+		/// The frame the sim has applied. The hold is counted in frames, so this is the only clock.
+		void NoteFrame(uint64_t appliedFrame);
+		void Clear();
+
+		NetSeatPresenceState StateOf(uint8_t peerId) const;
+		/// Frames the seat's hold still has to run; 0 when nothing is being held for it.
+		uint64_t HoldFramesRemaining(uint8_t peerId) const;
+		/// The persistent line for the seat, or "" while there is nothing to say about it.
+		std::string Line(uint8_t peerId, const std::string& playerName) const;
+
+		// The pinned timestep (c_DefaultDeltaTimeS = 0.0166666 s) as microseconds, so the hold's frames
+		// become the seconds a player understands without anyone reading a clock.
+		static constexpr uint64_t c_FrameMicroseconds = 16666;
+		static uint64_t HoldSeconds(uint64_t frames);
+		static const char* StateName(NetSeatPresenceState state);
+
+	private:
+		struct Seat {
+			NetSeatPresenceState state = NetSeatPresenceState::Present;
+			uint64_t holdUntilFrame = 0;
+			bool holdRanOut = false;
+			std::string holderName;
+		};
+
+		std::map<uint8_t, Seat> m_Seats;
+		uint64_t m_Frame = 0;
 	};
 
 } // namespace RTE

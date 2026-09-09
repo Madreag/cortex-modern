@@ -773,7 +773,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const std::string name = member.displayName.size() > 14 ? member.displayName.substr(0, 13) + "." : member.displayName;
 		std::string row = name + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
-		row += NetReconnectUx::RosterMark(member.dropped, member.reclaiming);
+		// §11's persistent line for the seat, derived on this peer; the short mark while there is none.
+		row += member.statusLine.empty() ? std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming)) : " - " + member.statusLine;
 		if (!member.isLocal && member.connected) {
 			row += " - ";
 			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));

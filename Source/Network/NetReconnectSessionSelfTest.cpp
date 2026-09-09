@@ -3200,6 +3200,70 @@ namespace RTE {
 			return 0;
 		}
 
+		// §11's line, rule by rule. Every input here is one a client has from the wire; none of them is
+		// a question for the host.
+		int TestSeatPresenceLine() {
+			const uint64_t hold = NetLockstepCoordinator::c_ReclaimHoldFrames;
+			NetSeatPresence presence;
+			presence.NoteFrame(100);
+			if (!presence.Line(2, "Alice").empty() || presence.StateOf(2) != NetSeatPresenceState::Present) {
+				return Fail("a seat nobody said anything about carries a line");
+			}
+			presence.Observe({2, NetSeatNoticeKind::Dropped, 100, 100 + hold, ""});
+			presence.NoteFrame(100);
+			if (presence.StateOf(2) != NetSeatPresenceState::Disconnected ||
+			    presence.HoldFramesRemaining(2) != hold ||
+			    presence.Line(2, "Alice") != "Alice: disconnected - seat held 20s") {
+				return Fail("a dropped seat's line is not the hold the round is counting: " + presence.Line(2, "Alice"));
+			}
+			presence.Observe({2, NetSeatNoticeKind::Reclaiming, 200, 0, ""});
+			presence.NoteFrame(100 + hold / 2);
+			if (presence.StateOf(2) != NetSeatPresenceState::Reconnecting ||
+			    presence.Line(2, "Alice") != "Alice: reconnecting - seat held 10s") {
+				return Fail("a reclaim in flight does not show on the roster: " + presence.Line(2, "Alice"));
+			}
+			// A resync starts a new round from its own frames; the hold is the seat's, not the round's.
+			presence.NoteFrame(0);
+			if (presence.HoldFramesRemaining(2) != hold / 2 || presence.StateOf(2) != NetSeatPresenceState::Reconnecting) {
+				return Fail("a new round restarted or expired the seat's hold");
+			}
+			presence.NoteFrame(hold / 2);
+			if (presence.StateOf(2) != NetSeatPresenceState::Left || presence.Line(2, "Alice") != "Alice: left - the seat's hold ran out") {
+				return Fail("the hold's frame deadline did not end the wait: " + presence.Line(2, "Alice"));
+			}
+			// Nothing brings back a seat whose hold is over except being told what became of it.
+			presence.Observe({2, NetSeatNoticeKind::Reclaiming, 0, 0, ""});
+			if (presence.StateOf(2) != NetSeatPresenceState::Left) {
+				return Fail("a stale reclaim notice reopened a seat the round had already given up");
+			}
+			presence.Observe({2, NetSeatNoticeKind::Substituted, 0, 0, "Understudy"});
+			if (presence.StateOf(2) != NetSeatPresenceState::Substituted || presence.Line(2, "Alice") != "Alice: substituted by Understudy") {
+				return Fail("a committed substitute does not show on the roster: " + presence.Line(2, "Alice"));
+			}
+			presence.Observe({2, NetSeatNoticeKind::Reclaimed, 0, 0, ""});
+			if (presence.StateOf(2) != NetSeatPresenceState::Present || !presence.Line(2, "Alice").empty()) {
+				return Fail("a seat that came back keeps a line about being gone");
+			}
+			// An announced leave is not a hold: it says outright that nobody is coming back.
+			NetSeatPresence announced;
+			announced.Observe({3, NetSeatNoticeKind::Left, 100, 0, ""});
+			announced.NoteFrame(100);
+			if (announced.StateOf(3) != NetSeatPresenceState::Left || announced.Line(3, "Bob") != "Bob: left" ||
+			    announced.HoldFramesRemaining(3) != 0) {
+				return Fail("a clean leave is shown as a wait: " + announced.Line(3, "Bob"));
+			}
+			if (!announced.Line(4, "").empty()) {
+				return Fail("a seat nobody mentioned produced a line");
+			}
+			// The hold's frames are P2 at the pinned timestep, and the line says it in seconds.
+			if (NetSeatPresence::HoldSeconds(hold) != 20 || NetSeatPresence::HoldSeconds(0) != 0 ||
+			    NetSeatPresence::HoldSeconds(60) != 1) {
+				return Fail("the hold's frames do not read back as the pinned timestep's seconds");
+			}
+			std::cout << "[net-reconnect-session-selftest] seat-presence line derived from the wire on every peer" << std::endl;
+			return 0;
+		}
+
 		int TestApplicantsAndBounds() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -4745,6 +4809,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestModerationViewAgesTheDrop(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSeatPresenceLine(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
