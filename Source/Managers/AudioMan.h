@@ -33,7 +33,7 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const;
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime3 ") ? "AudioRuntime3" : (text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"); }
-		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr);
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
 		void SetCheckpointTraceEnabled(bool enabled);

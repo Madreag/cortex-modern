@@ -67,6 +67,14 @@ namespace RTE {
 		std::string m_Text;
 	};
 
+	// The first field of a nested payload is its version tag, so a refusal can name the type that refused.
+	inline std::string CheckpointTypeName(std::string_view text) {
+		const size_t space = text.find(' ');
+		size_t size = 0;
+		if (space == std::string_view::npos || std::from_chars(text.data(), text.data() + space, size).ec != std::errc() || space + 1 + size > text.size()) return "runtime";
+		return std::string(text.substr(space + 1, size));
+	}
+
 	class CheckpointReader {
 	public:
 		CheckpointReader(std::string_view text, std::string_view version, bool validateOnly = false) : m_Text(text), m_ValidateOnly(validateOnly) {
@@ -88,9 +96,9 @@ namespace RTE {
 			if constexpr (requires { value.LoadCheckpoint(std::string_view{}, true); }) {
 				std::string text;
 				Value(text);
-				if (!value.LoadCheckpoint(text, true)) throw std::runtime_error("invalid nested runtime checkpoint");
+				if (!value.LoadCheckpoint(text, true)) throw std::runtime_error("invalid nested " + CheckpointTypeName(text) + " checkpoint");
 				OnCommit([&value, text = std::move(text)] {
-					if (!value.LoadCheckpoint(text)) throw std::runtime_error("could not apply nested runtime checkpoint");
+					if (!value.LoadCheckpoint(text)) throw std::runtime_error("could not apply nested " + CheckpointTypeName(text) + " checkpoint");
 				});
 			} else {
 				T candidate{};
@@ -105,15 +113,16 @@ namespace RTE {
 		void Value(T& value) {
 			const size_t end = m_Text.find(' ');
 			if (end == std::string_view::npos || end == 0) throw std::runtime_error("truncated runtime checkpoint number");
+			const auto refuse = [this, end] { return std::runtime_error("invalid runtime checkpoint integer '" + std::string(m_Text.substr(0, end)) + "'"); };
 			if constexpr (std::is_signed_v<T>) {
 				int64_t number = 0;
 				const auto parsed = std::from_chars(m_Text.data(), m_Text.data() + end, number);
-				if (parsed.ec != std::errc() || parsed.ptr != m_Text.data() + end || number < std::numeric_limits<T>::min() || number > std::numeric_limits<T>::max()) throw std::runtime_error("invalid runtime checkpoint integer");
+				if (parsed.ec != std::errc() || parsed.ptr != m_Text.data() + end || number < std::numeric_limits<T>::min() || number > std::numeric_limits<T>::max()) throw refuse();
 				value = static_cast<T>(number);
 			} else {
 				uint64_t number = 0;
 				const auto parsed = std::from_chars(m_Text.data(), m_Text.data() + end, number);
-				if (parsed.ec != std::errc() || parsed.ptr != m_Text.data() + end || number > static_cast<uint64_t>(std::numeric_limits<T>::max())) throw std::runtime_error("invalid runtime checkpoint integer");
+				if (parsed.ec != std::errc() || parsed.ptr != m_Text.data() + end || number > static_cast<uint64_t>(std::numeric_limits<T>::max())) throw refuse();
 				value = static_cast<T>(number);
 			}
 			m_Text.remove_prefix(end + 1);
