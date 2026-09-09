@@ -5,14 +5,17 @@
 #include "NetProtocol.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <iterator>
 #include <limits>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 namespace RTE {
@@ -24,6 +27,15 @@ namespace RTE {
 
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
+
+		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
+			const char* text = std::getenv(name);
+			if (!text) return std::nullopt;
+			uint64_t frame;
+			const char* end = text + std::strlen(text);
+			const auto parsed = std::from_chars(text, end, frame);
+			return parsed.ec == std::errc{} && parsed.ptr == end ? std::optional<uint64_t>(frame) : std::nullopt;
+		}
 
 		template <class... T>
 		struct Overloaded : T... {
@@ -1964,6 +1976,16 @@ namespace RTE {
 			return false;
 		}
 		const uint64_t targetFrame = producedFrame + m_Config.inputDelayFrames;
+		static const auto holdBeforeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_HOLD_BEFORE_TARGET");
+		if (holdBeforeTarget && targetFrame == *holdBeforeTarget) {
+			// The crash fixture waits for the host to receive the preceding frame, then kills this
+			// process. No later input can enter the transport while that barrier is being observed.
+			std::cout << "[lockstep-test] hold_before_target peer=" << static_cast<int>(m_Config.localPeerId)
+			          << " produced=" << producedFrame << " target=" << targetFrame << std::endl;
+			std::this_thread::sleep_for(std::chrono::seconds(30));
+			if (error) *error = "the lockstep crash fixture did not terminate its held peer";
+			return false;
+		}
 		if (targetFrame < m_Stats.nextFrame || m_LocalFrames.find(targetFrame) != m_LocalFrames.end()) {
 			if (error) *error = "local input frame is duplicate or already accepted";
 			return false;
@@ -3022,6 +3044,11 @@ namespace RTE {
 		m_Stats.remoteControllerFramesReceived += frame.frames.size();
 		peerStats.controllerFramesReceived += frame.frames.size();
 		peerFrames[frame.senderPeerId] = frame.frames;
+		static const auto observeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+		if (observeTarget && frame.targetFrame == *observeTarget) {
+			std::cout << "[lockstep-test] received peer=" << static_cast<int>(frame.senderPeerId)
+			          << " target=" << frame.targetFrame << std::endl;
+		}
 		m_PeersPlayedThisRound.insert(frame.senderPeerId);
 		if (!frame.commands.empty()) {
 			m_RemoteCommands[frame.targetFrame][frame.senderPeerId] = frame.commands;
