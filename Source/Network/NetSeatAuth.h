@@ -43,6 +43,30 @@ namespace RTE {
 		/// The seat's active holder generation; 0 when the seat holds none.
 		uint32_t GetActiveGeneration(uint16_t seat) const;
 
+		/// The generation a substitution would issue next. Reserving it draws nothing and changes
+		/// nothing: the seat keeps its current holder until the substitute commits, which is what
+		/// makes "the first commit wins" true rather than "the first approval wins".
+		uint32_t PeekNextGeneration(uint16_t seat) const;
+
+		/// Installs a credential the host already handed to a committing substitute. Accepted only at
+		/// exactly the next generation, so a reassignment can never rewind one.
+		bool AdoptCredential(uint16_t seat, uint32_t holderGeneration, const NetSeatCredential& credential);
+
+		/// Sets the seat's outgoing credential aside when a substitute takes the seat. The retired
+		/// credential can only ever produce a refusal - VerifyRetiredProof is its one reader and its
+		/// one caller answers "this seat was reassigned" - so the superseded holder learns why it lost
+		/// without anyone who lacks that credential learning the seat ever existed.
+		void RetireCredentialForSubstitution(uint16_t seat);
+
+		/// Whether the seat has a retired credential at that generation.
+		bool HasRetiredGeneration(uint16_t seat, uint32_t holderGeneration) const;
+
+		/// Verifies a proof against the RETIRED credential. Never grants anything.
+		bool VerifyRetiredProof(uint16_t seat, uint32_t holderGeneration, const NetH4Transcript& transcript, const NetAuthBytes32& mac) const;
+
+		/// Forgets the retired credential; the caller owns the window it is kept for.
+		void ClearRetired(uint16_t seat);
+
 		/// Revokes the seat's active credential (clean leave, substitution); generations never rewind.
 		void RevokeSeat(uint16_t seat);
 
@@ -51,6 +75,9 @@ namespace RTE {
 			uint32_t lastGeneration = 0;
 			bool active = false;
 			NetSeatCredential credential{};
+			uint32_t retiredGeneration = 0;
+			bool hasRetired = false;
+			NetSeatCredential retiredCredential{};
 		};
 
 		bool m_Active = false;

@@ -2939,7 +2939,991 @@ namespace RTE {
 			return 0;
 		}
 
+
+		// Builds an Applicant the way a client would, so the raw-connection cases ride the same bytes.
+		NetH4Applicant MakeApplicant(uint16_t stableSeat, uint8_t txSeed, const std::string& name) {
+			NetH4Applicant applicant;
+			applicant.txId = Ramp<16>(txSeed);
+			applicant.stableSeat = stableSeat;
+			applicant.identity = MakeIdentity();
+			applicant.displayName = name;
+			return applicant;
+		}
+
+		// §9b: "two pending applicants for one seat", the pending-applicant spam bound (P15) and
+		// "substitute inert - no peer id, no team, no snapshot, no authority - until the commit".
+		int TestApplicantsAndBounds() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "applicants", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat to moderate: " + error);
+			}
+			wire.ClearDelivered();
+
+			// Two applicants for the one dropped seat: the plan's own floor, and both representable.
+			if (!wire.SendRaw(71, MakeApplicant(0, 0x10, "first"), &error) ||
+			    !wire.SendRaw(72, MakeApplicant(0, 0x11, "second"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			for (NetPeerId connection : {71, 72}) {
+				if (CountOf<NetH4ApplicantAck>(wire.Delivered(connection)) != 1) {
+					return Fail("applicant " + std::to_string(connection) + " was not acknowledged");
+				}
+			}
+			std::vector<NetH4ModerationSeat> view = wire.host.GetModerationView();
+			if (view.size() != MakeSeatTable().size() || !view[0].substitutable || view[0].applicants.size() != 2) {
+				return Fail("the moderation view does not show both applicants for the dropped seat");
+			}
+			if (view[0].applicants[0].displayName != "first" || view[0].applicants[1].displayName != "second" ||
+			    view[0].applicants[0].approved || view[0].applicants[1].approved) {
+				return Fail("the moderation view lost an applicant or approved one by itself");
+			}
+			if (view[1].substitutable || view[2].substitutable) {
+				return Fail("a seat nobody dropped is offered for reassignment");
+			}
+
+			// Inert: an application moves nothing. No commit, no peer id, no credential, no reseat.
+			NetPeerId seatHolder = 12345;
+			uint32_t generation = 0;
+			uint32_t incarnation = 0;
+			if (!wire.host.GetSeatHolder(0, seatHolder, generation, incarnation) || seatHolder != c_InvalidNetPeerId ||
+			    generation != record.holderGeneration) {
+				return Fail("an applicant disturbed the seat it applied for");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("an application moved the seat's credential");
+			}
+			if (!wire.host.TakePendingReseats().empty() || !wire.host.TakeCommits().empty()) {
+				return Fail("an applicant earned authority before any host action");
+			}
+			if (wire.host.GetStats().applicantsRegistered != 2 || wire.host.GetApplicantCount() != 2) {
+				return Fail("the applicant records were not what the host says they are");
+			}
+			const std::vector<NetH4SeatStatus> statuses = wire.host.GetSeatStatuses();
+			if (statuses[0].applicants != 2 || statuses[0].substituting) {
+				return Fail("the roster does not report the pending applicants");
+			}
+
+			// A third for the same seat is over the per-seat bound; a second from a connection that
+			// already applied is over the per-connection bound. Both take the uniform delayed refusal.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const uint64_t refusedAtMs = wire.nowMs;
+			if (!wire.SendRaw(73, MakeApplicant(0, 0x12, "third"), &error) ||
+			    !wire.SendRaw(71, MakeApplicant(0, 0x13, "again"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (CountOf<NetH4ApplicantAck>(wire.Delivered(73)) != 0) {
+				return Fail("the per-seat bound admitted a third applicant");
+			}
+			if (CountOf<NetH4ApplicantAck>(wire.Delivered(71)) != 1) {
+				return Fail("one connection was allowed to hold two applications");
+			}
+			if (CountOf<NetJoinRejected>(wire.Delivered(73)) != 0) {
+				return Fail("a bounded applicant was refused before the release time");
+			}
+			wire.nowMs = refusedAtMs + NetReconnectAdmission::c_DenialReleaseMs;
+			wire.DrainHostOutbound();
+			if (CountOf<NetJoinRejected>(wire.Delivered(73)) != 1 || CountOf<NetJoinRejected>(wire.Delivered(71)) != 1) {
+				return Fail("a bounded applicant was not refused on the uniform schedule");
+			}
+			if (wire.host.GetStats().applicantsRefused != 2 || wire.host.GetApplicantCount() != 2) {
+				return Fail("a refused application still took a slot");
+			}
+
+			// A retransmitted application is the same one: it is answered, not counted twice.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(71, MakeApplicant(0, 0x10, "first"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (CountOf<NetH4ApplicantAck>(wire.Delivered(71)) != 2 || wire.host.GetApplicantCount() != 2 ||
+			    wire.host.GetStats().applicantsRegistered != 2) {
+				return Fail("a retransmitted application opened a second record");
+			}
+
+			// The control: a seat nobody dropped, the CPU slot and a seat that does not exist all take
+			// the SAME refusal, so applying reveals only what the roster already publishes.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const uint64_t controlAtMs = wire.nowMs;
+			if (!wire.SendRaw(81, MakeApplicant(1, 0x20, "live"), &error) ||
+			    !wire.SendRaw(82, MakeApplicant(2, 0x21, "cpu"), &error) ||
+			    !wire.SendRaw(83, MakeApplicant(9, 0x22, "absent"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			for (NetPeerId connection : {81, 82, 83}) {
+				if (CountOf<NetH4ApplicantAck>(wire.Delivered(connection)) != 0) {
+					return Fail("a seat that cannot be reassigned acknowledged an applicant");
+				}
+			}
+			wire.nowMs = controlAtMs + NetReconnectAdmission::c_DenialReleaseMs;
+			wire.DrainHostOutbound();
+			const NetJoinRejected* reference = nullptr;
+			for (NetPeerId connection : {81, 82, 83}) {
+				const NetJoinRejected* refusal = LastOf<NetJoinRejected>(wire.Delivered(connection));
+				if (refusal == nullptr) {
+					return Fail("a refused applicant heard nothing at all");
+				}
+				if (reference == nullptr) {
+					reference = refusal;
+				} else if (!(*refusal == *reference)) {
+					return Fail("two refused applications differ on the wire");
+				}
+			}
+
+			// The records expire on P2's horizon, exactly like a provisional seat, and take nothing
+			// with them.
+			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
+			wire.host.Tick(wire.nowMs);
+			if (wire.host.GetApplicantCount() != 0 || wire.host.GetStats().applicantsExpired != 2) {
+				return Fail("the applicant records did not expire on the P2 horizon");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("expiring an application touched the seat");
+			}
+			return 0;
+		}
+
+		// §9b: the substitution wire transaction - approval, provisional ticket, durable ack, the
+		// seat-generation CAS and a replayable commit result - plus the ack-lost and
+		// commit-result-lost windows and a delayed duplicate.
+		int TestSubstitutionTransaction() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "subst-holder", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat to substitute into: " + error);
+			}
+			wire.ClearDelivered();
+
+			Endpoint substitute;
+			substitute.connection = 91;
+			ConfigureEndpoint(substitute, "substitute", &unixNow);
+			wire.Add(&substitute);
+			if (!substitute.client.BeginApplication(0, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the application did not settle: " + error);
+			}
+			if (substitute.client.GetState() != NetH4ClientState::Applied) {
+				return Fail(std::string("the applicant did not settle on the host's list: ") + NetReconnectClientStateName(substitute.client.GetState()));
+			}
+			if (substitute.store.HasRecord()) {
+				return Fail("an applicant was given a ticket before the host approved anything");
+			}
+
+			// The host approves. The credential is handed out but NOT installed, which is exactly what
+			// makes the first COMMIT win rather than the first approval.
+			if (wire.host.SubstituteApplicant(0, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok) {
+				return Fail("the host could not approve the applicant");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("the approval installed a credential before the substitute committed");
+			}
+			if (!wire.host.HasSubstitution(0) || !wire.host.GetSeatStatuses()[0].substituting) {
+				return Fail("the approval is not visible as a substitution in flight");
+			}
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			if (substitute.client.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the substitute did not commit: ") + NetReconnectClientStateName(substitute.client.GetState()));
+			}
+			if (CountOf<NetH4SubstitutionOffer>(wire.Delivered(substitute.connection)) != 1) {
+				return Fail("the substitute did not get exactly one provisional ticket");
+			}
+			if (!substitute.store.HasRecord()) {
+				return Fail("the substitute committed without a durable ticket");
+			}
+			if (substitute.client.GetAssignedPeerId() != MakeSeatTable()[0].peerId || substitute.client.GetIncarnation() != 1) {
+				return Fail("the substitute did not take the seat's own peer id on a fresh incarnation");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration + 1) {
+				return Fail("the commit did not install the substitute's holder generation");
+			}
+			if (wire.host.GetStats().substitutionsCommitted != 1 || wire.host.HasSubstitution(0)) {
+				return Fail("the committed transaction did not close out");
+			}
+			NetPeerId seatHolder = c_InvalidNetPeerId;
+			uint32_t generation = 0;
+			uint32_t incarnation = 0;
+			if (!wire.host.GetSeatHolder(0, seatHolder, generation, incarnation) || seatHolder != substitute.connection ||
+			    generation != record.holderGeneration + 1 || incarnation != 1) {
+				return Fail("the seat did not change hands exactly once");
+			}
+			if (wire.host.GetApplicantCount() != 0) {
+				return Fail("the committed substitute stayed on the applicant list");
+			}
+
+			// Commit result lost: a re-presented ack replays the success it already earned, even
+			// carrying a mac that would never verify - the cache answers before anything is checked.
+			const NetH4JoinCommitted* committed = LastOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection));
+			if (committed == nullptr) {
+				return Fail("no commit reached the substitute");
+			}
+			const NetH4JoinCommitted firstCommit = *committed;
+			const uint32_t replaysBefore = wire.host.GetStats().replayedResults;
+			NetH4SubstitutionAck duplicate;
+			duplicate.txId = firstCommit.txId;
+			duplicate.stableSeat = 0;
+			duplicate.holderGeneration = firstCommit.holderGeneration;
+			duplicate.clientNonce = Ramp<16>(0x33);
+			duplicate.mac = Ramp<32>(0x44);
+			duplicate.stored = true;
+			if (!wire.SendRaw(substitute.connection, duplicate, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.GetStats().replayedResults != replaysBefore + 1) {
+				return Fail("a re-presented ack did not replay the cached commit");
+			}
+			const NetH4JoinCommitted* replay = LastOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection));
+			if (replay == nullptr || !(*replay == firstCommit)) {
+				return Fail("the replayed commit was not byte-identical to the first");
+			}
+			if (wire.host.GetStats().substitutionsCommitted != 1 || wire.host.GetStats().incarnationsBound != 2) {
+				return Fail("a duplicate ack ran a second substitution");
+			}
+
+			// A delayed duplicate arriving much later, still inside P17's window, replays too.
+			wire.nowMs += NetReconnectTxCache::c_RetentionMs / 2;
+			if (!wire.SendRaw(substitute.connection, duplicate, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetH4JoinCommitted* delayed = LastOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection));
+			if (delayed == nullptr || !(*delayed == firstCommit) || wire.host.GetStats().substitutionsCommitted != 1) {
+				return Fail("a delayed duplicate ack was not answered from the cache");
+			}
+
+			// The credential the substitute persisted really is the seat's: it reclaims like any holder.
+			NetH4TicketRecord substituteRecord;
+			if (substitute.store.Load(unixNow, substituteRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail("the substitute's ticket did not load: " + error);
+			}
+			if (substituteRecord.stableSeat != 0 || substituteRecord.holderGeneration != record.holderGeneration + 1) {
+				return Fail("the substitute's record names the wrong seat or generation");
+			}
+			wire.host.NotifyDisconnect(substitute.connection, 200);
+			substitute.connected = false;
+			wire.Remove(substitute.connection);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			Endpoint returning;
+			returning.connection = 92;
+			ConfigureEndpoint(returning, "substitute", &unixNow);
+			wire.Add(&returning);
+			if (!returning.client.BeginReclaim(substituteRecord, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the substitute's own reclaim did not settle: " + error);
+			}
+			if (returning.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the substitute could not reclaim the seat it was given");
+			}
+			return 0;
+		}
+
+		// §9b's ack-lost window: the offer retransmits on P3's ladder, gives up inside its budget, and
+		// an approval nobody answers expires without ever having touched the seat.
+		int TestSubstitutionAckLost() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "acklost", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat: " + error);
+			}
+			wire.ClearDelivered();
+			// A raw connection, so nothing ever answers the offer.
+			if (!wire.SendRaw(95, MakeApplicant(0, 0x30, "silent"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.SubstituteApplicant(0, 95, wire.nowMs) != NetH4ModerationResult::Ok) {
+				return Fail("the host could not approve the silent applicant");
+			}
+			wire.DrainHostOutbound();
+			if (CountOf<NetH4SubstitutionOffer>(wire.Delivered(95)) != 1) {
+				return Fail("the approval did not send exactly one offer");
+			}
+			for (uint32_t attempt = 1; attempt <= NetReconnectHost::c_MaxRetransmits; ++attempt) {
+				wire.nowMs += NetReconnectHost::c_RetransmitIntervalMs;
+				wire.DrainHostOutbound();
+				if (CountOf<NetH4SubstitutionOffer>(wire.Delivered(95)) != 1U + attempt) {
+					return Fail("the offer ladder did not retransmit at P3's cadence");
+				}
+			}
+			wire.nowMs += NetReconnectHost::c_RetransmitIntervalMs;
+			wire.DrainHostOutbound();
+			if (CountOf<NetH4SubstitutionOffer>(wire.Delivered(95)) != 1U + NetReconnectHost::c_MaxRetransmits) {
+				return Fail("the offer ladder did not stop at its budget");
+			}
+			if (wire.host.GetStats().substitutionOfferRetransmits != NetReconnectHost::c_MaxRetransmits) {
+				return Fail("the retransmits were not counted");
+			}
+
+			// P2 closes the window: the record goes, the substitute is told, and the seat is untouched.
+			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs;
+			wire.DrainHostOutbound();
+			if (wire.host.HasSubstitution(0)) {
+				return Fail("an unacknowledged approval outlived its window");
+			}
+			if (CountOf<NetJoinRejected>(wire.Delivered(95)) != 1) {
+				return Fail("the silent substitute was never told the approval lapsed");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("an unacknowledged approval changed the seat's credential");
+			}
+			NetPeerId seatHolder = 12345;
+			uint32_t generation = 0;
+			uint32_t incarnation = 0;
+			if (!wire.host.GetSeatHolder(0, seatHolder, generation, incarnation) || seatHolder != c_InvalidNetPeerId ||
+			    generation != record.holderGeneration) {
+				return Fail("an unacknowledged approval left the seat somewhere else");
+			}
+
+			// The original holder still reclaims: the seat was never released for the substitute.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			Endpoint returner;
+			returner.connection = 96;
+			ConfigureEndpoint(returner, "acklost", &unixNow);
+			wire.Add(&returner);
+			if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the holder's reclaim did not settle: " + error);
+			}
+			if (returner.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the original holder lost its seat to an approval that never committed");
+			}
+			return 0;
+		}
+
+		// §9b's cleanup rules: host-cancel, substitute-disappears-before-ack and a persistence failure
+		// each invalidate AND remove the provisional record, and none of them releases the seat first.
+		int TestSubstitutionCleanup() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "cleanup", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat: " + error);
+			}
+			wire.ClearDelivered();
+
+			// Host cancel.
+			if (!wire.SendRaw(101, MakeApplicant(0, 0x40, "cancelled"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.SubstituteApplicant(0, 101, wire.nowMs) != NetH4ModerationResult::Ok) {
+				return Fail("the host could not approve the applicant");
+			}
+			wire.DrainHostOutbound();
+			const NetH4SubstitutionOffer* offer = LastOf<NetH4SubstitutionOffer>(wire.Delivered(101));
+			if (offer == nullptr) {
+				return Fail("no offer was delivered to cancel");
+			}
+			const NetH4SubstitutionOffer cancelled = *offer;
+			if (wire.host.SubstituteApplicant(0, 101, wire.nowMs) != NetH4ModerationResult::SubstitutionInFlight) {
+				return Fail("the host was allowed to approve a second substitution for one seat");
+			}
+			if (wire.host.CancelSubstitution(0, wire.nowMs) != NetH4ModerationResult::Ok) {
+				return Fail("the host could not withdraw its own approval");
+			}
+			if (wire.host.HasSubstitution(0)) {
+				return Fail("the cancelled approval was not removed");
+			}
+			wire.DrainHostOutbound();
+			if (CountOf<NetJoinRejected>(wire.Delivered(101)) != 1) {
+				return Fail("the substitute was not told the approval was withdrawn");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("a cancel changed the seat's credential");
+			}
+			if (wire.host.CancelSubstitution(0, wire.nowMs) != NetH4ModerationResult::NoSubstitutionPending) {
+				return Fail("cancelling twice did not say there was nothing pending");
+			}
+			// An ack already in flight replays the refusal instead of finding nothing and hearing
+			// nothing: the terminal result was cached before the record went.
+			NetH4SubstitutionAck late;
+			late.txId = cancelled.txId;
+			late.stableSeat = cancelled.stableSeat;
+			late.holderGeneration = cancelled.holderGeneration;
+			late.clientNonce = Ramp<16>(0x41);
+			late.mac = Ramp<32>(0x42);
+			late.stored = true;
+			if (!wire.SendRaw(101, late, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (CountOf<NetJoinRejected>(wire.Delivered(101)) != 2 || CountOf<NetH4JoinCommitted>(wire.Delivered(101)) != 0) {
+				return Fail("a late ack for a cancelled approval was not answered from the cache");
+			}
+			if (wire.host.GetStats().substitutionsCommitted != 0) {
+				return Fail("a cancelled substitution committed anyway");
+			}
+
+			// Substitute disappears before its ack.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(111, MakeApplicant(0, 0x43, "vanishing"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.SubstituteApplicant(0, 111, wire.nowMs) != NetH4ModerationResult::Ok) {
+				return Fail("the host could not approve the second applicant");
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.NotifyDisconnect(111, 300) != NetH4DisconnectOutcome::Unknown) {
+				return Fail("an applicant's disconnect was adjudicated as a seat loss");
+			}
+			if (wire.host.HasSubstitution(0)) {
+				return Fail("a vanished substitute left its approval behind");
+			}
+			// Its application goes with it. The one the host merely CANCELLED stays: that player is
+			// still asking, and the host may pick it next.
+			const std::vector<NetH4ApplicantView> pending = wire.host.GetModerationView()[0].applicants;
+			if (std::any_of(pending.begin(), pending.end(), [](const NetH4ApplicantView& applicant) { return applicant.connection == 111; })) {
+				return Fail("a vanished substitute left its application behind");
+			}
+			if (pending.size() != 1 || pending.front().connection != 101 || pending.front().approved) {
+				return Fail("the cancelled applicant did not stay on the list, unapproved");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("a vanished substitute took the seat's credential with it");
+			}
+
+			// Persistence failure blocks a substitution exactly as it blocks a first join.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(121, MakeApplicant(0, 0x44, "unstorable"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.SubstituteApplicant(0, 121, wire.nowMs) != NetH4ModerationResult::Ok) {
+				return Fail("the host could not approve the third applicant");
+			}
+			wire.DrainHostOutbound();
+			const NetH4SubstitutionOffer* unstorable = LastOf<NetH4SubstitutionOffer>(wire.Delivered(121));
+			if (unstorable == nullptr) {
+				return Fail("no offer reached the third applicant");
+			}
+			NetH4SubstitutionAck refused;
+			refused.txId = unstorable->txId;
+			refused.stableSeat = unstorable->stableSeat;
+			refused.holderGeneration = unstorable->holderGeneration;
+			refused.stored = false;
+			if (!wire.SendRaw(121, refused, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			if (wire.host.HasSubstitution(0) || wire.host.GetStats().substitutionsCommitted != 0) {
+				return Fail("a substitute that could not persist its ticket still took the seat");
+			}
+			if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+				return Fail("a failed persistence still moved the seat's credential");
+			}
+
+			// After all of it the original holder still reclaims: the seat was never released.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			Endpoint returner;
+			returner.connection = 131;
+			ConfigureEndpoint(returner, "cleanup", &unixNow);
+			wire.Add(&returner);
+			if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the holder's reclaim did not settle: " + error);
+			}
+			if (returner.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the original holder lost its seat to a cleaned-up substitution");
+			}
+			return 0;
+		}
+
+		// §9b: valid returner versus a simultaneous host reassignment, BOTH orders. The first COMMIT
+		// wins; the loser is told precisely why, and only a loser that proves possession is told at all.
+		int TestSubstitutionRaceBothOrders() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+
+			// Order one: the returner commits while an approval is outstanding.
+			{
+				Wire wire;
+				ConfigureWire(wire);
+				Endpoint holder;
+				holder.connection = 61;
+				ConfigureEndpoint(holder, "race-a", &unixNow);
+				wire.Add(&holder);
+				NetH4TicketRecord record;
+				if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+					return Fail("could not drop a seat: " + error);
+				}
+				wire.ClearDelivered();
+				Endpoint substitute;
+				substitute.connection = 141;
+				ConfigureEndpoint(substitute, "race-a-substitute", &unixNow);
+				wire.Add(&substitute);
+				if (!substitute.client.BeginApplication(0, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("the application did not settle: " + error);
+				}
+				if (wire.host.SubstituteApplicant(0, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok) {
+					return Fail("the host could not approve the applicant");
+				}
+				// The substitute persists its ticket and answers - and the answer is LOST in flight,
+				// which is the whole point: it is a genuine, correctly signed ack that arrives late.
+				std::vector<NetPayload> heldReplies;
+				if (!wire.Step(substitute, heldReplies, &error)) {
+					return Fail("the approval did not reach the substitute: " + error);
+				}
+				if (heldReplies.size() != 1 || !std::holds_alternative<NetH4SubstitutionAck>(heldReplies.front())) {
+					return Fail("the approved substitute did not produce exactly one ack to lose");
+				}
+				const NetPayload lostAck = heldReplies.front();
+				if (substitute.client.GetState() != NetH4ClientState::Substituting || !substitute.store.HasRecord()) {
+					return Fail("the substitute did not persist its provisional ticket before answering");
+				}
+				// Out of the pump, so its retransmits cannot deliver the ack behind the test's back.
+				wire.Remove(substitute.connection);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				Endpoint returner;
+				returner.connection = 142;
+				ConfigureEndpoint(returner, "race-a", &unixNow);
+				wire.Add(&returner);
+				if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("the reclaim did not settle: " + error);
+				}
+				if (returner.client.GetState() != NetH4ClientState::Joined) {
+					return Fail("the returner did not win by committing first");
+				}
+				if (wire.host.HasSubstitution(0)) {
+					return Fail("the losing approval was not invalidated and removed");
+				}
+				if (wire.host.GetStats().substitutionsSuperseded != 1) {
+					return Fail("the superseded approval was not recorded as such");
+				}
+				if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+					return Fail("the loser's generation was installed anyway");
+				}
+				// The substitute's correctly signed ack lands after the race is over. It is answered
+				// precisely: it is host-approved and holds host-issued material, so there is nothing
+				// here it did not already know.
+				if (!wire.SendRaw(substitute.connection, lostAck, &error)) {
+					return Fail(error);
+				}
+				wire.DrainHostOutbound();
+				if (wire.host.GetStats().substitutionAckFailures != 0) {
+					return Fail("the losing ack was read as a bad proof rather than a lost race");
+				}
+				const NetJoinRejected* refusal = LastOf<NetJoinRejected>(wire.Delivered(substitute.connection));
+				if (refusal == nullptr || refusal->mismatchKey != "substitution" ||
+				    refusal->expected != std::string(NetH4DenialReasonName(NetH4DenialReason::SubstitutionSuperseded))) {
+					return Fail("the losing substitute was not told precisely why it lost");
+				}
+				if (CountOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection)) != 0) {
+					return Fail("the losing substitute was committed anyway");
+				}
+				if (wire.registry.GetActiveGeneration(0) != record.holderGeneration) {
+					return Fail("the losing substitute's credential was installed after it lost");
+				}
+				NetPeerId seatHolder = c_InvalidNetPeerId;
+				uint32_t generation = 0;
+				uint32_t incarnation = 0;
+				if (!wire.host.GetSeatHolder(0, seatHolder, generation, incarnation) || seatHolder != returner.connection) {
+					return Fail("the seat did not end up with the winner");
+				}
+			}
+
+			// Order two: the substitute commits first, and the original holder comes back afterwards.
+			{
+				Wire wire;
+				ConfigureWire(wire);
+				Endpoint holder;
+				holder.connection = 61;
+				ConfigureEndpoint(holder, "race-b-holder", &unixNow);
+				wire.Add(&holder);
+				NetH4TicketRecord record;
+				if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+					return Fail("could not drop a seat: " + error);
+				}
+				wire.ClearDelivered();
+				Endpoint substitute;
+				substitute.connection = 151;
+				ConfigureEndpoint(substitute, "race-b-substitute", &unixNow);
+				wire.Add(&substitute);
+				if (!substitute.client.BeginApplication(0, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("the application did not settle: " + error);
+				}
+				if (wire.host.SubstituteApplicant(0, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok ||
+				    !wire.Pump(&error)) {
+					return Fail("the substitution did not settle: " + error);
+				}
+				if (substitute.client.GetState() != NetH4ClientState::Joined) {
+					return Fail("the substitute did not win by committing first");
+				}
+
+				// The ex-holder returns. Its generation is superseded, so it gets a real challenge -
+				// indistinguishable from a live seat - and, having proved it, is told what happened.
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				const uint64_t reclaimAtMs = wire.nowMs;
+				Endpoint exHolder;
+				exHolder.connection = 152;
+				ConfigureEndpoint(exHolder, "race-b-holder", &unixNow);
+				wire.Add(&exHolder);
+				if (!exHolder.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("the late reclaim did not settle: " + error);
+				}
+				if (exHolder.client.GetState() == NetH4ClientState::Joined) {
+					return Fail("a superseded ticket took the seat back");
+				}
+				if (CountOf<NetH4Challenge>(wire.Delivered(exHolder.connection)) != 1) {
+					return Fail("a superseded generation did not get the same challenge a live one gets");
+				}
+				if (CountOf<NetJoinRejected>(wire.Delivered(exHolder.connection)) != 0) {
+					return Fail("the refusal arrived before its release time");
+				}
+				wire.nowMs = reclaimAtMs + NetReconnectAdmission::c_DenialReleaseMs;
+				wire.DrainHostOutbound();
+				const NetJoinRejected* told = LastOf<NetJoinRejected>(wire.Delivered(exHolder.connection));
+				if (told == nullptr || told->rejectReason != NetRejectReason::SeatReassigned) {
+					return Fail(std::string("the superseded holder was not told the seat was reassigned: ") +
+					            (told == nullptr ? "nothing was delivered" : NetProtocol::RejectReasonName(told->rejectReason)) +
+					            " synthetic=" + std::to_string(wire.host.GetAdmission().GetSyntheticChallenges()) +
+					            " retired=" + std::to_string(wire.registry.HasRetiredGeneration(0, record.holderGeneration)) +
+					            " active=" + std::to_string(wire.registry.GetActiveGeneration(0)) +
+					            " client=" + NetReconnectClientStateName(exHolder.client.GetState()));
+				}
+				if (wire.host.GetStats().reassignedReclaimsRefused != 1) {
+					return Fail("the precise refusal was not recorded");
+				}
+				NetPeerId seatHolder = c_InvalidNetPeerId;
+				uint32_t generation = 0;
+				uint32_t incarnation = 0;
+				if (!wire.host.GetSeatHolder(0, seatHolder, generation, incarnation) || seatHolder != substitute.connection ||
+				    generation != record.holderGeneration + 1) {
+					return Fail("the late reclaim disturbed the seat it lost");
+				}
+
+				// The oracle control: the SAME superseded seat and generation, without the credential,
+				// reads exactly like a seat that never existed.
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				const uint64_t probeAtMs = wire.nowMs;
+				NetH4Reclaim probe;
+				probe.txId = Ramp<16>(0x60);
+				probe.epoch = record.epoch;
+				probe.stableSeat = 0;
+				probe.holderGeneration = record.holderGeneration;
+				probe.identity = MakeIdentity();
+				probe.displayName = "probe";
+				NetH4Reclaim unknown = probe;
+				unknown.txId = Ramp<16>(0x61);
+				unknown.stableSeat = 9;
+				if (!wire.SendRaw(161, probe, &error) || !wire.SendRaw(162, unknown, &error)) {
+					return Fail(error);
+				}
+				wire.DrainHostOutbound();
+				if (CountOf<NetH4Challenge>(wire.Delivered(161)) != 1 || CountOf<NetH4Challenge>(wire.Delivered(162)) != 1) {
+					return Fail("the two probes did not each get exactly one challenge");
+				}
+				NetH4Proof badProof;
+				badProof.txId = probe.txId;
+				badProof.epoch = record.epoch;
+				badProof.stableSeat = 0;
+				badProof.holderGeneration = record.holderGeneration;
+				badProof.clientNonce = Ramp<16>(0x62);
+				badProof.mac = Ramp<32>(0x63);
+				if (!wire.SendRaw(161, badProof, &error)) {
+					return Fail(error);
+				}
+				wire.nowMs = probeAtMs + NetReconnectAdmission::c_DenialReleaseMs;
+				wire.DrainHostOutbound();
+				const NetJoinRejected* probeRefusal = LastOf<NetJoinRejected>(wire.Delivered(161));
+				const NetJoinRejected* unknownRefusal = LastOf<NetJoinRejected>(wire.Delivered(162));
+				if (probeRefusal == nullptr || unknownRefusal == nullptr) {
+					return Fail("a probe heard nothing at all");
+				}
+				if (!(*probeRefusal == *unknownRefusal)) {
+					return Fail("a superseded seat answered without the credential reads differently from an unknown one");
+				}
+				if (wire.host.GetStats().reassignedReclaimsRefused != 1) {
+					return Fail("a claimant that proved nothing was told the seat was reassigned");
+				}
+
+				// Past P2 the retired credential is gone, so nothing can be answered precisely again.
+				wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs;
+				wire.host.Tick(wire.nowMs);
+				if (wire.registry.HasRetiredGeneration(0, record.holderGeneration)) {
+					return Fail("the retired credential outlived the window it is kept for");
+				}
+			}
+			return 0;
+		}
+
+		// §8 for a substitute - it receives the ledgered ownership from resumed tick 1 - and the
+		// moderation verbs' own answers.
+		int TestSubstituteOwnershipAndModeration() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			g_Census = {
+			    {101, 1, 2, true},
+			    {102, 1, 2, true},
+			    {103, 1, 2, true},
+			    {201, 2, 3, true},
+			};
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			wire.host.SetDropOwnershipSource(&CensusSource, nullptr);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "subst-ledger", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat: " + error);
+			}
+			wire.ClearDelivered();
+
+			// The moderation verbs answer for themselves before anything is approved.
+			if (wire.host.WaitForSeat(0) != NetH4ModerationResult::Ok) {
+				return Fail("waiting for a dropped seat was refused");
+			}
+			if (wire.host.WaitForSeat(9) != NetH4ModerationResult::UnknownSeat ||
+			    wire.host.WaitForSeat(1) != NetH4ModerationResult::SeatNotSubstitutable) {
+				return Fail("the wait verb did not answer for a seat it cannot moderate");
+			}
+			if (wire.host.SubstituteApplicant(9, 171, wire.nowMs) != NetH4ModerationResult::UnknownSeat ||
+			    wire.host.SubstituteApplicant(1, 171, wire.nowMs) != NetH4ModerationResult::SeatNotSubstitutable ||
+			    wire.host.SubstituteApplicant(0, 171, wire.nowMs) != NetH4ModerationResult::UnknownApplicant ||
+			    wire.host.CancelSubstitution(0, wire.nowMs) != NetH4ModerationResult::NoSubstitutionPending) {
+				return Fail("a moderation verb accepted something it should have named");
+			}
+
+			// One actor dies and one changes team while the seat is empty; neither comes back.
+			g_Census = {
+			    {101, 1, 0, true},
+			    {102, 1, 0, false},
+			    {103, 2, 0, true},
+			    {201, 2, 3, true},
+			};
+			Endpoint substitute;
+			substitute.connection = 171;
+			ConfigureEndpoint(substitute, "subst-ledger-in", &unixNow);
+			wire.Add(&substitute);
+			if (!substitute.client.BeginApplication(0, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the application did not settle: " + error);
+			}
+			if (wire.host.SubstituteApplicant(0, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok || !wire.Pump(&error)) {
+				return Fail("the substitution did not settle: " + error);
+			}
+			if (substitute.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the substitute did not commit");
+			}
+			const std::vector<NetGameReseat> reseats = wire.host.TakePendingReseats();
+			if (reseats.size() != 1) {
+				return Fail("the committed substitution did not produce exactly one reseat");
+			}
+			if (reseats.front().team != 1 || reseats.front().newOwnerPeerId != MakeSeatTable()[0].lockstepPeerId ||
+			    reseats.front().newOwnerPeerId == MakeSeatTable()[0].peerId) {
+				return Fail("the substitute's reseat did not address the seat it took");
+			}
+			if (reseats.front().actorUIDs != std::vector<int64_t>{101}) {
+				return Fail("the substitute did not receive exactly the surviving ledgered actors");
+			}
+
+			// The control: a seat with no ledger entry earns a substitute no authority at all.
+			wire.host.SetLiveMatch(true);
+			Endpoint second;
+			second.connection = 181;
+			ConfigureEndpoint(second, "subst-ledger-none", &unixNow);
+			wire.Add(&second);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			// Seat 1 was never held, so a clean leave is what makes it empty rather than a drop.
+			wire.host.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			Endpoint leaver;
+			leaver.connection = 182;
+			ConfigureEndpoint(leaver, "subst-leaver", &unixNow);
+			wire.Add(&leaver);
+			wire.host.SetLiveMatch(false);
+			if (!leaver.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the second seat's join did not settle: " + error);
+			}
+			if (leaver.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the second seat was never taken");
+			}
+			wire.host.SetLiveMatch(true);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the clean leave did not settle: " + error);
+			}
+			if (!wire.host.IsSeatClosed(1)) {
+				return Fail("a clean mid-match leave did not close the seat");
+			}
+			if (!second.client.BeginApplication(1, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the application for the vacated seat did not settle: " + error);
+			}
+			if (second.client.GetState() != NetH4ClientState::Applied) {
+				return Fail("a seat left empty by a clean leave refused an applicant");
+			}
+			if (wire.host.SubstituteApplicant(1, second.connection, wire.nowMs) != NetH4ModerationResult::Ok || !wire.Pump(&error)) {
+				return Fail("the second substitution did not settle: " + error);
+			}
+			if (second.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("a substitute could not take a seat somebody cleanly left");
+			}
+			if (!wire.host.TakePendingReseats().empty()) {
+				return Fail("a seat with no ledger entry handed a substitute somebody's actors");
+			}
+			return 0;
+		}
 	} // namespace
+
+		// A lobby member whose process is gone sends nothing and closes nothing: the host reaps it on
+		// its own heartbeat timeout. That close is ours, so no transport event ever reaches the
+		// admission plane, and before this the seat stayed committed to a peer that no longer existed -
+		// every replacement was then refused a full lobby, which is what the 4-peer drop lane measured.
+		int TestReapedLobbySeatReturnsToThePool() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42160;
+			LoopbackTransport hostTransport;
+			LoopbackTransport firstTransport;
+			LoopbackTransport secondTransport;
+			NetSession host;
+			NetSession first;
+			NetSession second;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			// One human seat, so the replacement can only be admitted if the reaped seat came back.
+			admission.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore firstStore;
+			firstStore.SetPath(StorePath("reap-first"));
+			NetReconnectClient firstClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			firstClient.Configure(&firstStore, MakeIdentity(), "Player");
+			firstClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			firstClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			first.SetReconnectClient(&firstClient);
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 2;
+			// The transport says nothing about a close we make ourselves, which is how GNS behaved: the
+			// seat has to come back because the session hands the peer over, not because the wire did.
+			LoopbackTransportConfig silentClose;
+			silentClose.silentLocalDisconnect = true;
+			hostTransport.SetFaultConfig(silentClose);
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !first.StartClient(firstTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the first member: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				first.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				firstTransport.AdvanceTimeMs(10);
+			}
+			if (firstClient.GetState() != NetH4ClientState::Joined || host.GetReadyPeerCount() != 1) {
+				return Fail("the first member never committed the only seat");
+			}
+
+			// Its process dies: it stops answering and it never closes the socket. Only the host runs.
+			const uint64_t silentFrom = nowMs;
+			for (const uint64_t until = silentFrom + 2 * hostConfig.timeoutMs; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+			}
+			if (host.GetStats().timeouts == 0) {
+				return Fail("the host never reaped the silent member");
+			}
+			const std::vector<NetH4SeatStatus> seats = admission.GetSeatStatuses();
+			const auto reaped = std::find_if(seats.begin(), seats.end(), [](const NetH4SeatStatus& seat) { return seat.stableSeat == 0; });
+			if (reaped == seats.end() || reaped->committed) {
+				return Fail("the reaped member's seat is still committed to a peer that is gone");
+			}
+			// It has to be the reap that released it, not a later sweep: the session hands the peer over.
+			if (admission.GetStats().seatsReleased != 1 || admission.GetStats().seatsClosedByLeave != 0) {
+				return Fail("the seat came back by some route other than the reap: released=" +
+				            std::to_string(admission.GetStats().seatsReleased) +
+				            " byLeave=" + std::to_string(admission.GetStats().seatsClosedByLeave));
+			}
+
+			// The replacement: it can only be admitted onto the one seat the reap released.
+			NetReconnectTicketStore secondStore;
+			secondStore.SetPath(StorePath("reap-second"));
+			NetReconnectClient secondClient;
+			secondClient.Configure(&secondStore, MakeIdentity(), "Replacement");
+			secondClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			secondClient.SetHostContext("loopback", MakeHash(5));
+			second.SetReconnectClient(&secondClient);
+			if (!second.StartClient(secondTransport, "loopback", MakeSessionConfig(port, 303, "Replacement"), &error)) {
+				return Fail("the replacement could not connect: " + error);
+			}
+			for (const uint64_t until = nowMs + 1200; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				second.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				secondTransport.AdvanceTimeMs(10);
+			}
+			if (secondClient.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the replacement was refused the reaped seat: ") + second.BuildRejectText());
+			}
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("the host did not end up with exactly the replacement seated");
+			}
+			return 0;
+		}
 
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
@@ -2981,6 +3965,9 @@ namespace RTE {
 		if (const int result = TestSessionWiring(); result != 0) {
 			return result;
 		}
+		if (const int result = TestReapedLobbySeatReturnsToThePool(); result != 0) {
+			return result;
+		}
 		if (const int result = TestSessionEndIsTheOnlySignal(); result != 0) {
 			return result;
 		}
@@ -3015,6 +4002,24 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRecoveryAppliesOnlyAfterAMatch(); result != 0) {
+			return result;
+		}
+		if (const int result = TestApplicantsAndBounds(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSubstitutionTransaction(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSubstitutionAckLost(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSubstitutionCleanup(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSubstitutionRaceBothOrders(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSubstituteOwnershipAndModeration(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

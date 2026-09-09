@@ -18,6 +18,9 @@ namespace RTE {
 		// Every send to this peer is refused, as a full reliable send buffer does: the message is
 		// never queued, so on an ordered lane the receiver has a gap it can never fill.
 		NetPeerId refuseSendsToPeer = c_InvalidNetPeerId;
+		// A local Disconnect tells us nothing back, the way GNS behaved before it was made to report
+		// its own closes: state keyed on that peer only gets cleaned up if the caller does it itself.
+		bool silentLocalDisconnect = false;
 	};
 
 	class LoopbackTransport : public INetTransport {

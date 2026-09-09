@@ -526,7 +526,7 @@ namespace RTE {
 		}
 		if (std::holds_alternative<NetDisconnect>(message.payload)) {
 			peer->state = NetSessionState::Closed;
-			m_Transport->Disconnect(peerId, "peer disconnected");
+			DropPeerTransport(peerId, "peer disconnected");
 			RefreshHostState();
 			return;
 		}
@@ -620,7 +620,7 @@ namespace RTE {
 		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
 			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
 			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
-			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs)) {
+			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs, rejected->rejectReason)) {
 				FlushReconnectOutbound();
 				return;
 			}
@@ -702,7 +702,7 @@ namespace RTE {
 						RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "client hello timeout");
 					} else {
 						Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::Timeout), "heartbeat timeout"});
-						m_Transport->Disconnect(peer.transportPeerId, "heartbeat timeout");
+						DropPeerTransport(peer.transportPeerId, "heartbeat timeout");
 						peer.state = NetSessionState::Failed;
 						RecordReject(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "heartbeat timeout");
 						RefreshHostState();
@@ -719,6 +719,16 @@ namespace RTE {
 		}
 	}
 
+	void NetSession::DropPeerTransport(NetPeerId peerId, const std::string& reason) {
+		if (m_Role == NetSessionRole::Host && m_ReconnectHost) {
+			// Fenced connections are handled inside: a superseded incarnation keeps the seat.
+			(void)m_ReconnectHost->NotifyDisconnect(peerId, m_LockstepFrame);
+		}
+		if (m_Transport) {
+			m_Transport->Disconnect(peerId, reason);
+		}
+	}
+
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
 		peer.state = NetSessionState::Rejected;
@@ -730,7 +740,7 @@ namespace RTE {
 		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
 		if (m_Transport) {
 			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
-			m_Transport->Disconnect(peerId, BuildRejectText());
+			DropPeerTransport(peerId, BuildRejectText());
 		}
 	}
 
@@ -1038,6 +1048,18 @@ namespace RTE {
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
+				{"applicants_registered", stats.applicantsRegistered},
+				{"applicants_refused", stats.applicantsRefused},
+				{"applicants_expired", stats.applicantsExpired},
+				{"applicants_displaced", stats.applicantsDisplaced},
+				{"substitution_offers_sent", stats.substitutionOffersSent},
+				{"substitution_offer_retransmits", stats.substitutionOfferRetransmits},
+				{"substitutions_committed", stats.substitutionsCommitted},
+				{"substitutions_cancelled", stats.substitutionsCancelled},
+				{"substitutions_superseded", stats.substitutionsSuperseded},
+				{"substitution_ack_failures", stats.substitutionAckFailures},
+				{"reassigned_reclaims_refused", stats.reassignedReclaimsRefused},
+				{"pending_applicants", m_ReconnectHost->GetApplicantCount()},
 				{"outstanding_challenges", m_ReconnectHost->GetAdmission().GetOutstandingChallengeCount()},
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},

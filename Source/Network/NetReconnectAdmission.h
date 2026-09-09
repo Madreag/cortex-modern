@@ -17,7 +17,15 @@ namespace RTE {
 		ExpiredChallenge = 3,
 		RateLimited = 4,
 		ProviderUnavailable = 5,
+		// Phase B. The host records which of these it decided; the wire still cannot tell them apart
+		// unless the claimant proved possession first, which is the only case that carries its own text.
+		SeatNotSubstitutable = 6,
+		ApplicantBoundReached = 7,
+		SubstitutionSuperseded = 8,
+		SeatReassigned = 9,
 	};
+
+	const char* NetH4DenialReasonName(NetH4DenialReason reason);
 
 	struct NetH4Denial {
 		NetPeerId connection = c_InvalidNetPeerId;
@@ -25,6 +33,10 @@ namespace RTE {
 		NetH4DenialReason reason = NetH4DenialReason::UnknownSeat;
 		uint64_t issuedAtMs = 0;
 		uint64_t releaseAtMs = 0;
+		/// A refusal whose wording the claimant has earned by proving possession. It rides the same
+		/// release time as every other denial, so the schedule an observer can measure is unchanged.
+		bool precise = false;
+		NetPayload payload;
 	};
 
 	struct NetH4ChallengeRecord {
@@ -71,8 +83,9 @@ namespace RTE {
 		bool ConsumeChallenge(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs, NetH4ChallengeRecord& out);
 
 		/// Schedules the uniform denial. One pending denial per connection: a second refusal inside the
-		/// window joins the first rather than adding a reply.
-		void ScheduleDenial(NetPeerId connection, const NetAuthBytes16& txId, NetH4DenialReason reason, uint64_t nowMs);
+		/// window joins the first rather than adding a reply. A precise refusal replaces a uniform one
+		/// already pending on that connection but never moves its release time.
+		void ScheduleDenial(NetPeerId connection, const NetAuthBytes16& txId, NetH4DenialReason reason, uint64_t nowMs, const NetPayload* preciseRefusal = nullptr);
 
 		/// Collects the denials whose release time has arrived, oldest first.
 		std::vector<NetH4Denial> ReleaseDueDenials(uint64_t nowMs);

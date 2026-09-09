@@ -104,12 +104,35 @@ namespace RTE {
 		return true;
 	}
 
-	void NetReconnectAdmission::ScheduleDenial(NetPeerId connection, const NetAuthBytes16& txId, NetH4DenialReason reason, uint64_t nowMs) {
+	const char* NetH4DenialReasonName(NetH4DenialReason reason) {
+		switch (reason) {
+			case NetH4DenialReason::UnknownSeat: return "UnknownSeat";
+			case NetH4DenialReason::StaleEpoch: return "StaleEpoch";
+			case NetH4DenialReason::BadProof: return "BadProof";
+			case NetH4DenialReason::ExpiredChallenge: return "ExpiredChallenge";
+			case NetH4DenialReason::RateLimited: return "RateLimited";
+			case NetH4DenialReason::ProviderUnavailable: return "ProviderUnavailable";
+			case NetH4DenialReason::SeatNotSubstitutable: return "SeatNotSubstitutable";
+			case NetH4DenialReason::ApplicantBoundReached: return "ApplicantBoundReached";
+			case NetH4DenialReason::SubstitutionSuperseded: return "SubstitutionSuperseded";
+			case NetH4DenialReason::SeatReassigned: return "SeatReassigned";
+		}
+		return "Unknown";
+	}
+
+	void NetReconnectAdmission::ScheduleDenial(NetPeerId connection, const NetAuthBytes16& txId, NetH4DenialReason reason, uint64_t nowMs, const NetPayload* preciseRefusal) {
 		const auto pending = std::find_if(m_Denials.begin(), m_Denials.end(), [connection](const NetH4Denial& denial) {
 			return denial.connection == connection;
 		});
 		if (pending != m_Denials.end()) {
 			++m_CoalescedDenials;
+			// A refusal the claimant proved its way to says so, even when a uniform one got there
+			// first. The release time stays the one the first refusal set.
+			if (preciseRefusal != nullptr && !pending->precise) {
+				pending->reason = reason;
+				pending->precise = true;
+				pending->payload = *preciseRefusal;
+			}
 			return;
 		}
 		NetH4Denial denial;
@@ -118,6 +141,10 @@ namespace RTE {
 		denial.reason = reason;
 		denial.issuedAtMs = nowMs;
 		denial.releaseAtMs = nowMs + c_DenialReleaseMs;
+		if (preciseRefusal != nullptr) {
+			denial.precise = true;
+			denial.payload = *preciseRefusal;
+		}
 		m_Denials.push_back(denial);
 	}
 

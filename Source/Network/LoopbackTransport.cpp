@@ -214,7 +214,9 @@ namespace RTE {
 				client->ScheduleEvent({NetTransportEventType::PeerDisconnected, clientPeerId, NetTransportLane::ControlReliable, {}, reason}, 0, false);
 			}
 		}
-		ScheduleEvent({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason}, 0, false);
+		if (!m_Config.silentLocalDisconnect) {
+			ScheduleEvent({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason}, 0, false);
+		}
 	}
 
 	void LoopbackTransport::RemoveClientConnection(const std::string& reason, bool notifyHost) {
