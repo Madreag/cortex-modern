@@ -1395,6 +1395,30 @@ static void CheckRestoredDeepState() {
 	}
 }
 
+// Every capture takes the settle first, as CaptureWorld and SetAsideWorld do: a graph taken in front of it names the objects it sweeps.
+static void SettleBeforeCapture() {
+	g_LuaMan.CollectGarbageForCheckpoint();
+}
+
+// The probe's comparison capture; CheckRestoredScriptGraphs holds the result against the restored world.
+static bool CaptureProbeScriptGraphs() {
+	SettleBeforeCapture();
+	std::vector<std::string> problems;
+	if (!g_MovableMan.SerializeScriptGraphs(s_rbProbeLuaGraphsAtCapture, problems)) {
+		for (const std::string& problem: problems) {
+			std::cout << "[rbprobe] FAIL: script graph capture refused: " << problem << std::endl;
+		}
+		return false;
+	}
+	return true;
+}
+
+// The contract audit's observation is a capture too.
+static bool ObserveScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) {
+	SettleBeforeCapture();
+	return g_MovableMan.SerializeScriptGraphs(graphs, problems);
+}
+
 // The restored Lua state must serialize exactly as the captured one did: the graph text is canonical.
 static void CheckRestoredScriptGraphs() {
 	std::vector<std::string> restored;
@@ -1690,6 +1714,66 @@ static bool LuaIdentityPreserved(const std::string& atCapture, const std::string
 	return true;
 }
 
+// The harness's own captures, checked the way the engine's are: a root that has lost its last reference
+// must not survive into a capture the settle is about to sweep.
+static bool RunHarnessCaptureSelfTest() {
+	// A Lua-owned scripted object with its last reference dropped and nothing collected yet.
+	const auto park = [](long& uid) -> MovableObject* {
+		LuaStateWrapper& master = g_LuaMan.GetMasterScriptState();
+		const long first = MovableObject::GetUniqueIDCounter();
+		if (master.RunScriptString("_HarnessCaptureParked = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\")") != 0) {
+			return nullptr;
+		}
+		MovableObject* parked = nullptr;
+		for (long candidate = first; candidate <= MovableObject::GetUniqueIDCounter() && !parked; ++candidate) {
+			parked = g_MovableMan.FindObjectByUniqueID(candidate);
+			uid = candidate;
+		}
+		if (parked) {
+			// Registered with initialized scripts is what makes it a graph root.
+			parked->MoveScriptsToState(master);
+			parked->AdoptScriptObject();
+		}
+		master.RunScriptString("_HarnessCaptureParked = nil");
+		return parked;
+	};
+	const auto settleThroughAHold = []() {
+		MovableMan::WorldSetAside aside;
+		return g_MovableMan.SetAsideWorld(aside, false) && g_MovableMan.ReinstateWorld(aside);
+	};
+	bool probeOrder = false;
+	long probeUID = 0;
+	if (park(probeUID) && probeUID > 0) {
+		const std::vector<std::string> heldCapture = s_rbProbeLuaGraphsAtCapture;
+		const bool heldMismatch = s_rbProbeRestoreMismatch;
+		s_rbProbeRestoreMismatch = false;
+		const bool captured = CaptureProbeScriptGraphs();
+		const bool settled = settleThroughAHold();
+		CheckRestoredScriptGraphs();
+		const bool swept = g_MovableMan.FindObjectByUniqueID(probeUID) == nullptr;
+		probeOrder = captured && settled && swept && !s_rbProbeRestoreMismatch;
+		std::cout << "[harness-order] probe uid=" << probeUID << " captured=" << captured << " settled=" << settled
+		          << " swept=" << swept << " mismatch=" << s_rbProbeRestoreMismatch << std::endl;
+		s_rbProbeLuaGraphsAtCapture = heldCapture;
+		s_rbProbeRestoreMismatch = heldMismatch;
+	}
+	std::cout << "[script-graph-selftest] " << (probeOrder ? "PASS" : "FAIL") << " rollback_probe_capture_settles_first" << std::endl;
+	bool observeOrder = false;
+	long observeUID = 0;
+	if (park(observeUID) && observeUID > 0) {
+		std::vector<std::string> before, after, problems;
+		const bool first = ObserveScriptGraphs(before, problems);
+		const bool settled = settleThroughAHold();
+		const bool second = ObserveScriptGraphs(after, problems);
+		const bool swept = g_MovableMan.FindObjectByUniqueID(observeUID) == nullptr;
+		observeOrder = first && settled && second && swept && before == after;
+		std::cout << "[harness-order] observe uid=" << observeUID << " swept=" << swept
+		          << " graphs_equal=" << (before == after) << std::endl;
+	}
+	std::cout << "[script-graph-selftest] " << (observeOrder ? "PASS" : "FAIL") << " contract_audit_observation_settles_first" << std::endl;
+	return probeOrder && observeOrder;
+}
+
 // Observes completed tick boundaries. All state restoration belongs to the production
 // checkpoint APIs; the probe only rewinds its recorded input stream and compares observations.
 void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tickResult) {
@@ -1725,15 +1809,9 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 	if (s_rbProbePhase == 0 && simTick == static_cast<uint64_t>(s_rbProbeAtTick)) {
 		const auto captureStart = std::chrono::steady_clock::now();
 		double worldCaptureMs = 0.0;
-		{
-			std::vector<std::string> luaProblems;
-			if (!g_MovableMan.SerializeScriptGraphs(s_rbProbeLuaGraphsAtCapture, luaProblems)) {
-				for (const std::string& problem: luaProblems) {
-					std::cout << "[rbprobe] FAIL: script graph capture refused: " << problem << std::endl;
-				}
-				System::SetQuit(true);
-				return;
-			}
+		if (!CaptureProbeScriptGraphs()) {
+			System::SetQuit(true);
+			return;
 		}
 		if (s_rbProbeInMemory) {
 			const auto worldStart = std::chrono::steady_clock::now();
@@ -2501,6 +2579,8 @@ void RunGameLoop() {
 				ContractAudit::State pendingBefore;
 				bool havePendingBefore = false;
 				const auto observe = [&](const std::string& suffix) {
+					std::vector<std::string> graphs, problems;
+					const bool graph = ObserveScriptGraphs(graphs, problems);
 					auto state = ContractAudit::Observe(base + "." + suffix + ".gaps.txt");
 					ContractAudit::Write(ContractAudit::Identity(), base + "." + suffix + ".identity.txt");
 					ContractAudit::Write(state, base + "." + suffix + ".state.txt");
@@ -2514,8 +2594,6 @@ void RunGameLoop() {
 							          << " after_fields=" << pending.size() << std::endl;
 						}
 					}
-					std::vector<std::string> graphs, problems;
-					const bool graph = g_MovableMan.SerializeScriptGraphs(graphs, problems);
 					for (const std::string& problem: problems) std::cout << "[contract-audit] graph-problem=" << suffix << " " << problem << std::endl;
 					for (size_t index = 0; index < graphs.size(); ++index) {
 						std::ofstream out(base + "." + suffix + ".lua" + std::to_string(index), std::ios::binary);
@@ -3892,7 +3970,8 @@ int main(int argc, char** argv) {
 		return ShutDown(report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1)));
 	}
 	if (ScenarioRunner::GetArgs().scriptGraphSelfTest) {
-		const bool pass = g_LuaMan.RunScriptGraphSelfTest();
+		bool pass = g_LuaMan.RunScriptGraphSelfTest();
+		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
 	}
 	if (!s_netReplayInPath.empty()) {
