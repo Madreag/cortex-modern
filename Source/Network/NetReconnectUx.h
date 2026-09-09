@@ -101,6 +101,55 @@ namespace RTE {
 		std::string m_OfferAddress;
 	};
 
+	/// §9b's three host actions on a seat whose player is gone.
+	enum class NetModerationAction : uint8_t {
+		Wait = 0,       //!< Keep the seat for its player; the default, and a recorded decision.
+		Substitute = 1, //!< Hand it to the chosen applicant.
+		Cancel = 2,     //!< Withdraw a substitution that has not committed.
+	};
+
+	const char* NetModerationActionName(NetModerationAction action);
+
+	/// §9b's moderation panel as a model: the rows the host sees and the three actions it can take.
+	/// The panel renders this and the headless driver drives this, so a gate exercises the path a
+	/// player's click takes - the same rows, the same choice of applicant, the same service calls.
+	class NetModerationUx {
+	public:
+		struct Row {
+			uint16_t stableSeat = 0;
+			uint8_t lockstepPeerId = 0;
+			std::string text;          //!< The seat's line: who, how long, how much hold is left, who is waiting.
+			std::string applicantText; //!< The chosen applicant, or why there is none.
+			NetPeerId applicant = c_InvalidNetPeerId;
+			size_t applicants = 0;
+			bool substitutable = false;
+			bool substituting = false;
+		};
+
+		/// Rebuilds the rows from the host's view, keeping each seat's chosen applicant across refreshes.
+		void Refresh(const std::vector<NetH4ModerationSeat>& seats);
+		size_t RowCount() const { return m_Rows.size(); }
+		const Row& GetRow(size_t index) const { return m_Rows[index]; }
+		/// The row for a seat, or RowCount() when the seat is not one the host may decide about.
+		size_t FindSeat(uint16_t stableSeat) const;
+		/// Moves to the next applicant for the row's seat, wrapping.
+		void CycleApplicant(size_t index);
+		/// Runs the row's action through the service's §9b API and records what it answered.
+		NetH4ModerationResult Act(size_t index, NetModerationAction action);
+
+		const std::string& GetStatusText() const { return m_StatusText; }
+		/// The panel's own line, so an empty panel says why it is empty.
+		std::string GetSummaryText() const;
+
+		/// The seat's line. Time since the drop, the hold in frames AND seconds, and who is waiting.
+		static std::string DescribeSeat(const NetH4ModerationSeat& seat);
+
+	private:
+		std::vector<Row> m_Rows;
+		std::map<uint16_t, NetPeerId> m_Chosen; //!< Seat -> the applicant the host picked; kept while it is still applying.
+		std::string m_StatusText;
+	};
+
 	/// What this peer says about another player's seat (§11).
 	enum class NetSeatPresenceState : uint8_t {
 		Present = 0,
