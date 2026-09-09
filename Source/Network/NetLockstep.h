@@ -292,6 +292,8 @@ namespace RTE {
 		uint32_t ignoredAdmissionFaults = 0; //!< Unbound-transport faults/garbage dropped without touching the running match.
 		uint32_t staleRoundPackets = 0; //!< Packets tagged with another lockstep round, ignored.
 		uint32_t startRetransmits = 0; //!< Starts re-sent while waiting, or on a peer's repeated start.
+		uint32_t startAnswers = 0; //!< The share of those that answered a peer's repeat rather than the ladder.
+		uint32_t roundReadoptions = 0; //!< Rounds this peer followed the host onto after taking an older one.
 		uint32_t startAnswersSuppressed = 0; //!< Repeated starts left unanswered: their sender had already played this round.
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
@@ -483,8 +485,19 @@ namespace RTE {
 		bool SendStart(std::string* error, uint8_t onlyPeerId = 0);
 		/// Sends a peer that repeated its start what it needs to form the round.
 		void AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs);
+		/// Whether we take our round from that sender: the peer we are connected to. Everyone else's
+		/// start reaches us relayed, carrying the round its sender adopted rather than the host's.
+		bool IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const;
+		/// Whether a start describes the round this peer is configured for, field by field.
+		bool StartMatchesConfig(const NetLockstepStart& start) const;
+		/// Leaves the round we formed for the one the host is in, keeping our own production.
+		void ReadoptRound(uint64_t roundId, uint64_t nowMs);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
+		/// Clears everything one round owns, so leaving a round cannot carry a fact from it.
+		void ResetRoundState();
+		/// Sends the production a followed round owes the host, in order, retrying a refused send.
+		void FlushResendFrames();
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport);
 		/// Whether a packet's claimed sender owns the transport it arrived on. Only the relay host
@@ -566,6 +579,7 @@ namespace RTE {
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
 		std::map<uint8_t, uint64_t> m_LastStartAnswerMs; //!< peerId -> when we last answered its repeated start.
+		std::set<uint64_t> m_ResendFrames; //!< Target frames a followed round still owes the host.
 		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.
 		// What this peer spells its own observations with, and what a relay host re-encodes each other
 		// sender's with. A relay table is fed by exactly the frames it forwards, which is exactly what its
