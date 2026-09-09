@@ -76,6 +76,20 @@ namespace RTE {
 		bool substitute = false; //!< The seat changed hands by an explicit host action, not a reclaim.
 	};
 
+	/// A fault the §9b socket gates inject, so the failure windows can be driven over a real socket
+	/// instead of only on an in-process wire. Off unless a command line asks for one; nothing reads it
+	/// on a default build's happy path.
+	enum class NetH4Fault : uint8_t {
+		None = 0,
+		AckDrop = 1,      //!< The substitute never sends its ack: the offer ladder runs out and P2 closes the window.
+		AckDuplicate = 2, //!< It keeps re-sending the ack after the commit, so every duplicate meets the txId cache.
+		CommitDrop = 3,   //!< The host throws its first commit result away, so the substitute has to ask again.
+	};
+
+	void NetH4SetFault(NetH4Fault fault);
+	NetH4Fault NetH4GetFault();
+	NetH4Fault NetH4FaultFromName(const std::string& name);
+
 	/// What became of a held seat, for §11's roster line. The host turns each of these into the notice
 	/// every peer derives its line from; a client never has to ask what happened.
 	struct NetH4SeatHandover {

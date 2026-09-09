@@ -129,6 +129,31 @@ namespace RTE {
 		return taken;
 	}
 
+	namespace {
+		NetH4Fault s_Fault = NetH4Fault::None;
+	}
+
+	void NetH4SetFault(NetH4Fault fault) {
+		s_Fault = fault;
+	}
+
+	NetH4Fault NetH4GetFault() {
+		return s_Fault;
+	}
+
+	NetH4Fault NetH4FaultFromName(const std::string& name) {
+		if (name == "ack-drop") {
+			return NetH4Fault::AckDrop;
+		}
+		if (name == "ack-duplicate") {
+			return NetH4Fault::AckDuplicate;
+		}
+		if (name == "commit-drop") {
+			return NetH4Fault::CommitDrop;
+		}
+		return NetH4Fault::None;
+	}
+
 	std::vector<NetH4SeatHandover> NetReconnectHost::TakeSeatHandovers() {
 		std::vector<NetH4SeatHandover> taken = std::move(m_SeatHandovers);
 		m_SeatHandovers.clear();
@@ -819,6 +844,8 @@ namespace RTE {
 		applicant.key = key;
 		m_Applicants.push_back(applicant);
 		++m_Stats.applicantsRegistered;
+		std::cout << "[net-reconnect] applicant " << (applicant.displayName.empty() ? "a player" : applicant.displayName)
+		          << " asked for seat " << message.stableSeat << std::endl;
 		const NetH4ApplicantAck ack{c_NetH4Version, message.txId, message.stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		Send(connection, ack);
@@ -1007,7 +1034,14 @@ namespace RTE {
 		++m_Stats.substitutionsCommitted;
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, c_InvalidNetPeerId, false, true});
 		m_SeatHandovers.push_back({seat->seat.stableSeat, seat->seat.lockstepPeerId, pending->displayName, true});
-		Send(connection, committed);
+		if (NetH4GetFault() == NetH4Fault::CommitDrop) {
+			// The gate's commit-result-lost fault: the transaction is committed and cached, and the
+			// answer is thrown away exactly once. The substitute's own retry has to recover it.
+			std::cout << "[net-h4-fault] commit-drop: dropping the commit result for seat " << seat->seat.stableSeat << std::endl;
+			NetH4SetFault(NetH4Fault::None);
+		} else {
+			Send(connection, committed);
+		}
 		// §8: the substitute receives the ledgered ownership from resumed tick 1, through the same
 		// system-authored reseat a returning holder gets.
 		IssueReseat(*seat);
@@ -1542,6 +1576,12 @@ namespace RTE {
 			}
 			const NetH4SubstitutionAck ack{c_NetH4Version, offer->txId, offer->stableSeat, offer->holderGeneration, nonce, mac, stored && proved};
 			m_HasPendingRequest = false;
+			if (NetH4GetFault() == NetH4Fault::AckDrop) {
+				// The gate's ack-lost fault: the ticket is persisted and then nothing is ever sent back.
+				std::cout << "[net-h4-fault] ack-drop: holding the substitution ack for seat " << offer->stableSeat << std::endl;
+				m_State = NetH4ClientState::Substituting;
+				return true;
+			}
 			++m_Stats.substitutionAcksSent;
 			m_Outbound.push_back({c_InvalidNetPeerId, ack});
 			if (!stored || !proved) {
@@ -1565,7 +1605,13 @@ namespace RTE {
 			if (m_HasRecord && (committed->stableSeat != m_Record.stableSeat || committed->holderGeneration != m_Record.holderGeneration)) {
 				return true;
 			}
-			m_HasPendingRequest = false;
+			m_HasPendingRequest = NetH4GetFault() == NetH4Fault::AckDuplicate && m_HasPendingRequest &&
+			                      std::holds_alternative<NetH4SubstitutionAck>(m_PendingRequest);
+			if (m_HasPendingRequest) {
+				// The gate's delayed-duplicate fault: keep re-presenting the ack the commit answered, so
+				// every retransmit lands on the txId cache instead of on a live transaction.
+				std::cout << "[net-h4-fault] ack-duplicate: re-presenting the committed ack for seat " << committed->stableSeat << std::endl;
+			}
 			m_Incarnation = committed->incarnation;
 			m_AssignedPeerId = committed->assignedPeerId;
 			m_State = NetH4ClientState::Joined;
