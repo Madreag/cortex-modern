@@ -1,5 +1,6 @@
 #include "GnsTransport.h"
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 #include <map>
@@ -190,7 +191,8 @@ namespace RTE {
 			return true;
 		}
 
-		bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error) {
+		bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) {
+			if (congested) *congested = false;
 			if (!m_IsStarted || !m_Interface) {
 				SetError(error, "GNS transport is not started");
 				return false;
@@ -213,17 +215,22 @@ namespace RTE {
 				SendFlags(lane),
 				nullptr);
 			if (result != k_EResultOK) {
+				// LimitExceeded means the queue is full, not that the peer is gone: the message was
+				// never taken, so the caller holds it rather than giving up on a reachable player.
+				if (congested) *congested = result == k_EResultLimitExceeded;
 				SetError(error, "SendMessageToConnection failed with EResult " + std::to_string(static_cast<int>(result)) +
-				                " (" + std::to_string(bytes.size()) + " bytes" + DescribeSendPressure(connectionIt->second) + ")");
+				                " (" + std::to_string(bytes.size()) + " bytes, handed over " + std::to_string(m_BytesHandedOver[peerId]) +
+				                DescribeSendPressure(connectionIt->second) + ")");
 				return false;
 			}
+			m_BytesHandedOver[peerId] += bytes.size();
 			return true;
 		}
 
 		// What the connection was holding when it refused. k_EResultLimitExceeded (25) means the
 		// pending bytes reached SendBufferSize, so the refusal is only readable next to that budget
 		// and the rate draining it.
-		std::string DescribeSendPressure(HSteamNetConnection connection) const {
+		std::string DescribeSendPressure(HSteamNetConnection connection) {
 			std::string text;
 			SteamNetConnectionRealTimeStatus_t status{};
 			if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK) {
@@ -240,6 +247,22 @@ namespace RTE {
 			if (SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Connection,
 			                                           connection, &type, &budget, &budgetSize) >= k_ESteamNetworkingGetConfigValue_OK) {
 				text += ", buffer budget " + std::to_string(budget);
+			}
+			// The pending figure counts data scheduled for RE-transmission as well as new data, so it
+			// only means something beside what we actually handed over and the loss that drove it. A
+			// saturated episode refuses thousands of times a second, so take the 2KB dump once a second.
+			constexpr SteamNetworkingMicroseconds c_DetailIntervalUs = 1000 * 1000;
+			const SteamNetworkingMicroseconds nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
+			SteamNetworkingMicroseconds& lastUs = m_LastDetailUs[connection];
+			if (lastUs != 0 && nowUs - lastUs < c_DetailIntervalUs) {
+				return text;
+			}
+			lastUs = nowUs;
+			char detail[2048] = {};
+			if (m_Interface->GetDetailedConnectionStatus(connection, detail, sizeof(detail)) == 0) {
+				std::string status(detail);
+				std::replace(status.begin(), status.end(), '\n', ' ');
+				text += ", detail: " + status;
 			}
 			return text;
 		}
@@ -303,6 +326,8 @@ namespace RTE {
 			m_IsHost = false;
 			m_IsStarted = false;
 			m_NextPeerId = 1;
+			m_BytesHandedOver.clear();
+			m_LastDetailUs.clear();
 			m_PendingEvents.clear();
 		}
 
@@ -466,9 +491,11 @@ namespace RTE {
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt != m_PeersByConnection.end()) {
 				m_ConnectionsByPeer.erase(peerIt->second);
+				m_BytesHandedOver.erase(peerIt->second);
 				m_PeersByConnection.erase(peerIt);
 			}
 			s_ConnectionOwners.erase(connection);
+			m_LastDetailUs.erase(connection);
 			if (connection == m_ServerConnection) {
 				m_ServerConnection = k_HSteamNetConnection_Invalid;
 			}
@@ -500,6 +527,8 @@ namespace RTE {
 		std::map<HSteamNetConnection, NetPeerId> m_PeersByConnection;
 		std::map<NetPeerId, HSteamNetConnection> m_ConnectionsByPeer;
 		std::vector<NetTransportEvent> m_PendingEvents;
+		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
+		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
 
 		static Impl* s_CallbackInstance;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
@@ -521,7 +550,8 @@ namespace RTE {
 			return false;
 		}
 
-		bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* error) {
+		bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* error, bool* congested) {
+			if (congested) *congested = false;
 			SetError(error, "GameNetworkingSockets support is not compiled in; rebuild with CCCP_WITH_GNS");
 			return false;
 		}
@@ -549,8 +579,8 @@ namespace RTE {
 		return m_Impl->Connect(address, port, error);
 	}
 
-	bool GnsTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error) {
-		return m_Impl->Send(peerId, lane, bytes, error);
+	bool GnsTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) {
+		return m_Impl->Send(peerId, lane, bytes, error, congested);
 	}
 
 	void GnsTransport::Disconnect(NetPeerId peerId, const std::string& reason) {

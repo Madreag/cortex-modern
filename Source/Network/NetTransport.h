@@ -39,7 +39,9 @@ namespace RTE {
 
 		virtual bool StartHost(uint16_t port, std::string* error = nullptr) = 0;
 		virtual bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) = 0;
-		virtual bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr) = 0;
+		/// Sets congested when the peer is reachable but its send queue is full: the message was not
+		/// taken and the caller should hold it, NOT give up on the peer. Anything else is a real fault.
+		virtual bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) = 0;
 		virtual void Disconnect(NetPeerId peerId, const std::string& reason) = 0;
 		virtual void Stop() = 0;
 		virtual std::vector<NetTransportEvent> PollEvents() = 0;

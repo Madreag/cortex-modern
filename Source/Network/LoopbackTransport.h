@@ -15,12 +15,19 @@ namespace RTE {
 		bool reorderUnreliable = false;
 		uint32_t unreliableDropEveryN = 0;
 		uint32_t unreliableDuplicateEveryN = 0;
-		// Every send to this peer is refused, as a full reliable send buffer does: the message is
-		// never queued, so on an ordered lane the receiver has a gap it can never fill.
+		// Every send to this peer is refused outright, the way a connection that cannot carry anything
+		// behaves: the message is never queued, and no amount of waiting will change that.
 		NetPeerId refuseSendsToPeer = c_InvalidNetPeerId;
 		// A local Disconnect tells us nothing back, the way GNS behaved before it was made to report
 		// its own closes: state keyed on that peer only gets cleaned up if the caller does it itself.
 		bool silentLocalDisconnect = false;
+		// A metered per-peer send queue, as a real socket has: bytes accumulate on send and drain at
+		// this rate as time advances, and a send past the budget is refused as congestion. Zero is the
+		// unmetered queue every other test wants.
+		uint32_t sendBufferBytes = 0;
+		uint32_t drainBytesPerSecond = 0;
+		// Meter only this peer's queue, leaving every other link healthy.
+		NetPeerId meterOnlyPeer = c_InvalidNetPeerId;
 	};
 
 	class LoopbackTransport : public INetTransport {
@@ -37,10 +44,13 @@ namespace RTE {
 
 		bool StartHost(uint16_t port, std::string* error = nullptr) override;
 		bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override;
-		bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr) override;
+		bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override;
 		void Disconnect(NetPeerId peerId, const std::string& reason) override;
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
+
+		/// Gets whether this transport still holds a connection to a peer.
+		bool IsPeerConnected(NetPeerId peerId) const;
 
 	private:
 		struct ScheduledEvent {
@@ -65,8 +75,11 @@ namespace RTE {
 
 		static void SetError(std::string* error, const std::string& message);
 
+		void DrainSendQueues(uint64_t deltaMs);
+
 		uint64_t m_NowMs = 0;
 		uint64_t m_OrderCounter = 0;
+		std::map<NetPeerId, uint64_t> m_QueuedBytes; //!< The metered queue's depth per peer.
 		uint32_t m_SendCounter = 0;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
