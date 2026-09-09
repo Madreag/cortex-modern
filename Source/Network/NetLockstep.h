@@ -40,6 +40,7 @@ namespace RTE {
 		PeerDisconnected = 5,
 		InternalError = 6,
 		PeerLeft = 7, // A clean leave: the frame field is the FIRST frame without the leaver's data; survivors continue.
+		PeerDropped = 9, // The same, for a transport that died: the seat may still be reclaimed, so survivors hold a scripted outcome until the reclaim frame.
 		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
 	};
 
@@ -460,10 +461,14 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
-		/// Whether ANY seat is inside its reclaim window, whoever else is still playing. Ownership asks
-		/// the question above, which is about a round with nobody left; an outcome a player's absence
-		/// produced has to wait for that player whether or not the others are still here.
-		bool IsAnySeatHeldForReclaim() const;
+		// P2's 20 000 ms reclaim window as a count of frames at the pinned timestep (c_DefaultDeltaTimeS
+		// = 0.0166666 s, so 20 000 / 16.6666 = 1200). A frame, never a clock: every peer must reach the
+		// same answer at the same tick, and only the tick is shared.
+		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
+		/// Whether a dropped seat is still inside its reclaim window as of the given frame. Derived from
+		/// the relayed leave notice alone, so every peer in the round answers identically at the same
+		/// tick - the question above is about a round with nobody left and is answered host-side.
+		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
 		/// Whether the round has yet to commit a frame. A resync relaunch lands here: the ledgered
 		/// reseat rides the first committed frame, so nothing the round produced can be judged before it.
 		bool HasCommittedAFrame() const { return m_Stats.framesAccepted > 0; }
@@ -555,7 +560,8 @@ namespace RTE {
 		std::map<uint8_t, NetLockstepStart> m_RemoteStarts; //!< Each accepted start, re-sent when a peer repeats its own.
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
-		std::set<uint8_t> m_LeftSeatsHeld; //!< Left peers whose seat is still reclaimable, resolved once a tick.
+		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
+		std::set<uint8_t> m_DroppedSeats;   //!< Left peers whose transport died rather than announcing; carried by the leave notice, so every peer has it.
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.

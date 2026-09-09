@@ -272,6 +272,7 @@ namespace RTE {
 				case NetLockstepStopReason::InternalError:
 				case NetLockstepStopReason::PeerLeft:
 				case NetLockstepStopReason::ResyncRequested:
+				case NetLockstepStopReason::PeerDropped:
 					out = static_cast<NetLockstepStopReason>(rawReason);
 					return true;
 			}
@@ -1297,6 +1298,7 @@ namespace RTE {
 			case NetLockstepStopReason::InternalError: return "InternalError";
 			case NetLockstepStopReason::PeerLeft: return "PeerLeft";
 			case NetLockstepStopReason::ResyncRequested: return "ResyncRequested";
+			case NetLockstepStopReason::PeerDropped: return "PeerDropped";
 		}
 		return "Unknown";
 	}
@@ -1736,6 +1738,7 @@ namespace RTE {
 		m_ResendFrames.clear();
 		m_PeerLeaveFrames.clear();
 		m_LeftSeatsHeld.clear();
+		m_DroppedSeats.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
 		m_RelayBacklog.clear();
@@ -2974,9 +2977,9 @@ namespace RTE {
 			ScheduleRecoveryStop(stop.reason, stop.frame, stop.message);
 			return;
 		}
-		if (stop.reason == NetLockstepStopReason::PeerLeft) {
+		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::PeerDropped) {
 			if (IsKnownRemotePeer(stop.senderPeerId)) {
-				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, true);
+				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, stop.reason == NetLockstepStopReason::PeerLeft);
 			}
 			return;
 		}
@@ -3000,10 +3003,25 @@ namespace RTE {
 	void NetLockstepCoordinator::RefreshLeftSeatHolds() {
 		m_LeftSeatsHeld.clear();
 		for (const auto& left: m_PeerLeaveFrames) {
-			if (SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim) {
+			// The plane may close a seat early, but never past the frame every peer derives.
+			if (m_Stats.nextFrame < left.second + c_ReclaimHoldFrames &&
+			    SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim) {
 				m_LeftSeatsHeld.insert(left.first);
 			}
 		}
+	}
+
+	bool NetLockstepCoordinator::IsSeatHeldForReclaimAtFrame(uint64_t frame) const {
+		if (m_State != NetLockstepState::Running) {
+			return false;
+		}
+		for (uint8_t peerId: m_DroppedSeats) {
+			const auto left = m_PeerLeaveFrames.find(peerId);
+			if (left != m_PeerLeaveFrames.end() && frame < left->second + c_ReclaimHoldFrames) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
@@ -3013,10 +3031,6 @@ namespace RTE {
 	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
 		return m_State == NetLockstepState::Running && !m_RemotePeerIds.empty() &&
 		       m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && AnyLeftSeatHeld();
-	}
-
-	bool NetLockstepCoordinator::IsAnySeatHeldForReclaim() const {
-		return m_State == NetLockstepState::Running && AnyLeftSeatHeld();
 	}
 
 	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {
@@ -3035,11 +3049,14 @@ namespace RTE {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
+		if (!announced) {
+			m_DroppedSeats.insert(peerId);
+		}
 		RefreshLeftSeatHolds();
 		std::cout << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
 		NetLockstepStop notice;
 		notice.senderPeerId = peerId;
-		notice.reason = NetLockstepStopReason::PeerLeft;
+		notice.reason = announced ? NetLockstepStopReason::PeerLeft : NetLockstepStopReason::PeerDropped;
 		notice.frame = firstFrameWithout;
 		notice.message = message;
 		RelayToOtherRemotes({notice}, peerId);
