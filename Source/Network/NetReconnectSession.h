@@ -76,6 +76,15 @@ namespace RTE {
 		bool substitute = false; //!< The seat changed hands by an explicit host action, not a reclaim.
 	};
 
+	/// What became of a held seat, for §11's roster line. The host turns each of these into the notice
+	/// every peer derives its line from; a client never has to ask what happened.
+	struct NetH4SeatHandover {
+		uint16_t stableSeat = 0;
+		uint8_t lockstepPeerId = 0;
+		std::string holderName; //!< Substitutions only: who holds the seat now.
+		bool substitute = false;
+	};
+
 	/// One player asking the host for a seat whose holder is gone (§4, P15). An applicant holds no
 	/// peer id, no team, no snapshot and no authority: it is a name on the host's list until an
 	/// approved substitution commits.
@@ -240,6 +249,8 @@ namespace RTE {
 		std::vector<NetH4Outbound> TakeOutbound();
 		/// The seats committed since the last call.
 		std::vector<NetH4Commit> TakeCommits();
+		/// The seats that changed hands since the last read, for §11's roster line.
+		std::vector<NetH4SeatHandover> TakeSeatHandovers();
 		/// The reseats a committed reclaim earned, for the match runner to enqueue as lockstep commands.
 		std::vector<NetGameReseat> TakePendingReseats();
 
@@ -427,6 +438,7 @@ namespace RTE {
 		std::vector<NetH4Outbound> m_Outbound;
 		std::vector<NetGameReseat> m_PendingReseats;
 		std::vector<NetH4Commit> m_Commits;
+		std::vector<NetH4SeatHandover> m_SeatHandovers;
 		NetReconnectHostStats m_Stats;
 	};
 
