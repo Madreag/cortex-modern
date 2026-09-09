@@ -1,5 +1,7 @@
 #include "NetReconnectSession.h"
 
+#include "System/FaultInjection.h"
+
 #include "NetAuthCrypto.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
@@ -502,9 +504,14 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::HandleLeaveRequest(NetPeerId connection, const NetH4LeaveRequest& message, uint64_t nowMs) {
+		// Test-only: the ack the host sends never arrives, which is §7's ambiguous loss. Everything else
+		// about the exchange is unchanged - the seat is still closed and the generation still revoked.
+		const bool dropAck = FaultInjected("drop_leave_ack");
 		const NetH4TxKey key = MakeKey(NetMessageType::LeaveRequest, message.stableSeat, message.holderGeneration, m_LocalIdentity);
 		if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
-			Send(connection, *cached);
+			if (!dropAck) {
+				Send(connection, *cached);
+			}
 			return;
 		}
 		if (!MatchesEpoch(message.epoch)) {
@@ -541,7 +548,9 @@ namespace RTE {
 		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, true};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
-		Send(connection, ack);
+		if (!dropAck) {
+			Send(connection, ack);
+		}
 	}
 
 	bool NetReconnectHost::BindIncarnation(SeatState& seat, NetPeerId connection) {

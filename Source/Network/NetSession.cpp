@@ -2,6 +2,7 @@
 
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
+#include "System/FaultInjection.h"
 
 #include "nlohmann/json.hpp"
 
@@ -286,7 +287,9 @@ namespace RTE {
 					SendHeartbeat(peer.transportPeerId);
 				}
 			}
-		} else if (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+		} else if ((m_State == NetSessionState::Ready ||
+		            (m_State == NetSessionState::HelloSent && FaultInjected("client_never_says_hello"))) &&
+		           m_RemoteTransportPeerId != c_InvalidNetPeerId) {
 			SendHeartbeat(m_RemoteTransportPeerId);
 		}
 		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
@@ -319,7 +322,11 @@ namespace RTE {
 					}
 					m_RemoteTransportPeerId = event.peerId;
 					m_LastReceiveMs = m_NowMs;
-					Send(event.peerId, BuildClientHello());
+					// Test-only: P14's bound is "no decodable ClientHello within the budget", so the arm
+					// that proves it over a socket needs a connection that talks and never says hello.
+					if (!FaultInjected("client_never_says_hello")) {
+						Send(event.peerId, BuildClientHello());
+					}
 					m_State = NetSessionState::HelloSent;
 					m_StateStartedMs = m_NowMs;
 				}
