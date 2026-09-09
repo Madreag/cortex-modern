@@ -1797,6 +1797,21 @@ bool AudioMan::RunCheckpointSelfTest() {
 		if (FindCheckpointSoundContainer(source->GetCheckpointIdentity()) != stagedOwner.get()) throw std::runtime_error("staged sound owner could not be activated");
 		RestoreCheckpointSoundRegistry(liveRegistry);
 		stagedOwner.reset();
+		// A setting the manager never assigned reaches the writer as a raw byte, which is neither
+		// true nor false, and the reader has to refuse the archive rather than round it to a bool.
+		{
+			AudioRuntime unset;
+			const unsigned char rawByte = 100;
+			std::memcpy(&unset.muteOnFocusLoss, &rawByte, sizeof(rawByte));
+			std::string unsetRefusal;
+			if (unset.Load(unset.Save(), &unsetRefusal)) throw std::runtime_error("an audio setting that is neither true nor false was accepted");
+			if (unsetRefusal.find("'100'") == std::string::npos) throw std::runtime_error("the refusal did not name the offending value: " + unsetRefusal);
+			std::cout << "[audio-checkpoint-selftest] PASS unset_setting_byte_is_refused_and_named " << unsetRefusal << std::endl;
+			unsigned char liveByte = 0;
+			std::memcpy(&liveByte, &m_MuteAudioOnFocusLoss, sizeof(liveByte));
+			if (liveByte > 1) throw std::runtime_error("MuteAudioOnFocusLoss was never initialised: byte " + std::to_string(liveByte));
+			std::cout << "[audio-checkpoint-selftest] PASS mute_on_focus_loss_initialised" << std::endl;
+		}
 		AudioRuntime invalid;
 		std::string refusal;
 		if (!invalid.Load(checkpoint, &refusal)) throw std::runtime_error("could not parse generated audio checkpoint: " + refusal);
