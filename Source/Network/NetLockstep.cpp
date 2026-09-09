@@ -1656,6 +1656,8 @@ namespace RTE {
 		m_PeerLeaveFrames.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
+		m_CongestedPeers.clear();
+		m_HeldForCongestion.clear();
 		m_RelayBacklog.clear();
 		m_RelayBacklogSinceMs.clear();
 		m_LastLeaveMessage.clear();
@@ -1766,6 +1768,8 @@ namespace RTE {
 		m_PeerLeaveFrames.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
+		m_CongestedPeers.clear();
+		m_HeldForCongestion.clear();
 		m_RelayBacklog.clear();
 		m_RelayBacklogSinceMs.clear();
 		m_LastLeaveMessage.clear();
@@ -2317,6 +2321,9 @@ namespace RTE {
 		out << "\"relay_packets_sent\":" << m_Stats.relayPacketsSent << ",";
 		out << "\"relay_send_failures\":" << m_Stats.relaySendFailures << ",";
 		out << "\"relay_resends\":" << m_Stats.relayResends << ",";
+		out << "\"relay_congested_refusals\":" << m_Stats.relayCongestedRefusals << ",";
+		out << "\"relay_congestion_holds\":" << m_Stats.relayCongestionHolds << ",";
+		out << "\"relay_backlog_overflows\":" << m_Stats.relayBacklogOverflows << ",";
 		out << "\"relay_backlog_peers\":" << m_RelayBacklog.size() << ",";
 		out << "\"relay_bytes_sent\":" << m_Stats.relayBytesSent << ",";
 		out << "\"largest_relay_packet_bytes\":" << m_Stats.largestRelayPacketBytes << ",";
@@ -2466,8 +2473,10 @@ namespace RTE {
 			}
 			NetLockstepPeerStats& peerStats = m_Stats.peers[peerId];
 			std::string sendError;
-			if (m_Transport->Send(transportId, m_Config.frameLane, bytes, &sendError)) {
+			bool congested = false;
+			if (m_Transport->Send(transportId, m_Config.frameLane, bytes, &sendError, &congested)) {
 				CountRelaySent(peerStats, bytes.size());
+				m_CongestedPeers.erase(peerId);
 				continue;
 			}
 			// A refused forward was never queued, and on a reliable lane the receiver cannot ask for
@@ -2475,6 +2484,7 @@ namespace RTE {
 			++m_Stats.relaySendFailures;
 			++peerStats.relaySendFailures;
 			m_Stats.lastRelayError = sendError;
+			NoteRelayRefusal(peerId, congested);
 			std::cout << "[net-match] relay to " << DescribePeer(peerId) << " refused at frame " << m_Stats.nextFrame << ": " << sendError << std::endl;
 			QueueRelayBacklog(peerId, bytes);
 		}
@@ -2507,11 +2517,25 @@ namespace RTE {
 		return backlog == m_RelayBacklog.end() ? 0 : static_cast<uint32_t>(backlog->second.size());
 	}
 
+	void NetLockstepCoordinator::NoteRelayRefusal(uint8_t peerId, bool congested) {
+		if (congested) {
+			++m_Stats.relayCongestedRefusals;
+			m_CongestedPeers.insert(peerId);
+		} else {
+			m_CongestedPeers.erase(peerId);
+		}
+	}
+
 	void NetLockstepCoordinator::QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes) {
 		std::deque<std::vector<uint8_t>>& backlog = m_RelayBacklog[peerId];
-		// Past the skew window this peer could never catch up even if the transport freed up.
+		// Past the skew window this peer could never catch up even if the transport freed up - unless
+		// the queue is ours, in which case the cap is only a memory bound and the round's own grace,
+		// not this peer's seat, is what ends it.
 		if (backlog.size() >= NetLockstepCodec::c_MaxFutureFrameSkew) {
-			m_UnreachablePeers.insert(peerId);
+			++m_Stats.relayBacklogOverflows;
+			if (m_CongestedPeers.find(peerId) == m_CongestedPeers.end()) {
+				m_UnreachablePeers.insert(peerId);
+			}
 			return;
 		}
 		backlog.push_back(bytes);
@@ -2529,10 +2553,14 @@ namespace RTE {
 			}
 			while (!it->second.empty()) {
 				std::string sendError;
-				if (!m_Transport->Send(transportIt->second, m_Config.frameLane, it->second.front(), &sendError)) {
+				bool congested = false;
+				if (!m_Transport->Send(transportIt->second, m_Config.frameLane, it->second.front(), &sendError, &congested)) {
 					m_Stats.lastRelayError = sendError;
+					NoteRelayRefusal(peerId, congested);
 					break;
 				}
+				m_CongestedPeers.erase(peerId);
+				m_HeldForCongestion.erase(peerId);
 				++m_Stats.relayResends;
 				++m_Stats.peers[peerId].relayResends;
 				CountRelaySent(m_Stats.peers[peerId], it->second.front().size());
@@ -2545,7 +2573,18 @@ namespace RTE {
 			}
 			const uint64_t since = m_RelayBacklogSinceMs.emplace(peerId, nowMs).first->second;
 			if (m_Config.timeoutMs > 0 && nowMs >= since && nowMs - since >= PeerSilenceLeaveMs()) {
-				m_UnreachablePeers.insert(peerId);
+				// A queue of ours that will not drain is backpressure, not a lost player: the round
+				// waits on its own missing-frame grace instead of taking the seat off somebody whose
+				// only fault is being behind our socket.
+				if (m_CongestedPeers.find(peerId) != m_CongestedPeers.end()) {
+					if (m_HeldForCongestion.insert(peerId).second) {
+						++m_Stats.relayCongestionHolds;
+						std::cout << "[net-match] holding " << DescribePeer(peerId) << ": our send queue has not drained in "
+						          << (nowMs - since) << "ms (" << m_Stats.lastRelayError << ")" << std::endl;
+					}
+				} else {
+					m_UnreachablePeers.insert(peerId);
+				}
 			}
 			++it;
 		}
@@ -2954,6 +2993,11 @@ namespace RTE {
 				continue;
 			}
 			if (remoteIt != m_RemoteFrames.end() && remoteIt->second.find(peerId) != remoteIt->second.end()) {
+				continue;
+			}
+			// A peer we are not managing to send to has nothing to answer: its silence is our queue's
+			// doing, not evidence that it went away.
+			if (m_CongestedPeers.find(peerId) != m_CongestedPeers.end() || m_RelayBacklog.find(peerId) != m_RelayBacklog.end()) {
 				continue;
 			}
 			const auto heardIt = m_PeerLastHeardMs.find(peerId);

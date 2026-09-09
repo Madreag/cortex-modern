@@ -304,6 +304,9 @@ namespace RTE {
 		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
 		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
 		uint32_t relayResends = 0; //!< Refused forwards a later retry did deliver.
+		uint32_t relayCongestedRefusals = 0; //!< Forwards refused because OUR queue was full, not because the peer went.
+		uint32_t relayCongestionHolds = 0; //!< Peers held through a congestion episode instead of being dropped.
+		uint32_t relayBacklogOverflows = 0; //!< Forwards a full backlog could not even hold.
 		uint64_t relayBytesSent = 0; //!< Encoded bytes this host forwarded, across every peer.
 		uint32_t largestRelayPacketBytes = 0;
 		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
@@ -498,6 +501,8 @@ namespace RTE {
 		uint64_t RelayBacklogBytes() const;
 		void UpdateRelayBacklogBytes() { m_Stats.relayBacklogBytes = RelayBacklogBytes(); }
 		uint32_t RelayBacklogPackets(uint8_t peerId) const;
+		/// Records whether a refusal was our own full queue or a real fault.
+		void NoteRelayRefusal(uint8_t peerId, bool congested);
 		/// Holds a refused forward for retry, keeping this peer's stream in order behind it.
 		void QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes);
 		/// Retries refused forwards. A momentarily full send buffer heals; one that stays refused past
@@ -527,6 +532,8 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
+		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.
+		std::set<uint8_t> m_HeldForCongestion; //!< Congestion episodes already reported, so the hold is logged once.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.

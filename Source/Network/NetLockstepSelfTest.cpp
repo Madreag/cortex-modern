@@ -3156,6 +3156,146 @@ namespace RTE {
 			}
 			return true;
 		}
+		// Four peers behind a 200ms link whose send queue is metered, which is the lobby lane's shape.
+		// A relay host that outruns its own socket must hold the forwards and let the round wait: the
+		// peers behind that queue are healthy, and taking their seats for it ended the match at frame
+		// 151 with three "unreachable" leaves the retained run shows were our congestion, not theirs.
+		bool TestCongestedRelayHoldsEveryPeer(std::string* error) {
+			const uint16_t port = 43020;
+			const uint64_t sessionId = 0x7000000000000020ULL;
+			// A 200ms link needs a round trip per frame, so the round's own grace has to be seconds, not
+			// the 400ms the quick fixtures use.
+			const uint32_t timeoutMs = 4000; // The hold bound is half of this.
+			LoopbackTransport hostT, clientT[3];
+			LoopbackTransportConfig lagged;
+			lagged.latencyMs = 200;
+			LoopbackTransportConfig metered = lagged;
+			// A couple of forwards fill it and nothing meaningful drains: the socket the host has to
+			// keep three remotes fed through is simply gone.
+			metered.sendBufferBytes = 384;
+			metered.drainBytesPerSecond = 64;
+			hostT.SetFaultConfig(lagged);
+			if (!hostT.StartHost(port, error)) {
+				return false;
+			}
+			for (LoopbackTransport& client : clientT) {
+				client.SetFaultConfig(lagged);
+				if (!client.Connect("loopback", port, error)) {
+					return false;
+				}
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = timeoutMs;
+				c.localPeerId = local;
+				c.peerCount = 4;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client[3];
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}, {4, 3}}, true), error) ||
+			    !client[0].Start(clientT[0], cfg(2, {{1, 1}}, false), error) ||
+			    !client[1].Start(clientT[1], cfg(3, {{1, 1}}, false), error) ||
+			    !client[2].Start(clientT[2], cfg(4, {{1, 1}}, false), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			uint64_t produced[4] = {0, 0, 0, 0};
+			auto step = [&](const std::function<bool()>& done, uint64_t untilMs) {
+				for (; now <= untilMs; now += 5) {
+					std::string ignored;
+					if (host.IsRunning() && produced[0] <= host.GetStats().nextFrame + 4 &&
+					    host.QueueLocalInput(produced[0], {MakeFrame(100, produced[0] + 1)}, {}, &ignored)) {
+						++produced[0];
+					}
+					for (int i = 0; i < 3; ++i) {
+						if (client[i].IsRunning() && produced[i + 1] <= client[i].GetStats().nextFrame + 4 &&
+						    client[i].QueueLocalInput(produced[i + 1], {MakeFrame(200 + i * 100, produced[i + 1] + 1)}, {}, &ignored)) {
+							++produced[i + 1];
+						}
+					}
+					host.Tick(now);
+					for (int i = 0; i < 3; ++i) {
+						client[i].Tick(now);
+					}
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					for (LoopbackTransport& transport : clientT) {
+						transport.AdvanceTimeMs(5);
+					}
+				}
+				return false;
+			};
+			if (!step([&] { return host.IsRunning() && client[0].IsRunning() && client[1].IsRunning() && client[2].IsRunning(); }, 4000)) {
+				*error = "the four-peer congestion fixture did not reach Running";
+				return false;
+			}
+			// The socket fills once the round is up, as it did at frame 151: the handshake is not what
+			// this fixture is about.
+			hostT.SetFaultConfig(metered);
+			if (!step([&] { return host.GetStats().relayCongestedRefusals > 0; }, now + timeoutMs)) {
+				*error = "the metered send queue never refused a forward: " + host.BuildReportJson();
+				return false;
+			}
+			const uint64_t congestedFrom = now;
+			// Past the bound that used to condemn a peer, and inside the round's own grace.
+			step([&] { return false; }, congestedFrom + timeoutMs / 2 + 200);
+			if (host.GetStats().relayCongestionHolds == 0) {
+				*error = "a congestion episode outlasting the bound was not recorded as a hold: " + host.BuildReportJson();
+				return false;
+			}
+			if (!host.GetPeerLeaveFrames().empty()) {
+				*error = "the host took a seat off a peer because its own queue was full: " + host.BuildReportJson();
+				return false;
+			}
+			if (host.GetStats().peersDroppedSilent != 0) {
+				*error = "a peer behind our own queue was adjudicated silent: " + host.BuildReportJson();
+				return false;
+			}
+			// The link comes back: the held forwards go out and the round is still whole.
+			LoopbackTransportConfig drained = lagged;
+			drained.sendBufferBytes = 1 << 20;
+			drained.drainBytesPerSecond = 1 << 20;
+			hostT.SetFaultConfig(drained);
+			if (!step([&] { return !host.HasPendingRelayWork(); }, now + 2 * timeoutMs)) {
+				*error = "the held forwards never drained once the queue freed up: " + host.BuildReportJson();
+				return false;
+			}
+			if (!host.GetPeerLeaveFrames().empty() || host.IsFailed()) {
+				*error = "the round did not survive the congestion episode: " + host.BuildReportJson();
+				return false;
+			}
+			const NetLockstepStats& stats = host.GetStats();
+			if (stats.relayResends == 0 || stats.relayBacklogBytes != 0) {
+				*error = "the backlog did not actually replay: " + host.BuildReportJson();
+				return false;
+			}
+			// And the round goes on: surviving the episode means committing frames after it, not just
+			// keeping four names on the roster.
+			const uint64_t resumedFrom = stats.nextFrame;
+			if (!step([&] { return stats.nextFrame >= resumedFrom + 3; }, now + 2 * timeoutMs)) {
+				*error = "the round kept its peers but never advanced again: " + host.BuildReportJson();
+				return false;
+			}
+			const std::string report = host.BuildReportJson();
+			if (report.find("\"relay_congested_refusals\":") == std::string::npos ||
+			    report.find("\"relay_congestion_holds\":") == std::string::npos ||
+			    report.find("\"relay_backlog_overflows\":") == std::string::npos) {
+				*error = "the congestion counters are missing from the report: " + report;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS congested_relay_holds_every_peer refusals=" << stats.relayCongestedRefusals
+			          << " holds=" << stats.relayCongestionHolds << " resends=" << stats.relayResends
+			          << " dropped_silent=" << stats.peersDroppedSilent << " peers_left=" << host.GetPeerLeaveFrames().size()
+			          << " frames=" << stats.nextFrame << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -3197,7 +3337,8 @@ namespace RTE {
 		    !TestStaleRoundFrameLeavesTheLiveTable(&error) ||
 		    !TestResyncStragglersAreNotHoles(&error) ||
 		    !TestRefusedBlockLeavesNoBindings(&error) ||
-		    !TestFourPeerObservationRelayBytes(&error)) {
+		    !TestFourPeerObservationRelayBytes(&error) ||
+		    !TestCongestedRelayHoldsEveryPeer(&error)) {
 			return fail(error);
 		}
 
