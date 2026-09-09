@@ -1730,6 +1730,70 @@ namespace RTE {
 	// A peer that repeats its start is still waiting for one it missed, and ours may be it. Every
 	// start a formed peer receives reads as a repeat though, and the answer is itself a start, so an
 	// unconditional answer answers the answer: pace it by the ladder the repeats come from.
+	bool NetLockstepCoordinator::IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const {
+		// A relay host issues the round, it never takes one.
+		return !m_RelayHost && peerId != 0 && LockstepPeerOfTransport(fromTransport) == peerId;
+	}
+
+	// The round is the host's to name, so everything the REMOTES said belongs to the one we are leaving.
+	// Our own production stands and goes out again under the new tag: a start we follow carries this
+	// round's start frame and delays, so every frame we queued still targets the same frames.
+	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
+		m_RoundId = roundId;
+		++m_Stats.roundReadoptions;
+		m_RemoteStartsReceived.clear();
+		m_RemoteStarts.clear();
+		m_PeersPlayedThisRound.clear();
+		m_LastStartAnswerMs.clear();
+		m_PreStartFrames.clear();
+		m_PreStartChecksums.clear();
+		m_RemoteFrames.clear();
+		m_RemoteCommands.clear();
+		m_RemoteObservations.clear();
+		m_RemoteChecksums.clear();
+		m_PendingObservations.clear();
+		m_DroppedObservations.clear();
+		m_ObservationDecodeTables.Reset();
+		m_ObservationEncodeTables.Reset();
+		m_ObservationDecodeTables.roundId = m_RoundId;
+		m_State = NetLockstepState::WaitingForStart;
+		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+		std::string ignored;
+		(void)SendStart(&ignored);
+		++m_Stats.startRetransmits;
+		m_LastStartSentMs = nowMs;
+		// Our frames went out under the round we left, which the host refuses, so say them again.
+		for (const auto& [targetFrame, frames]: m_LocalFrames) {
+			NetLockstepFrame packet;
+			packet.senderPeerId = m_Config.localPeerId;
+			packet.targetFrame = targetFrame;
+			packet.frames = frames;
+			packet.roundId = m_RoundId;
+			if (const auto commandsIt = m_LocalCommands.find(targetFrame); commandsIt != m_LocalCommands.end()) {
+				packet.commands = commandsIt->second;
+			}
+			if (const auto observationsIt = m_LocalObservations.find(targetFrame); observationsIt != m_LocalObservations.end()) {
+				packet.observations = observationsIt->second;
+			}
+			size_t observationsEncoded = packet.observations.size();
+			if (!SendPacket({packet}, m_Config.frameLane, &ignored, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded)) {
+				continue;
+			}
+			// A fresh table spells every key out, so a frame that fitted before may not now; what it could
+			// not carry rides the next one, and we commit exactly what went out.
+			if (observationsEncoded < packet.observations.size()) {
+				m_PendingObservations.insert(m_PendingObservations.end(), packet.observations.begin() + static_cast<std::ptrdiff_t>(observationsEncoded), packet.observations.end());
+				packet.observations.resize(observationsEncoded);
+				m_Stats.observationsCarried += m_PendingObservations.size();
+				if (packet.observations.empty()) {
+					m_LocalObservations.erase(targetFrame);
+				} else {
+					m_LocalObservations[targetFrame] = packet.observations;
+				}
+			}
+		}
+	}
+
 	void NetLockstepCoordinator::AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs) {
 		// A peer we have no link to is the host's to answer, not ours; ours reaches us relayed.
 		if ((m_State != NetLockstepState::Running && m_State != NetLockstepState::WaitingForStart) ||
@@ -2353,6 +2417,7 @@ namespace RTE {
 		out << "\"ignored_session_packets\":" << m_Stats.ignoredSessionPackets << ",";
 		out << "\"stale_round_packets\":" << m_Stats.staleRoundPackets << ",";
 		out << "\"start_retransmits\":" << m_Stats.startRetransmits << ",";
+		out << "\"round_readoptions\":" << m_Stats.roundReadoptions << ",";
 		out << "\"start_answers_suppressed\":" << m_Stats.startAnswersSuppressed << ",";
 		out << "\"starts_relayed_on_repeat\":" << m_Stats.startsRelayedOnRepeat << ",";
 		out << "\"pre_start_frames_buffered\":" << m_Stats.preStartFramesBuffered << ",";
@@ -2778,9 +2843,17 @@ namespace RTE {
 			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport" << std::endl;
 			return;
 		}
+		// The peer we take our round from has started another one and ours has committed nothing, so that
+		// is the round we are in. Bounded to our own start frame, so a straggler from before a resync still
+		// takes the rule below, and to the peer that owns the transport it came in on: starts ride the
+		// reliable ordered lane, so a later start from that peer is a newer one, never an older one.
+		const bool followTheAuthority = start.roundId != 0 && m_RoundId != 0 && start.roundId != m_RoundId &&
+		                                start.startFrame == m_Config.startFrame && !HasCommittedAFrame() &&
+		                                (m_State == NetLockstepState::WaitingForStart || m_State == NetLockstepState::Running) &&
+		                                IsRoundAuthority(start.localPeerId, fromTransport);
 		// Another round's start (a late one from before a resync) is not this round's handshake; before this
 		// peer knows its round, a start for a different frame is that straggler too.
-		if (start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame))) {
+		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame))) {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
@@ -2799,6 +2872,8 @@ namespace RTE {
 		if (m_RoundId == 0 && start.roundId != 0) {
 			m_RoundId = start.roundId;
 			m_ObservationDecodeTables.roundId = m_RoundId;
+		} else if (followTheAuthority) {
+			ReadoptRound(start.roundId, nowMs);
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {

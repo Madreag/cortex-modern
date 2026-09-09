@@ -292,6 +292,7 @@ namespace RTE {
 		uint32_t ignoredAdmissionFaults = 0; //!< Unbound-transport faults/garbage dropped without touching the running match.
 		uint32_t staleRoundPackets = 0; //!< Packets tagged with another lockstep round, ignored.
 		uint32_t startRetransmits = 0; //!< Starts re-sent while waiting, or on a peer's repeated start.
+		uint32_t roundReadoptions = 0; //!< Rounds this peer followed the host onto after taking an older one.
 		uint32_t startAnswersSuppressed = 0; //!< Repeated starts left unanswered: their sender had already played this round.
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
@@ -483,6 +484,11 @@ namespace RTE {
 		bool SendStart(std::string* error, uint8_t onlyPeerId = 0);
 		/// Sends a peer that repeated its start what it needs to form the round.
 		void AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs);
+		/// Whether we take our round from that sender: the peer we are connected to. Everyone else's
+		/// start reaches us relayed, carrying the round its sender adopted rather than the host's.
+		bool IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const;
+		/// Leaves the round we formed for the one the host is in, keeping our own production.
+		void ReadoptRound(uint64_t roundId, uint64_t nowMs);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
