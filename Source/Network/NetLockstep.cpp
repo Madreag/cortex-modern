@@ -1653,6 +1653,7 @@ namespace RTE {
 		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
+		m_LastStartAnswerMs.clear();
 		m_PeerLeaveFrames.clear();
 		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
@@ -1724,6 +1725,23 @@ namespace RTE {
 		return true;
 	}
 
+	// A peer that repeats its start is still waiting for one it missed, and ours may be it. Every
+	// start a formed peer receives reads as a repeat though, and the answer is itself a start, so an
+	// unconditional answer answers the answer: pace it by the ladder the repeats come from.
+	void NetLockstepCoordinator::AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs) {
+		if (m_State != NetLockstepState::Running) {
+			return;
+		}
+		const auto answeredIt = m_LastStartAnswerMs.find(peerId);
+		if (answeredIt != m_LastStartAnswerMs.end() && nowMs >= answeredIt->second && nowMs - answeredIt->second < c_StartRetransmitMs) {
+			return;
+		}
+		m_LastStartAnswerMs[peerId] = nowMs;
+		std::string ignored;
+		(void)SendStart(&ignored);
+		++m_Stats.startRetransmits;
+	}
+
 	void NetLockstepCoordinator::FlushPreStart(uint8_t peerId, uint64_t nowMs) {
 		const auto transportIt = m_RemoteTransports.find(peerId);
 		const NetPeerId fromTransport = transportIt != m_RemoteTransports.end() ? transportIt->second : c_InvalidNetPeerId;
@@ -1764,6 +1782,7 @@ namespace RTE {
 		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
+		m_LastStartAnswerMs.clear();
 		m_PeerLeaveFrames.clear();
 		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
@@ -2754,11 +2773,8 @@ namespace RTE {
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {
 			RelayToOtherRemotes({start}, start.localPeerId);
-		} else if (m_State == NetLockstepState::Running) {
-			// A peer that repeats its start is still waiting for ours, which it may have missed.
-			std::string ignored;
-			(void)SendStart(&ignored);
-			++m_Stats.startRetransmits;
+		} else {
+			AnswerRepeatedStart(start.localPeerId, nowMs);
 		}
 		if (m_State == NetLockstepState::WaitingForStart && AllRemoteStartsReceived()) {
 			m_State = NetLockstepState::Running;
