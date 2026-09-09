@@ -2,18 +2,27 @@
 
 #include "Entity.h"
 #include "ContentFile.h"
+#include <memory>
+#include <span>
+#include <functional>
 
 namespace RTE {
 
 	/// Represents an Icon in the interface that can be loaded and stored from different data modules etc.
 	class Icon : public Entity {
 		friend struct ContractAudit;
+		friend class GUICheckpoint;
 
 
 	public:
 		EntityAllocation(Icon);
 		SerializableOverrideMethods;
 		ClassInfoGetters;
+		std::string SaveCheckpoint() const;
+		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		static std::string SaveCheckpointSet(std::span<const Icon> icons);
+		static bool LoadCheckpointSet(std::string_view text, std::span<Icon> icons, bool validateOnly = false);
+		static std::function<void()> PrepareCheckpointSet(std::string_view text, std::span<Icon> icons, bool validateOnly = false);
 
 #pragma region Creation
 		/// Constructor method used to instantiate an Icon object in system memory. Create() should be called before using the object.
@@ -83,9 +92,11 @@ namespace RTE {
 
 		std::vector<BITMAP*> m_BitmapsIndexed; //!< Vector containing the 8bpp BITMAPs of this Icon. BITMAPs are NOT owned!
 		std::vector<BITMAP*> m_BitmapsTrueColor; //!< Vector containing the 32bpp BITMAPs of this Icon. BITMAPs are NOT owned!
+		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmapOwners; //!< Keeps restored images alive across icon copies.
 
 	private:
 		/// Clears all the member variables of this Icon, effectively resetting the members of this abstraction level only.
 		void Clear();
+		void SwapCheckpoint(Icon& other) noexcept;
 	};
 } // namespace RTE

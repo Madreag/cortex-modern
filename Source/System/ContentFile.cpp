@@ -32,13 +32,25 @@ std::string ContentFile::SaveCheckpoint() const {
 }
 
 bool ContentFile::LoadCheckpoint(std::string_view text, bool validateOnly) {
+	return LoadCheckpoint(text, validateOnly, true);
+}
+
+bool ContentFile::LoadCheckpoint(std::string_view text, bool validateOnly, bool registerPath) {
 	try {
 		CheckpointReader archive(text, "ContentFile1", validateOnly);
 		archive(m_DataPath, m_DataPathExtension, m_DataPathWithoutExtension, m_DataPathIsImageFile, m_ImageFileInfo, m_FormattedReaderPosition, m_DataPathAndReaderPosition, m_DataModuleID, m_IsMemoryPNG);
-		archive.OnCommit([this] { if (!m_DataPath.empty()) s_PathHashes[GetHash()] = m_DataPath; });
+		if (registerPath) archive.OnCommit([this] { if (!m_DataPath.empty()) s_PathHashes[GetHash()] = m_DataPath; });
 		archive.Finish();
 		return true;
 	} catch (const std::exception&) { return false; }
+}
+
+void ContentFile::SwapCheckpoint(ContentFile& other) noexcept {
+	using std::swap;
+	swap(m_DataPath, other.m_DataPath); swap(m_DataPathExtension, other.m_DataPathExtension); swap(m_DataPathWithoutExtension, other.m_DataPathWithoutExtension);
+	swap(m_DataPathIsImageFile, other.m_DataPathIsImageFile); swap(m_ImageFileInfo, other.m_ImageFileInfo);
+	swap(m_FormattedReaderPosition, other.m_FormattedReaderPosition); swap(m_DataPathAndReaderPosition, other.m_DataPathAndReaderPosition);
+	swap(m_DataModuleID, other.m_DataModuleID); swap(m_IsMemoryPNG, other.m_IsMemoryPNG);
 }
 
 const std::string ContentFile::c_ClassName = "ContentFile";

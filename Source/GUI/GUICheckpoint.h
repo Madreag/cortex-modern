@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -29,6 +30,12 @@ namespace RTE {
 		static BITMAP* LoadBitmap(std::string_view text, bool validateOnly = false);
 		static std::string SaveSharedBitmap(const BITMAP* bitmap);
 		static std::shared_ptr<BITMAP> LoadSharedBitmap(std::string_view text, bool validateOnly = false);
+		static std::vector<std::shared_ptr<BITMAP>> LoadSharedBitmapPool(const std::vector<std::string>& images, bool validateOnly = false);
+		struct PreparedBitmapPool {
+			std::vector<std::shared_ptr<BITMAP>> images;
+			std::function<void()> commit;
+		};
+		static PreparedBitmapPool PrepareSharedBitmapPool(const std::vector<std::string>& images);
 		static std::string SaveImage(const GUIBitmap* bitmap);
 		static std::unique_ptr<GUIBitmap> LoadImage(std::string_view text, bool validateOnly = false);
 		static std::string SaveOwnedEntity(const Entity* entity);
@@ -49,6 +56,7 @@ namespace RTE {
 		static bool RunSelfTest();
 
 	private:
+		static thread_local int s_BitmapPoolAllocationFailureAfter;
 		static std::map<std::string, GUIPanel*> Panels(const GUIControlManager& manager);
 		static void PrepareOwnedPanels(GUIControlManager& manager, const std::unordered_set<std::string>& panelKeys);
 		template <class Archive> static void VisitManagerFields(Archive& archive, GUIManager& manager);

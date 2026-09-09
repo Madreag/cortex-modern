@@ -977,7 +977,7 @@ void Activity::RestoreRollbackState(const RollbackState& in) {
 }
 
 std::string Activity::SaveCheckpoint() const {
-	CheckpointWriter writer("Activity1");
+	CheckpointWriter writer("Activity3");
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
@@ -986,15 +986,22 @@ std::string Activity::SaveCheckpoint() const {
 			m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0,
 			m_PlayerController[player].GetControlledActor() ? m_PlayerController[player].GetControlledActor()->GetUniqueID() : 0};
 	}
-	writer(links);
+	writer(links, Icon::SaveCheckpointSet(m_TeamIcons));
 	return writer.Text();
 }
 
 bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "Activity1", validateOnly);
+		const bool legacy = text.starts_with("9 Activity1 ");
+		CheckpointReader reader(text, legacy ? "Activity1" : "Activity3", validateOnly);
 		VisitCheckpoint(reader, *this);
 		reader(m_CheckpointActorIDs);
+		if (!legacy) {
+			std::string icons;
+			reader.Value(icons);
+			auto apply = Icon::PrepareCheckpointSet(icons, m_TeamIcons, validateOnly);
+			if (apply) reader.OnCommit(std::move(apply));
+		}
 		reader.OnCommit([this] { m_HasCheckpointActorIDs = true; });
 		reader.Finish();
 		return true;
