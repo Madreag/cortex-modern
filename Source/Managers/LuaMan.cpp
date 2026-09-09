@@ -4729,6 +4729,121 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (discardForgetsDestroyed ? "PASS" : "FAIL") << " set_aside_world_discard_forgets_destroyed_owner" << std::endl;
 	checkpointValues = discardForgetsDestroyed && checkpointValues;
+	// A restore detaches every Lua-owned tree while the original world waits (RestoreWorldCandidate and
+	// RestartActivityCandidate both run that walk), so a detach must leave the record alone: those
+	// objects are alive and the world that comes back still has to name them.
+	bool keepsDetachedOwner = false;
+	{
+		const bool created = RunScriptString(
+			"_SetAsideDetachHeld = { held = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\") };"
+			"_SetAsideDetachUID = _SetAsideDetachHeld.held.UniqueID") == 0;
+		lua_getglobal(m_State, "_SetAsideDetachUID");
+		const long identity = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		MovableObject* const parked = identity > 0 ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		MovableMan::WorldSetAside aside;
+		if (created && parked && g_MovableMan.SetAsideWorld(aside, false)) {
+			const bool recorded = aside.knownObjects.contains(identity);
+			g_LuaMan.GetMasterScriptState().ReleaseScriptOwnedObjects();
+			const bool keptWhileHeld = aside.knownObjects.contains(identity);
+			const bool reinstated = g_MovableMan.ReinstateWorld(aside);
+			keepsDetachedOwner = recorded && keptWhileHeld && reinstated && g_MovableMan.FindObjectByUniqueID(identity) == parked;
+		}
+		RunScriptString("_SetAsideDetachHeld = nil; _SetAsideDetachUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (keepsDetachedOwner ? "PASS" : "FAIL") << " reinstate_keeps_a_detached_live_owner" << std::endl;
+	checkpointValues = keepsDetachedOwner && checkpointValues;
+	// A live object can take a new identity while the world is held (Create again, AdoptPersistedUniqueID),
+	// and the record still names it under the old one, so the forget has to find it by address.
+	bool reidentifyForgets = false;
+	{
+		auto* object = new MOPixel;
+		object->Create();
+		MovableObject* const address = object;
+		const long identity = object->GetUniqueID();
+		MovableMan::WorldSetAside aside;
+		if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+			const bool recorded = aside.knownObjects.contains(identity);
+			object->Create();
+			const long second = object->GetUniqueID();
+			delete object;
+			bool named = false;
+			for (const auto& [uid, entry]: aside.knownObjects) {
+				if (entry == address) named = true;
+			}
+			reidentifyForgets = recorded && second != identity && !named;
+			// Anything the record still names would be walked by the reinstate, so drop it rather than leave the world held.
+			std::erase_if(aside.knownObjects, [address](const auto& entry) { return entry.second == address; });
+			for (auto& held: aside.scriptRegistrations) { held.first.erase(address); held.second.erase(address); }
+			reidentifyForgets = g_MovableMan.ReinstateWorld(aside) && reidentifyForgets;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (reidentifyForgets ? "PASS" : "FAIL") << " reidentify_then_destroy_forgets" << std::endl;
+	checkpointValues = reidentifyForgets && checkpointValues;
+	// The checkpoint settle sweeps a script-owned object nothing references any more, and the graph's roots
+	// are a native list, so a graph captured before the settle names an object the reinstate cannot find.
+	bool settleRunsFirst = false;
+	{
+		const bool created = RunScriptString(
+			"_SetAsideOrderHeld = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+			"_SetAsideOrderUID = _SetAsideOrderHeld.UniqueID") == 0;
+		lua_getglobal(m_State, "_SetAsideOrderUID");
+		const long identity = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		MovableObject* const parked = identity > 0 ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		if (created && parked) {
+			// Registered with initialized scripts is what makes it a graph root, exactly as a restore adopts one.
+			parked->MoveScriptsToState(g_LuaMan.GetMasterScriptState());
+			parked->AdoptScriptObject();
+			RunScriptString("_SetAsideOrderHeld = nil; _SetAsideOrderUID = nil");
+			MovableMan::WorldSetAside aside;
+			const LuaStateWrapper& master = g_LuaMan.GetMasterScriptState();
+			const bool scripted = parked->ObjectScriptsInitialized();
+			const bool listed = master.GetRegisteredMOs().contains(parked) || master.GetPendingRegisteredMOs().contains(parked);
+			const bool held = scripted && listed && g_MovableMan.SetAsideWorld(aside, false);
+			const bool reinstated = held && g_MovableMan.ReinstateWorld(aside);
+			const bool swept = g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
+			settleRunsFirst = reinstated && swept;
+			std::cout << "[setaside-order] uid=" << identity << " scripted=" << scripted << " listed=" << listed
+			          << " held=" << held << " reinstated=" << reinstated << " swept=" << swept << std::endl;
+		}
+		RunScriptString("_SetAsideOrderHeld = nil; _SetAsideOrderUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (settleRunsFirst ? "PASS" : "FAIL") << " set_aside_settles_before_the_graph_capture" << std::endl;
+	checkpointValues = settleRunsFirst && checkpointValues;
+	// A reinstate that can see it will fail has to say so before it moves anything, so the world it was
+	// asked to put back is still held and can be put back afterwards.
+	bool refusesBeforeMoving = false;
+	{
+		MovableMan::WorldSetAside aside;
+		if (g_MovableMan.SetAsideWorld(aside, false)) {
+			const std::string globals = aside.runtimeGlobals;
+			aside.runtimeGlobals = "not a runtime globals archive";
+			refusesBeforeMoving = !g_MovableMan.ReinstateWorld(aside) && aside.held && g_MovableMan.HasWorldSetAside();
+			aside.runtimeGlobals = globals;
+			refusesBeforeMoving = g_MovableMan.ReinstateWorld(aside) && refusesBeforeMoving;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (refusesBeforeMoving ? "PASS" : "FAIL") << " reinstate_refuses_before_it_moves_the_world" << std::endl;
+	checkpointValues = refusesBeforeMoving && checkpointValues;
+	// A refusal it cannot see coming still has to finish the restore: the counter and the cursor are the
+	// originals' state, not the candidate's, whatever the graph did.
+	bool refusalFinishesRestore = false;
+	{
+		MovableMan::WorldSetAside aside;
+		if (g_MovableMan.SetAsideWorld(aside, false) && !aside.luaGraphs.empty()) {
+			const long counter = aside.uniqueIDCounter;
+			const int cursor = aside.luaStateCursor;
+			MovableObject::PinUniqueIDCounter(counter + 64);
+			g_LuaMan.SetScriptStateCursor(cursor + 1);
+			aside.luaGraphs.front().insert(0, "X");
+			refusalFinishesRestore = !g_MovableMan.ReinstateWorld(aside) && MovableObject::GetUniqueIDCounter() == counter && g_LuaMan.GetScriptStateCursor() == cursor;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (refusalFinishesRestore ? "PASS" : "FAIL") << " refused_reinstate_finishes_the_restore" << std::endl;
+	checkpointValues = refusalFinishesRestore && checkpointValues;
 	// A held sound registry copy names raw SoundContainers. Putting it back keeps only the owners the
 	// live map still registers under that identity, so a container destroyed while a copy waits stays gone.
 	bool soundRegistryForgetsDestroyed = false;
@@ -4781,6 +4896,55 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (shadowedOwner ? "PASS" : "FAIL") << " checkpoint_ignores_shadowed_script_owner" << std::endl;
 	checkpointValues = shadowedOwner && checkpointValues;
+	// A preset whose attachable was replaced keeps ignoring the discarded child, and every copy of it
+	// inherits that link. A restored object takes the link its record names and no other.
+	bool recordedIgnoreLink = false;
+	{
+		MovableMan::ConstructionRegistryScope registryScope;
+		MOPixel target;
+		target.Create();
+		auto* presetSource = const_cast<MovableObject*>(dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset("MOPixel", "Spark Yellow 1", "Base.rte")));
+		const auto record = [](const MovableObject* mo) {
+			auto stream = std::make_unique<std::stringstream>();
+			std::stringstream* raw = stream.get();
+			Writer writer(std::move(stream));
+			Writer::SnapshotScope snapshotScope(writer);
+			writer.NewProperty("ScriptEntity");
+			Scene::SaveSceneObject(writer, mo, false, true);
+			return raw->str();
+		};
+		const auto readInto = [](MovableObject& into, const std::string& text) {
+			Reader reader(std::make_unique<std::stringstream>(text), "Base.rte/MOToNotHitSelfTest.ini", false, nullptr, true);
+			reader.SetCheckpoint(true);
+			reader.SetThrowOnError(true);
+			reader.SetSkipIncludes(true);
+			if (!reader.NextProperty() || reader.ReadPropName() != "ScriptEntity") return false;
+			into.Destroy();
+			return static_cast<Serializable&>(into).Create(reader, true, false) >= 0;
+		};
+		if (presetSource && !presetSource->GetWhichMOToNotHit()) {
+			std::unique_ptr<MovableObject> donor(dynamic_cast<MovableObject*>(presetSource->Clone()));
+			donor->SetWhichMOToNotHit(&target, 10.0F);
+			const std::string linked = record(donor.get());
+			donor->SetWhichMOToNotHit(nullptr);
+			const std::string unlinked = record(donor.get());
+			recordedIgnoreLink = linked.find("MOToNotHitUniqueID = " + std::to_string(target.GetUniqueID())) != std::string::npos;
+			recordedIgnoreLink = unlinked.find("MOToNotHitUniqueID = 0") != std::string::npos && recordedIgnoreLink;
+			presetSource->SetWhichMOToNotHit(&target, 10.0F);
+			MOPixel restored;
+			recordedIgnoreLink = readInto(restored, unlinked) && recordedIgnoreLink;
+			restored.ResolveFaithfulLinks();
+			recordedIgnoreLink = !restored.GetWhichMOToNotHit() && restored.GetMOToNotHitUID() == 0 && recordedIgnoreLink;
+			MOPixel relinked;
+			recordedIgnoreLink = readInto(relinked, linked) && recordedIgnoreLink;
+			relinked.ResolveFaithfulLinks();
+			recordedIgnoreLink = relinked.GetWhichMOToNotHit() == &target && relinked.GetMOToNotHitUID() == target.GetUniqueID() && recordedIgnoreLink;
+			presetSource->SetWhichMOToNotHit(nullptr);
+			recordedIgnoreLink = !presetSource->GetWhichMOToNotHit() && recordedIgnoreLink;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (recordedIgnoreLink ? "PASS" : "FAIL") << " restore_takes_only_the_recorded_ignore_link" << std::endl;
+	checkpointValues = recordedIgnoreLink && checkpointValues;
 	bool nativeLifetime = true;
 	{
 		MOPixel object;

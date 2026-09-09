@@ -185,6 +185,46 @@ class ArgumentPolicyError(ValueError):
 class StartupCheckError(RuntimeError):
     """A pre-launch check failed; no process was created."""
 
+# The private desktop keeps windows and input away from the user, but a new game process still changes the
+# display's cooperative state, which minimises a fullscreen exclusive application the user is running.
+# SHQueryUserNotificationState reports exactly that condition, so no game launches while it holds.
+_shell32 = C.WinDLL("shell32", use_last_error=True)
+_query_notification_state = _shell32.SHQueryUserNotificationState
+_query_notification_state.argtypes = [C.POINTER(C.c_int)]
+_query_notification_state.restype = C.HRESULT
+_FULLSCREEN_STATES = {2: "QUNS_BUSY", 3: "QUNS_RUNNING_D3D_FULL_SCREEN", 4: "QUNS_PRESENTATION_MODE"}
+
+
+def user_fullscreen_state():
+    """The name of the user's fullscreen/presentation state, or None when a launch would not disturb the user."""
+    state = C.c_int(0)
+    try:
+        _query_notification_state(C.byref(state))
+    except OSError:
+        return None
+    return _FULLSCREEN_STATES.get(state.value)
+
+
+def wait_while_user_fullscreen(record, save, limit_seconds=4 * 3600, poll_seconds=15):
+    """Block while the user is in a fullscreen application; record the wait; refuse after the bound."""
+    if os.environ.get("CC_RUNNER_IGNORE_FULLSCREEN") == "1":
+        return
+    waited = 0
+    state = user_fullscreen_state()
+    while state:
+        record["waiting_for_user_fullscreen"] = state
+        record["waited_for_user_fullscreen_seconds"] = waited
+        save()
+        if waited >= limit_seconds:
+            raise StartupCheckError(f"user in {state} for {waited}s; the game is not launched over a fullscreen application")
+        time.sleep(poll_seconds)
+        waited += poll_seconds
+        state = user_fullscreen_state()
+    if waited:
+        record["waited_for_user_fullscreen_seconds"] = waited
+        save()
+
+
 
 def check(value):
     if not value:
@@ -367,6 +407,7 @@ class IsolatedRun:
         try:
             if self.do_startup_checks:
                 self._startup_checks()
+            wait_while_user_fullscreen(self.record, self._save)
             self.desktop = check(create_desktop(self.name, None, None, 0, 0x01FF, None))
             self.job = check(create_job(None, None))
             lim = EXT()
