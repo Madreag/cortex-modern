@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import gzip
+import itertools
 import json
 import re
 import shutil
@@ -17,6 +18,8 @@ sys.path.insert(0, str(repo / 'tools'))
 from run_sim_test import make_run
 from compare_sim_traces import strict_compare
 from compare_snapshots import compare_graphs, parse_graph
+import cross_process_state
+import state_document
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -39,14 +42,14 @@ def compare_lua_observations(first, first_stage, second, second_stage, cross_pro
             'cross_process': cross_process, 'vms': results}
 
 
-def compare_state_files(first, second, destination):
+def compare_state_files(first, second, destination, cross_process=False):
     """Compare exact raw documents; native string values can contain newlines/NULs."""
+    if cross_process:
+        return compare_state_fields(first, second, destination)
     count = 0
-    open_first = gzip.open if str(first).endswith('.gz') else open
-    open_second = gzip.open if str(second).endswith('.gz') else open
     hashes = [hashlib.sha256(), hashlib.sha256()]
     sizes = [0, 0]
-    with open_first(first, 'rb') as a_stream, open_second(second, 'rb') as b_stream, gzip.open(destination, 'wt', encoding='utf-8') as output:
+    with state_document.open_document(first) as a_stream, state_document.open_document(second) as b_stream, gzip.open(destination, 'wt', encoding='utf-8') as output:
         offset = 0
         while True:
             a, b = a_stream.read(65536), b_stream.read(65536)
@@ -62,6 +65,83 @@ def compare_state_files(first, second, destination):
     return {'equal': count == 0, 'changed_blocks': count, 'first_bytes': sizes[0], 'second_bytes': sizes[1],
             'first_sha256': hashes[0].hexdigest(), 'second_sha256': hashes[1].hexdigest(), 'artifact': str(destination),
             'classification': 'Exact unfiltered document comparison; differences are 64-KiB byte blocks, not a field count.'}
+
+
+def compare_state_fields(first, second, destination):
+    """The reference runs in another process, so project the named real-clock fields and keep the rest."""
+    hashes, sizes, counts = [hashlib.sha256(), hashlib.sha256()], [0, 0], [0, 0]
+    differences, projected_records, projected = 0, 0, {}
+    with state_document.open_document(first) as a_stream, state_document.open_document(second) as b_stream, gzip.open(destination, 'wt', encoding='utf-8') as output:
+        pairs = itertools.zip_longest(state_document.records(a_stream), state_document.records(b_stream))
+        for index, (a, b) in enumerate(pairs):
+            for position, block in enumerate((a, b)):
+                if block is not None:
+                    hashes[position].update(block)
+                    sizes[position] += len(block)
+                    counts[position] += 1
+            if a == b: continue
+            record = {'record': index, 'reference': None if a is None else state_document.text(a),
+                      'candidate': None if b is None else state_document.text(b)}
+            fields = [None if block is None else state_document.field(block) for block in (a, b)]
+            record['field'] = fields[0]
+            # Only a record the writer wrote on one line can be projected: a quoted run that spans lines
+            # would otherwise let clock-shaped text inside a native string pass as a clock field.
+            named = fields[0] is not None and fields[0] == fields[1] and state_document.single_line(a) and state_document.single_line(b)
+            reason = cross_process_state.real_clock_reason(fields[0]) if named else None
+            if reason:
+                family = projected.setdefault(cross_process_state.family(fields[0]), {'count': 0, 'reason': reason})
+                family['count'] += 1
+                projected_records += 1
+            else:
+                differences += 1
+            record.update(projected=bool(reason), reason=reason)
+            output.write(json.dumps(record) + '\n')
+    return {'equal': differences == 0 and counts[0] == counts[1], 'cross_process': True, 'changed_records': differences,
+            'projected_records': projected_records, 'projected': projected, 'first_records': counts[0], 'second_records': counts[1],
+            'first_bytes': sizes[0], 'second_bytes': sizes[1], 'first_sha256': hashes[0].hexdigest(),
+            'second_sha256': hashes[1].hexdigest(), 'artifact': str(destination),
+            'classification': 'Record-exact document comparison, a record being one written field however many lines its strings span. '
+                              'Every difference is retained in the artifact; only single-line records naming a field of '
+                              'cross_process_state.REAL_CLOCK_FIELDS are projected, counted per family with the writer that makes each per-process.'}
+
+
+# A transition named here must apply; every load transaction answers to --expect-load instead, and
+# 'observe'/'stage' record an outcome of their own.
+APPLYING_OPERATIONS = ('save', 'memory', 'file', 'hold', 'preview')
+LOAD_OPERATIONS = ('load', 'ordinary-load')
+STAGE_TRANSACTIONS = ('stage-reject', 'stage-ordinary-reject')
+# A refusal is allowed to print why it refused; an assert, an abort or a traceback never is.
+CRASH_ERROR = re.compile(r'RTE Assert|RTE Abort|stack traceback')
+
+
+def refused_load(item):
+    """A load transaction whose candidate the engine actually turned down."""
+    staged = item.get('staged_candidate') or {}
+    return (item['operation'].split(':', 1)[0] in LOAD_OPERATIONS + STAGE_TRANSACTIONS
+            and (item.get('applied') is not True or staged.get('replacement_accepted') is False))
+
+
+def unexpected_errors(item):
+    """Only the refusal a deliberate refusal case provoked is expected; an accepted load stays strict."""
+    exempt = refused_load(item)
+    return [line for line in item['errors'] if not exempt or CRASH_ERROR.search(line)]
+
+
+def gate(item, expect_load, exe_hash):
+    """The recorded outcome of the transition, not just a clean process."""
+    base = item['operation'].split(':', 1)[0]
+    must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and expect_load == 'accepted')
+    return [name for name, passed in (
+        ('completed', item['completed']),
+        ('process_clean', item['process_clean']),
+        ('desktop_unchanged', item['desktop_unchanged']),
+        ('binary', item['binary'] == exe_hash),
+        ('applied', item.get('applied') is True or not must_apply),
+        ('errors', not unexpected_errors(item)),
+        ('graph_capture', not item['graph_capture_problems']),
+        ('graphs_serialized', all(observation['serialized'] and observation['problem_count'] == 0
+                                  for observation in item['graph_observations']))) if not passed]
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -121,7 +201,8 @@ def main():
     exe_hash = digest(repo / 'Cortex Command.exe')
     inputs = {}
     harness_inputs = [Path(__file__), repo / 'tools/run_sim_test.py', repo / 'tools/win32_test_runner.py', repo / 'tools/compare_sim_traces.py',
-                      repo / 'tools/compare_snapshots.py', repo / 'tools/snapshot_runtime.py']
+                      repo / 'tools/compare_snapshots.py', repo / 'tools/snapshot_runtime.py',
+                      repo / 'tools/cross_process_state.py', repo / 'tools/state_document.py']
     for path in [options.replay, options.script, options.global_script, *options.snapshots, *harness_inputs]:
         if path:
             target = options.out / 'fixture_sources' / path.name
@@ -302,7 +383,7 @@ def main():
             if not expected_fault: checks['reference_full_lua'] = graphs['passed']
             try:
                 continuation['reference_raw'] = compare_state_files(ref / 'trace.json.contract.continued.state.txt.gz',
-                    out / 'trace.json.contract.continued.state.txt.gz', out / 'continuation-raw-differences.jsonl.gz')
+                    out / 'trace.json.contract.continued.state.txt.gz', out / 'continuation-raw-differences.jsonl.gz', cross_process=True)
             except Exception as error:
                 continuation['reference_raw'] = {'error': str(error)}
                 checks['reference_raw_available'] = False
@@ -331,11 +412,30 @@ def main():
             continuation['scope'] = 'Full trace, final native simulation dump and five complete Lua graphs; unfiltered cross-run raw fields retained for separate classification.'
             (out / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps({'case': result['case'], 'continuation_status': continuation['status'], 'failed_checks': [key for key, passed in checks.items() if not passed]}), flush=True)
+
+    for item in results:
+        item['gate_failures'] = gate(item, options.expect_load, exe_hash)
+        (Path(item['out']) / 'result.json').write_text(json.dumps(item, indent=2))
     unchanged = unchanged_inputs()
-    complete = unchanged and all(item['completed'] and item['process_clean'] and item['desktop_unchanged'] and item['binary'] == exe_hash for item in results)
+    complete = unchanged and not any(item['gate_failures'] for item in results)
     continuation_passed = all(item['continuation']['passed'] for item in results) if options.continue_through else None
+    verdict = {'rule': 'Every case completes on the pinned binary with a clean process and desktop, applies the transitions expected to apply, '
+                       'logs no engine error outside a deliberate refusal, and serialises all five Lua graphs.',
+               'failed_cases': [{'case': item['case'], 'operation': item['operation'], 'gate_failures': item['gate_failures'],
+                                 'applied': item.get('applied'), 'errors': item['errors']} for item in results if item['gate_failures']],
+               'refused_transitions': [item['case'] for item in results if item.get('applied') is False],
+               'error_cases': {item['case']: item['errors'] for item in results if item['errors']},
+               'unexpected_error_cases': {item['case']: unexpected_errors(item) for item in results if unexpected_errors(item)},
+               'graph_problem_cases': {item['case']: item['graph_capture_problems'] + [observation for observation in item['graph_observations']
+                                                                                       if not observation['serialized'] or observation['problem_count']]
+                                       for item in results if item['graph_capture_problems']
+                                       or any(not observation['serialized'] or observation['problem_count'] for observation in item['graph_observations'])},
+               'raw_field_differences': {item['case']: item.get('raw_field_differences') for item in results},
+               'raw_field_differences_total': sum(item.get('raw_field_differences') or 0 for item in results),
+               'raw_note': 'Raw field differences are recorded, never gated: they require the retained classifiers.'}
     (options.out / 'result.json').write_text(json.dumps({'status': 'AUDIT OBSERVATIONS, not a complete fidelity pass', 'complete': complete,
-        'source_unchanged': unchanged, 'continuation_checks_passed': continuation_passed, 'references': list(references.values()), 'results': results}, indent=2))
+        'source_unchanged': unchanged, 'continuation_checks_passed': continuation_passed, 'verdict': verdict,
+        'references': list(references.values()), 'results': results}, indent=2))
     return 0 if complete and continuation_passed is not False else 1
 
 if __name__ == '__main__': raise SystemExit(main())
