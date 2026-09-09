@@ -338,13 +338,14 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 15;
+		static constexpr uint16_t c_Version = 16;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
 		// Version 14 spells a sound observation's key once per sender and refers to it by slot after that.
 		// Version 15 says how many keys the sender had spelled out before the packet, so a receiver that
 		// missed one refuses instead of reading a reused slot as the key it held before.
+		// Version 16 distinguishes a dropped peer from a clean leave; admission hashes this version.
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
 		static constexpr uint16_t c_ObservationSlotVersion = 14;
