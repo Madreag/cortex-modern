@@ -1654,6 +1654,7 @@ namespace RTE {
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
 		m_CongestedPeers.clear();
@@ -1766,6 +1767,7 @@ namespace RTE {
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
 		m_CongestedPeers.clear();
@@ -2029,6 +2031,7 @@ namespace RTE {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		RefreshLeftSeatHolds();
 		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
 			HandleEvent(event, nowMs);
 		}
@@ -2161,30 +2164,34 @@ namespace RTE {
 		return true;
 	}
 
-	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+	uint8_t NetLockstepCoordinator::ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
 			return m_Config.localPeerId;
 		}
 		if (!m_Config.matchConfig.players.empty()) {
 			const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-			uint8_t ownerPeerId = NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {
-				actorUniqueID,
-				team,
-				cpuControlled,
-			});
-			// A leaver's team falls to its next surviving human peer, so the units play on. The
-			// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
-			if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
-				const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
-				// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
-				// teammate the relay host plays its units until the holder returns, instead of standing
-				// them down to be shot where they stand - the round is held open only while it is alone.
-				ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
-			}
-			return ownerPeerId;
+			return NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled});
 		}
 		const uint64_t normalized = actorUniqueID < 0 ? static_cast<uint64_t>(-(actorUniqueID + 1)) + 1U : static_cast<uint64_t>(actorUniqueID);
 		return static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
+	}
+
+	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+		uint8_t ownerPeerId = ResolveActorOwnerBeforeLeaves(actorUniqueID, actorTeam, cpuControlled);
+		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0 || m_Config.matchConfig.players.empty()) {
+			return ownerPeerId;
+		}
+		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
+		// A leaver's team falls to its next surviving human peer, so the units play on. The
+		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
+		if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
+			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+			// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
+			// teammate the relay host plays its units until the holder returns, instead of standing
+			// them down to be shot where they stand - the round is held open only while it is alone.
+			ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
+		}
+		return ownerPeerId;
 	}
 
 	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
@@ -2911,10 +2918,21 @@ namespace RTE {
 		return m_SeatStateSource ? m_SeatStateSource(m_SeatStateContext, peerId, transportPeerId) : NetLockstepSeatState{};
 	}
 
+	// The match service pumps us with its own lock held, and the ownership census that pump takes asks
+	// who owns a left seat's units - so asking the service back from there re-locks it on its own
+	// thread. The answer is resolved here instead, from the tick, which also fixes it for the whole
+	// tick: ownership cannot change under a subsystem halfway through one.
+	void NetLockstepCoordinator::RefreshLeftSeatHolds() {
+		m_LeftSeatsHeld.clear();
+		for (const auto& left: m_PeerLeaveFrames) {
+			if (SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim) {
+				m_LeftSeatsHeld.insert(left.first);
+			}
+		}
+	}
+
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
-		return std::any_of(m_PeerLeaveFrames.begin(), m_PeerLeaveFrames.end(), [this](const auto& left) {
-			return SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim;
-		});
+		return !m_LeftSeatsHeld.empty();
 	}
 
 	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
@@ -2938,6 +2956,7 @@ namespace RTE {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
+		RefreshLeftSeatHolds();
 		std::cout << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
 		NetLockstepStop notice;
 		notice.senderPeerId = peerId;

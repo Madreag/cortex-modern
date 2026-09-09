@@ -1422,12 +1422,14 @@ std::string InventoryMenuGUI::SaveCheckpoint() const {
 	CheckpointWriter writer("InventoryMenuGUI2");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
-	writer(GUICheckpoint::SaveEntityReference(m_InventoryActor), m_InventoryActorEquippedItems.size());
-	for (const auto& [item, offhand]: m_InventoryActorEquippedItems) writer(GUICheckpoint::SaveEntityReference(item), GUICheckpoint::SaveEntityReference(offhand));
+	// These pointers are not owned and are rebuilt every Update, so one whose object has left the
+	// world is already gone; a snapshot must not carry it, because no load could produce it back.
+	writer(GUICheckpoint::SaveEntityReference(GUICheckpoint::LiveObject(m_InventoryActor)), m_InventoryActorEquippedItems.size());
+	for (const auto& [item, offhand]: m_InventoryActorEquippedItems) writer(GUICheckpoint::SaveEntityReference(GUICheckpoint::LiveObject(item)), GUICheckpoint::SaveEntityReference(GUICheckpoint::LiveObject(offhand)));
 	const auto saveBox = [](const std::unique_ptr<CarouselItemBox>& box) {
 		CheckpointWriter state("CarouselItemBox1");
 		state(box != nullptr);
-		if (box) state(GUICheckpoint::SaveEntityReference(box->Item), box->IsForEquippedItems, box->FullSize, box->CurrentSize, box->Pos, box->IconCenterPosition, box->RoundedAndBorderedSides);
+		if (box) state(GUICheckpoint::SaveEntityReference(GUICheckpoint::LiveObject(box->Item)), box->IsForEquippedItems, box->FullSize, box->CurrentSize, box->Pos, box->IconCenterPosition, box->RoundedAndBorderedSides);
 		return state.Text();
 	};
 	for (const auto& box: m_CarouselItemBoxes) writer(saveBox(box));
@@ -1436,9 +1438,9 @@ std::string InventoryMenuGUI::SaveCheckpoint() const {
 	writer(buttonName(m_NonMouseHighlightedButton), buttonName(m_NonMousePreviousEquippedItemsBoxButton), buttonName(m_NonMousePreviousInventoryItemsBoxButton), buttonName(m_NonMousePreviousReloadOrDropButton));
 	writer(GUICheckpoint::SaveEntityReference(m_GUIInformationToggleButtonIcon), GUICheckpoint::SaveEntityReference(m_GUIReloadButtonIcon), GUICheckpoint::SaveEntityReference(m_GUIDropButtonIcon));
 	writer(m_GUISelectedItem != nullptr);
-	if (m_GUISelectedItem) writer(buttonName(m_GUISelectedItem->Button), GUICheckpoint::SaveEntityReference(m_GUISelectedItem->Object), m_GUISelectedItem->InventoryIndex, m_GUISelectedItem->EquippedItemIndex, m_GUISelectedItem->IsBeingDragged, m_GUISelectedItem->DragHoldCount);
+	if (m_GUISelectedItem) writer(buttonName(m_GUISelectedItem->Button), GUICheckpoint::SaveEntityReference(GUICheckpoint::LiveObject(m_GUISelectedItem->Object)), m_GUISelectedItem->InventoryIndex, m_GUISelectedItem->EquippedItemIndex, m_GUISelectedItem->IsBeingDragged, m_GUISelectedItem->DragHoldCount);
 	writer(m_GUIInventoryItemButtons.size());
-	for (const auto& [item, button]: m_GUIInventoryItemButtons) writer(GUICheckpoint::SaveEntityReference(item), buttonName(button));
+	for (const auto& [item, button]: m_GUIInventoryItemButtons) writer(GUICheckpoint::SaveEntityReference(GUICheckpoint::LiveObject(item)), buttonName(button));
 	writer(m_GUIControlManager != nullptr);
 	if (m_GUIControlManager) writer(m_GUIControlManager->SaveCheckpoint());
 	return writer.Text();

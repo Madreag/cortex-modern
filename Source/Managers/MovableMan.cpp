@@ -281,7 +281,7 @@ std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCe
 			continue;
 		}
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
-		census.push_back({actorID, actor->GetTeam(), ScenarioRunner::GetLockstepActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled())});
+		census.push_back({actorID, actor->GetTeam(), ScenarioRunner::GetLockstepDropTimeActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled())});
 	}
 	return census;
 }
