@@ -491,6 +491,8 @@ namespace RTE {
 		void ReadoptRound(uint64_t roundId, uint64_t nowMs);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
+		/// Clears everything one round owns, so leaving a round cannot carry a fact from it.
+		void ResetRoundState();
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport);
 		/// Whether a packet's claimed sender owns the transport it arrived on. Only the relay host
