@@ -2160,30 +2160,34 @@ namespace RTE {
 		return true;
 	}
 
-	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+	uint8_t NetLockstepCoordinator::ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
 			return m_Config.localPeerId;
 		}
 		if (!m_Config.matchConfig.players.empty()) {
 			const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-			uint8_t ownerPeerId = NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {
-				actorUniqueID,
-				team,
-				cpuControlled,
-			});
-			// A leaver's team falls to its next surviving human peer, so the units play on. The
-			// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
-			if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
-				const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
-				// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
-				// teammate the relay host plays its units until the holder returns, instead of standing
-				// them down to be shot where they stand - the round is held open only while it is alone.
-				ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
-			}
-			return ownerPeerId;
+			return NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled});
 		}
 		const uint64_t normalized = actorUniqueID < 0 ? static_cast<uint64_t>(-(actorUniqueID + 1)) + 1U : static_cast<uint64_t>(actorUniqueID);
 		return static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
+	}
+
+	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+		uint8_t ownerPeerId = ResolveActorOwnerBeforeLeaves(actorUniqueID, actorTeam, cpuControlled);
+		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0 || m_Config.matchConfig.players.empty()) {
+			return ownerPeerId;
+		}
+		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
+		// A leaver's team falls to its next surviving human peer, so the units play on. The
+		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
+		if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
+			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+			// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
+			// teammate the relay host plays its units until the holder returns, instead of standing
+			// them down to be shot where they stand - the round is held open only while it is alone.
+			ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
+		}
+		return ownerPeerId;
 	}
 
 	bool NetLockstepCoordinator::IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {

@@ -439,6 +439,8 @@ namespace RTE {
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
 		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
+		/// The same, with leaves NOT applied: who HELD the actor, which is what the drop ledger records.
+		uint8_t ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		uint8_t ResolveTeamCommandAuthority(int team) const;
 		/// Whether a transport peer carries one of this round's lockstep remotes (a NEW transport
 		/// peer reaching session-Ready mid-match is a reconnector).
