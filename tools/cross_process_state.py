@@ -34,9 +34,3 @@ def real_clock_reason(field):
 def family(field):
     """One name per field family: a raw path indexes objects, the field it names is the same one."""
     return re.sub(r'\[\d+\]', '[]', field)
-
-
-def field_of(line):
-    """The path a raw state line names, or None for a line that is not a field."""
-    key, separator, _ = line.partition(' = ')
-    return key if separator else None

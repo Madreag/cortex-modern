@@ -19,6 +19,8 @@ import run_audit
 
 TIMER = "mo[1048625].MovableObject.m_RestTimer.Timer.m_StartRealTime"
 SIMULATION = "mo[1048625].MovableObject.m_Vel.Vector.m_X"
+# A ContentFile path whose string carries a newline, as ContractAudit writes it: the record spans lines.
+STRING_HEAD = 'mo[7].MOSprite.m_SpriteFile.ContentFile.m_DataPathAndReaderPosition = "'
 
 
 def document(path, lines):
@@ -73,10 +75,6 @@ class ProjectionRules(unittest.TestCase):
             ),
             "mo[].AHuman.m_Paths[][].LimbPath.m_SegTimer.Timer.m_StartRealTime",
         )
-        self.assertEqual(
-            projection.field_of("clock.real_time = 89713"), "clock.real_time"
-        )
-        self.assertIsNone(projection.field_of("not a field"))
 
 
 class CrossProcessComparison(unittest.TestCase):
@@ -110,8 +108,8 @@ class CrossProcessComparison(unittest.TestCase):
             ],
         )
         self.assertTrue(result["equal"])
-        self.assertEqual(result["changed_lines"], 0)
-        self.assertEqual(result["projected_lines"], 3)
+        self.assertEqual(result["changed_records"], 0)
+        self.assertEqual(result["projected_records"], 3)
         self.assertEqual(
             sorted(result["projected"]),
             [
@@ -134,8 +132,8 @@ class CrossProcessComparison(unittest.TestCase):
             [SIMULATION + " = 1.6", TIMER + " = 2", "clock.sim_time = 101"],
         )
         self.assertFalse(result["equal"])
-        self.assertEqual(result["changed_lines"], 2)
-        self.assertEqual(result["projected_lines"], 1)
+        self.assertEqual(result["changed_records"], 2)
+        self.assertEqual(result["projected_records"], 1)
         retained = [
             record["field"]
             for record in records(self.artifact)
@@ -149,9 +147,31 @@ class CrossProcessComparison(unittest.TestCase):
             ["clock.real_time = 2", TIMER + " = 2", "clock.sim_accumulator = 3"],
         )
         self.assertFalse(result["equal"])
-        self.assertEqual(result["changed_lines"], 3)
-        self.assertEqual(result["projected_lines"], 0)
-        self.assertEqual((result["first_lines"], result["second_lines"]), (2, 3))
+        self.assertEqual(result["changed_records"], 3)
+        self.assertEqual(result["projected_records"], 0)
+        self.assertEqual((result["first_records"], result["second_records"]), (2, 3))
+
+    def test_clock_text_inside_a_native_string_is_not_a_clock_field(self):
+        # The two documents differ only inside one multi-line string, on a line shaped like an anchor.
+        first = [STRING_HEAD + "head", TIMER + " = 1", 'tail"', "clock.sim_time = 100"]
+        second = [STRING_HEAD + "head", TIMER + " = 2", 'tail"', "clock.sim_time = 100"]
+        result = self.compare(first, second)
+        self.assertFalse(result["equal"])
+        self.assertEqual(result["projected_records"], 0)
+        self.assertEqual(result["changed_records"], 1)
+        self.assertNotEqual(result["first_sha256"], result["second_sha256"])
+        difference = records(self.artifact)[0]
+        self.assertEqual(difference["field"], STRING_HEAD.split(" = ")[0])
+        self.assertFalse(difference["projected"])
+
+    def test_a_real_anchor_beside_a_multi_line_string_is_still_projected(self):
+        payload = [STRING_HEAD, 'Data/Base.rte/one.bmp"']
+        result = self.compare(
+            payload + [TIMER + " = 89713"], payload + [TIMER + " = 98497"]
+        )
+        self.assertTrue(result["equal"])
+        self.assertEqual(result["projected_records"], 1)
+        self.assertEqual((result["first_records"], result["second_records"]), (2, 2))
 
     def test_same_process_comparison_keeps_every_byte(self):
         result = self.compare([TIMER + " = 1"], [TIMER + " = 2"], cross_process=False)
