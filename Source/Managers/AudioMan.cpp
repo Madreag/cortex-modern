@@ -89,6 +89,11 @@ AudioMan::~AudioMan() {
 }
 
 void AudioMan::Clear() {
+	m_AudioSystem = nullptr;
+	m_MasterChannelGroup = nullptr;
+	m_SFXChannelGroup = nullptr;
+	m_UIChannelGroup = nullptr;
+	m_MusicChannelGroup = nullptr;
 	m_InaudibleTestOutputVerified = false;
 	m_ActiveLogicalSounds.clear();
 	{
@@ -109,6 +114,7 @@ void AudioMan::Clear() {
 	m_MuteMaster = false;
 	m_MuteMusic = false;
 	m_MuteSounds = false;
+	m_MuteAudioOnFocusLoss = false;
 	m_MasterVolume = 0.5F;
 	m_MusicVolume = 1.0F;
 	m_SoundsVolume = 1.0F;
@@ -1390,7 +1396,9 @@ namespace {
 			archive(enabled, nextVoice, nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer, playerPositions, listeners, groups, samples, voices, minimumDistances, events);
 		}
 		std::string Save() { CheckpointWriter archive("AudioRuntime3"); Fields(archive); archive(audibility, deferredSoundOpTick, deferredSoundOpOrdinal); return archive.Text(); }
-		bool Load(std::string_view text) {
+		// Every refusal names itself, so a rejected archive says what was wrong with it.
+		bool Load(std::string_view text, std::string* refusal = nullptr) {
+			const auto refuse = [refusal](std::string reason) { if (refusal) *refusal = std::move(reason); return false; };
 			try {
 				const std::string_view version = AudioMan::CheckpointVersion(text);
 				CheckpointReader archive(text, version); Fields(archive);
@@ -1398,15 +1406,27 @@ namespace {
 				else if (version == "AudioRuntime2") archive(audibility);
 				archive.Finish();
 				std::set<std::pair<SoundObservationKey, uint8_t>> readings;
-				for (const auto& record: audibility) if (!readings.insert({record.key, record.peer}).second) return false;
-				if (nextVoice < 0 || voices.size() > c_MaxVirtualChannels || listeners.size() > 8 || (enabled && listeners.empty())) return false;
-				for (float value: {masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning}) if (!AudioCheckpoint::Finite(value)) return false;
-				std::set<int> voiceIDs; for (const auto& voice: voices) if (!voiceIDs.insert(voice.identity).second || voice.owner > nextSoundContainer) return false;
-				for (const auto& [identity, distance]: minimumDistances) if (!voiceIDs.contains(identity) || !AudioCheckpoint::Finite(distance)) return false;
-				std::set<std::string> paths; for (const auto& sample: samples) if (!paths.insert(sample.path).second) return false;
-				for (const auto& voice: voices) if (voice.playing && !paths.contains(voice.path)) return false;
+				for (const auto& record: audibility) if (!readings.insert({record.key, record.peer}).second) return refuse("duplicate committed audibility for object " + std::to_string(record.key.objectUID) + " tick " + std::to_string(record.key.tick) + " peer " + std::to_string(record.peer));
+				if (nextVoice < 0) return refuse("negative next voice identity " + std::to_string(nextVoice));
+				if (voices.size() > c_MaxVirtualChannels) return refuse(std::to_string(voices.size()) + " voices exceed the " + std::to_string(c_MaxVirtualChannels) + " virtual channels");
+				if (listeners.size() > 8) return refuse(std::to_string(listeners.size()) + " listeners");
+				if (enabled && listeners.empty()) return refuse("audio is enabled but the checkpoint has no listener");
+				for (const auto& [name, value]: {std::pair<const char*, float>{"master volume", masterVolume}, {"music volume", musicVolume}, {"sounds volume", soundsVolume}, {"global pitch", globalPitch}, {"panning", panning}, {"listener Z", listenerZ}, {"minimum panning", minimumPanning}})
+					if (!AudioCheckpoint::Finite(value)) return refuse(std::string(name) + " is not finite");
+				std::set<int> voiceIDs;
+				for (const auto& voice: voices) {
+					if (!voiceIDs.insert(voice.identity).second) return refuse("duplicate voice identity " + std::to_string(voice.identity));
+					if (voice.owner > nextSoundContainer) return refuse("voice " + std::to_string(voice.identity) + " has owner " + std::to_string(voice.owner) + " past the sound container cursor " + std::to_string(nextSoundContainer));
+				}
+				for (const auto& [identity, distance]: minimumDistances) {
+					if (!voiceIDs.contains(identity)) return refuse("minimum audible distance names unknown voice " + std::to_string(identity));
+					if (!AudioCheckpoint::Finite(distance)) return refuse("minimum audible distance of voice " + std::to_string(identity) + " is not finite");
+				}
+				std::set<std::string> paths;
+				for (const auto& sample: samples) if (!paths.insert(sample.path).second) return refuse("duplicate sample " + sample.path);
+				for (const auto& voice: voices) if (voice.playing && !paths.contains(voice.path)) return refuse("playing voice " + std::to_string(voice.identity) + " has no captured sample for " + voice.path);
 				return true;
-			} catch (const std::exception&) { return false; }
+			} catch (const std::exception& error) { return refuse(error.what()); }
 		}
 	};
 }
@@ -1457,9 +1477,9 @@ std::string AudioMan::SaveCheckpoint() const {
 	return state.Save();
 }
 
-bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings) {
+bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings, std::string* refusal) {
 	AudioRuntime state;
-	if (!state.Load(text)) return false;
+	if (!state.Load(text, refusal)) return false;
 	if (validateOnly) return true;
 	try {
 		if (!m_AudioEnabled && !state.voices.empty()) throw std::runtime_error("checkpoint contains voices but the audio system is disabled");
@@ -1610,6 +1630,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		TraceCheckpointBoundary("load-committed");
 		return true;
 	} catch (const std::exception& error) {
+		if (refusal) *refusal = error.what();
 		g_ConsoleMan.PrintString(std::string("ERROR: Could not restore audio checkpoint: ") + error.what());
 		std::cout << "[audio-checkpoint] " << error.what() << std::endl;
 		return false;
@@ -1782,8 +1803,24 @@ bool AudioMan::RunCheckpointSelfTest() {
 		if (FindCheckpointSoundContainer(source->GetCheckpointIdentity()) != stagedOwner.get()) throw std::runtime_error("staged sound owner could not be activated");
 		RestoreCheckpointSoundRegistry(liveRegistry);
 		stagedOwner.reset();
+		// A setting the manager never assigned reaches the writer as a raw byte, which is neither
+		// true nor false, and the reader has to refuse the archive rather than round it to a bool.
+		{
+			AudioRuntime unset;
+			const unsigned char rawByte = 100;
+			std::memcpy(&unset.muteOnFocusLoss, &rawByte, sizeof(rawByte));
+			std::string unsetRefusal;
+			if (unset.Load(unset.Save(), &unsetRefusal)) throw std::runtime_error("an audio setting that is neither true nor false was accepted");
+			if (unsetRefusal.find("'100'") == std::string::npos) throw std::runtime_error("the refusal did not name the offending value: " + unsetRefusal);
+			std::cout << "[audio-checkpoint-selftest] PASS unset_setting_byte_is_refused_and_named " << unsetRefusal << std::endl;
+			unsigned char liveByte = 0;
+			std::memcpy(&liveByte, &m_MuteAudioOnFocusLoss, sizeof(liveByte));
+			if (liveByte > 1) throw std::runtime_error("MuteAudioOnFocusLoss was never initialised: byte " + std::to_string(liveByte));
+			std::cout << "[audio-checkpoint-selftest] PASS mute_on_focus_loss_initialised" << std::endl;
+		}
 		AudioRuntime invalid;
-		if (!invalid.Load(checkpoint)) throw std::runtime_error("could not parse generated audio checkpoint");
+		std::string refusal;
+		if (!invalid.Load(checkpoint, &refusal)) throw std::runtime_error("could not parse generated audio checkpoint: " + refusal);
 		for (auto& voice: invalid.voices) if (voice.identity == identity) {
 			AudioCheckpoint::Effect invalidEffect; invalidEffect.index = 63; invalidEffect.type = FMOD_DSP_TYPE_MULTIBAND_EQ;
 			voice.control.effects.push_back(invalidEffect);

@@ -652,6 +652,17 @@ namespace RTE {
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
 	}
 
+	uint8_t ScenarioRunner::GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		if (!s_LockstepCoordinator) {
+			return 0;
+		}
+		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
+		if (overrideIt != s_LockstepControlOverrides.end()) {
+			return overrideIt->second;
+		}
+		return s_LockstepCoordinator->ResolveActorOwnerBeforeLeaves(actorUniqueID, actorTeam, cpuControlled);
+	}
+
 	uint8_t ScenarioRunner::GetLockstepHostPeerId() {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().matchConfig.hostPeerId : 0;
 	}

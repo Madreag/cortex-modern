@@ -442,6 +442,8 @@ namespace RTE {
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
 		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
+		/// The same, with leaves NOT applied: who HELD the actor, which is what the drop ledger records.
+		uint8_t ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		uint8_t ResolveTeamCommandAuthority(int team) const;
 		/// Whether a transport peer carries one of this round's lockstep remotes (a NEW transport
 		/// peer reaching session-Ready mid-match is a reconnector).
@@ -510,7 +512,11 @@ namespace RTE {
 		void FlushRelayBacklog(uint64_t nowMs);
 		/// Drops peers whose forwards could not be delivered at all.
 		void DropUnreachablePeers(uint64_t nowMs);
+		/// Asks the match service for a seat. Only ever from inside Tick: the service pumps us with its
+		/// own lock held, so asking it back from an ownership query re-locks that lock on its own thread.
 		NetLockstepSeatState SeatStateOf(uint8_t peerId, NetPeerId transportPeerId) const;
+		/// Re-resolves which left seats are still held. Runs from the tick, never from a query.
+		void RefreshLeftSeatHolds();
 		/// Whether any peer that has left still holds a seat a returning player can reclaim.
 		bool AnyLeftSeatHeld() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
@@ -530,6 +536,7 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		std::set<uint8_t> m_LeftSeatsHeld; //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
 		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.

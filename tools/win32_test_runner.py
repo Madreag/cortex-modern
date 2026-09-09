@@ -182,6 +182,8 @@ class ArgumentPolicyError(ValueError):
     """The argument vector is not an explicit, well-formed test launch."""
 
 
+JOB_MEMORY_LIMIT_BYTES = int(os.environ.get("CC_RUNNER_JOB_MEMORY_GB", "8")) * 1024 ** 3
+
 class StartupCheckError(RuntimeError):
     """A pre-launch check failed; no process was created."""
 
@@ -411,7 +413,11 @@ class IsolatedRun:
             self.desktop = check(create_desktop(self.name, None, None, 0, 0x01FF, None))
             self.job = check(create_job(None, None))
             lim = EXT()
-            lim.BasicLimitInformation.LimitFlags = 0x2000
+            # KILL_ON_JOB_CLOSE, plus a job-wide commit limit: a runaway test process (one lockstep selftest
+            # reached 26 GB on 2026-09-09) fails its own allocations instead of taking the machine down.
+            lim.BasicLimitInformation.LimitFlags = 0x2000 | 0x200
+            lim.JobMemoryLimit = JOB_MEMORY_LIMIT_BYTES
+            self.record["job_memory_limit_bytes"] = JOB_MEMORY_LIMIT_BYTES
             check(set_job(self.job, 9, C.byref(lim), C.sizeof(lim)))
             ui = W.DWORD(0x40 | 0x10)
             check(set_job(self.job, 4, C.byref(ui), C.sizeof(ui)))
