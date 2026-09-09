@@ -575,6 +575,9 @@ namespace RTE {
 			if (!RoundTrip({NetLockstepStop{3, NetLockstepStopReason::PeerLeft, 240, "left"}}, error)) {
 				return false;
 			}
+			if (!RoundTrip({NetLockstepStop{3, NetLockstepStopReason::PeerDropped, 240, "connection lost"}}, error)) {
+				return false;
+			}
 			if (!RoundTrip({NetLockstepStop{1, NetLockstepStopReason::ResyncRequested, 300, "rejoin"}}, error)) {
 				return false;
 			}
@@ -599,7 +602,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x0F, 0x00,
+				0x10, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,

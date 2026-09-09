@@ -90,6 +90,7 @@ namespace RTE {
 		static std::optional<NetIdentityMismatch> Compare(const NetIdentityManifest& expected, const NetIdentityManifest& actual, bool rejectUserdataModules = true);
 
 		static NetHash32 HashCanonicalText(const std::string& domain, const std::vector<std::pair<std::string, std::string>>& fields);
+		static NetHash32 HashDeterministicConfig(const NetIdentityDeterministicConfig& config);
 		static std::string HashHex(const NetHash32& hash);
 		static std::string ShortHashHex(const NetHash32& hash);
 		static std::string NormalizeRelativePathForHash(const std::string& path, std::string* error = nullptr);

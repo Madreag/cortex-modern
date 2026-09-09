@@ -118,7 +118,7 @@ namespace RTE {
 			hasher.UpdateLine("H " + key + "=" + NetIdentity::HashHex(value));
 		}
 
-		NetHash32 HashDeterministicConfig(const NetIdentityDeterministicConfig& config) {
+		NetHash32 HashConfig(const NetIdentityDeterministicConfig& config) {
 			CanonicalHasher hasher;
 			hasher.UpdateLine("NetIdentityDeterministicConfig/v1");
 			AppendField(hasher, "game_version", config.gameVersion);
@@ -381,6 +381,10 @@ namespace RTE {
 		std::string ModuleLabel(const NetIdentityModuleEntry& module) {
 			return std::to_string(module.index) + ":" + module.fileName;
 		}
+	}
+
+	NetHash32 NetIdentity::HashDeterministicConfig(const NetIdentityDeterministicConfig& config) {
+		return HashConfig(config);
 	}
 
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {

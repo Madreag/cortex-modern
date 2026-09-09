@@ -3,6 +3,7 @@
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetLobbySession.h"
+#include "NetLockstep.h"
 #include "NetSession.h"
 
 #include <algorithm>
@@ -442,6 +443,35 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLockstepCodecAdmission(std::string* error) {
+			const std::array<std::pair<uint16_t, uint16_t>, 3> versions{{
+				{NetLockstepCodec::c_Version, NetLockstepCodec::c_Version},
+				{NetLockstepCodec::c_Version, 15}, {15, NetLockstepCodec::c_Version}}};
+			for (size_t index = 0; index < versions.size(); ++index) {
+				const uint16_t port = static_cast<uint16_t>(42150 + index);
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				auto hostConfig = MakeConfig(port, 1501, "Host");
+				auto clientConfig = MakeConfig(port, 1502, "Client");
+				hostConfig.localIdentity.deterministicConfig.lockstepCodecVersion = versions[index].first;
+				clientConfig.localIdentity.deterministicConfig.lockstepCodecVersion = versions[index].second;
+				hostConfig.localIdentity.deterministicConfigHash = NetIdentity::HashDeterministicConfig(hostConfig.localIdentity.deterministicConfig);
+				clientConfig.localIdentity.deterministicConfigHash = NetIdentity::HashDeterministicConfig(clientConfig.localIdentity.deterministicConfig);
+				if (!StartPair(port, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error) ||
+				    !DrivePair(hostTransport, clientTransport, host, client, [&] { return (host.IsReady() && client.IsReady()) || client.IsRejected(); }, error)) return false;
+				const bool compatible = index == 0;
+				if (compatible ? (!host.IsReady() || !client.IsReady()) :
+				    (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::DeterministicConfigMismatch ||
+				     client.GetMismatchKey() != "deterministic_config_hash" || host.IsReady())) {
+					*error = "lockstep codec admission " + std::to_string(versions[index].first) + "/" + std::to_string(versions[index].second) +
+					         " expected " + (compatible ? "Ready" : "DeterministicConfigMismatch") + " got " + NetSession::StateName(client.GetState());
+					return false;
+				}
+			}
+			std::cout << "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current" << std::endl;
+			return true;
+		}
+
 		bool TestSessionFull(std::string* error) {
 			const uint16_t port = 42201;
 			LoopbackTransport hostTransport;
@@ -841,6 +871,7 @@ namespace RTE {
 		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
+		if (!TestLockstepCodecAdmission(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
 		if (!TestUnauthenticatedConnectionBound(&error)) return fail(error);
 		if (!TestDuplicateNonce(&error)) return fail(error);
