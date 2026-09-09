@@ -689,6 +689,13 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-h4-fault") {
+			const std::string kind = argValue[++i];
+			NetH4SetFault(NetH4FaultFromName(kind));
+			std::cout << "[net-h4-fault] armed " << kind << std::endl;
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-match-e2e-moderate") {
 			// Repeatable: the actions run in order, one per delay, on the one seat.
 			s_netMatchE2eModerate.emplace_back(argValue[++i]);
