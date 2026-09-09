@@ -5070,6 +5070,61 @@ _PrimitiveQueueCapture = nil
 		lua_pop(L, 1);
 		return false;
 	}
+	// The lifetime half of the natural sweep: can a collector take an object the held record names?
+	// It cannot, and both halves are here. Dropped before the hold, the settle runs before the copy is
+	// taken, so the record never names it; dropped inside the hold, the stash the hold took still does.
+	bool holdNeverNamesASweptObject = false;
+	{
+		const auto park = [this]() -> long {
+			RunScriptString("_HoldSweep = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _HoldSweepUID = _HoldSweep.UniqueID");
+			lua_getglobal(m_State, "_HoldSweepUID");
+			const long identity = static_cast<long>(lua_tonumber(m_State, -1));
+			lua_pop(m_State, 1);
+			return identity;
+		};
+		bool droppedBefore = false;
+		{
+			const long identity = park();
+			RunScriptString("_HoldSweep = nil; _HoldSweepUID = nil");
+			MovableMan::WorldSetAside aside;
+			if (identity > 0 && g_MovableMan.SetAsideWorld(aside, false)) {
+				const bool swept = g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
+				const bool recorded = aside.knownObjects.contains(identity);
+				droppedBefore = swept && !recorded && g_MovableMan.ReinstateWorld(aside);
+				std::cout << "[setaside-sweep] before uid=" << identity << " swept=" << swept << " recorded=" << recorded << std::endl;
+			}
+		}
+		bool droppedInside = false;
+		{
+			const long identity = park();
+			MovableObject* const parked = identity > 0 ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+			MovableMan::WorldSetAside aside;
+			if (parked && g_MovableMan.SetAsideWorld(aside, false)) {
+				const auto named = aside.knownObjects.find(identity);
+				const bool recorded = named != aside.knownObjects.end() && named->second == parked;
+				RunScriptString("_HoldSweep = nil; _HoldSweepUID = nil");
+				g_LuaMan.CollectGarbageForCheckpoint();
+				const bool alive = g_MovableMan.FindObjectByUniqueID(identity) == parked;
+				const bool stillNamed = aside.knownObjects.contains(identity);
+				const bool reinstated = g_MovableMan.ReinstateWorld(aside);
+				lua_getglobal(m_State, "_HoldSweep");
+				const bool referenceBack = !lua_isnil(m_State, -1);
+				lua_pop(m_State, 1);
+				RunScriptString("_HoldSweep = nil; _HoldSweepUID = nil");
+				g_LuaMan.CollectGarbageForCheckpoint();
+				const bool sweptOnceDropped = g_MovableMan.FindObjectByUniqueID(identity) == nullptr;
+				droppedInside = recorded && alive && stillNamed && reinstated && referenceBack && sweptOnceDropped;
+				std::cout << "[setaside-sweep] inside uid=" << identity << " recorded=" << recorded << " alive=" << alive
+				          << " still_named=" << stillNamed << " reinstated=" << reinstated << " reference_back=" << referenceBack
+				          << " swept_once_dropped=" << sweptOnceDropped << std::endl;
+			}
+		}
+		holdNeverNamesASweptObject = droppedBefore && droppedInside;
+		RunScriptString("_HoldSweep = nil; _HoldSweepUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (holdNeverNamesASweptObject ? "PASS" : "FAIL") << " a_hold_never_names_a_swept_object" << std::endl;
+	checkpointValues = holdNeverNamesASweptObject && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
