@@ -873,6 +873,7 @@ static std::string ResyncSaveName() {
 			{"host_reseats_issued", m_ReconnectHost.GetStats().reseatsIssued},
 			{"host_reseats_without_a_ledger", m_ReconnectHost.GetStats().reseatsWithoutALedger},
 			{"host_reseats_without_survivors", m_ReconnectHost.GetStats().reseatsWithoutSurvivors},
+			{"host_reseat_live_on_team_not_named", m_ReconnectHost.GetStats().reseatLiveOnTeamNotNamed},
 		};
 		json seats = json::array();
 		for (const NetH4SeatStatus& seat: m_SeatStatuses) {

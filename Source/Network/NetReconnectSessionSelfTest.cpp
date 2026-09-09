@@ -4855,6 +4855,10 @@ namespace RTE {
 		// hand back). The gates could not tell them apart, and on reclaim_socket the host ended with
 		// actors 2 of a peak 4 while drop3, which did print the line, ended with 5 of 6. Each answer gets
 		// its own counter here, and the reseat itself is unchanged.
+		//
+		// F2.3: the counters alone still do not settle WHICH world a run is in - all the ledgered units
+		// dead and a live unit the ledger never named read identically. The last arm is that second
+		// world, and the number that tells them apart is the live-on-team count the record does not name.
 		int TestAReseatSaysWhyItDidNotIssue() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -4875,15 +4879,19 @@ namespace RTE {
 				uint32_t issued;
 				uint32_t withoutALedger;
 				uint32_t withoutSurvivors;
+				uint32_t liveOnTeamNotNamed;
 				std::vector<int64_t> reseated;
 			};
 			const std::vector<Arm> arms = {
 			    // The good case, so the two counters below are read against a working reseat.
-			    {"survivors", 141, held, held, 1, 0, 0, {101, 102, 103}},
+			    {"survivors", 141, held, held, 1, 0, 0, 0, {101, 102, 103}},
 			    // reclaim_socket's shape: the ledger is right, the units did not live through the window.
-			    {"no-survivors", 142, held, {{201, 0, 1, true}}, 0, 0, 1, {}},
+			    {"no-survivors", 142, held, {{201, 0, 1, true}}, 0, 0, 1, 0, {}},
 			    // A6's fault, kept measurable: the drop was seen where the world cannot be walked.
-			    {"no-ledger", 143, {}, held, 0, 1, 0, {}},
+			    {"no-ledger", 143, {}, held, 0, 1, 0, 3, {}},
+			    // F2.3's second world: same three counters as no-survivors, and a unit alive on the
+			    // returner's team that its record never named. Only this number tells them apart.
+			    {"unnamed-survivor", 144, held, {{104, 1, leaverPeer, true}, {201, 0, 1, true}}, 0, 0, 1, 1, {}},
 			};
 
 			uint64_t unixNow = 1'700'000'000'000ULL;
@@ -4934,12 +4942,16 @@ namespace RTE {
 				}
 				const NetReconnectHostStats stats = wire.host.GetStats();
 				if (stats.reseatsIssued != arm.issued || stats.reseatsWithoutALedger != arm.withoutALedger ||
-				    stats.reseatsWithoutSurvivors != arm.withoutSurvivors) {
+				    stats.reseatsWithoutSurvivors != arm.withoutSurvivors ||
+				    stats.reseatLiveOnTeamNotNamed != arm.liveOnTeamNotNamed) {
 					return Fail("the reseat counters read issued=" + std::to_string(stats.reseatsIssued) +
 					            " without_a_ledger=" + std::to_string(stats.reseatsWithoutALedger) +
-					            " without_survivors=" + std::to_string(stats.reseatsWithoutSurvivors) + where);
+					            " without_survivors=" + std::to_string(stats.reseatsWithoutSurvivors) +
+					            " live_on_team_not_named=" + std::to_string(stats.reseatLiveOnTeamNotNamed) + where);
 				}
 			}
+			// The two worlds the counters cannot separate, side by side: identical on all three, and
+			// apart on the one number that says whether the record named the world it came back to.
 			return 0;
 		}
 
