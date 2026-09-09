@@ -1009,6 +1009,11 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 	}
 }
 
+bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
+	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
+}
+
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
