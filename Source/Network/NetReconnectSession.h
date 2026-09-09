@@ -162,6 +162,9 @@ namespace RTE {
 		uint32_t seatsReleased = 0; //!< Seats handed back to the pool, whichever way their holder went.
 		uint32_t ledgerDropsRecorded = 0;
 		uint32_t reseatsIssued = 0;
+		uint32_t reseatsWithoutALedger = 0;   //!< Reclaims whose seat ledgered nothing at the drop: a returner reseated onto nothing.
+		uint32_t reseatsWithoutSurvivors = 0; //!< Reclaims whose ledgered units are all gone from the world; nothing to hand back.
+		uint32_t reseatLiveOnTeamNotNamed = 0; //!< The most a reclaim found alive on the returner's team that its drop record does not name. Recorded, never judged.
 		uint32_t reclaimRetransmitsDropped = 0;
 		uint32_t seatHoldsExpired = 0;
 		uint32_t seatsReleasedInLobby = 0;
