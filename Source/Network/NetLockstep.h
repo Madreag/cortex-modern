@@ -324,6 +324,7 @@ namespace RTE {
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t stopsFromLeftPeers = 0; //!< Stops a peer sent after the round had already dropped its seat.
+		uint32_t connectionsClosedOnEviction = 0; //!< Connections the host closed because the round took the seat.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
 		uint64_t longestStallMs = 0;
@@ -513,7 +514,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false);
 		/// The first frame this peer has no data for, walking up from the committed one.
 		uint64_t FirstFrameWithout(uint8_t peerId) const;
 		/// How long the host lets a required remote go quiet before calling it gone. Half the
