@@ -4604,6 +4604,201 @@ namespace RTE {
 			return 0;
 		}
 
+		// Source40 R1 and R2 are one defect: a timeout must measure a silence the session was WATCHING.
+		// The round owns the transport for the whole match, so the session is handed no traffic while it
+		// plays and - since the plane's clock became real elapsed time - a clock that runs on anyway. The
+		// first evaluation after that phase is the resync round's lobby tick, or the leave exchange's, and
+		// it measures the entire match: the host evicts every peer before the resync round can form, and
+		// the leaving client evicts the host before its LeaveRequest is flushed, so the announced leave is
+		// adjudicated as a lost connection. Both arms are driven exactly as the service drives them.
+		int TestARoundResumptionKeepsItsPeers() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			static_assert(NetReconnectClient::c_LeaveAckBudgetMs == 2000, "P21's ack budget");
+			// Long enough that the match alone outlasts the session's timeout, which is the whole point.
+			const uint64_t playedMs = 20'000;
+			const uint32_t budgetMs = MakeSessionConfig(0, 0, "Host").timeoutMs;
+			if (playedMs <= budgetMs) {
+				return Fail("the match phase must outlast the session timeout for this case to say anything");
+			}
+
+			struct SeatedPair {
+				LoopbackTransport hostTransport;
+				LoopbackTransport clientTransport;
+				NetSession host;
+				NetSession client;
+				NetSeatAuthRegistry registry;
+				NetReconnectHost admission;
+				NetReconnectTicketStore store;
+				NetReconnectClient reconnect;
+				uint64_t serviceMs = 0; //!< The admission clock: elapsed since the service started this match.
+
+				void Step(uint64_t byMs) {
+					serviceMs += byMs;
+					hostTransport.AdvanceTimeMs(byMs);
+					clientTransport.AdvanceTimeMs(byMs);
+				}
+
+				bool Seat(const std::string& name, uint16_t port, uint64_t* unixNow, std::string* error) {
+					registry.BeginHostedSession();
+					admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+					admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+					store.SetPath(StorePath(name));
+					reconnect.Configure(&store, MakeIdentity(), "Player");
+					reconnect.SetUnixClock(&FixedUnixClock, unixNow);
+					reconnect.SetHostContext("loopback", MakeHash(5));
+					host.SetReconnectHost(&admission);
+					client.SetReconnectClient(&reconnect);
+					if (!host.StartHost(hostTransport, MakeSessionConfig(port, 101, "Host"), error) ||
+					    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, 202, "Player"), error)) {
+						return false;
+					}
+					// WaitForSessionReady, clocked from the service's elapsed time as the runner clocks it.
+					for (uint64_t settled = 0; settled <= 600; settled += 10) {
+						host.Tick(serviceMs);
+						client.Tick(serviceMs);
+						Step(10);
+					}
+					if (reconnect.GetState() != NetH4ClientState::Joined || host.GetReadyPeerCount() != 1) {
+						*error = "the pair never committed its seat";
+						return false;
+					}
+					admission.SetLiveMatch(true);
+					return true;
+				}
+
+				// The match: PumpSessionEvents is all the session gets. The host's plane is ticked on the
+				// service clock and forwarded events injected on it; the client's pump has nothing to do
+				// and returns before touching its session at all.
+				void PlayFor(uint64_t forMs) {
+					for (const uint64_t until = serviceMs + forMs; serviceMs <= until;) {
+						for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+							host.InjectEvent(event, serviceMs);
+						}
+						host.TickAdmissionPlane(serviceMs);
+						Step(10);
+					}
+				}
+			};
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+
+			// R1: the resync round. StartNextMatch re-runs the lobby over the same session, and the lobby
+			// adds the session clock it captured at Start to its own round time - so the first tick lands
+			// on a clock the match advanced while nothing could stamp a receive.
+			{
+				SeatedPair pair;
+				if (!pair.Seat("resume-resync", 42152, &unixNow, &error)) {
+					return Fail("R1 arm: " + error);
+				}
+				const uint64_t seatedAtMs = pair.serviceMs;
+				pair.PlayFor(playedMs);
+				if (pair.host.GetClockMs() - seatedAtMs <= budgetMs) {
+					return Fail("R1 arm: the match never advanced the session clock past the timeout, so this arm is vacuous");
+				}
+
+				NetLobbySession hostLobby;
+				NetLobbySession clientLobby;
+				NetLobbySessionConfig hostLobbyConfig;
+				hostLobbyConfig.host = true;
+				hostLobbyConfig.localPeerId = 1;
+				hostLobbyConfig.remotePeerId = 2;
+				hostLobbyConfig.remoteTransportPeerId = static_cast<NetPeerId>(1);
+				hostLobbyConfig.matchConfig = MakeLobbyMatchConfig(0x5000000000000000ULL + 42152);
+				hostLobbyConfig.timeoutMs = 60'000;
+				hostLobbyConfig.session = &pair.host;
+				hostLobbyConfig.autoReady = true;
+				hostLobbyConfig.autoStart = true;
+				NetLobbySessionConfig clientLobbyConfig = hostLobbyConfig;
+				clientLobbyConfig.host = false;
+				clientLobbyConfig.localPeerId = 2;
+				clientLobbyConfig.remotePeerId = 1;
+				clientLobbyConfig.session = &pair.client;
+				if (!hostLobby.Start(pair.hostTransport, hostLobbyConfig, &error) ||
+				    !clientLobby.Start(pair.clientTransport, clientLobbyConfig, &error)) {
+					return Fail("R1 arm: the resync round would not start: " + error);
+				}
+				bool formed = false;
+				for (uint64_t roundMs = 0; roundMs <= 4000 && !formed; roundMs += 10) {
+					const NetMatchRunnerClocks clocks = NetMatchRunner::ResolveRoundClocks(roundMs, true, pair.serviceMs);
+					hostLobby.Tick(clocks.lobbyMs);
+					pair.host.TickAdmissionPlane(clocks.planeMs);
+					clientLobby.Tick(clocks.lobbyMs);
+					pair.client.TickAdmissionPlane(clocks.planeMs);
+					formed = hostLobby.IsStarted() && clientLobby.IsStarted();
+					pair.Step(10);
+				}
+				if (!formed) {
+					return Fail("R1 arm: the resync round never formed after the match: host=" +
+					            std::string(NetLobbySession::StateName(hostLobby.GetState())) + " (" + hostLobby.GetFailureReason() +
+					            ") client=" + NetLobbySession::StateName(clientLobby.GetState()) + " (" + clientLobby.GetFailureReason() +
+					            ") session timeouts host=" + std::to_string(pair.host.GetStats().timeouts) +
+					            " client=" + std::to_string(pair.client.GetStats().timeouts));
+				}
+				if (pair.host.GetReadyPeerCount() != 1 || !pair.client.IsReady()) {
+					return Fail("R1 arm: the round formed but the session dropped its peers");
+				}
+				if (pair.host.GetStats().timeouts != 0 || pair.client.GetStats().timeouts != 0) {
+					return Fail("R1 arm: a silence nobody was listening through was counted as a timeout");
+				}
+
+				// The control: a resumption starts the window again, it does not remove it. A peer that
+				// goes quiet while the session IS being ticked is still evicted on the budget.
+				const uint64_t quietFromMs = pair.serviceMs;
+				while (pair.serviceMs - quietFromMs <= budgetMs * 2ULL && pair.host.GetReadyPeerCount() != 0) {
+					pair.host.Tick(pair.serviceMs);
+					pair.Step(10);
+				}
+				if (pair.host.GetStats().timeouts == 0 || pair.host.GetReadyPeerCount() != 0) {
+					return Fail("R1 arm: a peer that went quiet under a ticking session was never evicted, so this case proves nothing");
+				}
+			}
+
+			// R2: the announced leave. RunCleanLeave opens the leave and then ticks the client's session on
+			// the admission clock, which the match has carried far past the last thing the session heard.
+			{
+				SeatedPair pair;
+				if (!pair.Seat("resume-leave", 42153, &unixNow, &error)) {
+					return Fail("R2 arm: " + error);
+				}
+				pair.PlayFor(playedMs);
+				if (!pair.reconnect.BeginLeave(pair.client.GetClockMs(), &error)) {
+					return Fail("R2 arm: the leave would not start: " + error);
+				}
+				for (const uint64_t until = pair.serviceMs + NetReconnectClient::c_LeaveAckBudgetMs;
+				     pair.serviceMs <= until && pair.reconnect.GetState() != NetH4ClientState::Left;) {
+					pair.client.Tick(pair.serviceMs);
+					// The host is still in its match, so its side of the exchange rides PumpSessionEvents.
+					for (const NetTransportEvent& event: pair.hostTransport.PollEvents()) {
+						pair.host.InjectEvent(event, pair.serviceMs);
+					}
+					pair.host.TickAdmissionPlane(pair.serviceMs);
+					pair.Step(10);
+				}
+				if (pair.reconnect.GetState() != NetH4ClientState::Left) {
+					return Fail(std::string("R2 arm: the announced leave was adjudicated as a lost connection: client=") +
+					            NetReconnectClientStateName(pair.reconnect.GetState()) +
+					            " acks=" + std::to_string(pair.reconnect.GetStats().leaveAcksReceived) +
+					            " session=" + NetSession::StateName(pair.client.GetState()) +
+					            " reject=" + pair.client.BuildRejectText());
+				}
+				if (pair.store.HasRecord() || pair.reconnect.GetStats().leaveAcksReceived != 1) {
+					return Fail("R2 arm: an acknowledged leave did not clear the recovery record");
+				}
+				if (pair.admission.GetStats().seatsClosedByLeave != 1) {
+					return Fail("R2 arm: the host did not close the seat on the leave");
+				}
+				if (pair.client.GetStats().timeouts != 0) {
+					return Fail("R2 arm: the leave exchange timed the host out instead of talking to it");
+				}
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4696,6 +4891,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestHeartbeatingHandshakeStillExpires(); result != 0) {
+			return result;
+		}
+		if (const int result = TestARoundResumptionKeepsItsPeers(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {

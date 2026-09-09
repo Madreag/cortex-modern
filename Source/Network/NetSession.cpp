@@ -692,8 +692,30 @@ namespace RTE {
 		if (m_Config.timeoutMs == 0) {
 			return;
 		}
+		// A timeout is a silence we were listening through. The round owns the transport for a whole
+		// match, so nothing stamps a receive while it plays and the next evaluation - the resync round's
+		// first tick, or the leave exchange's - would otherwise measure the entire match and evict
+		// everyone still there. A step longer than the budget is a resumption: the peers get their
+		// window started again instead.
+		const bool resumed = m_TimeoutsEvaluated && m_NowMs > m_LastTimeoutCheckMs &&
+		                     m_NowMs - m_LastTimeoutCheckMs > m_Config.timeoutMs;
+		m_TimeoutsEvaluated = true;
+		m_LastTimeoutCheckMs = m_NowMs;
+		if (resumed) {
+			++m_Stats.timeoutResumptions;
+			m_LastReceiveMs = m_NowMs;
+			for (PeerState& peer : m_Peers) {
+				if (IsActive(peer.state) && peer.state != NetSessionState::Handshake) {
+					peer.lastReceiveMs = m_NowMs;
+				}
+			}
+		}
 		if (m_Role == NetSessionRole::Host) {
+			// P14 expires a handshake on the connection's own age, which no resumption extends.
 			ExpireSilentHandshakes();
+			if (resumed) {
+				return;
+			}
 			for (PeerState& peer : m_Peers) {
 				if (!IsActive(peer.state) || peer.state == NetSessionState::Handshake) {
 					continue;
@@ -707,7 +729,7 @@ namespace RTE {
 					RefreshHostState();
 				}
 			}
-		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
+		} else if (!resumed && (m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
 		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs > m_Config.timeoutMs) {
 			++m_Stats.timeouts;
 			SetFailed(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - m_LastReceiveMs), "session timeout");
@@ -1115,6 +1137,7 @@ namespace RTE {
 				{"malformed_messages", m_Stats.malformedMessages},
 				{"ignored_phase_packets", m_Stats.ignoredPhasePackets},
 				{"timeouts", m_Stats.timeouts},
+				{"timeout_resumptions", m_Stats.timeoutResumptions},
 				{"unbound_connection_faults", m_Stats.unboundConnectionFaults},
 				{"unauthenticated_connections_refused", m_Stats.unauthenticatedConnectionsRefused},
 				{"fenced_packets", m_Stats.fencedPackets},
