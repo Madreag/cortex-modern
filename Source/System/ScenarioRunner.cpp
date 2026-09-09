@@ -48,6 +48,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		std::map<int64_t, uint8_t> s_LockstepControlOverrides; //!< Synced per-actor control handoffs (co-op shared teams).
@@ -578,6 +579,7 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator) {
 		s_LockstepCoordinator = coordinator;
+		s_LockstepAppliedFrame = 0;
 		s_LockstepControlOverrides.clear();
 		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
 		// Touch the timer singleton only when actually frozen — selftests run this before manager init.
@@ -673,6 +675,10 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId) {
 		s_LockstepControlOverrides[actorUniqueID] = ownerPeerId;
+	}
+
+	void ScenarioRunner::SetLockstepAppliedFrame(uint64_t frame) {
+		s_LockstepAppliedFrame = frame;
 	}
 
 	void ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(uint64_t frame) {
@@ -794,7 +800,7 @@ namespace RTE {
 		// A round that has committed nothing yet is still resuming: after a resync relaunch the ledgered
 		// reseat rides its first committed frame, and the activity update runs before MovableMan applies
 		// it, so the first evaluation a match may be judged on is the one after that frame lands.
-		return s_LockstepCoordinator->IsHoldingSeatForReclaim() ||
+		return s_LockstepCoordinator->IsSeatHeldForReclaimAtFrame(s_LockstepAppliedFrame) ||
 		       (s_LockstepCoordinator->IsRunning() && !s_LockstepCoordinator->HasCommittedAFrame());
 	}
 

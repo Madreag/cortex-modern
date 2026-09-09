@@ -164,6 +164,10 @@ namespace RTE {
 		/// Whether the round is running only because a dropped player still has a seat to come back to.
 		static bool IsLockstepHoldingSeatForReclaim();
 
+		/// The committed frame the sim is applying. Every peer applies the same frames in the same
+		/// order, so anything answered from this answers identically on all of them.
+		static void SetLockstepAppliedFrame(uint64_t frame);
+
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
 		/// including the leave the waited-for peer is waiting to have acknowledged.
