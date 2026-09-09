@@ -48,6 +48,11 @@ namespace RTE {
 
 		/// Gets the round-trip ping to a peer in milliseconds, or 0 if unavailable.
 		virtual uint32_t GetPeerPingMs(NetPeerId) const { return 0; }
+
+		/// Raises every connection's send rate for a bulk transfer (a match-state stream) and lowers it
+		/// again after. A match needs a few KB/s; only the stream needs megabytes, and a rate held that
+		/// high for the whole round has nothing to give back when the link cannot take it.
+		virtual void SetBulkTransferMode(bool) {}
 	};
 
 } // namespace RTE

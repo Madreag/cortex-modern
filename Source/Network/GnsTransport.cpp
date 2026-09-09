@@ -71,6 +71,11 @@ namespace RTE {
 			return info.m_info.m_szEndDebug[0] != '\0' ? info.m_info.m_szEndDebug : "GNS connection closed";
 		}
 
+		// The library's own default. A four-peer round sends a few KB/s per connection; the rate only
+		// has to be high while a match-state stream is in flight.
+		constexpr int32 c_MatchSendRateBytesPerSecond = 256 * 1024;
+		constexpr int32 c_BulkSendRateBytesPerSecond = 32 * 1024 * 1024;
+
 		int s_SimulatedLagMs = 0;
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection.
@@ -106,11 +111,13 @@ namespace RTE {
 			ApplySimulatedLag();
 			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
-			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
-			// move faster than the conservative default send rate (~256KB/s would take seconds).
+			// A bulk match-state transfer (a few MB) must fit the reliable send buffer outright; the
+			// rate it needs is raised for the transfer alone (SetBulkTransferMode), because this pair
+			// is a manual send rate rather than a range and a match held at megabytes a second cannot
+			// back off when the link will not take it.
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
-			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
-			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, c_MatchSendRateBytesPerSecond);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, c_MatchSendRateBytesPerSecond);
 			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
 			// adjudication (and a rejoiner's freed slot) kick in.
 			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
@@ -167,11 +174,13 @@ namespace RTE {
 			ApplySimulatedLag();
 			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
-			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
-			// move faster than the conservative default send rate (~256KB/s would take seconds).
+			// A bulk match-state transfer (a few MB) must fit the reliable send buffer outright; the
+			// rate it needs is raised for the transfer alone (SetBulkTransferMode), because this pair
+			// is a manual send rate rather than a range and a match held at megabytes a second cannot
+			// back off when the link will not take it.
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
-			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
-			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, c_MatchSendRateBytesPerSecond);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, c_MatchSendRateBytesPerSecond);
 			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
 			// adjudication (and a rejoiner's freed slot) kick in.
 			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
@@ -257,6 +266,20 @@ namespace RTE {
 				text += ", detail: " + status;
 			}
 			return text;
+		}
+
+		void SetBulkTransferMode(bool on) {
+			// The lobby lowers the rate on every pump once the last chunk is gone, so only act on the edge.
+			if (m_BulkTransfer == on) {
+				return;
+			}
+			m_BulkTransfer = on;
+			const int32 rate = on ? c_BulkSendRateBytesPerSecond : c_MatchSendRateBytesPerSecond;
+			for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
+				(void)peerId;
+				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMin, rate);
+				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMax, rate);
+			}
 		}
 
 		void Disconnect(NetPeerId peerId, const std::string& reason) {
@@ -446,6 +469,10 @@ namespace RTE {
 			const NetPeerId peerId = m_NextPeerId++;
 			m_PeersByConnection[connection] = peerId;
 			m_ConnectionsByPeer[peerId] = connection;
+			if (m_BulkTransfer) {
+				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMin, c_BulkSendRateBytesPerSecond);
+				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMax, c_BulkSendRateBytesPerSecond);
+			}
 			s_ConnectionOwners[connection] = this;
 			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
 		}
@@ -507,6 +534,7 @@ namespace RTE {
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
 		bool m_HasLingeringClose = false;
+		bool m_BulkTransfer = false;
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;
@@ -543,6 +571,7 @@ namespace RTE {
 			return false;
 		}
 
+		void SetBulkTransferMode(bool) {}
 		void Disconnect(NetPeerId, const std::string&) {}
 		void Stop() {}
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
@@ -568,6 +597,10 @@ namespace RTE {
 
 	bool GnsTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) {
 		return m_Impl->Send(peerId, lane, bytes, error, congested);
+	}
+
+	void GnsTransport::SetBulkTransferMode(bool on) {
+		m_Impl->SetBulkTransferMode(on);
 	}
 
 	void GnsTransport::Disconnect(NetPeerId peerId, const std::string& reason) {
