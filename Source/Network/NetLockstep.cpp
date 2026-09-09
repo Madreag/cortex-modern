@@ -1653,6 +1653,7 @@ namespace RTE {
 		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
+		m_RemoteStarts.clear();
 		m_LastStartAnswerMs.clear();
 		m_PeerLeaveFrames.clear();
 		m_LeftSeatsHeld.clear();
@@ -1706,7 +1707,7 @@ namespace RTE {
 		return SendStart(error);
 	}
 
-	bool NetLockstepCoordinator::SendStart(std::string* error) {
+	bool NetLockstepCoordinator::SendStart(std::string* error, uint8_t onlyPeerId) {
 		NetLockstepStart start;
 		start.sessionId = m_Config.sessionId;
 		start.startFrame = m_Config.startFrame;
@@ -1718,7 +1719,7 @@ namespace RTE {
 		start.scenario = m_Config.scenario;
 		start.ownershipPolicy = m_Config.ownershipPolicy;
 		start.roundId = m_RoundId;
-		if (!SendPacket({start}, NetTransportLane::ControlReliable, error)) {
+		if (!SendPacket({start}, NetTransportLane::ControlReliable, error, nullptr, nullptr, onlyPeerId)) {
 			return false;
 		}
 		++m_Stats.startPacketsSent;
@@ -1729,7 +1730,9 @@ namespace RTE {
 	// start a formed peer receives reads as a repeat though, and the answer is itself a start, so an
 	// unconditional answer answers the answer: pace it by the ladder the repeats come from.
 	void NetLockstepCoordinator::AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs) {
-		if (m_State != NetLockstepState::Running) {
+		// A peer we have no link to is the host's to answer, not ours; ours reaches us relayed.
+		if ((m_State != NetLockstepState::Running && m_State != NetLockstepState::WaitingForStart) ||
+		    m_RemoteTransports.find(peerId) == m_RemoteTransports.end()) {
 			return;
 		}
 		const auto answeredIt = m_LastStartAnswerMs.find(peerId);
@@ -1738,8 +1741,20 @@ namespace RTE {
 		}
 		m_LastStartAnswerMs[peerId] = nowMs;
 		std::string ignored;
-		(void)SendStart(&ignored);
+		(void)SendStart(&ignored, peerId);
 		++m_Stats.startRetransmits;
+		// It cannot say WHICH start it is missing, and in a star the ones only we can give it are the
+		// other remotes'. Re-send what we accepted from them, to the peer that asked and nobody else.
+		if (!m_RelayHost) {
+			return;
+		}
+		for (const auto& [otherPeerId, otherStart]: m_RemoteStarts) {
+			if (otherPeerId == peerId) {
+				continue;
+			}
+			(void)SendPacket({otherStart}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, peerId);
+			++m_Stats.startsRelayedOnRepeat;
+		}
 	}
 
 	void NetLockstepCoordinator::FlushPreStart(uint8_t peerId, uint64_t nowMs) {
@@ -1782,6 +1797,7 @@ namespace RTE {
 		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
+		m_RemoteStarts.clear();
 		m_LastStartAnswerMs.clear();
 		m_PeerLeaveFrames.clear();
 		m_LeftSeatsHeld.clear();
@@ -2328,6 +2344,7 @@ namespace RTE {
 		out << "\"ignored_session_packets\":" << m_Stats.ignoredSessionPackets << ",";
 		out << "\"stale_round_packets\":" << m_Stats.staleRoundPackets << ",";
 		out << "\"start_retransmits\":" << m_Stats.startRetransmits << ",";
+		out << "\"starts_relayed_on_repeat\":" << m_Stats.startsRelayedOnRepeat << ",";
 		out << "\"pre_start_frames_buffered\":" << m_Stats.preStartFramesBuffered << ",";
 		out << "\"round_id\":" << m_RoundId << ",";
 		out << "\"local_controller_frames_sent\":" << m_Stats.localControllerFramesSent << ",";
@@ -2401,15 +2418,18 @@ namespace RTE {
 		return "Unknown";
 	}
 
-	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded) {
+	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, uint8_t onlyPeerId) {
 		std::vector<uint8_t> bytes;
 		NetLockstepError encodeError;
 		if (!NetLockstepCodec::Encode(packet, bytes, &encodeError, dictionary, outObservationsEncoded)) {
 			if (error) *error = encodeError.message;
 			return false;
 		}
-		// Send to every remote peer's transport (a set of one in the 2-peer case).
+		// Send to every remote peer's transport (a set of one in the 2-peer case), or to just the one asked for.
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
+			if (onlyPeerId != 0 && peerId != onlyPeerId) {
+				continue;
+			}
 			// Behind an undrained backlog, or this peer's stream would arrive out of order.
 			const bool backlogged = lane == m_Config.frameLane && [&] {
 				const auto backlogIt = m_RelayBacklog.find(peerId);
@@ -2772,6 +2792,7 @@ namespace RTE {
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {
+			m_RemoteStarts[start.localPeerId] = start;
 			RelayToOtherRemotes({start}, start.localPeerId);
 		} else {
 			AnswerRepeatedStart(start.localPeerId, nowMs);

@@ -3408,6 +3408,140 @@ namespace RTE {
 			std::cout << "[net-lockstep-selftest] PASS repeated_starts_do_not_amplify host=" << hostSent << " client=" << clientSent << std::endl;
 			return true;
 		}
+		// A peer repeating its start is missing one and cannot say whose, so the host owes it the whole
+		// round: its own start and every remote start it has taken. Client B starts late here, so the
+		// relayed start of client A drains into the void and only a re-relay can reach it; client C
+		// starts later still, so the host is answering while it is itself waiting for a start.
+		bool TestCoordinatorRepeatedStartCarriesTheRound(std::string* error) {
+			const uint16_t port = 43100;
+			const uint64_t sessionId = 0x70000000000000A0ULL;
+			const uint64_t roundId = 0x9A5E0000000000A0ULL;
+			LoopbackTransport hostT, clientAT, clientBT, clientCT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+			    !clientBT.Connect("loopback", port, error) || !clientCT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 20000;
+				c.localPeerId = local;
+				c.peerCount = 4;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.roundId = relay ? roundId : 0;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB, clientC;
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					clientC.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &clientA, &clientB, &clientC}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+					clientCT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}, {4, 3}}, true), error) || !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().startPacketsReceived >= 1; }, 500)) {
+				*error = "the host never took client A's start";
+				return false;
+			}
+			// Client B is between rounds: the host's start and the relayed start of A drain into the void.
+			clientBT.AdvanceTimeMs(10);
+			if (clientBT.PollEvents().empty()) {
+				*error = "the relayed start never reached client B's transport";
+				return false;
+			}
+			if (!clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			// B repeats while the host still waits for C, so the answer has to come from a waiting host.
+			if (!drive([&] { return clientB.GetStats().startRetransmits >= 2; }, 1500)) {
+				*error = "client B never repeated its start";
+				return false;
+			}
+			if (host.IsRunning()) {
+				*error = "the host ran before client C started, so this fixture proves nothing";
+				return false;
+			}
+			if (!clientC.Start(clientCT, cfg(4, {{1, 1}}, false), error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning() && clientC.IsRunning(); }, 3000)) {
+				*error = "a repeated start was not answered with the round: " + clientB.BuildReportJson();
+				return false;
+			}
+			if (host.GetStats().startsRelayedOnRepeat == 0) {
+				*error = "client B reached Running without the host re-relaying a start";
+				return false;
+			}
+			for (uint64_t producedFrame = 0; producedFrame < 3; ++producedFrame) {
+				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
+				    !clientA.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
+				    !clientB.QueueLocalInput(producedFrame, {MakeFrame(300 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
+				    !clientC.QueueLocalInput(producedFrame, {MakeFrame(400 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady, aReady, bReady, cReady;
+			if (!drive([&] {
+					DrainReady(host, hostReady);
+					DrainReady(clientA, aReady);
+					DrainReady(clientB, bReady);
+					DrainReady(clientC, cReady);
+					return hostReady.size() == 3 && aReady.size() == 3 && bReady.size() == 3 && cReady.size() == 3;
+				}, 2000)) {
+				*error = "the re-formed four-peer round did not commit";
+				return false;
+			}
+			// Another remote's start is not this peer's round to move: relayed, so it never owns the
+			// transport it arrives on, and a round tag it disagrees with makes it a straggler.
+			const uint64_t staleBefore = clientB.GetStats().staleRoundPackets;
+			NetLockstepStart relayedStraggler;
+			relayedStraggler.sessionId = sessionId;
+			relayedStraggler.startFrame = 0;
+			relayedStraggler.inputDelayFrames = 0;
+			relayedStraggler.controllerFrameVersion = ControllerFrame::c_Version;
+			relayedStraggler.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			relayedStraggler.localPeerId = 2;
+			relayedStraggler.peerCount = 4;
+			relayedStraggler.scenario = "LockstepSelfTest";
+			relayedStraggler.ownershipPolicy = "unique-id-split";
+			relayedStraggler.roundId = roundId + 1;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({relayedStraggler}, bytes, error) || !hostT.Send(2, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!drive([&] { return clientB.GetStats().staleRoundPackets == staleBefore + 1; }, 500)) {
+				*error = "a relayed start from another round was not ignored";
+				return false;
+			}
+			if (clientB.GetRoundId() != roundId || clientB.IsFailed()) {
+				*error = "a relayed start moved client B's round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS repeated_start_carries_the_round relayed=" << host.GetStats().startsRelayedOnRepeat << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -3418,6 +3552,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestCoordinatorRepeatedStartCarriesTheRound(&error) ||
 		    !TestCoordinatorRepeatedStartsDoNotAmplify(&error) ||
 		    !TestObservationSlotCodec(&error) ||
 		    !TestCanonicalHeader(&error) ||
