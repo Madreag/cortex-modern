@@ -1653,6 +1653,7 @@ namespace RTE {
 		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
+		m_PeersPlayedThisRound.clear();
 		m_RemoteStarts.clear();
 		m_LastStartAnswerMs.clear();
 		m_PeerLeaveFrames.clear();
@@ -1735,6 +1736,13 @@ namespace RTE {
 		    m_RemoteTransports.find(peerId) == m_RemoteTransports.end()) {
 			return;
 		}
+		// A peer this round has taken frames from already had every start, or it could not have made
+		// one. A new start from it is a peer that has LEFT the round, and ours would hand it a round it
+		// is not in - which is how a peer that restarts first loses the next one.
+		if (m_PeersPlayedThisRound.find(peerId) != m_PeersPlayedThisRound.end()) {
+			++m_Stats.startAnswersSuppressed;
+			return;
+		}
 		const auto answeredIt = m_LastStartAnswerMs.find(peerId);
 		if (answeredIt != m_LastStartAnswerMs.end() && nowMs >= answeredIt->second && nowMs - answeredIt->second < c_StartRetransmitMs) {
 			return;
@@ -1797,6 +1805,7 @@ namespace RTE {
 		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
+		m_PeersPlayedThisRound.clear();
 		m_RemoteStarts.clear();
 		m_LastStartAnswerMs.clear();
 		m_PeerLeaveFrames.clear();
@@ -2344,6 +2353,7 @@ namespace RTE {
 		out << "\"ignored_session_packets\":" << m_Stats.ignoredSessionPackets << ",";
 		out << "\"stale_round_packets\":" << m_Stats.staleRoundPackets << ",";
 		out << "\"start_retransmits\":" << m_Stats.startRetransmits << ",";
+		out << "\"start_answers_suppressed\":" << m_Stats.startAnswersSuppressed << ",";
 		out << "\"starts_relayed_on_repeat\":" << m_Stats.startsRelayedOnRepeat << ",";
 		out << "\"pre_start_frames_buffered\":" << m_Stats.preStartFramesBuffered << ",";
 		out << "\"round_id\":" << m_RoundId << ",";
@@ -2872,6 +2882,7 @@ namespace RTE {
 		m_Stats.remoteControllerFramesReceived += frame.frames.size();
 		peerStats.controllerFramesReceived += frame.frames.size();
 		peerFrames[frame.senderPeerId] = frame.frames;
+		m_PeersPlayedThisRound.insert(frame.senderPeerId);
 		if (!frame.commands.empty()) {
 			m_RemoteCommands[frame.targetFrame][frame.senderPeerId] = frame.commands;
 		}

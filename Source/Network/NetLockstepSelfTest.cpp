@@ -3542,6 +3542,91 @@ namespace RTE {
 			std::cout << "[net-lockstep-selftest] PASS repeated_start_carries_the_round relayed=" << host.GetStats().startsRelayedOnRepeat << std::endl;
 			return true;
 		}
+		// A peer that has played this round already had every start; a new start from it means it has
+		// LEFT the round, and answering with ours would hand it a round it is not in.
+		bool TestCoordinatorRestartedPeerIsNotHandedTheOldRound(std::string* error) {
+			const uint16_t port = 43101;
+			const uint64_t sessionId = 0x70000000000000A1ULL;
+			const uint64_t roundOne = 0x9A5E0000000000A1ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 20000;
+			clientConfig.timeoutMs = 20000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the first round never started";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, 1000)) {
+				*error = "the first round did not commit a frame";
+				return false;
+			}
+			// The client restarts first; the host is still running the round the client just left.
+			NetLockstepConfig clientRestart = clientConfig;
+			clientRestart.roundId = 0;
+			clientRestart.remoteTransportPeerId = 1;
+			if (!client.Start(clientTransport, clientRestart, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 1000);
+			if (client.GetRoundId() != 0 || client.IsRunning()) {
+				*error = "the restarted client was handed the round it had just left (round " + std::to_string(client.GetRoundId()) + ")";
+				return false;
+			}
+			if (host.GetStats().startAnswersSuppressed == 0) {
+				*error = "the host answered a peer that had already played this round";
+				return false;
+			}
+			// The host follows, and the round re-forms on the host's new tag.
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 4000)) {
+				*error = "the round never re-formed after the host restarted: host=" + host.BuildReportJson() + " client=" + client.BuildReportJson();
+				return false;
+			}
+			if (client.GetRoundId() != roundTwo) {
+				*error = "the client did not converge on the host's new round";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(101, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(201, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, 1000)) {
+				*error = "the re-formed round did not commit a frame";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS restarted_peer_is_not_handed_the_old_round suppressed" << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -3552,6 +3637,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestCoordinatorRestartedPeerIsNotHandedTheOldRound(&error) ||
 		    !TestCoordinatorRepeatedStartCarriesTheRound(&error) ||
 		    !TestCoordinatorRepeatedStartsDoNotAmplify(&error) ||
 		    !TestObservationSlotCodec(&error) ||
