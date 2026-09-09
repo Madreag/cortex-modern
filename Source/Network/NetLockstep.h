@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <list>
 #include <map>
 #include <optional>
 #include <set>
@@ -60,6 +61,8 @@ namespace RTE {
 		InvalidString,
 		InvalidValue,
 		EncodeFailed,
+		UnboundObservationSlot, //!< An observation named a slot this sender never spelled out.
+		ObservationBindingGap, //!< A sender's bindings do not follow on from the ones this peer has.
 	};
 
 	struct NetLockstepError {
@@ -95,6 +98,73 @@ namespace RTE {
 		float value = 0.0F;
 
 		bool operator==(const NetSoundObservation&) const = default;
+	};
+
+	/// Which sound an observation is about, without the reading. The wire spells one of these out once
+	/// per sender and refers to it by slot afterwards.
+	struct NetSoundObservationKey {
+		uint64_t objectUID = 0;
+		uint64_t tick = 0;
+		uint64_t phase = 0;
+		uint64_t occurrence = 0;
+		uint64_t ordinal = 0;
+
+		auto operator<=>(const NetSoundObservationKey&) const = default;
+	};
+
+	NetSoundObservationKey KeyOfObservation(const NetSoundObservation& observation);
+
+	/// One sender's slot table for the compact observation form, held for the length of a lockstep
+	/// round. A key rides the wire the first time that sender sends it and is a slot number after
+	/// that, so a stream of changing readings costs five bytes each instead of forty-four. Every
+	/// binding is explicit in the packet, so the receiver needs no eviction rule of its own and a
+	/// repeated packet rebinds the same slot to the same key.
+	class NetSoundObservationDictionary {
+	public:
+		static constexpr uint16_t c_MaxSlots = 4096;
+
+		/// Encoder: which slot spells this key, and whether the key itself must ride along.
+		void Assign(const NetSoundObservationKey& key, uint16_t& outSlot, bool& outFullKey);
+		/// Encoder: what Assign would cost, without spending a slot on an observation that will not fit.
+		bool Lookup(const NetSoundObservationKey& key, uint16_t& outSlot) const;
+		/// Decoder: adopt what the sender just spelled out.
+		void Bind(uint16_t slot, const NetSoundObservationKey& key);
+		bool Resolve(uint16_t slot, NetSoundObservationKey& outKey) const;
+		void Reset();
+		/// How many keys this sender has spelled out. A packet says what this was before its own
+		/// bindings, so a receiver that missed one refuses rather than reading a reused slot as the key
+		/// it held before.
+		uint64_t BindingCount() const { return m_Bindings; }
+
+	private:
+		struct Slot {
+			NetSoundObservationKey key;
+			bool bound = false;
+			std::list<uint16_t>::iterator recency{};
+		};
+
+		std::vector<Slot> m_Slots;
+		std::map<NetSoundObservationKey, uint16_t> m_SlotOf;
+		std::list<uint16_t> m_Recent; //!< Least recently assigned first: the slot to reuse once every slot is bound.
+		uint64_t m_Bindings = 0;
+	};
+
+	/// The observation tables one peer keeps for the senders it decodes and, on the relay host,
+	/// re-encodes. A round's tables are reset when the round starts.
+	struct NetSoundObservationTables {
+		std::map<uint8_t, NetSoundObservationDictionary> bySender;
+		/// The round these tables belong to. A frame from any other round is read past without touching
+		/// them, so a packet the round is going to discard can never disturb a live sender's slots.
+		uint64_t roundId = 0;
+		/// Relay host: the lockstep peer this transport actually is, so a frame claiming another
+		/// sender can only ever disturb its own table. Zero on a client, whose one link is the host.
+		uint8_t transportSender = 0;
+
+		NetSoundObservationDictionary& For(uint8_t senderPeerId) { return bySender[transportSender != 0 ? transportSender : senderPeerId]; }
+		/// The table of a named sender, whatever transport is being decoded: what this peer encodes its
+		/// own frames with, and what a relay host re-encodes another peer's frames with.
+		NetSoundObservationDictionary& Exactly(uint8_t senderPeerId) { return bySender[senderPeerId]; }
+		void Reset() { bySender.clear(); roundId = 0; }
 	};
 
 	struct NetLockstepFrame {
@@ -237,6 +307,10 @@ namespace RTE {
 		uint64_t relayBytesSent = 0; //!< Encoded bytes this host forwarded, across every peer.
 		uint32_t largestRelayPacketBytes = 0;
 		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
+		uint64_t observationsCarried = 0; //!< Times a full frame left a reading for the next one to carry.
+		uint64_t observationsDropped = 0; //!< Carried readings dropped because new sounds outran the wire for frames on end.
+		uint32_t unresolvedObservationPackets = 0; //!< Frames dropped because an observation named a slot this peer never got.
+		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
@@ -250,13 +324,24 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 13;
+		static constexpr uint16_t c_Version = 15;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
+		// Version 14 spells a sound observation's key once per sender and refers to it by slot after that.
+		// Version 15 says how many keys the sender had spelled out before the packet, so a receiver that
+		// missed one refuses instead of reading a reused slot as the key it held before.
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
-		static constexpr size_t c_MaxObservationsPerPacket = 512;
+		static constexpr uint16_t c_ObservationSlotVersion = 14;
+		static constexpr uint16_t c_ObservationBindingSequenceVersion = 15;
+		static constexpr size_t c_MaxObservationsPerPacket = NetSoundObservationDictionary::c_MaxSlots;
+		// What one frame's observations may cost. The compact form makes 4096 of them about 21 KB, so a
+		// frame that hits this is carrying keys nobody has seen before; the rest ride the next frame.
+		static constexpr size_t c_MaxObservationBytesPerPacket = 24U * 1024U;
+		// How much a sender may hold back for later. Reaching this needs thousands of sounds nobody has
+		// heard before, every frame, for frames on end; past it the stalest readings go.
+		static constexpr size_t c_MaxCarriedObservations = NetSoundObservationDictionary::c_MaxSlots;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxScenarioBytes = 128;
@@ -281,10 +366,18 @@ namespace RTE {
 		static const char* StopReasonName(NetLockstepStopReason reason);
 		static const char* ErrorCodeName(NetLockstepErrorCode code);
 
-		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr);
+		/// Without a dictionary every observation spells out its key, so the packet stands alone; that is
+		/// what a replay record and a one-shot round trip want. With one, only what fits the observation
+		/// byte budget is encoded and outObservationsEncoded says how many, so the caller can carry the
+		/// rest; the dictionary is touched only once the packet is certain to encode.
+		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr);
 		/// The frame version selects the ControllerFrame layout and semantics; a recording carries its own.
-		static NetLockstepDecodeResult Decode(const uint8_t* data, size_t size, uint16_t controllerFrameVersion = ControllerFrame::c_Version);
-		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion = ControllerFrame::c_Version);
+		static NetLockstepDecodeResult Decode(const uint8_t* data, size_t size, uint16_t controllerFrameVersion = ControllerFrame::c_Version, NetSoundObservationTables* tables = nullptr);
+		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion = ControllerFrame::c_Version, NetSoundObservationTables* tables = nullptr);
+		/// Whether these bytes are a lockstep packet at all, for the session and lobby wires that share
+		/// the socket and need to tell another phase's traffic from garbage without decoding a payload
+		/// they hold no observation tables for.
+		static bool LooksLikePacket(const std::vector<uint8_t>& bytes);
 	};
 
 	/// What the H4 admission plane says about a seat mid-round. The round asks before it adjudicates a
@@ -337,6 +430,9 @@ namespace RTE {
 		bool IsFailed() const { return m_State == NetLockstepState::Failed; }
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
+		/// The readings this peer held and then had to drop. Their sampler must forget it ever sent them,
+		/// or it will not offer them again until the sound's audibility moves.
+		std::vector<NetSoundObservation> TakeDroppedObservations();
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
 		uint64_t GetRoundId() const { return m_RoundId; }
@@ -373,11 +469,12 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 	private:
-		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr);
+		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
-		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport);
+		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true);
+		uint8_t LockstepPeerOfTransport(NetPeerId transportPeerId) const;
 		bool SendStart(std::string* error);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
@@ -454,6 +551,14 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetSoundObservation>>> m_RemoteObservations; //!< frame -> (peerId -> observations)
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
+		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.
+		// What this peer spells its own observations with, and what a relay host re-encodes each other
+		// sender's with. A relay table is fed by exactly the frames it forwards, which is exactly what its
+		// sender encoded, so a forward is the same size as the packet it came from and its receivers see
+		// every binding the sender made.
+		NetSoundObservationTables m_ObservationEncodeTables;
+		std::vector<NetSoundObservation> m_PendingObservations; //!< What the last frame could not hold; rides the next one.
+		std::vector<NetSoundObservation> m_DroppedObservations; //!< Readings the wire never carried, for their sampler to take back.
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
 		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
