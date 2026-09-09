@@ -396,7 +396,9 @@ static std::string ResyncSaveName() {
 			// an unacknowledged one is an ambiguous loss that KEEPS it - so this waits exactly the P21
 			// budget and no longer, whatever the answer.
 			std::string error;
-			if (!m_ReconnectClient.BeginLeave(m_Session->GetClockMs(), &error)) {
+			// Both ends of the leave read the clock its deadlines run on: the retransmit ladder below is
+			// driven from the plane's own tick, which is session-elapsed time and not the session's clock.
+			if (!m_ReconnectClient.BeginLeave(AdmissionNowMs(), &error)) {
 				return;
 			}
 		}
