@@ -61,6 +61,10 @@ namespace RTE {
 		bool RunLogicalPlaybackSelfTest();
 		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
 		std::vector<NetSoundObservation> SampleSoundObservations();
+		/// Forgets that these readings were sent, so the next sample offers them again. The wire drops a
+		/// held reading when new sounds outrun it for frames on end; without this the sound would keep its
+		/// stale committed value until its audibility moved on its own.
+		void ForgetSentAudibility(const std::vector<NetSoundObservation>& observations);
 		/// Commits a tick's readings from every peer; the table is identical on all peers and pruned on the same frames.
 		void CommitSoundObservations(uint64_t frame, const std::vector<NetSoundObservation>& local, const std::vector<NetSoundObservation>& remote);
 		/// The reading a shared query returns: the controlling peer's, else the host's, else the latest committed, else 0.

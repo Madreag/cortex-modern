@@ -6,10 +6,13 @@
 #include "System/ScenarioRunner.h"
 
 #include <algorithm>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace RTE {
@@ -76,6 +79,460 @@ namespace RTE {
 			return true;
 		}
 
+		NetSoundObservation MakeObservation(uint8_t sender, uint64_t objectUID, uint64_t tick, uint64_t phase, uint64_t ordinal, float value) {
+			NetSoundObservation observation;
+			observation.senderPeerId = sender;
+			observation.objectUID = objectUID;
+			observation.tick = tick;
+			observation.phase = phase;
+			observation.occurrence = 0;
+			observation.ordinal = ordinal;
+			observation.value = value;
+			return observation;
+		}
+
+		// The shape a battle actually produces: one live sound per object, its key fixed for the sound's
+		// life and its reading moving every tick. Keys are spread over a realistic UID range and share the
+		// handful of script-hook hashes a phase comes from.
+		std::vector<NetSoundObservation> MakeObservationSet(uint8_t sender, size_t count, uint64_t startTick, float bias) {
+			static const uint64_t phases[4] = {0x9E3779B97F4A7C15ULL, 0xC2B2AE3D27D4EB4FULL, 0x165667B19E3779F9ULL, 0x27D4EB2F165667C5ULL};
+			std::vector<NetSoundObservation> observations;
+			observations.reserve(count);
+			for (size_t i = 0; i < count; ++i) {
+				observations.push_back(MakeObservation(sender, 1048576 + static_cast<uint64_t>(i) * 3, startTick + i % 7, phases[i % 4], 1 + i % 5,
+				                                       0.25F + static_cast<float>((i + static_cast<size_t>(bias * 64.0F)) % 64) / 256.0F));
+			}
+			return observations;
+		}
+
+		size_t FrameBytesWithoutObservations(const NetLockstepFrame& frame) {
+			NetLockstepFrame stripped = frame;
+			stripped.observations.clear();
+			std::vector<uint8_t> bytes;
+			return NetLockstepCodec::Encode({stripped}, bytes) ? bytes.size() : 0;
+		}
+
+		// The same frame as a version 13 packet: identical up to the observations, which spell out five
+		// full-width key fields and a reading each. Everything before the block is byte for byte what the
+		// current encoder writes, so this is a real recording's shape and not a guess at one.
+		std::vector<uint8_t> MakeVersion13Frame(const NetLockstepFrame& frame) {
+			NetLockstepFrame stripped = frame;
+			stripped.observations.clear();
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode({stripped}, bytes)) {
+				return {};
+			}
+			bytes.resize(bytes.size() - 3); // The empty observation block: a zero binding sequence and a zero count.
+			const auto appendU16 = [&bytes](uint16_t value) { bytes.push_back(static_cast<uint8_t>(value)); bytes.push_back(static_cast<uint8_t>(value >> 8)); };
+			const auto appendU32 = [&bytes](uint32_t value) { for (int i = 0; i < 4; ++i) { bytes.push_back(static_cast<uint8_t>(value >> (i * 8))); } };
+			const auto appendU64 = [&bytes](uint64_t value) { for (int i = 0; i < 8; ++i) { bytes.push_back(static_cast<uint8_t>(value >> (i * 8))); } };
+			appendU16(static_cast<uint16_t>(frame.observations.size()));
+			for (const NetSoundObservation& observation : frame.observations) {
+				appendU64(observation.objectUID);
+				appendU64(observation.tick);
+				appendU64(observation.phase);
+				appendU64(observation.occurrence);
+				appendU64(observation.ordinal);
+				uint32_t valueBits = 0;
+				std::memcpy(&valueBits, &observation.value, sizeof(valueBits));
+				appendU32(valueBits);
+			}
+			bytes[4] = 13;
+			bytes[5] = 0;
+			const uint32_t payloadLength = static_cast<uint32_t>(bytes.size() - NetLockstepCodec::c_HeaderBytes);
+			for (int i = 0; i < 4; ++i) {
+				bytes[12 + i] = static_cast<uint8_t>(payloadLength >> (i * 8));
+			}
+			return bytes;
+		}
+
+		NetLockstepFrame MakeObservationFrame(uint64_t targetFrame, uint64_t roundId, std::vector<NetSoundObservation> observations) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 2;
+			frame.targetFrame = targetFrame;
+			frame.roundId = roundId;
+			frame.frames = {MakeFrame(100, 1)};
+			frame.observations = std::move(observations);
+			return frame;
+		}
+
+		bool TestObservationSlotCodec(std::string* error) {
+			const uint64_t roundId = 0x5EED0000C0FFEE14ULL;
+			NetSoundObservationDictionary encoder;
+			NetSoundObservationTables decoderTables;
+
+			const auto roundTripThrough = [&](const NetLockstepFrame& frame, size_t& outBytes, size_t& outEncoded) {
+				std::vector<uint8_t> bytes;
+				NetLockstepError encodeError;
+				outEncoded = frame.observations.size();
+				if (!NetLockstepCodec::Encode({frame}, bytes, &encodeError, &encoder, &outEncoded)) {
+					*error = "compact observation encode failed: " + encodeError.message;
+					return false;
+				}
+				outBytes = bytes.size();
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &decoderTables);
+				if (!decoded.ok) {
+					*error = "compact observation decode failed: " + decoded.error.message;
+					return false;
+				}
+				const NetLockstepFrame* out = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
+				if (!out || out->observations.size() != outEncoded) {
+					*error = "compact observation decode returned the wrong count";
+					return false;
+				}
+				for (size_t i = 0; i < outEncoded; ++i) {
+					if (!(out->observations[i] == frame.observations[i])) {
+						*error = "compact observation " + std::to_string(i) + " did not survive the wire";
+						return false;
+					}
+				}
+				return true;
+			};
+
+			// First use spells the key out; the same keys next frame are slot references only.
+			const std::vector<NetSoundObservation> firstSet = MakeObservationSet(2, 64, 400, 0.0F);
+			const NetLockstepFrame first = MakeObservationFrame(10, roundId, firstSet);
+			const size_t emptyBytes = FrameBytesWithoutObservations(first);
+			size_t firstBytes = 0;
+			size_t firstEncoded = 0;
+			if (!roundTripThrough(first, firstBytes, firstEncoded) || firstEncoded != 64) {
+				if (error->empty()) { *error = "first observation frame did not encode every observation"; }
+				return false;
+			}
+			std::vector<NetSoundObservation> repeatSet = firstSet;
+			for (NetSoundObservation& observation : repeatSet) {
+				observation.value += 0.001953125F; // A changed reading of the same sound.
+			}
+			size_t repeatBytes = 0;
+			size_t repeatEncoded = 0;
+			if (!roundTripThrough(MakeObservationFrame(11, roundId, repeatSet), repeatBytes, repeatEncoded) || repeatEncoded != 64) {
+				if (error->empty()) { *error = "repeat observation frame did not encode every observation"; }
+				return false;
+			}
+			// Five bytes each: a one-byte slot reference and the reading, after the two-byte count.
+			if (repeatBytes - emptyBytes != 5 * 64) {
+				*error = "a repeated observation did not cost five bytes: block=" + std::to_string(repeatBytes - emptyBytes);
+				return false;
+			}
+			if (firstBytes <= repeatBytes || firstBytes - emptyBytes > 24 * 64) {
+				*error = "a first-use observation block was not in its expected range: " + std::to_string(firstBytes - emptyBytes);
+				return false;
+			}
+
+			// Filling the table evicts the key nobody has mentioned since; it returns spelled out in full.
+			const NetSoundObservationKey evicted = KeyOfObservation(firstSet.front());
+			uint64_t nextFrame = 12;
+			for (size_t block = 0; block * 256 < NetSoundObservationDictionary::c_MaxSlots; ++block) {
+				std::vector<NetSoundObservation> fresh;
+				for (size_t i = 0; i < 256; ++i) {
+					fresh.push_back(MakeObservation(2, 9000000 + block * 256 + i, 500 + i, 0x1234ULL + i, 1, 0.5F));
+				}
+				size_t bytes = 0;
+				size_t encoded = 0;
+				if (!roundTripThrough(MakeObservationFrame(nextFrame++, roundId, fresh), bytes, encoded) || encoded != fresh.size()) {
+					if (error->empty()) { *error = "a slot-exhaustion frame did not encode every observation"; }
+					return false;
+				}
+			}
+			uint16_t stillBound = 0;
+			if (encoder.Lookup(evicted, stillBound)) {
+				*error = "the least recently used key was not evicted once every slot was bound";
+				return false;
+			}
+			size_t returnBytes = 0;
+			size_t returnEncoded = 0;
+			if (!roundTripThrough(MakeObservationFrame(nextFrame++, roundId, {firstSet.front()}), returnBytes, returnEncoded) || returnEncoded != 1) {
+				if (error->empty()) { *error = "a returning key did not encode"; }
+				return false;
+			}
+			if (returnBytes - emptyBytes <= 5) {
+				*error = "a returning key was sent as a bare slot reference";
+				return false;
+			}
+
+			// More first-use observations than the byte budget holds: the encoder stops, says how many it
+			// took, and the rest encode next frame against a table that never saw them.
+			std::vector<NetSoundObservation> flood;
+			for (size_t i = 0; i < NetLockstepCodec::c_MaxObservationsPerPacket; ++i) {
+				flood.push_back(MakeObservation(2, 20000000 + i * 7, 900 + i, 0xABCDEF0123456789ULL + i, 1 + i % 3, 0.75F));
+			}
+			size_t floodBytes = 0;
+			size_t floodEncoded = 0;
+			if (!roundTripThrough(MakeObservationFrame(nextFrame++, roundId, flood), floodBytes, floodEncoded)) {
+				return false;
+			}
+			if (floodEncoded == 0 || floodEncoded >= flood.size()) {
+				*error = "the observation byte budget did not stop a flood of new keys: encoded " + std::to_string(floodEncoded);
+				return false;
+			}
+			// The slack is the block's own binding sequence, which is wider here than in an empty block.
+			if (floodBytes - emptyBytes > NetLockstepCodec::c_MaxObservationBytesPerPacket + 16 ||
+			    floodBytes > NetLockstepCodec::c_HeaderBytes + NetLockstepCodec::c_MaxPayloadBytes) {
+				*error = "an observation block passed its byte budget";
+				return false;
+			}
+			const std::vector<NetSoundObservation> carried(flood.begin() + static_cast<std::ptrdiff_t>(floodEncoded), flood.end());
+			size_t carriedBytes = 0;
+			size_t carriedEncoded = 0;
+			if (!roundTripThrough(MakeObservationFrame(nextFrame++, roundId, carried), carriedBytes, carriedEncoded)) {
+				return false;
+			}
+			if (carriedEncoded == 0) {
+				*error = "the carried remainder encoded nothing";
+				return false;
+			}
+
+			// A version 13 recording still decodes, with and without a table to read slots against.
+			const NetLockstepFrame legacy = MakeObservationFrame(40, roundId, MakeObservationSet(2, 5, 77, 0.5F));
+			const std::vector<uint8_t> legacyBytes = MakeVersion13Frame(legacy);
+			// One byte less than an empty version 15 block, because version 13 has no binding sequence.
+			if (legacyBytes.size() != FrameBytesWithoutObservations(legacy) - 1 + 44 * 5) {
+				*error = "the version 13 frame is not forty-four bytes per observation";
+				return false;
+			}
+			for (NetSoundObservationTables* tables: {static_cast<NetSoundObservationTables*>(nullptr), &decoderTables}) {
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(legacyBytes, ControllerFrame::c_Version, tables);
+				if (!decoded.ok) {
+					*error = "a version 13 frame did not decode: " + decoded.error.message;
+					return false;
+				}
+				const NetLockstepFrame* out = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
+				if (!out || out->observations != legacy.observations) {
+					*error = "a version 13 frame decoded to different observations";
+					return false;
+				}
+			}
+
+			// A slot reference nobody spelled out is refused, whether the table is missing or just lacks it.
+			NetSoundObservationDictionary lone;
+			std::vector<uint8_t> bindBytes;
+			size_t loneEncoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(50, 0, MakeObservationSet(2, 2, 3, 0.0F))}, bindBytes, nullptr, &lone, &loneEncoded)) {
+				*error = "could not encode the binding frame";
+				return false;
+			}
+			NetSoundObservationTables mirror;
+			if (!NetLockstepCodec::Decode(bindBytes, ControllerFrame::c_Version, &mirror).ok) {
+				*error = "could not decode the binding frame";
+				return false;
+			}
+			std::vector<uint8_t> refBytes;
+			size_t refEncoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(51, 0, MakeObservationSet(2, 2, 3, 0.25F))}, refBytes, nullptr, &lone, &refEncoded)) {
+				*error = "could not encode the slot-reference frame";
+				return false;
+			}
+			if (NetLockstepCodec::Decode(refBytes, ControllerFrame::c_Version, nullptr).error.code != NetLockstepErrorCode::UnboundObservationSlot) {
+				*error = "a slot reference without any table was not refused";
+				return false;
+			}
+			// A table that has never been fed sees the gap before it ever reaches the slot.
+			NetSoundObservationTables emptyTables;
+			if (NetLockstepCodec::Decode(refBytes, ControllerFrame::c_Version, &emptyTables).error.code != NetLockstepErrorCode::ObservationBindingGap) {
+				*error = "a slot reference against an empty table was not refused";
+				return false;
+			}
+			if (!NetLockstepCodec::Decode(refBytes, ControllerFrame::c_Version, &mirror).ok) {
+				*error = "a slot reference did not decode against the table that bound it";
+				return false;
+			}
+
+			// The one packet that says a slot has been reused is the only place that is ever said, so a
+			// receiver that misses it must refuse rather than read the slot as the key it held before.
+			// This is the reviewer's lost_rebinding probe: it decodes with no error on version 14.
+			uint64_t silentlyWrongKey = 0;
+			{
+				NetSoundObservationDictionary sender;
+				NetSoundObservationTables receiver;
+				uint64_t nextFrame = 100;
+				// Bind every slot, so the next key handed out reuses the one nobody has mentioned since.
+				for (size_t block = 0; block * 512 < NetSoundObservationDictionary::c_MaxSlots; ++block) {
+					std::vector<NetSoundObservation> keys;
+					for (size_t i = 0; i < 512; ++i) {
+						keys.push_back(MakeObservation(2, 700000 + block * 512 + i, 11, 0x5151ULL + i, 1, 0.125F));
+					}
+					std::vector<uint8_t> bytes;
+					size_t encoded = 0;
+					if (!NetLockstepCodec::Encode({MakeObservationFrame(nextFrame++, roundId, keys)}, bytes, nullptr, &sender, &encoded) || encoded != keys.size()) {
+						*error = "the rebinding probe could not fill the table";
+						return false;
+					}
+					if (!NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &receiver).ok) {
+						*error = "the rebinding probe's filling frames did not decode";
+						return false;
+					}
+				}
+				const NetSoundObservation reused = MakeObservation(2, 990001, 12, 0x6262ULL, 1, 0.25F);
+				std::vector<uint8_t> rebinding;
+				size_t rebindingEncoded = 0;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(nextFrame++, roundId, {reused})}, rebinding, nullptr, &sender, &rebindingEncoded)) {
+					*error = "the rebinding frame did not encode";
+					return false;
+				}
+				// The receiver never gets that frame. The next one refers to the reused slot.
+				NetSoundObservation later = reused;
+				later.value = 0.5F;
+				std::vector<uint8_t> after;
+				size_t afterEncoded = 0;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(nextFrame++, roundId, {later})}, after, nullptr, &sender, &afterEncoded)) {
+					*error = "the frame after the rebinding did not encode";
+					return false;
+				}
+				const NetLockstepDecodeResult lost = NetLockstepCodec::Decode(after, ControllerFrame::c_Version, &receiver);
+				if (lost.ok || lost.error.code != NetLockstepErrorCode::ObservationBindingGap) {
+					*error = "a lost rebinding was not refused: ok=" + std::to_string(lost.ok ? 1 : 0) + " " + NetLockstepCodec::ErrorCodeName(lost.error.code);
+					return false;
+				}
+				// The control: the same packet as version 14 said nothing about the bindings behind it, so the
+				// same receiver reads the reused slot as the key it held before and commits the sent reading
+				// against the wrong sound, with no error at all. That is what the sequence above refuses.
+				const size_t prefix = FrameBytesWithoutObservations(MakeObservationFrame(0, roundId, {})) - 3;
+				std::vector<uint8_t> asVersion14 = after;
+				size_t sequenceBytes = 0;
+				while (prefix + sequenceBytes < asVersion14.size() && (asVersion14[prefix + sequenceBytes] & 0x80U) != 0) {
+					++sequenceBytes;
+				}
+				++sequenceBytes;
+				asVersion14.erase(asVersion14.begin() + static_cast<std::ptrdiff_t>(prefix),
+				                  asVersion14.begin() + static_cast<std::ptrdiff_t>(prefix + sequenceBytes));
+				asVersion14[4] = 14;
+				for (int i = 0; i < 4; ++i) {
+					asVersion14[12 + i] = static_cast<uint8_t>((asVersion14.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+				}
+				const NetLockstepDecodeResult silent = NetLockstepCodec::Decode(asVersion14, ControllerFrame::c_Version, &receiver);
+				const NetLockstepFrame* silentFrame = silent.ok ? std::get_if<NetLockstepFrame>(&silent.packet.payload) : nullptr;
+				if (!silentFrame || silentFrame->observations.size() != 1) {
+					*error = "the version 14 control did not decode, so it proves nothing";
+					return false;
+				}
+				if (silentFrame->observations.front().objectUID == later.objectUID) {
+					*error = "the version 14 control did not reproduce the wrong key it is there to show";
+					return false;
+				}
+				silentlyWrongKey = silentFrame->observations.front().objectUID;
+				// Delivered in order, the same two frames read exactly what the sender meant.
+				NetSoundObservationDictionary replaySender;
+				NetSoundObservationTables replayReceiver;
+				uint64_t replayFrame = 200;
+				bool replayOk = true;
+				for (size_t block = 0; block * 512 < NetSoundObservationDictionary::c_MaxSlots && replayOk; ++block) {
+					std::vector<NetSoundObservation> keys;
+					for (size_t i = 0; i < 512; ++i) {
+						keys.push_back(MakeObservation(2, 700000 + block * 512 + i, 11, 0x5151ULL + i, 1, 0.125F));
+					}
+					std::vector<uint8_t> bytes;
+					size_t encoded = 0;
+					replayOk = NetLockstepCodec::Encode({MakeObservationFrame(replayFrame++, roundId, keys)}, bytes, nullptr, &replaySender, &encoded) &&
+					           NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &replayReceiver).ok;
+				}
+				std::vector<uint8_t> replayRebinding, replayAfter;
+				size_t ignored = 0;
+				replayOk = replayOk &&
+				           NetLockstepCodec::Encode({MakeObservationFrame(replayFrame++, roundId, {reused})}, replayRebinding, nullptr, &replaySender, &ignored) &&
+				           NetLockstepCodec::Decode(replayRebinding, ControllerFrame::c_Version, &replayReceiver).ok &&
+				           NetLockstepCodec::Encode({MakeObservationFrame(replayFrame++, roundId, {later})}, replayAfter, nullptr, &replaySender, &ignored);
+				if (!replayOk) {
+					*error = "the in-order replay of the rebinding stream failed";
+					return false;
+				}
+				const NetLockstepDecodeResult delivered = NetLockstepCodec::Decode(replayAfter, ControllerFrame::c_Version, &replayReceiver);
+				const NetLockstepFrame* deliveredFrame = delivered.ok ? std::get_if<NetLockstepFrame>(&delivered.packet.payload) : nullptr;
+				if (!deliveredFrame || deliveredFrame->observations.size() != 1 || !(deliveredFrame->observations.front() == later)) {
+					*error = "the reused slot did not read as the key the sender rebound it to";
+					return false;
+				}
+			}
+
+			// A sender that starts its round over has spelled nothing out yet; that is a fresh table, not a
+			// hole, and the keys it sends next are its own.
+			{
+				NetSoundObservationDictionary warm;
+				NetSoundObservationTables receiver;
+				std::vector<uint8_t> bytes;
+				size_t encoded = 0;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(300, roundId, MakeObservationSet(2, 8, 21, 0.0F))}, bytes, nullptr, &warm, &encoded) ||
+				    !NetLockstepCodec::Decode(bytes, ControllerFrame::c_Version, &receiver).ok) {
+					*error = "the restart probe's first round did not survive the wire";
+					return false;
+				}
+				NetSoundObservationDictionary restarted;
+				const std::vector<NetSoundObservation> fresh = MakeObservationSet(2, 8, 44, 0.5F);
+				std::vector<uint8_t> restartedBytes;
+				if (!NetLockstepCodec::Encode({MakeObservationFrame(0, roundId + 1, fresh)}, restartedBytes, nullptr, &restarted, &encoded)) {
+					*error = "the restarted round did not encode";
+					return false;
+				}
+				const NetLockstepDecodeResult adopted = NetLockstepCodec::Decode(restartedBytes, ControllerFrame::c_Version, &receiver);
+				const NetLockstepFrame* adoptedFrame = adopted.ok ? std::get_if<NetLockstepFrame>(&adopted.packet.payload) : nullptr;
+				if (!adoptedFrame || adoptedFrame->observations != fresh) {
+					*error = "a sender that started over was not followed: " + std::string(NetLockstepCodec::ErrorCodeName(adopted.error.code));
+					return false;
+				}
+			}
+
+			// Corruptions inside the block are refused, not read as another sound.
+			NetSoundObservationDictionary roundEncoder;
+			std::vector<uint8_t> roundBytes;
+			size_t roundEncoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(60, roundId, MakeObservationSet(2, 3, 9, 0.0F))}, roundBytes, nullptr, &roundEncoder, &roundEncoded)) {
+				*error = "could not encode the corruption frame";
+				return false;
+			}
+			// Past the frame's empty block, which is a zero binding sequence and a zero count.
+			const size_t blockStart = FrameBytesWithoutObservations(MakeObservationFrame(60, roundId, {}));
+			const auto expectBlockError = [&](size_t offset, uint8_t value, NetLockstepErrorCode code, const char* what) {
+				std::vector<uint8_t> corrupt = roundBytes;
+				corrupt[offset] = value;
+				NetSoundObservationTables tables;
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(corrupt, ControllerFrame::c_Version, &tables);
+				if (decoded.error.code == code) {
+					return true;
+				}
+				*error = std::string(what) + " gave " + NetLockstepCodec::ErrorCodeName(decoded.error.code);
+				return false;
+			};
+			if (!expectBlockError(blockStart - 3, 0x05U, NetLockstepErrorCode::ObservationBindingGap, "a binding sequence ahead of the table") ||
+			    !expectBlockError(blockStart, 0xFEU, NetLockstepErrorCode::UnboundObservationSlot, "a corrupted slot reference") ||
+			    !expectBlockError(blockStart + 1, 0xE0U, NetLockstepErrorCode::ReservedFieldNonZero, "a reserved key-mask bit")) {
+				return false;
+			}
+			std::vector<uint8_t> nonCanonical = roundBytes;
+			nonCanonical[blockStart] = 0x81U; // A varint continuation whose next byte adds nothing.
+			nonCanonical.insert(nonCanonical.begin() + static_cast<std::ptrdiff_t>(blockStart) + 1, 0x00U);
+			for (int i = 0; i < 4; ++i) {
+				nonCanonical[12 + i] = static_cast<uint8_t>((nonCanonical.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			NetSoundObservationTables varintTables;
+			if (NetLockstepCodec::Decode(nonCanonical, ControllerFrame::c_Version, &varintTables).error.code != NetLockstepErrorCode::InvalidValue) {
+				*error = "a non-canonical slot varint was not refused";
+				return false;
+			}
+
+			// A version 14 frame has no binding sequence and still decodes, with and without a table.
+			std::vector<uint8_t> version14 = roundBytes;
+			if (version14[blockStart - 3] != 0x00U) {
+				*error = "the corruption frame's binding sequence is not the single zero byte expected";
+				return false;
+			}
+			version14.erase(version14.begin() + static_cast<std::ptrdiff_t>(blockStart) - 3);
+			version14[4] = 14;
+			for (int i = 0; i < 4; ++i) {
+				version14[12 + i] = static_cast<uint8_t>((version14.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			for (NetSoundObservationTables* tables: {static_cast<NetSoundObservationTables*>(nullptr), &varintTables}) {
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(version14, ControllerFrame::c_Version, tables);
+				const NetLockstepFrame* out = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+				if (!out || out->observations != MakeObservationSet(2, 3, 9, 0.0F)) {
+					*error = "a version 14 frame did not decode: " + std::string(NetLockstepCodec::ErrorCodeName(decoded.error.code));
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS observation_slot_codec repeat=" << (repeatBytes - emptyBytes) / 64
+			          << "B first_use=" << (firstBytes - emptyBytes) / 64 << "B legacy=44B budget_stop=" << floodEncoded << "/" << flood.size()
+			          << " lost_rebinding=refused v14_control_committed_key=" << silentlyWrongKey << std::endl;
+			return true;
+		}
+
 		bool TestRoundTrips(std::string* error) {
 			const NetLockstepStart start{
 				0xAABBCCDDEEFF0011ULL,
@@ -137,7 +594,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x0D, 0x00,
+				0x0F, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1772,6 +2229,804 @@ namespace RTE {
 		// A6: the sim thread parks in the lockstep wait while a peer is silent, so the admission plane
 		// has to be serviced from inside it - the silent peer may be waiting on the very answer only
 		// that pump can send, which is what left every clean leave unacknowledged.
+		// Four peers over a host-star loopback, each reporting N changing sound readings a frame, so the
+		// relay's own byte counters say what the compact form costs. The same frames priced the way
+		// version 13 spelled them out give the factor. The first frame and the steady ones are measured
+		// apart, because only the first spells its keys out.
+		bool TestFourPeerObservationRelayBytes(std::string* error) {
+			for (const size_t observationsPerFrame: {size_t{64}, size_t{256}, size_t{512}}) {
+				const uint16_t port = static_cast<uint16_t>(43040 + observationsPerFrame % 16);
+				const uint64_t sessionId = 0x7000000000000040ULL + observationsPerFrame;
+				LoopbackTransport hostT, clientAT, clientBT, clientCT;
+				if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+				    !clientBT.Connect("loopback", port, error) || !clientCT.Connect("loopback", port, error)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = sessionId;
+					c.startFrame = 0;
+					c.inputDelayFrames = 0;
+					c.timeoutMs = 4000;
+					c.localPeerId = local;
+					c.peerCount = 4;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.frameLane = NetTransportLane::ControlReliable;
+					c.scenario = "LockstepSelfTest";
+					c.ownershipPolicy = "unique-id-split";
+					c.roundId = 0x1400000000000001ULL + observationsPerFrame;
+					return c;
+				};
+				NetLockstepCoordinator host, clientA, clientB, clientC;
+				NetLockstepConfig clientCfg = cfg(2, {{1, 1}}, false);
+				clientCfg.roundId = 0;
+				if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}, {4, 3}}, true), error)) {
+					return false;
+				}
+				clientCfg.localPeerId = 2;
+				if (!clientA.Start(clientAT, clientCfg, error)) {
+					return false;
+				}
+				clientCfg.localPeerId = 3;
+				if (!clientB.Start(clientBT, clientCfg, error)) {
+					return false;
+				}
+				clientCfg.localPeerId = 4;
+				if (!clientC.Start(clientCT, clientCfg, error)) {
+					return false;
+				}
+				NetLockstepCoordinator* peers[4] = {&host, &clientA, &clientB, &clientC};
+				LoopbackTransport* transports[4] = {&hostT, &clientAT, &clientBT, &clientCT};
+				auto drive = [&](const std::function<bool()>& done) {
+					for (uint64_t now = 0; now <= 20000; now += 5) {
+						for (NetLockstepCoordinator* peer: peers) {
+							peer->Tick(now);
+						}
+						if (done()) {
+							return true;
+						}
+						for (LoopbackTransport* transport: transports) {
+							transport->AdvanceTimeMs(5);
+						}
+					}
+					return false;
+				};
+				if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning() && clientC.IsRunning(); })) {
+					*error = "four-peer lockstep did not reach Running";
+					return false;
+				}
+
+				std::map<uint8_t, std::map<uint64_t, std::vector<NetSoundObservation>>> committed;
+				size_t readyPerPeer[4] = {0, 0, 0, 0};
+				auto collect = [&](size_t index) {
+					NetLockstepReadyFrame ready;
+					while (peers[index]->PopReadyFrame(ready)) {
+						std::vector<NetSoundObservation> all = ready.localObservations;
+						all.insert(all.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+						std::stable_sort(all.begin(), all.end(), [](const NetSoundObservation& a, const NetSoundObservation& b) {
+							return std::tie(a.senderPeerId, a.objectUID, a.ordinal) < std::tie(b.senderPeerId, b.objectUID, b.ordinal);
+						});
+						committed[static_cast<uint8_t>(index)][ready.frame] = std::move(all);
+						++readyPerPeer[index];
+					}
+				};
+				// Version 13 priced the same frames at forty-four bytes an observation, on top of a packet
+				// that is otherwise byte for byte the same one this build sends.
+				size_t legacyBytesPerFrame = 0;
+				const size_t frameCount = 12;
+				const auto runFrames = [&](uint64_t from, uint64_t to) {
+					for (uint64_t f = from; f < to; ++f) {
+						for (uint8_t peer = 1; peer <= 4; ++peer) {
+							std::vector<NetSoundObservation> observations = MakeObservationSet(peer, observationsPerFrame, 400 + peer, static_cast<float>(f) / 16.0F);
+							if (peer == 1 && legacyBytesPerFrame == 0) {
+								NetLockstepFrame priced;
+								priced.senderPeerId = peer;
+								priced.targetFrame = f;
+								priced.roundId = 0x1400000000000001ULL + observationsPerFrame;
+								priced.frames = {MakeFrame(100 + static_cast<int64_t>(f), f + 1)};
+								priced.observations = observations;
+								// Less the binding sequence of an empty block, which version 13 did not have.
+								legacyBytesPerFrame = FrameBytesWithoutObservations(priced) - 1 + 44 * observationsPerFrame;
+							}
+							if (!peers[peer - 1]->QueueLocalInput(f, {MakeFrame(100 * peer + static_cast<int64_t>(f), f + 1)}, {}, error, observations)) {
+								return false;
+							}
+						}
+					}
+					if (!drive([&] {
+							for (size_t i = 0; i < 4; ++i) {
+								collect(i);
+							}
+							return readyPerPeer[0] >= to && readyPerPeer[1] >= to && readyPerPeer[2] >= to && readyPerPeer[3] >= to;
+						})) {
+						*error = "four-peer lockstep did not produce every ready frame: " + std::to_string(readyPerPeer[0]) + "," + std::to_string(readyPerPeer[1]) +
+						         "," + std::to_string(readyPerPeer[2]) + "," + std::to_string(readyPerPeer[3]);
+						return false;
+					}
+					return true;
+				};
+				const uint64_t startBytes = host.GetStats().relayBytesSent;
+				const uint32_t startPackets = host.GetStats().relayPacketsSent;
+				if (!runFrames(0, 1)) {
+					return false;
+				}
+				const uint64_t firstUseBytes = host.GetStats().relayBytesSent - startBytes;
+				const uint32_t firstUsePackets = host.GetStats().relayPacketsSent - startPackets;
+				if (!runFrames(1, frameCount)) {
+					return false;
+				}
+				const uint64_t steadyBytes = host.GetStats().relayBytesSent - startBytes - firstUseBytes;
+				const uint32_t steadyPackets = host.GetStats().relayPacketsSent - startPackets - firstUsePackets;
+
+				// Every peer commits the identical table, which is the whole point of the wire form.
+				for (uint64_t f = 0; f < frameCount; ++f) {
+					for (uint8_t peer = 1; peer < 4; ++peer) {
+						if (committed[peer][f] != committed[0][f]) {
+							*error = "four-peer observation tables differ at frame " + std::to_string(f) + " on peer " + std::to_string(peer + 1);
+							return false;
+						}
+					}
+					if (committed[0][f].size() != observationsPerFrame * 4) {
+						*error = "four-peer frame " + std::to_string(f) + " committed " + std::to_string(committed[0][f].size()) +
+						         " observations, expected " + std::to_string(observationsPerFrame * 4);
+						return false;
+					}
+				}
+				const NetLockstepStats& stats = host.GetStats();
+				if (stats.relayObservationOverflows != 0 || stats.unresolvedObservationPackets != 0 ||
+				    stats.observationsCarried != 0 || stats.observationsDropped != 0) {
+					*error = "four-peer relay reported an observation fault";
+					return false;
+				}
+				if (firstUsePackets == 0 || steadyPackets == 0) {
+					*error = "four-peer relay forwarded nothing to measure";
+					return false;
+				}
+				const double firstUsePerPacket = static_cast<double>(firstUseBytes) / firstUsePackets;
+				const double steadyPerPacket = static_cast<double>(steadyBytes) / steadyPackets;
+				const double legacy = static_cast<double>(legacyBytesPerFrame);
+				std::cout << "[net-lockstep-selftest] PASS four_peer_observation_relay n=" << observationsPerFrame
+				          << " relayed_bytes_per_frame first_use=" << firstUsePerPacket << " steady=" << steadyPerPacket
+				          << " (was " << legacy << ") factor first_use=" << legacy / firstUsePerPacket << " steady=" << legacy / steadyPerPacket
+				          << " relay_bytes_sent=" << stats.relayBytesSent << " largest_relay_packet_bytes=" << stats.largestRelayPacketBytes << std::endl;
+				if (legacy / steadyPerPacket < 6.0) {
+					*error = "the compact observation form saved less than six times in the steady state at n=" + std::to_string(observationsPerFrame);
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// More changed readings in one frame than its byte budget holds: the sender keeps the rest for the
+		// next frame instead of refusing the frame, and both peers commit the same table either way.
+		bool TestObservationOverflowCarry(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000050ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000050ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x1400000000000050ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43060, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			// Every key is new every frame, so the block is nothing but spelled-out keys and the budget bites.
+			uint64_t nextObject = 30000000;
+			const auto flood = [&](size_t count, uint64_t tick) {
+				std::vector<NetSoundObservation> observations;
+				for (size_t i = 0; i < count; ++i) {
+					observations.push_back(MakeObservation(1, nextObject++, tick, 0xF0E1D2C3B4A59687ULL + nextObject, 1 + i % 4, 0.125F));
+				}
+				return observations;
+			};
+			// Two frames of new sounds nobody can hold, then quiet ones for the backlog to drain into.
+			const size_t burst = 2048;
+			const size_t frameCount = 10;
+			std::vector<NetSoundObservation> sent;
+			for (uint64_t f = 0; f < frameCount; ++f) {
+				std::vector<NetSoundObservation> observations = f < 2 ? flood(burst, 700 + f) : std::vector<NetSoundObservation>{};
+				sent.insert(sent.end(), observations.begin(), observations.end());
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, observations) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<NetSoundObservation> hostSeen, clientSeen;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&](NetLockstepCoordinator& coordinator, std::vector<NetSoundObservation>& into, size_t& count) {
+				NetLockstepReadyFrame ready;
+				while (coordinator.PopReadyFrame(ready)) {
+					into.insert(into.end(), ready.localObservations.begin(), ready.localObservations.end());
+					into.insert(into.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+					++count;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect(host, hostSeen, hostReady);
+					collect(client, clientSeen, clientReady);
+					return hostReady >= frameCount && clientReady >= frameCount;
+				}, error, 16000)) {
+				return false;
+			}
+			if (host.GetStats().observationsCarried == 0) {
+				*error = "a frame of nothing but new keys did not carry anything over";
+				return false;
+			}
+			if (host.GetStats().observationsDropped != 0) {
+				*error = "a burst the quiet frames could drain still dropped readings";
+				return false;
+			}
+			// The two peers saw the same readings in the same order, and the burst arrived whole.
+			if (hostSeen != clientSeen) {
+				*error = "the carried observations reached the two peers differently";
+				return false;
+			}
+			if (hostSeen != sent) {
+				*error = "the carried observations did not all arrive in their sampled order: " +
+				         std::to_string(hostSeen.size()) + " of " + std::to_string(sent.size());
+				return false;
+			}
+			const uint64_t carriedInBurst = host.GetStats().observationsCarried;
+
+			// Sustained: more new sounds every frame than the wire can ever carry. The held set stays
+			// bounded, the oldest readings go, and the frames themselves keep flowing.
+			for (uint64_t f = frameCount; f < frameCount + 8; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, flood(NetLockstepCodec::c_MaxObservationsPerPacket, 800 + f)) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect(host, hostSeen, hostReady);
+					collect(client, clientSeen, clientReady);
+					return hostReady >= frameCount + 8 && clientReady >= frameCount + 8;
+				}, error, 16000)) {
+				return false;
+			}
+			if (host.GetStats().observationsDropped == 0) {
+				*error = "the held observation set was not bounded under a sustained flood";
+				return false;
+			}
+			// Every dropped reading comes back exactly once, in the order it was sampled, so its sampler
+			// can forget it was ever sent and offer it again.
+			const std::vector<NetSoundObservation> handedBack = host.TakeDroppedObservations();
+			if (handedBack.size() != host.GetStats().observationsDropped) {
+				*error = "the dropped readings were not all handed back: " + std::to_string(handedBack.size()) +
+				         " of " + std::to_string(host.GetStats().observationsDropped);
+				return false;
+			}
+			std::set<NetSoundObservationKey> committedKeys;
+			for (const NetSoundObservation& observation: hostSeen) {
+				committedKeys.insert(KeyOfObservation(observation));
+			}
+			for (const NetSoundObservation& observation: handedBack) {
+				if (committedKeys.contains(KeyOfObservation(observation))) {
+					*error = "a reading was both committed and handed back as dropped";
+					return false;
+				}
+			}
+			if (!host.TakeDroppedObservations().empty()) {
+				*error = "a dropped reading was handed back twice";
+				return false;
+			}
+			if (hostSeen != clientSeen) {
+				*error = "a bounded held set left the two peers with different observations";
+				return false;
+			}
+			if (host.IsFailed() || client.IsFailed()) {
+				*error = "driving past the observation cap failed the round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS observation_overflow_carry burst=" << burst << " carried=" << carriedInBurst
+			          << " delivered=" << sent.size() << "/" << sent.size() << " sustained_dropped=" << host.GetStats().observationsDropped << std::endl;
+			return true;
+		}
+
+		// A frame from another lockstep round is the round's business, not the codec's: it decodes like
+		// any other, its sender still counts as heard from, and the round drops it.
+		bool TestStaleRoundFrameStillCountsAsTraffic(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000070ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000070ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x1400000000000070ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43070, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return false;
+			}
+			const NetLockstepPeerStats before = host.GetStats().peers.at(2);
+			const uint32_t staleBefore = host.GetStats().staleRoundPackets;
+
+			// A frame of the round before this one, with observations whose slots this host was never given.
+			NetSoundObservationDictionary strangerEncoder;
+			NetLockstepFrame stale;
+			stale.senderPeerId = 2;
+			stale.targetFrame = 4;
+			stale.roundId = hostConfig.roundId - 1;
+			stale.frames = {MakeFrame(300, 1)};
+			stale.observations = MakeObservationSet(2, 6, 55, 0.0F);
+			std::vector<uint8_t> bytes;
+			size_t encoded = 0;
+			if (!NetLockstepCodec::Encode({stale}, bytes, nullptr, &strangerEncoder, &encoded) || encoded != stale.observations.size()) {
+				*error = "the stale-round frame did not encode";
+				return false;
+			}
+			if (!clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			for (uint64_t now = 5000; now <= 5100; now += 5) {
+				host.Tick(now);
+				hostTransport.AdvanceTimeMs(5);
+				clientTransport.AdvanceTimeMs(5);
+			}
+			const NetLockstepPeerStats after = host.GetStats().peers.at(2);
+			if (after.staleRoundPackets != before.staleRoundPackets + 1 || host.GetStats().staleRoundPackets != staleBefore + 1) {
+				*error = "a stale-round frame was not counted against its sender";
+				return false;
+			}
+			if (after.framePacketsReceived != before.framePacketsReceived + 1) {
+				*error = "a stale-round frame did not count as a frame packet from its sender";
+				return false;
+			}
+			if (after.lastHeardMs <= before.lastHeardMs) {
+				*error = "a stale-round frame did not prove its sender is still there";
+				return false;
+			}
+			if (host.GetStats().unresolvedObservationPackets != 0 || host.IsFailed()) {
+				*error = "a stale-round frame disturbed the round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS stale_round_frame_counts_as_traffic last_heard=" << before.lastHeardMs << "->" << after.lastHeardMs
+			          << " stale=" << after.staleRoundPackets << " unresolved=0" << std::endl;
+			return true;
+		}
+
+		// Two frames a relay host cannot read the observations of, for opposite reasons: one from a
+		// transport that is not in the round at all, one from a peer that is. Only the second is a fault.
+		bool TestObservationFaultsAreToldApart(std::string* error) {
+			const uint16_t port = 43080;
+			const uint64_t sessionId = 0x7000000000000080ULL;
+			LoopbackTransport hostT, clientAT, clientBT, strangerT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+			    !clientBT.Connect("loopback", port, error) || !strangerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 4000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.roundId = 0x1400000000000080ULL;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			NetLockstepConfig clientCfg = cfg(2, {{1, 1}}, false);
+			clientCfg.roundId = 0;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error)) {
+				return false;
+			}
+			clientCfg.localPeerId = 2;
+			if (!clientA.Start(clientAT, clientCfg, error)) {
+				return false;
+			}
+			clientCfg.localPeerId = 3;
+			if (!clientB.Start(clientBT, clientCfg, error)) {
+				return false;
+			}
+			NetLockstepCoordinator* peers[3] = {&host, &clientA, &clientB};
+			LoopbackTransport* transports[4] = {&hostT, &clientAT, &clientBT, &strangerT};
+			auto drive = [&](uint64_t from, uint64_t to) {
+				for (uint64_t now = from; now <= to; now += 5) {
+					for (NetLockstepCoordinator* peer: peers) {
+						peer->Tick(now);
+					}
+					for (LoopbackTransport* transport: transports) {
+						transport->AdvanceTimeMs(5);
+					}
+				}
+			};
+			drive(0, 1000);
+			if (!host.IsRunning()) {
+				*error = "the fault-classification host did not reach Running";
+				return false;
+			}
+
+			// A frame whose observations refer to slots this host was never given.
+			NetSoundObservationDictionary strangerEncoder;
+			std::vector<uint8_t> binding, reference;
+			size_t encoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(2, 0x1400000000000080ULL, MakeObservationSet(2, 4, 31, 0.0F))}, binding, nullptr, &strangerEncoder, &encoded) ||
+			    !NetLockstepCodec::Encode({MakeObservationFrame(3, 0x1400000000000080ULL, MakeObservationSet(2, 4, 31, 0.5F))}, reference, nullptr, &strangerEncoder, &encoded)) {
+				*error = "the unreadable frames did not encode";
+				return false;
+			}
+
+			// From a transport with no seat in the round: admission traffic, not a fault of ours.
+			const uint32_t admissionBefore = host.GetStats().ignoredAdmissionFaults;
+			if (!strangerT.Send(1, NetTransportLane::ControlReliable, reference, error)) {
+				return false;
+			}
+			drive(1005, 1200);
+			if (host.GetStats().ignoredAdmissionFaults != admissionBefore + 1 || host.GetStats().unresolvedObservationPackets != 0) {
+				*error = "an unknown transport's unreadable frame was counted as a fault: admission=" +
+				         std::to_string(host.GetStats().ignoredAdmissionFaults) + " unresolved=" + std::to_string(host.GetStats().unresolvedObservationPackets);
+				return false;
+			}
+
+			// From a peer of the round, the same shape means a binding it can never be told again.
+			if (!clientAT.Send(1, NetTransportLane::ControlReliable, reference, error)) {
+				return false;
+			}
+			drive(1205, 1400);
+			if (host.GetStats().unresolvedObservationPackets != 1) {
+				*error = "a round member's unreadable frame was not counted as a fault";
+				return false;
+			}
+			if (host.IsFailed() || !host.IsRunning()) {
+				*error = "an unreadable observation block ended the round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS observation_faults_told_apart admission=" << host.GetStats().ignoredAdmissionFaults
+			          << " unresolved=" << host.GetStats().unresolvedObservationPackets << std::endl;
+			return true;
+		}
+
+		// A frame the round is going to discard must not disturb the live table of the peer that sent it,
+		// whether its sender's encoder is fresh or ahead. The reviewer's stale_round_shape probe.
+		bool TestStaleRoundFrameLeavesTheLiveTable(std::string* error) {
+			for (int shape = 0; shape < 2; ++shape) {
+				LoopbackTransport hostTransport, clientTransport;
+				NetLockstepCoordinator host, client;
+				const uint64_t sessionId = 0x7000000000000090ULL + static_cast<uint64_t>(shape);
+				NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+				NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+				hostConfig.roundId = 0x1400000000000090ULL;
+				hostConfig.timeoutMs = 8000;
+				clientConfig.timeoutMs = 8000;
+				if (!StartCoordinatorPair(static_cast<uint16_t>(43090 + shape), hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+					return false;
+				}
+				// One clock for the whole probe, so the peer's last-heard stamp can be read as it moves.
+				uint64_t clock = 0;
+				size_t hostReady = 0;
+				std::vector<NetSoundObservation> hostSaw;
+				auto drive = [&](const std::function<bool()>& done) {
+					for (uint64_t step = 0; step < 2000; ++step) {
+						// The clock moves before every tick, so a peer's last-heard stamp reads as it moves.
+						hostTransport.AdvanceTimeMs(5);
+						clientTransport.AdvanceTimeMs(5);
+						clock += 5;
+						host.Tick(clock);
+						client.Tick(clock);
+						NetLockstepReadyFrame ready;
+						while (host.PopReadyFrame(ready)) {
+							hostSaw = ready.remoteObservations;
+							++hostReady;
+						}
+						if (done()) {
+							return true;
+						}
+					}
+					return false;
+				};
+				if (!drive([&] { return host.IsRunning() && client.IsRunning(); })) {
+					*error = "the straggler probe did not reach Running";
+					return false;
+				}
+				// Real traffic first, so the host's table for peer 2 is not empty when the straggler lands.
+				const auto play = [&](uint64_t from, uint64_t to) {
+					for (uint64_t f = from; f < to; ++f) {
+						if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+						    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 12, 61, static_cast<float>(f) / 8.0F))) {
+							return false;
+						}
+					}
+					return drive([&] { return hostReady >= to; });
+				};
+				if (!play(0, 3)) {
+					if (error->empty()) { *error = "the straggler probe's opening frames did not commit"; }
+					return false;
+				}
+				const NetLockstepPeerStats before = host.GetStats().peers.at(2);
+				const uint32_t unresolvedBefore = host.GetStats().unresolvedObservationPackets;
+
+				// A frame of the previous round. Shape 0 comes from a fresh encoder, which is the zero count
+				// that would reset a live table; shape 1 comes from one that is ahead of the host's.
+				NetSoundObservationDictionary strangerEncoder;
+				size_t encoded = 0;
+				if (shape == 1) {
+					for (int warm = 0; warm < 3; ++warm) {
+						std::vector<uint8_t> scratch;
+						if (!NetLockstepCodec::Encode({MakeObservationFrame(90 + warm, hostConfig.roundId - 1, MakeObservationSet(2, 9, 300 + warm, 0.0F))}, scratch, nullptr, &strangerEncoder, &encoded)) {
+							*error = "the straggler's warm-up did not encode";
+							return false;
+						}
+					}
+				}
+				NetLockstepFrame stale;
+				stale.senderPeerId = 2;
+				stale.targetFrame = 3;
+				stale.roundId = hostConfig.roundId - 1;
+				stale.frames = {MakeFrame(999, 1)};
+				stale.observations = MakeObservationSet(2, 6, 400, 0.25F);
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({stale}, bytes, nullptr, &strangerEncoder, &encoded) || encoded != stale.observations.size()) {
+					*error = "the stale-round frame did not encode";
+					return false;
+				}
+				if (!clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+					return false;
+				}
+				if (!drive([&] { return host.GetStats().peers.at(2).staleRoundPackets > before.staleRoundPackets; })) {
+					*error = "shape " + std::to_string(shape) + ": the straggler never reached the round";
+					return false;
+				}
+				const NetLockstepPeerStats after = host.GetStats().peers.at(2);
+				if (after.staleRoundPackets != before.staleRoundPackets + 1 || after.framePacketsReceived != before.framePacketsReceived + 1) {
+					*error = "shape " + std::to_string(shape) + ": the straggler was not counted against its sender";
+					return false;
+				}
+				if (after.lastHeardMs <= before.lastHeardMs) {
+					*error = "shape " + std::to_string(shape) + ": the straggler did not prove its sender is still there (" +
+					         std::to_string(before.lastHeardMs) + " -> " + std::to_string(after.lastHeardMs) + ")";
+					return false;
+				}
+				if (host.GetStats().unresolvedObservationPackets != unresolvedBefore) {
+					*error = "shape " + std::to_string(shape) + ": a discarded straggler was counted as a hole in its sender's stream";
+					return false;
+				}
+
+				// The live table has to have survived: the client's next frames are mostly slot references.
+				if (!play(3, 5)) {
+					*error = "shape " + std::to_string(shape) + ": the peer was muted after the straggler";
+					return false;
+				}
+				if (hostReady < 5 || hostSaw.size() != 12) {
+					*error = "shape " + std::to_string(shape) + ": the host committed " + std::to_string(hostReady) +
+					         " frames and " + std::to_string(hostSaw.size()) + " observations after the straggler";
+					return false;
+				}
+				if (host.GetStats().unresolvedObservationPackets != unresolvedBefore || host.IsFailed()) {
+					*error = "shape " + std::to_string(shape) + ": the round did not survive the straggler";
+					return false;
+				}
+				std::cout << "[net-lockstep-selftest] PASS stale_round_leaves_the_live_table shape=" << shape
+				          << " stale=" << after.staleRoundPackets << " unresolved=" << host.GetStats().unresolvedObservationPackets
+				          << " last_heard=" << before.lastHeardMs << "->" << after.lastHeardMs
+				          << " frames=" << hostReady << " observations=" << hostSaw.size() << std::endl;
+			}
+			return true;
+		}
+
+		// A resync restarts the host while the other peer is still producing frames of the old round. Those
+		// are ordinary stragglers, not holes. The reviewer's resync_straggler_counter probe.
+		bool TestResyncStragglersAreNotHoles(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A0ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A0ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A0ULL;
+			hostConfig.timeoutMs = 20000;
+			clientConfig.timeoutMs = 20000;
+			if (!StartCoordinatorPair(43092, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t clock = 0;
+			size_t hostReady = 0;
+			auto drive = [&](const std::function<bool()>& done) {
+				for (uint64_t step = 0; step < 3000; ++step) {
+					// The clock moves before every tick, so a peer's last-heard stamp reads as it moves.
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+					clock += 5;
+					host.Tick(clock);
+					client.Tick(clock);
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						++hostReady;
+					}
+					if (done()) {
+						return true;
+					}
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "the resync probe did not reach Running";
+				return false;
+			}
+			for (uint64_t f = 0; f < 3; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 10, 71, static_cast<float>(f) / 8.0F))) {
+					return false;
+				}
+			}
+			if (!drive([&] { return hostReady >= 3; })) {
+				*error = "the resync probe's opening frames did not commit";
+				return false;
+			}
+
+			// The host restarts into a new round; the client has not noticed yet and keeps sending.
+			NetLockstepConfig resyncConfig = hostConfig;
+			resyncConfig.roundId = hostConfig.roundId + 1;
+			resyncConfig.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, resyncConfig, error)) {
+				return false;
+			}
+			for (uint64_t f = 3; f < 6; ++f) {
+				if (!client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 10, 71, static_cast<float>(f) / 8.0F))) {
+					return false;
+				}
+			}
+			drive([&] { return host.GetStats().staleRoundPackets >= 3; });
+			const NetLockstepStats& afterStragglers = host.GetStats();
+			if (afterStragglers.unresolvedObservationPackets != 0) {
+				*error = "a resync's in-flight frames were counted as holes: " + std::to_string(afterStragglers.unresolvedObservationPackets);
+				return false;
+			}
+			if (afterStragglers.staleRoundPackets != 3 || afterStragglers.peers.at(2).staleRoundPackets != 3) {
+				*error = "a resync's in-flight frames were not counted as stragglers: " + std::to_string(afterStragglers.staleRoundPackets);
+				return false;
+			}
+			if (afterStragglers.peers.at(2).lastHeardMs == 0) {
+				*error = "a resync's in-flight frames did not prove their sender is still there";
+				return false;
+			}
+			const uint64_t stragglerStamp = afterStragglers.peers.at(2).lastHeardMs;
+
+			// The client catches up; the round re-forms and runs.
+			NetLockstepConfig clientResync = clientConfig;
+			clientResync.remoteTransportPeerId = 1;
+			if (!client.Start(clientTransport, clientResync, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "the round did not re-form after the resync";
+				return false;
+			}
+			hostReady = 0;
+			for (uint64_t f = 0; f < 4; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(400 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 10, 81, static_cast<float>(f) / 8.0F))) {
+					return false;
+				}
+			}
+			if (!drive([&] { return hostReady >= 4; })) {
+				*error = "the recovered round did not commit its frames";
+				return false;
+			}
+			if (host.GetStats().unresolvedObservationPackets != 0) {
+				*error = "the recovered round reported a hole";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS resync_stragglers_are_not_holes stale=" << host.GetStats().staleRoundPackets
+			          << " unresolved=0 last_heard=" << stragglerStamp << " recovered_frames=" << hostReady << std::endl;
+			return true;
+		}
+
+		// A block that fails part way through must leave the table exactly as it was, or the sender's next
+		// perfectly good packet reads as a hole. The reviewer's partial_bind_then_refuse probe.
+		bool TestRefusedBlockLeavesNoBindings(std::string* error) {
+			NetSoundObservationDictionary sender;
+			NetSoundObservationTables receiver;
+			std::vector<uint8_t> first;
+			size_t encoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(10, 0, MakeObservationSet(2, 6, 91, 0.0F))}, first, nullptr, &sender, &encoded) || encoded != 6) {
+				*error = "the truncation probe's frame did not encode";
+				return false;
+			}
+			// Cut the block in half and re-stamp the payload length, so the packet is well formed up to the
+			// point where it runs out.
+			std::vector<uint8_t> truncated(first.begin(), first.begin() + static_cast<std::ptrdiff_t>(first.size() - 40));
+			for (int i = 0; i < 4; ++i) {
+				truncated[12 + i] = static_cast<uint8_t>((truncated.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			const NetLockstepDecodeResult refused = NetLockstepCodec::Decode(truncated, ControllerFrame::c_Version, &receiver);
+			if (refused.ok || refused.error.code != NetLockstepErrorCode::TruncatedPayload) {
+				*error = "a truncated observation block was not refused: " + std::string(NetLockstepCodec::ErrorCodeName(refused.error.code));
+				return false;
+			}
+			if (receiver.Exactly(2).BindingCount() != 0) {
+				*error = "a refused block left " + std::to_string(receiver.Exactly(2).BindingCount()) + " bindings behind";
+				return false;
+			}
+			// The same frame, whole, still reads, and so does the one after it.
+			const NetLockstepDecodeResult whole = NetLockstepCodec::Decode(first, ControllerFrame::c_Version, &receiver);
+			if (!whole.ok) {
+				*error = "the whole frame did not decode after its truncated copy: " + std::string(NetLockstepCodec::ErrorCodeName(whole.error.code));
+				return false;
+			}
+			std::vector<uint8_t> next;
+			const std::vector<NetSoundObservation> repeats = MakeObservationSet(2, 6, 91, 0.5F);
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(11, 0, repeats)}, next, nullptr, &sender, &encoded)) {
+				*error = "the frame after the truncation did not encode";
+				return false;
+			}
+			const NetLockstepDecodeResult following = NetLockstepCodec::Decode(next, ControllerFrame::c_Version, &receiver);
+			const NetLockstepFrame* followingFrame = following.ok ? std::get_if<NetLockstepFrame>(&following.packet.payload) : nullptr;
+			if (!followingFrame || followingFrame->observations != repeats) {
+				*error = "the sender's next packet was refused after a truncated one: " + std::string(NetLockstepCodec::ErrorCodeName(following.error.code));
+				return false;
+			}
+			// Staging must not change which bindings land or what a slot means while the block reads: a block
+			// that spells one slot out twice binds twice, and the reference between the two reads the first key.
+			NetSoundObservationTables ordered;
+			std::vector<uint8_t> crafted;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(12, 0, {})}, crafted)) {
+				*error = "the ordering probe's frame did not encode";
+				return false;
+			}
+			crafted.resize(crafted.size() - 3); // The empty observation block: a zero binding sequence and a zero count.
+			const auto appendVar = [&crafted](uint64_t value) {
+				while (value >= 0x80U) {
+					crafted.push_back(static_cast<uint8_t>(value) | 0x80U);
+					value >>= 7;
+				}
+				crafted.push_back(static_cast<uint8_t>(value));
+			};
+			const auto appendReading = [&crafted](float value) {
+				uint32_t bits = 0;
+				std::memcpy(&bits, &value, sizeof(bits));
+				for (int i = 0; i < 4; ++i) {
+					crafted.push_back(static_cast<uint8_t>(bits >> (i * 8)));
+				}
+			};
+			const NetSoundObservationKey firstKey{4001, 7, 0x9E3779B97F4A7C15ULL, 1, 2};
+			const NetSoundObservationKey secondKey{4002, 9, 0xC2B2AE3D27D4EB4FULL, 3, 4};
+			const auto appendSlotZeroKey = [&](const NetSoundObservationKey& key) {
+				appendVar(1); // Slot 0, spelled out.
+				crafted.push_back(0x1F);
+				appendVar(key.objectUID);
+				appendVar(key.tick);
+				appendVar(key.phase);
+				appendVar(key.occurrence);
+				appendVar(key.ordinal);
+			};
+			appendVar(0); // This sender has spelled nothing out before the block.
+			crafted.push_back(3);
+			crafted.push_back(0);
+			appendSlotZeroKey(firstKey);
+			appendReading(0.25F);
+			appendVar(0); // Slot 0 by reference, between the two keys it is bound to.
+			appendReading(0.5F);
+			appendSlotZeroKey(secondKey);
+			appendReading(0.75F);
+			for (int i = 0; i < 4; ++i) {
+				crafted[12 + i] = static_cast<uint8_t>((crafted.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			const NetLockstepDecodeResult twice = NetLockstepCodec::Decode(crafted, ControllerFrame::c_Version, &ordered);
+			const NetLockstepFrame* twiceFrame = twice.ok ? std::get_if<NetLockstepFrame>(&twice.packet.payload) : nullptr;
+			if (!twiceFrame || twiceFrame->observations.size() != 3) {
+				*error = "a block spelling one slot twice did not decode: " + std::string(NetLockstepCodec::ErrorCodeName(twice.error.code));
+				return false;
+			}
+			NetSoundObservationKey settled;
+			if (KeyOfObservation(twiceFrame->observations[1]) != firstKey || KeyOfObservation(twiceFrame->observations[2]) != secondKey ||
+			    ordered.Exactly(2).BindingCount() != 2 || !ordered.Exactly(2).Resolve(0, settled) || settled != secondKey) {
+				*error = "staged bindings did not land in the order the block spelled them";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS refused_block_leaves_no_bindings bindings_after_refusal=0 next_packet=ok"
+			          << " one_slot_twice=2_bindings mid_block_reference=first_key" << std::endl;
+			return true;
+		}
+
 		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
 			const uint16_t port = 43050;
 			const uint64_t sessionId = 0x7000000000000050ULL;
@@ -1911,6 +3166,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestObservationSlotCodec(&error) ||
 		    !TestCanonicalHeader(&error) ||
 		    !TestDecodeFailures(&error) ||
 		    !TestSemanticFailures(&error) ||
@@ -1934,7 +3190,14 @@ namespace RTE {
 		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
 		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
-		    !TestRelayHostFinishesWhatItOwes(&error)) {
+		    !TestRelayHostFinishesWhatItOwes(&error) ||
+		    !TestObservationOverflowCarry(&error) ||
+		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||
+		    !TestObservationFaultsAreToldApart(&error) ||
+		    !TestStaleRoundFrameLeavesTheLiveTable(&error) ||
+		    !TestResyncStragglersAreNotHoles(&error) ||
+		    !TestRefusedBlockLeavesNoBindings(&error) ||
+		    !TestFourPeerObservationRelayBytes(&error)) {
 			return fail(error);
 		}
 
