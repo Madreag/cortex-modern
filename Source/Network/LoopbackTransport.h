@@ -18,6 +18,9 @@ namespace RTE {
 		// Every send to this peer is refused outright, the way a connection that cannot carry anything
 		// behaves: the message is never queued, and no amount of waiting will change that.
 		NetPeerId refuseSendsToPeer = c_InvalidNetPeerId;
+		// Sends to that peer go through until this many have: a buffer that fits a start and not the
+		// frame behind it refuses in the middle of a batch, which an all-or-nothing knob cannot do.
+		uint32_t acceptedSendsBeforeRefusing = 0;
 		// A local Disconnect tells us nothing back, the way GNS behaved before it was made to report
 		// its own closes: state keyed on that peer only gets cleaned up if the caller does it itself.
 		bool silentLocalDisconnect = false;
@@ -81,6 +84,7 @@ namespace RTE {
 		uint64_t m_OrderCounter = 0;
 		std::map<NetPeerId, uint64_t> m_QueuedBytes; //!< The metered queue's depth per peer.
 		uint32_t m_SendCounter = 0;
+		uint32_t m_AcceptedBeforeRefusing = 0;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
 		uint16_t m_Port = 0;

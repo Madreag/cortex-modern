@@ -14,6 +14,7 @@ namespace RTE {
 
 	void LoopbackTransport::SetFaultConfig(const LoopbackTransportConfig& config) {
 		m_Config = config;
+		m_AcceptedBeforeRefusing = 0;
 	}
 
 	void LoopbackTransport::AdvanceTimeMs(uint64_t deltaMs) {
@@ -89,8 +90,11 @@ namespace RTE {
 			return false;
 		}
 		if (m_Config.refuseSendsToPeer != c_InvalidNetPeerId && peerId == m_Config.refuseSendsToPeer) {
-			SetError(error, "loopback peer refuses every send");
-			return false;
+			if (m_AcceptedBeforeRefusing >= m_Config.acceptedSendsBeforeRefusing) {
+				SetError(error, "loopback peer refuses further sends");
+				return false;
+			}
+			++m_AcceptedBeforeRefusing;
 		}
 		if (m_Config.sendBufferBytes > 0 && (m_Config.meterOnlyPeer == c_InvalidNetPeerId || peerId == m_Config.meterOnlyPeer)) {
 			uint64_t& queued = m_QueuedBytes[peerId];
