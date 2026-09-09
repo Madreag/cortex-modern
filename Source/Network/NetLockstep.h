@@ -478,6 +478,8 @@ namespace RTE {
 		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true);
 		uint8_t LockstepPeerOfTransport(NetPeerId transportPeerId) const;
 		bool SendStart(std::string* error);
+		/// Sends a peer that repeated its start what it needs to form the round.
+		void AnswerRepeatedStart(uint8_t peerId, uint64_t nowMs);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
@@ -558,6 +560,7 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetSoundObservation>>> m_RemoteObservations; //!< frame -> (peerId -> observations)
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
+		std::map<uint8_t, uint64_t> m_LastStartAnswerMs; //!< peerId -> when we last answered its repeated start.
 		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.
 		// What this peer spells its own observations with, and what a relay host re-encodes each other
 		// sender's with. A relay table is fed by exactly the frames it forwards, which is exactly what its

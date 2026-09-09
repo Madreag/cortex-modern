@@ -3327,6 +3327,87 @@ namespace RTE {
 			}
 			return true;
 		}
+		// These fixtures drive a handshake that a build without the fixes answers with another start, so
+		// they stop on a start budget as well as a clock: a fixture must fail, never fill the machine.
+		constexpr uint32_t c_RoundStartBudget = 200;
+
+		uint32_t StartsSent(std::initializer_list<const NetLockstepCoordinator*> peers) {
+			uint32_t sent = 0;
+			for (const NetLockstepCoordinator* peer: peers) {
+				sent += peer->GetStats().startPacketsSent;
+			}
+			return sent;
+		}
+
+		// Every start a running peer receives reads as a repeat, so an answer that is itself a start
+		// used to answer the answer: one stray start bounced between two peers forever.
+		bool TestCoordinatorRepeatedStartsDoNotAmplify(std::string* error) {
+			const uint16_t port = 43102;
+			const uint64_t sessionId = 0x70000000000000A2ULL;
+			const uint64_t roundId = 0x9A5E0000000000A2ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundId;
+			hostConfig.timeoutMs = 20000;
+			clientConfig.timeoutMs = 20000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the round never started";
+				return false;
+			}
+			const uint32_t hostSentBefore = host.GetStats().startPacketsSent;
+			const uint32_t clientSentBefore = client.GetStats().startPacketsSent;
+			NetLockstepStart repeat;
+			repeat.sessionId = sessionId;
+			repeat.startFrame = 0;
+			repeat.inputDelayFrames = 0;
+			repeat.controllerFrameVersion = ControllerFrame::c_Version;
+			repeat.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			repeat.localPeerId = 2;
+			repeat.peerCount = 2;
+			repeat.scenario = "LockstepSelfTest";
+			repeat.ownershipPolicy = "unique-id-split";
+			repeat.roundId = roundId;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({repeat}, bytes, error) || !clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 1000);
+			const uint32_t hostSent = host.GetStats().startPacketsSent - hostSentBefore;
+			const uint32_t clientSent = client.GetStats().startPacketsSent - clientSentBefore;
+			// One second is four retransmit intervals; a start each way per interval is the whole budget.
+			if (hostSent > 8 || clientSent > 8) {
+				*error = "one repeated start amplified into " + std::to_string(hostSent) + " host and " +
+				         std::to_string(clientSent) + " client starts in a second";
+				return false;
+			}
+			if (host.IsFailed() || client.IsFailed() || !host.IsRunning() || !client.IsRunning()) {
+				*error = "a repeated start disturbed the running round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS repeated_starts_do_not_amplify host=" << hostSent << " client=" << clientSent << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -3337,6 +3418,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestCoordinatorRepeatedStartsDoNotAmplify(&error) ||
 		    !TestObservationSlotCodec(&error) ||
 		    !TestCanonicalHeader(&error) ||
 		    !TestDecodeFailures(&error) ||
