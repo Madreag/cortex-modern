@@ -1795,6 +1795,10 @@ namespace RTE {
 	// A refused send on a reliable lane is backpressure, and the round waits on exactly these frames, so
 	// they are retried in order and nothing after a refused one goes out before it does.
 	void NetLockstepCoordinator::FlushResendFrames() {
+		// A round that has stopped or failed owes nobody anything.
+		if (m_State != NetLockstepState::Running && m_State != NetLockstepState::WaitingForStart) {
+			return;
+		}
 		while (!m_ResendFrames.empty()) {
 			std::string ignored;
 			if (!SendPacket({m_ResendFrames.begin()->second}, m_Config.frameLane, &ignored)) {

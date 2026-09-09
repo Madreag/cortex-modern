@@ -4279,6 +4279,86 @@ namespace RTE {
 			          << client.GetStats().framePacketsSent << std::endl;
 			return true;
 		}
+		// A round that has failed sends nothing more. The re-send drains from the tick, so an owed frame
+		// left over from a follow must not keep going out into a round this peer has stopped.
+		bool TestCoordinatorFailedRoundStopsResending(std::string* error) {
+			const uint16_t port = 43106;
+			const uint64_t sessionId = 0x70000000000000A6ULL;
+			const uint64_t roundOne = 0x9A5E0000000000A6ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 60000;
+			clientConfig.timeoutMs = 60000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the first round never started";
+				return false;
+			}
+			if (!client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 50);
+			LoopbackTransportConfig refuse;
+			refuse.refuseSendsToPeer = 1;
+			refuse.acceptedSendsBeforeRefusing = 1;
+			clientTransport.SetFaultConfig(refuse);
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetRoundId() == roundTwo; }, 4000)) {
+				*error = "the client never followed the host onto the new round";
+				return false;
+			}
+			// The round fails while a frame is still owed.
+			NetLockstepStop stop;
+			stop.senderPeerId = 1;
+			stop.reason = NetLockstepStopReason::ProtocolError;
+			stop.frame = 0;
+			stop.message = "host gave up";
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({stop}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.IsFailed(); }, 1000)) {
+				*error = "the client's round never failed, so this fixture proves nothing";
+				return false;
+			}
+			const uint32_t sentAtFailure = client.GetStats().framePacketsSent;
+			clientTransport.SetFaultConfig(LoopbackTransportConfig{});
+			drive([&] { return false; }, 1000);
+			if (client.GetStats().framePacketsSent != sentAtFailure) {
+				*error = "a failed round kept re-sending: frame_packets_sent " + std::to_string(sentAtFailure) +
+				         " -> " + std::to_string(client.GetStats().framePacketsSent);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS failed_round_stops_resending frames_sent=" << sentAtFailure << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -4289,6 +4369,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestCoordinatorFailedRoundStopsResending(&error) ||
 		    !TestCoordinatorOwedFrameOutlivesItsLocalCommit(&error) ||
 		    !TestCoordinatorReadoptResendSurvivesARefusedSend(&error) ||
 		    !TestReviewAuthorityStartDoesNotFailTheRound(&error) ||
