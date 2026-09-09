@@ -13,6 +13,7 @@
 #include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
 #include "NetSession.h"
+#include "System/ScenarioRunner.h"
 #include "System/System.h"
 
 #include <algorithm>
@@ -1490,6 +1491,206 @@ namespace RTE {
 			if (wire.host.GetLedger().Find(0) != nullptr) {
 				return Fail("the leave left the seat ownership ledger behind");
 			}
+			return 0;
+		}
+
+		// One settled actor, as the census sees it. The world the real census walks is not available
+		// here; the resolver line below is production's, which is the part that was wrong.
+		struct CensusActor {
+			int64_t uid = 0;
+			int32_t team = 0;
+			bool cpu = false;
+		};
+
+		std::vector<CensusActor> g_ProductionCensusActors;
+
+		// MovableMan::BuildLockstepOwnershipCensus resolves each actor's owner with exactly this call.
+		uint8_t ProductionCensusOwner(const CensusActor& actor) {
+			return ScenarioRunner::GetLockstepDropTimeActorOwner(actor.uid, actor.team, actor.cpu);
+		}
+
+		std::vector<NetH4LedgerActor> ProductionCensusSource(void*) {
+			std::vector<NetH4LedgerActor> census;
+			census.reserve(g_ProductionCensusActors.size());
+			for (const CensusActor& actor: g_ProductionCensusActors) {
+				census.push_back({actor.uid, actor.team, ProductionCensusOwner(actor), true});
+			}
+			return census;
+		}
+
+		// A three-peer round over loopback, driven far enough that the host adjudicates peer 2's drop -
+		// which is the state the ledger's census is taken in.
+		struct DroppedRound {
+			LoopbackTransport hostT, aT, bT;
+			NetLockstepCoordinator host, clientA, clientB;
+			uint64_t now = 0;
+
+			bool RunUntilPeerTwoIsGone(uint16_t port, const std::vector<NetMatchPlayerSlot>& players, std::string* error) {
+				if (!hostT.StartHost(port, error) || !aT.Connect("loopback", port, error) || !bT.Connect("loopback", port, error)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = 0x7000000000000090ULL + port;
+					c.timeoutMs = 5000;
+					c.localPeerId = local;
+					c.peerCount = 3;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.scenario = "ReconnectSessionSelfTest";
+					c.matchConfig.hostPeerId = 1;
+					c.matchConfig.peerCount = 3;
+					c.matchConfig.players = players;
+					return c;
+				};
+				if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+				    !clientA.Start(aT, cfg(2, {{1, 1}}, false), error) ||
+				    !clientB.Start(bT, cfg(3, {{1, 1}}, false), error)) {
+					return false;
+				}
+				auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						clientA.Tick(now);
+						clientB.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						aT.AdvanceTimeMs(5);
+						bT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
+				if (!drive(4000, [&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+					*error = "the ledger round did not reach Running";
+					return false;
+				}
+				ControllerFrame frame;
+				frame.stateMask = 1;
+				for (uint64_t f = 0; f < 2; ++f) {
+					frame.actorUniqueID = 100;
+					if (!host.QueueLocalInput(f, {frame}, {}, error)) {
+						return false;
+					}
+					frame.actorUniqueID = 200;
+					if (!clientA.QueueLocalInput(f, {frame}, {}, error)) {
+						return false;
+					}
+					frame.actorUniqueID = 300;
+					if (!clientB.QueueLocalInput(f, {frame}, {}, error)) {
+						return false;
+					}
+				}
+				NetLockstepReadyFrame ready;
+				size_t committed = 0;
+				if (!drive(4000, [&] {
+						while (host.PopReadyFrame(ready)) {
+							++committed;
+						}
+						return committed >= 2;
+					})) {
+					*error = "the ledger round never committed a frame";
+					return false;
+				}
+				// Peer 2's socket goes away: the relay host adjudicates it as a leave, and from there on
+				// ResolveActorOwner renames its units.
+				aT.Stop();
+				if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+					*error = "the drop was never adjudicated as a leave";
+					return false;
+				}
+				return true;
+			}
+		};
+
+		// The ledger records who HELD a seat's units at the drop. The round renames a leaver's units the
+		// moment it adjudicates the leave - to a surviving teammate, or to the relay host while the seat
+		// is held - so a census taken after that names anyone but the leaver, and a ledger filtered on the
+		// leaver's id comes back empty. An empty record makes IssueReseat return before it issues, which
+		// is a returner reseated onto nothing.
+		int TestLedgerRecordsWhatTheLeaverHeld() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			struct Arm {
+				const char* label;
+				uint16_t port;
+				std::vector<NetMatchPlayerSlot> players;
+				uint8_t renamedOwner;    //!< Who the leave hands peer 2's units to.
+				int64_t handedToPeerThree; //!< A unit peer 3 already holds, so it is not peer 2's to get back.
+				std::vector<int64_t> expected;
+			};
+			const std::vector<Arm> arms = {
+			    // Co-op shape: peers 2 and 3 share team 1, so the leave hands peer 2's units to peer 3 and
+			    // they must hand back per the ledger.
+			    {"survivor", 42180, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 1, false, "B"}}, 3, 103, {101, 102}},
+			    // The 1v1 shape the H4 gates run: nobody is left on team 1, so A6's fallback answers.
+			    {"no-survivor", 42184, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 2, false, "B"}}, 0, 0, {101, 102, 103}},
+			};
+
+			for (const Arm& arm: arms) {
+				const std::string where = std::string(" (") + arm.label + " arm)";
+				DroppedRound round;
+				if (!round.RunUntilPeerTwoIsGone(arm.port, arm.players, &error)) {
+					return Fail(error + where);
+				}
+				ScenarioRunner::SetLockstepCoordinator(&round.host);
+				if (arm.handedToPeerThree != 0) {
+					ScenarioRunner::SetLockstepControlOverride(arm.handedToPeerThree, 3);
+				}
+				g_ProductionCensusActors = {{101, 1, false}, {102, 1, false}, {103, 1, false}, {201, 2, false}};
+
+				auto fail = [&](const std::string& message) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					return Fail(message + where);
+				};
+				// The rename is the whole point: without it the census would still name the leaver.
+				if (round.host.ResolveActorOwner(101, 1, false) != arm.renamedOwner) {
+					return fail("the leave did not rename the dropped peer's units");
+				}
+
+				uint64_t unixNow = 1'700'000'000'000ULL;
+				Wire wire;
+				ConfigureWire(wire);
+				wire.host.SetDropOwnershipSource(&ProductionCensusSource, nullptr);
+				Endpoint player;
+				player.connection = 121;
+				ConfigureEndpoint(player, std::string("held-") + arm.label, &unixNow);
+				wire.Add(&player);
+				NetH4TicketRecord record;
+				if (SeatAndDrop(wire, player, record, unixNow, &error) != 0) {
+					return fail("could not seat the player: " + error);
+				}
+				const NetH4SeatOwnership* ledgered = wire.host.GetLedger().Find(0);
+				if (ledgered == nullptr || ledgered->actorUIDs != arm.expected) {
+					return fail("the drop ledger did not record the units the leaver held");
+				}
+
+				// And the reseat the returner is given is issued from it.
+				wire.host.SetLiveMatch(true);
+				Endpoint returner;
+				returner.connection = 122;
+				ConfigureEndpoint(returner, std::string("held-") + arm.label, &unixNow);
+				wire.Add(&returner);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return fail("the reclaim did not settle: " + error);
+				}
+				const std::vector<NetGameReseat> reseats = wire.host.TakePendingReseats();
+				if (reseats.size() != 1 || reseats.front().newOwnerPeerId != MakeSeatTable()[0].lockstepPeerId ||
+				    reseats.front().team != 1 || reseats.front().actorUIDs != arm.expected) {
+					return fail("the reclaim did not issue the ledgered reseat");
+				}
+				if (wire.host.GetStats().reseatsIssued != 1) {
+					return fail("the reseat was not counted");
+				}
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+			g_ProductionCensusActors.clear();
 			return 0;
 		}
 
@@ -3957,6 +4158,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLedgerAndReseat(); result != 0) {
+			return result;
+		}
+		if (const int result = TestLedgerRecordsWhatTheLeaverHeld(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRejoinAcrossRematch(); result != 0) {
