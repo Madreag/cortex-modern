@@ -88,6 +88,9 @@ namespace RTE {
 
 		/// Gets whether a named button is currently enabled.
 		bool AutomationControlEnabled(const std::string& controlName) const;
+		/// Whether the skin defines the control at all, whatever screen is up. "Enabled" cannot answer
+		/// this: a control that is merely on a hidden panel reads the same as one that does not exist.
+		bool AutomationControlExists(const std::string& controlName) const;
 #pragma endregion
 
 	private:

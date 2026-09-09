@@ -1143,6 +1143,12 @@ void ProcessMenuScript() {
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+	} else if (cmd == "assert_control") {
+		std::string control;
+		iss >> control;
+		const bool exists = menu->AutomationControlExists(control);
+		std::cout << "[menu-script] assert_control " << control << " " << (exists ? "PASS" : "FAIL") << std::endl;
+		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
 	} else if (cmd == "moderate") {
 		// The same panel action a host clicks, driven from a menu script.
 		std::string action;
