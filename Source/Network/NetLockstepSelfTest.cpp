@@ -2687,6 +2687,239 @@ namespace RTE {
 			return true;
 		}
 
+		// A frame the round is going to discard must not disturb the live table of the peer that sent it,
+		// whether its sender's encoder is fresh or ahead. The reviewer's stale_round_shape probe.
+		bool TestStaleRoundFrameLeavesTheLiveTable(std::string* error) {
+			for (int shape = 0; shape < 2; ++shape) {
+				LoopbackTransport hostTransport, clientTransport;
+				NetLockstepCoordinator host, client;
+				const uint64_t sessionId = 0x7000000000000090ULL + static_cast<uint64_t>(shape);
+				NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+				NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+				hostConfig.roundId = 0x1400000000000090ULL;
+				hostConfig.timeoutMs = 8000;
+				clientConfig.timeoutMs = 8000;
+				if (!StartCoordinatorPair(static_cast<uint16_t>(43090 + shape), hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+					return false;
+				}
+				// One clock for the whole probe, so the peer's last-heard stamp can be read as it moves.
+				uint64_t clock = 0;
+				size_t hostReady = 0;
+				std::vector<NetSoundObservation> hostSaw;
+				auto drive = [&](const std::function<bool()>& done) {
+					for (uint64_t step = 0; step < 2000; ++step) {
+						// The clock moves before every tick, so a peer's last-heard stamp reads as it moves.
+						hostTransport.AdvanceTimeMs(5);
+						clientTransport.AdvanceTimeMs(5);
+						clock += 5;
+						host.Tick(clock);
+						client.Tick(clock);
+						NetLockstepReadyFrame ready;
+						while (host.PopReadyFrame(ready)) {
+							hostSaw = ready.remoteObservations;
+							++hostReady;
+						}
+						if (done()) {
+							return true;
+						}
+					}
+					return false;
+				};
+				if (!drive([&] { return host.IsRunning() && client.IsRunning(); })) {
+					*error = "the straggler probe did not reach Running";
+					return false;
+				}
+				// Real traffic first, so the host's table for peer 2 is not empty when the straggler lands.
+				const auto play = [&](uint64_t from, uint64_t to) {
+					for (uint64_t f = from; f < to; ++f) {
+						if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+						    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 12, 61, static_cast<float>(f) / 8.0F))) {
+							return false;
+						}
+					}
+					return drive([&] { return hostReady >= to; });
+				};
+				if (!play(0, 3)) {
+					if (error->empty()) { *error = "the straggler probe's opening frames did not commit"; }
+					return false;
+				}
+				const NetLockstepPeerStats before = host.GetStats().peers.at(2);
+				const uint32_t unresolvedBefore = host.GetStats().unresolvedObservationPackets;
+
+				// A frame of the previous round. Shape 0 comes from a fresh encoder, which is the zero count
+				// that would reset a live table; shape 1 comes from one that is ahead of the host's.
+				NetSoundObservationDictionary strangerEncoder;
+				size_t encoded = 0;
+				if (shape == 1) {
+					for (int warm = 0; warm < 3; ++warm) {
+						std::vector<uint8_t> scratch;
+						if (!NetLockstepCodec::Encode({MakeObservationFrame(90 + warm, hostConfig.roundId - 1, MakeObservationSet(2, 9, 300 + warm, 0.0F))}, scratch, nullptr, &strangerEncoder, &encoded)) {
+							*error = "the straggler's warm-up did not encode";
+							return false;
+						}
+					}
+				}
+				NetLockstepFrame stale;
+				stale.senderPeerId = 2;
+				stale.targetFrame = 3;
+				stale.roundId = hostConfig.roundId - 1;
+				stale.frames = {MakeFrame(999, 1)};
+				stale.observations = MakeObservationSet(2, 6, 400, 0.25F);
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({stale}, bytes, nullptr, &strangerEncoder, &encoded) || encoded != stale.observations.size()) {
+					*error = "the stale-round frame did not encode";
+					return false;
+				}
+				if (!clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+					return false;
+				}
+				if (!drive([&] { return host.GetStats().peers.at(2).staleRoundPackets > before.staleRoundPackets; })) {
+					*error = "shape " + std::to_string(shape) + ": the straggler never reached the round";
+					return false;
+				}
+				const NetLockstepPeerStats after = host.GetStats().peers.at(2);
+				if (after.staleRoundPackets != before.staleRoundPackets + 1 || after.framePacketsReceived != before.framePacketsReceived + 1) {
+					*error = "shape " + std::to_string(shape) + ": the straggler was not counted against its sender";
+					return false;
+				}
+				if (after.lastHeardMs <= before.lastHeardMs) {
+					*error = "shape " + std::to_string(shape) + ": the straggler did not prove its sender is still there (" +
+					         std::to_string(before.lastHeardMs) + " -> " + std::to_string(after.lastHeardMs) + ")";
+					return false;
+				}
+				if (host.GetStats().unresolvedObservationPackets != unresolvedBefore) {
+					*error = "shape " + std::to_string(shape) + ": a discarded straggler was counted as a hole in its sender's stream";
+					return false;
+				}
+
+				// The live table has to have survived: the client's next frames are mostly slot references.
+				if (!play(3, 5)) {
+					*error = "shape " + std::to_string(shape) + ": the peer was muted after the straggler";
+					return false;
+				}
+				if (hostReady < 5 || hostSaw.size() != 12) {
+					*error = "shape " + std::to_string(shape) + ": the host committed " + std::to_string(hostReady) +
+					         " frames and " + std::to_string(hostSaw.size()) + " observations after the straggler";
+					return false;
+				}
+				if (host.GetStats().unresolvedObservationPackets != unresolvedBefore || host.IsFailed()) {
+					*error = "shape " + std::to_string(shape) + ": the round did not survive the straggler";
+					return false;
+				}
+				std::cout << "[net-lockstep-selftest] PASS stale_round_leaves_the_live_table shape=" << shape
+				          << " stale=" << after.staleRoundPackets << " unresolved=" << host.GetStats().unresolvedObservationPackets
+				          << " last_heard=" << before.lastHeardMs << "->" << after.lastHeardMs
+				          << " frames=" << hostReady << " observations=" << hostSaw.size() << std::endl;
+			}
+			return true;
+		}
+
+		// A resync restarts the host while the other peer is still producing frames of the old round. Those
+		// are ordinary stragglers, not holes. The reviewer's resync_straggler_counter probe.
+		bool TestResyncStragglersAreNotHoles(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A0ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A0ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A0ULL;
+			hostConfig.timeoutMs = 20000;
+			clientConfig.timeoutMs = 20000;
+			if (!StartCoordinatorPair(43092, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t clock = 0;
+			size_t hostReady = 0;
+			auto drive = [&](const std::function<bool()>& done) {
+				for (uint64_t step = 0; step < 3000; ++step) {
+					// The clock moves before every tick, so a peer's last-heard stamp reads as it moves.
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+					clock += 5;
+					host.Tick(clock);
+					client.Tick(clock);
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						++hostReady;
+					}
+					if (done()) {
+						return true;
+					}
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "the resync probe did not reach Running";
+				return false;
+			}
+			for (uint64_t f = 0; f < 3; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 10, 71, static_cast<float>(f) / 8.0F))) {
+					return false;
+				}
+			}
+			if (!drive([&] { return hostReady >= 3; })) {
+				*error = "the resync probe's opening frames did not commit";
+				return false;
+			}
+
+			// The host restarts into a new round; the client has not noticed yet and keeps sending.
+			NetLockstepConfig resyncConfig = hostConfig;
+			resyncConfig.roundId = hostConfig.roundId + 1;
+			resyncConfig.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, resyncConfig, error)) {
+				return false;
+			}
+			for (uint64_t f = 3; f < 6; ++f) {
+				if (!client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 10, 71, static_cast<float>(f) / 8.0F))) {
+					return false;
+				}
+			}
+			drive([&] { return host.GetStats().staleRoundPackets >= 3; });
+			const NetLockstepStats& afterStragglers = host.GetStats();
+			if (afterStragglers.unresolvedObservationPackets != 0) {
+				*error = "a resync's in-flight frames were counted as holes: " + std::to_string(afterStragglers.unresolvedObservationPackets);
+				return false;
+			}
+			if (afterStragglers.staleRoundPackets != 3 || afterStragglers.peers.at(2).staleRoundPackets != 3) {
+				*error = "a resync's in-flight frames were not counted as stragglers: " + std::to_string(afterStragglers.staleRoundPackets);
+				return false;
+			}
+			if (afterStragglers.peers.at(2).lastHeardMs == 0) {
+				*error = "a resync's in-flight frames did not prove their sender is still there";
+				return false;
+			}
+			const uint64_t stragglerStamp = afterStragglers.peers.at(2).lastHeardMs;
+
+			// The client catches up; the round re-forms and runs.
+			NetLockstepConfig clientResync = clientConfig;
+			clientResync.remoteTransportPeerId = 1;
+			if (!client.Start(clientTransport, clientResync, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "the round did not re-form after the resync";
+				return false;
+			}
+			hostReady = 0;
+			for (uint64_t f = 0; f < 4; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(400 + static_cast<int64_t>(f), f + 1)}, {}, error, MakeObservationSet(2, 10, 81, static_cast<float>(f) / 8.0F))) {
+					return false;
+				}
+			}
+			if (!drive([&] { return hostReady >= 4; })) {
+				*error = "the recovered round did not commit its frames";
+				return false;
+			}
+			if (host.GetStats().unresolvedObservationPackets != 0) {
+				*error = "the recovered round reported a hole";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS resync_stragglers_are_not_holes stale=" << host.GetStats().staleRoundPackets
+			          << " unresolved=0 last_heard=" << stragglerStamp << " recovered_frames=" << hostReady << std::endl;
+			return true;
+		}
+
 		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
 			const uint16_t port = 43050;
 			const uint64_t sessionId = 0x7000000000000050ULL;
@@ -2854,6 +3087,8 @@ namespace RTE {
 		    !TestObservationOverflowCarry(&error) ||
 		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||
 		    !TestObservationFaultsAreToldApart(&error) ||
+		    !TestStaleRoundFrameLeavesTheLiveTable(&error) ||
+		    !TestResyncStragglersAreNotHoles(&error) ||
 		    !TestFourPeerObservationRelayBytes(&error)) {
 			return fail(error);
 		}
