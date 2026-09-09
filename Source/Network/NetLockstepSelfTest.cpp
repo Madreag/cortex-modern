@@ -1455,6 +1455,153 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestCoordinatorRejectsUnboundPackets(std::string* error) {
+			// Exercise the receive path, including its liveness bookkeeping, with every packet kind.
+			// A departed seat remains a known logical peer but no longer owns any transport.
+			std::string failures;
+			for (int route = 0; route < 3; ++route) {
+				for (int kind = 0; kind < 5; ++kind) {
+					const uint16_t port = static_cast<uint16_t>(43940 + route * 5 + kind);
+					LoopbackTransport hostT, clientAT, clientBT, strangerT;
+					if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+					    !clientBT.Connect("loopback", port, error)) return false;
+					auto cfg = [](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+						NetLockstepConfig c;
+						c.sessionId = 0x7000000000000090ULL;
+						c.localPeerId = local;
+						c.peerCount = 3;
+						c.timeoutMs = 5000;
+						c.roundId = 901;
+						c.remoteTransportPeerIds = std::move(transports);
+						c.relayToOtherPeers = relay;
+						c.frameLane = NetTransportLane::ControlReliable;
+						c.scenario = "LockstepSelfTest";
+						c.ownershipPolicy = "unique-id-split";
+						return c;
+					};
+					const auto hostConfig = cfg(1, {{2, 1}, {3, 2}}, true);
+					NetLockstepCoordinator host, clientA, clientB;
+					if (!host.Start(hostT, hostConfig, error) ||
+					    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+					    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) return false;
+					uint64_t now = 0;
+					bool pumpB = true;
+					auto pump = [&](unsigned steps) {
+						for (unsigned step = 0; step < steps; ++step) {
+							now += 5;
+							hostT.AdvanceTimeMs(5);
+							clientAT.AdvanceTimeMs(5);
+							clientBT.AdvanceTimeMs(5);
+							strangerT.AdvanceTimeMs(5);
+							host.Tick(now);
+							clientA.Tick(now);
+							if (pumpB) clientB.Tick(now);
+						}
+					};
+					pump(10);
+					if (!host.IsRunning() || !clientA.IsRunning() || !clientB.IsRunning() ||
+					    !host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) ||
+					    !clientA.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error) ||
+					    !clientB.QueueLocalInput(0, {MakeFrame(300, 1)}, {}, error)) return false;
+					pump(10);
+					NetLockstepReadyFrame ready;
+					if (!host.PopReadyFrame(ready) || ready.frame != 0 || ready.remoteFrames.size() != 2 ||
+					    !clientA.PopReadyFrame(ready) || ready.frame != 0 || ready.remoteFrames.size() != 2 ||
+					    !clientB.PopReadyFrame(ready) || ready.frame != 0 || ready.remoteFrames.size() != 2) {
+						*error = "transport-authority fixture did not commit its three-peer control frame";
+						return false;
+					}
+					std::array<uint8_t, 32> goodHash{};
+					goodHash.fill(0x5A);
+					if (!host.SubmitLocalChecksum(0, goodHash, error) || !clientA.SubmitLocalChecksum(0, goodHash, error) ||
+					    !clientB.SubmitLocalChecksum(0, goodHash, error)) return false;
+					pump(10);
+					if (!host.IsRunning() || !clientA.IsRunning() || !clientB.IsRunning()) {
+						*error = "transport-authority fixture rejected legitimate relayed checksums";
+						return false;
+					}
+					pumpB = false;
+					if (route == 2) {
+						clientBT.Stop();
+						pump(10);
+						if (host.GetPeerLeaveFrames().count(3) != 1 || clientA.GetPeerLeaveFrames().count(3) != 1 ||
+						    host.UsesTransportPeer(2)) {
+							*error = "transport-authority fixture did not remove the departed peer's binding";
+							return false;
+						}
+					}
+					if (route != 0 && !strangerT.Connect("loopback", port, error)) return false;
+					pump(10);
+					const uint64_t heardBefore = host.GetStats().peers.at(3).lastHeardMs;
+					const auto hostStatsBefore = host.GetStats();
+					const auto survivorStatsBefore = clientA.GetStats();
+					if (!host.SubmitLocalChecksum(1, goodHash, error)) return false;
+					NetLockstepPacket packet;
+					if (kind == 0) {
+						NetLockstepStart start;
+						start.sessionId = hostConfig.sessionId;
+						start.localPeerId = 3;
+						start.peerCount = 3;
+						start.controllerFrameVersion = ControllerFrame::c_Version;
+						start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+						start.roundId = hostConfig.roundId;
+						start.scenario = "DifferentScenario";
+						start.ownershipPolicy = hostConfig.ownershipPolicy;
+						packet.payload = start;
+					} else if (kind == 1) {
+						NetLockstepFrame frame;
+						frame.senderPeerId = 3;
+						frame.targetFrame = 1;
+						frame.roundId = hostConfig.roundId;
+						frame.frames = {MakeFrame(300, 2)};
+						packet.payload = frame;
+					} else if (kind == 2) {
+						packet.payload = NetLockstepAck{3, 0, 0};
+					} else if (kind == 3) {
+						packet.payload = NetLockstepStop{3, NetLockstepStopReason::Desync, 1, "forged stop"};
+					} else {
+						NetLockstepChecksum checksum;
+						checksum.senderPeerId = 3;
+						checksum.frame = 1;
+						checksum.roundId = hostConfig.roundId;
+						checksum.hash.fill(0xA5);
+						packet.payload = checksum;
+					}
+					std::vector<uint8_t> bytes;
+					NetLockstepError codecError;
+					if (!NetLockstepCodec::Encode(packet, bytes, &codecError)) {
+						*error = codecError.message;
+						return false;
+					}
+					LoopbackTransport& sender = route == 0 ? clientAT : strangerT;
+					if (!sender.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+					pump(10);
+					if (!host.IsRunning() || !clientA.IsRunning() || host.GetStats().peers.at(3).lastHeardMs != heardBefore ||
+					    host.GetStats().relayPacketsSent != hostStatsBefore.relayPacketsSent ||
+					    host.GetStats().remoteControllerFramesReceived != hostStatsBefore.remoteControllerFramesReceived ||
+					    clientA.GetStats().remoteControllerFramesReceived != survivorStatsBefore.remoteControllerFramesReceived) {
+						failures += " route=" + std::to_string(route) + " kind=" + std::to_string(kind) +
+						            " host=" + host.GetStats().timeoutReason + " survivor=" + clientA.GetStats().timeoutReason + ";";
+						continue;
+					}
+					// A real peer's divergence must still be detected after the forged packet was rejected.
+					std::array<uint8_t, 32> badHash{};
+					badHash.fill(0xA5);
+					if (!clientA.SubmitLocalChecksum(1, badHash, error)) return false;
+					pump(10);
+					if (!host.IsFailed() || host.GetStats().timeoutReason.find("sim state diverged at tick 1") == std::string::npos) {
+						*error = "transport-authority fixture ignored a divergent checksum from its bound peer";
+						return false;
+					}
+				}
+			}
+			if (!failures.empty()) {
+				*error = "unauthorized packets changed the round or refreshed a claimed peer:" + failures;
+				return false;
+			}
+			return true;
+		}
+
 		bool TestCoordinatorPeerLeave(std::string* error) {
 			const uint16_t port = 43011;
 			const uint64_t sessionId = 0x7000000000000011ULL;
@@ -5200,6 +5347,7 @@ namespace RTE {
 		    !TestAnnouncedLeaveHoldsNothing(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
+		    !TestCoordinatorRejectsUnboundPackets(&error) ||
 		    !TestCoordinatorPeerLeave(&error) ||
 		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
 		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
