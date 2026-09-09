@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <charconv>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -42,6 +43,14 @@ namespace RTE {
 			m_Text.append(buffer, result.ptr);
 			m_Text.push_back(' ');
 		}
+		// A bool's storage byte is only 0 or 1 once someone has assigned it, and reading an unassigned
+		// one as a bool is undefined: compilers variously mask it to the low bit, keep it, or take a
+		// single-digit fast path on a value they assume is 0 or 1. Copy the byte and write what it is.
+		void Value(const bool& value) {
+			unsigned char byte;
+			std::memcpy(&byte, &value, sizeof(byte));
+			Value(static_cast<unsigned int>(byte));
+		}
 		template <class T> requires std::is_enum_v<T>
 		void Value(T value) { Value(static_cast<std::underlying_type_t<T>>(value)); }
 		void Value(float value) { Value(std::bit_cast<uint32_t>(value)); }
@@ -54,7 +63,8 @@ namespace RTE {
 		template <class T, size_t N> void Value(const T (&values)[N]) { for (const auto& value: values) Value(value); }
 		template <class T, class U> void Value(const std::pair<T, U>& value) { (*this)(value.first, value.second); }
 		template <class T> void Value(const std::vector<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
-		void Value(const std::vector<bool>& values) { Value(values.size()); for (bool value: values) Value(value); }
+		// vector<bool> packs bits, so its elements have no storage byte of their own to copy.
+		void Value(const std::vector<bool>& values) { Value(values.size()); for (bool value: values) Value(value ? 1u : 0u); }
 		template <class T> void Value(const std::list<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
 		template <class T> void Value(const std::deque<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
 		template <class T> void Value(const std::set<T>& values) { Value(values.size()); for (const auto& value: values) Value(value); }
