@@ -1103,6 +1103,7 @@ namespace RTE {
 				{"synthetic_challenges", m_ReconnectHost->GetAdmission().GetSyntheticChallenges()},
 				{"rate_limited_attempts", m_ReconnectHost->GetAdmission().GetRateLimitedAttempts()},
 				{"ledger_seats", m_ReconnectHost->GetLedger().Size()},
+				{"ledger_empty_drops_refused", m_ReconnectHost->GetLedger().GetEmptyDropsRefused()},
 			};
 		}
 
