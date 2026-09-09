@@ -644,30 +644,30 @@ namespace RTE {
 
 	void NetReconnectHost::IssueReseat(const SeatState& seat) {
 		const NetH4SeatOwnership* record = m_Ledger.Find(seat.seat.stableSeat);
-		std::vector<NetH4LedgerActor> actors;
-		if (record != nullptr && m_DropOwnershipSource != nullptr) {
-			actors = m_DropOwnershipSource(m_DropOwnershipContext);
-		}
-		if (record != nullptr) {
-			// Recorded, not judged: how much of the returner's team is alive here and NOT in its record.
-			// Zero says the record named the world it came back to, which is what tells a reclaim whose
-			// units simply died apart from one whose drop under-recorded them - the two are otherwise
-			// indistinguishable from the counters below.
-			uint32_t unnamed = 0;
-			for (const NetH4LedgerActor& actor: actors) {
-				if (actor.alive && actor.team == record->team &&
-				    std::find(record->actorUIDs.begin(), record->actorUIDs.end(), actor.actorUID) == record->actorUIDs.end()) {
-					++unnamed;
-				}
-			}
-			m_Stats.reseatLiveOnTeamNotNamed = std::max(m_Stats.reseatLiveOnTeamNotNamed, unnamed);
-		}
 		if (record == nullptr || record->actorUIDs.empty()) {
 			// The drop recorded nothing, so the returner is reseated onto nothing. That is a fault, and
 			// counting it apart from the case below is what lets a gate tell the two answers apart.
+			// Nothing walks the world on this path: the census is the caller's sim tick to give, and a
+			// reclaim that lands off it would be refused and counted against a gate that reads zero.
 			++m_Stats.reseatsWithoutALedger;
 			return;
 		}
+		std::vector<NetH4LedgerActor> actors;
+		if (m_DropOwnershipSource != nullptr) {
+			actors = m_DropOwnershipSource(m_DropOwnershipContext);
+		}
+		// Recorded, not judged, off the one census the restoration below needs anyway: how much of the
+		// returner's team is alive here and NOT in its record. Zero says the record named the world it
+		// came back to, which is what tells a reclaim whose units simply died apart from one whose drop
+		// under-recorded them - the two are otherwise indistinguishable from the counters here.
+		uint32_t unnamed = 0;
+		for (const NetH4LedgerActor& actor: actors) {
+			if (actor.alive && actor.team == record->team &&
+			    std::find(record->actorUIDs.begin(), record->actorUIDs.end(), actor.actorUID) == record->actorUIDs.end()) {
+				++unnamed;
+			}
+		}
+		m_Stats.reseatLiveOnTeamNotNamed = std::max(m_Stats.reseatLiveOnTeamNotNamed, unnamed);
 		std::vector<int64_t> restored = m_Ledger.BuildRestoration(seat.seat.stableSeat, m_Mode, actors);
 		if (restored.empty()) {
 			// The ledger is good; none of the units it names is still alive on its team. There is
