@@ -3627,6 +3627,128 @@ namespace RTE {
 			std::cout << "[net-lockstep-selftest] PASS restarted_peer_is_not_handed_the_old_round suppressed" << std::endl;
 			return true;
 		}
+		// A client that restarted before the host did adopts the round the host is still finishing;
+		// when the host starts its own, the client has to follow it rather than refuse it forever.
+		bool TestCoordinatorClientFollowsTheHostsNewRound(std::string* error) {
+			const uint16_t port = 43103;
+			const uint64_t sessionId = 0x70000000000000A3ULL;
+			const uint64_t roundOne = 0x9A5E0000000000A3ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 20000;
+			clientConfig.timeoutMs = 20000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the first round never started";
+				return false;
+			}
+			// The client restarts before it has played, so nothing tells the host it has left; it takes
+			// the host's answer and lands in the round the host is about to leave.
+			NetLockstepConfig clientRestart = clientConfig;
+			clientRestart.roundId = 0;
+			clientRestart.remoteTransportPeerId = 1;
+			if (!client.Start(clientTransport, clientRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetRoundId() == roundOne; }, 2000)) {
+				*error = "the restarted client never took the old round, so this fixture proves nothing";
+				return false;
+			}
+			// It plays into that round too: this frame goes out under a tag the host's next round refuses.
+			if (!client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 100);
+			// A start from another round for another start frame stays a straggler, never a new round.
+			const uint32_t staleBefore = client.GetStats().staleRoundPackets;
+			NetLockstepStart straggler;
+			straggler.sessionId = sessionId;
+			straggler.startFrame = 7;
+			straggler.inputDelayFrames = 0;
+			straggler.controllerFrameVersion = ControllerFrame::c_Version;
+			straggler.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			straggler.localPeerId = 1;
+			straggler.peerCount = 2;
+			straggler.scenario = "LockstepSelfTest";
+			straggler.ownershipPolicy = "unique-id-split";
+			straggler.roundId = roundOne - 1;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({straggler}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetStats().staleRoundPackets == staleBefore + 1; }, 500)) {
+				*error = "a start for another start frame was not ignored";
+				return false;
+			}
+			if (client.IsFailed() || client.GetRoundId() != roundOne) {
+				*error = "a straggling start moved or failed the client's round";
+				return false;
+			}
+			// The host starts its own round; the client's has committed nothing, so it follows.
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 4000)) {
+				*error = "the client never followed the host onto its new round: host=" + host.BuildReportJson() + " client=" + client.BuildReportJson();
+				return false;
+			}
+			if (client.GetRoundId() != roundTwo || client.GetStats().roundReadoptions != 1) {
+				*error = "the client is running on round " + std::to_string(client.GetRoundId()) + " after " +
+				         std::to_string(client.GetStats().roundReadoptions) + " readoptions";
+				return false;
+			}
+			// The client's frame was produced for this round under the old tag; the round commits it.
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, 1000)) {
+				*error = "the followed round did not commit the client's own production: host=" + host.BuildReportJson();
+				return false;
+			}
+			// Once the round has committed, no start moves it: a running match keeps its round.
+			const uint32_t staleAfterCommit = client.GetStats().staleRoundPackets;
+			NetLockstepStart afterCommit = straggler;
+			afterCommit.startFrame = 0;
+			afterCommit.roundId = roundOne;
+			if (!EncodePacket({afterCommit}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetStats().staleRoundPackets == staleAfterCommit + 1; }, 500)) {
+				*error = "a start from another round reached a committed round";
+				return false;
+			}
+			if (client.GetRoundId() != roundTwo || client.GetStats().roundReadoptions != 1 || client.IsFailed()) {
+				*error = "a committed round was moved by another round's start";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS client_follows_the_hosts_new_round readoptions=" << client.GetStats().roundReadoptions << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -3637,6 +3759,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestCoordinatorClientFollowsTheHostsNewRound(&error) ||
 		    !TestCoordinatorRestartedPeerIsNotHandedTheOldRound(&error) ||
 		    !TestCoordinatorRepeatedStartCarriesTheRound(&error) ||
 		    !TestCoordinatorRepeatedStartsDoNotAmplify(&error) ||
