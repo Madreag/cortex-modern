@@ -4278,6 +4278,7 @@ void MovableMan::UpdateControllers() {
 		// A leaver's actors dropped off the wire: their control handoffs revert to the policy owner
 		// (a surviving teammate's AI picks them up), and actors with no surviving owner stand down —
 		// on every survivor at the same tick.
+		ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
 		for (Actor* actor: m_Actors) {
 			if (ScenarioRunner::IsLockstepActorOwnerGone(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
