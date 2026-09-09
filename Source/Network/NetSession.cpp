@@ -386,9 +386,12 @@ namespace RTE {
 		++m_Stats.receivedMessages;
 		m_LastReceivedSequence = decoded.message.sequence;
 		m_LastReceiveMs = m_NowMs;
+		// It spoke, so it is owed a restart again the next time we stop listening.
+		m_ResumedWithoutTraffic = false;
 		if (m_Role == NetSessionRole::Host) {
 			if (PeerState* peer = FindPeer(peerId)) {
 				peer->lastReceiveMs = m_NowMs;
+				peer->resumedWithoutTraffic = false;
 			}
 			HandleHostMessage(peerId, decoded.message);
 		} else {
@@ -702,20 +705,30 @@ namespace RTE {
 		m_TimeoutsEvaluated = true;
 		m_LastTimeoutCheckMs = m_NowMs;
 		if (resumed) {
-			++m_Stats.timeoutResumptions;
-			m_LastReceiveMs = m_NowMs;
+			// One restart per silence, and no more: without a floor a caller that always evaluated more
+			// slowly than the budget would resume forever and evict nobody. Once a window has been
+			// restarted, the next full budget without a word ends the peer however slowly we evaluate
+			// from there; any packet from it clears the mark and it is owed a restart again.
+			bool restarted = false;
+			if (!m_ResumedWithoutTraffic) {
+				m_ResumedWithoutTraffic = true;
+				m_LastReceiveMs = m_NowMs;
+				restarted = true;
+			}
 			for (PeerState& peer : m_Peers) {
-				if (IsActive(peer.state) && peer.state != NetSessionState::Handshake) {
+				if (IsActive(peer.state) && peer.state != NetSessionState::Handshake && !peer.resumedWithoutTraffic) {
+					peer.resumedWithoutTraffic = true;
 					peer.lastReceiveMs = m_NowMs;
+					restarted = true;
 				}
+			}
+			if (restarted) {
+				++m_Stats.timeoutResumptions;
 			}
 		}
 		if (m_Role == NetSessionRole::Host) {
 			// P14 expires a handshake on the connection's own age, which no resumption extends.
 			ExpireSilentHandshakes();
-			if (resumed) {
-				return;
-			}
 			for (PeerState& peer : m_Peers) {
 				if (!IsActive(peer.state) || peer.state == NetSessionState::Handshake) {
 					continue;
@@ -729,7 +742,7 @@ namespace RTE {
 					RefreshHostState();
 				}
 			}
-		} else if (!resumed && (m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
+		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
 		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs > m_Config.timeoutMs) {
 			++m_Stats.timeouts;
 			SetFailed(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - m_LastReceiveMs), "session timeout");

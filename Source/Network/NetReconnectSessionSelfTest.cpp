@@ -4745,16 +4745,66 @@ namespace RTE {
 				if (pair.host.GetStats().timeouts != 0 || pair.client.GetStats().timeouts != 0) {
 					return Fail("R1 arm: a silence nobody was listening through was counted as a timeout");
 				}
+				// Exactly one resumption per match-to-round transition, and it is what let the round form.
+				if (pair.host.GetStats().timeoutResumptions != 1) {
+					return Fail("R1 arm: the round formed on " + std::to_string(pair.host.GetStats().timeoutResumptions) +
+					            " host resumptions, not the one the transition owes");
+				}
 
-				// The control: a resumption starts the window again, it does not remove it. A peer that
-				// goes quiet while the session IS being ticked is still evicted on the budget.
+				// The control: a resumption starts the window again, it does not remove it, and it does
+				// not move it either - the peer that goes quiet is evicted one budget later, measured.
 				const uint64_t quietFromMs = pair.serviceMs;
-				while (pair.serviceMs - quietFromMs <= budgetMs * 2ULL && pair.host.GetReadyPeerCount() != 0) {
+				uint64_t evictedAfterMs = 0;
+				while (pair.serviceMs - quietFromMs <= budgetMs * 3ULL && evictedAfterMs == 0) {
 					pair.host.Tick(pair.serviceMs);
+					if (pair.host.GetReadyPeerCount() == 0) {
+						evictedAfterMs = pair.serviceMs - quietFromMs;
+					}
 					pair.Step(10);
 				}
-				if (pair.host.GetStats().timeouts == 0 || pair.host.GetReadyPeerCount() != 0) {
+				if (evictedAfterMs == 0 || pair.host.GetStats().timeouts != 1) {
 					return Fail("R1 arm: a peer that went quiet under a ticking session was never evicted, so this case proves nothing");
+				}
+				// The tolerance is one heartbeat interval either side: the peer's last stamped receive is
+				// its last heartbeat, which lands somewhere inside the interval before the round ended.
+				if (evictedAfterMs + 200 < budgetMs || evictedAfterMs > budgetMs + 200) {
+					return Fail("R1 arm: the quiet peer was evicted after " + std::to_string(evictedAfterMs) +
+					            " ms, not the budget's " + std::to_string(budgetMs));
+				}
+				if (pair.host.GetStats().timeoutResumptions != 1) {
+					return Fail("R1 arm: the eviction window was restarted again while the session was watching");
+				}
+			}
+
+			// F2.1c: the predicate has a floor. A caller that always evaluates more slowly than the
+			// budget would otherwise resume forever and never evict anyone - twenty consecutive slow
+			// evaluations kept a never-speaking peer seated for 100 s in the reviewer's probe. A
+			// resumption is worth one restart per silence: once the window has been restarted, the next
+			// full budget without a word ends the peer however slowly the caller evaluates from there.
+			{
+				SeatedPair pair;
+				if (!pair.Seat("resume-floor", 42154, &unixNow, &error)) {
+					return Fail("floor arm: " + error);
+				}
+				// The client is never ticked again: a peer that died without a FIN.
+				pair.PlayFor(playedMs);
+				uint32_t slowTicks = 0;
+				while (slowTicks < 20 && pair.host.GetReadyPeerCount() != 0) {
+					pair.host.Tick(pair.serviceMs);
+					++slowTicks;
+					pair.Step(budgetMs + 10);
+				}
+				if (pair.host.GetReadyPeerCount() != 0 || pair.host.GetStats().timeouts != 1) {
+					return Fail("floor arm: " + std::to_string(slowTicks) + " evaluations at " +
+					            std::to_string(budgetMs + 10) + " ms kept a never-speaking peer seated for " +
+					            std::to_string(static_cast<uint64_t>(slowTicks) * (budgetMs + 10)) + " ms: resumptions=" +
+					            std::to_string(pair.host.GetStats().timeoutResumptions) + " timeouts=" +
+					            std::to_string(pair.host.GetStats().timeouts));
+				}
+				// One restart, then judged: the second slow evaluation is the one that evicts.
+				if (pair.host.GetStats().timeoutResumptions != 1 || slowTicks != 2) {
+					return Fail("floor arm: the peer went after " + std::to_string(slowTicks) + " evaluations and " +
+					            std::to_string(pair.host.GetStats().timeoutResumptions) + " resumptions, not 2 and 1");
 				}
 			}
 
