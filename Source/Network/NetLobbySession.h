@@ -91,6 +91,8 @@ namespace RTE {
 		/// started client always holds the complete state.
 		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
+		/// Gets whether this host still has state chunks it has not handed to the transport.
+		bool HasPendingStateChunks() const { return !m_OutgoingChunks.empty(); }
 		/// Takes the fully received state file (empties the buffer).
 		std::vector<uint8_t> TakeReceivedState();
 		/// Received/total byte progress of an incoming transfer (0/0 when none).

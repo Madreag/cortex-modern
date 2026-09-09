@@ -270,6 +270,9 @@ namespace RTE {
 		uint32_t relayPacketsSent = 0; //!< Host: packets forwarded TO this peer.
 		uint32_t relaySendFailures = 0; //!< Host: forwards the transport refused for this peer.
 		uint32_t relayResends = 0; //!< Host: refused forwards a later retry did deliver.
+		uint32_t relayBacklogOverflows = 0; //!< Host: forwards this peer's full backlog could not hold.
+		uint64_t longestCongestionHoldMs = 0; //!< Host: the longest this peer kept its seat behind our undrained queue.
+		std::string lastRelayError; //!< Host: why a forward to THIS peer was last refused.
 		uint64_t relayBytesSent = 0; //!< Host: encoded bytes forwarded to this peer, the send-buffer pressure it sees.
 		uint32_t largestRelayPacketBytes = 0; //!< Host: the biggest single forward, so an oversized frame is visible.
 		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
@@ -308,6 +311,10 @@ namespace RTE {
 		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
 		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
 		uint32_t relayResends = 0; //!< Refused forwards a later retry did deliver.
+		uint32_t relayCongestedRefusals = 0; //!< Forwards refused because OUR queue was full, not because the peer went.
+		uint32_t relayCongestionHolds = 0; //!< Peers held through a congestion episode instead of being dropped.
+		uint64_t longestCongestionHoldMs = 0; //!< The longest a peer kept its seat behind our undrained queue.
+		uint32_t relayBacklogOverflows = 0; //!< Forwards a full backlog could not even hold.
 		uint64_t relayBytesSent = 0; //!< Encoded bytes this host forwarded, across every peer.
 		uint32_t largestRelayPacketBytes = 0;
 		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
@@ -316,6 +323,7 @@ namespace RTE {
 		uint32_t unresolvedObservationPackets = 0; //!< Frames dropped because an observation named a slot this peer never got.
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
+		uint32_t stopsFromLeftPeers = 0; //!< Stops a peer sent after the round had already dropped its seat.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
 		uint64_t longestStallMs = 0;
@@ -511,6 +519,10 @@ namespace RTE {
 		/// How long the host lets a required remote go quiet before calling it gone. Half the
 		/// missing-frame grace, so the relayed notice still has the other half to reach the survivors.
 		uint64_t PeerSilenceLeaveMs() const { return m_Config.timeoutMs / 2; }
+		/// How long a peer keeps its seat while OUR queue to it will not drain. Three quarters of the
+		/// grace: past the silence bound, so a transient episode still costs nobody a seat, and a clear
+		/// quarter short of the missing-frame timeout, so a hold can never be what ends the round.
+		uint64_t CongestionHoldLeaveMs() const { return m_Config.timeoutMs * 3 / 4; }
 		/// Relay host: a required remote that has blocked the round this long has left, whatever its
 		/// socket still says. Waiting for the transport means waiting on the dead peer's own process.
 		void AdjudicateSilentPeers(uint64_t nowMs);
@@ -518,6 +530,12 @@ namespace RTE {
 		uint64_t RelayBacklogBytes() const;
 		void UpdateRelayBacklogBytes() { m_Stats.relayBacklogBytes = RelayBacklogBytes(); }
 		uint32_t RelayBacklogPackets(uint8_t peerId) const;
+		/// Records whether a refusal was our own full queue or a real fault.
+		void NoteRelayRefusal(uint8_t peerId, bool congested);
+		/// Records a refusal against the peer it was for as well as the round.
+		void NoteRelayError(uint8_t peerId, const std::string& error);
+		/// Drops every trace of a peer's congestion, so a reused id starts clean.
+		void ForgetCongestion(uint8_t peerId);
 		/// Holds a refused forward for retry, keeping this peer's stream in order behind it.
 		void QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes);
 		/// Retries refused forwards. A momentarily full send buffer heals; one that stays refused past
@@ -554,6 +572,8 @@ namespace RTE {
 		std::set<uint8_t> m_LeftSeatsHeld; //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
+		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.
+		std::set<uint8_t> m_HeldForCongestion; //!< Congestion episodes already reported, so the hold is logged once.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.

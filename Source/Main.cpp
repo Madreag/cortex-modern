@@ -263,7 +263,7 @@ class NullNetTransport final : public INetTransport {
 public:
 	bool StartHost(uint16_t, std::string*) override { return true; }
 	bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
-	bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*) override { return true; }
+	bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
 	void Disconnect(NetPeerId, const std::string&) override {}
 	void Stop() override {}
 	std::vector<NetTransportEvent> PollEvents() override { return {}; }

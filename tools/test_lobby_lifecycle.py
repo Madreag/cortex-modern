@@ -1,4 +1,32 @@
-"""Exercise leave, dropped clients, and replacement joins through the real menu handlers."""
+"""Exercise leave, dropped clients, and replacement joins through the real menu handlers.
+
+The lobby lanes:
+
+    --action leave                           the departing peer leaves the lobby by hand
+    --action drop                            it is killed in the lobby, a replacement takes the seat
+    --action rejoin                          it leaves the lobby, a replacement takes the seat
+    --action rejoin --short-trace-control    the replacement refuses a trace it cannot complete
+    --action drop --players 4                the same lobby drop with a fuller lobby
+    --action drop --leave-at-frame 40        it is killed 40 frames into the running 180-frame match
+
+The last one sheds a seat while the round is running, which the lobby-time lanes never do. Its
+expected shape, all of it in result.json and lockstep-stats.json beside the run:
+
+    host_simulation / stayerN_simulation  every survivor's 180 ticks match the host's, byte for byte
+    stayerN_process                       exit 0, and no "[menu-mp] FAIL: collected N of 180" line
+    departing_process                     exit 137, the killed peer the only one to end early
+    only_the_leaver_left                  the host's peer_leave_frames holds one seat, at a frame
+                                          inside the match
+    the_leaver_is_the_departing_peer      one "[net-match] Departing left the match at frame N"
+    no_missing_frame_timeout              no peer's timeout_reason names MissingFrameTimeout
+
+Counters to read in lockstep-stats.json, per peer: peers_left, peer_leave_frames,
+peers_dropped_silent, stops_from_left_peers, frames_accepted, next_frame, missing_frame_stalls,
+longest_stall_ms, relay_congested_refusals, longest_congestion_hold_ms, timeout_reason. A survivor
+that ends with frames_accepted at 180 and an empty timeout_reason is the pass; peers_dropped_silent 1
+on the host is the ordinary way a killed peer's seat goes, and stops_from_left_peers stays 0 because
+a killed peer sends nothing after it dies.
+"""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -46,7 +74,7 @@ def read_lockstep(out):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--players", type=int, choices=[2, 3, 4], default=3)
@@ -54,9 +82,21 @@ def main():
     parser.add_argument("--port", type=int, default=44160)
     parser.add_argument("--short-trace-control", action="store_true", help="require the replacement to report an incomplete longer trace")
     parser.add_argument("--fake-lag-ms", type=int, default=0)
+    parser.add_argument("--leave-at-frame", type=int, default=0,
+                        help="kill the departing peer this many frames into the RUNNING match instead of in the lobby; the timestep is pinned at 30Hz so the wait is N/30s, and the frame it landed on comes back in the host's peer_leave_frames. No replacement joins.")
     options = parser.parse_args()
     if options.short_trace_control and options.action == "leave":
         parser.error("--short-trace-control requires a replacement")
+    early_drop = options.leave_at_frame > 0
+    if early_drop:
+        if options.action != "drop":
+            parser.error("--leave-at-frame is a mid-match drop; pass --action drop")
+        if options.players < 3:
+            parser.error("--leave-at-frame needs 3+ players so the round still has survivors")
+        if options.short_trace_control:
+            parser.error("--short-trace-control is a lobby-time control with no replacement here")
+        if options.leave_at_frame >= 180:
+            parser.error("--leave-at-frame must land inside the 180-frame match")
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     runs = {}
@@ -79,7 +119,8 @@ def main():
     try:
         players = options.players
         host = menu_script("Host", True, players, options.port)
-        host += f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nwait_connected {players - 1}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\ndump_lobby\n"
+        if not early_drop:
+            host += f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nwait_connected {players - 1}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\ndump_lobby\n"
         if match:
             host += f"wait_connected {players}\nwait_remote_ready\nwait_all_ready\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n"
         else:
@@ -92,18 +133,27 @@ def main():
             script = menu_script(display, False, players, options.port) + "wait_all_ready\ndump_lobby\n"
             if index == 1:
                 script += "wait 99999\n" if options.action == "drop" else "wait 15\nactivate ButtonMultiplayerLeave\nwait 15\nassert_substate Landing\nexit\n"
+            elif early_drop:
+                script += "wait 99999\n"
             elif match:
                 script += f"wait_connected {players - 1}\nassert_substate Lobby\ndump_lobby\nwait_connected {players}\nwait_all_ready\ndump_lobby\nwait 99999\n"
             else:
                 script += "wait_state Failed\nwait 5\nassert_substate Landing\nexit\n"
             start(name, script, match and index != 1)
-        if options.action == "drop":
+        if early_drop:
+            # The menu script stops being pumped once the match starts, so the frame is counted off
+            # the pinned 30Hz timestep from the host's own start; the report says where it landed.
+            wait_for_log(host_run, "activate ButtonMultiplayerStart ok=1", 60)
+            time.sleep(options.leave_at_frame / 30.0)
+            runs["departing"].terminate()
+        elif options.action == "drop":
             wait_for_log(runs["departing"], "[menu-script] dump_lobby")
             wait_for_log(host_run, "allready -> OK")
             runs["departing"].terminate()
-        wait_for_log(host_run, f"connected:{players - 1} -> OK")
+        if not early_drop:
+            wait_for_log(host_run, f"connected:{players - 1} -> OK")
         records["departing"] = runs["departing"].finish()
-        if match:
+        if match and not early_drop:
             script = menu_script("Replacement", False, players, options.port) + "wait_all_ready\ndump_lobby\nwait 99999\n"
             start("replacement", script, True)
         pending = [(name, run) for name, run in runs.items() if name not in records]
@@ -135,11 +185,23 @@ def main():
                     checks[f"{name}_simulation"], details[name]["comparison"] = strict_compare(root / "host/trace.json", root / name / "trace.json", min(180, len(ticks)), prefix=True)
                 else:
                     checks[f"{name}_simulation"], details[name]["comparison"] = strict_compare(root / "host/trace.json", root / name / "trace.json", 180)
-                checks[f"{name}_replacement_name"] = "Replacement(team" in log
+                if not early_drop:
+                    checks[f"{name}_replacement_name"] = "Replacement(team" in log
             elif expected_exit == 0:
                 checks[f"{name}_landing"] = "assert_substate expected=Landing actual=Landing PASS" in log
         host_log = (root / "host/stdout.log").read_text(errors="replace")
-        checks["host_survived_departure"] = "assert_substate expected=Lobby actual=Lobby PASS" in host_log and "assert_enabled ButtonMultiplayerStart expected=0 actual=0 PASS" in host_log
+        if early_drop:
+            # The round outlives the seat: every survivor finishes all 180 frames, one seat is
+            # named, and nobody ends on a grace that ran out.
+            leaves = lockstep.get("host", {}).get("peer_leave_frames", {}) or {}
+            leave_lines = re.findall(r"\[net-match\] (.+?) left the match at frame (\d+)", host_log)
+            result["leave_frames"], result["leave_lines"] = leaves, leave_lines
+            checks["only_the_leaver_left"] = len(leaves) == 1 and all(0 < int(frame) < 180 for frame in leaves.values())
+            checks["the_leaver_is_the_departing_peer"] = len(leave_lines) == 1 and leave_lines[0][0] == "Departing"
+            checks["no_missing_frame_timeout"] = all("MissingFrameTimeout" not in (stats.get("timeout_reason") or "")
+                                                     for stats in lockstep.values())
+        else:
+            checks["host_survived_departure"] = "assert_substate expected=Lobby actual=Lobby PASS" in host_log and "assert_enabled ButtonMultiplayerStart expected=0 actual=0 PASS" in host_log
         result.update(pass_=all(checks.values()), checks=checks, details=details)
         result["pass"] = result.pop("pass_")
         result["lockstep"] = lockstep
