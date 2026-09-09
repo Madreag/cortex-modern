@@ -30,7 +30,7 @@ namespace RTE {
 			explicit AdmissionProbeTransport(INetTransport& inner) : m_Inner(inner) {}
 			bool StartHost(uint16_t port, std::string* error = nullptr) override { return m_Inner.StartHost(port, error); }
 			bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override { return m_Inner.Connect(address, port, error); }
-			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr) override { return m_Inner.Send(peerId, lane, bytes, error); }
+			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override { return m_Inner.Send(peerId, lane, bytes, error, congested); }
 			void Disconnect(NetPeerId peerId, const std::string& reason) override { m_Inner.Disconnect(peerId, reason); }
 			void Stop() override { m_Inner.Stop(); }
 			uint32_t GetPeerPingMs(NetPeerId peerId) const override { return m_Inner.GetPeerPingMs(peerId); }

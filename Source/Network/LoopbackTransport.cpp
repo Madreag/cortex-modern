@@ -18,6 +18,17 @@ namespace RTE {
 
 	void LoopbackTransport::AdvanceTimeMs(uint64_t deltaMs) {
 		m_NowMs += deltaMs;
+		DrainSendQueues(deltaMs);
+	}
+
+	void LoopbackTransport::DrainSendQueues(uint64_t deltaMs) {
+		if (m_Config.drainBytesPerSecond == 0) {
+			return;
+		}
+		const uint64_t drained = (static_cast<uint64_t>(m_Config.drainBytesPerSecond) * deltaMs) / 1000U;
+		for (auto& [peerId, queued] : m_QueuedBytes) {
+			queued = queued > drained ? queued - drained : 0;
+		}
 	}
 
 	bool LoopbackTransport::StartHost(uint16_t port, std::string* error) {
@@ -64,14 +75,25 @@ namespace RTE {
 		return true;
 	}
 
-	bool LoopbackTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error) {
+	bool LoopbackTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) {
+		if (congested) *congested = false;
 		if (!m_IsStarted) {
 			SetError(error, "loopback transport is not started");
 			return false;
 		}
 		if (m_Config.refuseSendsToPeer != c_InvalidNetPeerId && peerId == m_Config.refuseSendsToPeer) {
-			SetError(error, "loopback send buffer is full");
+			SetError(error, "loopback peer refuses every send");
 			return false;
+		}
+		if (m_Config.sendBufferBytes > 0) {
+			uint64_t& queued = m_QueuedBytes[peerId];
+			if (queued + bytes.size() > m_Config.sendBufferBytes) {
+				if (congested) *congested = true;
+				SetError(error, "loopback send buffer is full (" + std::to_string(queued) + " of " +
+				                std::to_string(m_Config.sendBufferBytes) + " bytes queued)");
+				return false;
+			}
+			queued += bytes.size();
 		}
 		const uint32_t sendOrdinal = ++m_SendCounter;
 		if (ShouldDrop(lane, sendOrdinal)) {
