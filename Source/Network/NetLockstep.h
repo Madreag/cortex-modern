@@ -153,6 +153,9 @@ namespace RTE {
 	/// re-encodes. A round's tables are reset when the round starts.
 	struct NetSoundObservationTables {
 		std::map<uint8_t, NetSoundObservationDictionary> bySender;
+		/// The round these tables belong to. A frame from any other round is read past without touching
+		/// them, so a packet the round is going to discard can never disturb a live sender's slots.
+		uint64_t roundId = 0;
 		/// Relay host: the lockstep peer this transport actually is, so a frame claiming another
 		/// sender can only ever disturb its own table. Zero on a client, whose one link is the host.
 		uint8_t transportSender = 0;
@@ -161,7 +164,7 @@ namespace RTE {
 		/// The table of a named sender, whatever transport is being decoded: what this peer encodes its
 		/// own frames with, and what a relay host re-encodes another peer's frames with.
 		NetSoundObservationDictionary& Exactly(uint8_t senderPeerId) { return bySender[senderPeerId]; }
-		void Reset() { bySender.clear(); }
+		void Reset() { bySender.clear(); roundId = 0; }
 	};
 
 	struct NetLockstepFrame {

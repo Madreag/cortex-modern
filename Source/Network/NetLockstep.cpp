@@ -659,7 +659,10 @@ namespace RTE {
 			return true;
 		}
 
-		bool ReadObservations(ByteReader& reader, NetLockstepFrame& payload, NetSoundObservationDictionary* dictionary, NetLockstepError* error, uint16_t version) {
+		// A block belonging to another round is read with `discard` and no dictionary: its shape is checked,
+		// nothing is resolved and no observation comes out, so a frame this round is going to drop cannot
+		// disturb its sender's live slots.
+		bool ReadObservations(ByteReader& reader, NetLockstepFrame& payload, NetSoundObservationDictionary* dictionary, NetLockstepError* error, uint16_t version, bool discard) {
 			if (version >= NetLockstepCodec::c_ObservationBindingSequenceVersion) {
 				uint64_t bindingsBefore = 0;
 				if (!ReadVarOrFail(reader, bindingsBefore, error, "observation_bindings_before")) {
@@ -684,7 +687,9 @@ namespace RTE {
 				SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "observation_count exceeds maximum");
 				return false;
 			}
-			payload.observations.reserve(observationCount);
+			if (!discard) {
+				payload.observations.reserve(observationCount);
+			}
 			NetSoundObservationKey previous;
 			for (uint16_t i = 0; i < observationCount; ++i) {
 				NetSoundObservationKey key;
@@ -732,7 +737,7 @@ namespace RTE {
 						if (dictionary) {
 							dictionary->Bind(static_cast<uint16_t>(slot), key);
 						}
-					} else if (!dictionary || !dictionary->Resolve(static_cast<uint16_t>(slot), key)) {
+					} else if (!discard && (!dictionary || !dictionary->Resolve(static_cast<uint16_t>(slot), key))) {
 						SetError(error, NetLockstepErrorCode::UnboundObservationSlot, reader.Offset(), "observation names a slot this sender never spelled out");
 						return false;
 					}
@@ -746,6 +751,9 @@ namespace RTE {
 				if (!std::isfinite(observation.value)) {
 					SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 4, "sound observation value is not finite");
 					return false;
+				}
+				if (discard) {
+					continue;
 				}
 				observation.objectUID = key.objectUID;
 				observation.tick = key.tick;
@@ -1135,11 +1143,12 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id")) {
 					return false;
 				}
-				// A frame from another round decodes like any other and is dropped by the round's own rule,
-				// so its sender still counts as heard from; the binding sequence, not the round tag, is
-				// what keeps one round's slots from standing for another's keys.
-				NetSoundObservationDictionary* dictionary = tables ? &tables->For(payload.senderPeerId) : nullptr;
-				if (!ReadObservations(reader, payload, dictionary, error, version)) {
+				// A frame from another round decodes like any other and is dropped by the round's own rule, so
+				// its sender still counts as heard from; its observations are read past rather than resolved,
+				// so one round's slots never stand for another's keys and the counters stay for real holes.
+				const bool otherRound = tables && payload.roundId != 0 && tables->roundId != 0 && payload.roundId != tables->roundId;
+				NetSoundObservationDictionary* dictionary = tables && !otherRound ? &tables->For(payload.senderPeerId) : nullptr;
+				if (!ReadObservations(reader, payload, dictionary, error, version, otherRound)) {
 					return false;
 				}
 			}
@@ -1647,6 +1656,7 @@ namespace RTE {
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
 		m_RoundId = config.roundId;
+		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_LastStartSentMs = UINT64_MAX;
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
@@ -2711,6 +2721,7 @@ namespace RTE {
 		}
 		if (m_RoundId == 0 && start.roundId != 0) {
 			m_RoundId = start.roundId;
+			m_ObservationDecodeTables.roundId = m_RoundId;
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {
