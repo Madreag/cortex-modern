@@ -4051,6 +4051,107 @@ namespace RTE {
 			return 0;
 		}
 
+		// A7 defect A: every admission deadline is real time. The pump that feeds them runs once per sim
+		// tick from the game loop AND again from inside the lockstep wait, so a clock that adds a fixed
+		// step per pump runs at whatever rate the frame happens to pump - halving P2 under a normal
+		// double pump, and stopping dead across a pause. The seat hold is measured here in elapsed
+		// milliseconds against a real NetReconnectHost, driven exactly as the service drives it.
+		int TestAdmissionClockIsElapsedTime() {
+			// How long a seat survives, in elapsed ms, when the plane is ticked `pumpsPerStep` times per
+			// 10 ms of elapsed time through the given clock discipline.
+			auto holdEndsAtMs = [](bool countPumps, uint32_t pumpsPerStep, uint64_t stepMs, uint64_t giveUpMs) -> uint64_t {
+				ScriptedAuthCrypto crypto;
+				ScopedTestCrypto scope(&crypto);
+				std::string error;
+				if (!ResetLaneDirectory(&error)) {
+					return UINT64_MAX;
+				}
+				uint64_t unixNow = 1'700'000'000'000ULL;
+				Wire wire;
+				ConfigureWire(wire);
+				Endpoint player;
+				player.connection = 111;
+				ConfigureEndpoint(player, "clock", &unixNow);
+				wire.Add(&player);
+				if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+					return UINT64_MAX;
+				}
+				const std::vector<NetH4Seat> seats = MakeSeatTable();
+				wire.host.SetLiveMatch(true);
+
+				NetAdmissionClock clock;
+				uint64_t steadyMs = 9'000'000ULL; // An arbitrary origin: elapsed time, never the raw clock.
+				clock.Start(steadyMs);
+				uint64_t pumpCounter = 0;
+				auto planeNowMs = [&]() -> uint64_t {
+					// The defect, exactly: a step added per pump instead of the elapsed time.
+					return countPumps ? (pumpCounter += 15) : clock.NowMs(steadyMs);
+				};
+				wire.host.Tick(planeNowMs());
+				wire.host.NotifyDisconnect(player.connection, 120);
+				player.connected = false;
+				for (uint64_t elapsedMs = 0; elapsedMs <= giveUpMs; elapsedMs += stepMs) {
+					for (uint32_t pump = 0; pump < pumpsPerStep; ++pump) {
+						wire.host.Tick(planeNowMs());
+						if (!wire.host.IsSeatHeldForReclaim(seats[0].lockstepPeerId)) {
+							return elapsedMs;
+						}
+					}
+					steadyMs += stepMs;
+				}
+				return giveUpMs + 1;
+			};
+
+			const uint64_t windowMs = NetReconnectHost::c_ProvisionalExpiryMs;
+			const uint64_t giveUpMs = windowMs * 3;
+
+			// One pump per 10 ms of elapsed time: the seat is held for its window and no longer.
+			const uint64_t singleMs = holdEndsAtMs(false, 1, 10, giveUpMs);
+			if (singleMs < windowMs || singleMs > windowMs + 20) {
+				return Fail("a singly-pumped seat hold did not last P2: " + std::to_string(singleMs) + " ms");
+			}
+			// Two pumps a tick is what the game loop and the lockstep wait actually do together; the
+			// window must not move at all.
+			const uint64_t doubleMs = holdEndsAtMs(false, 2, 10, giveUpMs);
+			if (doubleMs != singleMs) {
+				return Fail("double pumping moved the P2 window to " + std::to_string(doubleMs) + " ms");
+			}
+			// A stall pumps the plane hundreds of times inside a few milliseconds.
+			const uint64_t stalledMs = holdEndsAtMs(false, 200, 10, giveUpMs);
+			if (stalledMs != singleMs) {
+				return Fail("a stall moved the P2 window to " + std::to_string(stalledMs) + " ms");
+			}
+			// A pause pumps rarely over a long time; the window must not stretch either.
+			const uint64_t pausedMs = holdEndsAtMs(false, 1, 5000, giveUpMs);
+			if (pausedMs < windowMs || pausedMs > windowMs + 5000) {
+				return Fail("a pause stretched the P2 window to " + std::to_string(pausedMs) + " ms");
+			}
+
+			// The negative control: counting pumps is the defect, and it must still measure as one.
+			const uint64_t countedDoubleMs = holdEndsAtMs(true, 2, 10, giveUpMs);
+			if (countedDoubleMs >= windowMs) {
+				return Fail("the pump-counting control did not shorten the window, so this case proves nothing");
+			}
+			const uint64_t countedPausedMs = holdEndsAtMs(true, 1, 5000, giveUpMs);
+			if (countedPausedMs <= giveUpMs) {
+				return Fail("the pump-counting control expired a paused hold, so this case proves nothing");
+			}
+
+			// The clock itself: an origin is not part of the answer, and it never runs backwards.
+			NetAdmissionClock clock;
+			if (clock.IsStarted() || clock.NowMs(1234) != 0) {
+				return Fail("an unstarted admission clock reported time");
+			}
+			clock.Start(9'000'000ULL);
+			if (!clock.IsStarted() || clock.NowMs(9'000'000ULL) != 0 || clock.NowMs(9'020'000ULL) != 20'000ULL) {
+				return Fail("the admission clock did not report elapsed milliseconds");
+			}
+			if (clock.NowMs(8'999'000ULL) != 0) {
+				return Fail("the admission clock ran backwards");
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4131,6 +4232,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLiveAdmissionExpiresSilentConnections(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAdmissionClockIsElapsedTime(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
