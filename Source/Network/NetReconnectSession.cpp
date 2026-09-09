@@ -129,6 +129,12 @@ namespace RTE {
 		return taken;
 	}
 
+	std::vector<NetH4SeatHandover> NetReconnectHost::TakeSeatHandovers() {
+		std::vector<NetH4SeatHandover> taken = std::move(m_SeatHandovers);
+		m_SeatHandovers.clear();
+		return taken;
+	}
+
 	std::vector<NetGameReseat> NetReconnectHost::TakePendingReseats() {
 		std::vector<NetGameReseat> taken = std::move(m_PendingReseats);
 		m_PendingReseats.clear();
@@ -497,6 +503,7 @@ namespace RTE {
 		}
 		++m_Stats.reclaimsAccepted;
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, supersededConnection, true});
+		m_SeatHandovers.push_back({seat->seat.stableSeat, seat->seat.lockstepPeerId, std::string(), false});
 		Send(connection, committed);
 		IssueReseat(*seat);
 	}
@@ -999,6 +1006,7 @@ namespace RTE {
 		m_TxCache.Store(message.txId, key, committed, nowMs);
 		++m_Stats.substitutionsCommitted;
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, c_InvalidNetPeerId, false, true});
+		m_SeatHandovers.push_back({seat->seat.stableSeat, seat->seat.lockstepPeerId, pending->displayName, true});
 		Send(connection, committed);
 		// §8: the substitute receives the ledgered ownership from resumed tick 1, through the same
 		// system-authored reseat a returning holder gets.

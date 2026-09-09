@@ -3,6 +3,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetProtocol.h"
+#include "NetReconnectUx.h"
 #include "System/ScenarioRunner.h"
 #include "ActivityMan.h"
 
@@ -2009,6 +2010,143 @@ namespace RTE {
 			// Ownership's own question is untouched: a survivor is still here, so it stays false on both.
 			if (host.IsHoldingSeatForReclaim() || stayer.IsHoldingSeatForReclaim()) {
 				*error = "a round with a surviving remote reported itself as holding for reclaim";
+				return false;
+			}
+			return true;
+		}
+
+		// §11's roster line, asked of both peers still in the round. It is derived from the relayed
+		// notices alone, so a client has to reach the host's answer without asking the host anything.
+		bool TestSeatLineAgreesAcrossPeers(std::string* error) {
+			const uint16_t port = 43076;
+			const uint64_t sessionId = 0x7000000000000076ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			SeatStateStub hostStub;
+			hostStub.held = true;
+			ClientSeatStateProbe stayerProbe;
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &hostStub);
+			stayer.SetSeatStateSource(&QuerySeatStateAsAClient, &stayerProbe);
+			NetSeatPresence hostLine, stayerLine;
+			auto absorb = [&] {
+				for (const NetLockstepSeatNotice& notice: host.TakeSeatNotices()) {
+					hostLine.Observe(notice);
+				}
+				for (const NetLockstepSeatNotice& notice: stayer.TakeSeatNotices()) {
+					stayerLine.Observe(notice);
+				}
+			};
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					leaver.Tick(now);
+					stayer.Tick(now);
+					absorb();
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the three-peer round never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					while (stayer.PopReadyFrame(ready)) {
+					}
+					return committed >= 2;
+				})) {
+				*error = "the three-peer round never committed a frame";
+				return false;
+			}
+
+			leaverT.Stop();
+			if (!drive(3000, [&] { return hostLine.StateOf(2) != NetSeatPresenceState::Present && stayerLine.StateOf(2) != NetSeatPresenceState::Present; })) {
+				*error = "a survivor never learned the seat had dropped";
+				return false;
+			}
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			const uint64_t deadline = leaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames;
+			const std::vector<std::pair<const char*, uint64_t>> samples = {
+			    {"at_the_drop", leaveFrame},
+			    {"mid_window", leaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames / 2},
+			    {"last_held_frame", deadline - 1},
+			    {"at_the_deadline", deadline},
+			    {"past_the_deadline", deadline + 600},
+			};
+			for (const auto& [name, frame]: samples) {
+				hostLine.NoteFrame(frame);
+				stayerLine.NoteFrame(frame);
+				const std::string hostText = hostLine.Line(2, "Alice");
+				const std::string stayerText = stayerLine.Line(2, "Alice");
+				std::cout << "[net-lockstep-selftest] MEASURE seat_line_across_peers " << name << " frame=" << frame
+				          << " host=\"" << hostText << "\" stayer=\"" << stayerText << "\"" << std::endl;
+				if (hostText != stayerText) {
+					*error = std::string("the two survivors show different roster lines at ") + name;
+					return false;
+				}
+				const bool held = frame < deadline;
+				if (hostText.find(held ? "disconnected" : "left") == std::string::npos) {
+					*error = std::string("the roster line does not follow the hold's frame deadline at ") + name;
+					return false;
+				}
+			}
+
+			// The other half of §11's line: what became of the seat. The host announces it once and both
+			// peers say the same thing, the host from the notice it sent.
+			host.AnnounceSeatChange(2, NetLockstepStopReason::SeatSubstituted, "Understudy");
+			if (!drive(2000, [&] { return stayerLine.StateOf(2) == NetSeatPresenceState::Substituted; })) {
+				*error = "the surviving client never heard that the seat had been substituted";
+				return false;
+			}
+			hostLine.NoteFrame(deadline + 600);
+			stayerLine.NoteFrame(deadline + 600);
+			const std::string hostText = hostLine.Line(2, "Alice");
+			std::cout << "[net-lockstep-selftest] MEASURE seat_line_across_peers substituted host=\"" << hostText
+			          << "\" stayer=\"" << stayerLine.Line(2, "Alice") << "\"" << std::endl;
+			if (hostText != stayerLine.Line(2, "Alice") || hostText.find("substituted by Understudy") == std::string::npos) {
+				*error = "the survivors disagree about who has the seat now";
+				return false;
+			}
+			if (stayerProbe.reads == 0) {
+				*error = "the surviving client never ran the seat-state path, so the measurement is vacuous";
 				return false;
 			}
 			return true;
@@ -4606,6 +4744,7 @@ namespace RTE {
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
+		    !TestSeatLineAgreesAcrossPeers(&error) ||
 		    !TestAnnouncedLeaveHoldsNothing(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
