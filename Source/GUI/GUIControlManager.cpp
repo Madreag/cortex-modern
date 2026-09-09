@@ -183,6 +183,11 @@ std::string GUICheckpoint::SaveEntityReference(const Entity* entity, const Scene
 	return writer.Text();
 }
 
+const MovableObject* GUICheckpoint::LiveObject(const MovableObject* object) {
+	// Only the pointer value is read, so this is safe on one whose object is already gone.
+	return object && !g_MovableMan.IsKnownObject(object) ? nullptr : object;
+}
+
 std::string GUICheckpoint::SaveSharedBitmap(const BITMAP* bitmap) {
 	std::string path;
 	int cacheSlot = -1;
@@ -1614,6 +1619,38 @@ bool GUICheckpoint::RunSelfTest() {
 			clear_to_color(bitmap.get(), 0); inventory.m_GUIControlManager->Draw(&screen);
 			check("inventory_full_rendered_pixels", SaveBitmap(bitmap.get()) == fullPixels);
 			check("inventory_bare_full_apply", bareInventory.LoadCheckpoint(fullInventory) && bareInventory.SaveCheckpoint() == fullInventory && bareInventory.m_GUISelectedItem && bareInventory.m_GUISelectedItem->Button == bareInventory.m_GUIInventoryItemButtons[0].second);
+			{
+				// A menu still pointing at an object that has left the world: a peer's drop kills an
+				// actor and the resync snapshot is taken before the menu's next Update drops the
+				// pointer. A default-constructed Actor holds exactly the state a destroyed one does -
+				// no unique id, unknown to MovableMan - so the case needs no lifetime games.
+				Actor departedActor;
+				MOPixel departedItem;
+				check("inventory_departed_object_is_unknown", departedActor.GetUniqueID() == 0 && !g_MovableMan.IsKnownObject(&departedActor) && !departedActor.IsOriginalPreset());
+				const std::string liveInventory = inventory.SaveCheckpoint();
+				Actor* const liveActor = inventory.m_InventoryActor;
+				const auto liveEquipped = inventory.m_InventoryActorEquippedItems;
+				MovableObject* const liveButtonItem = inventory.m_GUIInventoryItemButtons[0].first;
+
+				inventory.m_InventoryActor = &departedActor;
+				const std::string departedActorState = inventory.SaveCheckpoint();
+				check("inventory_departed_actor_saves_absent", departedActorState != liveInventory);
+				check("inventory_departed_actor_restores_empty", inventory.LoadCheckpoint(departedActorState) && inventory.GetInventoryActor() == nullptr && inventory.SaveCheckpoint() == departedActorState);
+
+				// Every non-owning object pointer the menu keeps, not only the actor.
+				inventory.m_InventoryActor = liveActor;
+				inventory.m_InventoryActorEquippedItems = {{&departedItem, &departedItem}};
+				inventory.m_GUIInventoryItemButtons[0].first = &departedItem;
+				const std::string departedItemState = inventory.SaveCheckpoint();
+				check("inventory_departed_items_restore_empty", inventory.LoadCheckpoint(departedItemState) && inventory.m_InventoryActorEquippedItems.size() == 1 &&
+				    !inventory.m_InventoryActorEquippedItems[0].first && !inventory.m_InventoryActorEquippedItems[0].second && !inventory.m_GUIInventoryItemButtons[0].first);
+
+				// A live reference takes the same path it always did.
+				inventory.m_InventoryActor = liveActor;
+				inventory.m_InventoryActorEquippedItems = liveEquipped;
+				inventory.m_GUIInventoryItemButtons[0].first = liveButtonItem;
+				check("inventory_live_reference_unchanged", inventory.SaveCheckpoint() == liveInventory);
+			}
 			const std::string steadyInventory = inventory.SaveCheckpoint();
 			check("inventory_malformed_atomic", !inventory.LoadCheckpoint(steadyInventory + "bad") && inventory.SaveCheckpoint() == steadyInventory);
 		}

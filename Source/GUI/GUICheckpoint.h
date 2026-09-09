@@ -12,6 +12,7 @@ struct BITMAP;
 namespace RTE {
 
 	class Entity;
+	class MovableObject;
 	class Scene;
 	class GUIBitmap;
 	class GUIControlManager;
@@ -33,6 +34,9 @@ namespace RTE {
 		static std::string SaveOwnedEntity(const Entity* entity);
 		static std::unique_ptr<Entity> LoadOwnedEntity(std::string_view text, bool validateOnly = false);
 		static std::string SaveEntityReference(const Entity* entity, const Scene* scene = nullptr);
+		/// A menu's non-owning object pointer, or nullptr once the object has left the world. Menus
+		/// refresh these every Update, so one MovableMan no longer knows is already gone.
+		static const MovableObject* LiveObject(const MovableObject* object);
 		static const Entity* LoadEntityReference(std::string_view text, bool validateOnly = false, const Scene* scene = nullptr);
 		static std::string Save(const GUIControlManager& manager);
 		static bool Load(GUIControlManager& manager, std::string_view text, bool validateOnly = false);
