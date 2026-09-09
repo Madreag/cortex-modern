@@ -171,6 +171,10 @@ namespace RTE {
 		PeerState* FindPeer(NetPeerId peerId);
 		const PeerState* FindPeer(NetPeerId peerId) const;
 		uint32_t ActivePeerCount() const;
+		/// Drops connections that never sent a ClientHello past the handshake timeout. A live match runs
+		/// this and nothing else: a seated player's traffic rides the round, so its receive clock is
+		/// stale by design and the heartbeat check would evict it.
+		void ExpireSilentHandshakes();
 		uint8_t AllocatePeerId() const;
 		/// An id past the peer cap for a mid-match joiner to run its admission transaction on; a commit
 		/// replaces it with the seat's own id. Zero outside a live match, or when the range is full.
