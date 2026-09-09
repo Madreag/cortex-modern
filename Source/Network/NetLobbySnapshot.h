@@ -18,6 +18,7 @@ namespace RTE {
 		uint32_t pingMs = 0;
 		bool dropped = false;    //!< §11: the seat is held but its player's link is gone.
 		bool reclaiming = false; //!< §11: that player is proving its ticket right now.
+		std::string statusLine;  //!< §11's persistent line for the seat, derived on THIS peer; "" when the seat is fine.
 	};
 
 	/// A copyable snapshot of the multiplayer match/lobby state for the GUI thread to render. The service owns

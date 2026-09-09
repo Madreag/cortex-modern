@@ -384,6 +384,8 @@ static std::string ResyncSaveName() {
 		m_ReconnectHost.EndHostedSession();
 		m_ReconnectHost.TakeOutbound();
 		m_SeatStatuses.clear();
+		m_SeatPresence.Clear();
+		m_ReclaimingAnnounced.clear();
 		m_AdmissionAttached = false;
 	}
 
@@ -715,7 +717,38 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::PumpSeatPresence() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Coordinator) {
+			return;
+		}
+		for (const NetLockstepSeatNotice& notice: m_Coordinator->TakeSeatNotices()) {
+			m_SeatPresence.Observe(notice);
+		}
+		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
+	}
+
+	void NetMatchService::AnnounceSeatTransitions() {
+		if (!m_Coordinator) {
+			return;
+		}
+		for (const NetH4SeatHandover& handover: m_ReconnectHost.TakeSeatHandovers()) {
+			m_Coordinator->AnnounceSeatChange(handover.lockstepPeerId,
+			                                  handover.substitute ? NetLockstepStopReason::SeatSubstituted : NetLockstepStopReason::SeatReclaimed,
+			                                  handover.holderName);
+		}
+		for (const NetH4SeatStatus& status: m_SeatStatuses) {
+			if (!status.reclaiming) {
+				m_ReclaimingAnnounced.erase(status.stableSeat);
+			} else if (m_ReclaimingAnnounced.insert(status.stableSeat).second) {
+				m_Coordinator->AnnounceSeatChange(status.lockstepPeerId, NetLockstepStopReason::SeatReclaiming, std::string());
+			}
+		}
+	}
+
 	void NetMatchService::PumpSessionEvents() {
+		// Every peer, every tick: a client derives its own roster line and never waits to be told.
+		PumpSeatPresence();
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
 		if (m_PendingSessionEvents.empty() && !hostAdmission) {
 			return;
@@ -763,6 +796,7 @@ static std::string ResyncSaveName() {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
+			AnnounceSeatTransitions();
 		}
 		if (events.empty()) {
 			return;
@@ -811,15 +845,13 @@ static std::string ResyncSaveName() {
 			snapshot.members.push_back(local);
 		}
 		// §11: a dropped seat stays marked on the roster for as long as it is dropped, so the remaining
-		// players see who is missing rather than a toast they may have blinked past.
+		// players see who is missing rather than a toast they may have blinked past. Derived from the
+		// round's own notices, so the host and every client say the same thing about the same seat.
 		for (NetLobbyMember& member: snapshot.members) {
-			for (const NetH4SeatStatus& seat: m_SeatStatuses) {
-				if (seat.lockstepPeerId == member.peerId) {
-					member.dropped = seat.dropped;
-					member.reclaiming = seat.reclaiming;
-					break;
-				}
-			}
+			const NetSeatPresenceState state = m_SeatPresence.StateOf(member.peerId);
+			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
+			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
+			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
 		}
 		return snapshot;
 	}
@@ -919,11 +951,25 @@ static std::string ResyncSaveName() {
 					{"substituting", seat.substituting},
 					{"holder_generation", seat.holderGeneration},
 					{"seat_generation", seat.seatGeneration},
+					{"dropped_for_ms", seat.droppedForMs},
 					{"applicants", applicants},
 				});
 			}
 		}
 		reconnect["moderation"] = moderation;
+		// §11's roster lines exactly as this peer shows them, so a two-process gate can read a CLIENT's.
+		json rosterLines = json::array();
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			const std::string line = m_SeatPresence.Line(member.peerId, member.displayName);
+			if (!line.empty()) {
+				rosterLines.push_back(json{
+					{"peer_id", static_cast<int>(member.peerId)},
+					{"state", NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId))},
+					{"line", line},
+				});
+			}
+		}
+		reconnect["roster_lines"] = rosterLines;
 		report["reconnect"] = reconnect;
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
@@ -1080,7 +1126,27 @@ static std::string ResyncSaveName() {
 		if (!m_AdmissionAttached || !m_IsHost) {
 			return {};
 		}
-		return m_ReconnectHost.GetModerationView();
+		std::vector<NetH4ModerationSeat> seats = m_ReconnectHost.GetModerationView();
+		// The plane knows the seat; the roster knows the name, and the round knows how long it holds it.
+		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+		for (NetH4ModerationSeat& seat: seats) {
+			for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+				if (member.peerId == seat.lockstepPeerId) {
+					seat.displayName = member.displayName;
+					break;
+				}
+			}
+			if (!m_Coordinator) {
+				continue;
+			}
+			const std::map<uint8_t, uint64_t>& leaves = m_Coordinator->GetPeerLeaveFrames();
+			const auto left = leaves.find(seat.lockstepPeerId);
+			if (left != leaves.end()) {
+				const uint64_t deadline = left->second + NetLockstepCoordinator::c_ReclaimHoldFrames;
+				seat.holdFramesRemaining = appliedFrame < deadline ? deadline - appliedFrame : 0;
+			}
+		}
+		return seats;
 	}
 
 	NetH4ModerationResult NetMatchService::WaitForSeat(uint16_t stableSeat) {

@@ -1,9 +1,11 @@
 #pragma once
 
+#include "NetLockstep.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace RTE {
@@ -97,6 +99,98 @@ namespace RTE {
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
+	};
+
+	/// §9b's three host actions on a seat whose player is gone.
+	enum class NetModerationAction : uint8_t {
+		Wait = 0,       //!< Keep the seat for its player; the default, and a recorded decision.
+		Substitute = 1, //!< Hand it to the chosen applicant.
+		Cancel = 2,     //!< Withdraw a substitution that has not committed.
+	};
+
+	const char* NetModerationActionName(NetModerationAction action);
+
+	/// §9b's moderation panel as a model: the rows the host sees and the three actions it can take.
+	/// The panel renders this and the headless driver drives this, so a gate exercises the path a
+	/// player's click takes - the same rows, the same choice of applicant, the same service calls.
+	class NetModerationUx {
+	public:
+		struct Row {
+			uint16_t stableSeat = 0;
+			uint8_t lockstepPeerId = 0;
+			std::string text;          //!< The seat's line: who, how long, how much hold is left, who is waiting.
+			std::string applicantText; //!< The chosen applicant, or why there is none.
+			NetPeerId applicant = c_InvalidNetPeerId;
+			size_t applicants = 0;
+			bool substitutable = false;
+			bool substituting = false;
+		};
+
+		/// Rebuilds the rows from the host's view, keeping each seat's chosen applicant across refreshes.
+		void Refresh(const std::vector<NetH4ModerationSeat>& seats);
+		size_t RowCount() const { return m_Rows.size(); }
+		const Row& GetRow(size_t index) const { return m_Rows[index]; }
+		/// The row for a seat, or RowCount() when the seat is not one the host may decide about.
+		size_t FindSeat(uint16_t stableSeat) const;
+		/// Moves to the next applicant for the row's seat, wrapping.
+		void CycleApplicant(size_t index);
+		/// Runs the row's action through the service's §9b API and records what it answered.
+		NetH4ModerationResult Act(size_t index, NetModerationAction action);
+
+		const std::string& GetStatusText() const { return m_StatusText; }
+		/// The panel's own line, so an empty panel says why it is empty.
+		std::string GetSummaryText() const;
+
+		/// The seat's line. Time since the drop, the hold in frames AND seconds, and who is waiting.
+		static std::string DescribeSeat(const NetH4ModerationSeat& seat);
+
+	private:
+		std::vector<Row> m_Rows;
+		std::map<uint16_t, NetPeerId> m_Chosen; //!< Seat -> the applicant the host picked; kept while it is still applying.
+		std::string m_StatusText;
+	};
+
+	/// What this peer says about another player's seat (§11).
+	enum class NetSeatPresenceState : uint8_t {
+		Present = 0,
+		Disconnected = 1, //!< The link died and the seat is inside its reclaim hold.
+		Reconnecting = 2, //!< That player is proving its ticket now.
+		Substituted = 3,  //!< Someone else has the seat.
+		Left = 4,         //!< Announced a clean leave, or the hold ran out.
+	};
+
+	/// §11's persistent roster indication, derived on every peer from the round's own notices: the
+	/// leave's kind and frame, the hold's frame deadline, and what became of the seat. A client shows
+	/// what the host shows because both read the same notices - nothing host-only decides it.
+	class NetSeatPresence {
+	public:
+		void Observe(const NetLockstepSeatNotice& notice);
+		/// The frame the sim has applied. The hold is counted in frames, so this is the only clock.
+		void NoteFrame(uint64_t appliedFrame);
+		void Clear();
+
+		NetSeatPresenceState StateOf(uint8_t peerId) const;
+		/// Frames the seat's hold still has to run; 0 when nothing is being held for it.
+		uint64_t HoldFramesRemaining(uint8_t peerId) const;
+		/// The persistent line for the seat, or "" while there is nothing to say about it.
+		std::string Line(uint8_t peerId, const std::string& playerName) const;
+
+		// The pinned timestep (c_DefaultDeltaTimeS = 0.0166666 s) as microseconds, so the hold's frames
+		// become the seconds a player understands without anyone reading a clock.
+		static constexpr uint64_t c_FrameMicroseconds = 16666;
+		static uint64_t HoldSeconds(uint64_t frames);
+		static const char* StateName(NetSeatPresenceState state);
+
+	private:
+		struct Seat {
+			NetSeatPresenceState state = NetSeatPresenceState::Present;
+			uint64_t holdUntilFrame = 0;
+			bool holdRanOut = false;
+			std::string holderName;
+		};
+
+		std::map<uint8_t, Seat> m_Seats;
+		uint64_t m_Frame = 0;
 	};
 
 } // namespace RTE
