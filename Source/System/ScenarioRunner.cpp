@@ -677,6 +677,10 @@ namespace RTE {
 		s_LockstepControlOverrides[actorUniqueID] = ownerPeerId;
 	}
 
+	uint64_t ScenarioRunner::GetLockstepAppliedFrame() {
+		return s_LockstepAppliedFrame;
+	}
+
 	void ScenarioRunner::SetLockstepAppliedFrame(uint64_t frame) {
 		s_LockstepAppliedFrame = frame;
 	}

@@ -12,8 +12,10 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define g_NetMatchService NetMatchService::Instance()
 
@@ -99,6 +101,9 @@ namespace RTE {
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
 		void PumpSessionEvents();
+		/// §11's roster line, on every peer alike: the round's seat notices in, the applied frame as the
+		/// only clock. Game-thread only, like the rest of the pump.
+		void PumpSeatPresence();
 		/// The reconnect UX state machine (§11): auto-retry, the stored-ticket offer and the roster's
 		/// dropped/reclaiming marks. Game-thread only.
 		NetReconnectUx& GetReconnectUx() { return m_ReconnectUx; }
@@ -180,6 +185,8 @@ namespace RTE {
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
 		NetReconnectUx m_ReconnectUx;
+		NetSeatPresence m_SeatPresence;
+		std::set<uint16_t> m_ReclaimingAnnounced; //!< Seats already announced as reclaiming, so the notice goes out once.
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
@@ -192,6 +199,9 @@ namespace RTE {
 		/// The moderator stand-in for the unattended gates: runs from PumpSessionEvents, on the game
 		/// thread, and does exactly what a host clicking the UI would do.
 		void DriveAutoSubstitution(uint64_t nowMs);
+		/// Host: turns the plane's seat transitions into the notices every peer reads. Nothing here
+		/// decides what a client shows - the notice does, and the host reads its own back.
+		void AnnounceSeatTransitions();
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;

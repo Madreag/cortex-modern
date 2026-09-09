@@ -270,6 +270,13 @@ public:
 };
 static std::string s_menuScriptPath;
 static std::string s_menuScriptOutDir;
+// §9b's moderation panel, driven headless: the gate names the actions, the seat and how long to wait
+// before each. They take the panel's own path, so a gate exercises what a host clicks.
+static std::vector<std::string> s_netMatchE2eModerate;
+static size_t s_netMatchE2eModerateAt = 0;
+static int s_netMatchE2eModerateSeat = -1;
+static uint64_t s_netMatchE2eModerateDelayMs = 0;
+static uint64_t s_netMatchE2eModerateReadyMs = 0;
 
 bool NetGameplayRequested() {
 	return s_netLockstep || s_netMatch;
@@ -685,6 +692,29 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-h4-fault") {
+			const std::string kind = argValue[++i];
+			NetH4SetFault(NetH4FaultFromName(kind));
+			std::cout << "[net-h4-fault] armed " << kind << std::endl;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-moderate") {
+			// Repeatable: the actions run in order, one per delay, on the one seat.
+			s_netMatchE2eModerate.emplace_back(argValue[++i]);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-moderate-seat") {
+			s_netMatchE2eModerateSeat = static_cast<int>(std::strtol(argValue[++i], nullptr, 10));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-moderate-delay") {
+			s_netMatchE2eModerateDelayMs = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-replay-out") {
 			s_netReplayOutPath = argValue[++i];
 			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
@@ -955,6 +985,43 @@ void PollSDLEvents() {
 	}
 }
 
+// Drives §9b's moderation panel from the command line, in a match, where the menu loop does not run.
+// It goes through the panel's model and its action, so the only thing the gate skips is the click.
+static void DriveModerationE2e() {
+	if (s_netMatchE2eModerateAt >= s_netMatchE2eModerate.size()) {
+		return;
+	}
+	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+	if (!menu) {
+		return;
+	}
+	const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
+	const bool anythingToDecide = std::any_of(seats.begin(), seats.end(), [](const NetH4ModerationSeat& seat) {
+		return seat.dropped || seat.closed || seat.substituting;
+	});
+	if (!anythingToDecide) {
+		return;
+	}
+	const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	if (s_netMatchE2eModerateReadyMs == 0) {
+		s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
+		std::cout << "[net-match-e2e] moderate armed actions=" << s_netMatchE2eModerate.size()
+		          << " seat=" << s_netMatchE2eModerateSeat << " delay_ms=" << s_netMatchE2eModerateDelayMs << std::endl;
+	}
+	if (nowMs < s_netMatchE2eModerateReadyMs) {
+		return;
+	}
+	// A substitution needs an applicant; until one turns up the panel's own button is disabled too,
+	// so the driver waits exactly as a host would rather than pressing a dead button.
+	const std::string& action = s_netMatchE2eModerate[s_netMatchE2eModerateAt];
+	if (!menu->AutomationModerate(action, s_netMatchE2eModerateSeat)) {
+		return;
+	}
+	std::cout << "[net-match-e2e] moderate " << action << " seat=" << s_netMatchE2eModerateSeat << " done" << std::endl;
+	++s_netMatchE2eModerateAt;
+	s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
+}
+
 /// <summary>
 /// Game menus loop.
 /// </summary>
@@ -1079,6 +1146,23 @@ void ProcessMenuScript() {
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+	} else if (cmd == "assert_control") {
+		std::string control;
+		iss >> control;
+		const bool exists = menu->AutomationControlExists(control);
+		std::cout << "[menu-script] assert_control " << control << " " << (exists ? "PASS" : "FAIL") << std::endl;
+		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
+	} else if (cmd == "moderate") {
+		// The same panel action a host clicks, driven from a menu script.
+		std::string action;
+		int seat = -1;
+		iss >> action;
+		if (!(iss >> seat)) {
+			seat = -1;
+		}
+		const bool ok = menu->AutomationModerate(action, seat);
+		std::cout << "[menu-script] moderate " << action << " seat=" << seat << " ok=" << ok << std::endl;
+		if (!ok) { return MenuScriptFail("moderate found no seat to act on: " + action); }
 	} else if (cmd == "settext") {
 		std::string control;
 		std::string text;
@@ -2457,6 +2541,7 @@ void RunGameLoop() {
 
 				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
 				g_NetMatchService.PumpSessionEvents();
+				DriveModerationE2e();
 
 				g_FrameMan.Update();
 

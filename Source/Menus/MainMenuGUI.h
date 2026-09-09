@@ -3,6 +3,7 @@
 #include "Controller.h"
 #include "NetLanDiscovery.h"
 #include "NetMatchConfig.h"
+#include "NetReconnectUx.h"
 
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
@@ -80,9 +81,16 @@ namespace RTE {
 
 		/// Gets the name of the active multiplayer sub-screen (Landing/HostSetup/JoinSetup/Lobby).
 		std::string AutomationMultiplayerSubScreen() const;
+		/// Takes §9b's moderation action on a seat exactly as the panel's button does: the same model,
+		/// the same chosen applicant, the same service call. -1 means the first seat on the panel.
+		/// @return Whether a row was found and the action ran.
+		bool AutomationModerate(const std::string& action, int stableSeat);
 
 		/// Gets whether a named button is currently enabled.
 		bool AutomationControlEnabled(const std::string& controlName) const;
+		/// Whether the skin defines the control at all, whatever screen is up. "Enabled" cannot answer
+		/// this: a control that is merely on a hidden panel reads the same as one that does not exist.
+		bool AutomationControlExists(const std::string& controlName) const;
 #pragma endregion
 
 	private:
@@ -124,6 +132,8 @@ namespace RTE {
 			MultiplayerCancelReconnectButton,
 			MultiplayerHostBackButton,
 			MultiplayerJoinBackButton,
+			MultiplayerModerateButton,
+			MultiplayerModerationBackButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -141,7 +151,8 @@ namespace RTE {
 			Landing,
 			HostSetup,
 			JoinSetup,
-			Lobby
+			Lobby,
+			Moderation
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
@@ -193,6 +204,15 @@ namespace RTE {
 		GUICollectionBox* m_MultiplayerHostPanel;
 		GUICollectionBox* m_MultiplayerJoinPanel;
 		GUICollectionBox* m_MultiplayerLobbyPanel;
+		GUICollectionBox* m_MultiplayerModerationPanel;
+		GUILabel* m_MultiplayerModerationSummaryLabel;
+		GUILabel* m_MultiplayerModerationStatusLabel;
+		std::array<GUILabel*, 3> m_ModerationSeatLabels;
+		std::array<GUIButton*, 3> m_ModerationApplicantButtons;
+		std::array<GUIButton*, 3> m_ModerationWaitButtons;
+		std::array<GUIButton*, 3> m_ModerationSubstituteButtons;
+		std::array<GUIButton*, 3> m_ModerationCancelButtons;
+		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		GUICollectionBox* m_CreditsScrollPanel;
@@ -295,6 +315,10 @@ namespace RTE {
 
 		/// Refreshes the multiplayer sub-panels, labels, and button states from the lobby snapshot.
 		void RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot);
+		/// Rebuilds §9b's moderation panel from the host's live seat view.
+		void RefreshModerationControls(const NetLobbySnapshot& snapshot);
+		/// The one path a moderation action takes, whether a player clicked it or a gate drove it.
+		void ActivateModerationRow(size_t row, NetModerationAction action);
 
 		/// §11: shows the recovery banner and the rejoin/cancel controls the reconnect state machine says apply.
 		void RefreshReconnectControls();

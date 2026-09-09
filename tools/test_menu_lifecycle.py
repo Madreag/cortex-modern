@@ -13,6 +13,9 @@ SCRIPTS = {
     "quit_button": "wait 40\nassert_screen MainScreen\nactivate ButtonQuit\nwait 5\nassert_screen ShouldHaveQuit\n",
     "join_exit": "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nactivate ButtonMultiplayerJoinGame\nwait 12\nassert_substate JoinSetup\nwait 30\nactivate ButtonJoinBack\nwait 10\nassert_substate Landing\nwait 150\nexit\n",
     "credits_exit": "wait 40\nactivate ButtonMainToCreds\nwait 60\nassert_screen CreditsScreen\nwait 150\nexit\n",
+    # §9b's moderation panel: every control the host's seat list needs is in the skin, with no match
+    # and no socket - a name that never resolved would only show up in a live gate otherwise.
+    "moderation_panel": "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\nassert_control ButtonMultiplayerModerate\nassert_control MultiplayerModerationPanel\nassert_control LabelModerationTitle\nassert_control LabelModerationSummary\nassert_control LabelModerationStatus\nassert_control ButtonModerationBack\nassert_control LabelModerationSeat0\nassert_control ButtonModerationApplicant0\nassert_control ButtonModerationWait0\nassert_control ButtonModerationSubstitute0\nassert_control ButtonModerationCancel0\nassert_control LabelModerationSeat1\nassert_control ButtonModerationApplicant1\nassert_control ButtonModerationWait1\nassert_control ButtonModerationSubstitute1\nassert_control ButtonModerationCancel1\nassert_control LabelModerationSeat2\nassert_control ButtonModerationApplicant2\nassert_control ButtonModerationWait2\nassert_control ButtonModerationSubstitute2\nassert_control ButtonModerationCancel2\nwait 20\nexit\n",
 }
 
 REQUIRED = {
@@ -20,6 +23,7 @@ REQUIRED = {
     "quit_button": "activate ButtonQuit ok=1",
     "join_exit": "assert_substate expected=Landing actual=Landing PASS",
     "credits_exit": "assert_screen expected=CreditsScreen actual=CreditsScreen PASS",
+    "moderation_panel": "assert_control ButtonModerationCancel2 PASS",
 }
 
 
