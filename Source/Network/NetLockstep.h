@@ -579,7 +579,7 @@ namespace RTE {
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
 		std::map<uint8_t, uint64_t> m_LastStartAnswerMs; //!< peerId -> when we last answered its repeated start.
-		std::set<uint64_t> m_ResendFrames; //!< Target frames a followed round still owes the host.
+		std::map<uint64_t, NetLockstepFrame> m_ResendFrames; //!< The frames a followed round still owes the host, whole.
 		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.
 		// What this peer spells its own observations with, and what a relay host re-encodes each other
 		// sender's with. A relay table is fed by exactly the frames it forwards, which is exactly what its
