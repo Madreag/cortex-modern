@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
 #include "System/ScenarioRunner.h"
+#include "ActivityMan.h"
 
 #include <algorithm>
 #include <cstring>
@@ -1358,6 +1359,7 @@ namespace RTE {
 			return true;
 		}
 
+
 		// P4C: three peers over a host-star loopback (clients connect only to the host, which relays).
 		// Proves N-peer frame collection (advance only when all remotes are in), the peerId-ordered
 		// merge, all-starts-before-run, and N-way checksum agreement.
@@ -1863,6 +1865,375 @@ namespace RTE {
 			state.heldForReclaim = stub->held && (stub->heldPeerId == 0 || stub->heldPeerId == peerId);
 			state.fencedTransport = transportPeerId != c_InvalidNetPeerId && transportPeerId == stub->fenced;
 			return state;
+		}
+
+		// The surviving client answers seat state the way NetMatchService::QuerySeatState does off the
+		// host (NetMatchService.cpp:1125): a default state for every seat. So a hold that is read from
+		// the admission plane exists only on the host, and one derived from the leave notice exists on
+		// every peer - which is the whole point of the frame deadline.
+		struct ClientSeatStateProbe {
+			uint32_t reads = 0;
+		};
+
+		NetLockstepSeatState QuerySeatStateAsAClient(void* context, uint8_t, NetPeerId) {
+			++static_cast<ClientSeatStateProbe*>(context)->reads;
+			return NetLockstepSeatState{};
+		}
+
+		// One of two remotes drops and the other plays on - the shape every substitution gate sets up.
+		// The scripted outcome is declared inside the sim on every peer, so both survivors must answer
+		// the activity gate identically at the same frame, through the hold, at its deadline and past it.
+		bool TestActivityGateAgreesAcrossPeers(std::string* error) {
+			const uint16_t port = 43072;
+			const uint64_t sessionId = 0x7000000000000072ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			SeatStateStub hostStub;
+			hostStub.held = true;
+			ClientSeatStateProbe stayerProbe;
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &hostStub);
+			stayer.SetSeatStateSource(&QuerySeatStateAsAClient, &stayerProbe);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					leaver.Tick(now);
+					stayer.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the three-peer round never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					while (stayer.PopReadyFrame(ready)) {
+					}
+					return committed >= 2;
+				})) {
+				*error = "the three-peer round never committed a frame";
+				return false;
+			}
+
+			leaverT.Stop();
+			if (!drive(3000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && stayer.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "both survivors never adjudicated the drop";
+				return false;
+			}
+			if (!host.IsRunning() || !stayer.IsRunning()) {
+				*error = "a survivor left the round";
+				return false;
+			}
+			const uint64_t hostLeaveFrame = host.GetPeerLeaveFrames().at(2);
+			if (stayer.GetPeerLeaveFrames().at(2) != hostLeaveFrame) {
+				*error = "the two survivors recorded different leave frames";
+				return false;
+			}
+
+			// The production call, asked of each peer still playing, at the frame it is applying.
+			auto gateAt = [](NetLockstepCoordinator& peer, uint64_t frame) {
+				ScenarioRunner::SetLockstepCoordinator(&peer);
+				ScenarioRunner::SetLockstepAppliedFrame(frame);
+				const bool gate = ScenarioRunner::IsLockstepHoldingSeatForReclaim();
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				return gate;
+			};
+			const uint64_t deadline = hostLeaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames;
+			const std::vector<std::pair<const char*, uint64_t>> samples = {
+			    {"at_the_drop", hostLeaveFrame},
+			    {"mid_window", hostLeaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames / 2},
+			    {"last_held_frame", deadline - 1},
+			    {"at_the_deadline", deadline},
+			    {"past_the_deadline", deadline + 600},
+			};
+			bool agreed = true;
+			std::string disagreement;
+			for (const auto& [name, frame]: samples) {
+				const bool hostGate = gateAt(host, frame);
+				const bool stayerGate = gateAt(stayer, frame);
+				const bool hostDefers = ActivityMan::ScriptedEndIsDeferred(true, true, hostGate);
+				const bool stayerDefers = ActivityMan::ScriptedEndIsDeferred(true, true, stayerGate);
+				std::cout << "[net-lockstep-selftest] MEASURE activity_gate_across_peers " << name
+				          << " frame=" << frame << " host_defers=" << hostDefers << " stayer_defers=" << stayerDefers
+				          << " stayer_seat_reads=" << stayerProbe.reads << std::endl;
+				if (hostDefers != stayerDefers) {
+					agreed = false;
+					disagreement = name;
+					break;
+				}
+				// Before the deadline both hold, from it neither does.
+				if (hostDefers != (frame < deadline)) {
+					*error = std::string("the derived hold does not follow the frame deadline at ") + name;
+					return false;
+				}
+			}
+			if (stayerProbe.reads == 0) {
+				*error = "the surviving client never asked for a seat state, so the measurement is vacuous";
+				return false;
+			}
+			if (!agreed) {
+				*error = "the activity gate disagrees across peers still in the round: the host defers a "
+				         "scripted outcome the surviving client applies (" + disagreement + ")";
+				return false;
+			}
+			// Ownership's own question is untouched: a survivor is still here, so it stays false on both.
+			if (host.IsHoldingSeatForReclaim() || stayer.IsHoldingSeatForReclaim()) {
+				*error = "a round with a surviving remote reported itself as holding for reclaim";
+				return false;
+			}
+			return true;
+		}
+
+		// A peer that ANNOUNCED its leave said it is not coming back, so nothing is held for it - the
+		// wire tells the two apart, and every peer reads the same answer.
+		bool TestAnnouncedLeaveHoldsNothing(std::string* error) {
+			const uint16_t port = 43074;
+			const uint64_t sessionId = 0x7000000000000074ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			SeatStateStub hostStub;
+			hostStub.held = true;
+			ClientSeatStateProbe stayerProbe;
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &hostStub);
+			stayer.SetSeatStateSource(&QuerySeatStateAsAClient, &stayerProbe);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					leaver.Tick(now);
+					stayer.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the announced-leave round never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					while (stayer.PopReadyFrame(ready)) {
+					}
+					return committed >= 2;
+				})) {
+				*error = "the announced-leave round never committed a frame";
+				return false;
+			}
+			leaver.Leave("bye");
+			if (!drive(3000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && stayer.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the announced leave never reached both survivors";
+				return false;
+			}
+			auto gateAt = [](NetLockstepCoordinator& peer, uint64_t frame) {
+				ScenarioRunner::SetLockstepCoordinator(&peer);
+				ScenarioRunner::SetLockstepAppliedFrame(frame);
+				const bool gate = ScenarioRunner::IsLockstepHoldingSeatForReclaim();
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				return gate;
+			};
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			if (gateAt(host, leaveFrame) || gateAt(stayer, leaveFrame)) {
+				*error = "an announced leave held a scripted outcome that should have applied at once";
+				return false;
+			}
+			return true;
+		}
+
+		// B1: the substitution scenario at the resync save. One of two remotes drops, its seat is held
+		// for its reclaim window, and the OTHER remote plays on - which is exactly what the four
+		// substitution gates set up. A scripted outcome the absent player produced must wait for that
+		// player, or the activity ends and the resync snapshot has no running game to save. The hold is
+		// a frame deadline off the relayed leave notice, so it is the same fact on every peer.
+		bool TestCoordinatorHeldSeatWithASurvivor(std::string* error) {
+			const uint16_t port = 43062;
+			const uint64_t sessionId = 0x7000000000000062ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			SeatStateStub stub;
+			stub.held = true;
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					leaver.Tick(now);
+					stayer.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the three-peer round never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "the three-peer round never committed a frame";
+				return false;
+			}
+
+			leaverT.Stop();
+			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the drop was never adjudicated as a leave";
+				return false;
+			}
+			if (host.GetState() != NetLockstepState::Running) {
+				*error = "the round stopped although a peer is still playing";
+				return false;
+			}
+			// The round with nobody left is a different question, and its answer must not move: one
+			// remote is still here, so this stays false and ownership behaviour is untouched.
+			if (host.IsHoldingSeatForReclaim()) {
+				*error = "a round with a surviving remote reported itself as holding for reclaim";
+				return false;
+			}
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			if (!host.IsSeatHeldForReclaimAtFrame(leaveFrame)) {
+				*error = "the dropped peer's seat is inside its window but the round does not say so";
+				return false;
+			}
+			if (host.IsSeatHeldForReclaimAtFrame(leaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames)) {
+				*error = "the derived hold outlived its frame deadline";
+				return false;
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			struct ClearCoordinator {
+				~ClearCoordinator() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+			} clearCoordinator;
+			ScenarioRunner::SetLockstepAppliedFrame(leaveFrame);
+			if (!ScenarioRunner::IsLockstepHoldingSeatForReclaim()) {
+				*error = "the activity gate would let a scripted outcome end the match under a returning player";
+				return false;
+			}
+			if (!ActivityMan::ScriptedEndIsDeferred(true, true, ScenarioRunner::IsLockstepHoldingSeatForReclaim())) {
+				*error = "the scripted end was not deferred while a seat is held";
+				return false;
+			}
+
+			// The deadline passes and the match may finish; an engine teardown was never held back.
+			ScenarioRunner::SetLockstepAppliedFrame(leaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames);
+			if (ScenarioRunner::IsLockstepHoldingSeatForReclaim()) {
+				*error = "the hold outlived the reclaim window";
+				return false;
+			}
+			if (ActivityMan::ScriptedEndIsDeferred(true, true, ScenarioRunner::IsLockstepHoldingSeatForReclaim()) ||
+			    ActivityMan::ScriptedEndIsDeferred(false, true, true)) {
+				*error = "the end was deferred with no held seat, or an engine teardown was held back";
+				return false;
+			}
+			return true;
 		}
 
 		// H4 §4: a 1v1 whose only remote DROPS holds its seat for the reclaim window instead of ending,
@@ -4825,6 +5196,9 @@ namespace RTE {
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
+		    !TestActivityGateAgreesAcrossPeers(&error) ||
+		    !TestAnnouncedLeaveHoldsNothing(&error) ||
+		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
 		    !TestCoordinatorPeerLeave(&error) ||
 		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
