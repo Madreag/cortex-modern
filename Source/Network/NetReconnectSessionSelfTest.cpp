@@ -4893,6 +4893,106 @@ namespace RTE {
 			return 0;
 		}
 
+		// followup-5 item 4: a seat drops twice. The first drop is seen from the sim tick and ledgers what
+		// the holder had; the second is seen from a setup worker - WaitForSessionReady ticking the session
+		// on the rematch or resync round, then CheckTimeouts, DropPeerTransport, NotifyDisconnect - where
+		// CollectDropOwnership refuses to walk the world and returns nothing. Replacing the record with
+		// that empty one starves IssueReseat, so the next returner is reseated onto nothing.
+		int TestASecondDropDoesNotEraseAGoodRecord() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint8_t leaverPeer = MakeSeatTable()[0].lockstepPeerId;
+			const std::vector<int64_t> held = {101, 102, 103};
+
+			// The rule on its own, where both drops are visible side by side.
+			{
+				NetReconnectLedger ledger;
+				ledger.RecordDrop(0, leaverPeer, 1, 100, held);
+				ledger.RecordDrop(0, leaverPeer, 1, 240, {});
+				const NetH4SeatOwnership* record = ledger.Find(0);
+				if (record == nullptr || record->actorUIDs != held || ledger.GetEmptyDropsRefused() != 1) {
+					return Fail("an empty second drop erased the seat's recorded units");
+				}
+				// A later drop that HAS units is the seat's own news and still replaces it.
+				ledger.RecordDrop(0, leaverPeer, 1, 300, {104});
+				if (ledger.Find(0)->actorUIDs != std::vector<int64_t>{104} || ledger.GetEmptyDropsRefused() != 1) {
+					return Fail("a later drop with units stopped replacing the seat's record");
+				}
+			}
+
+			// And through the host, in the order production takes it.
+			std::vector<NetH4LedgerActor> census = {
+			    {101, 1, leaverPeer, true}, {102, 1, leaverPeer, true}, {103, 1, leaverPeer, true}, {201, 0, 1, true}};
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			wire.host.SetDropOwnershipSource(
+			    [](void* context) { return *static_cast<std::vector<NetH4LedgerActor>*>(context); }, &census);
+			Endpoint player;
+			player.connection = 151;
+			ConfigureEndpoint(player, "second-drop", &unixNow);
+			wire.Add(&player);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, player, record, unixNow, &error) != 0) {
+				return Fail("could not seat the player: " + error);
+			}
+			wire.host.SetLiveMatch(true);
+
+			Endpoint first;
+			first.connection = 152;
+			ConfigureEndpoint(first, "second-drop", &unixNow);
+			wire.Add(&first);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!first.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the first reclaim did not settle: " + error);
+			}
+			if (wire.host.TakePendingReseats().size() != 1) {
+				return Fail("the first reclaim did not issue the ledgered reseat");
+			}
+			NetH4TicketRecord second;
+			if (first.store.Load(unixNow, second, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail("the reclaim left no record to come back with: " + error);
+			}
+
+			// The off-tick second drop: the census refuses, so the seat records nothing.
+			const std::vector<NetH4LedgerActor> live = census;
+			census.clear();
+			wire.host.NotifyDisconnect(first.connection, 240);
+			first.connected = false;
+			wire.Remove(first.connection);
+			census = live;
+			const NetH4SeatOwnership* ledgered = wire.host.GetLedger().Find(0);
+			if (ledgered == nullptr || ledgered->actorUIDs != held) {
+				return Fail("the off-tick second drop erased the units the holder actually had");
+			}
+			if (wire.host.GetLedger().GetEmptyDropsRefused() != 1) {
+				return Fail("the refusal was not counted, so a gate cannot see it");
+			}
+
+			// What the record is for: the next returner is reseated onto it.
+			Endpoint returner;
+			returner.connection = 153;
+			ConfigureEndpoint(returner, "second-drop", &unixNow);
+			wire.Add(&returner);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returner.client.BeginReclaim(second, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the second reclaim did not settle: " + error);
+			}
+			const std::vector<NetGameReseat> reseats = wire.host.TakePendingReseats();
+			if (reseats.size() != 1 || reseats.front().actorUIDs != held ||
+			    reseats.front().newOwnerPeerId != leaverPeer) {
+				return Fail("the returner after an off-tick second drop was reseated onto nothing");
+			}
+			if (wire.host.GetStats().reseatsWithoutALedger != 0) {
+				return Fail("the second reclaim found the ledger empty");
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4991,6 +5091,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAReseatSaysWhyItDidNotIssue(); result != 0) {
+			return result;
+		}
+		if (const int result = TestASecondDropDoesNotEraseAGoodRecord(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
