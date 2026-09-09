@@ -181,8 +181,9 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+			const uint64_t waitMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now() - startTime).count());
+			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : waitMs;
 			session.Tick(nowMs);
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
@@ -210,7 +211,7 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (nowMs > maxWaitMs) {
+			if (waitMs > maxWaitMs) {
 				SetFailed("timed out waiting for session Ready");
 				if (error) *error = m_SetupError;
 				return false;
@@ -269,10 +270,11 @@ namespace RTE {
 				m_Lobby.RequestStart();
 			}
 			const auto now = std::chrono::steady_clock::now();
-			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
-			m_Lobby.Tick(nowMs);
+			const uint64_t roundMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
+			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), m_Config.nowMs ? m_Config.nowMs() : 0);
+			m_Lobby.Tick(clocks.lobbyMs);
 			// The lobby round owns the transport queue, so the plane only gets its time from here.
-			session.TickAdmissionPlane(nowMs);
+			session.TickAdmissionPlane(clocks.planeMs);
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
@@ -289,7 +291,7 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (nowMs > maxWaitMs) {
+			if (clocks.budgetMs > maxWaitMs) {
 				SetFailed("timed out waiting for lobby start");
 				if (error) *error = m_SetupError;
 				return false;

@@ -51,8 +51,21 @@ namespace RTE {
 		std::function<uint64_t()> nowMs;
 	};
 
+	/// What a setup round clocks each of its parts with.
+	struct NetMatchRunnerClocks {
+		uint64_t lobbyMs = 0;  //!< NetLobbySession adds the session clock it captured at Start, so this is per round.
+		uint64_t planeMs = 0;  //!< The admission plane's deadlines are session-elapsed time.
+		uint64_t budgetMs = 0; //!< The round's own wait budget, which is per round like the lobby's.
+	};
+
 	class NetMatchRunner {
 	public:
+		/// Splits a setup round's clocks. Handing the lobby the session clock double-counts it, because
+		/// the lobby adds its own base - which is what the base is for.
+		static NetMatchRunnerClocks ResolveRoundClocks(uint64_t roundMs, bool hasSessionClock, uint64_t sessionClockMs) {
+			return {roundMs, hasSessionClock ? sessionClockMs : roundMs, roundMs};
+		}
+
 		bool Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error = nullptr);
 
 		/// Runs the next match over an already-established session: re-runs the lobby round and starts a
