@@ -71,11 +71,6 @@ namespace RTE {
 			return info.m_info.m_szEndDebug[0] != '\0' ? info.m_info.m_szEndDebug : "GNS connection closed";
 		}
 
-		// The library's own default. A four-peer round sends a few KB/s per connection; the rate only
-		// has to be high while a match-state stream is in flight.
-		constexpr int32 c_MatchSendRateBytesPerSecond = 256 * 1024;
-		constexpr int32 c_BulkSendRateBytesPerSecond = 32 * 1024 * 1024;
-
 		int s_SimulatedLagMs = 0;
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection.
@@ -111,13 +106,11 @@ namespace RTE {
 			ApplySimulatedLag();
 			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
-			// A bulk match-state transfer (a few MB) must fit the reliable send buffer outright; the
-			// rate it needs is raised for the transfer alone (SetBulkTransferMode), because this pair
-			// is a manual send rate rather than a range and a match held at megabytes a second cannot
-			// back off when the link will not take it.
+			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
+			// move faster than the conservative default send rate (~256KB/s would take seconds).
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
-			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, c_MatchSendRateBytesPerSecond);
-			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, c_MatchSendRateBytesPerSecond);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
 			// adjudication (and a rejoiner's freed slot) kick in.
 			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
@@ -174,13 +167,11 @@ namespace RTE {
 			ApplySimulatedLag();
 			SteamNetworkingConfigValue_t connectionConfigs[5];
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
-			// A bulk match-state transfer (a few MB) must fit the reliable send buffer outright; the
-			// rate it needs is raised for the transfer alone (SetBulkTransferMode), because this pair
-			// is a manual send rate rather than a range and a match held at megabytes a second cannot
-			// back off when the link will not take it.
+			// Bulk match-state transfers (a few MB) must fit the reliable send buffer outright and
+			// move faster than the conservative default send rate (~256KB/s would take seconds).
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
-			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, c_MatchSendRateBytesPerSecond);
-			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, c_MatchSendRateBytesPerSecond);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
 			// adjudication (and a rejoiner's freed slot) kick in.
 			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
@@ -276,66 +267,6 @@ namespace RTE {
 			return text;
 		}
 
-		void SetBulkTransferMode(bool on) {
-			if (on) {
-				m_BulkDrainPending = false;
-				m_BulkDrainArmed = false;
-				if (!m_BulkTransfer) {
-					m_BulkTransfer = true;
-					ApplySendRate(c_BulkSendRateBytesPerSecond);
-				}
-				return;
-			}
-			// The caller has run out of chunks, but the socket has not: what it queued at the bulk rate
-			// would finish draining at the match rate, 128x slower, with the round waiting behind it.
-			// Hold the rate until the connections say the stream is off them.
-			if (m_BulkTransfer) {
-				m_BulkDrainPending = true;
-				LowerBulkRateWhenDrained();
-			}
-		}
-
-		void ApplySendRate(int32 rate) {
-			for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
-				(void)peerId;
-				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMin, rate);
-				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMax, rate);
-			}
-		}
-
-		// Pending reaching zero says the socket has taken every chunk, and one ping past that is the
-		// latest the last of them can still be on the wire. Unacked never reaches zero - the round's own
-		// reliable frame every 33ms sees to that - so the deadline is armed once and not pushed out.
-		void LowerBulkRateWhenDrained() {
-			if (!m_BulkTransfer || !m_BulkDrainPending || !m_Interface) {
-				return;
-			}
-			const SteamNetworkingMicroseconds nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
-			if (!m_BulkDrainArmed) {
-				SteamNetworkingMicroseconds holdUs = 0;
-				for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
-					(void)peerId;
-					SteamNetConnectionRealTimeStatus_t status = {};
-					if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) {
-						continue;
-					}
-					if (status.m_cbPendingReliable > 0) {
-						return;
-					}
-					holdUs = std::max<SteamNetworkingMicroseconds>(holdUs, std::max(status.m_nPing, 0) * 1000);
-				}
-				m_BulkDrainArmed = true;
-				m_BulkDrainDeadlineUs = nowUs + holdUs;
-			}
-			if (nowUs < m_BulkDrainDeadlineUs) {
-				return;
-			}
-			m_BulkTransfer = false;
-			m_BulkDrainPending = false;
-			m_BulkDrainArmed = false;
-			ApplySendRate(c_MatchSendRateBytesPerSecond);
-		}
-
 		void Disconnect(NetPeerId peerId, const std::string& reason) {
 			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
 			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end()) {
@@ -394,10 +325,6 @@ namespace RTE {
 			m_Interface = nullptr;
 			m_IsHost = false;
 			m_IsStarted = false;
-			m_BulkTransfer = false;
-			m_BulkDrainPending = false;
-			m_BulkDrainArmed = false;
-			m_BulkDrainDeadlineUs = 0;
 			m_NextPeerId = 1;
 			m_BytesHandedOver.clear();
 			m_LastDetailUs.clear();
@@ -410,7 +337,6 @@ namespace RTE {
 				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
 				PollCallbacks();
-				LowerBulkRateWhenDrained();
 			}
 
 			std::vector<NetTransportEvent> events;
@@ -530,10 +456,6 @@ namespace RTE {
 			const NetPeerId peerId = m_NextPeerId++;
 			m_PeersByConnection[connection] = peerId;
 			m_ConnectionsByPeer[peerId] = connection;
-			if (m_BulkTransfer) {
-				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMin, c_BulkSendRateBytesPerSecond);
-				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMax, c_BulkSendRateBytesPerSecond);
-			}
 			s_ConnectionOwners[connection] = this;
 			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
 		}
@@ -597,10 +519,6 @@ namespace RTE {
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
 		bool m_HasLingeringClose = false;
-		bool m_BulkTransfer = false;
-		bool m_BulkDrainPending = false; //!< The caller is done queueing; the rate drops once the socket is empty.
-		bool m_BulkDrainArmed = false; //!< The socket has taken every chunk; the deadline below is running.
-		SteamNetworkingMicroseconds m_BulkDrainDeadlineUs = 0; //!< When the last chunk can no longer be on the wire.
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;
@@ -638,7 +556,6 @@ namespace RTE {
 			return false;
 		}
 
-		void SetBulkTransferMode(bool) {}
 		void Disconnect(NetPeerId, const std::string&) {}
 		void Stop() {}
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
@@ -664,10 +581,6 @@ namespace RTE {
 
 	bool GnsTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) {
 		return m_Impl->Send(peerId, lane, bytes, error, congested);
-	}
-
-	void GnsTransport::SetBulkTransferMode(bool on) {
-		m_Impl->SetBulkTransferMode(on);
 	}
 
 	void GnsTransport::Disconnect(NetPeerId peerId, const std::string& reason) {

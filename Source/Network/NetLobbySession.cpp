@@ -179,10 +179,6 @@ namespace RTE {
 			m_OutgoingChunks.push_back(std::move(chunk));
 		}
 		m_StateBytesToSend = std::move(fileBytes);
-		// Only the stream needs the rate; the round that follows it does not.
-		if (m_Transport) {
-			m_Transport->SetBulkTransferMode(true);
-		}
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
@@ -205,9 +201,6 @@ namespace RTE {
 			}
 			m_ChunkSendStall = 0;
 			m_OutgoingChunks.pop_front();
-		}
-		if (m_OutgoingChunks.empty() && m_Transport) {
-			m_Transport->SetBulkTransferMode(false);
 		}
 	}
 
