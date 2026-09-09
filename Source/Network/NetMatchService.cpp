@@ -854,6 +854,13 @@ static std::string ResyncSaveName() {
 			{"client_substitution_offers", m_ReconnectClient.GetStats().substitutionOffersReceived},
 			{"client_substitution_acks", m_ReconnectClient.GetStats().substitutionAcksSent},
 			{"client_reject_reason", m_ReconnectClient.HasLastRejectReason() ? NetProtocol::RejectReasonName(m_ReconnectClient.GetLastRejectReason()) : ""},
+			// The host's drop-and-reseat accounting, which survives the session end the seat list does
+			// not: after the activity ends the seats read empty, so these are all a gate has left.
+			{"host_seats_dropped", m_ReconnectHost.GetStats().seatsDropped},
+			{"host_ledger_drops_recorded", m_ReconnectHost.GetStats().ledgerDropsRecorded},
+			{"host_reseats_issued", m_ReconnectHost.GetStats().reseatsIssued},
+			{"host_reseats_without_a_ledger", m_ReconnectHost.GetStats().reseatsWithoutALedger},
+			{"host_reseats_without_survivors", m_ReconnectHost.GetStats().reseatsWithoutSurvivors},
 		};
 		json seats = json::array();
 		for (const NetH4SeatStatus& seat: m_SeatStatuses) {

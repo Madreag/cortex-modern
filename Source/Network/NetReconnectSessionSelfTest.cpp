@@ -4799,6 +4799,100 @@ namespace RTE {
 			return 0;
 		}
 
+		// Source40 item 3: host_reseat_issued reads one log line, and IssueReseat has TWO ways of not
+		// printing it - the drop ledgered nothing (a fault: the returner is reseated onto nothing), or the
+		// ledger is good and none of the units it names is still alive (not a fault: there is nothing to
+		// hand back). The gates could not tell them apart, and on reclaim_socket the host ended with
+		// actors 2 of a peak 4 while drop3, which did print the line, ended with 5 of 6. Each answer gets
+		// its own counter here, and the reseat itself is unchanged.
+		int TestAReseatSaysWhyItDidNotIssue() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint8_t leaverPeer = MakeSeatTable()[0].lockstepPeerId;
+			// What the leaver held at the drop: three of its own units and one the host always had.
+			const std::vector<NetH4LedgerActor> held = {
+			    {101, 1, leaverPeer, true}, {102, 1, leaverPeer, true}, {103, 1, leaverPeer, true}, {201, 0, 1, true}};
+
+			struct Arm {
+				const char* label;
+				NetPeerId connection;
+				std::vector<NetH4LedgerActor> atTheDrop;
+				std::vector<NetH4LedgerActor> atTheReclaim;
+				uint32_t issued;
+				uint32_t withoutALedger;
+				uint32_t withoutSurvivors;
+				std::vector<int64_t> reseated;
+			};
+			const std::vector<Arm> arms = {
+			    // The good case, so the two counters below are read against a working reseat.
+			    {"survivors", 141, held, held, 1, 0, 0, {101, 102, 103}},
+			    // reclaim_socket's shape: the ledger is right, the units did not live through the window.
+			    {"no-survivors", 142, held, {{201, 0, 1, true}}, 0, 0, 1, {}},
+			    // A6's fault, kept measurable: the drop was seen where the world cannot be walked.
+			    {"no-ledger", 143, {}, held, 0, 1, 0, {}},
+			};
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			for (const Arm& arm: arms) {
+				const std::string where = std::string(" (") + arm.label + " arm)";
+				std::vector<NetH4LedgerActor> census = arm.atTheDrop;
+				Wire wire;
+				ConfigureWire(wire);
+				wire.host.SetDropOwnershipSource(
+				    [](void* context) { return *static_cast<std::vector<NetH4LedgerActor>*>(context); }, &census);
+				Endpoint player;
+				player.connection = arm.connection;
+				ConfigureEndpoint(player, std::string("reseat-") + arm.label, &unixNow);
+				wire.Add(&player);
+				NetH4TicketRecord record;
+				if (SeatAndDrop(wire, player, record, unixNow, &error) != 0) {
+					return Fail("could not seat the player: " + error + where);
+				}
+				const NetH4SeatOwnership* ledgered = wire.host.GetLedger().Find(0);
+				if (ledgered == nullptr) {
+					return Fail("the drop recorded no seat at all" + where);
+				}
+				if (ledgered->actorUIDs.size() != (arm.atTheDrop.empty() ? 0U : 3U)) {
+					return Fail("the drop ledgered " + std::to_string(ledgered->actorUIDs.size()) + " units" + where);
+				}
+
+				// Whatever is left of the world when the holder comes back.
+				census = arm.atTheReclaim;
+				wire.host.SetLiveMatch(true);
+				Endpoint returner;
+				returner.connection = static_cast<NetPeerId>(arm.connection + 100);
+				ConfigureEndpoint(returner, std::string("reseat-") + arm.label, &unixNow);
+				wire.Add(&returner);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("the reclaim did not settle: " + error + where);
+				}
+				if (returner.client.GetState() != NetH4ClientState::Joined) {
+					return Fail(std::string("the returner did not commit: ") + NetReconnectClientStateName(returner.client.GetState()) + where);
+				}
+				const std::vector<NetGameReseat> reseats = wire.host.TakePendingReseats();
+				std::vector<int64_t> reseated;
+				for (const NetGameReseat& reseat: reseats) {
+					reseated.insert(reseated.end(), reseat.actorUIDs.begin(), reseat.actorUIDs.end());
+				}
+				if (reseated != arm.reseated) {
+					return Fail("the reclaim reseated " + std::to_string(reseated.size()) + " units" + where);
+				}
+				const NetReconnectHostStats stats = wire.host.GetStats();
+				if (stats.reseatsIssued != arm.issued || stats.reseatsWithoutALedger != arm.withoutALedger ||
+				    stats.reseatsWithoutSurvivors != arm.withoutSurvivors) {
+					return Fail("the reseat counters read issued=" + std::to_string(stats.reseatsIssued) +
+					            " without_a_ledger=" + std::to_string(stats.reseatsWithoutALedger) +
+					            " without_survivors=" + std::to_string(stats.reseatsWithoutSurvivors) + where);
+				}
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4894,6 +4988,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestARoundResumptionKeepsItsPeers(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAReseatSaysWhyItDidNotIssue(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {

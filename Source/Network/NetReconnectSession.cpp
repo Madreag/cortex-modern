@@ -636,6 +636,9 @@ namespace RTE {
 	void NetReconnectHost::IssueReseat(const SeatState& seat) {
 		const NetH4SeatOwnership* record = m_Ledger.Find(seat.seat.stableSeat);
 		if (record == nullptr || record->actorUIDs.empty()) {
+			// The drop recorded nothing, so the returner is reseated onto nothing. That is a fault, and
+			// counting it apart from the case below is what lets a gate tell the two answers apart.
+			++m_Stats.reseatsWithoutALedger;
 			return;
 		}
 		std::vector<NetH4LedgerActor> actors;
@@ -644,6 +647,9 @@ namespace RTE {
 		}
 		std::vector<int64_t> restored = m_Ledger.BuildRestoration(seat.seat.stableSeat, m_Mode, actors);
 		if (restored.empty()) {
+			// The ledger is good; none of the units it names is still alive on its team. There is
+			// nothing to hand back, which is not a fault.
+			++m_Stats.reseatsWithoutSurvivors;
 			return;
 		}
 		NetGameReseat reseat;

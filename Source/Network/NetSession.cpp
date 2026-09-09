@@ -1082,6 +1082,8 @@ namespace RTE {
 				{"seats_closed_by_leave", stats.seatsClosedByLeave},
 				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
 				{"reseats_issued", stats.reseatsIssued},
+				{"reseats_without_a_ledger", stats.reseatsWithoutALedger},
+				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
