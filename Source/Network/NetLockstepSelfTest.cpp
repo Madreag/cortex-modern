@@ -4051,6 +4051,78 @@ namespace RTE {
 			          << " in " << elapsed << "ms" << std::endl;
 			return true;
 		}
+		// Following the round authority skips the stale-round rule, which used to be what kept another
+		// round's start away from the FIELD validation below it. A start from the host that agrees on
+		// the start frame but disagrees on any other field now fails the round with a ProtocolError
+		// where the base counted it stale and played on.
+		bool TestReviewAuthorityStartDoesNotFailTheRound(std::string* error) {
+			const uint16_t port = 43112;
+			const uint64_t sessionId = 0x70000000000000B2ULL;
+			const uint64_t roundOne = 0x9A5E0000000000B2ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 60000;
+			clientConfig.timeoutMs = 60000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_ReviewStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the round never started";
+				return false;
+			}
+			// A start from the host for another round, agreeing on the start frame and disagreeing on
+			// one other field - here the input delay a re-measured auto-delay would change.
+			const uint32_t staleBefore = client.GetStats().staleRoundPackets;
+			NetLockstepStart mismatched;
+			mismatched.sessionId = sessionId;
+			mismatched.startFrame = 0;
+			mismatched.inputDelayFrames = 1;
+			mismatched.controllerFrameVersion = ControllerFrame::c_Version;
+			mismatched.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			mismatched.localPeerId = 1;
+			mismatched.peerCount = 2;
+			mismatched.scenario = "LockstepSelfTest";
+			mismatched.ownershipPolicy = "unique-id-split";
+			mismatched.roundId = roundTwo;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({mismatched}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 300);
+			if (client.IsFailed()) {
+				*error = "a start from the round authority that disagrees on a field failed the client's "
+				         "round instead of being counted stale: " + client.GetStats().timeoutReason;
+				return false;
+			}
+			if (client.GetStats().staleRoundPackets != staleBefore + 1 || client.GetRoundId() != roundOne) {
+				*error = "a mismatched start was neither counted stale nor left the round alone (stale=" +
+				         std::to_string(client.GetStats().staleRoundPackets) + " round moved=" +
+				         std::to_string(client.GetRoundId() != roundOne) + ")";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS review_authority_start_does_not_fail_the_round" << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -4061,6 +4133,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestReviewAuthorityStartDoesNotFailTheRound(&error) ||
 		    !TestReviewReadoptClearsTheLeftPeer(&error) ||
 		    !TestReviewReadoptClearsTheDeferredStop(&error) ||
 		    !TestReviewFourPeerStrayStartRate(&error) ||
