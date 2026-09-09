@@ -38,6 +38,7 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 from run_sim_test import make_run  # noqa: E402  (the path is set above on purpose)
+from h4_gate_evidence import reseat_evidence
 
 # The seat a 2-remote match gives the first joining client: slot 0 is the host's own.
 SUBSTITUTED_SEAT = 1
@@ -361,8 +362,11 @@ def run_gate(
             (admission.get("reclaims_accepted") or 0) == 0,
             admission.get("reclaims_accepted"),
         )
-        checks.check("reseat_issued", "[net-reconnect] reseating team" in host_log)
+        reseated, detail = reseat_evidence(reconnect, host_log)
+        checks.check("reseat_issued", reseated, detail)
     elif gate == "substitute_returner_wins":
+        reseated, detail = reseat_evidence(reconnect, host_log)
+        checks.check("returner_reseat_decided", reseated, detail)
         returner = read_json(root / "returner_report.json")
         substitute = read_json(root / "substitute_report.json")
         checks.check(
