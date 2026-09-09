@@ -7,7 +7,7 @@ The lobby lanes:
     --action rejoin                          it leaves the lobby, a replacement takes the seat
     --action rejoin --short-trace-control    the replacement refuses a trace it cannot complete
     --action drop --players 4                the same lobby drop with a fuller lobby
-    --action drop --leave-at-frame 40        it is killed 40 frames into the running 180-frame match
+    --action drop --leave-at-frame 40        it is killed after sending frames through 39, before 40
 
 The last one sheds a seat while the round is running, which the lobby-time lanes never do. Its
 expected shape, all of it in result.json and lockstep-stats.json beside the run:
@@ -15,8 +15,7 @@ expected shape, all of it in result.json and lockstep-stats.json beside the run:
     host_simulation / stayerN_simulation  every survivor's 180 ticks match the host's, byte for byte
     stayerN_process                       exit 0, and no "[menu-mp] FAIL: collected N of 180" line
     departing_process                     exit 137, the killed peer the only one to end early
-    only_the_leaver_left                  the host's peer_leave_frames holds one seat, at a frame
-                                          inside the match
+    only_the_leaver_left                  the host's peer_leave_frames holds one seat at frame 40
     the_leaver_is_the_departing_peer      one "[net-match] Departing left the match at frame N"
     no_missing_frame_timeout              no peer's timeout_reason names MissingFrameTimeout
 
@@ -50,8 +49,10 @@ def wait_for_log(run, marker, seconds=45):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         log = run.out / "stdout.log"
-        if log.exists() and marker in log.read_text(errors="replace"):
-            return
+        if log.exists():
+            text = log.read_text(errors="replace")
+            if marker in text:
+                return text
         if run.poll() is not None:
             raise RuntimeError(f"{run.out.name} ended before {marker}")
         time.sleep(0.05)
@@ -83,7 +84,7 @@ def main():
     parser.add_argument("--short-trace-control", action="store_true", help="require the replacement to report an incomplete longer trace")
     parser.add_argument("--fake-lag-ms", type=int, default=0)
     parser.add_argument("--leave-at-frame", type=int, default=0,
-                        help="kill the departing peer this many frames into the RUNNING match instead of in the lobby; the timestep is pinned at 30Hz so the wait is N/30s, and the frame it landed on comes back in the host's peer_leave_frames. No replacement joins.")
+                        help="hold the departing peer before it sends this target frame, wait until the host receives its preceding frame, then kill it; require this exact effective leave frame. No replacement joins.")
     options = parser.parse_args()
     if options.short_trace_control and options.action == "leave":
         parser.error("--short-trace-control requires a replacement")
@@ -113,7 +114,12 @@ def main():
         if trace:
             ticks = 360 if options.short_trace_control and name == "replacement" else 180
             args += ["-tick-hashes", "-max-ticks", ticks, "-out", out / "trace.json"]
-        runs[name] = make_run(options.repo, args, out, 120).start()
+        environment = {}
+        if early_drop and name == "departing":
+            environment["CC_TEST_LOCKSTEP_HOLD_BEFORE_TARGET"] = str(options.leave_at_frame)
+        if early_drop and name == "host":
+            environment["CC_TEST_LOCKSTEP_OBSERVE_TARGET"] = str(options.leave_at_frame - 1)
+        runs[name] = make_run(options.repo, args, out, 120, env=environment).start()
         return runs[name]
 
     try:
@@ -141,10 +147,14 @@ def main():
                 script += "wait_state Failed\nwait 5\nassert_substate Landing\nexit\n"
             start(name, script, match and index != 1)
         if early_drop:
-            # The menu script stops being pumped once the match starts, so the frame is counted off
-            # the pinned 30Hz timestep from the host's own start; the report says where it landed.
-            wait_for_log(host_run, "activate ButtonMultiplayerStart ok=1", 60)
-            time.sleep(options.leave_at_frame / 30.0)
+            text = wait_for_log(runs["departing"], "[lockstep-test] hold_before_target ", 60)
+            marker = re.search(r"\[lockstep-test\] hold_before_target peer=(\d+) produced=(\d+) target=(\d+)", text)
+            if not marker or int(marker[3]) != options.leave_at_frame:
+                raise RuntimeError("the departing peer did not reach the requested input barrier")
+            result["input_barrier"] = dict(zip(("peer_id", "produced_frame", "target_frame"), map(int, marker.groups())))
+            received = f"[lockstep-test] received peer={marker[1]} target={options.leave_at_frame - 1}"
+            wait_for_log(host_run, received, 10)
+            result["host_received_barrier"] = received
             runs["departing"].terminate()
         elif options.action == "drop":
             wait_for_log(runs["departing"], "[menu-script] dump_lobby")
@@ -196,8 +206,10 @@ def main():
             leaves = lockstep.get("host", {}).get("peer_leave_frames", {}) or {}
             leave_lines = re.findall(r"\[net-match\] (.+?) left the match at frame (\d+)", host_log)
             result["leave_frames"], result["leave_lines"] = leaves, leave_lines
-            checks["only_the_leaver_left"] = len(leaves) == 1 and all(0 < int(frame) < 180 for frame in leaves.values())
-            checks["the_leaver_is_the_departing_peer"] = len(leave_lines) == 1 and leave_lines[0][0] == "Departing"
+            checks["input_barrier_reached"] = result["input_barrier"]["target_frame"] == options.leave_at_frame
+            checks["host_received_last_frame"] = result["host_received_barrier"] in host_log
+            checks["only_the_leaver_left"] = leaves == {str(result["input_barrier"]["peer_id"]): options.leave_at_frame}
+            checks["the_leaver_is_the_departing_peer"] = leave_lines == [("Departing", str(options.leave_at_frame))]
             checks["no_missing_frame_timeout"] = all("MissingFrameTimeout" not in (stats.get("timeout_reason") or "")
                                                      for stats in lockstep.values())
         else:
