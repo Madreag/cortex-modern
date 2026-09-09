@@ -3925,6 +3925,132 @@ namespace RTE {
 			return 0;
 		}
 
+		// A7 defect B: mid-match the coordinator owns the transport queue, so the session is driven
+		// through TickAdmissionPlane alone. P14's bound on half-open connections is only useful if that
+		// path expires them: eight silent sockets otherwise hold the bound forever and no returner can
+		// reclaim its seat. Driven exactly as the live match drives it - polled and injected, never Tick.
+		int TestLiveAdmissionExpiresSilentConnections() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42140;
+			LoopbackTransport hostTransport;
+			LoopbackTransport holderTransport;
+			NetSession host;
+			NetSession holder;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("silent"));
+			NetReconnectClient holderClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			holderClient.Configure(&store, MakeIdentity(), "Player");
+			holderClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			holderClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			holder.SetReconnectClient(&holderClient);
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 1;
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !holder.StartClient(holderTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the holder: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				holder.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				holderTransport.AdvanceTimeMs(10);
+			}
+			if (holderClient.GetState() != NetH4ClientState::Joined || host.GetReadyPeerCount() != 1) {
+				return Fail("the holder never committed the only seat");
+			}
+
+			// The match is live: from here the session sees only what the round hands it.
+			admission.SetLiveMatch(true);
+			const uint64_t liveFromMs = nowMs;
+			auto pumpLive = [&](uint64_t untilMs) {
+				for (; nowMs <= untilMs; nowMs += 10) {
+					for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+						host.InjectEvent(event, nowMs);
+					}
+					host.TickAdmissionPlane(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					holderTransport.AdvanceTimeMs(10);
+				}
+			};
+
+			// Eight sockets connect and say nothing, which is exactly P14's bound.
+			std::vector<std::unique_ptr<LoopbackTransport>> silent;
+			for (uint32_t index = 0; index < NetSession::c_MaxUnauthenticatedPeers; ++index) {
+				auto transport = std::make_unique<LoopbackTransport>();
+				if (!transport->Connect("loopback", port, &error)) {
+					return Fail("a silent connection could not be made: " + error);
+				}
+				silent.push_back(std::move(transport));
+			}
+			pumpLive(nowMs + 200);
+			if (host.GetUnauthenticatedPeerCount() != NetSession::c_MaxUnauthenticatedPeers) {
+				return Fail("the silent connections did not reach the session through the live path: " +
+				            std::to_string(host.GetUnauthenticatedPeerCount()));
+			}
+
+			// Inside P14 they are still the host's problem to keep.
+			pumpLive(liveFromMs + MakeSessionConfig(port, 0, "Host").timeoutMs - 500);
+			if (host.GetUnauthenticatedPeerCount() != NetSession::c_MaxUnauthenticatedPeers) {
+				return Fail("a silent connection was expired before P14's deadline");
+			}
+			// Past it they must go, or the bound is permanent.
+			pumpLive(liveFromMs + MakeSessionConfig(port, 0, "Host").timeoutMs + 1000);
+			if (host.GetUnauthenticatedPeerCount() != 0) {
+				return Fail("the live path never expired the silent connections: " +
+				            std::to_string(host.GetUnauthenticatedPeerCount()) + " still held the bound");
+			}
+			// The control that matters: the live holder's traffic rides the round, so its own receive
+			// clock is stale by design and it must NOT be timed out with them.
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("expiring the silent connections dropped the live player too");
+			}
+
+			// The point of the bound: a returner can now be admitted.
+			NetH4TicketRecord record;
+			if (store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			holderTransport.Stop();
+			pumpLive(nowMs + 200);
+			LoopbackTransport returnerTransport;
+			NetSession returner;
+			NetReconnectClient returnerClient;
+			returnerClient.Configure(&store, MakeIdentity(), "Player");
+			returnerClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			returnerClient.SetHostContext("loopback", MakeHash(5));
+			returner.SetReconnectClient(&returnerClient);
+			if (!returner.StartClient(returnerTransport, "loopback", MakeSessionConfig(port, 303, "Player"), &error)) {
+				return Fail("the returner could not connect: " + error);
+			}
+			for (const uint64_t until = nowMs + 4000; nowMs <= until; nowMs += 10) {
+				for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+					host.InjectEvent(event, nowMs);
+				}
+				host.TickAdmissionPlane(nowMs);
+				returner.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				returnerTransport.AdvanceTimeMs(10);
+			}
+			if (returnerClient.GetState() != NetH4ClientState::Joined || !returnerClient.UsedStoredTicket()) {
+				return Fail(std::string("the returner was not admitted after the bound cleared: ") +
+				            NetReconnectClientStateName(returnerClient.GetState()) + " reject=" + returner.BuildRejectText());
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4002,6 +4128,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRecoveryAppliesOnlyAfterAMatch(); result != 0) {
+			return result;
+		}
+		if (const int result = TestLiveAdmissionExpiresSilentConnections(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
