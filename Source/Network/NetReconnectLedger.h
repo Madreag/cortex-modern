@@ -41,7 +41,9 @@ namespace RTE {
 		/// The UIDs the peer owned, in ascending UID order so every peer records the identical list.
 		static std::vector<int64_t> CollectOwnedActorUIDs(const std::vector<NetH4LedgerActor>& actors, uint8_t peerId);
 
-		/// Records the seat's ownership at its drop frame, replacing any earlier drop of that seat.
+		/// Records the seat's ownership at its drop frame, replacing any earlier drop of that seat -
+		/// except that an empty record never replaces a recorded one, which is what a second drop seen
+		/// off the sim tick would otherwise do to a good one.
 		void RecordDrop(uint16_t stableSeat, uint8_t peerId, int32_t team, uint64_t droppedAtFrame, std::vector<int64_t> actorUIDs);
 
 		/// @return The seat's recorded ownership, or nullptr when the seat never dropped.
@@ -58,11 +60,13 @@ namespace RTE {
 		size_t Size() const { return m_Seats.size(); }
 		uint32_t GetDropsRecorded() const { return m_DropsRecorded; }
 		uint32_t GetActorsTruncated() const { return m_ActorsTruncated; }
+		uint32_t GetEmptyDropsRefused() const { return m_EmptyDropsRefused; }
 
 	private:
 		std::vector<NetH4SeatOwnership> m_Seats;
 		uint32_t m_DropsRecorded = 0;
 		uint32_t m_ActorsTruncated = 0;
+		uint32_t m_EmptyDropsRefused = 0;
 	};
 
 } // namespace RTE
