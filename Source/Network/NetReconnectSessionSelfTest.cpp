@@ -3154,6 +3154,52 @@ namespace RTE {
 
 		// §9b: "two pending applicants for one seat", the pending-applicant spam bound (P15) and
 		// "substitute inert - no peer id, no team, no snapshot, no authority - until the commit".
+		// The panel says how long the seat has been empty, so the view has to carry it: the moderator
+		// decides on the wait, and a UI with a clock of its own would disagree with the plane's.
+		int TestModerationViewAgesTheDrop() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 63;
+			ConfigureEndpoint(holder, "dropage", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			// The plane stamps the drop with its own clock, so start it somewhere other than zero.
+			wire.nowMs += 5000;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat to age: " + error);
+			}
+			// The plane's clock is the host's, not the caller's, so pin them together before measuring.
+			wire.nowMs += 1000;
+			wire.DrainHostOutbound();
+			const std::vector<NetH4ModerationSeat> first = wire.host.GetModerationView();
+			wire.nowMs += 5000;
+			wire.DrainHostOutbound();
+			const std::vector<NetH4ModerationSeat> aged = wire.host.GetModerationView();
+			if (!first[0].dropped || first[0].droppedAtMs == 0 || first[0].droppedForMs == 0) {
+				return Fail("the moderation view cannot say the seat is empty at all");
+			}
+			if (aged[0].droppedForMs != first[0].droppedForMs + 5000 || aged[0].droppedAtMs != first[0].droppedAtMs) {
+				return Fail("the moderation view cannot say how long the seat has been empty");
+			}
+			if (aged[1].droppedForMs != 0 || aged[1].droppedAtMs != 0 || aged[1].dropped) {
+				return Fail("a seat nobody dropped reports a drop age");
+			}
+			// The hold's frames are the round's; nothing off the round may invent them.
+			if (aged[0].holdFramesRemaining != 0) {
+				return Fail("the admission plane filled in a hold the round never counted");
+			}
+			std::cout << "[net-reconnect-session-selftest] moderation view ages the drop from the plane's clock" << std::endl;
+			return 0;
+		}
+
 		int TestApplicantsAndBounds() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -4696,6 +4742,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestHeartbeatingHandshakeStillExpires(); result != 0) {
+			return result;
+		}
+		if (const int result = TestModerationViewAgesTheDrop(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
