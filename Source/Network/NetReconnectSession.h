@@ -96,6 +96,7 @@ namespace RTE {
 		uint16_t stableSeat = 0;
 		uint8_t lockstepPeerId = 0;
 		int32_t team = 0;
+		std::string displayName; //!< The roster's name for the seat, so the host moderates a player and not a number.
 		bool committed = false;
 		bool dropped = false;
 		bool closed = false;
@@ -104,6 +105,9 @@ namespace RTE {
 		bool substituting = false;    //!< An approval is in flight for it.
 		uint32_t holderGeneration = 0;
 		uint32_t seatGeneration = 0;  //!< The value a pending approval compares against at commit.
+		uint64_t droppedAtMs = 0;     //!< When the holder's link went, on the admission plane's clock.
+		uint64_t droppedForMs = 0;    //!< How long ago that was, so the panel needs no clock of its own.
+		uint64_t holdFramesRemaining = 0; //!< Frames the round still holds the seat for; a frame, never a clock.
 		std::vector<NetH4ApplicantView> applicants;
 
 		bool operator==(const NetH4ModerationSeat&) const = default;
