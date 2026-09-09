@@ -47,6 +47,8 @@
 
 using namespace RTE;
 
+thread_local int GUICheckpoint::s_BitmapPoolAllocationFailureAfter = -1;
+
 std::string GUICheckpoint::SaveBitmap(const BITMAP* bitmap) {
 	CheckpointWriter writer("GUIBitmap1");
 	writer(bitmap != nullptr);
@@ -212,23 +214,100 @@ std::shared_ptr<BITMAP> GUICheckpoint::LoadSharedBitmap(std::string_view text, b
 	bool present; image.Value(present);
 	if (!present && cacheSlot >= 0) throw std::runtime_error("null cached bitmap owner");
 	reader.Finish();
-	if (validateOnly) return {};
 	if (cacheSlot >= 0) {
 		auto& cache = ContentFile::s_LoadedBitmaps[cacheSlot];
 		const auto found = cache.find(path);
 		if (found != cache.end()) {
 			if (SaveBitmap(found->second) != pixels) throw std::runtime_error("shared bitmap cache pixels differ: " + path);
+			if (validateOnly) return {};
 			return std::shared_ptr<BITMAP>(found->second, [](BITMAP*) {});
 		}
+		if (validateOnly) return {};
 		auto loaded = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(LoadBitmap(pixels), destroy_bitmap);
 		BITMAP* bitmap = loaded.get();
 		cache.emplace(path, bitmap);
 		loaded.release();
 		return std::shared_ptr<BITMAP>(bitmap, [](BITMAP*) {});
 	}
+	if (validateOnly) return {};
 	return std::shared_ptr<BITMAP>(LoadBitmap(pixels), [](BITMAP* bitmap) {
 		if (bitmap) { g_GLResourceMan.DestroyBitmapInfo(bitmap); destroy_bitmap(bitmap); }
 	});
+}
+
+std::vector<std::shared_ptr<BITMAP>> GUICheckpoint::LoadSharedBitmapPool(const std::vector<std::string>& images, bool validateOnly) {
+	std::set<std::pair<int, std::string>> cached;
+	for (const auto& text: images) {
+		LoadSharedBitmap(text, true);
+		CheckpointReader reader(text, "SharedBitmap1", true);
+		std::string path, pixels;
+		int slot;
+		reader.Value(path); reader.Value(slot); reader.Value(pixels); reader.Finish();
+		CheckpointReader image(pixels, "GUIBitmap1", true);
+		bool present; image.Value(present);
+		if (!present) throw std::runtime_error("null shared bitmap pool member");
+		if (slot >= 0 && !cached.emplace(slot, path).second) throw std::runtime_error("duplicate shared bitmap cache owner");
+	}
+	std::vector<std::shared_ptr<BITMAP>> owners;
+	if (!validateOnly) {
+		auto prepared = PrepareSharedBitmapPool(images);
+		prepared.commit();
+		owners = std::move(prepared.images);
+	}
+	return owners;
+}
+
+GUICheckpoint::PreparedBitmapPool GUICheckpoint::PrepareSharedBitmapPool(const std::vector<std::string>& images) {
+	LoadSharedBitmapPool(images, true);
+	struct Pending {
+		std::array<std::unordered_map<std::string, BITMAP*>, ContentFile::BitDepths::BitDepthCount> cached;
+		std::vector<std::unique_ptr<BITMAP, void(*)(BITMAP*)>> allocations;
+	};
+	auto pending = std::make_shared<Pending>();
+	PreparedBitmapPool result;
+	result.images.reserve(images.size());
+	for (const auto& text: images) {
+		CheckpointReader reader(text, "SharedBitmap1", true);
+		std::string path, pixels; int slot;
+		reader.Value(path); reader.Value(slot); reader.Value(pixels); reader.Finish();
+		if (slot >= 0) {
+			const auto& cache = ContentFile::s_LoadedBitmaps[slot];
+			const auto found = cache.find(path);
+			if (found != cache.end()) {
+				result.images.emplace_back(found->second, [](BITMAP*) {});
+				continue;
+			}
+		}
+		if (s_BitmapPoolAllocationFailureAfter == 0) throw std::bad_alloc();
+		if (s_BitmapPoolAllocationFailureAfter > 0) --s_BitmapPoolAllocationFailureAfter;
+		auto bitmap = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(LoadBitmap(pixels), destroy_bitmap);
+		if (slot >= 0) {
+			pending->cached[slot].emplace(path, bitmap.get());
+			result.images.emplace_back(bitmap.get(), [](BITMAP*) {});
+			pending->allocations.push_back(std::move(bitmap));
+		} else {
+			result.images.emplace_back(bitmap.release(), [](BITMAP* image) {
+				g_GLResourceMan.DestroyBitmapInfo(image); destroy_bitmap(image);
+			});
+		}
+	}
+	// Allocate every node and bucket before exposing any image to the cache or its users.
+	for (size_t slot = 0; slot < pending->cached.size(); ++slot) {
+		auto& cache = ContentFile::s_LoadedBitmaps[slot];
+		if (!pending->cached[slot].empty()) cache.reserve(cache.size() + pending->cached[slot].size());
+	}
+	result.commit = [pending] {
+		for (size_t slot = 0; slot < pending->cached.size(); ++slot) {
+			auto& cache = ContentFile::s_LoadedBitmaps[slot];
+			for (const auto& [path, bitmap]: pending->cached[slot]) {
+				if (cache.contains(path)) throw std::runtime_error("shared bitmap cache changed during preparation: " + path);
+			}
+		}
+		for (size_t slot = 0; slot < pending->cached.size(); ++slot) ContentFile::s_LoadedBitmaps[slot].merge(pending->cached[slot]);
+		for (auto& bitmap: pending->allocations) bitmap.release();
+		pending->allocations.clear();
+	};
+	return result;
 }
 
 const Entity* GUICheckpoint::LoadEntityReference(std::string_view text, bool validateOnly, const Scene* scene) {
@@ -1434,6 +1513,87 @@ bool GUICheckpoint::RunSelfTest() {
 	};
 	const std::string oldSharedInput = GUIInput::SaveSharedCheckpoint();
 	try {
+		{
+			const std::string path = "checkpoint-selftest/absent-shared-bitmap.png";
+			auto& cache = ContentFile::s_LoadedBitmaps[0];
+			const bool absentBefore = !cache.contains(path);
+			auto image = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(create_bitmap_ex(8, 2, 2), destroy_bitmap);
+			clear_to_color(image.get(), 37);
+			CheckpointWriter first("SharedBitmap1"); first(path, 0, SaveBitmap(image.get()));
+			clear_to_color(image.get(), 38);
+			CheckpointWriter second("SharedBitmap1"); second(path, 0, SaveBitmap(image.get()));
+			const std::vector<std::string> conflicting{first.Text(), second.Text()};
+			bool refusedValidation = false, refused = false;
+			try { LoadSharedBitmapPool(conflicting, true); } catch (const std::exception&) { refusedValidation = true; }
+			try { LoadSharedBitmapPool(conflicting); } catch (const std::exception&) { refused = true; }
+			check("bitmap_pool_conflicts_leave_cache_unchanged", absentBefore && refusedValidation && refused && !cache.contains(path));
+			const std::string secondPath = path + ".second";
+			CheckpointWriter distinct("SharedBitmap1"); distinct(secondPath, 0, SaveBitmap(image.get()));
+			std::vector<std::string> values;
+			Icon empty;
+			for (size_t team = 0; team < Activity::Teams::MaxTeamCount; ++team) {
+				CheckpointWriter value("IconValues1");
+				value(empty.Entity::SaveCheckpoint(), ContentFile(), team < 2 ? 1u : 0u,
+					team < 2 ? std::vector<size_t>{team + 1} : std::vector<size_t>{}, std::vector<size_t>{});
+				values.push_back(value.Text());
+			}
+			const auto replaceIcons = [](const Activity& activity, const std::string& icons) {
+				const std::string current = Icon::SaveCheckpointSet({activity.GetTeamIcon(0), Activity::Teams::MaxTeamCount});
+				const std::string suffix = std::to_string(current.size()) + " " + current + " ";
+				std::string checkpoint = activity.Activity::SaveCheckpoint();
+				if (!checkpoint.ends_with(suffix)) throw std::runtime_error("missing activity icon group in regression");
+				checkpoint.resize(checkpoint.size() - suffix.size());
+				return checkpoint + std::to_string(icons.size()) + " " + icons + " ";
+			};
+			CheckpointWriter group("IconSet1"); group(std::vector<std::string>{first.Text(), distinct.Text()}, values);
+			GameActivity source, target;
+			source.SetDifficulty(77); target.SetDifficulty(33);
+			const std::string checkpoint = replaceIcons(source, group.Text());
+			const std::string before = target.SaveCheckpoint();
+			s_BitmapPoolAllocationFailureAfter = 1;
+			const bool allocationRefused = !target.Activity::LoadCheckpoint(checkpoint);
+			s_BitmapPoolAllocationFailureAfter = -1;
+			check("activity_icon_allocation_refusal_atomic", allocationRefused && target.SaveCheckpoint() == before && !cache.contains(path) && !cache.contains(secondPath));
+			// A failing control may have published one of the fixture's initially absent cache entries.
+			if (absentBefore) for (const auto& fixturePath: {path, secondPath}) {
+				const auto found = cache.find(fixturePath);
+				if (found != cache.end()) { destroy_bitmap(found->second); cache.erase(found); }
+			}
+			if (!target.LoadCheckpoint(before)) throw std::runtime_error("could not reset activity after allocation regression");
+			check("activity_icon_trailing_refusal_atomic", !target.Activity::LoadCheckpoint(checkpoint + "trailing") &&
+				target.SaveCheckpoint() == before && !cache.contains(path) && !cache.contains(secondPath));
+			const auto validLast = values.back();
+			values.back() = validLast.substr(0, validLast.size() - 2);
+			CheckpointWriter malformed("IconSet1"); malformed(std::vector<std::string>{first.Text(), distinct.Text()}, values);
+			check("activity_icon_late_metadata_refusal_atomic", !target.Activity::LoadCheckpoint(replaceIcons(source, malformed.Text())) &&
+				target.SaveCheckpoint() == before && !cache.contains(path) && !cache.contains(secondPath));
+			values.back() = validLast;
+			std::weak_ptr<BITMAP> used, unrelated, obsolete;
+			Icon copied, emptyCopy;
+			std::function<void()> apply, copy;
+			{
+				std::array<Icon, Activity::Teams::MaxTeamCount> icons;
+				CheckpointWriter uncached("IconSet1"); uncached(std::vector<std::string>{SaveSharedBitmap(image.get()), SaveSharedBitmap(image.get())}, values);
+				{
+					if (!Icon::LoadCheckpointSet(uncached.Text(), icons)) throw std::runtime_error("could not seed icon preparation regression");
+					obsolete = icons[0].m_CheckpointBitmapOwners.front();
+					apply = Icon::PrepareCheckpointSet(uncached.Text(), icons);
+					copy = apply;
+					apply();
+					check("icon_preparation_releases_obsolete_bitmap_owners", obsolete.expired());
+					const std::string expected = Icon::SaveCheckpointSet(icons);
+					copy();
+					const bool copiedOnce = Icon::SaveCheckpointSet(icons) == expected;
+					apply();
+					check("icon_preparation_commits_once_across_copies", copiedOnce && Icon::SaveCheckpointSet(icons) == expected);
+				}
+				used = icons[0].m_CheckpointBitmapOwners.front(); unrelated = icons[1].m_CheckpointBitmapOwners.front();
+				copied.Create(icons[0]); emptyCopy.Create(icons[2]);
+			}
+			check("icon_copy_releases_unrelated_bitmap_owners", !used.expired() && unrelated.expired() && emptyCopy.m_CheckpointBitmapOwners.empty());
+			copied.Destroy();
+			check("icon_copy_releases_last_bitmap_owner", used.expired());
+		}
 		std::unique_ptr<BITMAP, void(*)(BITMAP*)> bitmap(create_bitmap_ex(8, 640, 480), destroy_bitmap);
 		std::unique_ptr<BITMAP, void(*)(BITMAP*)> icon(create_bitmap_ex(8, 16, 16), destroy_bitmap);
 		clear_to_color(bitmap.get(), 0); clear_to_color(icon.get(), 37);

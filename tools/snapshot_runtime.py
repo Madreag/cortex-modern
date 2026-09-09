@@ -143,6 +143,13 @@ SCHEMAS["Activity1"] = [
     ("team_count", "n"), *fields("team_active player_team team_deaths team_ai_skill team_funds team_funds_share funds_changed funds_contribution had_brain brain_evacuated", array(4)),
     ("player_controller", array(4, "o")), ("message_timer", array(4, TIMER)), *fields("saved_encoded saved_strings", STRING_MAP),
     ("saved_numbers", NUMBER_MAP), ("actor_links", array(4, array(3)))]
+SCHEMAS["Activity2"] = [*SCHEMAS["Activity1"], ("team_icons", array(4, "o"))]
+SCHEMAS["Activity3"] = [*SCHEMAS["Activity1"], ("team_icons", "o")]
+SCHEMAS["Icon1"] = [("base", "o"), ("bitmap_file", "o"), ("frame_count", "n"),
+                    ("images", sequence("o")), ("indexed_frames", sequence("n")), ("true_color_frames", sequence("n"))]
+SCHEMAS["IconSet1"] = [("images", sequence("o")), ("icons", sequence("o"))]
+SCHEMAS["IconValues1"] = [("base", "o"), ("bitmap_file", "o"), ("frame_count", "n"),
+                         ("indexed_frames", sequence("n")), ("true_color_frames", sequence("n"))]
 SCHEMAS["GameActivity1"] = [
     ("base", "o"), ("cpu_team", "n"), ("team_is_cpu", array(4)), *fields("observation_target death_view_target", array(4, VECTOR)),
     ("actor_select_timer", array(4, TIMER)), *fields("actor_cursor landing_zone", array(4, VECTOR)),
@@ -397,13 +404,28 @@ def decode(data):
             owner = song["fallback"] if section == -1 else song["sections"][section]
             if not 0 <= index < len(owner["transitions" if bucket else "sounds"]):
                 raise ValueError("invalid music next-sound reference")
-    if version in ("PrimitiveMan1", "PrimitiveValue1", "MOSpriteRuntime2"):
+    if version == "Activity3" and (not isinstance(result["team_icons"], dict) or result["team_icons"].get("version") != "IconSet1" or len(result["team_icons"]["icons"]) != 4):
+        raise ValueError("invalid activity icon set")
+    if version in ("PrimitiveMan1", "PrimitiveValue1", "MOSpriteRuntime2", "Icon1", "IconSet1"):
+        cache_owners = set()
         for bitmap in result["images"]:
             if not isinstance(bitmap, dict) or bitmap.get("version") != "SharedBitmap1" or bitmap["pixels"]["value"] is None:
                 raise ValueError("invalid runtime image pool member")
+            if version in ("Icon1", "IconSet1") and bitmap["cache_slot"] >= 0:
+                owner = (bitmap["cache_slot"], bitmap["path"])
+                if owner in cache_owners:
+                    raise ValueError("duplicate icon bitmap cache owner")
+                cache_owners.add(owner)
         if version == "MOSpriteRuntime2":
             if any(not 0 <= reference <= len(result["images"]) for reference in [*result["frames"], result["icon_index"]]):
                 raise ValueError("invalid sprite image reference")
+        elif version in ("Icon1", "IconSet1"):
+            for icon in result["icons"] if version == "IconSet1" else [result]:
+                if not isinstance(icon, dict) or icon.get("version") != ("IconValues1" if version == "IconSet1" else "Icon1"):
+                    raise ValueError("invalid icon value record")
+                if any(not 0 <= reference <= len(result["images"])
+                       for reference in [*icon["indexed_frames"], *icon["true_color_frames"]]):
+                    raise ValueError("invalid icon image reference")
         else:
             if version == "PrimitiveValue1" and len(result["primitives"]) != 1:
                 raise ValueError("invalid primitive value count")
@@ -482,7 +504,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 masked.append((*path, key, "sim_start"))
             if len(path) >= 2 and path[-2:] == ("player_controller", 0):
                 mask("team")
-        if version == "Activity1":
+        if version in ("Activity1", "Activity2", "Activity3"):
             for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
                 result[key][0] = "LOCAL"
                 masked.append((*path, key, 0))

@@ -4618,6 +4618,145 @@ _PrimitiveQueueCapture = nil
 		activity.SetDifficulty(33);
 		checkpointValues = activity.LoadCheckpoint(activityState) && activity.GetDifficulty() == 77 && activity.SaveCheckpoint() == activityState && checkpointValues;
 	}
+	{
+		// A bare activity has empty icons; inactive teams may still hold a custom icon.
+		const auto* preset = dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", "Team 4 Default", "Base.rte"));
+		GameActivity activity;
+		const auto icons = [](const Activity& value) {
+			std::array<std::string, Activity::Teams::MaxTeamCount> states;
+			for (int team = 0; team < Activity::Teams::MaxTeamCount; ++team) {
+				const Icon& icon = *value.GetTeamIcon(team);
+				CheckpointWriter writer("ActivityIconProbe");
+				writer(icon.Entity::SaveCheckpoint(), icon.GetFrameCount(), icon.GetBitmaps8().size(), icon.GetBitmaps32().size());
+				for (const auto* bitmap: icon.GetBitmaps8()) writer(GUICheckpoint::SaveSharedBitmap(bitmap));
+				for (const auto* bitmap: icon.GetBitmaps32()) writer(GUICheckpoint::SaveSharedBitmap(bitmap));
+				states[team] = writer.Text();
+			}
+			return states;
+		};
+		bool passed = preset != nullptr;
+		if (preset) {
+			activity.SetTeamIcon(1, *preset);
+			const auto expected = icons(activity);
+			const std::string checkpoint = activity.SaveCheckpoint();
+			for (int team = 0; team < Activity::Teams::MaxTeamCount; ++team) activity.SetTeamIcon(team, *preset);
+			const auto changed = icons(activity);
+			passed = changed != expected && activity.LoadCheckpoint(checkpoint, true) && icons(activity) == changed && passed;
+			for (const auto& invalid: {checkpoint.substr(0, checkpoint.size() - 2), checkpoint + "trailing"}) {
+				passed = !activity.LoadCheckpoint(invalid) && icons(activity) == changed && passed;
+			}
+			passed = activity.LoadCheckpoint(checkpoint) && icons(activity) == expected && activity.SaveCheckpoint() == checkpoint && passed;
+		}
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " activity_checkpoint_team_icons" << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		const auto iconState = [](const std::vector<std::string>& images, const std::vector<size_t>& indexed, const std::vector<size_t>& trueColor) {
+			Icon empty;
+			CheckpointWriter writer("Icon1");
+			writer(empty.Entity::SaveCheckpoint(), ContentFile(), static_cast<unsigned int>(indexed.size()), images, indexed, trueColor);
+			return writer.Text();
+		};
+		const auto replaceLastIcon = [](const Activity& source, const std::string& replacement) {
+			std::string state = source.Activity::SaveCheckpoint();
+			const std::string old = Icon::SaveCheckpointSet({source.GetTeamIcon(0), Activity::Teams::MaxTeamCount});
+			const std::string token = std::to_string(old.size()) + " " + old + " ";
+			if (!state.ends_with(token)) throw std::runtime_error("missing final activity icon in regression");
+			state.resize(state.size() - token.size());
+			CheckpointReader group(old, "IconSet1", true);
+			std::vector<std::string> images, values;
+			group.Value(images); group.Value(values); group.Finish();
+			CheckpointReader icon(replacement, "Icon1", true);
+			std::string base, file; unsigned int frames;
+			std::vector<std::string> extra;
+			std::vector<size_t> indexed, trueColor;
+			icon.Value(base); icon.Value(file); icon.Value(frames); icon.Value(extra); icon.Value(indexed); icon.Value(trueColor); icon.Finish();
+			for (auto* references: {&indexed, &trueColor}) for (auto& reference: *references) if (reference) reference += images.size();
+			images.insert(images.end(), extra.begin(), extra.end());
+			CheckpointWriter value("IconValues1"); value(base, file, frames, indexed, trueColor);
+			values.back() = value.Text();
+			CheckpointWriter changed("IconSet1"); changed(images, values);
+			return state + std::to_string(changed.Text().size()) + " " + changed.Text() + " ";
+		};
+		const auto refusedWithoutChange = [&](const std::string& icon) {
+			GameActivity source, target;
+			source.SetDifficulty(77); target.SetDifficulty(33);
+			const std::string checkpoint = replaceLastIcon(source, icon);
+			const std::string before = target.SaveCheckpoint();
+			const bool refusedValidation = !target.Activity::LoadCheckpoint(checkpoint, true);
+			const bool refusedLoad = !target.Activity::LoadCheckpoint(checkpoint);
+			const bool unchanged = target.SaveCheckpoint() == before;
+			std::cout << "[activity-icon-refusal] validation_refused=" << refusedValidation << " load_refused=" << refusedLoad << " unchanged=" << unchanged << std::endl;
+			return refusedValidation && refusedLoad && unchanged;
+		};
+		const bool nullPool = refusedWithoutChange(iconState({GUICheckpoint::SaveSharedBitmap(nullptr)}, {1}, {}));
+		std::cout << "[script-graph-selftest] " << (nullPool ? "PASS" : "FAIL") << " activity_icon_null_pool_refusal_atomic" << std::endl;
+		checkpointValues = nullPool && checkpointValues;
+		const auto* preset = dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", "Team 4 Default", "Base.rte"));
+		bool cacheConflict = false;
+		if (preset && !preset->GetBitmaps8().empty()) {
+			const std::string shared = GUICheckpoint::SaveSharedBitmap(preset->GetBitmaps8().front());
+			CheckpointReader cached(shared, "SharedBitmap1", true);
+			std::string path, pixels; int slot;
+			cached.Value(path); cached.Value(slot); cached.Value(pixels); cached.Finish();
+			auto changed = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(GUICheckpoint::LoadBitmap(pixels), destroy_bitmap);
+			putpixel(changed.get(), 0, 0, getpixel(changed.get(), 0, 0) ^ 1);
+			CheckpointWriter invalid("SharedBitmap1");
+			invalid(path, slot, GUICheckpoint::SaveBitmap(changed.get()));
+			cacheConflict = !path.empty() && refusedWithoutChange(iconState({invalid.Text()}, {1}, {}));
+		}
+		std::cout << "[script-graph-selftest] " << (cacheConflict ? "PASS" : "FAIL") << " activity_icon_cache_conflict_refusal_atomic" << std::endl;
+		checkpointValues = cacheConflict && checkpointValues;
+		bool sharedIcons = false, legacy = false;
+		std::string activityCheckpoint;
+		{
+			auto first = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(create_bitmap_ex(8, 2, 2), destroy_bitmap);
+			auto second = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(create_bitmap_ex(8, 2, 2), destroy_bitmap);
+			auto firstColor = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(create_bitmap_ex(32, 2, 2), destroy_bitmap);
+			auto secondColor = std::unique_ptr<BITMAP, void(*)(BITMAP*)>(create_bitmap_ex(32, 2, 2), destroy_bitmap);
+			clear_to_color(first.get(), 37); clear_to_color(second.get(), 37);
+			clear_to_color(firstColor.get(), 0x123456); clear_to_color(secondColor.get(), 0x123456);
+			Icon custom;
+			const std::string state = iconState({GUICheckpoint::SaveSharedBitmap(first.get()), GUICheckpoint::SaveSharedBitmap(second.get()),
+				GUICheckpoint::SaveSharedBitmap(firstColor.get()), GUICheckpoint::SaveSharedBitmap(secondColor.get())}, {1, 1, 0, 2}, {3, 3, 0, 4});
+			GameActivity source;
+			source.SetDifficulty(77);
+			if (custom.LoadCheckpoint(state)) {
+				source.SetTeamIcon(0, custom); source.SetTeamIcon(1, custom);
+				activityCheckpoint = source.Activity::SaveCheckpoint();
+				sharedIcons = source.GetTeamIcon(0)->GetBitmaps8()[0] == source.GetTeamIcon(1)->GetBitmaps8()[0];
+			}
+		}
+		Icon survivor;
+		if (!activityCheckpoint.empty()) {
+			GameActivity target;
+			sharedIcons = target.Activity::LoadCheckpoint(activityCheckpoint) && target.Activity::SaveCheckpoint() == activityCheckpoint && sharedIcons;
+			if (sharedIcons) {
+				const auto& first = target.GetTeamIcon(0)->GetBitmaps8();
+				const auto& second = target.GetTeamIcon(1)->GetBitmaps8();
+				const auto& firstColor = target.GetTeamIcon(0)->GetBitmaps32();
+				const auto& secondColor = target.GetTeamIcon(1)->GetBitmaps32();
+				sharedIcons = first.size() == 4 && first[0] == first[1] && first[2] == nullptr && first[0] != first[3] &&
+					first == second && getpixel(first[0], 0, 0) == 37 && getpixel(first[3], 0, 0) == 37 &&
+					firstColor.size() == 4 && firstColor[0] == firstColor[1] && firstColor[2] == nullptr && firstColor[0] != firstColor[3] &&
+					firstColor == secondColor && getpixel(firstColor[0], 0, 0) == 0x123456 && getpixel(firstColor[3], 0, 0) == 0x123456;
+				survivor.Create(*target.GetTeamIcon(0));
+				const std::string iconSet = Icon::SaveCheckpointSet({target.GetTeamIcon(0), Activity::Teams::MaxTeamCount});
+				const std::string suffix = std::to_string(iconSet.size()) + " " + iconSet + " ";
+				std::string old = activityCheckpoint.substr(0, activityCheckpoint.size() - suffix.size());
+				old.replace(0, std::string("9 Activity3 ").size(), "9 Activity1 ");
+				target.SetDifficulty(33);
+				const std::string before = target.SaveCheckpoint();
+				legacy = target.Activity::LoadCheckpoint(old, true) && target.SaveCheckpoint() == before &&
+					target.Activity::LoadCheckpoint(old) && target.GetDifficulty() == 77 &&
+					Icon::SaveCheckpointSet({target.GetTeamIcon(0), Activity::Teams::MaxTeamCount}) == iconSet;
+			}
+		}
+		sharedIcons = sharedIcons && survivor.GetBitmaps8().size() == 4 && getpixel(survivor.GetBitmaps8()[0], 0, 0) == 37;
+		std::cout << "[script-graph-selftest] " << (sharedIcons ? "PASS" : "FAIL") << " activity_icon_shared_distinct_bitmap_lifetime" << std::endl;
+		std::cout << "[script-graph-selftest] " << (legacy ? "PASS" : "FAIL") << " activity_icon_legacy_activity1" << std::endl;
+		checkpointValues = sharedIcons && legacy && checkpointValues;
+	}
 	std::cout << "[script-graph-selftest] " << (checkpointValues ? "PASS" : "FAIL") << " native_runtime_checkpoint_values" << std::endl;
 	// A script-owned sound that has lost its last Lua reference keeps its playing voice until the
 	// collector sweeps it, so a capture taken before that names an owner no restore can produce.
