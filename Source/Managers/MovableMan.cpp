@@ -1025,6 +1025,7 @@ void MovableMan::Clear() {
 	m_Speculation = Speculation();
 	m_RenderHidden.clear();
 	m_LinkRoot = nullptr;
+	m_WorldSetAside = nullptr;
 	m_Actors.clear();
 	m_ContiguousActorIDs.clear();
 	m_Items.clear();
@@ -1401,7 +1402,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
 }
 
 bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
-	if (out.held || m_HasWorldSetAside) {
+	if (out.held || m_WorldSetAside) {
 		return false;
 	}
 	CompleteQueuedMOIDDrawings();
@@ -1510,7 +1511,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		}
 	}
 	out.held = true;
-	m_HasWorldSetAside = true;
+	m_WorldSetAside = &out;
 	return true;
 }
 
@@ -1634,7 +1635,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	for (int team = 0; team < Activity::MaxTeamCount; ++team) m_TeamMOIDCount[team] = in.teamMOIDCount[team];
 	g_SceneMan.SwapMOIDGrid(in.moidGrid);
 	in.held = false;
-	m_HasWorldSetAside = false;
+	m_WorldSetAside = nullptr;
 	// Past this point the candidate world is gone, so a failure is reported rather than returned:
 	// every remaining step still runs, or the originals come back only half restored.
 	bool restored = g_ActivityMan.PrepareCheckpointMaterials(in.runtimeGlobals);
@@ -4701,6 +4702,13 @@ CheckpointSoundRegistry MovableMan::ConstructionRegistryScope::GetStagedSoundReg
 	return g_AudioMan.AddedCheckpointSoundRegistrations(m_OriginalSounds);
 }
 
+MovableMan::WorldSetAside::~WorldSetAside() {
+	// A refused reinstate keeps its world held so the caller can retry or discard it; one that does neither gets it discarded here.
+	if (held && MovableMan::IsConstructed() && g_MovableMan.m_WorldSetAside == this) {
+		g_MovableMan.DiscardWorld(*this);
+	}
+}
+
 void MovableMan::DiscardWorld(WorldSetAside& in) {
 	if (!in.held) return;
 	CompleteQueuedMOIDDrawings();
@@ -4735,7 +4743,7 @@ void MovableMan::DiscardWorld(WorldSetAside& in) {
 	in.musicOwners.reset();
 	in.luaGraphs.clear();
 	in.held = false;
-	m_HasWorldSetAside = false;
+	m_WorldSetAside = nullptr;
 }
 
 bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
@@ -4745,7 +4753,7 @@ bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 		return false;
 	}
 	// A caller running a speculative world already owns the originals and its rollback.
-	if (m_HasWorldSetAside) return RestoreWorldCandidate(in);
+	if (m_WorldSetAside) return RestoreWorldCandidate(in);
 	const std::string globals = g_ActivityMan.CaptureRuntimeGlobals();
 	WorldSetAside original;
 	if (!SetAsideWorld(original)) return false;

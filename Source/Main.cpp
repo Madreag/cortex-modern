@@ -398,7 +398,10 @@ int ShutDown(int exitCode) {
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	LocalPrediction::Clear();
 	if (s_rbProbeOriginals.held) {
-		g_MovableMan.ReinstateWorld(s_rbProbeOriginals);
+		// These originals outlive the managers, so a refusal here is discarded while there is still an engine to do it.
+		if (!g_MovableMan.ReinstateWorld(s_rbProbeOriginals)) {
+			g_MovableMan.DiscardWorld(s_rbProbeOriginals);
+		}
 		exitCode = EXIT_FAILURE;
 	}
 	s_rbProbeWorld.Clear();
@@ -1771,7 +1774,27 @@ static bool RunHarnessCaptureSelfTest() {
 		          << " graphs_equal=" << (before == after) << std::endl;
 	}
 	std::cout << "[script-graph-selftest] " << (observeOrder ? "PASS" : "FAIL") << " contract_audit_observation_settles_first" << std::endl;
-	return probeOrder && observeOrder;
+	// Last in the run: a build that fails this one leaves a world held.
+	bool refusalKeepsTheNextHold = false;
+	{
+		bool refused = false;
+		bool stillHeld = false;
+		{
+			// A caller that gives up on a refused reinstate, exactly as RestartActivity's local record does.
+			MovableMan::WorldSetAside aside;
+			if (g_MovableMan.SetAsideWorld(aside, false)) {
+				aside.runtimeGlobals = "not a runtime globals archive";
+				refused = !g_MovableMan.ReinstateWorld(aside);
+				stillHeld = aside.held && g_MovableMan.HasWorldSetAside();
+			}
+		}
+		MovableMan::WorldSetAside next;
+		const bool nextHold = g_MovableMan.SetAsideWorld(next, false);
+		refusalKeepsTheNextHold = refused && stillHeld && nextHold && g_MovableMan.ReinstateWorld(next) && !g_MovableMan.HasWorldSetAside();
+		std::cout << "[setaside-latch] refused=" << refused << " still_held=" << stillHeld << " next_hold=" << nextHold << std::endl;
+	}
+	std::cout << "[script-graph-selftest] " << (refusalKeepsTheNextHold ? "PASS" : "FAIL") << " refused_reinstate_leaves_the_next_hold_possible" << std::endl;
+	return probeOrder && observeOrder && refusalKeepsTheNextHold;
 }
 
 // Observes completed tick boundaries. All state restoration belongs to the production

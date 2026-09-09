@@ -225,6 +225,9 @@ namespace RTE {
 			long uniqueIDCounter = 0;
 			int luaStateCursor = 0;
 			bool held = false;
+
+			/// A record that dies still holding the world hands it back, so no caller can leave a hold nothing can reach.
+			~WorldSetAside();
 		};
 		/// Moves every resident and queued add out of the world; returns false without moving them if capture fails.
 		bool SetAsideWorld(WorldSetAside& out, bool holdActivity = true);
@@ -232,7 +235,7 @@ namespace RTE {
 		bool ReinstateWorld(WorldSetAside& in);
 		/// Retires a held world after its replacement is fully usable, without running old Destroy callbacks.
 		void DiscardWorld(WorldSetAside& in);
-		bool HasWorldSetAside() const { return m_HasWorldSetAside; }
+		bool HasWorldSetAside() const { return m_WorldSetAside != nullptr; }
 		bool ValidateScriptGraphs(const std::vector<std::string>& graphs, std::string* error);
 		/// One line per Lua state listing every registered object's unique id and the identity of its Lua object; identity oracles compare it.
 		std::string DescribeLuaIdentity() const;
@@ -833,7 +836,7 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
-		bool m_HasWorldSetAside = false;
+		WorldSetAside* m_WorldSetAside = nullptr; //!< The record holding the world aside, if any; the hold is its to reinstate or discard.
 		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
 		void ForgetHeldWorld(WorldSetAside& in);
 		bool RestoreWorldCandidate(const WorldSnapshot& in);
