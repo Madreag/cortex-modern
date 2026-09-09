@@ -279,6 +279,7 @@ namespace RTE {
 		void SetBulkTransferMode(bool on) {
 			if (on) {
 				m_BulkDrainPending = false;
+				m_BulkDrainArmed = false;
 				if (!m_BulkTransfer) {
 					m_BulkTransfer = true;
 					ApplySendRate(c_BulkSendRateBytesPerSecond);
@@ -302,22 +303,36 @@ namespace RTE {
 			}
 		}
 
-		// Nothing pending and nothing unacked is the strongest "it has left the socket" the library
-		// offers; an ack from the far end is the only thing that could say more.
+		// Pending reaching zero says the socket has taken every chunk, and one ping past that is the
+		// latest the last of them can still be on the wire. Unacked never reaches zero - the round's own
+		// reliable frame every 33ms sees to that - so the deadline is armed once and not pushed out.
 		void LowerBulkRateWhenDrained() {
 			if (!m_BulkTransfer || !m_BulkDrainPending || !m_Interface) {
 				return;
 			}
-			for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
-				(void)peerId;
-				SteamNetConnectionRealTimeStatus_t status = {};
-				if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK &&
-				    status.m_cbPendingReliable + status.m_cbSentUnackedReliable > 0) {
-					return;
+			const SteamNetworkingMicroseconds nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
+			if (!m_BulkDrainArmed) {
+				SteamNetworkingMicroseconds holdUs = 0;
+				for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
+					(void)peerId;
+					SteamNetConnectionRealTimeStatus_t status = {};
+					if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) != k_EResultOK) {
+						continue;
+					}
+					if (status.m_cbPendingReliable > 0) {
+						return;
+					}
+					holdUs = std::max<SteamNetworkingMicroseconds>(holdUs, std::max(status.m_nPing, 0) * 1000);
 				}
+				m_BulkDrainArmed = true;
+				m_BulkDrainDeadlineUs = nowUs + holdUs;
+			}
+			if (nowUs < m_BulkDrainDeadlineUs) {
+				return;
 			}
 			m_BulkTransfer = false;
 			m_BulkDrainPending = false;
+			m_BulkDrainArmed = false;
 			ApplySendRate(c_MatchSendRateBytesPerSecond);
 		}
 
@@ -381,6 +396,8 @@ namespace RTE {
 			m_IsStarted = false;
 			m_BulkTransfer = false;
 			m_BulkDrainPending = false;
+			m_BulkDrainArmed = false;
+			m_BulkDrainDeadlineUs = 0;
 			m_NextPeerId = 1;
 			m_BytesHandedOver.clear();
 			m_LastDetailUs.clear();
@@ -582,6 +599,8 @@ namespace RTE {
 		bool m_HasLingeringClose = false;
 		bool m_BulkTransfer = false;
 		bool m_BulkDrainPending = false; //!< The caller is done queueing; the rate drops once the socket is empty.
+		bool m_BulkDrainArmed = false; //!< The socket has taken every chunk; the deadline below is running.
+		SteamNetworkingMicroseconds m_BulkDrainDeadlineUs = 0; //!< When the last chunk can no longer be on the wire.
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;

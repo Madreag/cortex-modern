@@ -857,20 +857,17 @@ namespace RTE {
 				*error = "the stream was queued at the match rate";
 				return false;
 			}
-			// Every chunk handed over, and the link still carrying them: the rate must not drop yet.
-			bool sawQueueEmptyWithBytesInFlight = false;
+			// When the last chunk went is what the drop is timed against: the round's own traffic keeps
+			// the link busy either way, so the link going quiet cannot be the test.
+			uint64_t lastChunkAtMs = 0;
 			for (int i = 0; i < 400 && hostTransport.IsBulkTransferMode(); ++i) {
-				pump();
-				if (!hostLobby.HasPendingStateChunks() && hostTransport.InFlightBytes() > 0) {
-					sawQueueEmptyWithBytesInFlight = true;
-					if (!hostTransport.IsBulkTransferMode()) {
-						*error = "the rate dropped while the stream was still on the link";
-						return false;
-					}
+				if (hostLobby.HasPendingStateChunks()) {
+					lastChunkAtMs = hostTransport.NowMs();
 				}
+				pump();
 			}
-			if (!sawQueueEmptyWithBytesInFlight) {
-				*error = "the fixture never observed the stream in flight past the last queued chunk";
+			if (lastChunkAtMs == 0) {
+				*error = "the fixture never observed a chunk waiting to go out";
 				return false;
 			}
 			if (hostTransport.IsBulkTransferMode()) {
@@ -882,8 +879,9 @@ namespace RTE {
 				*error = "expected exactly one raise then one drop, got " + std::to_string(changes.size());
 				return false;
 			}
-			if (changes[1].atMs < changes[0].atMs + latencyMs) {
-				*error = "the drop came before the stream could have left the link";
+			if (changes[1].atMs < lastChunkAtMs + latencyMs) {
+				*error = "the drop came before the stream could have left the link (" +
+				         std::to_string(changes[1].atMs) + "ms, last chunk " + std::to_string(lastChunkAtMs) + "ms)";
 				return false;
 			}
 			// A torn-down transport keeps no rate latched for the next lobby.
@@ -893,7 +891,66 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-session-selftest] PASS bulk_rate_follows_the_socket raised_at=" << changes[0].atMs
-			          << "ms dropped_at=" << changes[1].atMs << "ms state_bytes=" << state.size() << std::endl;
+			          << "ms last_chunk_at=" << lastChunkAtMs << "ms dropped_at=" << changes[1].atMs
+			          << "ms state_bytes=" << state.size() << std::endl;
+			return true;
+		}
+
+		// The round keeps sending its own frames while a transfer drains, so the return has to be timed
+		// off the queue emptying, not off the link going quiet: a busy link gives the rate back at the
+		// same moment a quiet one does.
+		bool TestBulkRateReturnsUnderRoundTraffic(std::string* error) {
+			struct Shape {
+				const char* label;
+				uint32_t latencyMs;
+				uint32_t sendEveryMs;
+			};
+			const Shape shapes[] = {{"quiet_link", 200, 0}, {"round_traffic_200ms", 200, 33}, {"round_traffic_5ms", 5, 33}};
+			std::string report;
+			for (const Shape& shape : shapes) {
+				LoopbackTransport hostTransport;
+				LoopbackTransport clientTransport;
+				LoopbackTransportConfig lagged;
+				lagged.latencyMs = shape.latencyMs;
+				hostTransport.SetFaultConfig(lagged);
+				clientTransport.SetFaultConfig(lagged);
+				const uint16_t port = static_cast<uint16_t>(42210 + shape.latencyMs + shape.sendEveryMs);
+				if (!hostTransport.StartHost(port, error) || !clientTransport.Connect("loopback", port, error)) {
+					return false;
+				}
+				const std::vector<uint8_t> chunk(48 * 1024, 7);
+				const std::vector<uint8_t> frame(64, 3);
+				hostTransport.SetBulkTransferMode(true);
+				for (int i = 0; i < 5; ++i) {
+					if (!hostTransport.Send(1, NetTransportLane::ControlReliable, chunk, error)) {
+						return false;
+					}
+				}
+				hostTransport.SetBulkTransferMode(false); // The caller has run out of chunks.
+				uint64_t droppedAt = 0;
+				for (uint64_t t = 0; t <= 5000 && droppedAt == 0; t += 5) {
+					if (shape.sendEveryMs > 0 && (t % shape.sendEveryMs) == 0 &&
+					    !hostTransport.Send(1, NetTransportLane::ControlReliable, frame, error)) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+					(void)hostTransport.PollEvents();
+					(void)clientTransport.PollEvents();
+					if (!hostTransport.IsBulkTransferMode()) {
+						droppedAt = hostTransport.NowMs();
+					}
+				}
+				const std::vector<LoopbackRateChange>& changes = hostTransport.GetRateChanges();
+				if (droppedAt != shape.latencyMs || changes.size() != 2 || !changes[0].bulk || changes[1].bulk) {
+					*error = std::string("the bulk rate on ") + shape.label + " came back at " + std::to_string(droppedAt) +
+					         "ms after " + std::to_string(changes.size()) + " changes, expected " +
+					         std::to_string(shape.latencyMs) + "ms after 2";
+					return false;
+				}
+				report += std::string(" ") + shape.label + "=" + std::to_string(droppedAt) + "ms";
+			}
+			std::cout << "[net-session-selftest] PASS bulk_rate_returns_under_round_traffic" << report << std::endl;
 			return true;
 		}
 
@@ -953,6 +1010,7 @@ namespace RTE {
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
 		if (!TestBulkRateFollowsTheSocket(&error)) return fail(error);
+		if (!TestBulkRateReturnsUnderRoundTraffic(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;
 		return 0;

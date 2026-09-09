@@ -64,6 +64,8 @@ namespace RTE {
 		const std::vector<LoopbackRateChange>& GetRateChanges() const { return m_RateChanges; }
 		/// Gets bytes this transport has sent but not yet put in front of the far end.
 		uint64_t InFlightBytes() const;
+		/// Gets bytes sitting in the metered send queue, the model of a socket's pending reliable data.
+		uint64_t QueuedBytes() const;
 
 	private:
 		struct ScheduledEvent {
@@ -100,6 +102,8 @@ namespace RTE {
 		std::vector<LoopbackRateChange> m_RateChanges;
 		bool m_BulkTransfer = false;
 		bool m_BulkDrainPending = false;
+		bool m_BulkDrainArmed = false; //!< The queue has emptied; the deadline below is running.
+		uint64_t m_BulkDrainDeadlineMs = 0; //!< When the last chunk can no longer be travelling.
 		uint32_t m_SendCounter = 0;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
