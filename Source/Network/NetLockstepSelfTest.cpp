@@ -2213,8 +2213,10 @@ namespace RTE {
 			}
 
 			// The control: once the window closes the seat has no player, and the units stand down
-			// exactly as they did before - which is the pre-A6 behaviour, kept.
+			// exactly as they did before - which is the pre-A6 behaviour, kept. The round reads the seat
+			// on its tick, so that is where the closed window lands.
 			stub.held = false;
+			host.Tick(now + 5);
 			if (host.ResolveActorOwner(clientActor, 1, false) != 0) {
 				*error = "a released seat's units still had an owner";
 				return false;

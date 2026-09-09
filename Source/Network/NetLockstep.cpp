@@ -1654,6 +1654,7 @@ namespace RTE {
 		m_State = NetLockstepState::WaitingForStart;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
 		m_RelayBacklog.clear();
@@ -1764,6 +1765,7 @@ namespace RTE {
 		m_State = NetLockstepState::Running;
 		m_RemoteStartsReceived.clear();
 		m_PeerLeaveFrames.clear();
+		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
 		m_RelayBacklog.clear();
@@ -2025,6 +2027,7 @@ namespace RTE {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		RefreshLeftSeatHolds();
 		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
 			HandleEvent(event, nowMs);
 		}
@@ -2872,10 +2875,21 @@ namespace RTE {
 		return m_SeatStateSource ? m_SeatStateSource(m_SeatStateContext, peerId, transportPeerId) : NetLockstepSeatState{};
 	}
 
+	// The match service pumps us with its own lock held, and the ownership census that pump takes asks
+	// who owns a left seat's units - so asking the service back from there re-locks it on its own
+	// thread. The answer is resolved here instead, from the tick, which also fixes it for the whole
+	// tick: ownership cannot change under a subsystem halfway through one.
+	void NetLockstepCoordinator::RefreshLeftSeatHolds() {
+		m_LeftSeatsHeld.clear();
+		for (const auto& left: m_PeerLeaveFrames) {
+			if (SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim) {
+				m_LeftSeatsHeld.insert(left.first);
+			}
+		}
+	}
+
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
-		return std::any_of(m_PeerLeaveFrames.begin(), m_PeerLeaveFrames.end(), [this](const auto& left) {
-			return SeatStateOf(left.first, c_InvalidNetPeerId).heldForReclaim;
-		});
+		return !m_LeftSeatsHeld.empty();
 	}
 
 	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
@@ -2899,6 +2913,7 @@ namespace RTE {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
+		RefreshLeftSeatHolds();
 		std::cout << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
 		NetLockstepStop notice;
 		notice.senderPeerId = peerId;
