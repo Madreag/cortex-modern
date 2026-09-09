@@ -98,6 +98,13 @@ namespace RTE {
 			m_AddedRegisteredMOs.erase(moToUnregister);
 		}
 
+		/// A destroyed object leaves the lists a set-aside world will swap back; a detached live one stays.
+		void ForgetDestroyedRegisteredMO(MovableObject* moToForget) {
+			for (auto* held: m_HeldRegisteredMOs) {
+				held->erase(moToForget);
+			}
+		}
+
 		/// Gets a list of the MOs registed as using us.
 		/// @return The MOs registed as using us.
 		const std::unordered_set<MovableObject*>& GetRegisteredMOs() const { return m_RegisteredMOs; }
@@ -107,6 +114,17 @@ namespace RTE {
 		void SwapRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
+		}
+		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
+		void SwapAndHoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			m_RegisteredMOs.swap(registered);
+			m_AddedRegisteredMOs.swap(pending);
+			m_HeldRegisteredMOs.push_back(&registered);
+			m_HeldRegisteredMOs.push_back(&pending);
+		}
+		void ForgetHeldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			std::erase(m_HeldRegisteredMOs, &registered);
+			std::erase(m_HeldRegisteredMOs, &pending);
 		}
 		/// The address of the object's Lua table (as a hex string), or "-" when it has none; the identity oracles compare it.
 		std::string DescribeScriptObjectIdentity(long uniqueID);
@@ -320,6 +338,7 @@ namespace RTE {
 		void Clear();
 
 		std::unordered_set<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
+		std::vector<std::unordered_set<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
@@ -388,10 +407,18 @@ namespace RTE {
 		int GetScriptStateCursor() const { return m_LastAssignedLuaState; }
 
 		/// Restores the threaded state cursor after a checkpoint.
-		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = cursor % m_ScriptStates.size(); }
+		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : cursor % m_ScriptStates.size(); }
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);
+
+		/// Drops a destroyed object from every held script update list, whichever state holds it.
+		void ForgetDestroyedRegisteredMO(MovableObject* moToForget) {
+			m_MasterScriptState.ForgetDestroyedRegisteredMO(moToForget);
+			for (LuaStateWrapper& state: m_ScriptStates) {
+				state.ForgetDestroyedRegisteredMO(moToForget);
+			}
+		}
 
 		/// Runs the script graph's contract tests in the master state and prints their lines; true when all pass.
 		bool RunScriptGraphSelfTest();

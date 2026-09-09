@@ -136,6 +136,7 @@ MovableObject::MovableObject() {
 
 MovableObject::~MovableObject() {
 	Destroy(true);
+	g_MovableMan.ForgetDestroyedObject(this);
 }
 
 void MovableObject::Clear() {
