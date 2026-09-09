@@ -4123,6 +4123,84 @@ namespace RTE {
 			std::cout << "[net-lockstep-selftest] PASS review_authority_start_does_not_fail_the_round" << std::endl;
 			return true;
 		}
+		// A followed round re-sends the production the round we left carried away under its own tag. A
+		// refused send on a reliable lane is backpressure, not a lost frame: the host waits for exactly
+		// that frame, so what could not go out has to go out later.
+		bool TestCoordinatorReadoptResendSurvivesARefusedSend(std::string* error) {
+			const uint16_t port = 43104;
+			const uint64_t sessionId = 0x70000000000000A4ULL;
+			const uint64_t roundOne = 0x9A5E0000000000A4ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 60000;
+			clientConfig.timeoutMs = 60000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the first round never started";
+				return false;
+			}
+			// The client produces a frame into the round it is about to lose.
+			if (!client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 50);
+			// Its link refuses everything, so the follow's start and its re-sent production are refused.
+			LoopbackTransportConfig refuse;
+			refuse.refuseSendsToPeer = 1;
+			clientTransport.SetFaultConfig(refuse);
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetRoundId() == roundTwo; }, 2000)) {
+				*error = "the client never followed the host onto the new round";
+				return false;
+			}
+			drive([&] { return false; }, 500);
+			if (host.GetStats().framePacketsReceived != 0) {
+				*error = "the fixture did not refuse the re-send it is about to test";
+				return false;
+			}
+			clientTransport.SetFaultConfig(LoopbackTransportConfig{});
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 4000)) {
+				*error = "the round never re-formed once the link freed up: " + client.BuildReportJson();
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1 && client.GetStats().framesAccepted == 1; }, 2000)) {
+				*error = "the refused re-send never reached the host: host=" + host.BuildReportJson();
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS readopt_resend_survives_a_refused_send frames_sent="
+			          << client.GetStats().framePacketsSent << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -4133,6 +4211,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestCoordinatorReadoptResendSurvivesARefusedSend(&error) ||
 		    !TestReviewAuthorityStartDoesNotFailTheRound(&error) ||
 		    !TestReviewReadoptClearsTheLeftPeer(&error) ||
 		    !TestReviewReadoptClearsTheDeferredStop(&error) ||
