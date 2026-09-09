@@ -3,8 +3,10 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -28,6 +30,12 @@ namespace RTE {
 		uint32_t drainBytesPerSecond = 0;
 	};
 
+	/// What a transport did to its connections' send rate, and when.
+	struct LoopbackRateChange {
+		uint64_t atMs = 0;
+		bool bulk = false;
+	};
+
 	class LoopbackTransport : public INetTransport {
 	public:
 		LoopbackTransport();
@@ -46,6 +54,14 @@ namespace RTE {
 		void Disconnect(NetPeerId peerId, const std::string& reason) override;
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
+		void SetBulkTransferMode(bool on) override;
+
+		/// Gets whether the connections are still carrying the bulk rate.
+		bool IsBulkTransferMode() const { return m_BulkTransfer; }
+		/// Gets every raise and drop of the bulk rate, in order, for a test to read the timing off.
+		const std::vector<LoopbackRateChange>& GetRateChanges() const { return m_RateChanges; }
+		/// Gets bytes this transport has sent but not yet put in front of the far end.
+		uint64_t InFlightBytes() const;
 
 	private:
 		struct ScheduledEvent {
@@ -71,10 +87,17 @@ namespace RTE {
 		static void SetError(std::string* error, const std::string& message);
 
 		void DrainSendQueues(uint64_t deltaMs);
+		void RetireInFlight();
+		void LowerBulkRateWhenDrained();
+		void NoteInFlight(NetPeerId peerId, uint64_t deliverAtMs, size_t bytes);
 
 		uint64_t m_NowMs = 0;
 		uint64_t m_OrderCounter = 0;
 		std::map<NetPeerId, uint64_t> m_QueuedBytes; //!< The metered queue's depth per peer.
+		std::map<NetPeerId, std::deque<std::pair<uint64_t, size_t>>> m_InFlight; //!< peerId -> (arrival, bytes) not yet delivered.
+		std::vector<LoopbackRateChange> m_RateChanges;
+		bool m_BulkTransfer = false;
+		bool m_BulkDrainPending = false;
 		uint32_t m_SendCounter = 0;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;

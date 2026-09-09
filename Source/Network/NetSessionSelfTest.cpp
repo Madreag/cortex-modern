@@ -794,6 +794,109 @@ namespace RTE {
 			return true;
 		}
 
+		// A match needs a few KB/s and only the state stream needs megabytes, so the rate is raised for
+		// the transfer and dropped after it - after it has left the socket, not after the last chunk was
+		// handed to it, or the tail of the stream drains at the match rate with the round behind it.
+		bool TestBulkRateFollowsTheSocket(std::string* error) {
+			constexpr uint16_t port = 42209;
+			constexpr uint64_t latencyMs = 40;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			LoopbackTransportConfig faults;
+			faults.latencyMs = latencyMs;
+			hostTransport.SetFaultConfig(faults);
+			clientTransport.SetFaultConfig(faults);
+			NetSession hostSession;
+			NetSessionConfig hostConfig = MakeConfig(port, 1801, "Host");
+			hostConfig.maxPeers = 1;
+			if (!hostSession.StartHost(hostTransport, hostConfig, error)) {
+				return false;
+			}
+			NetSession clientSession;
+			if (!clientSession.StartClient(clientTransport, "loopback", MakeConfig(port, 1802, "Player"), error)) {
+				return false;
+			}
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(hostConfig.sessionId);
+			match.peerCount = 2;
+			NetLobbySessionConfig config;
+			config.host = true;
+			config.localPeerId = 1;
+			config.matchConfig = match;
+			config.autoStart = false;
+			config.session = &hostSession;
+			NetLobbySession hostLobby;
+			if (!hostLobby.Start(hostTransport, config, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto pump = [&]() {
+				hostSession.Tick(now);
+				clientSession.Tick(now);
+				hostLobby.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				now += 10;
+			};
+			for (int i = 0; i < 200 && !(hostSession.IsReady() && clientSession.IsReady()); ++i) {
+				pump();
+			}
+			if (!hostSession.IsReady() || !clientSession.IsReady()) {
+				*error = "the bulk-rate fixture never got a peer onto the lobby";
+				return false;
+			}
+			if (hostTransport.IsBulkTransferMode()) {
+				*error = "the transport was already carrying the bulk rate before any transfer";
+				return false;
+			}
+			std::vector<uint8_t> state(5 * NetLobbyProtocol::c_MaxStateChunkBytes + 17);
+			for (size_t i = 0; i < state.size(); ++i) {
+				state[i] = static_cast<uint8_t>(i * 17);
+			}
+			hostLobby.BeginStateTransfer(state);
+			if (!hostTransport.IsBulkTransferMode()) {
+				*error = "the stream was queued at the match rate";
+				return false;
+			}
+			// Every chunk handed over, and the link still carrying them: the rate must not drop yet.
+			bool sawQueueEmptyWithBytesInFlight = false;
+			for (int i = 0; i < 400 && hostTransport.IsBulkTransferMode(); ++i) {
+				pump();
+				if (!hostLobby.HasPendingStateChunks() && hostTransport.InFlightBytes() > 0) {
+					sawQueueEmptyWithBytesInFlight = true;
+					if (!hostTransport.IsBulkTransferMode()) {
+						*error = "the rate dropped while the stream was still on the link";
+						return false;
+					}
+				}
+			}
+			if (!sawQueueEmptyWithBytesInFlight) {
+				*error = "the fixture never observed the stream in flight past the last queued chunk";
+				return false;
+			}
+			if (hostTransport.IsBulkTransferMode()) {
+				*error = "the bulk rate was never given back";
+				return false;
+			}
+			const std::vector<LoopbackRateChange>& changes = hostTransport.GetRateChanges();
+			if (changes.size() != 2 || !changes[0].bulk || changes[1].bulk) {
+				*error = "expected exactly one raise then one drop, got " + std::to_string(changes.size());
+				return false;
+			}
+			if (changes[1].atMs < changes[0].atMs + latencyMs) {
+				*error = "the drop came before the stream could have left the link";
+				return false;
+			}
+			// A torn-down transport keeps no rate latched for the next lobby.
+			hostTransport.Stop();
+			if (hostTransport.IsBulkTransferMode()) {
+				*error = "the transport stayed latched at the bulk rate through Stop()";
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS bulk_rate_follows_the_socket raised_at=" << changes[0].atMs
+			          << "ms dropped_at=" << changes[1].atMs << "ms state_bytes=" << state.size() << std::endl;
+			return true;
+		}
+
 		bool TestLatencyAndCleanDisconnect(std::string* error) {
 			const uint16_t port = 42206;
 			LoopbackTransport hostTransport;
@@ -849,6 +952,7 @@ namespace RTE {
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
+		if (!TestBulkRateFollowsTheSocket(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;
 		return 0;

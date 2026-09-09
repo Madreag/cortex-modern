@@ -239,7 +239,7 @@ namespace RTE {
 		// What the connection was holding when it refused. k_EResultLimitExceeded (25) means the
 		// pending bytes reached SendBufferSize, so the refusal is only readable next to that budget
 		// and the rate draining it.
-		std::string DescribeSendPressure(HSteamNetConnection connection) const {
+		std::string DescribeSendPressure(HSteamNetConnection connection) {
 			std::string text;
 			SteamNetConnectionRealTimeStatus_t status{};
 			if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK) {
@@ -258,7 +258,15 @@ namespace RTE {
 				text += ", buffer budget " + std::to_string(budget);
 			}
 			// The pending figure counts data scheduled for RE-transmission as well as new data, so it
-			// only means something beside what we actually handed over and the loss that drove it.
+			// only means something beside what we actually handed over and the loss that drove it. A
+			// saturated episode refuses thousands of times a second, so take the 2KB dump once a second.
+			constexpr SteamNetworkingMicroseconds c_DetailIntervalUs = 1000 * 1000;
+			const SteamNetworkingMicroseconds nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
+			SteamNetworkingMicroseconds& lastUs = m_LastDetailUs[connection];
+			if (lastUs != 0 && nowUs - lastUs < c_DetailIntervalUs) {
+				return text;
+			}
+			lastUs = nowUs;
 			char detail[2048] = {};
 			if (m_Interface->GetDetailedConnectionStatus(connection, detail, sizeof(detail)) == 0) {
 				std::string status(detail);
@@ -269,17 +277,48 @@ namespace RTE {
 		}
 
 		void SetBulkTransferMode(bool on) {
-			// The lobby lowers the rate on every pump once the last chunk is gone, so only act on the edge.
-			if (m_BulkTransfer == on) {
+			if (on) {
+				m_BulkDrainPending = false;
+				if (!m_BulkTransfer) {
+					m_BulkTransfer = true;
+					ApplySendRate(c_BulkSendRateBytesPerSecond);
+				}
 				return;
 			}
-			m_BulkTransfer = on;
-			const int32 rate = on ? c_BulkSendRateBytesPerSecond : c_MatchSendRateBytesPerSecond;
+			// The caller has run out of chunks, but the socket has not: what it queued at the bulk rate
+			// would finish draining at the match rate, 128x slower, with the round waiting behind it.
+			// Hold the rate until the connections say the stream is off them.
+			if (m_BulkTransfer) {
+				m_BulkDrainPending = true;
+				LowerBulkRateWhenDrained();
+			}
+		}
+
+		void ApplySendRate(int32 rate) {
 			for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
 				(void)peerId;
 				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMin, rate);
 				SteamNetworkingUtils()->SetConnectionConfigValueInt32(connection, k_ESteamNetworkingConfig_SendRateMax, rate);
 			}
+		}
+
+		// Nothing pending and nothing unacked is the strongest "it has left the socket" the library
+		// offers; an ack from the far end is the only thing that could say more.
+		void LowerBulkRateWhenDrained() {
+			if (!m_BulkTransfer || !m_BulkDrainPending || !m_Interface) {
+				return;
+			}
+			for (const auto& [peerId, connection] : m_ConnectionsByPeer) {
+				(void)peerId;
+				SteamNetConnectionRealTimeStatus_t status = {};
+				if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK &&
+				    status.m_cbPendingReliable + status.m_cbSentUnackedReliable > 0) {
+					return;
+				}
+			}
+			m_BulkTransfer = false;
+			m_BulkDrainPending = false;
+			ApplySendRate(c_MatchSendRateBytesPerSecond);
 		}
 
 		void Disconnect(NetPeerId peerId, const std::string& reason) {
@@ -340,7 +379,11 @@ namespace RTE {
 			m_Interface = nullptr;
 			m_IsHost = false;
 			m_IsStarted = false;
+			m_BulkTransfer = false;
+			m_BulkDrainPending = false;
 			m_NextPeerId = 1;
+			m_BytesHandedOver.clear();
+			m_LastDetailUs.clear();
 			m_PendingEvents.clear();
 		}
 
@@ -350,6 +393,7 @@ namespace RTE {
 				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
 				PollCallbacks();
+				LowerBulkRateWhenDrained();
 			}
 
 			std::vector<NetTransportEvent> events;
@@ -508,9 +552,11 @@ namespace RTE {
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt != m_PeersByConnection.end()) {
 				m_ConnectionsByPeer.erase(peerIt->second);
+				m_BytesHandedOver.erase(peerIt->second);
 				m_PeersByConnection.erase(peerIt);
 			}
 			s_ConnectionOwners.erase(connection);
+			m_LastDetailUs.erase(connection);
 			if (connection == m_ServerConnection) {
 				m_ServerConnection = k_HSteamNetConnection_Invalid;
 			}
@@ -535,6 +581,7 @@ namespace RTE {
 		bool m_IsStarted = false;
 		bool m_HasLingeringClose = false;
 		bool m_BulkTransfer = false;
+		bool m_BulkDrainPending = false; //!< The caller is done queueing; the rate drops once the socket is empty.
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;
@@ -544,6 +591,7 @@ namespace RTE {
 		std::map<NetPeerId, HSteamNetConnection> m_ConnectionsByPeer;
 		std::vector<NetTransportEvent> m_PendingEvents;
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
+		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
 
 		static Impl* s_CallbackInstance;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
