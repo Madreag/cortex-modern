@@ -963,7 +963,10 @@ static std::string ResyncSaveName() {
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
-		m_AdmissionClock.Start(SteadyNowMs());
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_AdmissionClock.Start(SteadyNowMs());
+		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
 
 		AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
