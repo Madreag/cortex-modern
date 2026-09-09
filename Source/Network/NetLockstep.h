@@ -323,6 +323,7 @@ namespace RTE {
 		uint32_t unresolvedObservationPackets = 0; //!< Frames dropped because an observation named a slot this peer never got.
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
+		uint32_t stopsFromLeftPeers = 0; //!< Stops a peer sent after the round had already dropped its seat.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
 		uint64_t longestStallMs = 0;

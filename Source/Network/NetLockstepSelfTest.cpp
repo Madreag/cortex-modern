@@ -3455,10 +3455,9 @@ namespace RTE {
 			// The round is what has to survive: the remaining peers keep committing frames past the seat
 			// the dead link cost, which is the whole point of taking only that one.
 			const uint64_t resumeFrom = host.GetStats().nextFrame;
-			// The control shows what a whole round does; a round that has just shed a seat is held to the
-			// guarantee this fix makes - it survives and goes on committing - because how far it then gets
-			// is a separate, pre-existing limit (see the report).
-			const uint64_t target = neverBreak ? 45 : 5;
+			// A round that has shed a seat runs to the same length as the control: shedding one is not
+			// allowed to cost the survivors anything.
+			const uint64_t target = 45;
 			if (!step([&] { return host.GetStats().nextFrame >= resumeFrom + target; }, now + 6 * timeoutMs)) {
 				*error = "the round stopped advancing; last queue refusal [" + queueError + "] produced=" +
 				         std::to_string(produced[0]) + "/" + std::to_string(produced[1]) + "/" + std::to_string(produced[2]) + "/" +
@@ -3487,6 +3486,12 @@ namespace RTE {
 					return false;
 				}
 			}
+			// The survivors run the same round: a seat going has to land on the same frame for both.
+			if (client[1].GetStats().nextFrame != client[2].GetStats().nextFrame) {
+				*error = "the survivors ended on different frames (" + std::to_string(client[1].GetStats().nextFrame) + " vs " +
+				         std::to_string(client[2].GetStats().nextFrame) + "): " + client[1].BuildReportJson() + " |c4 " + client[2].BuildReportJson();
+				return false;
+			}
 			const NetLockstepStats& s = host.GetStats();
 			*verdict = " peers_left=" + std::to_string(host.GetPeerLeaveFrames().size()) +
 			           " frames=" + std::to_string(s.nextFrame) +
@@ -3494,6 +3499,7 @@ namespace RTE {
 			           " holds=" + std::to_string(s.relayCongestionHolds) +
 			           " longest_hold_ms=" + std::to_string(s.longestCongestionHoldMs) +
 			           " overflows=" + std::to_string(s.relayBacklogOverflows) +
+			           " ignored_stops=" + std::to_string(s.stopsFromLeftPeers) +
 			           " client_frames=" + std::to_string(client[0].GetStats().nextFrame) + "/" +
 			           std::to_string(client[1].GetStats().nextFrame) + "/" + std::to_string(client[2].GetStats().nextFrame);
 			return true;

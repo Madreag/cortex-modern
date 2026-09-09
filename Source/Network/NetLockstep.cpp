@@ -2445,6 +2445,7 @@ namespace RTE {
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
+		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";
 		out << "\"peers_left\":" << m_PeerLeaveFrames.size() << ",";
 		out << "\"peer_leave_frames\":{";
 		for (auto it = m_PeerLeaveFrames.begin(); it != m_PeerLeaveFrames.end(); ++it) {
@@ -3033,6 +3034,15 @@ namespace RTE {
 			return;
 		}
 		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
+		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
+		// peer able to send, and its own grace runs out on a round it is no longer in.
+		const auto leftIt = m_PeerLeaveFrames.find(stop.senderPeerId);
+		if (leftIt != m_PeerLeaveFrames.end()) {
+			std::cout << "[lockstep] ignored a " << NetLockstepCodec::StopReasonName(stop.reason) << " from peer "
+			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << std::endl;
+			++m_Stats.stopsFromLeftPeers;
+			return;
+		}
 		if (m_DeferStops && stop.reason == NetLockstepStopReason::Complete &&
 		    (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick + 1 < stop.frame)) {
 			if (!m_PendingCompleteStop || stop.frame < m_PendingCompleteStop->frame) m_PendingCompleteStop = stop;
