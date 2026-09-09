@@ -2898,9 +2898,9 @@ namespace RTE {
 			return true;
 		}
 		const auto it = m_RemoteTransports.find(claimedPeerId);
-		// Reject only a KNOWN mapping that is violated; an absent mapping stays gated by IsKnownRemotePeer
-		// as before, so this never drops on a path that doesn't track transports.
-		return it == m_RemoteTransports.end() || it->second == fromTransport;
+		// Departed seats remain known logical peers, but their removed transport binding grants no
+		// authority. Rejoining peers acquire a new binding only after the session admits them.
+		return it != m_RemoteTransports.end() && it->second == fromTransport;
 	}
 
 	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
