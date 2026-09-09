@@ -725,9 +725,9 @@ namespace RTE {
 			if (peer.state != NetSessionState::Handshake) {
 				continue;
 			}
-			if (m_NowMs >= peer.lastReceiveMs && m_NowMs - peer.lastReceiveMs > m_Config.timeoutMs) {
+			if (m_NowMs >= peer.connectedAtMs && m_NowMs - peer.connectedAtMs > m_Config.timeoutMs) {
 				++m_Stats.timeouts;
-				RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.lastReceiveMs), "client hello timeout");
+				RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.connectedAtMs), "client hello timeout");
 			}
 		}
 	}
@@ -1007,6 +1007,8 @@ namespace RTE {
 
 	std::string NetSession::BuildReportJson() const {
 		json peers = json::array();
+		// Every admission deadline is a difference against this, so it is the one a gate must read.
+		const uint64_t clockMs = m_NowMs;
 		if (m_Role == NetSessionRole::Host) {
 			for (const PeerState& peer : m_Peers) {
 				peers.push_back(json{
@@ -1084,6 +1086,7 @@ namespace RTE {
 			{"schema", 1},
 			{"session_id", std::to_string(m_SessionId)},
 			{"role", RoleName(m_Role)},
+			{"clock_ms", clockMs},
 			{"final_state", StateName(m_State)},
 			{"accepted", m_State == NetSessionState::Accepted || m_State == NetSessionState::Ready},
 			{"rejected", m_State == NetSessionState::Rejected},
