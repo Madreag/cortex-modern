@@ -4896,6 +4896,55 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (shadowedOwner ? "PASS" : "FAIL") << " checkpoint_ignores_shadowed_script_owner" << std::endl;
 	checkpointValues = shadowedOwner && checkpointValues;
+	// A preset whose attachable was replaced keeps ignoring the discarded child, and every copy of it
+	// inherits that link. A restored object takes the link its record names and no other.
+	bool recordedIgnoreLink = false;
+	{
+		MovableMan::ConstructionRegistryScope registryScope;
+		MOPixel target;
+		target.Create();
+		auto* presetSource = const_cast<MovableObject*>(dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset("MOPixel", "Spark Yellow 1", "Base.rte")));
+		const auto record = [](const MovableObject* mo) {
+			auto stream = std::make_unique<std::stringstream>();
+			std::stringstream* raw = stream.get();
+			Writer writer(std::move(stream));
+			Writer::SnapshotScope snapshotScope(writer);
+			writer.NewProperty("ScriptEntity");
+			Scene::SaveSceneObject(writer, mo, false, true);
+			return raw->str();
+		};
+		const auto readInto = [](MovableObject& into, const std::string& text) {
+			Reader reader(std::make_unique<std::stringstream>(text), "Base.rte/MOToNotHitSelfTest.ini", false, nullptr, true);
+			reader.SetCheckpoint(true);
+			reader.SetThrowOnError(true);
+			reader.SetSkipIncludes(true);
+			if (!reader.NextProperty() || reader.ReadPropName() != "ScriptEntity") return false;
+			into.Destroy();
+			return static_cast<Serializable&>(into).Create(reader, true, false) >= 0;
+		};
+		if (presetSource && !presetSource->GetWhichMOToNotHit()) {
+			std::unique_ptr<MovableObject> donor(dynamic_cast<MovableObject*>(presetSource->Clone()));
+			donor->SetWhichMOToNotHit(&target, 10.0F);
+			const std::string linked = record(donor.get());
+			donor->SetWhichMOToNotHit(nullptr);
+			const std::string unlinked = record(donor.get());
+			recordedIgnoreLink = linked.find("MOToNotHitUniqueID = " + std::to_string(target.GetUniqueID())) != std::string::npos;
+			recordedIgnoreLink = unlinked.find("MOToNotHitUniqueID = 0") != std::string::npos && recordedIgnoreLink;
+			presetSource->SetWhichMOToNotHit(&target, 10.0F);
+			MOPixel restored;
+			recordedIgnoreLink = readInto(restored, unlinked) && recordedIgnoreLink;
+			restored.ResolveFaithfulLinks();
+			recordedIgnoreLink = !restored.GetWhichMOToNotHit() && restored.GetMOToNotHitUID() == 0 && recordedIgnoreLink;
+			MOPixel relinked;
+			recordedIgnoreLink = readInto(relinked, linked) && recordedIgnoreLink;
+			relinked.ResolveFaithfulLinks();
+			recordedIgnoreLink = relinked.GetWhichMOToNotHit() == &target && relinked.GetMOToNotHitUID() == target.GetUniqueID() && recordedIgnoreLink;
+			presetSource->SetWhichMOToNotHit(nullptr);
+			recordedIgnoreLink = !presetSource->GetWhichMOToNotHit() && recordedIgnoreLink;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (recordedIgnoreLink ? "PASS" : "FAIL") << " restore_takes_only_the_recorded_ignore_link" << std::endl;
+	checkpointValues = recordedIgnoreLink && checkpointValues;
 	bool nativeLifetime = true;
 	{
 		MOPixel object;
