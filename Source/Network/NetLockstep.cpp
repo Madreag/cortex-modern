@@ -1702,6 +1702,18 @@ namespace RTE {
 	// A peer that repeats its start is still waiting for one it missed, and ours may be it. Every
 	// start a formed peer receives reads as a repeat though, and the answer is itself a start, so an
 	// unconditional answer answers the answer: pace it by the ladder the repeats come from.
+	bool NetLockstepCoordinator::StartMatchesConfig(const NetLockstepStart& start) const {
+		return start.sessionId == m_Config.sessionId &&
+		       start.startFrame == m_Config.startFrame &&
+		       start.inputDelayFrames == PeerInputDelay(start.localPeerId) &&
+		       start.controllerFrameVersion == ControllerFrame::c_Version &&
+		       start.controllerFrameEncodedSize == ControllerFrame::c_EncodedSize &&
+		       IsKnownRemotePeer(start.localPeerId) &&
+		       start.peerCount == m_Config.peerCount &&
+		       start.scenario == m_Config.scenario &&
+		       start.ownershipPolicy == m_Config.ownershipPolicy;
+	}
+
 	bool NetLockstepCoordinator::IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const {
 		// A relay host issues the round, it never takes one.
 		return !m_RelayHost && peerId != 0 && LockstepPeerOfTransport(fromTransport) == peerId;
@@ -2822,15 +2834,14 @@ namespace RTE {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
-		if (start.sessionId != m_Config.sessionId ||
-		    start.startFrame != m_Config.startFrame ||
-		    start.inputDelayFrames != PeerInputDelay(start.localPeerId) ||
-		    start.controllerFrameVersion != ControllerFrame::c_Version ||
-		    start.controllerFrameEncodedSize != ControllerFrame::c_EncodedSize ||
-		    !IsKnownRemotePeer(start.localPeerId) ||
-		    start.peerCount != m_Config.peerCount ||
-		    start.scenario != m_Config.scenario ||
-		    start.ownershipPolicy != m_Config.ownershipPolicy) {
+		if (!StartMatchesConfig(start)) {
+			// A start we would only have taken by following its round belongs to another round after all,
+			// and another round's start is ignored here - it was never this round's handshake to fail on.
+			if (followTheAuthority) {
+				++m_Stats.staleRoundPackets;
+				std::cout << "[lockstep] ignored a start of round " << start.roundId << " that disagrees with this round's setup" << std::endl;
+				return;
+			}
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch");
 			return;
 		}
