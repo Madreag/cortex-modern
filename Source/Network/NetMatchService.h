@@ -155,6 +155,8 @@ namespace RTE {
 		void EndAdmissionSession();
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
+		/// Elapsed milliseconds since this session began, for every admission deadline.
+		uint64_t AdmissionNowMs() const;
 
 
 		mutable std::mutex m_Mutex;
@@ -203,7 +205,7 @@ namespace RTE {
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
-		uint64_t m_SessionPumpNowMs = 0;
+		NetAdmissionClock m_AdmissionClock; //!< One elapsed-time source for setup, play, stalls and resync.
 		NetLanDiscovery m_LanDiscovery; //!< Game-thread only: the hosting lobby's LAN beacon.
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;

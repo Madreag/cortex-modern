@@ -39,6 +39,24 @@ namespace RTE {
 	/// The seat table in the pinned form, straight off the live match config.
 	std::vector<NetH4Seat> NetH4BuildSeatTable(const NetMatchConfig& config);
 
+	/// The admission plane's clock: milliseconds elapsed since the session began. Its deadlines are real
+	/// time, so a tick that pumps twice, a stall that pumps hundreds of times and a pause that pumps none
+	/// all have to read the same elapsed value. Counting pumps instead halves the P2 window.
+	class NetAdmissionClock {
+	public:
+		void Start(uint64_t steadyNowMs) {
+			m_OriginMs = steadyNowMs;
+			m_Started = true;
+		}
+		bool IsStarted() const { return m_Started; }
+		/// @return Milliseconds since Start; zero before it, and never backwards if the clock hiccups.
+		uint64_t NowMs(uint64_t steadyNowMs) const { return m_Started && steadyNowMs > m_OriginMs ? steadyNowMs - m_OriginMs : 0; }
+
+	private:
+		uint64_t m_OriginMs = 0;
+		bool m_Started = false;
+	};
+
 	/// What a disconnecting transport meant to the seats.
 	enum class NetH4DisconnectOutcome : uint8_t {
 		Unknown = 0,    //!< No seat ever bound this transport.
