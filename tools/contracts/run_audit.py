@@ -110,8 +110,38 @@ def text_line(line):
 # 'observe'/'stage' record an outcome of their own.
 APPLYING_OPERATIONS = ('save', 'memory', 'file', 'hold', 'preview')
 LOAD_OPERATIONS = ('load', 'ordinary-load')
-# The refusal transactions print their engine refusal, so only they may log errors.
-REFUSING_OPERATIONS = ('load', 'ordinary-load', 'stage-reject', 'stage-ordinary-reject')
+STAGE_TRANSACTIONS = ('stage-reject', 'stage-ordinary-reject')
+# A refusal is allowed to print why it refused; an assert, an abort or a traceback never is.
+CRASH_ERROR = re.compile(r'RTE Assert|RTE Abort|stack traceback')
+
+
+def refused_load(item):
+    """A load transaction whose candidate the engine actually turned down."""
+    staged = item.get('staged_candidate') or {}
+    return (item['operation'].split(':', 1)[0] in LOAD_OPERATIONS + STAGE_TRANSACTIONS
+            and (item.get('applied') is not True or staged.get('replacement_accepted') is False))
+
+
+def unexpected_errors(item):
+    """Only the refusal a deliberate refusal case provoked is expected; an accepted load stays strict."""
+    exempt = refused_load(item)
+    return [line for line in item['errors'] if not exempt or CRASH_ERROR.search(line)]
+
+
+def gate(item, expect_load, exe_hash):
+    """The recorded outcome of the transition, not just a clean process."""
+    base = item['operation'].split(':', 1)[0]
+    must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and expect_load == 'accepted')
+    return [name for name, passed in (
+        ('completed', item['completed']),
+        ('process_clean', item['process_clean']),
+        ('desktop_unchanged', item['desktop_unchanged']),
+        ('binary', item['binary'] == exe_hash),
+        ('applied', item.get('applied') is True or not must_apply),
+        ('errors', not unexpected_errors(item)),
+        ('graph_capture', not item['graph_capture_problems']),
+        ('graphs_serialized', all(observation['serialized'] and observation['problem_count'] == 0
+                                  for observation in item['graph_observations']))) if not passed]
 
 
 def main():
@@ -384,23 +414,8 @@ def main():
             (out / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps({'case': result['case'], 'continuation_status': continuation['status'], 'failed_checks': [key for key, passed in checks.items() if not passed]}), flush=True)
 
-    def gate(item):
-        """The recorded outcome of the transition, not just a clean process."""
-        base = item['operation'].split(':', 1)[0]
-        must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and options.expect_load == 'accepted')
-        return [name for name, passed in (
-            ('completed', item['completed']),
-            ('process_clean', item['process_clean']),
-            ('desktop_unchanged', item['desktop_unchanged']),
-            ('binary', item['binary'] == exe_hash),
-            ('applied', item.get('applied') is True or not must_apply),
-            ('errors', not item['errors'] or base in REFUSING_OPERATIONS),
-            ('graph_capture', not item['graph_capture_problems']),
-            ('graphs_serialized', all(observation['serialized'] and observation['problem_count'] == 0
-                                      for observation in item['graph_observations']))) if not passed]
-
     for item in results:
-        item['gate_failures'] = gate(item)
+        item['gate_failures'] = gate(item, options.expect_load, exe_hash)
         (Path(item['out']) / 'result.json').write_text(json.dumps(item, indent=2))
     unchanged = unchanged_inputs()
     complete = unchanged and not any(item['gate_failures'] for item in results)
@@ -411,6 +426,7 @@ def main():
                                  'applied': item.get('applied'), 'errors': item['errors']} for item in results if item['gate_failures']],
                'refused_transitions': [item['case'] for item in results if item.get('applied') is False],
                'error_cases': {item['case']: item['errors'] for item in results if item['errors']},
+               'unexpected_error_cases': {item['case']: unexpected_errors(item) for item in results if unexpected_errors(item)},
                'graph_problem_cases': {item['case']: item['graph_capture_problems'] + [observation for observation in item['graph_observations']
                                                                                        if not observation['serialized'] or observation['problem_count']]
                                        for item in results if item['graph_capture_problems']
