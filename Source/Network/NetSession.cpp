@@ -1097,6 +1097,7 @@ namespace RTE {
 				{"reseats_issued", stats.reseatsIssued},
 				{"reseats_without_a_ledger", stats.reseatsWithoutALedger},
 				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
+				{"reseat_live_on_team_not_named", stats.reseatLiveOnTeamNotNamed},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
