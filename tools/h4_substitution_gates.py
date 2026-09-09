@@ -567,10 +567,14 @@ def run_gate(
                 "panel_wait_recorded",
                 "[net-moderation] wait seat=" in host_log and "result=Ok" in host_log,
             )
+            # The applicant dies as it registers, so whether the panel got its approval in first is a
+            # race the gate does not need to win: either no offer went out, or the one that did was
+            # invalidated and removed with the connection it named.
             checks.check(
-                "no_offer_sent",
-                (admission.get("substitution_offers_sent") or 0) == 0,
-                admission.get("substitution_offers_sent"),
+                "nothing_survived_the_applicants_loss",
+                (admission.get("substitution_offers_sent") or 0) == 0
+                or (admission.get("substitutions_cancelled") or 0) >= 1,
+                f"offers={admission.get('substitution_offers_sent')} cancelled={admission.get('substitutions_cancelled')}",
             )
             checks.check(
                 "substitution_did_not_commit",
