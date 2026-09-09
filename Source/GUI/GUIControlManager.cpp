@@ -176,7 +176,7 @@ std::string GUICheckpoint::SaveEntityReference(const Entity* entity, const Scene
 					if (found != objects->end()) { placedSet = set; placedIndex = std::distance(objects->begin(), found); kind = 2; }
 				}
 			}
-			if (placedSet < 0) throw std::runtime_error("a GUI entity reference has no persistent owner");
+			if (placedSet < 0) throw std::runtime_error("a GUI entity reference has no persistent owner: " + entity->GetClassName() + " \"" + entity->GetPresetName() + "\"");
 		}
 		writer(kind, uid, placedSet, placedIndex, entity->GetClassName(), entity->GetPresetName(), entity->GetModuleName());
 	}
@@ -1650,6 +1650,13 @@ bool GUICheckpoint::RunSelfTest() {
 				inventory.m_InventoryActorEquippedItems = liveEquipped;
 				inventory.m_GUIInventoryItemButtons[0].first = liveButtonItem;
 				check("inventory_live_reference_unchanged", inventory.SaveCheckpoint() == liveInventory);
+
+				// The writer keeps its teeth: an orphaned reference is still refused, and now says what.
+				bool refused = false;
+				std::string refusal;
+				try { SaveEntityReference(&departedActor); } catch (const std::exception& error) { refused = true; refusal = error.what(); }
+				check("orphaned_reference_still_refused", refused && refusal.find("no persistent owner") != std::string::npos);
+				check("orphaned_reference_names_the_entity", refusal.find("Actor") != std::string::npos);
 			}
 			const std::string steadyInventory = inventory.SaveCheckpoint();
 			check("inventory_malformed_atomic", !inventory.LoadCheckpoint(steadyInventory + "bad") && inventory.SaveCheckpoint() == steadyInventory);
