@@ -49,6 +49,9 @@ namespace RTE {
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
 
+		/// Gets whether this transport still holds a connection to a peer.
+		bool IsPeerConnected(NetPeerId peerId) const;
+
 	private:
 		struct ScheduledEvent {
 			uint64_t deliverAtMs = 0;

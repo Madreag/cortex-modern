@@ -21,6 +21,13 @@ namespace RTE {
 		DrainSendQueues(deltaMs);
 	}
 
+	bool LoopbackTransport::IsPeerConnected(NetPeerId peerId) const {
+		if (!m_IsStarted) {
+			return false;
+		}
+		return m_IsHost ? m_HostPeers.find(peerId) != m_HostPeers.end() : m_ClientHost != nullptr && peerId == m_ClientHostPeerId;
+	}
+
 	void LoopbackTransport::DrainSendQueues(uint64_t deltaMs) {
 		if (m_Config.drainBytesPerSecond == 0) {
 			return;

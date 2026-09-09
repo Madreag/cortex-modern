@@ -1678,6 +1678,13 @@ namespace RTE {
 				*error = "the host did not adjudicate the wedged peer: " + fx.host.BuildReportJson();
 				return false;
 			}
+			// The silence bound takes the seat, so it takes the connection with it. A wedged peer is not
+			// running to hear the close; the host is the one that must stop paying for it.
+			if (fx.hostT.IsPeerConnected(2) || fx.host.GetStats().connectionsClosedOnEviction != 1) {
+				*error = "the wedged peer's connection outlived its seat (closed=" +
+				         std::to_string(fx.host.GetStats().connectionsClosedOnEviction) + "): " + fx.host.BuildReportJson();
+				return false;
+			}
 			// Every survivor drops the requirement at the SAME frame, or their committed sets diverge.
 			if (fx.host.GetPeerLeaveFrames().at(3) != fx.clientA.GetPeerLeaveFrames().at(3)) {
 				*error = "host and survivor disagreed on the leave frame";
@@ -4048,6 +4055,18 @@ namespace RTE {
 					*error = "the leave is not attributed to peer 2's own queue: " + host.BuildReportJson();
 					return false;
 				}
+				// The seat went, so the connection goes with it, in the same tick that took the seat.
+				if (hostT.IsPeerConnected(1) || s.connectionsClosedOnEviction != 1) {
+					*error = "the evicted seat kept its connection (closed=" + std::to_string(s.connectionsClosedOnEviction) +
+					         "): " + host.BuildReportJson();
+					return false;
+				}
+				// The close is the notice: the evicted peer stops there and then, rather than spending
+				// its own grace sending into a round that is no longer listening.
+				if (!client[0].IsFailed() || client[0].GetStats().timeoutReason.find("PeerDisconnected") == std::string::npos) {
+					*error = "the evicted peer did not stop when its seat was taken: " + client[0].BuildReportJson();
+					return false;
+				}
 				if (healLate) {
 					hostT.SetFaultConfig(healed);
 				}
@@ -4100,6 +4119,7 @@ namespace RTE {
 			           " longest_hold_ms=" + std::to_string(s.longestCongestionHoldMs) +
 			           " overflows=" + std::to_string(s.relayBacklogOverflows) +
 			           " ignored_stops=" + std::to_string(s.stopsFromLeftPeers) +
+			           " closed_on_eviction=" + std::to_string(s.connectionsClosedOnEviction) +
 			           " client_frames=" + std::to_string(client[0].GetStats().nextFrame) + "/" +
 			           std::to_string(client[1].GetStats().nextFrame) + "/" + std::to_string(client[2].GetStats().nextFrame);
 			return true;

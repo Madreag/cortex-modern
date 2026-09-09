@@ -2449,6 +2449,7 @@ namespace RTE {
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";
+		out << "\"connections_closed_on_eviction\":" << m_Stats.connectionsClosedOnEviction << ",";
 		out << "\"peers_left\":" << m_PeerLeaveFrames.size() << ",";
 		out << "\"peer_leave_frames\":{";
 		for (auto it = m_PeerLeaveFrames.begin(); it != m_PeerLeaveFrames.end(); ++it) {
@@ -3124,7 +3125,7 @@ namespace RTE {
 
 	// A leave is deterministic by construction: no survivor can advance to the leaver's first missing
 	// frame without processing this, so every peer drops the requirement at the same tick.
-	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced) {
+	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport) {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
@@ -3139,7 +3140,17 @@ namespace RTE {
 		notice.frame = firstFrameWithout;
 		notice.message = message;
 		RelayToOtherRemotes({notice}, peerId);
+		const auto transportIt = m_RemoteTransports.find(peerId);
+		const NetPeerId transportId = transportIt != m_RemoteTransports.end() ? transportIt->second : c_InvalidNetPeerId;
 		m_RemoteTransports.erase(peerId);
+		// A seat the round took keeps nothing. Its packets still cost receive work, and on a link that
+		// fails one way they keep the connection's own timeout alive; a returner comes back on a new
+		// connection through the reconnect path, so this is not the way back. The transport flushes what
+		// is still queued before it closes.
+		if (closeTransport && m_RelayHost && m_Transport && transportId != c_InvalidNetPeerId) {
+			++m_Stats.connectionsClosedOnEviction;
+			m_Transport->Disconnect(transportId, "seat taken: " + message);
+		}
 		ForgetCongestion(peerId);
 		m_LastLeaveMessage = message;
 		// A holder that DROPPED with a live ticket is not gone yet: the round plays on exactly as it does
@@ -3216,7 +3227,7 @@ namespace RTE {
 				break;
 			}
 			++m_Stats.peersDroppedSilent;
-			ApplyPeerLeave(peerId, FirstFrameWithout(peerId), "no frames for " + std::to_string(budget) + "ms", nowMs, false);
+			ApplyPeerLeave(peerId, FirstFrameWithout(peerId), "no frames for " + std::to_string(budget) + "ms", nowMs, false, true);
 		}
 	}
 
@@ -3231,7 +3242,7 @@ namespace RTE {
 				continue;
 			}
 			const std::string& reason = m_Stats.peers[peerId].lastRelayError;
-			ApplyPeerLeave(peerId, FirstFrameWithout(peerId), "unreachable: " + (reason.empty() ? m_Stats.lastRelayError : reason), nowMs, false);
+			ApplyPeerLeave(peerId, FirstFrameWithout(peerId), "unreachable: " + (reason.empty() ? m_Stats.lastRelayError : reason), nowMs, false, true);
 		}
 	}
 
