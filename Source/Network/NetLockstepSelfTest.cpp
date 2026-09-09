@@ -3749,6 +3749,308 @@ namespace RTE {
 			std::cout << "[net-lockstep-selftest] PASS client_follows_the_hosts_new_round readoptions=" << client.GetStats().roundReadoptions << std::endl;
 			return true;
 		}
+		// ---- round-start-review: adversarial cases -------------------------------------------------
+		// Independent review of stage2/round-start-fixes. These are written to hold what the branch
+		// claims; a RED line here is a finding against the branch, not against the base.
+		constexpr uint32_t c_ReviewStartBudget = 3000;
+
+		// ReadoptRound leaves the round without clearing what the round said about who is GONE.
+		// Start() clears m_PeerLeaveFrames/m_LeftSeatsHeld; ReadoptRound keeps them, so the one peer
+		// that FOLLOWS a new round carries the old round's leave map into it and alone stops requiring
+		// the returned peer's frames - which is exactly the peer the rejoin resync exists to bring back.
+		bool TestReviewReadoptClearsTheLeftPeer(std::string* error) {
+			const uint16_t port = 43110;
+			const uint64_t sessionId = 0x70000000000000B0ULL;
+			const uint64_t roundOne = 0x9A5E0000000000B0ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+			    !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint64_t round) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 60000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.roundId = round;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &clientA, &clientB}) > c_ReviewStartBudget) {
+						return false;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true, roundOne), error) ||
+			    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false, 0), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false, 0), error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); }, 2000)) {
+				*error = "the first round never started";
+				return false;
+			}
+			// Peer 3 drops; the host adjudicates and announces the leave at frame 0, which is the notice
+			// ApplyPeerLeave relays. Client A has committed nothing, so it stays eligible to follow.
+			NetLockstepStop leave;
+			leave.senderPeerId = 3;
+			leave.reason = NetLockstepStopReason::PeerLeft;
+			leave.frame = 0;
+			leave.message = "connection lost";
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({leave}, bytes, error) || !hostT.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 100);
+			if (clientA.GetStats().framesAccepted != 0 || !clientA.IsRunning()) {
+				*error = "client A is not in the state this fixture needs (accepted=" +
+				         std::to_string(clientA.GetStats().framesAccepted) + ")";
+				return false;
+			}
+			// Peer 3 comes back: the host resyncs onto a new round and peer 3 restarts into it. Client A
+			// never restarts - it follows.
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true, roundTwo), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false, 0), error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); }, 6000)) {
+				*error = "the round never re-formed: A=" + clientA.BuildReportJson();
+				return false;
+			}
+			if (clientA.GetStats().roundReadoptions != 1 || clientA.GetRoundId() != roundTwo) {
+				*error = "client A did not follow the host onto the new round (readoptions=" +
+				         std::to_string(clientA.GetStats().roundReadoptions) + ")";
+				return false;
+			}
+			// In the NEW round peer 3 is present and required by everyone. Only the host and A produce.
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) ||
+			    !clientA.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 500);
+			if (clientA.GetStats().framesAccepted != 0 || host.GetStats().framesAccepted != 0) {
+				*error = "the followed round committed a different frame set on the follower: A accepted=" +
+				         std::to_string(clientA.GetStats().framesAccepted) + " host accepted=" +
+				         std::to_string(host.GetStats().framesAccepted) +
+				         " - A carried the old round's leave record for peer 3 through ReadoptRound";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS review_readopt_clears_the_left_peer" << std::endl;
+			return true;
+		}
+
+		// A stop the round deferred belongs to the round that deferred it. Start() drops it; ReadoptRound
+		// keeps it, so a peer that follows the host into the next match stops that one at its first tick.
+		bool TestReviewReadoptClearsTheDeferredStop(std::string* error) {
+			const uint16_t port = 43113;
+			const uint64_t sessionId = 0x70000000000000B3ULL;
+			const uint64_t roundOne = 0x9A5E0000000000B3ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 60000;
+			clientConfig.timeoutMs = 60000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			client.DeferStopsToTickBoundary();
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_ReviewStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the round never started";
+				return false;
+			}
+			// The host completes the match one frame ahead of the client's applied tick; the client holds
+			// the stop for that tick boundary, exactly as the deferred-stop path requires.
+			NetLockstepStop complete;
+			complete.senderPeerId = 1;
+			complete.reason = NetLockstepStopReason::Complete;
+			complete.frame = 1;
+			complete.message = "match over";
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({complete}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 100);
+			if (!client.IsRunning() || client.GetStats().framesAccepted != 0) {
+				*error = "the client is not in the state this fixture needs";
+				return false;
+			}
+			// The host starts the next match on the same start frame; the client follows it.
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && client.IsRunning() && client.GetRoundId() == roundTwo; }, 4000)) {
+				*error = "the client never followed the host onto the next match: " + client.BuildReportJson();
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetStats().framesAccepted == 1; }, 1000)) {
+				*error = "the followed round did not commit its first frame";
+				return false;
+			}
+			client.FinishSimulationTick(0);
+			if (!client.IsRunning()) {
+				*error = "the previous round's deferred Complete stopped the round the client followed: " +
+				         client.GetStats().timeoutReason;
+				return false;
+			}
+			// The deferred-stop MODE is the launch path's, not the round's: a follower that dropped it
+			// would apply a stop at a point no other peer does. A Complete for a later frame is held.
+			NetLockstepStop later;
+			later.senderPeerId = 1;
+			later.reason = NetLockstepStopReason::Complete;
+			later.frame = 5;
+			later.message = "later match over";
+			if (!EncodePacket({later}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 100);
+			if (!client.IsRunning()) {
+				*error = "the follower stopped applying deferred stops at the tick boundary: " + client.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS review_readopt_clears_the_deferred_stop deferred_mode_kept" << std::endl;
+			return true;
+		}
+
+		// The whole round formed, then ONE stray repeated start: the four-peer shape whose answers
+		// doubled per tick on the unfixed engine. Measures what the tip actually sends in a second.
+		bool TestReviewFourPeerStrayStartRate(std::string* error) {
+			const uint16_t port = 43111;
+			const uint64_t sessionId = 0x70000000000000B1ULL;
+			const uint64_t roundId = 0x9A5E0000000000B1ULL;
+			LoopbackTransport hostT, clientAT, clientBT, clientCT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) ||
+			    !clientBT.Connect("loopback", port, error) || !clientCT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 60000;
+				c.localPeerId = local;
+				c.peerCount = 4;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.roundId = relay ? roundId : 0;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB, clientC;
+			uint64_t now = 0;
+			bool budgetHit = false;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					clientC.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &clientA, &clientB, &clientC}) > c_ReviewStartBudget) {
+						budgetHit = true;
+						return false;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+					clientCT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}, {4, 3}}, true), error) ||
+			    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error) ||
+			    !clientC.Start(clientCT, cfg(4, {{1, 1}}, false), error)) {
+				return false;
+			}
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning() && clientC.IsRunning(); }, 2000)) {
+				*error = "the four-peer round never started";
+				return false;
+			}
+			const uint32_t before = StartsSent({&host, &clientA, &clientB, &clientC});
+			NetLockstepStart repeat;
+			repeat.sessionId = sessionId;
+			repeat.startFrame = 0;
+			repeat.inputDelayFrames = 0;
+			repeat.controllerFrameVersion = ControllerFrame::c_Version;
+			repeat.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			repeat.localPeerId = 2;
+			repeat.peerCount = 4;
+			repeat.scenario = "LockstepSelfTest";
+			repeat.ownershipPolicy = "unique-id-split";
+			repeat.roundId = roundId;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({repeat}, bytes, error) || !clientAT.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			const uint64_t startedAt = now;
+			drive([&] { return false; }, 1000);
+			const uint32_t sent = StartsSent({&host, &clientA, &clientB, &clientC}) - before;
+			const uint64_t elapsed = now - startedAt;
+			if (sent > 40 || budgetHit) {
+				*error = "one stray start in a formed four-peer round produced " + std::to_string(sent) +
+				         " starts in " + std::to_string(elapsed) + "ms" + (budgetHit ? " (budget stop)" : "");
+				return false;
+			}
+			if (host.IsFailed() || !host.IsRunning() || !clientA.IsRunning() || !clientB.IsRunning() || !clientC.IsRunning()) {
+				*error = "a stray start disturbed the running four-peer round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS review_four_peer_stray_start_rate starts=" << sent
+			          << " in " << elapsed << "ms" << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -3759,6 +4061,9 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestReviewReadoptClearsTheLeftPeer(&error) ||
+		    !TestReviewReadoptClearsTheDeferredStop(&error) ||
+		    !TestReviewFourPeerStrayStartRate(&error) ||
 		    !TestCoordinatorClientFollowsTheHostsNewRound(&error) ||
 		    !TestCoordinatorRestartedPeerIsNotHandedTheOldRound(&error) ||
 		    !TestCoordinatorRepeatedStartCarriesTheRound(&error) ||

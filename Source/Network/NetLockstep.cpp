@@ -1648,43 +1648,15 @@ namespace RTE {
 		m_RemoteTransports = std::move(remoteTransports);
 		m_RelayHost = config.relayToOtherPeers;
 		m_DeferStops = false;
-		m_PendingRecoveryStop.reset();
-		m_PendingCompleteStop.reset();
-		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::WaitingForStart;
-		m_RemoteStartsReceived.clear();
-		m_PeersPlayedThisRound.clear();
-		m_RemoteStarts.clear();
-		m_LastStartAnswerMs.clear();
-		m_PeerLeaveFrames.clear();
-		m_LeftSeatsHeld.clear();
-		m_PeerLastHeardMs.clear();
-		m_UnreachablePeers.clear();
-		m_RelayBacklog.clear();
-		m_RelayBacklogSinceMs.clear();
-		m_LastLeaveMessage.clear();
-		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
-		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
-		m_WaitStartMs = 0;
-		m_LastStallFrame = UINT64_MAX;
+		ResetRoundState();
+		// A round of our own produces its own input; a round we FOLLOW keeps what we already queued.
 		m_LocalFrames.clear();
-		m_RemoteFrames.clear();
 		m_LocalCommands.clear();
-		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
-		m_PendingObservations.clear();
-		m_DroppedObservations.clear();
-		m_ObservationDecodeTables.Reset();
-		m_ObservationEncodeTables.Reset();
-		m_RemoteObservations.clear();
-		m_LocalChecksums.clear();
-		m_RemoteChecksums.clear();
-		m_ReadyFrames.clear();
+		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_RoundId = config.roundId;
 		m_ObservationDecodeTables.roundId = m_RoundId;
-		m_LastStartSentMs = UINT64_MAX;
-		m_PreStartFrames.clear();
-		m_PreStartChecksums.clear();
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
 		m_Stats.configuredStartFrame = config.startFrame;
@@ -1738,26 +1710,48 @@ namespace RTE {
 	// The round is the host's to name, so everything the REMOTES said belongs to the one we are leaving.
 	// Our own production stands and goes out again under the new tag: a start we follow carries this
 	// round's start frame and delays, so every frame we queued still targets the same frames.
-	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
-		m_RoundId = roundId;
-		++m_Stats.roundReadoptions;
+	// Everything one round owns. Start, StartReplay and a round we follow all pass through here, so a
+	// field a round carries cannot be reset in two of the three and forgotten in the last. What stays
+	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
+	void NetLockstepCoordinator::ResetRoundState() {
+		m_PendingRecoveryStop.reset();
+		m_PendingCompleteStop.reset();
+		m_LastCompletedSimulationTick.reset();
 		m_RemoteStartsReceived.clear();
-		m_RemoteStarts.clear();
 		m_PeersPlayedThisRound.clear();
+		m_RemoteStarts.clear();
 		m_LastStartAnswerMs.clear();
-		m_PreStartFrames.clear();
-		m_PreStartChecksums.clear();
+		m_PeerLeaveFrames.clear();
+		m_LeftSeatsHeld.clear();
+		m_PeerLastHeardMs.clear();
+		m_UnreachablePeers.clear();
+		m_RelayBacklog.clear();
+		m_RelayBacklogSinceMs.clear();
+		m_LastLeaveMessage.clear();
+		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+		m_WaitStartMs = 0;
+		m_LastStallFrame = UINT64_MAX;
 		m_RemoteFrames.clear();
 		m_RemoteCommands.clear();
 		m_RemoteObservations.clear();
 		m_RemoteChecksums.clear();
+		m_LocalChecksums.clear();
 		m_PendingObservations.clear();
 		m_DroppedObservations.clear();
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
+		m_ReadyFrames.clear();
+		m_PreStartFrames.clear();
+		m_PreStartChecksums.clear();
+		m_LastStartSentMs = UINT64_MAX;
+	}
+
+	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
+		m_RoundId = roundId;
+		++m_Stats.roundReadoptions;
+		ResetRoundState();
 		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_State = NetLockstepState::WaitingForStart;
-		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		std::string ignored;
 		(void)SendStart(&ignored);
 		++m_Stats.startRetransmits;
@@ -1864,43 +1858,14 @@ namespace RTE {
 		m_RemoteTransports.clear();
 		m_RelayHost = false;
 		m_DeferStops = false;
-		m_PendingRecoveryStop.reset();
-		m_PendingCompleteStop.reset();
-		m_LastCompletedSimulationTick.reset();
 		m_State = NetLockstepState::Running;
-		m_RemoteStartsReceived.clear();
-		m_PeersPlayedThisRound.clear();
-		m_RemoteStarts.clear();
-		m_LastStartAnswerMs.clear();
-		m_PeerLeaveFrames.clear();
-		m_LeftSeatsHeld.clear();
-		m_PeerLastHeardMs.clear();
-		m_UnreachablePeers.clear();
-		m_RelayBacklog.clear();
-		m_RelayBacklogSinceMs.clear();
-		m_LastLeaveMessage.clear();
-		m_PeerEffectiveStart.clear();
-		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
-		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
-		m_WaitStartMs = 0;
-		m_LastStallFrame = UINT64_MAX;
+		ResetRoundState();
 		m_LocalFrames.clear();
-		m_RemoteFrames.clear();
 		m_LocalCommands.clear();
-		m_RemoteCommands.clear();
 		m_LocalObservations.clear();
-		m_PendingObservations.clear();
-		m_DroppedObservations.clear();
-		m_ObservationDecodeTables.Reset();
-		m_ObservationEncodeTables.Reset();
-		m_RemoteObservations.clear();
-		m_LocalChecksums.clear();
-		m_RemoteChecksums.clear();
-		m_ReadyFrames.clear();
+		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
+		m_PeerEffectiveStart.clear();
 		m_RoundId = 0;
-		m_LastStartSentMs = UINT64_MAX;
-		m_PreStartFrames.clear();
-		m_PreStartChecksums.clear();
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
 		m_Stats.configuredStartFrame = config.startFrame;
