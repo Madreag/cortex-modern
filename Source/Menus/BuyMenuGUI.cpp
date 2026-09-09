@@ -2468,13 +2468,13 @@ void BuyMenuGUI::TryPurchase() {
 
 std::string BuyMenuGUI::SaveCheckpoint() const {
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
-	CheckpointWriter writer("BuyMenuGUI2");
+	CheckpointWriter writer("BuyMenuGUI3");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
 	writer(GUICheckpoint::SaveEntityReference(m_pSelectedCraft));
 	std::vector<bool> expanded;
 	if (m_aExpandedModules) for (int i = 0; i < g_PresetMan.GetTotalModuleCount(); ++i) expanded.push_back(m_aExpandedModules[i]);
-	writer(expanded, m_Loadouts.size());
+	writer(m_aExpandedModules != nullptr, GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
 	for (const auto& loadout: m_Loadouts) {
 		std::vector<std::string> cargo;
 		for (const auto* item: loadout.m_CargoItems) cargo.push_back(GUICheckpoint::SaveEntityReference(item));
@@ -2491,15 +2491,27 @@ bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if (text.starts_with("11 BuyMenuGUI1 ")) {
 			CheckpointReader reader(text, "BuyMenuGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
 		}
-		CheckpointReader reader(text, "BuyMenuGUI2", validateOnly);
+		const bool byModuleID = text.starts_with("11 BuyMenuGUI2 ");
+		CheckpointReader reader(text, byModuleID ? "BuyMenuGUI2" : "BuyMenuGUI3", validateOnly);
 		reader(m_CheckpointInitialized);
 		VisitCheckpoint(reader, *this);
 		std::string selected, controls;
 		std::vector<bool> expanded;
 		size_t count;
-		reader.Value(selected); reader.Value(expanded); reader.Value(count);
+		reader.Value(selected);
+		if (byModuleID) {
+			std::vector<bool> saved;
+			reader.Value(saved);
+			if (!saved.empty()) expanded = GUICheckpoint::LoadModuleFlags(saved);
+		} else {
+			bool anyExpanded;
+			std::map<std::string, bool> saved;
+			reader.Value(anyExpanded); reader.Value(saved);
+			if (anyExpanded) expanded = GUICheckpoint::LoadModuleFlags(saved);
+		}
+		reader.Value(count);
 		GUICheckpoint::LoadEntityReference(selected, true);
-		if (count > text.size() || (!expanded.empty() && expanded.size() != static_cast<size_t>(g_PresetMan.GetTotalModuleCount()))) return false;
+		if (count > text.size()) return false;
 		struct SavedLoadout { std::string native, craft; bool complete; std::vector<std::string> cargo; };
 		std::vector<SavedLoadout> loadouts(count);
 		for (auto& item: loadouts) {

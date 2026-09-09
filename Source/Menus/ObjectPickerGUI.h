@@ -20,6 +20,7 @@ namespace RTE {
 
 	/// A GUI for picking object instances for placement to the Scene in various editors.
 	class ObjectPickerGUI {
+		friend class GUICheckpoint;
 
 	public:
 
@@ -139,8 +140,7 @@ namespace RTE {
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_PickerState, self.m_PickerFocus, self.m_OpenCloseSpeed, self.m_ModuleSpaceID,
 				self.m_ShowType, self.m_NativeTechModuleID, self.m_ForeignCostMult, self.m_ShownGroupIndex,
-				self.m_SelectedGroupIndex, self.m_SelectedObjectIndex, self.m_RepeatStartTimer, self.m_RepeatTimer,
-				self.m_ExpandedModules);
+				self.m_SelectedGroupIndex, self.m_SelectedObjectIndex, self.m_RepeatStartTimer, self.m_RepeatTimer);
 		}
 		/// Enumeration for ObjectPicker states when enabling/disabling the ObjectPicker.
 		enum class PickerState {

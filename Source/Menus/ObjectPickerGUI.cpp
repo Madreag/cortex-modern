@@ -618,10 +618,10 @@ void ObjectPickerGUI::Draw(BITMAP* drawBitmap) const {
 
 std::string ObjectPickerGUI::SaveCheckpoint() const {
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
-	CheckpointWriter writer("ObjectPickerGUI2");
+	CheckpointWriter writer("ObjectPickerGUI3");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
-	writer(GUICheckpoint::SaveEntityReference(m_PickedObject), m_GUIControlManager != nullptr);
+	writer(GUICheckpoint::SaveModuleFlags(m_ExpandedModules), GUICheckpoint::SaveEntityReference(m_PickedObject), m_GUIControlManager != nullptr);
 	if (m_GUIControlManager) writer(m_GUIControlManager->SaveCheckpoint());
 	return writer.Text();
 }
@@ -629,12 +629,29 @@ std::string ObjectPickerGUI::SaveCheckpoint() const {
 bool ObjectPickerGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
 		if (!validateOnly && !LoadCheckpoint(text, true)) return false;
+		// The expansion flags follow the visited fields and are indexed by module ID, which the
+		// installation that saved them decided, so they come back sized to the modules we have.
+		const auto expanded = [this](CheckpointReader& reader, bool byModuleID) {
+			std::vector<bool> flags;
+			if (byModuleID) {
+				std::vector<bool> saved;
+				reader.Value(saved);
+				flags = GUICheckpoint::LoadModuleFlags(saved);
+			} else {
+				std::map<std::string, bool> saved;
+				reader.Value(saved);
+				flags = GUICheckpoint::LoadModuleFlags(saved);
+			}
+			reader.OnCommit([this, flags] { m_ExpandedModules = flags; });
+		};
 		if (text.starts_with("16 ObjectPickerGUI1 ")) {
-			CheckpointReader reader(text, "ObjectPickerGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
+			CheckpointReader reader(text, "ObjectPickerGUI1", validateOnly); VisitCheckpoint(reader, *this); expanded(reader, true); reader.Finish(); return true;
 		}
-		CheckpointReader reader(text, "ObjectPickerGUI2", validateOnly);
+		const bool byModuleID = text.starts_with("16 ObjectPickerGUI2 ");
+		CheckpointReader reader(text, byModuleID ? "ObjectPickerGUI2" : "ObjectPickerGUI3", validateOnly);
 		reader(m_CheckpointInitialized);
 		VisitCheckpoint(reader, *this);
+		expanded(reader, byModuleID);
 		std::string picked, controls;
 		bool hasControls;
 		reader.Value(picked); reader.Value(hasControls);
