@@ -624,8 +624,12 @@ namespace RTE {
 					}
 					if constexpr (std::is_same_v<Payload, NetLobbyReady> || std::is_same_v<Payload, NetLobbyConfigAck>) return false;
 					if constexpr (std::is_same_v<Payload, NetLobbyAbort> || std::is_same_v<Payload, NetLobbyHello>) return payload.peerId == sender->first;
+					// The host is a client's only remote and the roster's sole authority, so a state for
+					// a peer we have no slot for yet is an ordering race with its match config, not an
+					// impostor: HandlePeerState drops it. Failing the session over a name-and-ping
+					// message left a joiner dead in a four-member lobby.
 					if constexpr (std::is_same_v<Payload, NetLobbyPeerState>) {
-						return std::any_of(m_Config.matchConfig.players.begin(), m_Config.matchConfig.players.end(), [&](const NetMatchPlayerSlot& slot) { return slot.peerId == payload.peerId; });
+						return true;
 					}
 					return true;
 				}, decoded.message.payload);
@@ -736,6 +740,13 @@ namespace RTE {
 		// Accept any roster peer, not just direct remotes: a client hears its SIBLINGS through the
 		// host's relay, so every lobby shows real names and readies for the whole roster.
 		if (message.peerId == 0 || message.peerId == m_Config.localPeerId) {
+			return;
+		}
+		// Only peers this config seats: a state that outran its match config names a peer we cannot
+		// place, and the next periodic state carries it again once the config lands.
+		if (!m_Config.host && std::none_of(m_Config.matchConfig.players.begin(), m_Config.matchConfig.players.end(),
+		                                   [&](const NetMatchPlayerSlot& slot) { return slot.peerId == message.peerId; })) {
+			++m_Stats.unconfiguredPeerStates;
 			return;
 		}
 		if (!message.connected) {

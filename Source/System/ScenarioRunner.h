@@ -115,6 +115,11 @@ namespace RTE {
 		static const std::string& GetControllerReplayError();
 
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator);
+		/// Pumps the coordinator until the relay host owes no peer a forward, or the budget runs out,
+		/// then keeps relaying for lingerMs. The star's hub is the only route between its clients, so
+		/// quitting with a forward still held takes the round off every client that was waiting on it.
+		/// Returns whether it drained.
+		static bool DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs);
 		static bool FinishLockstepSimulationTick(uint64_t completedTick);
 
 		/// Enable the "waiting for peer" overlay drawn while the lockstep wait is stalled. Interactive
@@ -155,6 +160,11 @@ namespace RTE {
 
 		/// Whether the round is running only because a dropped player still has a seat to come back to.
 		static bool IsLockstepHoldingSeatForReclaim();
+
+		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
+		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
+		/// including the leave the waited-for peer is waiting to have acknowledged.
+		static void SetSessionPump(std::function<void()> pump);
 
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.

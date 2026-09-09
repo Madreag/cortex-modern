@@ -1795,7 +1795,11 @@ namespace RTE {
 			// A leaver's team falls to its next surviving human peer, so the units play on. The
 			// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
 			if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
-				ownerPeerId = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+				const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
+				// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
+				// teammate the relay host plays its units until the holder returns, instead of standing
+				// them down to be shot where they stand - the round is held open only while it is alone.
+				ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
 			}
 			return ownerPeerId;
 		}
@@ -1825,8 +1829,9 @@ namespace RTE {
 		if (!IsPeerGoneAtFrame(NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled}), frame)) {
 			return false;
 		}
-		// The team's units fall to the next surviving human peer; only an ownerless team stands down.
-		return FirstAliveHumanPeerForTeam(team, frame) == 0;
+		// The team's units fall to the next surviving human peer; only an ownerless team stands down,
+		// and a seat still inside its reclaim window is not ownerless (the relay host plays it).
+		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsHoldingSeatForReclaim();
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
@@ -1937,6 +1942,9 @@ namespace RTE {
 		out << "\"relay_send_failures\":" << m_Stats.relaySendFailures << ",";
 		out << "\"relay_resends\":" << m_Stats.relayResends << ",";
 		out << "\"relay_backlog_peers\":" << m_RelayBacklog.size() << ",";
+		out << "\"relay_bytes_sent\":" << m_Stats.relayBytesSent << ",";
+		out << "\"largest_relay_packet_bytes\":" << m_Stats.largestRelayPacketBytes << ",";
+		out << "\"relay_backlog_bytes\":" << m_Stats.relayBacklogBytes << ",";
 		out << "\"last_relay_error\":\"" << EscapeJson(m_Stats.lastRelayError) << "\",";
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
@@ -1963,6 +1971,9 @@ namespace RTE {
 			    << ",\"relay_packets_sent\":" << peer.relayPacketsSent
 			    << ",\"relay_send_failures\":" << peer.relaySendFailures
 			    << ",\"relay_resends\":" << peer.relayResends
+			    << ",\"relay_bytes_sent\":" << peer.relayBytesSent
+			    << ",\"largest_relay_packet_bytes\":" << peer.largestRelayPacketBytes
+			    << ",\"relay_backlog_packets\":" << RelayBacklogPackets(it->first)
 			    << ",\"highest_target_frame\":" << peer.highestTargetFrame
 			    << ",\"last_heard_ms\":" << peer.lastHeardMs << "}";
 		}
@@ -1993,8 +2004,30 @@ namespace RTE {
 		}
 		// Send to every remote peer's transport (a set of one in the 2-peer case).
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
-			if (!m_Transport->Send(transportId, lane, bytes, error)) {
+			// Behind an undrained backlog, or this peer's stream would arrive out of order.
+			const bool backlogged = lane == m_Config.frameLane && [&] {
+				const auto backlogIt = m_RelayBacklog.find(peerId);
+				return backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty();
+			}();
+			std::string sendError;
+			if (!backlogged && m_Transport->Send(transportId, lane, bytes, &sendError)) {
+				continue;
+			}
+			// One client's refused send is that peer's problem, not the round's: a seat reclaimed by a
+			// newer connection leaves a handle the transport has forgotten, and the host must not end
+			// everyone's match on it. Frames take the same retry backlog a refused forward takes, so a
+			// brief refusal still arrives in order; a client has one link, so its refusal stays fatal.
+			if (!m_RelayHost) {
+				if (error) *error = sendError;
 				return false;
+			}
+			if (!backlogged) {
+				++m_Stats.relaySendFailures;
+				++m_Stats.peers[peerId].relaySendFailures;
+				m_Stats.lastRelayError = sendError;
+			}
+			if (lane == m_Config.frameLane) {
+				QueueRelayBacklog(peerId, bytes);
 			}
 		}
 		return true;
@@ -2036,8 +2069,7 @@ namespace RTE {
 			NetLockstepPeerStats& peerStats = m_Stats.peers[peerId];
 			std::string sendError;
 			if (m_Transport->Send(transportId, m_Config.frameLane, bytes, &sendError)) {
-				++m_Stats.relayPacketsSent;
-				++peerStats.relayPacketsSent;
+				CountRelaySent(peerStats, bytes.size());
 				continue;
 			}
 			// A refused forward was never queued, and on a reliable lane the receiver cannot ask for
@@ -2050,6 +2082,33 @@ namespace RTE {
 		}
 	}
 
+	// Every forward's cost to the destination's send buffer, so a refusal can be read against the
+	// bytes that filled it rather than the packet count.
+	void NetLockstepCoordinator::CountRelaySent(NetLockstepPeerStats& peerStats, size_t bytes) {
+		++m_Stats.relayPacketsSent;
+		++peerStats.relayPacketsSent;
+		m_Stats.relayBytesSent += bytes;
+		peerStats.relayBytesSent += bytes;
+		const uint32_t size = static_cast<uint32_t>(bytes);
+		m_Stats.largestRelayPacketBytes = std::max(m_Stats.largestRelayPacketBytes, size);
+		peerStats.largestRelayPacketBytes = std::max(peerStats.largestRelayPacketBytes, size);
+	}
+
+	uint64_t NetLockstepCoordinator::RelayBacklogBytes() const {
+		uint64_t bytes = 0;
+		for (const auto& [peerId, backlog]: m_RelayBacklog) {
+			for (const std::vector<uint8_t>& packet : backlog) {
+				bytes += packet.size();
+			}
+		}
+		return bytes;
+	}
+
+	uint32_t NetLockstepCoordinator::RelayBacklogPackets(uint8_t peerId) const {
+		const auto backlog = m_RelayBacklog.find(peerId);
+		return backlog == m_RelayBacklog.end() ? 0 : static_cast<uint32_t>(backlog->second.size());
+	}
+
 	void NetLockstepCoordinator::QueueRelayBacklog(uint8_t peerId, const std::vector<uint8_t>& bytes) {
 		std::deque<std::vector<uint8_t>>& backlog = m_RelayBacklog[peerId];
 		// Past the skew window this peer could never catch up even if the transport freed up.
@@ -2058,6 +2117,7 @@ namespace RTE {
 			return;
 		}
 		backlog.push_back(bytes);
+		UpdateRelayBacklogBytes();
 	}
 
 	void NetLockstepCoordinator::FlushRelayBacklog(uint64_t nowMs) {
@@ -2075,10 +2135,9 @@ namespace RTE {
 					m_Stats.lastRelayError = sendError;
 					break;
 				}
-				++m_Stats.relayPacketsSent;
 				++m_Stats.relayResends;
-				++m_Stats.peers[peerId].relayPacketsSent;
 				++m_Stats.peers[peerId].relayResends;
+				CountRelaySent(m_Stats.peers[peerId], it->second.front().size());
 				it->second.pop_front();
 			}
 			if (it->second.empty()) {
@@ -2092,6 +2151,7 @@ namespace RTE {
 			}
 			++it;
 		}
+		UpdateRelayBacklogBytes();
 	}
 
 	void NetLockstepCoordinator::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
@@ -2124,8 +2184,10 @@ namespace RTE {
 					break;
 				}
 				// A superseded incarnation's socket finally closing says nothing about the seat: its live
-				// holder is another transport, which the resync brings into the round.
+				// holder is another transport, which the resync brings into the round. The dead handle
+				// leaves the round with it, or the next send names a peer the transport has forgotten.
 				if (m_RelayHost && lockstepPeer != 0 && SeatStateOf(lockstepPeer, event.peerId).fencedTransport) {
+					m_RemoteTransports.erase(lockstepPeer);
 					++m_Stats.ignoredAdmissionFaults;
 					break;
 				}

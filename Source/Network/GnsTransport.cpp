@@ -213,10 +213,35 @@ namespace RTE {
 				SendFlags(lane),
 				nullptr);
 			if (result != k_EResultOK) {
-				SetError(error, "SendMessageToConnection failed with EResult " + std::to_string(static_cast<int>(result)));
+				SetError(error, "SendMessageToConnection failed with EResult " + std::to_string(static_cast<int>(result)) +
+				                " (" + std::to_string(bytes.size()) + " bytes" + DescribeSendPressure(connectionIt->second) + ")");
 				return false;
 			}
 			return true;
+		}
+
+		// What the connection was holding when it refused. k_EResultLimitExceeded (25) means the
+		// pending bytes reached SendBufferSize, so the refusal is only readable next to that budget
+		// and the rate draining it.
+		std::string DescribeSendPressure(HSteamNetConnection connection) const {
+			std::string text;
+			SteamNetConnectionRealTimeStatus_t status{};
+			if (m_Interface->GetConnectionRealTimeStatus(connection, &status, 0, nullptr) == k_EResultOK) {
+				text += ", pending reliable " + std::to_string(status.m_cbPendingReliable) +
+				        ", unreliable " + std::to_string(status.m_cbPendingUnreliable) +
+				        ", unacked " + std::to_string(status.m_cbSentUnackedReliable) +
+				        ", rate " + std::to_string(status.m_nSendRateBytesPerSecond) + " B/s" +
+				        ", queue " + std::to_string(status.m_usecQueueTime / 1000) + "ms" +
+				        ", ping " + std::to_string(status.m_nPing) + "ms";
+			}
+			int32 budget = 0;
+			size_t budgetSize = sizeof(budget);
+			ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Int32;
+			if (SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Connection,
+			                                           connection, &type, &budget, &budgetSize) >= k_ESteamNetworkingGetConfigValue_OK) {
+				text += ", buffer budget " + std::to_string(budget);
+			}
+			return text;
 		}
 
 		void Disconnect(NetPeerId peerId, const std::string& reason) {
@@ -230,6 +255,10 @@ namespace RTE {
 			m_Interface->CloseConnection(connection, 0, reason.c_str(), true);
 			m_HasLingeringClose = true;
 			ForgetConnection(connection);
+			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
+			// later callback finds no peer either. A peer leaving must look the same to us however it
+			// went, or state keyed on the connection - a held seat, most of all - is never cleaned up.
+			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 
 		void Stop() {

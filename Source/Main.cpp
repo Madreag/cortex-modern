@@ -173,11 +173,20 @@ static uint16_t s_netPort = 41010;
 static std::string s_netSessionReportPath;
 static bool s_netExitAfterReady = false;
 static bool s_netAllowUserdata = false;
+// Phase B, unattended gates: the host stands in for a moderator on the seat it is told to watch.
+static bool s_netH4Substitute = false;
+static uint16_t s_netH4SubstituteSeat = 0;
+static uint64_t s_netH4SubstituteDelayMs = 0;
+static bool s_netH4SubstituteCancel = false;
 static bool s_netLockstep = false;
 static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netLockstepReportPath;
+// A capped stop holds the link while the relay host hands over what it still owes; a client one
+// input-delay behind needs those forwards to finish its own last tick.
+static constexpr uint32_t c_CappedStopDrainMs = 8000;
+static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static uint64_t s_netLockstepTicks = 0;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
@@ -544,6 +553,33 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-reconnect-ticket") {
 			NetMatchService::SetTicketStorePath(argValue[++i]);
+			continue;
+		}
+
+		// Phase B, unattended gates: the joiner asks the host for a seat instead of joining one, and
+		// the host approves the first applicant for that seat the way a moderator would.
+		if (!lastArg && currentArg == "-net-h4-apply") {
+			NetMatchService::SetApplyForSeat(true, static_cast<uint16_t>(std::stoi(argValue[++i])));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-h4-substitute") {
+			s_netH4Substitute = true;
+			s_netH4SubstituteSeat = static_cast<uint16_t>(std::stoi(argValue[++i]));
+			NetMatchService::SetAutoSubstitute(s_netH4Substitute, s_netH4SubstituteSeat, s_netH4SubstituteDelayMs, s_netH4SubstituteCancel);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-h4-substitute-delay") {
+			s_netH4SubstituteDelayMs = static_cast<uint64_t>(std::stoll(argValue[++i]));
+			NetMatchService::SetAutoSubstitute(s_netH4Substitute, s_netH4SubstituteSeat, s_netH4SubstituteDelayMs, s_netH4SubstituteCancel);
+			continue;
+		}
+
+		if (currentArg == "-net-h4-substitute-cancel") {
+			s_netH4SubstituteCancel = true;
+			NetMatchService::SetAutoSubstitute(s_netH4Substitute, s_netH4SubstituteSeat, s_netH4SubstituteDelayMs, s_netH4SubstituteCancel);
+			++i;
 			continue;
 		}
 
@@ -1908,6 +1944,21 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
 			System::SetQuit(true);
+		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+			// The last peer announced its leave, so the match is over rather than broken: it ends the
+			// way a finished one does, which keeps the seats and the admission counters in the report.
+			const Activity* leftActivity = g_ActivityMan.GetActivity();
+			const std::string result = (leftActivity && leftActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+			g_NetMatchService.FinishMatch(result);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
+			}
 		} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
 			// If our activity is not over, they left mid-match rather than finishing it.
@@ -2657,9 +2708,11 @@ void RunGameLoop() {
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 				if (g_MetricsCollector.GetTickHashCount() >= cap) {
 					std::cout << "[menu-mp] trace complete at tick " << g_TimerMan.GetSimUpdateCount() << std::endl;
+					// Hand over what we still owe BEFORE the goodbye, so a client one input-delay
+					// behind can finish its own last tick instead of losing the round to our exit.
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					g_NetMatchService.Complete("menu mp trace complete");
-					// Same capped-stop drain as the e2e path.
-					std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 					g_ActivityMan.EndActivity();
 					System::SetQuit(true);
 					break;
@@ -2791,10 +2844,12 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					if (s_netMatchServiceE2ERunningTicks > tickCap) {
-						g_NetMatchService.Complete("e2e complete");
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
-						// owes itself our in-flight tail, so hold the socket open before quitting drops it.
-						std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
+						// socket open before quitting drops it.
+						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
+						g_NetMatchService.Complete("e2e complete");
+						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 						g_ActivityMan.EndActivity();
 						System::SetQuit(true);
 						break;
@@ -3905,6 +3960,7 @@ int main(int argc, char** argv) {
 					scenarioExitCode = s_netReplayExitCode;
 				}
 				if (NetGameplayRequested()) {
+					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					netLockstepCoordinator.Complete(scenarioExitCode == 0 ? "scenario complete" : "scenario failed");
 				}
 			}

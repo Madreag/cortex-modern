@@ -69,11 +69,68 @@ namespace RTE {
 		return (entry != m_Seats.end() && entry->second.active) ? entry->second.lastGeneration : 0;
 	}
 
+	uint32_t NetSeatAuthRegistry::PeekNextGeneration(uint16_t seat) const {
+		if (!m_Active) {
+			return 0;
+		}
+		const auto entry = m_Seats.find(seat);
+		const uint32_t last = entry == m_Seats.end() ? 0U : entry->second.lastGeneration;
+		return last == UINT32_MAX ? 0U : last + 1U;
+	}
+
+	bool NetSeatAuthRegistry::AdoptCredential(uint16_t seat, uint32_t holderGeneration, const NetSeatCredential& credential) {
+		if (!m_Active || holderGeneration == 0 || holderGeneration != PeekNextGeneration(seat)) {
+			return false;
+		}
+		SeatEntry& entry = m_Seats[seat];
+		entry.lastGeneration = holderGeneration;
+		entry.active = true;
+		entry.credential = credential;
+		return true;
+	}
+
+	void NetSeatAuthRegistry::RetireCredentialForSubstitution(uint16_t seat) {
+		const auto entry = m_Seats.find(seat);
+		if (entry == m_Seats.end() || !entry->second.active) {
+			return;
+		}
+		entry->second.retiredGeneration = entry->second.lastGeneration;
+		entry->second.retiredCredential = entry->second.credential;
+		entry->second.hasRetired = true;
+	}
+
+	bool NetSeatAuthRegistry::HasRetiredGeneration(uint16_t seat, uint32_t holderGeneration) const {
+		if (!m_Active || holderGeneration == 0) {
+			return false;
+		}
+		const auto entry = m_Seats.find(seat);
+		return entry != m_Seats.end() && entry->second.hasRetired && entry->second.retiredGeneration == holderGeneration;
+	}
+
+	bool NetSeatAuthRegistry::VerifyRetiredProof(uint16_t seat, uint32_t holderGeneration, const NetH4Transcript& transcript, const NetAuthBytes32& mac) const {
+		if (!HasRetiredGeneration(seat, holderGeneration)) {
+			return false;
+		}
+		return NetH4VerifyProof(m_Seats.find(seat)->second.retiredCredential, transcript, mac);
+	}
+
+	void NetSeatAuthRegistry::ClearRetired(uint16_t seat) {
+		const auto entry = m_Seats.find(seat);
+		if (entry != m_Seats.end()) {
+			entry->second.hasRetired = false;
+			entry->second.retiredGeneration = 0;
+			entry->second.retiredCredential.fill(0);
+		}
+	}
+
 	void NetSeatAuthRegistry::RevokeSeat(uint16_t seat) {
 		const auto entry = m_Seats.find(seat);
 		if (entry != m_Seats.end()) {
 			entry->second.active = false;
 			entry->second.credential.fill(0);
+			entry->second.hasRetired = false;
+			entry->second.retiredGeneration = 0;
+			entry->second.retiredCredential.fill(0);
 		}
 	}
 

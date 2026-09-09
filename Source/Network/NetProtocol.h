@@ -39,6 +39,10 @@ namespace RTE {
 		Proof = 17,
 		LeaveRequest = 18,
 		LeaveAck = 19,
+		Applicant = 20,
+		ApplicantAck = 21,
+		SubstitutionOffer = 22,
+		SubstitutionAck = 23,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -60,6 +64,9 @@ namespace RTE {
 		// The one signal that lets a client delete its recovery record: the host sends it from the
 		// same place it clears the seat registry, so no credential can verify afterwards.
 		SessionEnded = 16,
+		// The host gave this seat to a substitute. Only a claimant that proved the superseded
+		// credential is ever told this, so it says nothing to anyone who does not already hold it.
+		SeatReassigned = 17,
 	};
 
 	enum class NetProtocolErrorCode {
@@ -309,6 +316,60 @@ namespace RTE {
 		bool operator==(const NetH4LeaveAck&) const = default;
 	};
 
+	/// Phase B: asking the host for a seat whose holder is gone. An applicant is inert - it holds no
+	/// peer id, no team, no snapshot and no authority until the host approves it and the commit lands.
+	struct NetH4Applicant {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		uint16_t stableSeat = 0;
+		NetH4Identity identity;
+		std::string displayName;
+
+		bool operator==(const NetH4Applicant&) const = default;
+	};
+
+	/// The applicant is on the host's list. It carries no seat secret: the credential is drawn only
+	/// when the host actually approves a substitution.
+	struct NetH4ApplicantAck {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		uint16_t stableSeat = 0;
+		uint32_t expiresInMs = 0;
+
+		bool operator==(const NetH4ApplicantAck&) const = default;
+	};
+
+	/// The host approved this applicant for the seat: here is the provisional ticket to persist and
+	/// the challenge to answer with it. The transaction id is the HOST's (P1), so holding it is
+	/// already proof of having received this offer.
+	struct NetH4SubstitutionOffer {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		NetAuthBytes32 credential{};
+		NetAuthBytes32 challenge{};
+		uint64_t hostSessionId = 0;
+		uint32_t provisionalExpiryMs = 0;
+
+		bool operator==(const NetH4SubstitutionOffer&) const = default;
+	};
+
+	/// The durable half of the substitution: the record is on disk AND the mac proves this connection
+	/// holds the credential it just stored, so no other connection can commit the seat in its place.
+	struct NetH4SubstitutionAck {
+		uint16_t h4Version = c_NetH4Version;
+		NetAuthBytes16 txId{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		NetAuthBytes16 clientNonce{};
+		NetAuthBytes32 mac{};
+		bool stored = false;
+
+		bool operator==(const NetH4SubstitutionAck&) const = default;
+	};
+
 	using NetPayload = std::variant<
 		NetClientHello,
 		NetHostHello,
@@ -328,7 +389,11 @@ namespace RTE {
 		NetH4Challenge,
 		NetH4Proof,
 		NetH4LeaveRequest,
-		NetH4LeaveAck>;
+		NetH4LeaveAck,
+		NetH4Applicant,
+		NetH4ApplicantAck,
+		NetH4SubstitutionOffer,
+		NetH4SubstitutionAck>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;
