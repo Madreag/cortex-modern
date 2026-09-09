@@ -92,8 +92,15 @@ namespace RTE {
 		}
 		std::vector<uint8_t> wireBytes;
 		NetLockstepError codecError;
-		if (!NetLockstepCodec::Encode({record}, wireBytes, &codecError)) {
+		// A record stands on its own, so it spells every observation key out; if a tick had more of them
+		// than one packet holds, say so rather than write a recording that is quietly short.
+		size_t observationsEncoded = observations.size();
+		if (!NetLockstepCodec::Encode({record}, wireBytes, &codecError, nullptr, &observationsEncoded)) {
 			if (error) *error = "could not encode a replay frame: " + codecError.message;
+			return false;
+		}
+		if (observationsEncoded < observations.size()) {
+			if (error) *error = "a replay frame's sound observations do not fit one record";
 			return false;
 		}
 		std::vector<uint8_t> bytes;

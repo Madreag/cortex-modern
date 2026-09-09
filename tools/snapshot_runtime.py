@@ -116,6 +116,7 @@ SCHEMAS["AudioRuntime1"] = [*fields("enabled next_voice next_sound_container mut
     ("player_positions", sequence(VECTOR)), ("listeners", sequence(array(4, array(3)))), ("groups", array(4, "o")),
     *fields("samples voices", sequence("o")), ("minimum_distances", sequence(array(2))), ("events", array(4, sequence("o")))]
 SCHEMAS["AudioRuntime2"] = [*SCHEMAS["AudioRuntime1"], ("audibility", sequence("o"))]
+SCHEMAS["AudioRuntime3"] = [*SCHEMAS["AudioRuntime2"], *fields("deferred_sound_op_tick deferred_sound_op_ordinal")]
 SCHEMAS["CommittedAudibility1"] = fields("object_uid tick phase occurrence ordinal peer frame value")
 SCHEMAS["SoundPlayback1"] = [("voices", sequence("o"))]
 SCHEMAS["SoundContainer1"] = [("entity", "o"), ("identity", "n"), ("playing_channels", sequence("n")),
@@ -191,6 +192,8 @@ SCHEMAS["BuyMenuGUI1"] = [*fields("enabled focus focus_change category speed lis
     "selected_loadout purchase_made delivery_width enforce_max_passengers enforce_max_mass only_owned"),
     *fields("allowed always_allowed prohibited owned", NUMBER_MAP)]
 SCHEMAS["BuyMenuGUI2"] = [("initialized", "n"), *SCHEMAS["BuyMenuGUI1"], ("tail", "tail")]
+# BuyMenuGUI3 keys the per-module expansion flags by module name; they ride in the tail like version 2's.
+SCHEMAS["BuyMenuGUI3"] = SCHEMAS["BuyMenuGUI2"]
 SCHEMAS["Entity1"] = [*fields("preset_name copied_from description reader_position", "s"), *fields("original module random_weight"), ("groups", STRINGS)]
 SCHEMAS["Matrix1"] = [("angle", "n"), ("flipped", array(2)), ("elements", array(2, array(2))), ("elements_current", "n")]
 SCHEMAS["ContentFile1"] = [*fields("path extension stem", "s"), ("is_image", "n"), ("image_info", array(3)),
@@ -431,6 +434,7 @@ _LOCAL_FIELDS = {
     # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
     "AudioRuntime1": {"player_positions", "listeners"},
     "AudioRuntime2": {"player_positions", "listeners"},
+    "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
     "ActorRuntime1": {"hud_stack"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},

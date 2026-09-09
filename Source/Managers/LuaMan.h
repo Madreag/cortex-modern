@@ -96,9 +96,12 @@ namespace RTE {
 		void UnregisterMO(MovableObject* moToUnregister) {
 			m_RegisteredMOs.erase(moToUnregister);
 			m_AddedRegisteredMOs.erase(moToUnregister);
-			// A list waiting to be swapped back must forget it too, or the world that returns names a freed object.
+		}
+
+		/// A destroyed object leaves the lists a set-aside world will swap back; a detached live one stays.
+		void ForgetDestroyedRegisteredMO(MovableObject* moToForget) {
 			for (auto* held: m_HeldRegisteredMOs) {
-				held->erase(moToUnregister);
+				held->erase(moToForget);
 			}
 		}
 
@@ -112,8 +115,10 @@ namespace RTE {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
 		}
-		/// Marks lists a set-aside world will swap back, so a destroyed object leaves them as well.
-		void HoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
+		void SwapAndHoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
+			m_RegisteredMOs.swap(registered);
+			m_AddedRegisteredMOs.swap(pending);
 			m_HeldRegisteredMOs.push_back(&registered);
 			m_HeldRegisteredMOs.push_back(&pending);
 		}
@@ -406,6 +411,14 @@ namespace RTE {
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);
+
+		/// Drops a destroyed object from every held script update list, whichever state holds it.
+		void ForgetDestroyedRegisteredMO(MovableObject* moToForget) {
+			m_MasterScriptState.ForgetDestroyedRegisteredMO(moToForget);
+			for (LuaStateWrapper& state: m_ScriptStates) {
+				state.ForgetDestroyedRegisteredMO(moToForget);
+			}
+		}
 
 		/// Runs the script graph's contract tests in the master state and prints their lines; true when all pass.
 		bool RunScriptGraphSelfTest();

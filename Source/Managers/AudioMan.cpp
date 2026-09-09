@@ -1901,6 +1901,10 @@ std::vector<NetSoundObservation> AudioMan::SampleSoundObservations() {
 	return observations;
 }
 
+void AudioMan::ForgetSentAudibility(const std::vector<NetSoundObservation>& observations) {
+	for (const NetSoundObservation& observation: observations) m_LastSentAudibility.erase(KeyOf(observation));
+}
+
 void AudioMan::CommitSoundObservations(uint64_t frame, const std::vector<NetSoundObservation>& local, const std::vector<NetSoundObservation>& remote) {
 	std::vector<const NetSoundObservation*> observations;
 	observations.reserve(local.size() + remote.size());
@@ -2378,6 +2382,23 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 			      std::to_string(kept.GetPosition().m_X));
 			kept.Stop();
 		}
+	{
+		// A reading the wire had to drop must be offered again, so the sound does not keep a stale
+		// committed value until its audibility happens to move.
+		const std::map<SoundObservationKey, float> sentBefore = m_LastSentAudibility;
+		NetSoundObservation dropped;
+		dropped.objectUID = 4242; dropped.tick = 7; dropped.phase = phase; dropped.occurrence = 0; dropped.ordinal = 3;
+		dropped.value = 0.375F;
+		NetSoundObservation kept2 = dropped;
+		kept2.ordinal = 4;
+		m_LastSentAudibility[KeyOf(dropped)] = dropped.value;
+		m_LastSentAudibility[KeyOf(kept2)] = kept2.value;
+		ForgetSentAudibility({dropped});
+		check("dropped_reading_is_sampled_again",
+		      !m_LastSentAudibility.contains(KeyOf(dropped)) && m_LastSentAudibility.contains(KeyOf(kept2)),
+		      std::to_string(m_LastSentAudibility.size()));
+		m_LastSentAudibility = sentBefore;
+	}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 	s_PlaybackSuppressed = suppressed;
 	return passed;

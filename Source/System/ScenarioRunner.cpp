@@ -848,7 +848,10 @@ namespace RTE {
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations));
 		}
 		// The input boundary also carries this peer's actual audibility of the shared sounds it answers for.
-		return s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error, g_AudioMan.SampleSoundObservations());
+		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, DrainLocalGameCommands(), error, g_AudioMan.SampleSoundObservations());
+		// A reading the wire had to drop was still recorded as sent, so hand it back to be sampled afresh.
+		g_AudioMan.ForgetSentAudibility(s_LockstepCoordinator->TakeDroppedObservations());
+		return queued;
 	}
 
 	bool ScenarioRunner::PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames) {

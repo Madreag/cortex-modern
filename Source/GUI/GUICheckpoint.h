@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 struct BITMAP;
 
@@ -36,6 +37,11 @@ namespace RTE {
 		static std::string Save(const GUIControlManager& manager);
 		static bool Load(GUIControlManager& manager, std::string_view text, bool validateOnly = false);
 		static bool Validate(std::string_view text);
+		// Per-module menu flags. A module ID belongs to the installation that saved them, so they
+		// travel keyed by module and come back sized to the modules this installation has.
+		static std::map<std::string, bool> SaveModuleFlags(const std::vector<bool>& flags);
+		static std::vector<bool> LoadModuleFlags(const std::map<std::string, bool>& saved);
+		static std::vector<bool> LoadModuleFlags(const std::vector<bool>& savedByModuleID);
 		static bool RunSelfTest();
 
 	private:

@@ -376,7 +376,7 @@ namespace RTE {
 			// Another phase's packet on the shared wire: a peer that finished its session handshake
 			// starts its lobby round while we still wait for the others (N-peer), or a prior match's
 			// in-flight lockstep frames. The lobby protocol tolerates our packets the same way.
-			if (NetLobbyProtocol::Decode(bytes).ok || NetLockstepCodec::Decode(bytes).ok) {
+			if (NetLobbyProtocol::Decode(bytes).ok || NetLockstepCodec::LooksLikePacket(bytes)) {
 				++m_Stats.ignoredPhasePackets;
 				return;
 			}

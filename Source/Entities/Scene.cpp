@@ -1453,8 +1453,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("SpecialBehaviour_AirResistanceRaw", movableObjectToSave->GetAirResistance());
 		writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundDamageOnCollision", movableObjectToSave->GetApplyWoundDamageOnCollision());
 		writer.NewPropertyWithValue("SpecialBehaviour_ApplyWoundBurstDamageOnCollision", movableObjectToSave->GetApplyWoundBurstDamageOnCollision());
-		if (const MovableObject* moToNotHit = movableObjectToSave->GetWhichMOToNotHit(); moToNotHit && g_MovableMan.FindObjectByUniqueID(movableObjectToSave->GetMOToNotHitUID()) == moToNotHit) {
-			writer.NewPropertyWithValue("MOToNotHitUniqueID", movableObjectToSave->GetMOToNotHitUID());
+		// Written even when there is none, so a restored object drops the ignore link its preset carries.
+		const MovableObject* moToNotHit = movableObjectToSave->GetWhichMOToNotHit();
+		const bool namesMOToNotHit = moToNotHit && g_MovableMan.FindObjectByUniqueID(movableObjectToSave->GetMOToNotHitUID()) == moToNotHit;
+		writer.NewPropertyWithValue("MOToNotHitUniqueID", namesMOToNotHit ? movableObjectToSave->GetMOToNotHitUID() : 0);
+		if (namesMOToNotHit) {
 			writer.NewPropertyWithValue("MOIgnoreTimerStart", movableObjectToSave->GetMOIgnoreTimerStart());
 			writer.NewPropertyWithValue("MOIgnoreTimerLimitTicks", movableObjectToSave->GetMOIgnoreTimerLimitTicks());
 		}

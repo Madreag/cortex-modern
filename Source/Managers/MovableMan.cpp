@@ -1172,13 +1172,19 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	if (entry != m_KnownObjects.end() && entry->second == mo) {
 		m_KnownObjects.erase(entry);
 	}
-	// A copy waiting to be put back must forget this object too, or reinstating it resurrects the freed pointer.
-	for (auto* held: m_HeldRegistries) {
-		auto entry = held->find(mo->GetUniqueID());
-		if (entry != held->end() && entry->second == mo) {
-			held->erase(entry);
+}
+
+// Only a destruction may take an object out of a held copy. Unregistering also happens to live objects:
+// a restore detaches every Lua-owned tree, and those have to come back with the world that named them.
+void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		// By address, not by key: the object may have taken a new identity since the copy was made.
+		for (auto* held: m_HeldRegistries) {
+			std::erase_if(*held, [mo](const auto& entry) { return entry.second == mo; });
 		}
 	}
+	g_LuaMan.ForgetDestroyedRegisteredMO(mo);
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int ignoreTeam, bool getsHitByMOsOnly) const {
@@ -1402,6 +1408,8 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	WaitForActorsSeeTask();
 	{
 	AudioMan::CheckpointRegistryScope captureSounds;
+	// The settle comes first, as it does in CaptureWorld: a graph captured before it names the objects it sweeps.
+	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
 	out.soundRegistrations = g_AudioMan.CaptureCheckpointSoundRegistry();
 	std::vector<std::string> luaProblems;
 	m_ScriptGraphFailure.clear();
@@ -1413,7 +1421,6 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 		out.luaGraphs.clear();
 		return false;
 	}
-	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
 	out.frameState = g_FrameMan.SaveCheckpoint();
 	if (holdActivity && !out.terrain.Capture()) return false;
 	if (holdActivity && g_SceneMan.GetScene()) out.sceneRuntime = g_SceneMan.GetScene()->SaveRuntimeCheckpoint();
@@ -1428,6 +1435,12 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	}
 	out.luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	out.scriptRegistrations.clear();
+	// A throw before the world is held must not leave a pointer into this frame published.
+	struct Publication {
+		MovableMan& man;
+		WorldSetAside& world;
+		~Publication() { if (!world.held) man.ForgetHeldWorld(world); }
+	} publication{*this, out};
 	const auto stashState = [this, &out](LuaStateWrapper& state) {
 		state.RunScriptString("_ScriptGraph.stashObjects()");
 		for (const MovableObject* mo: SortedRegisteredMOs(state, true)) {
@@ -1437,8 +1450,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 			}
 		}
 		auto& lists = out.scriptRegistrations.emplace_back();
-		state.SwapRegisteredMOs(lists.first, lists.second);
-		state.HoldRegisteredMOs(lists.first, lists.second);
+		state.SwapAndHoldRegisteredMOs(lists.first, lists.second);
 	};
 	stashState(g_LuaMan.GetMasterScriptState());
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
@@ -1517,9 +1529,21 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	if (!in.held) {
 		return false;
 	}
+	// Everything that can be judged before the world moves is judged here, so a refusal costs nothing.
+	if ((in.terrain.width && !in.terrain.CanRestore()) || !g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals, true)) {
+		std::cout << "[scriptgraph] reinstate refused before the world moved" << std::endl;
+		return false;
+	}
 	CompleteQueuedMOIDDrawings();
 	WaitForActorsSeeTask();
-	ForgetHeldWorld(in);
+	// discardState and PurgeAllMOs run below, so the record stays published until it is put back.
+	struct Withdraw {
+		MovableMan& man;
+		WorldSetAside& world;
+		bool done = false;
+		void Now() { if (!done) { man.ForgetHeldWorld(world); done = true; } }
+		~Withdraw() { Now(); }
+	} withdraw{*this, in};
 	// The re-run never happened: every scripted object of its world (nested ones included) drops its script object without Destroy, and the originals' slots come back.
 	const auto isOriginal = [&in](const MovableObject* mo) {
 		const auto known = in.knownObjects.find(mo->GetUniqueID());
@@ -1554,6 +1578,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 		g_SceneMan.GetScene()->SwapRuntimeOwners(*in.sceneOwners);
 		rejectedSceneOwners = std::move(in.sceneOwners);
 	}
+	withdraw.Now();
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		m_KnownObjects = std::move(in.knownObjects);
@@ -1610,11 +1635,13 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	g_SceneMan.SwapMOIDGrid(in.moidGrid);
 	in.held = false;
 	m_HasWorldSetAside = false;
-	if (!g_ActivityMan.PrepareCheckpointMaterials(in.runtimeGlobals)) return false;
+	// Past this point the candidate world is gone, so a failure is reported rather than returned:
+	// every remaining step still runs, or the originals come back only half restored.
+	bool restored = g_ActivityMan.PrepareCheckpointMaterials(in.runtimeGlobals);
 	if (Scene* scene = g_SceneMan.GetScene()) {
 		scene->SwapAreas(in.sceneAreas);
 		in.sceneAreas.areas.clear();
-		if (!in.sceneRuntime.empty() && !scene->LoadRuntimeCheckpoint(in.sceneRuntime, false, false)) return false;
+		if (!in.sceneRuntime.empty()) restored = scene->LoadRuntimeCheckpoint(in.sceneRuntime, false, false) && restored;
 	}
 	// The originals' Lua state as it was when they stepped aside, entity references pointing at them again.
 	g_LuaMan.SwapPathCallbacks(in.pathCallbacks);
@@ -1624,7 +1651,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	std::string luaError;
 	if (!RestoreScriptGraphs(in.luaGraphs, &luaError, true)) {
 		std::cout << "[scriptgraph] reinstate failed: " << luaError << std::endl;
-		return false;
+		restored = false;
 	}
 	// The stash only has to outlive the candidate. Held past that it keeps unreachable script
 	// objects alive into the next capture, which then names sound owners no restore can produce.
@@ -1633,10 +1660,11 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
 	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
-	if (in.terrain.width && !in.terrain.Restore()) return false;
-	if (!g_MusicMan.RestoreCheckpointOwners(in.musicOwners)) return false;
+	if (in.terrain.width) restored = in.terrain.Restore() && restored;
+	restored = g_MusicMan.RestoreCheckpointOwners(in.musicOwners) && restored;
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(in.soundRegistrations));
-	return g_FrameMan.LoadCheckpoint(in.frameState) && g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals);
+	restored = g_FrameMan.LoadCheckpoint(in.frameState) && restored;
+	return g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals) && restored;
 }
 
 bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const {
