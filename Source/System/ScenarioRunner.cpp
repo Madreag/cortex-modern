@@ -794,7 +794,7 @@ namespace RTE {
 		// A round that has committed nothing yet is still resuming: after a resync relaunch the ledgered
 		// reseat rides its first committed frame, and the activity update runs before MovableMan applies
 		// it, so the first evaluation a match may be judged on is the one after that frame lands.
-		return s_LockstepCoordinator->IsHoldingSeatForReclaim() ||
+		return s_LockstepCoordinator->IsAnySeatHeldForReclaim() ||
 		       (s_LockstepCoordinator->IsRunning() && !s_LockstepCoordinator->HasCommittedAFrame());
 	}
 
