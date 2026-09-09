@@ -8,6 +8,7 @@
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
 #include "System.h"
+#include "System/FaultInjection.h"
 #include "TimerMan.h"
 
 #include "MovableMan.h"
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <random>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace RTE {
@@ -196,6 +198,11 @@ static std::string ResyncSaveName() {
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
+			}
+			if (FaultInjected("slow_resync_save")) {
+				// Test-only: a save that outlasts the session budget, so the arm can show the round that
+				// follows drops nobody. Nothing script-visible moves - the sim is already torn down here.
+				std::this_thread::sleep_for(std::chrono::seconds(7));
 			}
 			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + ResyncSaveName() + ".ccsave";
 			std::ifstream in(savePath, std::ios::binary);
@@ -860,6 +867,8 @@ static std::string ResyncSaveName() {
 			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},
 			{"client_leave_acks", m_ReconnectClient.GetStats().leaveAcksReceived},
 			{"client_ambiguous_losses", m_ReconnectClient.GetStats().ambiguousLosses},
+			{"client_unacknowledged_leaves", m_ReconnectClient.GetStats().unacknowledgedLeaves},
+			{"client_retransmits", m_ReconnectClient.GetStats().retransmits},
 			{"client_confirmed_session_ends", m_ReconnectClient.GetStats().confirmedSessionEnds},
 			{"client_applications_sent", m_ReconnectClient.GetStats().applicationsSent},
 			{"client_applications_acknowledged", m_ReconnectClient.GetStats().applicationsAcknowledged},
