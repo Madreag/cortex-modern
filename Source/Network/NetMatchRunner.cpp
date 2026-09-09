@@ -181,7 +181,7 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now() - startTime).count());
 			session.Tick(nowMs);
 			if (m_Config.publishLobby) {
@@ -269,8 +269,10 @@ namespace RTE {
 				m_Lobby.RequestStart();
 			}
 			const auto now = std::chrono::steady_clock::now();
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
+			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			m_Lobby.Tick(nowMs);
+			// The lobby round owns the transport queue, so the plane only gets its time from here.
+			session.TickAdmissionPlane(nowMs);
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}

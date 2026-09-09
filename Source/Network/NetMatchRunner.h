@@ -46,6 +46,9 @@ namespace RTE {
 		std::atomic<bool>* startRequested = nullptr;
 		const std::atomic<bool>* cancelRequested = nullptr;
 		std::function<void(const NetLobbySnapshot&)> publishLobby;
+		// The session's clock. Supplied by the service so setup, play and every resync share one elapsed
+		// time; without it each wait clocks from its own start, which the admission deadlines cannot use.
+		std::function<uint64_t()> nowMs;
 	};
 
 	class NetMatchRunner {

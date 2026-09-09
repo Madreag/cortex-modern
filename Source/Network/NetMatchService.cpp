@@ -408,7 +408,7 @@ static std::string ResyncSaveName() {
 				if (!m_Session) {
 					break;
 				}
-				m_Session->Tick(m_Session->GetClockMs() + 5);
+				m_Session->Tick(AdmissionNowMs());
 				if (m_ReconnectClient.GetState() == NetH4ClientState::Left || m_ReconnectClient.WantsLinkClosed()) {
 					break;
 				}
@@ -598,6 +598,10 @@ static std::string ResyncSaveName() {
 		DriveReconnectUx(nowMs);
 	}
 
+	uint64_t NetMatchService::AdmissionNowMs() const {
+		return m_AdmissionClock.NowMs(SteadyNowMs());
+	}
+
 	void NetMatchService::DriveReconnectUx(uint64_t nowMs) {
 		NetMatchServiceState state = NetMatchServiceState::Idle;
 		bool isHost = false;
@@ -721,21 +725,21 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetLiveMatch(true);
 			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
-		m_SessionPumpNowMs += 15;
+		const uint64_t nowMs = AdmissionNowMs();
 		if (hostAdmission) {
 			// The coordinator owns the transport queue mid-match, so the session's own Tick never runs;
 			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
 			// dropped seat's reclaim window would wait for the match to end.
-			m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+			m_Session->TickAdmissionPlane(nowMs);
 		}
 		for (const NetTransportEvent& event: events) {
-			m_Session->InjectEvent(event, m_SessionPumpNowMs);
+			m_Session->InjectEvent(event, nowMs);
 		}
 		if (hostAdmission) {
 			// The reseat is a lockstep command, not a local mutation: every peer applies the identical
 			// ownership at the identical tick. QueueLocalInput restamps the sender as this peer, which
 			// on the host is exactly the id MovableMan's reseat gate requires.
-			DriveAutoSubstitution(m_SessionPumpNowMs);
+			DriveAutoSubstitution(nowMs);
 			for (const NetGameReseat& reseat: m_ReconnectHost.TakePendingReseats()) {
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
@@ -837,6 +841,8 @@ static std::string ResyncSaveName() {
 			// Every census must come from the sim tick; anything else means a drop was seen from a
 			// thread that may not walk the world, and the ledger recorded nothing for it.
 			{"census_refusals", m_CensusRefusals.load()},
+			// Elapsed milliseconds, so a gate can tell a real deadline from a counted pump.
+			{"admission_clock_ms", AdmissionNowMs()},
 			{"client_state", NetReconnectClientStateName(m_ReconnectClient.GetState())},
 			{"client_used_stored_ticket", m_ReconnectClient.UsedStoredTicket()},
 			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},
@@ -956,6 +962,10 @@ static std::string ResyncSaveName() {
 			m_LobbySnapshot = snapshot;
 		};
 
+		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
+		m_AdmissionClock.Start(SteadyNowMs());
+		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
+
 		AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
 
 		std::string error;
@@ -1054,10 +1064,10 @@ static std::string ResyncSaveName() {
 		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running || !m_Session) {
 			return NetH4ModerationResult::NotHosting;
 		}
-		const NetH4ModerationResult result = m_ReconnectHost.SubstituteApplicant(stableSeat, applicantConnection, m_SessionPumpNowMs);
+		const NetH4ModerationResult result = m_ReconnectHost.SubstituteApplicant(stableSeat, applicantConnection, AdmissionNowMs());
 		// The offer has to leave now, not at the next pump: the substitute is waiting on it and P3's
 		// ladder is measured from the moment it was sent.
-		m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+		m_Session->TickAdmissionPlane(AdmissionNowMs());
 		return result;
 	}
 
@@ -1066,8 +1076,8 @@ static std::string ResyncSaveName() {
 		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running || !m_Session) {
 			return NetH4ModerationResult::NotHosting;
 		}
-		const NetH4ModerationResult result = m_ReconnectHost.CancelSubstitution(stableSeat, m_SessionPumpNowMs);
-		m_Session->TickAdmissionPlane(m_SessionPumpNowMs);
+		const NetH4ModerationResult result = m_ReconnectHost.CancelSubstitution(stableSeat, AdmissionNowMs());
+		m_Session->TickAdmissionPlane(AdmissionNowMs());
 		return result;
 	}
 
