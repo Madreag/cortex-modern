@@ -1790,7 +1790,14 @@ namespace RTE {
 		// Their readings ride the next frame we queue instead: re-sending them here would bind slots in
 		// our own table that a refused send never showed the receiver.
 		for (const auto& [targetFrame, frames]: m_LocalFrames) {
-			m_ResendFrames.insert(targetFrame);
+			NetLockstepFrame& owed = m_ResendFrames[targetFrame];
+			owed.senderPeerId = m_Config.localPeerId;
+			owed.targetFrame = targetFrame;
+			owed.frames = frames;
+			owed.roundId = m_RoundId;
+			if (const auto commandsIt = m_LocalCommands.find(targetFrame); commandsIt != m_LocalCommands.end()) {
+				owed.commands = commandsIt->second;
+			}
 			const auto observationsIt = m_LocalObservations.find(targetFrame);
 			if (observationsIt == m_LocalObservations.end()) {
 				continue;
@@ -1805,23 +1812,13 @@ namespace RTE {
 	// A refused send on a reliable lane is backpressure, and the round waits on exactly these frames, so
 	// they are retried in order and nothing after a refused one goes out before it does.
 	void NetLockstepCoordinator::FlushResendFrames() {
+		// A round that has stopped or failed owes nobody anything.
+		if (m_State != NetLockstepState::Running && m_State != NetLockstepState::WaitingForStart) {
+			return;
+		}
 		while (!m_ResendFrames.empty()) {
-			const uint64_t targetFrame = *m_ResendFrames.begin();
-			const auto framesIt = m_LocalFrames.find(targetFrame);
-			if (framesIt == m_LocalFrames.end()) {
-				m_ResendFrames.erase(m_ResendFrames.begin());
-				continue;
-			}
-			NetLockstepFrame packet;
-			packet.senderPeerId = m_Config.localPeerId;
-			packet.targetFrame = targetFrame;
-			packet.frames = framesIt->second;
-			packet.roundId = m_RoundId;
-			if (const auto commandsIt = m_LocalCommands.find(targetFrame); commandsIt != m_LocalCommands.end()) {
-				packet.commands = commandsIt->second;
-			}
 			std::string ignored;
-			if (!SendPacket({packet}, m_Config.frameLane, &ignored)) {
+			if (!SendPacket({m_ResendFrames.begin()->second}, m_Config.frameLane, &ignored)) {
 				return;
 			}
 			++m_Stats.framePacketsSent;
