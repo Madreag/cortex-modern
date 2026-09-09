@@ -6,6 +6,7 @@
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
+#include "NetMatchRunner.h"
 #include "NetReconnectLedger.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
@@ -4152,6 +4153,256 @@ namespace RTE {
 			return 0;
 		}
 
+		// A minimal two-peer match config, enough for a lobby round to start.
+		NetMatchConfig MakeLobbyMatchConfig(uint64_t sessionId) {
+			NetMatchConfig config;
+			config.sessionId = sessionId;
+			config.hostPeerId = 1;
+			config.players = {{1, 0, false, "Host"}, {2, 1, false, "Player"}};
+			return config;
+		}
+
+		// A7 correction 1: the plane's clock is only right if the COMPOSITION is. NetLobbySession adds the
+		// session clock it captured at Start to whatever Tick is handed, so handing it the session clock
+		// counts it twice and every deadline inflates by the setup wait - and again by the whole previous
+		// session at each rematch or resync. Measured here through a real lobby round, not the plane alone.
+		int TestComposedSeatHoldMeetsP2() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42150;
+			LoopbackTransport hostTransport;
+			LoopbackTransport holderTransport;
+			NetSession host;
+			NetSession holder;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("composed"));
+			NetReconnectClient holderClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			holderClient.Configure(&store, MakeIdentity(), "Player");
+			holderClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			holderClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			holder.SetReconnectClient(&holderClient);
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 1;
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !holder.StartClient(holderTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the holder: " + error);
+			}
+
+			// The service clock is session-elapsed; the setup wait costs 30 s, as an ordinary menu host does.
+			uint64_t serviceMs = 0;
+			auto step = [&](uint64_t byMs) {
+				serviceMs += byMs;
+				hostTransport.AdvanceTimeMs(byMs);
+				holderTransport.AdvanceTimeMs(byMs);
+			};
+			for (uint64_t settled = 0; settled <= 600; settled += 10) {
+				host.Tick(serviceMs);
+				holder.Tick(serviceMs);
+				step(10);
+			}
+			if (holderClient.GetState() != NetH4ClientState::Joined) {
+				return Fail("the holder never committed its seat before the lobby round");
+			}
+			const uint64_t waitedMs = 30'000;
+			for (uint64_t waited = 0; waited < waitedMs; waited += 100) {
+				host.Tick(serviceMs);
+				holder.Tick(serviceMs);
+				step(100);
+			}
+
+			// The lobby round, clocked exactly as RunLobby clocks it.
+			NetLobbySession lobby;
+			NetLobbySessionConfig lobbyConfig;
+			lobbyConfig.host = true;
+			lobbyConfig.localPeerId = 1;
+			lobbyConfig.remotePeerId = 2;
+			lobbyConfig.remoteTransportPeerId = static_cast<NetPeerId>(1);
+			lobbyConfig.matchConfig = MakeLobbyMatchConfig(0x5000000000000000ULL + port);
+			lobbyConfig.timeoutMs = 600'000;
+			lobbyConfig.session = &host;
+			lobbyConfig.autoReady = true;
+			lobbyConfig.autoStart = false;
+			if (!lobby.Start(hostTransport, lobbyConfig, &error)) {
+				return Fail("the lobby round would not start: " + error);
+			}
+			const uint64_t lobbyStartedAtMs = serviceMs;
+			for (uint64_t roundMs = 0; roundMs <= 500; roundMs += 10) {
+				const NetMatchRunnerClocks clocks = NetMatchRunner::ResolveRoundClocks(roundMs, true, serviceMs);
+				lobby.Tick(clocks.lobbyMs);
+				host.TickAdmissionPlane(clocks.planeMs);
+				holder.Tick(serviceMs);
+				step(10);
+			}
+			// A round that adds the session clock to itself shows up here, before any deadline; the hold
+			// below is what it costs.
+			const uint64_t inflationMs = host.GetClockMs() > serviceMs ? host.GetClockMs() - serviceMs : 0;
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("the lobby round dropped the seated player");
+			}
+			(void)lobbyStartedAtMs;
+
+			// Live match: the holder drops, and the hold is measured in elapsed service milliseconds.
+			admission.SetLiveMatch(true);
+			holderTransport.Stop();
+			const uint64_t droppedAtMs = serviceMs;
+			uint64_t releasedAtMs = 0;
+			for (uint64_t elapsed = 0; elapsed <= NetReconnectHost::c_ProvisionalExpiryMs * 3 && releasedAtMs == 0; elapsed += 10) {
+				for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+					host.InjectEvent(event, serviceMs);
+				}
+				host.TickAdmissionPlane(serviceMs);
+				if (!admission.IsSeatHeldForReclaim(MakeSeatTable()[0].lockstepPeerId)) {
+					releasedAtMs = serviceMs;
+				}
+				step(10);
+			}
+			if (releasedAtMs == 0) {
+				return Fail("the dropped seat was never released");
+			}
+			const uint64_t heldMs = releasedAtMs - droppedAtMs;
+			if (heldMs < NetReconnectHost::c_ProvisionalExpiryMs || heldMs > NetReconnectHost::c_ProvisionalExpiryMs + 20) {
+				return Fail("the composed P2 seat hold was " + std::to_string(heldMs) + " ms against the pinned " +
+				            std::to_string(NetReconnectHost::c_ProvisionalExpiryMs) + ", the lobby round having inflated the session clock by " +
+				            std::to_string(inflationMs) + " ms");
+			}
+			if (inflationMs != 0) {
+				return Fail("the lobby round inflated the session clock by " + std::to_string(inflationMs) + " ms");
+			}
+
+			// What the round hands each part, taken from the runner itself rather than restated.
+			const NetMatchRunnerClocks first = NetMatchRunner::ResolveRoundClocks(500, true, 30500);
+			if (first.lobbyMs != 500) {
+				return Fail("the lobby round was handed the session clock, which it adds its own base to");
+			}
+			if (first.planeMs != 30500) {
+				return Fail("the admission plane was not handed session-elapsed time");
+			}
+			if (first.budgetMs != 500) {
+				return Fail("the round's wait budget stopped being per round");
+			}
+			const NetMatchRunnerClocks standalone = NetMatchRunner::ResolveRoundClocks(500, false, 0);
+			if (standalone.lobbyMs != 500 || standalone.planeMs != 500 || standalone.budgetMs != 500) {
+				return Fail("a runner with no service clock stopped clocking itself");
+			}
+			return 0;
+		}
+
+		// A7 correction 4: P14 is "no decodable ClientHello within the budget". A connection that
+		// heartbeats and never says hello is not authenticating, so its age is what expires it - reading
+		// its last packet instead let eight of them hold the whole bound for as long as they kept talking.
+		int TestHeartbeatingHandshakeStillExpires() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42151;
+			LoopbackTransport hostTransport;
+			LoopbackTransport holderTransport;
+			NetSession host;
+			NetSession holder;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("heartbeat"));
+			NetReconnectClient holderClient;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			holderClient.Configure(&store, MakeIdentity(), "Player");
+			holderClient.SetUnixClock(&FixedUnixClock, &unixNow);
+			holderClient.SetHostContext("loopback", MakeHash(5));
+			host.SetReconnectHost(&admission);
+			holder.SetReconnectClient(&holderClient);
+			NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+			hostConfig.maxPeers = 1;
+			if (!host.StartHost(hostTransport, hostConfig, &error) ||
+			    !holder.StartClient(holderTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not seat the holder: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (; nowMs <= 600; nowMs += 10) {
+				host.Tick(nowMs);
+				holder.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				holderTransport.AdvanceTimeMs(10);
+			}
+			if (holderClient.GetState() != NetH4ClientState::Joined || host.GetReadyPeerCount() != 1) {
+				return Fail("the holder never committed the only seat");
+			}
+			admission.SetLiveMatch(true);
+
+			// Eight connections that talk and never say hello.
+			std::vector<std::unique_ptr<LoopbackTransport>> chatty;
+			for (uint32_t index = 0; index < NetSession::c_MaxUnauthenticatedPeers; ++index) {
+				auto transport = std::make_unique<LoopbackTransport>();
+				if (!transport->Connect("loopback", port, &error)) {
+					return Fail("a heartbeating connection could not be made: " + error);
+				}
+				chatty.push_back(std::move(transport));
+			}
+			const uint64_t deadlineMs = MakeSessionConfig(port, 0, "Host").timeoutMs;
+			uint64_t nextHeartbeatMs = nowMs;
+			const uint64_t startedAtMs = nowMs;
+			for (const uint64_t until = nowMs + deadlineMs * 6; nowMs <= until; nowMs += 10) {
+				if (nowMs >= nextHeartbeatMs) {
+					// Every 4 s, comfortably inside a 5 s budget measured from the last packet.
+					nextHeartbeatMs = nowMs + 4000;
+					for (const std::unique_ptr<LoopbackTransport>& transport: chatty) {
+						NetMessage message;
+						message.sequence = 1;
+						message.payload = NetHeartbeat{};
+						std::vector<uint8_t> bytes;
+						if (NetProtocol::Encode(message, bytes)) {
+							// A loopback client always addresses its host as peer 1.
+							(void)transport->Send(static_cast<NetPeerId>(1), NetTransportLane::ControlReliable, bytes, nullptr);
+						}
+					}
+				}
+				for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+					host.InjectEvent(event, nowMs);
+				}
+				host.TickAdmissionPlane(nowMs);
+				for (const std::unique_ptr<LoopbackTransport>& transport: chatty) {
+					transport->AdvanceTimeMs(10);
+				}
+				hostTransport.AdvanceTimeMs(10);
+				holderTransport.AdvanceTimeMs(10);
+				if (host.GetUnauthenticatedPeerCount() == 0) {
+					break;
+				}
+			}
+			if (host.GetUnauthenticatedPeerCount() != 0) {
+				return Fail("heartbeating connections that never said hello held the P14 bound: " +
+				            std::to_string(host.GetUnauthenticatedPeerCount()) + " of " +
+				            std::to_string(NetSession::c_MaxUnauthenticatedPeers));
+			}
+			const uint64_t expiredAfterMs = nowMs - startedAtMs;
+			if (expiredAfterMs < deadlineMs || expiredAfterMs > deadlineMs * 2) {
+				return Fail("a heartbeating handshake expired " + std::to_string(expiredAfterMs) +
+				            " ms after connecting, against P14's " + std::to_string(deadlineMs));
+			}
+			// The controls the reviewer confirmed must survive it: the seated player stays, and a client
+			// that is genuinely mid-handshake is not cut short before the deadline.
+			if (host.GetReadyPeerCount() != 1) {
+				return Fail("expiring heartbeating handshakes dropped the seated player");
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -4235,6 +4486,12 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAdmissionClockIsElapsedTime(); result != 0) {
+			return result;
+		}
+		if (const int result = TestComposedSeatHoldMeetsP2(); result != 0) {
+			return result;
+		}
+		if (const int result = TestHeartbeatingHandshakeStillExpires(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
