@@ -460,6 +460,10 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
+		/// Whether ANY seat is inside its reclaim window, whoever else is still playing. Ownership asks
+		/// the question above, which is about a round with nobody left; an outcome a player's absence
+		/// produced has to wait for that player whether or not the others are still here.
+		bool IsAnySeatHeldForReclaim() const;
 		/// Whether the round has yet to commit a frame. A resync relaunch lands here: the ledgered
 		/// reseat rides the first committed frame, so nothing the round produced can be judged before it.
 		bool HasCommittedAFrame() const { return m_Stats.framesAccepted > 0; }

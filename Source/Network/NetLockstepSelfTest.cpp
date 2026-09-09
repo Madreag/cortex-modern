@@ -4,6 +4,7 @@
 #include "NetLockstep.h"
 #include "NetProtocol.h"
 #include "System/ScenarioRunner.h"
+#include "ActivityMan.h"
 
 #include <algorithm>
 #include <cstring>
@@ -1357,6 +1358,7 @@ namespace RTE {
 			return true;
 		}
 
+
 		// P4C: three peers over a host-star loopback (clients connect only to the host, which relays).
 		// Proves N-peer frame collection (advance only when all remotes are in), the peerId-ordered
 		// merge, all-starts-before-run, and N-way checksum agreement.
@@ -1855,6 +1857,123 @@ namespace RTE {
 			state.heldForReclaim = stub->held && (stub->heldPeerId == 0 || stub->heldPeerId == peerId);
 			state.fencedTransport = transportPeerId != c_InvalidNetPeerId && transportPeerId == stub->fenced;
 			return state;
+		}
+
+		// B1: the substitution scenario at the resync save. One of two remotes drops, its seat is held
+		// for its reclaim window, and the OTHER remote plays on - which is exactly what the four
+		// substitution gates set up. A scripted outcome the absent player produced must wait for that
+		// player, or the activity ends and the resync snapshot has no running game to save.
+		bool TestCoordinatorHeldSeatWithASurvivor(std::string* error) {
+			const uint16_t port = 43062;
+			const uint64_t sessionId = 0x7000000000000062ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			SeatStateStub stub;
+			stub.held = true;
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					leaver.Tick(now);
+					stayer.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the three-peer round never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "the three-peer round never committed a frame";
+				return false;
+			}
+
+			leaverT.Stop();
+			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the drop was never adjudicated as a leave";
+				return false;
+			}
+			if (host.GetState() != NetLockstepState::Running) {
+				*error = "the round stopped although a peer is still playing";
+				return false;
+			}
+			// The round with nobody left is a different question, and its answer must not move: one
+			// remote is still here, so this stays false and ownership behaviour is untouched.
+			if (host.IsHoldingSeatForReclaim()) {
+				*error = "a round with a surviving remote reported itself as holding for reclaim";
+				return false;
+			}
+			if (!host.IsAnySeatHeldForReclaim()) {
+				*error = "the dropped peer's seat is inside its window but the round does not say so";
+				return false;
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			struct ClearCoordinator {
+				~ClearCoordinator() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+			} clearCoordinator;
+			if (!ScenarioRunner::IsLockstepHoldingSeatForReclaim()) {
+				*error = "the activity gate would let a scripted outcome end the match under a returning player";
+				return false;
+			}
+			if (!ActivityMan::ScriptedEndIsDeferred(true, true, ScenarioRunner::IsLockstepHoldingSeatForReclaim())) {
+				*error = "the scripted end was not deferred while a seat is held";
+				return false;
+			}
+
+			// The window closes and the match may finish; an engine teardown was never held back.
+			stub.held = false;
+			host.Tick(now + 5);
+			if (host.IsAnySeatHeldForReclaim() || ScenarioRunner::IsLockstepHoldingSeatForReclaim()) {
+				*error = "the hold outlived the reclaim window";
+				return false;
+			}
+			if (ActivityMan::ScriptedEndIsDeferred(true, true, ScenarioRunner::IsLockstepHoldingSeatForReclaim()) ||
+			    ActivityMan::ScriptedEndIsDeferred(false, true, true)) {
+				*error = "the end was deferred with no held seat, or an engine teardown was held back";
+				return false;
+			}
+			return true;
 		}
 
 		// H4 §4: a 1v1 whose only remote DROPS holds its seat for the reclaim window instead of ending,
@@ -4234,6 +4353,7 @@ namespace RTE {
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
+		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
 		    !TestCoordinatorPeerLeave(&error) ||
 		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
