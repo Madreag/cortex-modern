@@ -10,8 +10,11 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
+#include <system_error>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -2228,6 +2231,172 @@ namespace RTE {
 			return true;
 		}
 
+		// The match service holds its own mutex across the whole session pump, and the drop's ownership
+		// census runs inside it - so a seat read from an ownership query locks that mutex on the thread
+		// that already owns it. This raises what MSVC's std::mutex raises there instead of re-locking it,
+		// which is undefined rather than observable.
+		struct ServiceLockedSeatStateStub {
+			SeatStateStub seat;
+			std::mutex mutex;
+			std::thread::id owner;
+			uint32_t reads = 0;
+			uint32_t reentries = 0;
+		};
+
+		// Stands in for NetMatchService::PumpSessionEvents holding m_Mutex for the length of the pump.
+		struct ServiceLockScope {
+			explicit ServiceLockScope(ServiceLockedSeatStateStub& stub) :
+			    m_Stub(stub), m_Lock(stub.mutex) { m_Stub.owner = std::this_thread::get_id(); }
+			~ServiceLockScope() { m_Stub.owner = std::thread::id{}; }
+			ServiceLockedSeatStateStub& m_Stub;
+			std::lock_guard<std::mutex> m_Lock;
+		};
+
+		NetLockstepSeatState QuerySeatStateUnderServiceLock(void* context, uint8_t peerId, NetPeerId transportPeerId) {
+			auto* stub = static_cast<ServiceLockedSeatStateStub*>(context);
+			if (stub->owner == std::this_thread::get_id()) {
+				++stub->reentries;
+				throw std::system_error(std::make_error_code(std::errc::resource_deadlock_would_occur), "seat state read under the match service's lock");
+			}
+			const std::lock_guard<std::mutex> lock(stub->mutex);
+			++stub->reads;
+			return QuerySeatStateStub(&stub->seat, peerId, transportPeerId);
+		}
+
+		// A6: the drop of the last remote with nobody left on its team is the branch that asks whether the
+		// seat is held - and on the host it is asked from inside the pump that holds the service's lock.
+		// The round must answer that from what it already knows, never by asking back.
+		bool TestSeatStateNeverReadUnderTheServiceLock(std::string* error) {
+			const uint16_t port = 43042;
+			const uint64_t sessionId = 0x7000000000000042ULL;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 200;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.hostPeerId = 1;
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			ServiceLockedSeatStateStub stub;
+			stub.seat.held = true;
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateUnderServiceLock, &stub);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "the service-lock fixture did not reach Running";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "the service-lock fixture never committed a frame";
+				return false;
+			}
+			// The drop: the only remote goes away and its team has no other human, so the ownership
+			// fallback has to decide whether the seat is held.
+			clientT.Stop();
+			if (!drive(600, [&] { return host.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the drop was never adjudicated as a leave";
+				return false;
+			}
+			if (!host.IsHoldingSeatForReclaim()) {
+				*error = "the held drop did not put the round in its reclaim window";
+				return false;
+			}
+			for (uint64_t f = 2; f < 5; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+
+			const int64_t clientActor = 4242;
+			uint32_t pumps = 0;
+			uint8_t censusOwner = 0;
+			bool censusOwnerGone = true;
+			bool censusLocal = false;
+			bool censusHolding = false;
+			// The census the drop takes, run from inside the service's critical section exactly as
+			// PumpSessionEvents runs it - and driven from the production wait loop, not a hand-rolled one.
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&] {
+				const ServiceLockScope serviceLock(stub);
+				++pumps;
+				censusOwner = host.ResolveActorOwner(clientActor, 1, false);
+				censusOwnerGone = host.IsActorOwnerGone(clientActor, 1, false, host.GetStats().nextFrame);
+				censusLocal = host.IsLocalActor(clientActor, 1, false);
+				censusHolding = host.IsHoldingSeatForReclaim();
+			});
+			std::string reentry;
+			try {
+				for (uint64_t f = 2; f < 5; ++f) {
+					std::string waitError;
+					if (!ScenarioRunner::WaitForLockstepControllerFrame(f, ready, &waitError)) {
+						break;
+					}
+				}
+			} catch (const std::system_error& fault) {
+				reentry = fault.what();
+			}
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+
+			if (!reentry.empty() || stub.reentries != 0) {
+				*error = "the drop's ownership census read the seat state under the match service's lock: " + reentry;
+				return false;
+			}
+			if (pumps == 0) {
+				*error = "the census never ran inside the service's lock";
+				return false;
+			}
+			if (stub.reads == 0) {
+				*error = "the round never read the seat state at all";
+				return false;
+			}
+			// A6's semantics, seen from where the host actually asks: the held seat's units are the
+			// host's to play and nothing stands them down.
+			if (censusOwner != 1 || censusOwnerGone || !censusLocal || !censusHolding) {
+				*error = "the census did not see the held seat's units fall to the relay host";
+				return false;
+			}
+			return true;
+		}
+
 		// A6: the sim thread parks in the lockstep wait while a peer is silent, so the admission plane
 		// has to be serviced from inside it - the silent peer may be waiting on the very answer only
 		// that pump can send, which is what left every clean leave unacknowledged.
@@ -3190,6 +3359,7 @@ namespace RTE {
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
 		    !TestCoordinatorDroppedSeatHold(&error) ||
 		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
+		    !TestSeatStateNeverReadUnderTheServiceLock(&error) ||
 		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
 		    !TestRelayHostFinishesWhatItOwes(&error) ||
