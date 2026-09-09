@@ -1733,6 +1733,7 @@ namespace RTE {
 		m_PeersPlayedThisRound.clear();
 		m_RemoteStarts.clear();
 		m_LastStartAnswerMs.clear();
+		m_ResendFrames.clear();
 		m_PeerLeaveFrames.clear();
 		m_LeftSeatsHeld.clear();
 		m_PeerLastHeardMs.clear();
@@ -1768,35 +1769,46 @@ namespace RTE {
 		(void)SendStart(&ignored);
 		++m_Stats.startRetransmits;
 		m_LastStartSentMs = nowMs;
-		// Our frames went out under the round we left, which the host refuses, so say them again.
+		// Our frames went out under the round we left, which the host refuses, so they go out again.
+		// Their readings ride the next frame we queue instead: re-sending them here would bind slots in
+		// our own table that a refused send never showed the receiver.
 		for (const auto& [targetFrame, frames]: m_LocalFrames) {
+			m_ResendFrames.insert(targetFrame);
+			const auto observationsIt = m_LocalObservations.find(targetFrame);
+			if (observationsIt == m_LocalObservations.end()) {
+				continue;
+			}
+			m_Stats.observationsCarried += observationsIt->second.size();
+			m_PendingObservations.insert(m_PendingObservations.end(), observationsIt->second.begin(), observationsIt->second.end());
+			m_LocalObservations.erase(observationsIt);
+		}
+		FlushResendFrames();
+	}
+
+	// A refused send on a reliable lane is backpressure, and the round waits on exactly these frames, so
+	// they are retried in order and nothing after a refused one goes out before it does.
+	void NetLockstepCoordinator::FlushResendFrames() {
+		while (!m_ResendFrames.empty()) {
+			const uint64_t targetFrame = *m_ResendFrames.begin();
+			const auto framesIt = m_LocalFrames.find(targetFrame);
+			if (framesIt == m_LocalFrames.end()) {
+				m_ResendFrames.erase(m_ResendFrames.begin());
+				continue;
+			}
 			NetLockstepFrame packet;
 			packet.senderPeerId = m_Config.localPeerId;
 			packet.targetFrame = targetFrame;
-			packet.frames = frames;
+			packet.frames = framesIt->second;
 			packet.roundId = m_RoundId;
 			if (const auto commandsIt = m_LocalCommands.find(targetFrame); commandsIt != m_LocalCommands.end()) {
 				packet.commands = commandsIt->second;
 			}
-			if (const auto observationsIt = m_LocalObservations.find(targetFrame); observationsIt != m_LocalObservations.end()) {
-				packet.observations = observationsIt->second;
+			std::string ignored;
+			if (!SendPacket({packet}, m_Config.frameLane, &ignored)) {
+				return;
 			}
-			size_t observationsEncoded = packet.observations.size();
-			if (!SendPacket({packet}, m_Config.frameLane, &ignored, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded)) {
-				continue;
-			}
-			// A fresh table spells every key out, so a frame that fitted before may not now; what it could
-			// not carry rides the next one, and we commit exactly what went out.
-			if (observationsEncoded < packet.observations.size()) {
-				m_PendingObservations.insert(m_PendingObservations.end(), packet.observations.begin() + static_cast<std::ptrdiff_t>(observationsEncoded), packet.observations.end());
-				packet.observations.resize(observationsEncoded);
-				m_Stats.observationsCarried += m_PendingObservations.size();
-				if (packet.observations.empty()) {
-					m_LocalObservations.erase(targetFrame);
-				} else {
-					m_LocalObservations[targetFrame] = packet.observations;
-				}
-			}
+			++m_Stats.framePacketsSent;
+			m_ResendFrames.erase(m_ResendFrames.begin());
 		}
 	}
 
@@ -1821,6 +1833,7 @@ namespace RTE {
 		std::string ignored;
 		(void)SendStart(&ignored, peerId);
 		++m_Stats.startRetransmits;
+		++m_Stats.startAnswers;
 		// It cannot say WHICH start it is missing, and in a star the ones only we can give it are the
 		// other remotes'. Re-send what we accepted from them, to the peer that asked and nobody else.
 		if (!m_RelayHost) {
@@ -2128,6 +2141,7 @@ namespace RTE {
 			}
 		}
 		FlushRelayBacklog(nowMs);
+		FlushResendFrames();
 		DropUnreachablePeers(nowMs);
 		AdjudicateSilentPeers(nowMs);
 		AdvanceReadyFrames(nowMs);
@@ -2394,6 +2408,7 @@ namespace RTE {
 		out << "\"ignored_session_packets\":" << m_Stats.ignoredSessionPackets << ",";
 		out << "\"stale_round_packets\":" << m_Stats.staleRoundPackets << ",";
 		out << "\"start_retransmits\":" << m_Stats.startRetransmits << ",";
+		out << "\"start_answers\":" << m_Stats.startAnswers << ",";
 		out << "\"round_readoptions\":" << m_Stats.roundReadoptions << ",";
 		out << "\"start_answers_suppressed\":" << m_Stats.startAnswersSuppressed << ",";
 		out << "\"starts_relayed_on_repeat\":" << m_Stats.startsRelayedOnRepeat << ",";
