@@ -50,6 +50,7 @@ namespace RTE {
 		uint32_t malformedMessages = 0;
 		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
+		uint32_t timeoutResumptions = 0; //!< Evaluations skipped because the caller stopped feeding the session for longer than the budget.
 		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
 		uint32_t unauthenticatedConnectionsRefused = 0; //!< Host: connections refused because the half-open bound was already full.
 		uint32_t fencedPackets = 0; //!< Host: packets from a superseded incarnation of a seat, dropped for it.
@@ -209,6 +210,8 @@ namespace RTE {
 		uint64_t m_NowMs = 0;
 		uint64_t m_StateStartedMs = 0;
 		uint64_t m_LastReceiveMs = 0;
+		uint64_t m_LastTimeoutCheckMs = 0;
+		bool m_TimeoutsEvaluated = false;
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_SessionId = 0;
 		NetPeerId m_RemoteTransportPeerId = c_InvalidNetPeerId;
