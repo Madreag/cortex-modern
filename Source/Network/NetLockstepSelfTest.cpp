@@ -3331,6 +3331,196 @@ namespace RTE {
 		// A relay host that outruns its own socket must hold the forwards and let the round wait: the
 		// peers behind that queue are healthy, and taking their seats for it ended the match at frame
 		// 151 with three "unreachable" leaves the retained run shows were our congestion, not theirs.
+		// One peer behind a link that stops draining while every other link stays healthy - the review's
+		// failing case. The round must lose that seat and go on, never the other way round: whether the
+		// bound that takes it is the hold clock or the backlog cap, only one seat may pay for it.
+		bool RunOneDeadLinkRound(bool healEarly, bool healLate, std::string* error, std::string* verdict, bool neverBreak = false) {
+			const uint16_t port = static_cast<uint16_t>(healEarly ? 43030 : 43040);
+			const uint64_t sessionId = 0x7000000000000040ULL + (healEarly ? 0 : 1);
+			const uint32_t timeoutMs = 4000;
+			LoopbackTransport hostT, clientT[3];
+			LoopbackTransportConfig lagged;
+			lagged.latencyMs = 200;
+			LoopbackTransportConfig dead = lagged;
+			dead.sendBufferBytes = 384;
+			dead.drainBytesPerSecond = 0;
+			dead.meterOnlyPeer = 1; // transport id 1 is lockstep peer 2; every other link stays healthy.
+			hostT.SetFaultConfig(lagged);
+			if (!hostT.StartHost(port, error)) {
+				return false;
+			}
+			for (LoopbackTransport& client : clientT) {
+				client.SetFaultConfig(lagged);
+				if (!client.Connect("loopback", port, error)) {
+					return false;
+				}
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = timeoutMs;
+				c.localPeerId = local;
+				c.peerCount = 4;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client[3];
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}, {4, 3}}, true), error) ||
+			    !client[0].Start(clientT[0], cfg(2, {{1, 1}}, false), error) ||
+			    !client[1].Start(clientT[1], cfg(3, {{1, 1}}, false), error) ||
+			    !client[2].Start(clientT[2], cfg(4, {{1, 1}}, false), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			uint64_t produced[4] = {0, 0, 0, 0};
+			std::string queueError;
+			auto step = [&](const std::function<bool()>& done, uint64_t untilMs) {
+				for (; now <= untilMs; now += 5) {
+					std::string ignored;
+					if (host.IsRunning() && produced[0] <= host.GetStats().nextFrame + 4 &&
+					    host.QueueLocalInput(produced[0], {MakeFrame(100, produced[0] + 1)}, {}, &queueError)) {
+						++produced[0];
+					}
+					for (int i = 0; i < 3; ++i) {
+						if (client[i].IsRunning() && produced[i + 1] <= client[i].GetStats().nextFrame + 4 &&
+						    client[i].QueueLocalInput(produced[i + 1], {MakeFrame(200 + i * 100, produced[i + 1] + 1)}, {}, &queueError)) {
+							++produced[i + 1];
+						}
+					}
+					host.Tick(now);
+					for (int i = 0; i < 3; ++i) {
+						client[i].Tick(now);
+					}
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					for (LoopbackTransport& transport : clientT) {
+						transport.AdvanceTimeMs(5);
+					}
+				}
+				return false;
+			};
+			if (!step([&] { return host.IsRunning() && client[0].IsRunning() && client[1].IsRunning() && client[2].IsRunning(); }, 4000)) {
+				*error = "the one-dead-link fixture did not reach Running";
+				return false;
+			}
+			LoopbackTransportConfig healed = lagged;
+			healed.sendBufferBytes = 1 << 20;
+			healed.drainBytesPerSecond = 1 << 20;
+			const uint64_t brokeAt = now;
+			if (!neverBreak) {
+				hostT.SetFaultConfig(dead);
+			}
+			if (neverBreak) {
+				// Control: nothing is wrong with any link, so the round has only itself to blame.
+			} else if (healEarly) {
+				// Inside every bound: the stream has not lost a forward yet, so the link coming back is
+				// all it takes.
+				if (!step([&] { return host.GetStats().relayCongestedRefusals > 0; }, now + timeoutMs)) {
+					*error = "the dead link never refused a forward: " + host.BuildReportJson();
+					return false;
+				}
+				hostT.SetFaultConfig(healed);
+			} else {
+				if (!step([&] { return !host.GetPeerLeaveFrames().empty(); }, now + 2 * timeoutMs)) {
+					*error = "the dead link cost nobody a seat: " + host.BuildReportJson();
+					return false;
+				}
+				const uint64_t leftAt = now;
+				const NetLockstepStats& s = host.GetStats();
+				if (leftAt - brokeAt > timeoutMs * 3 / 4) {
+					*error = "the seat went past the hold bound (" + std::to_string(leftAt - brokeAt) + "ms): " + host.BuildReportJson();
+					return false;
+				}
+				if (host.GetPeerLeaveFrames().size() != 1 || host.GetPeerLeaveFrames().find(2) == host.GetPeerLeaveFrames().end()) {
+					*error = "a healthy peer paid for the dead link: " + host.BuildReportJson();
+					return false;
+				}
+				const auto peerIt = s.peers.find(2);
+				if (peerIt == s.peers.end() || (peerIt->second.relayBacklogOverflows == 0 && peerIt->second.longestCongestionHoldMs == 0)) {
+					*error = "the leave is not attributed to peer 2's own queue: " + host.BuildReportJson();
+					return false;
+				}
+				if (healLate) {
+					hostT.SetFaultConfig(healed);
+				}
+			}
+			// The round is what has to survive: the remaining peers keep committing frames past the seat
+			// the dead link cost, which is the whole point of taking only that one.
+			const uint64_t resumeFrom = host.GetStats().nextFrame;
+			const uint64_t target = neverBreak ? 45 : 20;
+			if (!step([&] { return host.GetStats().nextFrame >= resumeFrom + target; }, now + 6 * timeoutMs)) {
+				*error = "the round stopped advancing; last queue refusal [" + queueError + "] produced=" +
+				         std::to_string(produced[0]) + "/" + std::to_string(produced[1]) + "/" + std::to_string(produced[2]) + "/" +
+				         std::to_string(produced[3]) + " " + host.BuildReportJson() +
+				         " |c2 " + client[0].BuildReportJson() + " |c3 " + client[1].BuildReportJson() +
+				         " |c4 " + client[2].BuildReportJson();
+				return false;
+			}
+			if (host.IsFailed()) {
+				*error = "the round failed after the dead link was resolved: " + host.BuildReportJson();
+				return false;
+			}
+			const size_t expectedLeaves = (healEarly || neverBreak) ? 0 : 1;
+			if (host.GetPeerLeaveFrames().size() != expectedLeaves) {
+				*error = "the round shed " + std::to_string(host.GetPeerLeaveFrames().size()) + " seats, expected " +
+				         std::to_string(expectedLeaves) + ": " + host.BuildReportJson();
+				return false;
+			}
+			for (int i = 0; i < 3; ++i) {
+				if (i == 0 && !healEarly && !neverBreak) {
+					continue; // The peer whose link died is allowed to have stopped.
+				}
+				if (client[i].GetStats().nextFrame + 5 < resumeFrom + target) {
+					*error = "a healthy client stalled at frame " + std::to_string(client[i].GetStats().nextFrame) +
+					         ": " + client[i].BuildReportJson();
+					return false;
+				}
+			}
+			const NetLockstepStats& s = host.GetStats();
+			*verdict = " peers_left=" + std::to_string(host.GetPeerLeaveFrames().size()) +
+			           " frames=" + std::to_string(s.nextFrame) +
+			           " refusals=" + std::to_string(s.relayCongestedRefusals) +
+			           " holds=" + std::to_string(s.relayCongestionHolds) +
+			           " longest_hold_ms=" + std::to_string(s.longestCongestionHoldMs) +
+			           " overflows=" + std::to_string(s.relayBacklogOverflows) +
+			           " client_frames=" + std::to_string(client[0].GetStats().nextFrame) + "/" +
+			           std::to_string(client[1].GetStats().nextFrame) + "/" + std::to_string(client[2].GetStats().nextFrame);
+			return true;
+		}
+
+		// Control: nothing is broken, so nothing may be shed and the round must keep committing.
+		bool TestFourPeerRoundRunsToLength(std::string* error) {
+			std::string verdict;
+			if (!RunOneDeadLinkRound(false, false, error, &verdict, true)) {
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS four_peer_round_runs_to_length" << verdict << std::endl;
+			return true;
+		}
+
+		bool TestDeadLinkLosesOnlyItsOwnSeat(std::string* error) {
+			std::string verdict;
+			if (!RunOneDeadLinkRound(false, true, error, &verdict)) {
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS dead_link_loses_only_its_own_seat" << verdict << std::endl;
+			return true;
+		}
+
+		bool TestDeadLinkHealedInTimeKeepsEverySeat(std::string* error) {
+			std::string verdict;
+			if (!RunOneDeadLinkRound(true, false, error, &verdict)) {
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS dead_link_healed_in_time_keeps_every_seat" << verdict << std::endl;
+			return true;
+		}
+
 		bool TestCongestedRelayHoldsEveryPeer(std::string* error) {
 			const uint16_t port = 43020;
 			const uint64_t sessionId = 0x7000000000000020ULL;
@@ -3510,7 +3700,10 @@ namespace RTE {
 		    !TestResyncStragglersAreNotHoles(&error) ||
 		    !TestRefusedBlockLeavesNoBindings(&error) ||
 		    !TestFourPeerObservationRelayBytes(&error) ||
-		    !TestCongestedRelayHoldsEveryPeer(&error)) {
+		    !TestCongestedRelayHoldsEveryPeer(&error) ||
+		    !TestFourPeerRoundRunsToLength(&error) ||
+		    !TestDeadLinkLosesOnlyItsOwnSeat(&error) ||
+		    !TestDeadLinkHealedInTimeKeepsEverySeat(&error)) {
 			return fail(error);
 		}
 

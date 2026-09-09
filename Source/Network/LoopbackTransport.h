@@ -28,6 +28,8 @@ namespace RTE {
 		// unmetered queue every other test wants.
 		uint32_t sendBufferBytes = 0;
 		uint32_t drainBytesPerSecond = 0;
+		// Meter only this peer's queue, leaving every other link healthy.
+		NetPeerId meterOnlyPeer = c_InvalidNetPeerId;
 	};
 
 	/// What a transport did to its connections' send rate, and when.

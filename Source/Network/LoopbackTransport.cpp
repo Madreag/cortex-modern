@@ -138,7 +138,7 @@ namespace RTE {
 			SetError(error, "loopback peer refuses every send");
 			return false;
 		}
-		if (m_Config.sendBufferBytes > 0) {
+		if (m_Config.sendBufferBytes > 0 && (m_Config.meterOnlyPeer == c_InvalidNetPeerId || peerId == m_Config.meterOnlyPeer)) {
 			uint64_t& queued = m_QueuedBytes[peerId];
 			if (queued + bytes.size() > m_Config.sendBufferBytes) {
 				if (congested) *congested = true;
