@@ -89,6 +89,11 @@ AudioMan::~AudioMan() {
 }
 
 void AudioMan::Clear() {
+	m_AudioSystem = nullptr;
+	m_MasterChannelGroup = nullptr;
+	m_SFXChannelGroup = nullptr;
+	m_UIChannelGroup = nullptr;
+	m_MusicChannelGroup = nullptr;
 	m_InaudibleTestOutputVerified = false;
 	m_ActiveLogicalSounds.clear();
 	{
@@ -109,6 +114,7 @@ void AudioMan::Clear() {
 	m_MuteMaster = false;
 	m_MuteMusic = false;
 	m_MuteSounds = false;
+	m_MuteAudioOnFocusLoss = false;
 	m_MasterVolume = 0.5F;
 	m_MusicVolume = 1.0F;
 	m_SoundsVolume = 1.0F;
