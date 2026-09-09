@@ -14,6 +14,7 @@ namespace RTE {
 
 	void LoopbackTransport::SetFaultConfig(const LoopbackTransportConfig& config) {
 		m_Config = config;
+		m_AcceptedBeforeRefusing = 0;
 	}
 
 	void LoopbackTransport::AdvanceTimeMs(uint64_t deltaMs) {
@@ -70,8 +71,11 @@ namespace RTE {
 			return false;
 		}
 		if (m_Config.refuseSendsToPeer != c_InvalidNetPeerId && peerId == m_Config.refuseSendsToPeer) {
-			SetError(error, "loopback send buffer is full");
-			return false;
+			if (m_AcceptedBeforeRefusing >= m_Config.acceptedSendsBeforeRefusing) {
+				SetError(error, "loopback send buffer is full");
+				return false;
+			}
+			++m_AcceptedBeforeRefusing;
 		}
 		const uint32_t sendOrdinal = ++m_SendCounter;
 		if (ShouldDrop(lane, sendOrdinal)) {
