@@ -2920,6 +2920,113 @@ namespace RTE {
 			return true;
 		}
 
+		// A block that fails part way through must leave the table exactly as it was, or the sender's next
+		// perfectly good packet reads as a hole. The reviewer's partial_bind_then_refuse probe.
+		bool TestRefusedBlockLeavesNoBindings(std::string* error) {
+			NetSoundObservationDictionary sender;
+			NetSoundObservationTables receiver;
+			std::vector<uint8_t> first;
+			size_t encoded = 0;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(10, 0, MakeObservationSet(2, 6, 91, 0.0F))}, first, nullptr, &sender, &encoded) || encoded != 6) {
+				*error = "the truncation probe's frame did not encode";
+				return false;
+			}
+			// Cut the block in half and re-stamp the payload length, so the packet is well formed up to the
+			// point where it runs out.
+			std::vector<uint8_t> truncated(first.begin(), first.begin() + static_cast<std::ptrdiff_t>(first.size() - 40));
+			for (int i = 0; i < 4; ++i) {
+				truncated[12 + i] = static_cast<uint8_t>((truncated.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			const NetLockstepDecodeResult refused = NetLockstepCodec::Decode(truncated, ControllerFrame::c_Version, &receiver);
+			if (refused.ok || refused.error.code != NetLockstepErrorCode::TruncatedPayload) {
+				*error = "a truncated observation block was not refused: " + std::string(NetLockstepCodec::ErrorCodeName(refused.error.code));
+				return false;
+			}
+			if (receiver.Exactly(2).BindingCount() != 0) {
+				*error = "a refused block left " + std::to_string(receiver.Exactly(2).BindingCount()) + " bindings behind";
+				return false;
+			}
+			// The same frame, whole, still reads, and so does the one after it.
+			const NetLockstepDecodeResult whole = NetLockstepCodec::Decode(first, ControllerFrame::c_Version, &receiver);
+			if (!whole.ok) {
+				*error = "the whole frame did not decode after its truncated copy: " + std::string(NetLockstepCodec::ErrorCodeName(whole.error.code));
+				return false;
+			}
+			std::vector<uint8_t> next;
+			const std::vector<NetSoundObservation> repeats = MakeObservationSet(2, 6, 91, 0.5F);
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(11, 0, repeats)}, next, nullptr, &sender, &encoded)) {
+				*error = "the frame after the truncation did not encode";
+				return false;
+			}
+			const NetLockstepDecodeResult following = NetLockstepCodec::Decode(next, ControllerFrame::c_Version, &receiver);
+			const NetLockstepFrame* followingFrame = following.ok ? std::get_if<NetLockstepFrame>(&following.packet.payload) : nullptr;
+			if (!followingFrame || followingFrame->observations != repeats) {
+				*error = "the sender's next packet was refused after a truncated one: " + std::string(NetLockstepCodec::ErrorCodeName(following.error.code));
+				return false;
+			}
+			// Staging must not change which bindings land or what a slot means while the block reads: a block
+			// that spells one slot out twice binds twice, and the reference between the two reads the first key.
+			NetSoundObservationTables ordered;
+			std::vector<uint8_t> crafted;
+			if (!NetLockstepCodec::Encode({MakeObservationFrame(12, 0, {})}, crafted)) {
+				*error = "the ordering probe's frame did not encode";
+				return false;
+			}
+			crafted.resize(crafted.size() - 3); // The empty observation block: a zero binding sequence and a zero count.
+			const auto appendVar = [&crafted](uint64_t value) {
+				while (value >= 0x80U) {
+					crafted.push_back(static_cast<uint8_t>(value) | 0x80U);
+					value >>= 7;
+				}
+				crafted.push_back(static_cast<uint8_t>(value));
+			};
+			const auto appendReading = [&crafted](float value) {
+				uint32_t bits = 0;
+				std::memcpy(&bits, &value, sizeof(bits));
+				for (int i = 0; i < 4; ++i) {
+					crafted.push_back(static_cast<uint8_t>(bits >> (i * 8)));
+				}
+			};
+			const NetSoundObservationKey firstKey{4001, 7, 0x9E3779B97F4A7C15ULL, 1, 2};
+			const NetSoundObservationKey secondKey{4002, 9, 0xC2B2AE3D27D4EB4FULL, 3, 4};
+			const auto appendSlotZeroKey = [&](const NetSoundObservationKey& key) {
+				appendVar(1); // Slot 0, spelled out.
+				crafted.push_back(0x1F);
+				appendVar(key.objectUID);
+				appendVar(key.tick);
+				appendVar(key.phase);
+				appendVar(key.occurrence);
+				appendVar(key.ordinal);
+			};
+			appendVar(0); // This sender has spelled nothing out before the block.
+			crafted.push_back(3);
+			crafted.push_back(0);
+			appendSlotZeroKey(firstKey);
+			appendReading(0.25F);
+			appendVar(0); // Slot 0 by reference, between the two keys it is bound to.
+			appendReading(0.5F);
+			appendSlotZeroKey(secondKey);
+			appendReading(0.75F);
+			for (int i = 0; i < 4; ++i) {
+				crafted[12 + i] = static_cast<uint8_t>((crafted.size() - NetLockstepCodec::c_HeaderBytes) >> (i * 8));
+			}
+			const NetLockstepDecodeResult twice = NetLockstepCodec::Decode(crafted, ControllerFrame::c_Version, &ordered);
+			const NetLockstepFrame* twiceFrame = twice.ok ? std::get_if<NetLockstepFrame>(&twice.packet.payload) : nullptr;
+			if (!twiceFrame || twiceFrame->observations.size() != 3) {
+				*error = "a block spelling one slot twice did not decode: " + std::string(NetLockstepCodec::ErrorCodeName(twice.error.code));
+				return false;
+			}
+			NetSoundObservationKey settled;
+			if (KeyOfObservation(twiceFrame->observations[1]) != firstKey || KeyOfObservation(twiceFrame->observations[2]) != secondKey ||
+			    ordered.Exactly(2).BindingCount() != 2 || !ordered.Exactly(2).Resolve(0, settled) || settled != secondKey) {
+				*error = "staged bindings did not land in the order the block spelled them";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS refused_block_leaves_no_bindings bindings_after_refusal=0 next_packet=ok"
+			          << " one_slot_twice=2_bindings mid_block_reference=first_key" << std::endl;
+			return true;
+		}
+
 		bool TestSessionPumpRunsWhileTheRoundWaits(std::string* error) {
 			const uint16_t port = 43050;
 			const uint64_t sessionId = 0x7000000000000050ULL;
@@ -3089,6 +3196,7 @@ namespace RTE {
 		    !TestObservationFaultsAreToldApart(&error) ||
 		    !TestStaleRoundFrameLeavesTheLiveTable(&error) ||
 		    !TestResyncStragglersAreNotHoles(&error) ||
+		    !TestRefusedBlockLeavesNoBindings(&error) ||
 		    !TestFourPeerObservationRelayBytes(&error)) {
 			return fail(error);
 		}
