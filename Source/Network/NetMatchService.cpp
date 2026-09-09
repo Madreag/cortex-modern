@@ -726,6 +726,14 @@ static std::string ResyncSaveName() {
 			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
 		const uint64_t nowMs = AdmissionNowMs();
+		// F1.5: the two clocks must be one. Sampled here, at the pump, because the report is written
+		// after the loop stops feeding the session and its difference reads the teardown by then.
+		if (const uint64_t sessionMs = m_Session->GetClockMs(); sessionMs > nowMs) {
+			const uint64_t divergenceMs = sessionMs - nowMs;
+			uint64_t seen = m_MaxClockDivergenceMs.load();
+			while (divergenceMs > seen && !m_MaxClockDivergenceMs.compare_exchange_weak(seen, divergenceMs)) {
+			}
+		}
 		if (hostAdmission) {
 			// The coordinator owns the transport queue mid-match, so the session's own Tick never runs;
 			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
@@ -843,6 +851,8 @@ static std::string ResyncSaveName() {
 			{"census_refusals", m_CensusRefusals.load()},
 			// Elapsed milliseconds, so a gate can tell a real deadline from a counted pump.
 			{"admission_clock_ms", AdmissionNowMs()},
+			// Zero whenever setup, play and every resync read one clock; the inflation itself otherwise.
+			{"clock_divergence_max_ms", m_MaxClockDivergenceMs.load()},
 			{"client_state", NetReconnectClientStateName(m_ReconnectClient.GetState())},
 			{"client_used_stored_ticket", m_ReconnectClient.UsedStoredTicket()},
 			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},

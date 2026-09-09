@@ -185,6 +185,10 @@ namespace RTE {
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
+		/// The largest the session clock has ever run ahead of the admission clock at a pump. Zero on a
+		/// tree where they are one clock; the inflation itself on one where they are not, whenever the
+		/// report is written - which the two clocks in the report cannot say, being read after teardown.
+		std::atomic<uint64_t> m_MaxClockDivergenceMs{0};
 		/// The moderator stand-in for the unattended gates: runs from PumpSessionEvents, on the game
 		/// thread, and does exactly what a host clicking the UI would do.
 		void DriveAutoSubstitution(uint64_t nowMs);
