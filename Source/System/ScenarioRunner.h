@@ -167,6 +167,9 @@ namespace RTE {
 		/// The committed frame the sim is applying. Every peer applies the same frames in the same
 		/// order, so anything answered from this answers identically on all of them.
 		static void SetLockstepAppliedFrame(uint64_t frame);
+		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
+		/// shows or decides on the hold reads the tick and never a clock.
+		static uint64_t GetLockstepAppliedFrame();
 
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -

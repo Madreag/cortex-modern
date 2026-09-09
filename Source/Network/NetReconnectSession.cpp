@@ -835,6 +835,8 @@ namespace RTE {
 			});
 			entry.holderGeneration = seat.holderGeneration;
 			entry.seatGeneration = seat.seatGeneration;
+			entry.droppedAtMs = seat.droppedAtMs;
+			entry.droppedForMs = entry.dropped && m_NowMs > seat.droppedAtMs ? m_NowMs - seat.droppedAtMs : 0;
 			for (const Applicant& applicant : m_Applicants) {
 				if (applicant.stableSeat != seat.seat.stableSeat) {
 					continue;

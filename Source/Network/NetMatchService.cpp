@@ -890,6 +890,7 @@ static std::string ResyncSaveName() {
 					{"substituting", seat.substituting},
 					{"holder_generation", seat.holderGeneration},
 					{"seat_generation", seat.seatGeneration},
+					{"dropped_for_ms", seat.droppedForMs},
 					{"applicants", applicants},
 				});
 			}
@@ -1051,7 +1052,27 @@ static std::string ResyncSaveName() {
 		if (!m_AdmissionAttached || !m_IsHost) {
 			return {};
 		}
-		return m_ReconnectHost.GetModerationView();
+		std::vector<NetH4ModerationSeat> seats = m_ReconnectHost.GetModerationView();
+		// The plane knows the seat; the roster knows the name, and the round knows how long it holds it.
+		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+		for (NetH4ModerationSeat& seat: seats) {
+			for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+				if (member.peerId == seat.lockstepPeerId) {
+					seat.displayName = member.displayName;
+					break;
+				}
+			}
+			if (!m_Coordinator) {
+				continue;
+			}
+			const std::map<uint8_t, uint64_t>& leaves = m_Coordinator->GetPeerLeaveFrames();
+			const auto left = leaves.find(seat.lockstepPeerId);
+			if (left != leaves.end()) {
+				const uint64_t deadline = left->second + NetLockstepCoordinator::c_ReclaimHoldFrames;
+				seat.holdFramesRemaining = appliedFrame < deadline ? deadline - appliedFrame : 0;
+			}
+		}
+		return seats;
 	}
 
 	NetH4ModerationResult NetMatchService::WaitForSeat(uint16_t stableSeat) {
