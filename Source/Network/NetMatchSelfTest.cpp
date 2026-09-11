@@ -822,6 +822,30 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestEarlyOverUsesMatchTick(std::string* error) {
+			NetMatchE2ETickClock lateJoin;
+			for (uint64_t tick = 1; tick <= 65; ++tick) {
+				lateJoin.NoteSimTick(tick);
+			}
+			if (lateJoin.EarlyOverIsSetupFailure(307)) {
+				*error = "own count 65 with match tick 307 was a setup failure";
+				return false;
+			}
+			if (!lateJoin.EarlyOverIsSetupFailure(65)) {
+				*error = "own count 65 with match tick 65 was not a setup failure";
+				return false;
+			}
+			NetMatchE2ETickClock longRun;
+			for (uint64_t tick = 1; tick <= 3000; ++tick) {
+				longRun.NoteSimTick(tick);
+			}
+			if (!longRun.EarlyOverIsSetupFailure(50)) {
+				*error = "own count 3000 with match tick 50 was not a setup failure";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLobbyStateTransfer(std::string* error) {
 			// Codec round-trip first.
 			NetLobbyStateChunk chunk;
@@ -1714,6 +1738,7 @@ namespace RTE {
 		std::string tickClockError;
 		std::string capTickError;
 		std::string executedTickError;
+		std::string earlyOverTickError;
 		if (!TestFailedReportKeepsAdmissionCounters(&failedReportError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << failedReportError << std::endl;
 		}
@@ -1732,12 +1757,16 @@ namespace RTE {
 		if (!TestE2ETickClockCountsExecutedTicks(&executedTickError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << executedTickError << std::endl;
 		}
+		if (!TestEarlyOverUsesMatchTick(&earlyOverTickError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << earlyOverTickError << std::endl;
+		}
 		if (!failedReportError.empty()) return fail(failedReportError);
 		if (!rejoinOverError.empty()) return fail(rejoinOverError);
 		if (!rejoinWaitError.empty()) return fail(rejoinWaitError);
 		if (!tickClockError.empty()) return fail(tickClockError);
 		if (!capTickError.empty()) return fail(capTickError);
 		if (!executedTickError.empty()) return fail(executedTickError);
+		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 
