@@ -1570,6 +1570,8 @@ namespace RTE {
 		// configured milliseconds - long enough for the host's drop notice to arrive too late.
 		const uint64_t giveUpMs = timeoutMs > 0 ? static_cast<uint64_t>(timeoutMs) + 50 : 500;
 		const auto waitStart = std::chrono::steady_clock::now();
+		auto giveUpOrigin = waitStart;
+		bool heldThisWait = false;
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
@@ -1660,16 +1662,17 @@ namespace RTE {
 				}
 				nextOverlayMs = stallMs + 200;
 			}
-			uint64_t budgetMs = giveUpMs;
 			if (holdPause) {
-				uint64_t remain = s_LockstepCoordinator->HoldPauseRemainingMs(NetLockstepNowMs());
-				if (remain == 0) {
-					remain = NetLockstepCoordinator::c_HoldPauseMs;
+				heldThisWait = true;
+			} else {
+				if (heldThisWait) {
+					giveUpOrigin = std::chrono::steady_clock::now();
+					heldThisWait = false;
 				}
-				budgetMs = remain + 1000;
-			}
-			if (stallMs >= budgetMs) {
-				break;
+				const uint32_t giveUpStallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - giveUpOrigin).count());
+				if (giveUpStallMs >= giveUpMs) {
+					break;
+				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
