@@ -286,6 +286,44 @@ def _probe_writable(directory):
     return ok
 
 
+FIREWALL_RULES_KEY = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules"
+FIREWALL_ALLOW_SCRIPT = r"D:\Projects\reviews\takeover-20260909\grok-workers\firewall_allow_all_exes.ps1"
+
+
+def firewall_allows_inbound(exe):
+    """True when an active inbound Allow rule names this executable.
+
+    Read from the rule store in the registry (no elevation needed) instead of the WMI cmdlets, which take
+    tens of seconds. Without such a rule Windows raises the "new app listening" prompt on the desktop the
+    first time the process binds a socket, and an unattended run then waits on nobody.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return None
+    wanted = os.path.normcase(os.path.realpath(str(exe)))
+    try:
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, FIREWALL_RULES_KEY)
+    except OSError:
+        return None
+    with key:
+        index = 0
+        while True:
+            try:
+                _name, value, _kind = winreg.EnumValue(key, index)
+            except OSError:
+                return False
+            index += 1
+            if not isinstance(value, str):
+                continue
+            fields = dict(part.split("=", 1) for part in value.split("|") if "=" in part)
+            if fields.get("Dir") != "In" or fields.get("Action") != "Allow" or fields.get("Active", "TRUE") != "TRUE":
+                continue
+            app = fields.get("App")
+            if app and os.path.normcase(os.path.expandvars(app)) == wanted:
+                return True
+
+
 class IsolatedRun:
     def __init__(
         self,
@@ -382,6 +420,17 @@ class IsolatedRun:
                 )
             except OSError as exc:
                 self._check("userdata_writable", False, f"{userdata}: {exc}")
+            # Only a networked run binds a socket, so only it can raise the firewall prompt.
+            if exe_ok and any(str(a).startswith("-net") for a in self.argv[1:]):
+                allowed = firewall_allows_inbound(exe)
+                if allowed is None:
+                    self._check("firewall_allow_rule_present", True, "rule store unreadable; not checked")
+                else:
+                    self._check(
+                        "firewall_allow_rule_present",
+                        allowed,
+                        str(exe) if allowed else f"no inbound allow rule for {exe}; run {FIREWALL_ALLOW_SCRIPT} elevated",
+                    )
         try:
             private = (
                 not str(self.out)
