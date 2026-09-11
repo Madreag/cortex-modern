@@ -1065,6 +1065,10 @@ void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint6
 	m_NextSoundContainerIdentity = std::max(m_NextSoundContainerIdentity, identity);
 	auto& owners = m_CheckpointSoundContainers[identity];
 	if (std::find(owners.begin(), owners.end(), container) == owners.end()) owners.push_back(container);
+	if (m_RestoredSoundRegistryRecording) {
+		auto& restored = m_RestoredSoundContainers[identity];
+		if (std::find(restored.begin(), restored.end(), container) == restored.end()) restored.push_back(container);
+	}
 }
 
 void AudioMan::UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
@@ -1731,9 +1735,14 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) ownerChannels.try_emplace(voice.owner);
 		std::map<int, const AudioCheckpoint::Voice*> descriptions;
 		std::map<int, FMOD::Channel*> backendCandidates;
+		if (m_RestoredSoundRegistryActive) RefreshRestoredManagerIdentities();
 		for (const auto& voice: state.voices) {
-			SoundContainer* owner = voice.owner ? FindCheckpointSoundContainer(voice.owner) : nullptr;
-			if (voice.owner && !owner) throw std::runtime_error("voice " + std::to_string(voice.identity) + " has no registered owner " + std::to_string(voice.owner));
+			SoundContainer* owner = voice.owner ? ResolveCheckpointVoiceOwner(voice.owner) : nullptr;
+			if (voice.owner && !owner) {
+				SoundContainer* named = FindCheckpointSoundContainer(voice.owner);
+				const std::string preset = named ? named->GetPresetName() : std::string();
+				throw std::runtime_error("voice " + std::to_string(voice.identity) + " has no registered owner " + std::to_string(voice.owner) + (preset.empty() ? "" : " (" + preset + ")"));
+			}
 			if (owner) ownerChannels[owner].insert(voice.identity);
 			if (voice.playing && !sounds.contains(voice.path)) throw std::runtime_error("voice sample is absent: " + voice.path);
 			if (voice.playing && owner && !owner->GetSoundDataForSound(sounds.at(voice.path))) {
@@ -2158,6 +2167,51 @@ bool AudioMan::RunCheckpointSelfTest() {
 			std::cout << "[audio-checkpoint-selftest] PASS lua_copy_owner_is_disowned" << std::endl;
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL lua_copy_owner_is_disowned " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
+			std::unique_ptr<SoundContainer> leftover(static_cast<SoundContainer*>(preset->Clone()));
+			leftover->SetPaused(true); leftover->SetImmobile(true); leftover->SetLoopSetting(-1);
+			if (!leftover->Play()) throw std::runtime_error("leftover apply fixture did not play");
+			const int leftoverVoice = *leftover->GetPlayingChannels()->begin();
+			const std::string leftoverAudio = leftover->SaveCheckpoint();
+			const std::string snapshot = SaveCheckpoint();
+			const uint64_t leftoverOwner = leftover->GetCheckpointIdentity();
+			const CheckpointSoundRegistry live = CaptureCheckpointSoundRegistry();
+			std::unique_ptr<SoundContainer> clone;
+			{
+				RestoredSoundRegistryScope restored;
+				CheckpointSoundRegistry seed = live;
+				seed.erase(leftoverOwner);
+				ActivateCheckpointSoundRegistrations(seed);
+				{ MovableObject::FaithfulCloneScope faithful(true); clone.reset(static_cast<SoundContainer*>(leftover->Clone())); }
+				StopRecordingRestoredSoundRegistry();
+				CheckpointSoundRegistry leftoverBack = CaptureCheckpointSoundRegistry();
+				leftoverBack[leftoverOwner] = {leftover.get()};
+				RestoreCheckpointSoundRegistry(leftoverBack);
+				if (!LoadCheckpoint(snapshot)) throw std::runtime_error("written owner did not apply against a leftover registry");
+				if (m_PlayingVoices.at(leftoverVoice).owner != clone.get()) throw std::runtime_error("written owner resolved to the leftover object");
+			}
+			RestoreCheckpointSoundRegistry(live);
+			std::cout << "[audio-checkpoint-selftest] PASS written_owner_resolves_to_clone" << std::endl;
+			bool leftoverApply = false, cleanApply = false;
+			{
+				RestoredSoundRegistryScope restored;
+				StopRecordingRestoredSoundRegistry();
+				leftoverApply = LoadCheckpoint(snapshot);
+			}
+			{
+				RestoredSoundRegistryScope restored;
+				StopRecordingRestoredSoundRegistry();
+				RestoreCheckpointSoundRegistry({});
+				cleanApply = LoadCheckpoint(snapshot);
+			}
+			RestoreCheckpointSoundRegistry(live);
+			if (leftoverApply != cleanApply) throw std::runtime_error("leftover and clean apply differed");
+			if (!leftover->LoadCheckpoint(leftoverAudio)) throw std::runtime_error("could not restore leftover apply fixture");
+			std::cout << "[audio-checkpoint-selftest] PASS leftover_and_clean_apply_match" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL leftover_or_clone_apply " << error.what() << std::endl;
 			ok = false;
 		}
 		if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("owner selftests left the audio checkpoint unrestored");
