@@ -232,6 +232,17 @@ namespace RTE {
 		int GetSeatPlayer() const { return m_SeatMode == InputMode::CIM_PLAYER ? m_SeatPlayer : Players::NoPlayer; }
 		int GetSeatPlayerRaw() const { return m_SeatPlayer; }
 
+		struct LocalInputState {
+			InputMode seatMode = CIM_AI;
+			int seatPlayer = Players::NoPlayer;
+			std::array<bool, 8> ignore{};
+			Timer releaseTimer, joyAccelTimer, keyAccelTimer;
+			std::pair<std::pair<float, float>, bool> cursorAngleLimits{{0, 0}, false};
+		};
+		LocalInputState CaptureLocalInputState() const;
+		void RestoreLocalInputState(const LocalInputState& state);
+		void ResetLocalInputState(InputMode mode = CIM_AI, int player = Players::NoPlayer);
+
 		/// Whether the actor-switch debounce has run out for this seat.
 		bool ReleaseDelayPassed();
 		bool IsSeatedByPlayer(int player = Players::NoPlayer) const { return m_SeatMode == InputMode::CIM_PLAYER && m_SeatPlayer >= Players::PlayerOne && (player < Players::PlayerOne || m_SeatPlayer == player); }

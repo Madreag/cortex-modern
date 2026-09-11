@@ -10,8 +10,10 @@
 #include "LogicalSound.h"
 
 #include "fmod/fmod.hpp"
+#include <functional>
 #include <map>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 #include <utility>
 #include "fmod/fmod_errors.h"
@@ -32,6 +34,7 @@ namespace RTE {
 
 	public:
 		std::string SaveCheckpoint() const;
+		std::string SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const;
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime3 ") ? "AudioRuntime3" : (text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
@@ -77,6 +80,11 @@ namespace RTE {
 		CheckpointSoundRegistry AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const;
 		void RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original);
 		void ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates);
+		void NoteCarriedSoundIdentity(uint64_t identity);
+		void CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const;
+		void RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried);
+		const std::unordered_set<uint64_t>& LastCarriedSoundIdentities() const { return m_LastCarriedSoundIdentities; }
+		void StopRecordingRestoredSoundRegistry();
 		class CheckpointRegistryScope {
 		public:
 			CheckpointRegistryScope();
@@ -86,6 +94,40 @@ namespace RTE {
 		private:
 			CheckpointSoundRegistry m_Original;
 			uint64_t m_Cursor;
+		};
+		class SoundCheckpointSaveScope {
+		public:
+			SoundCheckpointSaveScope();
+			~SoundCheckpointSaveScope();
+			SoundCheckpointSaveScope(const SoundCheckpointSaveScope&) = delete;
+			SoundCheckpointSaveScope& operator=(const SoundCheckpointSaveScope&) = delete;
+			void Note(uint64_t identity);
+			bool Contains(uint64_t identity) const { return m_Carried.contains(identity); }
+			const std::unordered_set<uint64_t>& Carried() const { return m_Carried; }
+			static SoundCheckpointSaveScope* Current() { return s_Current; }
+		private:
+			static thread_local SoundCheckpointSaveScope* s_Current;
+			std::unordered_set<uint64_t> m_Carried;
+			SoundCheckpointSaveScope* m_Previous = nullptr;
+		};
+		class RestoredSoundRegistryScope {
+		public:
+			RestoredSoundRegistryScope();
+			~RestoredSoundRegistryScope();
+			RestoredSoundRegistryScope(const RestoredSoundRegistryScope&) = delete;
+			RestoredSoundRegistryScope& operator=(const RestoredSoundRegistryScope&) = delete;
+		};
+		class RestorePlayPhaseScope {
+		public:
+			explicit RestorePlayPhaseScope(const char* name);
+			~RestorePlayPhaseScope();
+			RestorePlayPhaseScope(const RestorePlayPhaseScope&) = delete;
+			RestorePlayPhaseScope& operator=(const RestorePlayPhaseScope&) = delete;
+			static const char* Name();
+			static int RestorePlayCount();
+			static void ResetRestorePlayCount();
+		private:
+			const char* m_Previous;
 		};
 		/// Hardcoded playback priorities for sounds. Note that sounds don't have to use these specifically; their priority can be anywhere between high and low.
 		enum PlaybackPriority {
@@ -447,6 +489,11 @@ namespace RTE {
 		int m_NextVoiceIdentity = 0;
 		CheckpointSoundRegistry m_CheckpointSoundContainers;
 		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
+		CheckpointSoundRegistry m_RestoredSoundContainers;
+		std::unordered_set<uint64_t> m_RestoredManagerIdentities;
+		std::unordered_set<uint64_t> m_LastCarriedSoundIdentities;
+		bool m_RestoredSoundRegistryActive = false;
+		bool m_RestoredSoundRegistryRecording = false;
 		uint64_t m_NextSoundContainerIdentity = 0;
 		mutable std::mutex m_LogicalSoundsMutex;
 		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
@@ -471,6 +518,9 @@ namespace RTE {
 		void RegisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity);
 		void UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity);
 		SoundContainer* FindCheckpointSoundContainer(uint64_t identity) const;
+		SoundContainer* FindRestoredCheckpointSoundContainer(uint64_t identity) const;
+		SoundContainer* ResolveCheckpointVoiceOwner(uint64_t identity) const;
+		void RefreshRestoredManagerIdentities();
 		int RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance);
 		int FindVoiceIdentity(const FMOD::Channel* channel) const;
 		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;

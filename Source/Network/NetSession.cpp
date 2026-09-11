@@ -1,4 +1,5 @@
 #include "NetSession.h"
+#include "NetA7Journal.h"
 
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
@@ -85,6 +86,7 @@ namespace RTE {
 		}
 		m_State = NetSessionState::Listening;
 		m_StateStartedMs = m_NowMs;
+		if (NetA7Journal::Enabled()) NetA7Journal::Session("listening", m_NowMs, {{"port", m_Config.port}});
 		return true;
 	}
 
@@ -262,6 +264,9 @@ namespace RTE {
 		NetMessage message;
 		message.sequence = ++m_NextSequence;
 		message.payload = std::move(payload);
+		const bool a7Heartbeat = NetA7Journal::ControlledSilentClient() && m_Role == NetSessionRole::Client &&
+		                         m_State == NetSessionState::HelloSent && std::holds_alternative<NetHeartbeat>(message.payload);
+		if (a7Heartbeat) message.sequence = NetA7Journal::SilentHeartbeatTag();
 		if (!NetProtocol::Encode(message, bytes, &encodeError)) {
 			if (error) *error = encodeError.message;
 			return false;
@@ -270,6 +275,11 @@ namespace RTE {
 			return false;
 		}
 		++m_Stats.sentMessages;
+		if (a7Heartbeat) NetA7Journal::Session("silent_heartbeat_sent", m_NowMs, {{"sequence", message.sequence}, {"connected_age_ms", m_NowMs - m_A7ClientConnectedMs}});
+		if (NetA7Journal::Enabled()) {
+			if (const auto* leave = std::get_if<NetH4LeaveRequest>(&message.payload))
+				NetA7Journal::Session("leave_send", m_NowMs, {{"transaction", NetA7Journal::Hex(leave->txId.data(), leave->txId.size())}, {"sequence", message.sequence}});
+		}
 		return true;
 	}
 
@@ -278,6 +288,14 @@ namespace RTE {
 	}
 
 	void NetSession::MaybeSendHeartbeats() {
+		if (NetA7Journal::ControlledSilentClient() && m_Role == NetSessionRole::Client && m_State == NetSessionState::HelloSent) {
+			if (!m_A7HeartbeatAttempted && m_RemoteTransportPeerId != c_InvalidNetPeerId && m_NowMs >= m_A7ClientConnectedMs &&
+			    m_NowMs - m_A7ClientConnectedMs >= NetA7Journal::SilentHeartbeatMs()) {
+				m_A7HeartbeatAttempted = true;
+				SendHeartbeat(m_RemoteTransportPeerId);
+			}
+			return;
+		}
 		if (m_Config.heartbeatIntervalMs == 0 || m_NowMs < m_NextHeartbeatMs) {
 			return;
 		}
@@ -313,6 +331,10 @@ namespace RTE {
 					peer.transportPeerId = event.peerId;
 					peer.state = NetSessionState::Handshake;
 					peer.connectedAtMs = m_NowMs;
+					if (NetA7Journal::Enabled()) {
+						peer.a7ConnectionId = ++m_A7NextConnectionId;
+						NetA7Journal::Session("handshake_open", m_NowMs, {{"connection", std::to_string(peer.a7ConnectionId)}, {"transport_peer_id", event.peerId}});
+					}
 					peer.lastReceiveMs = m_NowMs;
 					m_Peers.push_back(std::move(peer));
 					RefreshHostState();
@@ -322,6 +344,7 @@ namespace RTE {
 					}
 					m_RemoteTransportPeerId = event.peerId;
 					m_LastReceiveMs = m_NowMs;
+					if (NetA7Journal::Enabled()) { m_A7ClientConnectedMs = m_NowMs; m_A7HeartbeatAttempted = false; }
 					// Test-only: P14's bound is "no decodable ClientHello within the budget", so the arm
 					// that proves it over a socket needs a connection that talks and never says hello.
 					if (!FaultInjected("client_never_says_hello")) {
@@ -339,6 +362,7 @@ namespace RTE {
 						break;
 					}
 					if (PeerState* peer = FindPeer(event.peerId)) {
+						if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_closed", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}, {"reason", event.reason}});
 						peer->state = NetSessionState::Closed;
 					}
 					RefreshHostState();
@@ -494,6 +518,7 @@ namespace RTE {
 				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
 				return;
 			}
+			if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_accepted", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}});
 			peer->clientNonce = hello->clientNonce;
 			peer->displayName = hello->displayName;
 			peer->identityHash = hello->sessionIdentityHash;
@@ -532,6 +557,8 @@ namespace RTE {
 			return;
 		}
 		if (std::holds_alternative<NetHeartbeat>(message.payload)) {
+			if (NetA7Journal::Enabled() && peer->state == NetSessionState::Handshake)
+				NetA7Journal::Session("handshake_heartbeat", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}, {"sequence", message.sequence}});
 			peer->lastHeartbeatMs = m_NowMs;
 			return;
 		}
@@ -709,6 +736,7 @@ namespace RTE {
 		// window started again instead.
 		const bool resumed = m_TimeoutsEvaluated && m_NowMs > m_LastTimeoutCheckMs &&
 		                     m_NowMs - m_LastTimeoutCheckMs > m_Config.timeoutMs;
+		const uint64_t a7EvaluationGap = m_NowMs >= m_LastTimeoutCheckMs ? m_NowMs - m_LastTimeoutCheckMs : 0;
 		m_TimeoutsEvaluated = true;
 		m_LastTimeoutCheckMs = m_NowMs;
 		if (resumed) {
@@ -731,6 +759,7 @@ namespace RTE {
 			}
 			if (restarted) {
 				++m_Stats.timeoutResumptions;
+				if (NetA7Journal::Enabled()) NetA7Journal::Session("session_resumed", m_NowMs, {{"resync", std::to_string(NetA7Journal::CurrentResync())}, {"evaluation_gap_ms", a7EvaluationGap}});
 			}
 		}
 		if (m_Role == NetSessionRole::Host) {
@@ -750,7 +779,8 @@ namespace RTE {
 				}
 			}
 		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
-		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs > m_Config.timeoutMs) {
+		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs >
+		           ((NetA7Journal::ControlledSilentClient() && m_State == NetSessionState::HelloSent) ? NetA7Journal::SilentReceiveBudgetMs() : m_Config.timeoutMs)) {
 			++m_Stats.timeouts;
 			SetFailed(NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - m_LastReceiveMs), "session timeout");
 			if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
@@ -767,14 +797,22 @@ namespace RTE {
 			if (peer.state != NetSessionState::Handshake) {
 				continue;
 			}
+			const uint64_t a7Age = m_NowMs >= peer.connectedAtMs ? m_NowMs - peer.connectedAtMs : 0;
 			if (m_NowMs >= peer.connectedAtMs && m_NowMs - peer.connectedAtMs > m_Config.timeoutMs) {
+				if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_expired", m_NowMs, {{"connection", std::to_string(peer.a7ConnectionId)},
+					{"reason", "client hello timeout"}, {"timeout_ms", m_Config.timeoutMs}, {"age_ms", a7Age}, {"previous_check_age_ms", peer.a7PreviousHandshakeAgeMs}});
 				++m_Stats.timeouts;
 				RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.connectedAtMs), "client hello timeout");
 			}
+			if (NetA7Journal::Enabled()) peer.a7PreviousHandshakeAgeMs = a7Age;
 		}
 	}
 
 	void NetSession::DropPeerTransport(NetPeerId peerId, const std::string& reason) {
+		if (NetA7Journal::Enabled()) {
+			if (const PeerState* peer = FindPeer(peerId))
+				NetA7Journal::Session("handshake_closed", m_NowMs, {{"connection", std::to_string(peer->a7ConnectionId)}, {"reason", reason}});
+		}
 		if (m_Role == NetSessionRole::Host && m_ReconnectHost) {
 			// Fenced connections are handled inside: a superseded incarnation keeps the seat.
 			(void)m_ReconnectHost->NotifyDisconnect(peerId, m_LockstepFrame);

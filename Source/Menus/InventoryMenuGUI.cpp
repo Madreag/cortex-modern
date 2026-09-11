@@ -1536,6 +1536,7 @@ bool InventoryMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) 
 		m_NonMouseHighlightedButton = restoredButtons[0]; m_NonMousePreviousEquippedItemsBoxButton = restoredButtons[1]; m_NonMousePreviousInventoryItemsBoxButton = restoredButtons[2]; m_NonMousePreviousReloadOrDropButton = restoredButtons[3];
 		m_GUIInformationToggleButtonIcon = restoredIcons[0]; m_GUIReloadButtonIcon = restoredIcons[1]; m_GUIDropButtonIcon = restoredIcons[2];
 		m_GUISelectedItem = std::move(selected); m_GUIInventoryItemButtons = std::move(itemButtons); m_PendingCheckpoint.clear();
+		if (GUICheckpoint::IsRestoringNetLocalUI() && m_GUISelectedItem && !m_GUISelectedItem->Object) ClearSelectedItem();
 		if (!hasControls) {
 			m_GUIControlManager.reset(); m_GUIScreen.reset(); m_GUIInput.reset();
 			m_GUITopLevelBox = nullptr; m_GUIInformationText = nullptr; m_GUIInformationToggleButton = nullptr;

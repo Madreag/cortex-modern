@@ -387,11 +387,26 @@ namespace RTE {
 			return AppendString(out, payload.reason, NetLobbyProtocol::c_MaxShortTextBytes, "reason", error);
 		}
 
+		bool ValidateStateChunkHeader(const NetLobbyStateChunk& payload, size_t byteCount, size_t offset, NetLobbyError* error) {
+			const uint16_t chunkCount = NetLobbyProtocol::GetStateChunkCount(payload.totalBytes);
+			if (payload.transferId == 0 || chunkCount == 0 || payload.chunkCount != chunkCount || payload.chunkIndex >= chunkCount) {
+				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "state chunk header is invalid");
+				return false;
+			}
+			const size_t begin = static_cast<size_t>(payload.chunkIndex) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			if (byteCount != std::min(NetLobbyProtocol::c_MaxStateChunkBytes, static_cast<size_t>(payload.totalBytes) - begin)) {
+				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "state chunk size does not match its header");
+				return false;
+			}
+			return true;
+		}
+
 		bool EncodePayload(const NetLobbyStateChunk& payload, std::vector<uint8_t>& out, NetLobbyError* error) {
 			if (payload.bytes.size() > NetLobbyProtocol::c_MaxStateChunkBytes) {
 				SetError(error, NetLobbyErrorCode::PayloadTooLarge, out.size(), "state chunk exceeds max size");
 				return false;
 			}
+			if (!ValidateStateChunkHeader(payload, payload.bytes.size(), out.size(), error)) return false;
 			AppendU64LE(out, payload.transferId);
 			AppendU32LE(out, payload.totalBytes);
 			AppendU16LE(out, payload.chunkIndex);
@@ -509,11 +524,7 @@ namespace RTE {
 					    !ReadOrTruncated(reader.ReadU16LE(payload.chunkIndex), reader, error, "chunk_index") ||
 					    !ReadOrTruncated(reader.ReadU16LE(payload.chunkCount), reader, error, "chunk_count") ||
 					    !ReadOrTruncated(reader.ReadU32LE(byteCount), reader, error, "byte_count")) return false;
-					if (byteCount > NetLobbyProtocol::c_MaxStateChunkBytes || payload.chunkIndex >= payload.chunkCount || payload.chunkCount == 0 ||
-					    payload.totalBytes > NetLobbyProtocol::c_MaxTotalStateBytes || payload.chunkCount > NetLobbyProtocol::c_MaxStateChunkCount) {
-						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), "state chunk header is invalid");
-						return false;
-					}
+					if (!ValidateStateChunkHeader(payload, byteCount, reader.Offset(), error)) return false;
 					if (!reader.ReadBytes(payload.bytes, byteCount)) {
 						SetError(error, NetLobbyErrorCode::TruncatedPayload, reader.Offset(), "state chunk bytes are truncated");
 						return false;

@@ -154,6 +154,8 @@ namespace RTE {
 
 		/// Detaches the old VM's Lua-owned native identities before replacement objects adopt them.
 		void ReleaseScriptOwnedObjects();
+		bool HasNativeAliases(const std::unordered_set<const void*>& objects);
+		bool RekeyScriptObjects(const std::vector<std::pair<const MovableObject*, long>>& identities, bool validateOnly = false);
 
 		/// Restores a graph into this state, laying each root's fields onto its live object; false with the reasons when anything did not restore.
 		bool RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld = false);

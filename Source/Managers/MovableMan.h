@@ -19,6 +19,7 @@
 
 #include "BS_thread_pool.hpp"
 
+#include <cstdint>
 #include <mutex>
 #include <map>
 #include <future>
@@ -38,6 +39,7 @@ namespace RTE {
 	class LuaStateWrapper;
 	class HeldDevice;
 	class MOPixel;
+	struct NetValueObservation;
 	class MOSprite;
 	class AHuman;
 	class SceneLayer;
@@ -462,6 +464,7 @@ namespace RTE {
 		/// Every settled live actor with the lockstep peer that held it. Sim thread only:
 		/// the reconnect ledger records a dropped seat's share of this at the frame it dropped.
 		std::vector<LockstepActorOwner> BuildLockstepOwnershipCensus() const;
+		void RecordA7UnitOwnership(uint64_t round, uint64_t frame) const;
 
 		/// Gets the number of particles (MOPixel:s) currently held.
 		/// @return The number of particles.
@@ -759,6 +762,11 @@ namespace RTE {
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
 		bool RunLockstepPausedTick();
 
+		uint8_t ValueObservationAuthority(uint64_t objectUID) const;
+		void CommitValueObservations(uint64_t frame, const std::vector<NetValueObservation>& local, const std::vector<NetValueObservation>& remote);
+		void CommitOfflineValueWrites();
+		uint64_t GetValueObservationsRejected() const { return m_ValueObservationsRejected; }
+
 		/// Returns the size of the object registry collection
 		/// @return Size of the objects registry.
 		unsigned int GetKnownObjectsCount() { return m_KnownObjects.size(); }
@@ -934,6 +942,7 @@ namespace RTE {
 		bool m_MOSubtractionEnabled;
 
 		unsigned int m_SimUpdateFrameNumber;
+		uint64_t m_ValueObservationsRejected;
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;

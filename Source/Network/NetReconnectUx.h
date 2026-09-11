@@ -1,9 +1,11 @@
 #pragma once
 
+#include "NetLockstep.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace RTE {
@@ -97,6 +99,78 @@ namespace RTE {
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
+	};
+
+	/// §9b's moderation panel as a model: the rows the host sees and the three actions it can take.
+	/// The panel renders this and the headless driver drives this, so a gate exercises the path a
+	/// player's click takes - the same rows, the same choice of applicant, the same service calls.
+	class NetModerationUx {
+	public:
+		struct Row {
+			NetH4ModerationSeat view;
+			NetModerationSelection selection;
+			uint16_t stableSeat = 0;
+			uint8_t lockstepPeerId = 0;
+			std::string text;          //!< The seat's line: who, how long, how much hold is left, who is waiting.
+			std::string applicantText; //!< The chosen applicant, or why there is none.
+			NetPeerId applicant = c_InvalidNetPeerId;
+			size_t applicants = 0;
+			bool substitutable = false;
+			bool substituting = false;
+		};
+
+		/// Rebuilds the rows from the host's view, keeping each seat's chosen applicant across refreshes.
+		void Refresh(const std::vector<NetH4ModerationSeat>& seats);
+		size_t RowCount() const { return m_Rows.size(); }
+		const Row& GetRow(size_t index) const { return m_Rows[index]; }
+		/// The row for a seat, or RowCount() when the seat is not one the host may decide about.
+		size_t FindSeat(uint16_t stableSeat) const;
+		/// Moves to the next applicant for the row's seat, wrapping.
+		void CycleApplicant(size_t index);
+		void CycleApplicant(const Row& displayed);
+		static bool Available(const Row& row, NetModerationAction action);
+		/// Runs the row's action through the service's §9b API and records what it answered.
+		NetH4ModerationResult Act(size_t index, NetModerationAction action);
+		NetH4ModerationResult Act(const Row& displayed, NetModerationAction action);
+
+		const std::string& GetStatusText() const { return m_StatusText; }
+		/// The panel's own line, so an empty panel says why it is empty.
+		std::string GetSummaryText() const;
+
+		/// The seat's line. Time since the drop, the hold in frames AND seconds, and who is waiting.
+		static std::string DescribeSeat(const NetH4ModerationSeat& seat);
+
+	private:
+		std::vector<Row> m_Rows;
+		std::map<uint16_t, NetModerationSelection> m_Chosen;
+		std::string m_StatusText;
+	};
+
+	/// The persistent roster, populated only by the coordinator's authenticated complete snapshots.
+	class NetSeatPresence {
+	public:
+		bool ApplySnapshot(const NetLockstepSeatSnapshot& snapshot, uint64_t receivedAtMs = NetLockstepNowMs());
+		const std::map<uint8_t, NetSeatPresenceEntry>& GetSeats() const { return m_Seats; }
+		const std::optional<NetLockstepSeatSnapshot>& GetSnapshot() const { return m_Snapshot; }
+		/// Used only to display the simulation hold; admission alone decides the public seat state.
+		void NoteFrame(uint64_t appliedFrame);
+		void Clear();
+
+		NetSeatPresenceState StateOf(uint8_t peerId) const;
+		/// Frames the seat's hold still has to run; 0 when nothing is being held for it.
+		uint64_t HoldFramesRemaining(uint8_t peerId) const;
+		uint64_t HoldWallSecondsRemaining(uint8_t peerId, uint64_t nowMs = NetLockstepNowMs()) const;
+		/// The persistent line for the seat, or "" while there is nothing to say about it.
+		std::string Line(uint8_t peerId, const std::string& playerName) const;
+
+		static uint64_t HoldSeconds(uint64_t frames);
+		static const char* StateName(NetSeatPresenceState state);
+
+	private:
+		std::map<uint8_t, NetSeatPresenceEntry> m_Seats;
+		std::optional<NetLockstepSeatSnapshot> m_Snapshot;
+		uint64_t m_ReceivedAtMs = 0;
+		uint64_t m_Frame = 0;
 	};
 
 } // namespace RTE

@@ -1144,14 +1144,14 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 	}
 }
 
-int UInputMan::Update() {
+int UInputMan::Update(bool handleSpecialInput) {
 	for (auto& [mouseID, mouse]: m_MouseStates) {
 		mouse.relativeMotion *= m_MouseSensitivity;
 	}
 
 	UpdateMouseInput();
 	UpdateJoystickDigitalAxis();
-	HandleSpecialInput();
+	if (handleSpecialInput) HandleSpecialInput();
 
 	return 0;
 }
@@ -1201,6 +1201,13 @@ void UInputMan::EndSimUpdate() {
 }
 
 void UInputMan::HandleSpecialInput() {
+	if (g_ActivityMan.IsInActivity()) {
+		if (KeyPressed(SDLK_F6) && g_MenuMan.ToggleNetworkPanel()) return;
+		if (g_MenuMan.IsNetworkPanelOpen()) {
+			if (AnyStartPress(false)) g_MenuMan.ToggleNetworkPanel();
+			return;
+		}
+	}
 	// If we launched into editor directly, skip the logic and quit quickly.
 	if (g_ActivityMan.IsSetToLaunchIntoEditor() && KeyPressed(SDLK_ESCAPE)) {
 		System::SetQuit();

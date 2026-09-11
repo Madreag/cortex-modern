@@ -36,6 +36,17 @@ namespace RTE {
 		bool operator==(const NetH4Seat&) const = default;
 	};
 
+	enum class NetHoldResolution : uint16_t {
+		Expired = 0,
+		Reclaimed = 1,
+		Substituted = 2,
+	};
+
+	struct NetHoldResolutionNotice {
+		uint8_t lockstepPeerId = 0;
+		NetHoldResolution resolution = NetHoldResolution::Expired;
+	};
+
 	/// The seat table in the pinned form, straight off the live match config.
 	std::vector<NetH4Seat> NetH4BuildSeatTable(const NetMatchConfig& config);
 
@@ -76,6 +87,20 @@ namespace RTE {
 		bool substitute = false; //!< The seat changed hands by an explicit host action, not a reclaim.
 	};
 
+	/// A fault the §9b socket gates inject, so the failure windows can be driven over a real socket
+	/// instead of only on an in-process wire. Off unless a command line asks for one; nothing reads it
+	/// on a default build's happy path.
+	enum class NetH4Fault : uint8_t {
+		None = 0,
+		AckDrop = 1,      //!< The substitute never sends its ack: the offer ladder runs out and P2 closes the window.
+		AckDuplicate = 2, //!< It keeps re-sending the ack after the commit, so every duplicate meets the txId cache.
+		CommitDrop = 3,   //!< The host throws its first commit result away, so the substitute has to ask again.
+	};
+
+	void NetH4SetFault(NetH4Fault fault);
+	NetH4Fault NetH4GetFault();
+	NetH4Fault NetH4FaultFromName(const std::string& name);
+
 	/// One player asking the host for a seat whose holder is gone (§4, P15). An applicant holds no
 	/// peer id, no team, no snapshot and no authority: it is a name on the host's list until an
 	/// approved substitution commits.
@@ -86,6 +111,7 @@ namespace RTE {
 		uint64_t appliedAtMs = 0;
 		uint64_t expiresAtMs = 0;
 		bool approved = false; //!< An approval for this applicant is in flight.
+		NetAuthBytes16 transactionId{}; //!< The displayed application, even if a connection id is reused.
 
 		bool operator==(const NetH4ApplicantView&) const = default;
 	};
@@ -95,15 +121,27 @@ namespace RTE {
 	struct NetH4ModerationSeat {
 		uint16_t stableSeat = 0;
 		uint8_t lockstepPeerId = 0;
+		bool cpu = false;
 		int32_t team = 0;
+		std::string displayName; //!< The roster's name for the seat, so the host moderates a player and not a number.
+		bool actionsAvailable = true; //!< Service disables actions while its worker owns the plane.
 		bool committed = false;
 		bool dropped = false;
 		bool closed = false;
 		bool heldForReclaim = false;  //!< The original holder can still return.
 		bool substitutable = false;   //!< A host action may reassign it right now.
 		bool substituting = false;    //!< An approval is in flight for it.
+		NetAuthBytes16 substitutionTransaction{};
+		bool reclaiming = false;
+		uint32_t incarnation = 0;
+		NetAuthBytes16 epoch{};
+		uint64_t holdUntilMs = 0;
+		std::string substituteName; //!< Retained current-holder state, not an unread event history.
 		uint32_t holderGeneration = 0;
 		uint32_t seatGeneration = 0;  //!< The value a pending approval compares against at commit.
+		uint64_t droppedAtMs = 0;     //!< When the holder's link went, on the admission plane's clock.
+		uint64_t droppedForMs = 0;    //!< How long ago that was, so the panel needs no clock of its own.
+		uint64_t holdFramesRemaining = 0; //!< Frames the round still holds the seat for; a frame, never a clock.
 		std::vector<NetH4ApplicantView> applicants;
 
 		bool operator==(const NetH4ModerationSeat&) const = default;
@@ -119,9 +157,30 @@ namespace RTE {
 		SubstitutionInFlight = 5,
 		NoSubstitutionPending = 6,
 		ProviderUnavailable = 7,
+		StaleSelection = 8,
+		ActionUnavailable = 9,
 	};
 
 	const char* NetH4ModerationResultName(NetH4ModerationResult result);
+
+	enum class NetModerationAction : uint8_t { Wait, Substitute, Cancel };
+	const char* NetModerationActionName(NetModerationAction action);
+
+	/// Identity of the seat and application actually displayed when the host pressed a button.
+	struct NetModerationSelection {
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		uint32_t seatGeneration = 0;
+		uint32_t incarnation = 0;
+		NetPeerId applicant = c_InvalidNetPeerId;
+		NetAuthBytes16 applicantTransaction{};
+		NetAuthBytes16 substitutionTransaction{};
+		bool operator==(const NetModerationSelection&) const = default;
+	};
+
+	NetModerationSelection NetSelectModerationSeat(const NetH4ModerationSeat& seat, NetPeerId applicant = c_InvalidNetPeerId);
+	NetH4ModerationResult NetModerationAvailability(const NetH4ModerationSeat& seat, const NetModerationSelection& selection, NetModerationAction action);
 
 	/// A seat's live admission status, for §11's persistent roster indication and the reports.
 	struct NetH4SeatStatus {
@@ -203,6 +262,7 @@ namespace RTE {
 		static constexpr size_t c_MaxApplicantsPerConnection = 1;
 
 		void Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity);
+		NetAuthBytes16 GetEpoch() const;
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
@@ -239,8 +299,10 @@ namespace RTE {
 		std::vector<NetH4Outbound> TakeOutbound();
 		/// The seats committed since the last call.
 		std::vector<NetH4Commit> TakeCommits();
+		/// The seats that changed hands since the last read, for §11's roster line.
 		/// The reseats a committed reclaim earned, for the match runner to enqueue as lockstep commands.
 		std::vector<NetGameReseat> TakePendingReseats();
+		std::vector<NetHoldResolutionNotice> TakePendingHoldResolutions();
 
 		const NetReconnectHostStats& GetStats() const { return m_Stats; }
 		const NetReconnectAdmission& GetAdmission() const { return m_Admission; }
@@ -251,6 +313,7 @@ namespace RTE {
 		/// §9b's moderation API: every seat, whether it may be reassigned, and who is asking for it.
 		/// The host UI renders this and calls one of the three verbs below; nothing here is a secret.
 		std::vector<NetH4ModerationSeat> GetModerationView() const;
+		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action, uint64_t nowMs);
 		/// Keep waiting for the original holder. Explicit, so "wait" is a recorded decision rather
 		/// than the absence of one.
 		NetH4ModerationResult WaitForSeat(uint16_t stableSeat);
@@ -289,6 +352,7 @@ namespace RTE {
 			uint32_t seatGeneration = 1;
 			uint32_t retiredGeneration = 0; //!< A generation a substitute superseded, kept only to answer it.
 			uint64_t retiredUntilMs = 0;
+			std::string substituteName;
 		};
 
 		/// A pending applicant. It carries an identity because §4 re-validates one on every admission
@@ -347,6 +411,7 @@ namespace RTE {
 			// The generation this names was superseded by a substitute. The challenge is real and the
 			// answer is a refusal either way; proving it only decides whether the refusal says why.
 			bool superseded = false;
+			bool proofFinished = false; //!< Keep replay suppression after a failed proof without showing an active reconnect.
 		};
 
 		struct Fence {
@@ -383,6 +448,8 @@ namespace RTE {
 		/// left has nothing to reclaim and the seat must be joinable again.
 		void ReleaseSeat(SeatState& seat);
 		void IssueReseat(const SeatState& seat);
+		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
+		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 
 		/// Whether an explicit host action may hand this seat to somebody else: a live match, a real
@@ -405,6 +472,7 @@ namespace RTE {
 
 		NetSeatAuthRegistry* m_Registry = nullptr;
 		uint64_t m_HostSessionId = 0;
+		NetAuthBytes16 m_ConfiguredEpoch{};
 		NetH4Identity m_LocalIdentity;
 		NetHash32 m_MatchConfigHash{};
 		std::string m_HostAddress;
@@ -425,6 +493,7 @@ namespace RTE {
 		std::vector<Fence> m_Fences;
 		std::vector<NetH4Outbound> m_Outbound;
 		std::vector<NetGameReseat> m_PendingReseats;
+		std::vector<NetHoldResolutionNotice> m_PendingHoldResolutions;
 		std::vector<NetH4Commit> m_Commits;
 		NetReconnectHostStats m_Stats;
 	};
@@ -516,7 +585,16 @@ namespace RTE {
 		bool IsAdmissionPending() const;
 		/// Why the last store read produced nothing, so §11 can tell missing from corrupt from stale.
 		NetH4TicketLoadResult GetLastLoadResult() const { return m_LastLoad; }
-		bool UsedStoredTicket() const { return m_UsedStoredTicket; }
+		bool UsedStoredTicket() const { return m_UsedStoredTicket && !m_FellBackToNewJoin; }
+		const char* ReclaimOutcome() const {
+			if (m_FellBackToNewJoin) {
+				return "new_join_after_refusal";
+			}
+			if (m_UsedStoredTicket) {
+				return "reclaim_accepted";
+			}
+			return "";
+		}
 		/// Set when an unacknowledged leave gave up: keep the ticket and close the link.
 		bool WantsLinkClosed() const { return m_WantsLinkClosed; }
 		/// The reason the host last refused this client, so §11 can say "the seat was reassigned"
@@ -549,6 +627,7 @@ namespace RTE {
 		NetH4ClientState m_State = NetH4ClientState::Idle;
 		NetH4TicketLoadResult m_LastLoad = NetH4TicketLoadResult::Missing;
 		bool m_UsedStoredTicket = false;
+		uint64_t m_A7PreviousLeaveElapsedMs = 0;
 		bool m_FellBackToNewJoin = false;
 		bool m_ApplyForSeat = false;
 		uint16_t m_ApplySeat = 0;
