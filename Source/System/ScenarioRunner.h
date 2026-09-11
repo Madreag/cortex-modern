@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace RTE {
+	class NetSeatPresence;
 	/// CLI scenario direct-launch mode.
 	///
 	/// Activated when the binary is invoked with `-scenario <PresetName>`. Skips the menu loop,
@@ -182,6 +183,7 @@ namespace RTE {
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
 		/// including the leave the waited-for peer is waiting to have acknowledged.
 		static void SetSessionPump(std::function<void()> pump);
+		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.

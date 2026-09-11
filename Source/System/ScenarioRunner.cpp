@@ -13,6 +13,7 @@
 #include "MovableObject.h"
 #include "NetActorOwnership.h"
 #include "NetMatchReplay.h"
+#include "NetReconnectUx.h"
 #include "RTETools.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -51,6 +52,7 @@ namespace RTE {
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
+		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		uint64_t s_NextLocalCommandSequence = 1;
 		uint64_t s_CommandSessionId = 0;
@@ -134,7 +136,7 @@ namespace RTE {
 
 		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
 		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
-		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn) {
+		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
 			SDL_PumpEvents();
 			BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 			GUIFont* largeFont = g_FrameMan.GetLargeFont();
@@ -146,10 +148,15 @@ namespace RTE {
 			AllegroBitmap drawBitmap(backbuffer);
 			const int centerX = backbuffer->w / 2;
 			const int centerY = backbuffer->h / 2;
-			const std::string who = waitingOn.empty() ? "the other player" : waitingOn;
-			largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for " + who + "... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
-			if (graceMs > stallMs) {
-				smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
+			if (holdPause) {
+				const std::string who = holdName.empty() ? "a player" : holdName;
+				largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)", GUIFont::Centre);
+			} else {
+				const std::string who = waitingOn.empty() ? "the other player" : waitingOn;
+				largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for " + who + "... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
+				if (graceMs > stallMs) {
+					smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
+				}
 			}
 			g_WindowMan.ClearBackbuffer(false);
 			g_WindowMan.GetScreenBuffer()->Begin();
@@ -606,6 +613,10 @@ namespace RTE {
 		s_SessionPump = std::move(pump);
 	}
 
+	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
+		s_SeatPresence = presence;
+	}
+
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
 		if (!coordinator && s_LockstepCoordinator) {
 			for (auto& input: s_LockstepCoordinator->CaptureLocalInputHistory()) s_LocalInputHistory[input.targetFrame] = std::move(input);
@@ -615,6 +626,9 @@ namespace RTE {
 			}
 		}
 		s_LockstepCoordinator = coordinator;
+		if (!coordinator) {
+			s_SeatPresence = nullptr;
+		}
 		if (coordinator && (!preserveCommands || s_CommandSessionId != coordinator->GetConfig().sessionId || s_CommandEpoch != coordinator->GetConfig().seatPresenceEpoch)) {
 			s_PendingLocalGameCommands.clear();
 			s_NextLocalCommandSequence = 1;
@@ -1579,18 +1593,49 @@ namespace RTE {
 				return false;
 			}
 			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
+			const bool holdPause = s_LockstepCoordinator->AnyDroppedSeatHeld();
+			uint32_t holdSeconds = 0;
+			std::string holdName;
+			if (holdPause) {
+				holdName = s_LockstepCoordinator->DescribeHeldPause(holdSeconds, NetLockstepNowMs());
+				if (s_SeatPresence) {
+					for (const auto& [peerId, seat]: s_SeatPresence->GetSeats()) {
+						if (!seat.holdActive) {
+							continue;
+						}
+						if (!seat.holderName.empty()) {
+							holdName = seat.holderName;
+						}
+						holdSeconds = static_cast<uint32_t>(s_SeatPresence->HoldWallSecondsRemaining(peerId));
+						break;
+					}
+				}
+			}
 			if (stallMs >= nextOverlayMs) {
 				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
-					std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
+					if (holdPause) {
+						std::cout << "[net-match] match paused waiting for " << (holdName.empty() ? "a player" : holdName)
+						          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
+					} else {
+						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
+					}
 				}
 				if (s_LockstepStallOverlayEnabled) {
-					DrawLockstepStallOverlay(stallMs, timeoutMs, missing);
+					DrawLockstepStallOverlay(stallMs, timeoutMs, missing, holdPause, holdName, holdSeconds);
 				}
 				nextOverlayMs = stallMs + 200;
 			}
-			if (stallMs >= giveUpMs) {
+			uint64_t budgetMs = giveUpMs;
+			if (holdPause) {
+				uint64_t remain = s_LockstepCoordinator->HoldPauseRemainingMs(NetLockstepNowMs());
+				if (remain == 0) {
+					remain = NetLockstepCoordinator::c_HoldPauseMs;
+				}
+				budgetMs = remain + 1000;
+			}
+			if (stallMs >= budgetMs) {
 				break;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
