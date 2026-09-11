@@ -538,7 +538,7 @@ namespace RTE {
 		void Leave(const std::string& message = "player left");
 		/// Ends the round on every peer so the match reconvenes and reloads the host's snapshot
 		/// (a rejoin or an operator-forced heal). Host-initiated.
-		void RequestResync(const std::string& message = "resync requested");
+		void RequestResync(const std::string& message = "resync requested", bool immediate = false);
 		/// Keeps recovery and completion aligned with applied simulation ticks, while input may be prefetched.
 		void DeferStopsToTickBoundary() { m_DeferStops = true; }
 		bool HasPendingRecoveryStop() const { return m_PendingRecoveryStop.has_value(); }
@@ -699,6 +699,10 @@ namespace RTE {
 		void RefreshLeftSeatHolds();
 		/// Whether any peer that has left still holds a seat a returning player can reclaim.
 		bool AnyLeftSeatHeld() const;
+		/// A Reclaimed or Substituted seat is being refilled; it is not a last-player close.
+		bool SeatIsRefilling(uint8_t peerId) const;
+		bool AnySeatRefilling() const;
+		size_t LeftPeersNotRefilling() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
 		void EndRoundIfNobodyIsComingBack();
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
