@@ -1046,6 +1046,7 @@ namespace RTE {
 		void CommitPendingValueOps();
 		void DropMatchingValueOverlay(const PendingValueOp& op);
 		void ClearValueOverlay();
+		static bool RunValueMapSelfTest();
 
 		/// Event listener to be run while this MovableObject's PieMenu is opened.
 		/// @param pieMenu The PieMenu this event listener needs to listen to. This will always be this' m_PieMenu and only exists for std::bind.
