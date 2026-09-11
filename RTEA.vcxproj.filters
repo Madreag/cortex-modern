@@ -424,6 +424,12 @@
     <ClInclude Include="Source\Menus\MainMenuGUI.h">
       <Filter>Menus</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Menus\NetModerationGUI.h">
+      <Filter>Menus</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\CI\NetModerationGUIProbe.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Menus\MetagameGUI.h">
       <Filter>Menus</Filter>
     </ClInclude>
@@ -1257,6 +1263,12 @@
     </ClCompile>
     <ClCompile Include="Source\Menus\MainMenuGUI.cpp">
       <Filter>Menus</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Menus\NetModerationGUI.cpp">
+      <Filter>Menus</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\CI\NetModerationGUIProbe.cpp">
+      <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\Menus\MetagameGUI.cpp">
       <Filter>Menus</Filter>

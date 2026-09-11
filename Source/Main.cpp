@@ -25,6 +25,8 @@
 #include "GUI.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
+#include "NetModerationGUI.h"
+#include "NetModerationGUIProbe.h"
 #include "AllegroScreen.h"
 #include "AllegroBitmap.h"
 
@@ -83,6 +85,7 @@
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
+#include "NetA7Journal.h"
 #include "ScenarioRunner.h"
 #include "InputScript.h"
 #include "AIWriteScript.h"
@@ -949,6 +952,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 /// Polls the SDL event queue and passes events to be handled by the relevant managers.
 /// </summary>
 void PollSDLEvents() {
+	NetModerationGUIProbe::BeforePoll();
 	SDL_Event sdlEvent;
 	while (SDL_PollEvent(&sdlEvent)) {
 		switch (sdlEvent.type) {
@@ -985,13 +989,12 @@ void PollSDLEvents() {
 	}
 }
 
-// Drives §9b's moderation panel from the command line, in a match, where the menu loop does not run.
-// It goes through the panel's model and its action, so the only thing the gate skips is the click.
+// The e2e driver uses the same live panel as the host.
 static void DriveModerationE2e() {
 	if (s_netMatchE2eModerateAt >= s_netMatchE2eModerate.size()) {
 		return;
 	}
-	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+	NetModerationGUI* menu = g_MenuMan.GetNetworkPanel();
 	if (!menu) {
 		return;
 	}
@@ -1603,11 +1606,32 @@ static void DrawFrameWithPreviews() {
 	g_SceneMan.SetRenderDrawContext(true);
 	LocalPrediction::BeginRender();
 	g_FrameMan.Draw();
+	g_MenuMan.DrawNetworkUI();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	LocalPrediction::EndRender();
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
+	NetModerationGUIProbe::AfterDraw();
+}
+
+static void UpdateResyncUI() {
+	PollSDLEvents();
+	g_UInputMan.Update(false);
+	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
+		g_MenuMan.ToggleNetworkPanel();
+	}
+	g_MenuMan.UpdateNetworkUI();
+	g_WindowMan.ClearBackbuffer();
+	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
+	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, g_WindowMan.GetResX() / 2, g_WindowMan.GetResY() - 24,
+	    "Resynchronizing the match...  Seats [F6]", GUIFont::Centre);
+	g_MenuMan.DrawNetworkUI();
+	g_WindowMan.UploadFrame();
+	NetModerationGUIProbe::AfterDraw();
+	g_UInputMan.EndFrame();
+	g_UInputMan.EndSimUpdate();
 }
 
 // The previews' gameplay against -lpinv-expect. A preview that starts before the canonical pickup must
@@ -2170,6 +2194,12 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
+					UpdateResyncUI();
+					if (System::IsSetToQuit()) {
+						resyncError = "quit requested during resync";
+						resyncOk = false;
+						break;
+					}
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
 						resyncError = g_NetMatchService.GetErrorText();
 						resyncOk = false;
@@ -2332,7 +2362,8 @@ void RunGameLoop() {
 			constexpr uint64_t c_DesyncCheckIntervalTicks = 30;
 			const bool desyncSampleTick = ScenarioRunner::IsLockstepControllerSyncActive() && !s_recordTickHashes &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
-			const bool hashThisTick = s_recordTickHashes || desyncSampleTick;
+			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick;
 			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);
 			}
@@ -2594,6 +2625,11 @@ void RunGameLoop() {
 			if (hashThisTick) {
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
+					const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+					NetA7Journal::AppliedTick(round, simTick, ScenarioRunner::GetLockstepLocalPeerId(), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult)));
+					g_MovableMan.RecordA7UnitOwnership(round, simTick);
+				}
 				if (s_recordTickHashes && s_rbProbePhase != 3) {
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 				}
@@ -3163,6 +3199,7 @@ void RunGameLoop() {
 			t_simRNGOverride = &g_RenderRNG;
 			g_SceneMan.SetRenderDrawContext(true);
 			g_UInputMan.Update();
+			g_MenuMan.UpdateNetworkUI();
 			g_ActivityMan.RenderUpdate();
 			g_UInputMan.EndFrame();
 			g_SceneMan.SetRenderDrawContext(false);
@@ -3704,6 +3741,7 @@ int RunNetReplayPlayback() {
 
 int RunNetMatchServiceE2E() {
 	std::string setupError;
+	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
 	if (s_netHost == !s_netJoinAddress.empty()) {
 		setupError = "-net-match-service-e2e requires exactly one of -net-host or -net-join <address>";
 	}
@@ -3819,9 +3857,17 @@ int RunNetMatchServiceE2E() {
 
 	std::string reportError;
 	const int exitCode = setupError.empty() ? s_netMatchServiceE2EExitCode : 1;
+	const bool a7ReportSettled = !NetA7Journal::Enabled() || g_NetMatchService.CanSealA7Journal();
+	if (!a7ReportSettled) {
+		NetA7Journal::Gap("service worker still active before report generation");
+		(void)NetA7Journal::Seal("", 1);
+		return 1;
+	}
 	const std::string report = BuildNetMatchServiceE2EReportJson(exitCode, setupError);
 	if (!WriteTextFile(s_netLockstepReportPath, report, &reportError)) {
 		std::cerr << "[net-match-service-e2e] report failed: " << reportError << std::endl;
+		NetA7Journal::Gap("native report write failed");
+		(void)NetA7Journal::Seal("", 1);
 		return 1;
 	}
 	if (!s_netLockstepReportPath.empty()) {
@@ -3830,7 +3876,7 @@ int RunNetMatchServiceE2E() {
 			std::cout << "[localpred] " << stats << std::endl;
 		}
 	}
-	return exitCode;
+	return NetA7Journal::Seal(s_netLockstepReportPath, exitCode) ? exitCode : 1;
 }
 
 /// <summary>

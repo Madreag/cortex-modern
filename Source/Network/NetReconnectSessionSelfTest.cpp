@@ -170,6 +170,8 @@ namespace RTE {
 			NetReconnectHost host;
 			uint64_t nowMs = 0;
 			uint32_t droppedToFence = 0;
+			NetPeerId loseNextCommitFor = c_InvalidNetPeerId;
+			std::vector<NetPayload> lostCommits;
 
 			void Add(Endpoint* endpoint) { m_Endpoints.push_back(endpoint); }
 			void Remove(NetPeerId connection) {
@@ -193,8 +195,13 @@ namespace RTE {
 						if (!Roundtrip(outbound.payload, payload, error)) {
 							return false;
 						}
-						m_Delivered[outbound.connection].push_back(payload);
 						moved = true;
+						if (outbound.connection == loseNextCommitFor && std::holds_alternative<NetH4JoinCommitted>(payload)) {
+							lostCommits.push_back(payload);
+							loseNextCommitFor = c_InvalidNetPeerId;
+							continue;
+						}
+						m_Delivered[outbound.connection].push_back(payload);
 						// The session drops a fenced transport's traffic before it reaches anyone.
 						Endpoint* endpoint = Find(outbound.connection);
 						if (endpoint != nullptr && endpoint->connected) {
@@ -1283,13 +1290,24 @@ namespace RTE {
 					return Fail(error);
 				}
 				quitter.client.TakeOutbound();
-				if (!quitter.client.BeginLeave(0, &error)) {
+				constexpr uint64_t leaveStartedMs = 37;
+				if (!quitter.client.BeginLeave(leaveStartedMs, &error)) {
 					return Fail(error);
 				}
 				quitter.client.TakeOutbound();
-				for (uint64_t now = 0; now <= NetReconnectClient::c_LeaveAckBudgetMs; now += 250) {
-					quitter.client.Tick(now);
+				for (uint64_t elapsed = 0; elapsed < NetReconnectClient::c_LeaveAckBudgetMs; elapsed += 251) {
+					quitter.client.Tick(leaveStartedMs + elapsed);
 					quitter.client.TakeOutbound();
+				}
+				quitter.client.Tick(leaveStartedMs + NetReconnectClient::c_LeaveAckBudgetMs - 1);
+				quitter.client.TakeOutbound();
+				if (quitter.client.WantsLinkClosed() || quitter.client.GetStats().ambiguousLosses != 0 ||
+				    quitter.client.GetStats().unacknowledgedLeaves != 0) {
+					return Fail("the unacknowledged leave settled before its deadline");
+				}
+				quitter.client.Tick(leaveStartedMs + NetReconnectClient::c_LeaveAckBudgetMs + 3);
+				if (!quitter.client.TakeOutbound().empty()) {
+					return Fail("the expired leave retransmitted past its deadline");
 				}
 				if (!quitter.client.WantsLinkClosed()) {
 					return Fail("an unacknowledged leave did not ask to close the link");
@@ -1300,8 +1318,9 @@ namespace RTE {
 				if (!quitter.store.HasRecord()) {
 					return Fail("an ambiguous loss cleared the recovery record");
 				}
-				if (quitter.client.GetStats().unacknowledgedLeaves != 1) {
-					return Fail("the unacknowledged leave was not counted");
+				quitter.client.Tick(leaveStartedMs + NetReconnectClient::c_LeaveAckBudgetMs * 2);
+				if (quitter.client.GetStats().unacknowledgedLeaves != 1 || quitter.client.GetStats().ambiguousLosses != 1) {
+					return Fail("the expired leave was not counted once as an ambiguous loss");
 				}
 			}
 
@@ -1317,6 +1336,9 @@ namespace RTE {
 			}
 			if (player.store.HasRecord()) {
 				return Fail("the acknowledged leave did not clear the ticket");
+			}
+			if (player.client.GetStats().ambiguousLosses != 0 || player.client.GetStats().unacknowledgedLeaves != 0) {
+				return Fail("the acknowledged leave was counted as an ambiguous loss");
 			}
 			if (!wire.host.IsSeatClosed(record.stableSeat)) {
 				return Fail("the leave did not close the seat");
@@ -3196,71 +3218,245 @@ namespace RTE {
 			if (aged[0].holdFramesRemaining != 0) {
 				return Fail("the admission plane filled in a hold the round never counted");
 			}
-			std::cout << "[net-reconnect-session-selftest] moderation view ages the drop from the plane's clock" << std::endl;
+			std::cout << "[net-reconnect-session-selftest] PASS: moderation view ages the drop from the plane's clock" << std::endl;
 			return 0;
 		}
 
-		// §11's line, rule by rule. Every input here is one a client has from the wire; none of them is
-		// a question for the host.
 		int TestSeatPresenceLine() {
 			const uint64_t hold = NetLockstepCoordinator::c_ReclaimHoldFrames;
 			NetSeatPresence presence;
+			NetLockstepSeatSnapshot snapshot;
+			snapshot.senderPeerId = 1;
+			snapshot.sessionId = 123;
+			snapshot.epoch = Ramp<16>(7);
+			snapshot.roundId = 70;
+			snapshot.revision = 1;
+			snapshot.observedAtMs = 1000;
+			NetSeatPresenceEntry seat;
+			seat.stableSeat = 0;
+			seat.peerId = 2;
+			seat.state = NetSeatPresenceState::Disconnected;
+			seat.holderGeneration = 4;
+			seat.seatGeneration = 8;
+			seat.incarnation = 2;
+			seat.holdActive = true;
+			seat.holdUntilMs = 21000;
+			seat.holdUntilFrame = 100 + hold;
+			seat.holderName = "Alice";
+			snapshot.seats = {seat};
+			if (!presence.Line(2, "Alice").empty() || !presence.ApplySnapshot(snapshot, 5000)) return Fail("initial roster state was not adopted");
 			presence.NoteFrame(100);
-			if (!presence.Line(2, "Alice").empty() || presence.StateOf(2) != NetSeatPresenceState::Present) {
-				return Fail("a seat nobody said anything about carries a line");
-			}
-			presence.Observe({2, NetSeatNoticeKind::Dropped, 100, 100 + hold, ""});
-			presence.NoteFrame(100);
-			if (presence.StateOf(2) != NetSeatPresenceState::Disconnected ||
-			    presence.HoldFramesRemaining(2) != hold ||
-			    presence.Line(2, "Alice") != "Alice: disconnected - seat held 20s") {
-				return Fail("a dropped seat's line is not the hold the round is counting: " + presence.Line(2, "Alice"));
-			}
-			presence.Observe({2, NetSeatNoticeKind::Reclaiming, 200, 0, ""});
-			presence.NoteFrame(100 + hold / 2);
-			if (presence.StateOf(2) != NetSeatPresenceState::Reconnecting ||
-			    presence.Line(2, "Alice") != "Alice: reconnecting - seat held 10s") {
-				return Fail("a reclaim in flight does not show on the roster: " + presence.Line(2, "Alice"));
-			}
-			// A resync starts a new round from its own frames; the hold is the seat's, not the round's.
+			if (presence.HoldFramesRemaining(2) != hold || presence.HoldWallSecondsRemaining(2, 5000) != 20 ||
+			    presence.HoldWallSecondsRemaining(2, 14999) != 11 || presence.HoldWallSecondsRemaining(2, 15000) != 10 ||
+			    presence.HoldWallSecondsRemaining(2, 25000) != 0) return Fail("the two hold clocks were mixed or rounded down");
+			presence.NoteFrame(100 + hold + 100);
+			if (presence.StateOf(2) != NetSeatPresenceState::Disconnected || presence.HoldFramesRemaining(2) != 0 ||
+			    presence.HoldWallSecondsRemaining(2, 5000) != 20) return Fail("frame progress invented an admission transition");
+			snapshot.revision++;
+			snapshot.seats[0].state = NetSeatPresenceState::Reconnecting;
+			if (!presence.ApplySnapshot(snapshot, 5000) || presence.StateOf(2) != NetSeatPresenceState::Reconnecting) return Fail("reclaim start did not update the line");
+			const auto stale = snapshot;
+			snapshot.revision++;
+			snapshot.seats[0].state = NetSeatPresenceState::Disconnected;
+			presence.ApplySnapshot(snapshot, 5000);
+			if (presence.ApplySnapshot(stale, 5000) || presence.StateOf(2) != NetSeatPresenceState::Disconnected) return Fail("a stale reclaim replaced a failed attempt");
+			snapshot.revision++;
+			snapshot.seats[0].holdActive = false;
+			snapshot.seats[0].holdUntilMs = 0;
+			presence.ApplySnapshot(snapshot, 5000);
+			if (presence.Line(2, "Old name") != "Alice: disconnected") return Fail("hold expiry was presented as leaving the match");
+			snapshot.revision++;
+			snapshot.seats[0].state = NetSeatPresenceState::Substituted;
+			snapshot.seats[0].holderName = "Carol";
+			snapshot.seats[0].holderGeneration++;
+			snapshot.seats[0].seatGeneration++;
+			snapshot.seats[0].incarnation = 1;
+			presence.ApplySnapshot(snapshot, 5000);
+			if (presence.Line(2, "Carol") != "Carol: joined as substitute") return Fail("a substitute was described as replacing itself");
+			snapshot.roundId++;
+			snapshot.revision = 1;
+			snapshot.seats[0].holdUntilFrame = 0;
 			presence.NoteFrame(0);
-			if (presence.HoldFramesRemaining(2) != hold / 2 || presence.StateOf(2) != NetSeatPresenceState::Reconnecting) {
-				return Fail("a new round restarted or expired the seat's hold");
-			}
-			presence.NoteFrame(hold / 2);
-			if (presence.StateOf(2) != NetSeatPresenceState::Left || presence.Line(2, "Alice") != "Alice: left - the seat's hold ran out") {
-				return Fail("the hold's frame deadline did not end the wait: " + presence.Line(2, "Alice"));
-			}
-			// Nothing brings back a seat whose hold is over except being told what became of it.
-			presence.Observe({2, NetSeatNoticeKind::Reclaiming, 0, 0, ""});
-			if (presence.StateOf(2) != NetSeatPresenceState::Left) {
-				return Fail("a stale reclaim notice reopened a seat the round had already given up");
-			}
-			presence.Observe({2, NetSeatNoticeKind::Substituted, 0, 0, "Understudy"});
-			if (presence.StateOf(2) != NetSeatPresenceState::Substituted || presence.Line(2, "Alice") != "Alice: substituted by Understudy") {
-				return Fail("a committed substitute does not show on the roster: " + presence.Line(2, "Alice"));
-			}
-			presence.Observe({2, NetSeatNoticeKind::Reclaimed, 0, 0, ""});
-			if (presence.StateOf(2) != NetSeatPresenceState::Present || !presence.Line(2, "Alice").empty()) {
-				return Fail("a seat that came back keeps a line about being gone");
-			}
-			// An announced leave is not a hold: it says outright that nobody is coming back.
-			NetSeatPresence announced;
-			announced.Observe({3, NetSeatNoticeKind::Left, 100, 0, ""});
-			announced.NoteFrame(100);
-			if (announced.StateOf(3) != NetSeatPresenceState::Left || announced.Line(3, "Bob") != "Bob: left" ||
-			    announced.HoldFramesRemaining(3) != 0) {
-				return Fail("a clean leave is shown as a wait: " + announced.Line(3, "Bob"));
-			}
-			if (!announced.Line(4, "").empty()) {
-				return Fail("a seat nobody mentioned produced a line");
-			}
-			// The hold's frames are P2 at the pinned timestep, and the line says it in seconds.
+			if (!presence.ApplySnapshot(snapshot, 5000) || presence.HoldFramesRemaining(2) != 0 ||
+			    presence.StateOf(2) != NetSeatPresenceState::Substituted) return Fail("a full new-round snapshot did not replace the old frame hold");
+			snapshot.revision++;
+			snapshot.seats[0].state = NetSeatPresenceState::Present;
+			presence.ApplySnapshot(snapshot, 5000);
+			if (!presence.Line(2, "Carol").empty()) return Fail("a returned player retained a missing-player line");
+			snapshot.revision++;
+			snapshot.seats[0].state = NetSeatPresenceState::Left;
+			presence.ApplySnapshot(snapshot, 5000);
+			if (presence.Line(2, "Carol") != "Carol: left" || !presence.Line(4, "").empty()) return Fail("a clean leave or absent roster subject was misreported");
+			presence.Clear();
+			if (presence.GetSnapshot() || !presence.GetSeats().empty()) return Fail("roster survived the session lifetime");
 			if (NetSeatPresence::HoldSeconds(hold) != 20 || NetSeatPresence::HoldSeconds(0) != 0 ||
-			    NetSeatPresence::HoldSeconds(60) != 1) {
-				return Fail("the hold's frames do not read back as the pinned timestep's seconds");
+			    NetSeatPresence::HoldSeconds(60) != 1 || NetSeatPresence::HoldSeconds(61) != 2) return Fail("hold seconds differ from the pinned timestep");
+			return 0;
+		}
+
+		int TestModerationSelectionModel() {
+			NetH4ModerationSeat alice;
+			alice.stableSeat = 4;
+			alice.lockstepPeerId = 2;
+			alice.displayName = "Alice";
+			alice.epoch = Ramp<16>(1);
+			alice.holderGeneration = 6;
+			alice.seatGeneration = 9;
+			alice.incarnation = 2;
+			alice.dropped = alice.substitutable = alice.heldForReclaim = true;
+			alice.applicants = {{71, 4, "Carol", 0, 20000, false, Ramp<16>(2)}, {72, 4, "Dana", 0, 20000, false, Ramp<16>(3)}};
+			NetH4ModerationSeat bob = alice;
+			bob.stableSeat = 9;
+			bob.lockstepPeerId = 3;
+			bob.displayName = "Bob";
+			NetModerationUx model;
+			model.Refresh({alice, bob});
+			if (model.RowCount() != 2) return Fail("the two dropped seats are not displayed");
+			const auto pressedAlice = model.GetRow(0);
+			if (!NetModerationUx::Available(pressedAlice, NetModerationAction::Wait) ||
+			    !NetModerationUx::Available(pressedAlice, NetModerationAction::Substitute) ||
+			    NetModerationUx::Available(pressedAlice, NetModerationAction::Cancel)) return Fail("dropped-seat action availability is wrong");
+			model.Refresh({bob});
+			if (model.GetRow(0).stableSeat != 9 || NetModerationAvailability(bob, pressedAlice.selection, NetModerationAction::Wait) != NetH4ModerationResult::StaleSelection) {
+				return Fail("a row disappearing retargeted the pressed action to the next seat");
 			}
-			std::cout << "[net-reconnect-session-selftest] seat-presence line derived from the wire on every peer" << std::endl;
+			model.Refresh({alice, bob});
+			alice.applicants.erase(alice.applicants.begin());
+			model.Refresh({alice, bob});
+			if (model.GetRow(0).applicant != c_InvalidNetPeerId || NetModerationUx::Available(model.GetRow(0), NetModerationAction::Substitute)) {
+				return Fail("an applicant disappearing silently selected the next person");
+			}
+			model.CycleApplicant(0);
+			model.Refresh({alice, bob});
+			if (model.GetRow(0).applicant != 72 || !NetModerationUx::Available(model.GetRow(0), NetModerationAction::Substitute)) return Fail("an explicit applicant choice did not take effect");
+			const auto pressedDana = model.GetRow(0);
+			alice.applicants[0].transactionId = Ramp<16>(4);
+			model.Refresh({alice, bob});
+			if (model.GetRow(0).applicant != c_InvalidNetPeerId || NetModerationAvailability(alice, pressedDana.selection, NetModerationAction::Substitute) != NetH4ModerationResult::StaleSelection) {
+				return Fail("connection reuse retargeted an old application");
+			}
+			for (int changed = 0; changed < 4; ++changed) {
+				auto current = pressedAlice.view;
+				if (changed == 0) current.epoch = Ramp<16>(30);
+				if (changed == 1) current.holderGeneration++;
+				if (changed == 2) current.seatGeneration++;
+				if (changed == 3) current.incarnation++;
+				if (NetModerationAvailability(current, pressedAlice.selection, NetModerationAction::Wait) != NetH4ModerationResult::StaleSelection) return Fail("a seat lifetime change kept a pressed selection valid");
+			}
+			for (int state = 0; state < 4; ++state) {
+				auto current = pressedAlice.view;
+				if (state == 0) current.actionsAvailable = false;
+				if (state == 1) current.cpu = true;
+				if (state == 2) { current.dropped = false; current.substitutable = false; }
+				if (state == 3) { current.substituting = true; current.substitutionTransaction = Ramp<16>(40); }
+				const auto selected = NetSelectModerationSeat(current, 71);
+				for (int action = 0; action < 3; ++action) {
+					const bool available = NetModerationAvailability(current, selected, static_cast<NetModerationAction>(action)) == NetH4ModerationResult::Ok;
+					const bool expected = state == 3 && action != static_cast<int>(NetModerationAction::Substitute);
+					if (available != expected) return Fail("unavailable/committed/pending action parity differs");
+				}
+				if (state == 3) {
+					current.substitutionTransaction = Ramp<16>(41);
+					if (NetModerationAvailability(current, selected, NetModerationAction::Cancel) != NetH4ModerationResult::StaleSelection) return Fail("an old cancel retargeted a new approval");
+				}
+			}
+			return 0;
+		}
+
+		int TestModerationSelectionTransactions() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "selected-holder", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			wire.nowMs = 500;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error)) return Fail(error);
+			if (!wire.SendRaw(71, MakeApplicant(0, 1, "Carol"), &error) || !wire.SendRaw(72, MakeApplicant(0, 2, "Dana"), &error)) return Fail(error);
+			const auto before = wire.host.GetModerationView();
+			const auto selected = NetSelectModerationSeat(before[0], 71);
+			if (before[0].applicants.size() != 2 || wire.host.ApplyModeration(selected, NetModerationAction::Wait, wire.nowMs) != NetH4ModerationResult::Ok) return Fail("the two-applicant seat was not selectable");
+			wire.host.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			wire.host.Configure(&wire.registry, 0x4831ULL, MakeIdentity());
+			if (wire.host.GetModerationView() != before) return Fail("a same-epoch seat-table refresh discarded admission state");
+			for (int field = 0; field < 5; ++field) {
+				auto stale = selected;
+				if (field == 0) stale.epoch = Ramp<16>(50);
+				if (field == 1) stale.holderGeneration++;
+				if (field == 2) stale.seatGeneration++;
+				if (field == 3) stale.incarnation++;
+				if (field == 4) stale.applicantTransaction = Ramp<16>(51);
+				if (wire.host.ApplyModeration(stale, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::StaleSelection ||
+				    wire.host.GetStats().substitutionOffersSent != 0) return Fail("a stale selection emitted a substitution offer");
+			}
+			if (wire.host.ApplyModeration(selected, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::Ok) return Fail("a current selection could not approve the applicant");
+			const auto cancelFirst = NetSelectModerationSeat(wire.host.GetModerationView()[0]);
+			if (wire.host.ApplyModeration(cancelFirst, NetModerationAction::Cancel, wire.nowMs) != NetH4ModerationResult::Ok ||
+			    wire.host.ApplyModeration(selected, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::Ok) return Fail("cancel/reapprove did not reach the second transaction");
+			if (wire.host.ApplyModeration(cancelFirst, NetModerationAction::Cancel, wire.nowMs) != NetH4ModerationResult::StaleSelection ||
+			    !wire.host.GetModerationView()[0].substituting || wire.host.GetStats().substitutionsCancelled != 1) return Fail("a delayed cancel withdrew a newer approval");
+			const auto cancelSecond = NetSelectModerationSeat(wire.host.GetModerationView()[0]);
+			if (wire.host.ApplyModeration(cancelSecond, NetModerationAction::Cancel, wire.nowMs) != NetH4ModerationResult::Ok) return Fail("the current cancel was refused");
+			wire.host.NotifyDisconnect(71, 100);
+			if (wire.host.ApplyModeration(selected, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::StaleSelection) return Fail("an applicant disconnect left its selection live");
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(71, MakeApplicant(0, 3, "Eve"), &error)) return Fail(error);
+			if (wire.host.ApplyModeration(selected, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::StaleSelection) return Fail("connection reuse resurrected the old selection");
+			const auto expires = NetSelectModerationSeat(wire.host.GetModerationView()[0], 72);
+			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
+			if (wire.host.ApplyModeration(expires, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::StaleSelection) return Fail("an expired applicant was accepted at click time");
+			const auto expired = wire.host.GetModerationView()[0];
+			if (!expired.dropped || expired.heldForReclaim || !expired.substitutable) return Fail("hold expiry altered seat ownership or substitution eligibility");
+			wire.host.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			if (wire.host.GetModerationView()[0] != expired) return Fail("a seat-table refresh restarted an expired hold");
+			wire.host.EndHostedSession();
+			ConfigureWire(wire);
+			wire.host.SetLiveMatch(true);
+			const auto next = wire.host.GetModerationView();
+			if (next[0].epoch == before[0].epoch || next[0].dropped || next[0].heldForReclaim || next[0].holderGeneration ||
+			    next[0].incarnation || next[0].substituting || !next[0].applicants.empty() || !next[0].substituteName.empty()) return Fail("a new hosted epoch retained old seat state");
+			if (wire.host.ApplyModeration(selected, NetModerationAction::Wait, wire.nowMs) != NetH4ModerationResult::StaleSelection ||
+			    !wire.host.TakePendingReseats().empty() || !wire.host.TakeCommits().empty() || !wire.host.TakeOutbound().empty()) return Fail("a prior-session decision or event survived configuration");
+			return 0;
+		}
+
+		int TestFailedProofEndsPublicReconnecting() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 61;
+			ConfigureEndpoint(holder, "failed-proof-holder", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error)) return Fail(error);
+			Endpoint returning;
+			returning.connection = 81;
+			ConfigureEndpoint(returning, "failed-proof-returner", &unixNow);
+			wire.Add(&returning);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returning.client.BeginReclaim(record, wire.nowMs, &error)) return Fail(error);
+			std::vector<NetPayload> replies;
+			if (!wire.Step(returning, replies, &error)) return Fail(error);
+			const auto* validProof = LastOf<NetH4Proof>(replies);
+			if (!validProof || !wire.host.GetModerationView()[0].reclaiming || !wire.host.GetSeatStatuses()[0].reclaiming) return Fail("a real reclaim challenge was not visible");
+			auto bad = *validProof;
+			bad.mac[0] ^= 1;
+			if (!wire.SendRaw(returning.connection, bad, &error)) return Fail(error);
+			const auto after = wire.host.GetModerationView()[0];
+			if (after.reclaiming || wire.host.GetSeatStatuses()[0].reclaiming || !after.dropped || !after.heldForReclaim ||
+			    wire.host.GetStats().reclaimsAccepted != 0) return Fail("a consumed bad proof remained publicly reconnecting or acquired authority");
+			if (!wire.SendRaw(returning.connection, *validProof, &error) || wire.host.GetStats().reclaimsAccepted != 0) return Fail("a failed proof challenge was usable again");
 			return 0;
 		}
 
@@ -4183,33 +4379,32 @@ namespace RTE {
 			if (!substitute.client.BeginApplication(0, wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the application did not settle: " + error);
 			}
+			wire.loseNextCommitFor = substitute.connection;
 			if (wire.host.SubstituteApplicant(0, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok ||
 			    !wire.Pump(&error)) {
 				return Fail("the substitution did not settle: " + error);
 			}
-			const NetH4JoinCommitted* committed = LastOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection));
+			const NetH4JoinCommitted* committed = LastOf<NetH4JoinCommitted>(wire.lostCommits);
 			if (committed == nullptr || wire.host.GetStats().substitutionsCommitted != 1) {
 				return Fail("the substitution did not commit in the first place");
 			}
 			const NetH4JoinCommitted first = *committed;
+			if (substitute.client.GetState() != NetH4ClientState::Substituting ||
+			    substitute.client.GetStats().commitsReceived != 0 || CountOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection)) != 0) {
+				return Fail("the supposedly lost commit reached its client");
+			}
 			NetPeerId holderBefore = c_InvalidNetPeerId;
 			uint32_t generationBefore = 0;
 			uint32_t incarnationBefore = 0;
 			wire.host.GetSeatHolder(0, holderBefore, generationBefore, incarnationBefore);
-			// The fault: the commit result never arrives, so the substitute presents its ack again.
-			wire.ClearDelivered();
 			const uint32_t replaysBefore = wire.host.GetStats().replayedResults;
-			NetH4SubstitutionAck again;
-			again.txId = first.txId;
-			again.stableSeat = 0;
-			again.holderGeneration = first.holderGeneration;
-			again.clientNonce = Ramp<16>(0x54);
-			again.mac = Ramp<32>(0x55);
-			again.stored = true;
-			if (!wire.SendRaw(substitute.connection, again, &error)) {
-				return Fail(error);
+			const uint32_t retriesBefore = substitute.client.GetStats().retransmits;
+			wire.nowMs += NetReconnectHost::c_RetransmitIntervalMs;
+			if (!wire.Pump(&error)) return Fail(error);
+			if (substitute.client.GetStats().retransmits != retriesBefore + 1 ||
+			    substitute.client.GetStats().commitsReceived != 1 || substitute.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the actual client retry did not recover the lost commit");
 			}
-			wire.DrainHostOutbound();
 			const NetH4JoinCommitted* replay = LastOf<NetH4JoinCommitted>(wire.Delivered(substitute.connection));
 			if (replay == nullptr || !(*replay == first)) {
 				return Fail("the retry did not get back the identical commit result");
@@ -4901,15 +5096,20 @@ namespace RTE {
 			lobbyConfig.matchConfig = MakeLobbyMatchConfig(0x5000000000000000ULL + port);
 			lobbyConfig.timeoutMs = 600'000;
 			lobbyConfig.session = &host;
+			lobbyConfig.sessionNowMs = [&] { return serviceMs; };
 			lobbyConfig.autoReady = true;
 			lobbyConfig.autoStart = false;
 			if (!lobby.Start(hostTransport, lobbyConfig, &error)) {
 				return Fail("the lobby round would not start: " + error);
 			}
 			const uint64_t lobbyStartedAtMs = serviceMs;
+			step(37);
 			for (uint64_t roundMs = 0; roundMs <= 500; roundMs += 10) {
 				const NetMatchRunnerClocks clocks = NetMatchRunner::ResolveRoundClocks(roundMs, true, serviceMs);
 				lobby.Tick(clocks.lobbyMs);
+				if (host.GetClockMs() != serviceMs) {
+					return Fail("lobby session decisions used a stale captured clock after the setup gap");
+				}
 				host.TickAdmissionPlane(clocks.planeMs);
 				holder.Tick(serviceMs);
 				step(10);
@@ -5656,6 +5856,15 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSeatPresenceLine(); result != 0) {
+			return result;
+		}
+		if (const int result = TestModerationSelectionModel(); result != 0) {
+			return result;
+		}
+		if (const int result = TestModerationSelectionTransactions(); result != 0) {
+			return result;
+		}
+		if (const int result = TestFailedProofEndsPublicReconnecting(); result != 0) {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
