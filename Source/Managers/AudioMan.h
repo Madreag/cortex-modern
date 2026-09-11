@@ -117,6 +117,16 @@ namespace RTE {
 			RestoredSoundRegistryScope(const RestoredSoundRegistryScope&) = delete;
 			RestoredSoundRegistryScope& operator=(const RestoredSoundRegistryScope&) = delete;
 		};
+		class RestorePlayPhaseScope {
+		public:
+			explicit RestorePlayPhaseScope(const char* name);
+			~RestorePlayPhaseScope();
+			RestorePlayPhaseScope(const RestorePlayPhaseScope&) = delete;
+			RestorePlayPhaseScope& operator=(const RestorePlayPhaseScope&) = delete;
+			static const char* Name();
+		private:
+			const char* m_Previous;
+		};
 		/// Hardcoded playback priorities for sounds. Note that sounds don't have to use these specifically; their priority can be anywhere between high and low.
 		enum PlaybackPriority {
 			PRIORITY_HIGH = 0,

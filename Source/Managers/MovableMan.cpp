@@ -1757,6 +1757,7 @@ bool MovableMan::ValidateScriptGraphs(const std::vector<std::string>& graphs, st
 }
 
 bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld) {
+	AudioMan::RestorePlayPhaseScope playPhase("RestoreScriptGraphs");
 	if (!ValidateScriptGraphs(graphs, error)) return false;
 	std::vector<std::string> errors;
 	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();

@@ -714,6 +714,7 @@ void ActivityMan::RemoveSavedGame(const std::string& fileName) const {
 }
 
 bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
+	AudioMan::RestorePlayPhaseScope playPhase("staging");
 	MovableMan::ConstructionRegistryScope registryScope;
 	MovableObject::ScriptLoadDeferralScope scriptScope;
 	struct RestoreConstructionGlobals {
@@ -816,6 +817,7 @@ bool ActivityMan::SetStartEditorActivitySetToLaunchInto() {
 }
 
 int ActivityMan::StartActivity(Activity* activity) {
+	AudioMan::RestorePlayPhaseScope playPhase("Start");
 	RTEAssert(activity, "Trying to start a null activity!");
 
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
@@ -1117,6 +1119,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 }
 
 bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly) {
+	AudioMan::RestorePlayPhaseScope playPhase(validateOnly ? "" : "apply");
 	try {
 		const bool legacy = text.starts_with("15 RuntimeGlobals1 ");
 		const bool version2 = text.starts_with("15 RuntimeGlobals2 ");
