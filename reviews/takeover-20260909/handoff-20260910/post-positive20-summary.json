@@ -1,0 +1,26 @@
+{
+  "positive20_manifest_sha256": "29938cd8ba995ab728c3710d66644f4c01659bb29b4a66954bd7fa78ed14c1ad",
+  "positive20_base_head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "modified_since_positive20": [
+    "RTEA.vcxproj",
+    "RTEA.vcxproj.filters",
+    "Source/Network/NetA7Journal.cpp",
+    "Source/Network/NetA7Journal.h",
+    "Source/Network/NetLobbySession.cpp",
+    "Source/Network/NetLockstep.cpp",
+    "Source/Network/NetMatchService.cpp",
+    "Source/Network/NetReconnectSession.cpp",
+    "Source/Network/NetReconnectSession.h",
+    "Source/Network/NetReconnectTxCache.cpp",
+    "Source/Network/NetReconnectTxCache.h",
+    "Source/Network/NetSession.cpp",
+    "Source/Network/NetSession.h",
+    "Source/Network/meson.build"
+  ],
+  "new_since_positive20": [
+    "Source/Network/NetRecoveryJournal.cpp",
+    "Source/Network/NetRecoveryJournal.h"
+  ],
+  "positive20_base_copies_verified": 14,
+  "patch_sha256": "c065c059bdb4d61ee451fbd6ad8dc2e555d7b3490a89bc6eb986d0add51ede51"
+}
