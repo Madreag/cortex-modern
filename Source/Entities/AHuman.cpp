@@ -129,7 +129,7 @@ int AHuman::Create() {
 	}
 
 	// If empty-handed, equip first thing in inventory
-	if (m_pFGArm && m_pFGArm->IsAttached() && !m_pFGArm->GetHeldDevice()) {
+	if (!IsCheckpointClone() && m_pFGArm && m_pFGArm->IsAttached() && !m_pFGArm->GetHeldDevice()) {
 		m_pFGArm->SetHeldDevice(dynamic_cast<HeldDevice*>(SwapNextInventory(nullptr, true)));
 		m_pFGArm->SetHandPos(m_Pos + m_HolsterOffset.GetXFlipped(m_HFlipped));
 	}
