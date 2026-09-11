@@ -1236,6 +1236,40 @@ namespace RTE {
 			return config;
 		}
 
+		bool TestSenderDropsUncontrolledTeamCommands(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433414D00ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43021, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43021, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43021, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIOrder{1002, 1, NetGameAIOrder::PopWaypoint, 10.0F, 20.0F, 0}});
+			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				*error = "host enqueued an AIOrder for a team it does not control";
+				return false;
+			}
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIOrder{1001, 0, NetGameAIOrder::PopWaypoint, 10.0F, 20.0F, 0}});
+			const std::vector<NetGameCommand> kept = ScenarioRunner::DrainLocalGameCommands();
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (kept.size() != 1) {
+				*error = "host dropped an AIOrder for the team it controls";
+				return false;
+			}
+			return true;
+		}
+
 		void DrainReady(NetLockstepCoordinator& coordinator, std::vector<uint64_t>& readyFrames) {
 			NetLockstepReadyFrame ready;
 			while (coordinator.PopReadyFrame(ready)) {
@@ -6922,6 +6956,7 @@ namespace RTE {
 		std::string error;
 		if (!TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
+		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||
