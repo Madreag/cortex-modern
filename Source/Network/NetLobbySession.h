@@ -4,7 +4,7 @@
 #include "NetTransport.h"
 
 #include <cstdint>
-#include <deque>
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -39,6 +39,7 @@ namespace RTE {
 		bool autoReady = true;
 		bool autoStart = true;
 		NetSession* session = nullptr; //!< Shared admission state while the lobby owns transport events.
+		std::function<uint64_t()> sessionNowMs; //!< Shared session clock; absent callers use the round's captured base.
 		bool autoInputDelay = false;
 	};
 
@@ -92,12 +93,13 @@ namespace RTE {
 		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
 		/// Gets whether this host still has state chunks it has not handed to the transport.
-		bool HasPendingStateChunks() const { return !m_OutgoingChunks.empty(); }
+		bool HasPendingStateChunks() const { return m_OutgoingChunkIndex < m_OutgoingChunkCount; }
 		/// Takes the fully received state file (empties the buffer).
 		std::vector<uint8_t> TakeReceivedState();
 		/// Received/total byte progress of an incoming transfer (0/0 when none).
 		std::pair<uint32_t, uint32_t> GetStateTransferProgress() const { return {m_IncomingReceivedBytes, m_IncomingTotalBytes}; }
-		bool IsStateTransferOutgoing() const { return !m_OutgoingChunks.empty(); }
+		bool IsStateTransferOutgoing() const { return HasPendingStateChunks(); }
+		uint64_t GetStateTransferProgressSerial() const { return m_StateTransferProgressSerial; }
 
 		std::string BuildReportJson() const;
 
@@ -122,6 +124,7 @@ namespace RTE {
 		void RemoveRemote(NetPeerId transportPeerId);
 		void RejectRemote(NetPeerId transportPeerId, const std::string& reason);
 		void HandleStateChunk(const NetLobbyStateChunk& message);
+		void RestartStateTransfer();
 		void SendQueuedStateChunks();
 		void Reject(const std::string& reason);
 		void Fail(const std::string& reason);
@@ -152,13 +155,19 @@ namespace RTE {
 		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
 		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
-		std::deque<NetLobbyStateChunk> m_OutgoingChunks; //!< Host: queued state-file chunks, paced out through Tick.
 		std::vector<uint8_t> m_StateBytesToSend;
+		uint64_t m_OutgoingStateId = 0;
+		uint16_t m_OutgoingChunkIndex = 0;
+		uint16_t m_OutgoingChunkCount = 0;
+		std::vector<NetPeerId> m_OutgoingChunkSentTo;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
+		uint64_t m_StateTransferProgressSerial = 0;
 		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
+		uint64_t m_LastIncomingStateId = 0;
 		uint32_t m_IncomingTotalBytes = 0;
 		uint32_t m_IncomingReceivedBytes = 0;
-		std::map<uint16_t, std::vector<uint8_t>> m_IncomingChunks;
+		uint16_t m_IncomingChunkCount = 0;
+		uint16_t m_IncomingNextChunkIndex = 0;
 		bool m_IncomingStateComplete = false;
 		std::vector<uint8_t> m_ReceivedState;
 		NetLobbyStats m_Stats;
