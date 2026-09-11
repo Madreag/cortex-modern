@@ -18,12 +18,14 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <iterator>
 #include <limits>
 #include <map>
 #include <string>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -635,6 +637,64 @@ namespace RTE {
 			    service.GetStatusText() != "Match stopped" ||
 			    service.GetErrorText() != "PeerDisconnected:test") {
 				*error = "runtime error was not visible through match service state";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestJoinWaitTrigger(std::string* error) {
+			std::error_code fsError;
+			const std::filesystem::path dir = std::filesystem::temp_directory_path() / "cccp-join-wait-selftest";
+			std::filesystem::create_directories(dir, fsError);
+			const std::filesystem::path missing = dir / "absent.trigger";
+			std::filesystem::remove(missing, fsError);
+
+			std::string waitError;
+			auto started = std::chrono::steady_clock::now();
+			if (NetMatchService::WaitForJoinTrigger(missing.string(), 300, &waitError)) {
+				*error = "the join wait proceeded with no trigger file";
+				return false;
+			}
+			auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+			if (waitError.find("join wait timed out") == std::string::npos || waitError.find(missing.string()) == std::string::npos) {
+				*error = "the join wait timeout did not name itself and the path: " + waitError;
+				return false;
+			}
+			if (elapsedMs < 300) {
+				*error = "the join wait gave up before its budget: " + std::to_string(elapsedMs) + "ms";
+				return false;
+			}
+
+			const std::filesystem::path present = dir / "present.trigger";
+			{
+				std::ofstream handle(present, std::ios::binary);
+				handle << "go";
+			}
+			waitError.clear();
+			if (!NetMatchService::WaitForJoinTrigger(present.string(), 300, &waitError) || !waitError.empty()) {
+				*error = "the join wait did not proceed with the trigger present: " + waitError;
+				return false;
+			}
+
+			const std::filesystem::path late = dir / "late.trigger";
+			std::filesystem::remove(late, fsError);
+			std::thread writer([late] {
+				std::this_thread::sleep_for(std::chrono::milliseconds(400));
+				std::ofstream handle(late, std::ios::binary);
+				handle << "go";
+			});
+			started = std::chrono::steady_clock::now();
+			const bool released = NetMatchService::WaitForJoinTrigger(late.string(), 10000, &waitError);
+			elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+			writer.join();
+			std::filesystem::remove(late, fsError);
+			std::filesystem::remove(present, fsError);
+			if (!released) {
+				*error = "the join wait missed a trigger created while it waited: " + waitError;
+				return false;
+			}
+			if (elapsedMs < 400 || elapsedMs > 4000) {
+				*error = "the join wait did not release on the trigger: " + std::to_string(elapsedMs) + "ms";
 				return false;
 			}
 			return true;
@@ -1732,6 +1792,7 @@ namespace RTE {
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
+		if (!TestJoinWaitTrigger(&error)) return fail(error);
 		std::string failedReportError;
 		std::string rejoinOverError;
 		std::string rejoinWaitError;

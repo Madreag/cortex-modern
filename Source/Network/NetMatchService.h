@@ -129,6 +129,13 @@ namespace RTE {
 		/// Phase B, host: stand in for the moderator in an unattended gate - approve the first
 		/// applicant for this seat after the delay, and optionally withdraw the approval again.
 		static void SetAutoSubstitute(bool enabled, uint16_t stableSeat, uint64_t delayMs, bool thenCancel);
+		/// A joiner finishes its startup and then waits for this file before it connects, so a gate can
+		/// place a second holder of one ticket at a chosen moment of the match instead of at boot time.
+		static void SetJoinWaitPath(std::string path);
+		/// Polls `path` every 100 ms until it exists. False (with `error`) when `budgetMs` runs out.
+		static bool WaitForJoinTrigger(const std::string& path, uint64_t budgetMs, std::string* error);
+		static constexpr uint64_t c_JoinWaitBudgetMs = 120000;
+		static constexpr uint64_t c_JoinWaitPollMs = 100;
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
 		bool CanSealA7Journal() const;
@@ -290,6 +297,7 @@ namespace RTE {
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
+		static std::string s_JoinWaitPath;
 		static bool s_ApplyForSeat;
 		static uint16_t s_ApplySeat;
 		static bool s_AutoSubstitute;
