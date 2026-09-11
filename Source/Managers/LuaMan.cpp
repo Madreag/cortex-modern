@@ -3604,11 +3604,20 @@ bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& ob
 					lua_pop(L, 1);
 				}
 			} else if (type == LUA_TUSERDATA) {
-				if (auto* rep = luabind::detail::is_class_object(L, index); rep && rep->get_lua_table().is_valid()) {
-					rep->get_lua_table().get(L);
-					const bool found = Walk(-1);
-					lua_pop(L, 1);
-					if (found) return true;
+				if (auto* rep = luabind::detail::is_class_object(L, index); rep) {
+					if (rep->get_lua_table().is_valid()) {
+						rep->get_lua_table().get(L);
+						const bool found = Walk(-1);
+						lua_pop(L, 1);
+						if (found) return true;
+					}
+					// A held child userdata keeps its owner in this table.
+					if (rep->get_dependencies().is_valid()) {
+						rep->get_dependencies().get(L);
+						const bool found = Walk(-1);
+						lua_pop(L, 1);
+						if (found) return true;
+					}
 				}
 			} else if (type == LUA_TFUNCTION) {
 				for (int upvalue = 1;; ++upvalue) {
@@ -3618,14 +3627,9 @@ bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& ob
 					if (found) return true;
 				}
 			} else if (lua_State* thread = lua_tothread(L, index); thread && thread != L) {
-				const int top = lua_gettop(thread);
-				for (int slot = 1; slot <= top; ++slot) {
-					lua_pushvalue(thread, slot);
-					lua_xmove(thread, L, 1);
-					const bool found = Walk(-1);
-					lua_pop(L, 1);
-					if (found) return true;
-				}
+				if (LuaThreadCodec::VisitThreadStack(thread, L, [](lua_State*, void* raw) {
+					return static_cast<Reach*>(raw)->Walk(-1);
+				}, this)) return true;
 			}
 			if (type == LUA_TFUNCTION || type == LUA_TUSERDATA || type == LUA_TTHREAD) {
 				lua_getfenv(L, index);
@@ -3643,8 +3647,9 @@ bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& ob
 			return false;
 		}
 	} reach{m_State, &objects, {}};
-	const int top = lua_gettop(m_State);
-	for (int index = 1; index <= top; ++index) if (reach.Walk(index)) return true;
+	if (LuaThreadCodec::VisitThreadStack(m_State, m_State, [](lua_State*, void* raw) {
+		return static_cast<Reach*>(raw)->Walk(-1);
+	}, &reach)) return true;
 	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
 	if (reach.Walk(-1)) { lua_pop(m_State, 1); return true; }
 	lua_pop(m_State, 1);
