@@ -4,6 +4,7 @@ sources += files(
 'GnsTransport.cpp',
 'LoopbackTransport.cpp',
 'NetActorOwnership.cpp',
+'NetA7Journal.cpp',
 'NetAdmissionSelfTest.cpp',
 'NetAuthCrypto.cpp',
 'NetAuthSelfTest.cpp',

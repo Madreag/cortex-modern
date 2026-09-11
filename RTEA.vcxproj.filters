@@ -451,6 +451,9 @@
     <ClInclude Include="Source\GUI\GUISound.h">
       <Filter>GUI</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetA7Journal.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\SimChecksum.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -804,6 +807,9 @@
     </ClCompile>
     <ClCompile Include="Source\System\Matrix.cpp">
       <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetA7Journal.cpp">
+      <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\SimChecksum.cpp">
       <Filter>Network</Filter>
