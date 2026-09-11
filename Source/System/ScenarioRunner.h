@@ -124,6 +124,11 @@ namespace RTE {
 		static bool RestoreNetResyncState(const NetResyncState& state, std::string* error = nullptr);
 		/// The in-progress sim tick is the drop frame; the resumed round starts there.
 		static uint64_t ResyncResumeStartFrame(uint64_t dropFrame);
+		/// The first frame the sim has not applied, as the lockstep round counts it.
+		static uint64_t GetLockstepResumeFrame();
+		/// Resolves the drop frame a heal resumes at, and whether the snapshot must rewind the sim
+		/// counter one tick to reach it, from the round's resume frame and the sim update count.
+		static bool ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, bool& outRewind, std::string* error = nullptr);
 		/// Pumps the coordinator until the relay host owes no peer a forward, or the budget runs out,
 		/// then keeps relaying for lingerMs. The star's hub is the only route between its clients, so
 		/// quitting with a forward still held takes the round off every client that was waiting on it.
