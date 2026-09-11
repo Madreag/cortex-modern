@@ -5749,6 +5749,51 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestRefusedReclaimReportsNewJoin() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("refused-fallback"));
+			NetH4TicketRecord record;
+			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+			record.epoch = Ramp<16>(0x21);
+			record.stableSeat = 1;
+			record.holderGeneration = 3;
+			record.credential = Ramp<32>(0x61);
+			record.hostSessionId = 0x4831ULL;
+			record.hostAddress = "127.0.0.1";
+			record.issuedAtUnixMs = 1'700'000'000'000ULL;
+			record.matchConfigHash = MakeHash(5);
+			if (!store.Store(record, &error)) {
+				return Fail("could not store the reclaim ticket: " + error);
+			}
+			NetReconnectClient client;
+			uint64_t unixNow = record.issuedAtUnixMs;
+			client.Configure(&store, MakeIdentity(), "Player");
+			client.SetUnixClock(&FixedUnixClock, &unixNow);
+			client.SetHostContext("127.0.0.1", MakeHash(5));
+			if (!client.BeginAdmission(0, &error)) {
+				return Fail("admission did not start from the stored ticket: " + error);
+			}
+			if (!client.UsedStoredTicket() || std::string(client.ReclaimOutcome()) != "reclaim_accepted") {
+				return Fail("a stored ticket for this host did not start a reclaim");
+			}
+			if (!client.AbsorbRejection(0, NetRejectReason::HostNotAccepting)) {
+				return Fail("a refused reclaim did not fall back to a new join");
+			}
+			if (client.UsedStoredTicket()) {
+				return Fail("used stored ticket stayed true after the fallback new join");
+			}
+			if (std::string(client.ReclaimOutcome()) != "new_join_after_refusal") {
+				return Fail(std::string("reclaim outcome after fallback was ") + client.ReclaimOutcome());
+			}
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -5898,6 +5943,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestGateSubstituteDisappearsBeforeAck(); result != 0) {
+			return result;
+		}
+		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {
 			return result;
 		}
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

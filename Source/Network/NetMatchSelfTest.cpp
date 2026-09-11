@@ -11,6 +11,8 @@
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 
+#include "nlohmann/json.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -632,6 +634,117 @@ namespace RTE {
 			    service.GetStatusText() != "Match stopped" ||
 			    service.GetErrorText() != "PeerDisconnected:test") {
 				*error = "runtime error was not visible through match service state";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFailedReportKeepsAdmissionCounters(std::string* error) {
+			NetMatchService service;
+			service.ReportRuntimeError("resync failed: resync snapshot save failed");
+			nlohmann::json report;
+			try {
+				report = nlohmann::json::parse(service.BuildReportJson());
+			} catch (const nlohmann::json::exception& parseError) {
+				*error = std::string("failed report was not JSON: ") + parseError.what();
+				return false;
+			}
+			const nlohmann::json* admission = nullptr;
+			const nlohmann::json* sessionStats = nullptr;
+			if (report.contains("runner") && report["runner"].is_object() && report["runner"].contains("session") &&
+			    report["runner"]["session"].is_object()) {
+				const nlohmann::json& session = report["runner"]["session"];
+				if (session.contains("admission") && session["admission"].is_object()) {
+					admission = &session["admission"];
+				}
+				if (session.contains("stats") && session["stats"].is_object()) {
+					sessionStats = &session["stats"];
+				}
+			}
+			if (admission == nullptr) {
+				*error = "failed report omitted runner.session.admission";
+				return false;
+			}
+			static const char* const admissionKeys[] = {
+			    "seats_dropped",
+			    "applicants_registered",
+			    "substitutions_committed",
+			    "reclaims_accepted",
+			    "incarnations_bound",
+			    "substitutions_cancelled",
+			    "applicants_refused",
+			    "pending_applicants",
+			    "substitution_offers_sent",
+			    "substitution_offer_retransmits",
+			    "replayed_results",
+			    "seats_closed_by_leave",
+			    "fenced_packets",
+			    "fenced_disconnects",
+			    "new_joins",
+			};
+			for (const char* key: admissionKeys) {
+				if (!admission->contains(key) || !(*admission)[key].is_number_integer()) {
+					*error = std::string("failed report missing admission.") + key;
+					return false;
+				}
+			}
+			if (sessionStats == nullptr || !sessionStats->contains("fenced_disconnects") || !sessionStats->contains("fenced_packets") ||
+			    !(*sessionStats)["fenced_disconnects"].is_number_integer() || !(*sessionStats)["fenced_packets"].is_number_integer()) {
+				*error = "failed report omitted session.stats fenced counters";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestRejoinWhileActivityOver(std::string* error) {
+			if (NetMatchService::ResyncSnapshotAllowed(nullptr) ||
+			    NetMatchService::ClassifyRejoin(nullptr) != NetRejoinAnswer::MatchOver) {
+				*error = "an over or missing activity still asked for a resync snapshot";
+				return false;
+			}
+			NetMatchService service;
+			service.AnswerMatchOverRejoin("match over");
+			if (service.GetState() == NetMatchServiceState::Failed) {
+				*error = "a match-over rejoin failed the session";
+				return false;
+			}
+			nlohmann::json report;
+			try {
+				report = nlohmann::json::parse(service.BuildReportJson());
+			} catch (const nlohmann::json::exception& parseError) {
+				*error = std::string("match-over report was not JSON: ") + parseError.what();
+				return false;
+			}
+			if (!report.contains("reconnect") || report["reconnect"].value("rejoin_outcome", "") != "match_over") {
+				*error = "match-over rejoin did not report rejoin_outcome=match_over";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestE2ETickClockSurvivesResync(std::string* error) {
+			NetMatchE2ETickClock clock;
+			for (uint64_t tick = 1; tick <= 250; ++tick) {
+				clock.NoteSimTick(tick);
+			}
+			clock.OnResyncRelaunch();
+			clock.NoteSimTick(1);
+			if (clock.Total() < 100 || clock.EarlyOverIsSetupFailure()) {
+				*error = "e2e running ticks reset at resync; total=" + std::to_string(clock.Total());
+				return false;
+			}
+			NetMatchE2ETickClock early;
+			for (uint64_t tick = 1; tick <= 20; ++tick) {
+				early.NoteSimTick(tick);
+			}
+			if (!early.EarlyOverIsSetupFailure()) {
+				*error = "an Over in the first 20 ticks was not a setup failure";
+				return false;
+			}
+			clock.OnNewMatch();
+			clock.NoteSimTick(1);
+			if (clock.Total() != 0 || !clock.EarlyOverIsSetupFailure()) {
+				*error = "a rematch kept the previous match's running ticks";
 				return false;
 			}
 			return true;
@@ -1293,6 +1406,21 @@ namespace RTE {
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
+		std::string failedReportError;
+		std::string rejoinOverError;
+		std::string tickClockError;
+		if (!TestFailedReportKeepsAdmissionCounters(&failedReportError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << failedReportError << std::endl;
+		}
+		if (!TestRejoinWhileActivityOver(&rejoinOverError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << rejoinOverError << std::endl;
+		}
+		if (!TestE2ETickClockSurvivesResync(&tickClockError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << tickClockError << std::endl;
+		}
+		if (!failedReportError.empty()) return fail(failedReportError);
+		if (!rejoinOverError.empty()) return fail(rejoinOverError);
+		if (!tickClockError.empty()) return fail(tickClockError);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
