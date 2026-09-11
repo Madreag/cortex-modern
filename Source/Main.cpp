@@ -1695,6 +1695,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		return;
 	}
 	WriteProbeText("lpinv_before", before);
+	const uint64_t soundCursorBefore = g_AudioMan.GetCheckpointSoundContainerCursor();
 	int failures = 0;
 	int cases = 0;
 	for (const int depth: s_lpInvarianceDepths) {
@@ -1736,6 +1737,9 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			}
 			if (previewsRun != static_cast<uint64_t>(repeats)) {
 				fail(std::to_string(previewsRun) + " previews ran, expected " + std::to_string(repeats) + " (no local actor to preview?)");
+			}
+			if (const uint64_t soundCursorAfter = g_AudioMan.GetCheckpointSoundContainerCursor(); soundCursorAfter != soundCursorBefore) {
+				fail("the audio checkpoint identity cursor moved " + std::to_string(soundCursorBefore) + " -> " + std::to_string(soundCursorAfter) + " across discarded previews");
 			}
 			if (!outcomeFailure.empty()) {
 				fail(outcomeFailure + " [" + outcome + "]");
