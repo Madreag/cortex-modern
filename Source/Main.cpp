@@ -2323,6 +2323,9 @@ void RunGameLoop() {
 		if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) {
 			return;
 		}
+		if (s_netMatchServiceE2E && s_netMatchE2ETicks.Total() == 0) {
+			s_netMatchE2ETicks.OnResyncRelaunch(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		}
 	}
 
 	long long updateStartTime = 0;
