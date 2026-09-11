@@ -1837,3 +1837,55 @@ void MovableObject::SetPostScreenEffectToDraw() const {
 		}
 	}
 }
+
+bool MovableObject::RunValueMapSelfTest() {
+	MovableMan::ConstructionRegistryScope isolated;
+	Actor object;
+	if (object.MovableObject::Create(1) < 0) {
+		std::cout << "[value-map-selftest] FAIL create" << std::endl;
+		return false;
+	}
+	const uint64_t uid = static_cast<uint64_t>(object.GetUniqueID());
+	{
+		SoundSimulationScope local(uid, 1, SoundExecutionDomain::LocalSimulation);
+		object.SetNumberValue("k", 7);
+		if (object.GetNumberValue("k") != 7 || !object.NumberValueExists("k")) {
+			std::cout << "[value-map-selftest] FAIL local_read_after_write" << std::endl;
+			return false;
+		}
+		object.SetStringValue("s", "hi");
+		if (object.GetStringValue("s") != "hi" || !object.StringValueExists("s")) {
+			std::cout << "[value-map-selftest] FAIL local_string_read_after_write" << std::endl;
+			return false;
+		}
+	}
+	if (object.GetNumberValue("k") != 0 || object.NumberValueExists("k") || object.GetNumberValueMap().count("k") ||
+	    object.StringValueExists("s") || !object.GetStringValue(std::string("s")).empty()) {
+		std::cout << "[value-map-selftest] FAIL shared_uncommitted" << std::endl;
+		return false;
+	}
+	g_MovableMan.CommitOfflineValueWrites();
+	if (object.GetNumberValue("k") != 7 || !object.NumberValueExists("k") || object.GetStringValue("s") != "hi") {
+		std::cout << "[value-map-selftest] FAIL offline_same_tick" << std::endl;
+		return false;
+	}
+	{
+		SoundSimulationScope local(uid, 1, SoundExecutionDomain::LocalSimulation);
+		object.RemoveNumberValue("k");
+		if (object.NumberValueExists("k") || object.GetNumberValue("k") != 0) {
+			std::cout << "[value-map-selftest] FAIL local_remove_hides" << std::endl;
+			return false;
+		}
+	}
+	if (!object.NumberValueExists("k") || object.GetNumberValue("k") != 7) {
+		std::cout << "[value-map-selftest] FAIL shared_holds_until_commit" << std::endl;
+		return false;
+	}
+	g_MovableMan.CommitOfflineValueWrites();
+	if (object.NumberValueExists("k") || object.GetNumberValue("k") != 0) {
+		std::cout << "[value-map-selftest] FAIL remove_propagates" << std::endl;
+		return false;
+	}
+	std::cout << "[value-map-selftest] PASS local_read_after_write shared_uncommitted offline_same_tick remove_propagates" << std::endl;
+	return true;
+}
