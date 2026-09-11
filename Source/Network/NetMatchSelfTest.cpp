@@ -1491,6 +1491,87 @@ namespace RTE {
 		return pumpOne(NetHoldResolution::Expired) && pumpOne(NetHoldResolution::Reclaimed);
 	}
 
+	bool TestRosterTransitionsRecordHoldThenPresent(std::string* error) {
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Running;
+		NetLobbyMember host;
+		host.peerId = 1;
+		host.displayName = "Host";
+		NetLobbyMember leaver;
+		leaver.peerId = 2;
+		leaver.displayName = "Leaver";
+		service.m_LobbySnapshot.members = {host, leaver};
+		NetLockstepSeatSnapshot snapshot;
+		snapshot.senderPeerId = 1;
+		snapshot.sessionId = 11;
+		snapshot.roundId = 1;
+		snapshot.revision = 1;
+		snapshot.observedAtMs = 1000;
+		NetSeatPresenceEntry seat;
+		seat.stableSeat = 1;
+		seat.peerId = 2;
+		seat.state = NetSeatPresenceState::Reconnecting;
+		seat.holdActive = true;
+		seat.holdUntilMs = 21000;
+		seat.holderName = "Leaver";
+		snapshot.seats = {seat};
+		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 1000)) {
+			*error = "the hold snapshot was not applied";
+			return false;
+		}
+		service.RecordRosterTransitions(snapshot.observedAtMs);
+		snapshot.revision = 2;
+		snapshot.observedAtMs = 5000;
+		snapshot.seats[0].state = NetSeatPresenceState::Present;
+		snapshot.seats[0].holdActive = false;
+		snapshot.seats[0].holdUntilMs = 0;
+		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 5000)) {
+			*error = "the present snapshot was not applied";
+			return false;
+		}
+		service.RecordRosterTransitions(snapshot.observedAtMs);
+		nlohmann::json report;
+		try {
+			report = nlohmann::json::parse(service.BuildReportJson());
+		} catch (const nlohmann::json::exception& parseError) {
+			*error = std::string("roster-transition report was not JSON: ") + parseError.what();
+			return false;
+		}
+		if (!report.contains("reconnect") || !report["reconnect"].contains("roster_transitions")) {
+			*error = "report omitted reconnect.roster_transitions";
+			return false;
+		}
+		const nlohmann::json& transitions = report["reconnect"]["roster_transitions"];
+		if (!transitions.is_array()) {
+			*error = "roster_transitions was not an array";
+			return false;
+		}
+		std::vector<nlohmann::json> peer2;
+		for (const nlohmann::json& row: transitions) {
+			if (row.value("peer_id", 0) == 2) {
+				peer2.push_back(row);
+			}
+		}
+		if (peer2.size() != 2) {
+			*error = "peer 2 roster_transitions size=" + std::to_string(peer2.size()) + " wanted 2";
+			return false;
+		}
+		if (peer2[0].value("state", "") == "Present" || peer2[0].value("line", "").empty()) {
+			*error = "first peer 2 transition was not a hold line";
+			return false;
+		}
+		if (peer2[1].value("state", "") != "Present") {
+			*error = "second peer 2 transition was not Present";
+			return false;
+		}
+		const nlohmann::json& lines = report["reconnect"].value("roster_lines", nlohmann::json::array());
+		if (!lines.is_array() || !lines.empty()) {
+			*error = "roster_lines was not empty after the present snapshot";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error) {
 		LoopbackTransport hostTransport;
 		LoopbackTransport clientTransport;
@@ -1658,6 +1739,7 @@ namespace RTE {
 		if (!capTickError.empty()) return fail(capTickError);
 		if (!executedTickError.empty()) return fail(executedTickError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
+		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
