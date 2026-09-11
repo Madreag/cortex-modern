@@ -3402,8 +3402,10 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::FinishSimulationTick(uint64_t completedTick) {
-		if (!m_DeferStops || !IsRunning()) return false;
-		m_LastCompletedSimulationTick = completedTick;
+		if (!m_DeferStops) return false;
+		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
+		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (!IsRunning()) return false;
 		if (m_PendingRecoveryStop && m_Config.localPeerId == m_Config.matchConfig.hostPeerId) {
 			const NetLockstepStop stop = *m_PendingRecoveryStop;
 			m_PendingRecoveryStop.reset();
