@@ -269,7 +269,8 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
-		FinishMatch(text);
+		// The session pump must not destroy the coordinator; the main loop FinishMatch's the stop.
+		Complete(text);
 	}
 
 	bool NetMatchService::ResyncMatch(std::string* error) {

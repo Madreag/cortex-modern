@@ -10,6 +10,7 @@
 #include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
+#include "ScenarioRunner.h"
 
 #include "nlohmann/json.hpp"
 
@@ -1490,6 +1491,116 @@ namespace RTE {
 		return pumpOne(NetHoldResolution::Expired) && pumpOne(NetHoldResolution::Reclaimed);
 	}
 
+	bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error) {
+		LoopbackTransport hostTransport;
+		LoopbackTransport clientTransport;
+		NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+		NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+		if (!hostTransport.StartHost(43211, error) || !clientTransport.Connect("loopback", 43211, error)) {
+			return false;
+		}
+		for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+			if (event.type == NetTransportEventType::PeerConnected) {
+				hostRemotePeer = event.peerId;
+			}
+		}
+		for (const NetTransportEvent& event: clientTransport.PollEvents()) {
+			if (event.type == NetTransportEventType::PeerConnected) {
+				clientRemotePeer = event.peerId;
+			}
+		}
+		if (hostRemotePeer == c_InvalidNetPeerId || clientRemotePeer == c_InvalidNetPeerId) {
+			*error = "match-over wait fixture did not connect the loopback pair";
+			return false;
+		}
+		auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+			NetLockstepConfig config;
+			config.sessionId = 0x4D4F5232303131ULL;
+			config.timeoutMs = 2000;
+			config.localPeerId = local;
+			config.peerCount = 2;
+			config.remoteTransportPeerIds = std::move(transports);
+			config.relayToOtherPeers = relay;
+			config.scenario = "LockstepSelfTest";
+			config.ownershipPolicy = "unique-id-split";
+			return config;
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator client;
+		if (!service.m_Coordinator->Start(hostTransport, cfg(1, {{2, hostRemotePeer}}, true), error) ||
+		    !client.Start(clientTransport, cfg(2, {{1, clientRemotePeer}}, false), error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now < 80; now += 5) {
+			service.m_Coordinator->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (!service.m_Coordinator->IsRunning()) {
+			*error = "match-over wait fixture never started the host coordinator";
+			return false;
+		}
+		ScenarioRunner::SetLockstepCoordinator(service.m_Coordinator.get());
+		bool pumped = false;
+		bool coordinatorLived = false;
+		ScenarioRunner::SetSessionPump([&] {
+			if (pumped) {
+				return;
+			}
+			pumped = true;
+			service.AnswerMatchOverRejoin("match over");
+			coordinatorLived = ScenarioRunner::HasLockstepCoordinator();
+		});
+		NetLockstepReadyFrame ready;
+		std::string waitError;
+		const uint64_t waitTick = service.m_Coordinator->GetStats().nextFrame;
+		const bool got = ScenarioRunner::WaitForLockstepControllerFrame(waitTick, ready, &waitError);
+		const bool stillThere = ScenarioRunner::HasLockstepCoordinator();
+		ScenarioRunner::SetSessionPump(nullptr);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (!pumped) {
+			*error = "the lockstep wait never ran the session pump";
+			return false;
+		}
+		if (!coordinatorLived || !stillThere) {
+			*error = "match-over rejoin from the session pump destroyed the coordinator";
+			return false;
+		}
+		if (got) {
+			*error = "the wait produced a frame after a match-over rejoin";
+			return false;
+		}
+		if (waitError.find("Complete:") == std::string::npos || waitError.find("match over") == std::string::npos) {
+			*error = "the wait did not return Complete:match over; got " + waitError;
+			return false;
+		}
+		if (service.GetState() != NetMatchServiceState::Running) {
+			*error = "the pump completed or failed the service; the main loop must FinishMatch";
+			return false;
+		}
+		nlohmann::json report;
+		try {
+			report = nlohmann::json::parse(service.BuildReportJson());
+		} catch (const nlohmann::json::exception& parseError) {
+			*error = std::string("match-over wait report was not JSON: ") + parseError.what();
+			return false;
+		}
+		if (!report.contains("reconnect") || report["reconnect"].value("rejoin_outcome", "") != "match_over") {
+			*error = "match-over rejoin from the wait did not report rejoin_outcome=match_over";
+			return false;
+		}
+		service.FinishMatch("match over");
+		if (service.GetState() != NetMatchServiceState::Completed) {
+			*error = "the main-loop FinishMatch did not complete the match";
+			return false;
+		}
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -1518,6 +1629,7 @@ namespace RTE {
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		std::string failedReportError;
 		std::string rejoinOverError;
+		std::string rejoinWaitError;
 		std::string tickClockError;
 		std::string capTickError;
 		std::string executedTickError;
@@ -1526,6 +1638,9 @@ namespace RTE {
 		}
 		if (!TestRejoinWhileActivityOver(&rejoinOverError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << rejoinOverError << std::endl;
+		}
+		if (!TestMatchOverRejoinFromWaitKeepsCoordinator(&rejoinWaitError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << rejoinWaitError << std::endl;
 		}
 		if (!TestE2ETickClockSurvivesResync(&tickClockError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << tickClockError << std::endl;
@@ -1538,6 +1653,7 @@ namespace RTE {
 		}
 		if (!failedReportError.empty()) return fail(failedReportError);
 		if (!rejoinOverError.empty()) return fail(rejoinOverError);
+		if (!rejoinWaitError.empty()) return fail(rejoinWaitError);
 		if (!tickClockError.empty()) return fail(tickClockError);
 		if (!capTickError.empty()) return fail(capTickError);
 		if (!executedTickError.empty()) return fail(executedTickError);

@@ -2243,6 +2243,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					s_netMatchE2ETicks.OnResyncRelaunch();
 				}
 			} else if (resyncError == "match over") {
+				g_NetMatchService.FinishMatch("match over");
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
 				ScenarioRunner::ClearControllerReplayError();
