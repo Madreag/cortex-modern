@@ -788,11 +788,14 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	m_ControlledActor[player]->GetController()->SetDisabled(false);
 
 	SoundContainer* actorSwitchSoundToPlay = (m_ControlledActor[player] == m_Brain[player]) ? g_GUISound.BrainSwitchSound() : g_GUISound.ActorSwitchSound();
-	actorSwitchSoundToPlay->Play(player);
+	// Snapshot Start selects the brain again; the UI click is not part of the restored sim.
+	if (!g_MovableMan.IsRestoringSnapshot()) {
+		actorSwitchSoundToPlay->Play(player);
+	}
 
 	// If out of frame from the POV of the preswitch actor, play the camera travel noise
 	const int switchSoundThreshold = g_WindowMan.GetResX() / 2;
-	if (preSwitchActor && g_SceneMan.ShortestDistance(preSwitchActor->GetPos(), m_ControlledActor[player]->GetPos(), g_SceneMan.SceneWrapsX() || g_SceneMan.SceneWrapsY()).MagnitudeIsGreaterThan(static_cast<float>(switchSoundThreshold))) {
+	if (!g_MovableMan.IsRestoringSnapshot() && preSwitchActor && g_SceneMan.ShortestDistance(preSwitchActor->GetPos(), m_ControlledActor[player]->GetPos(), g_SceneMan.SceneWrapsX() || g_SceneMan.SceneWrapsY()).MagnitudeIsGreaterThan(static_cast<float>(switchSoundThreshold))) {
 		g_GUISound.CameraTravelSound()->Play(player);
 	}
 
