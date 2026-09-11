@@ -1614,7 +1614,7 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-static void UpdateResyncUI() {
+static void UpdateResyncUI(uint32_t elapsedSeconds) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
 	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
@@ -1624,8 +1624,11 @@ static void UpdateResyncUI() {
 	g_WindowMan.ClearBackbuffer();
 	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, g_WindowMan.GetResX() / 2, g_WindowMan.GetResY() - 24,
-	    "Resynchronizing the match...  Seats [F6]", GUIFont::Centre);
+	const int centerX = g_WindowMan.GetResX() / 2;
+	const int centerY = g_WindowMan.GetResY() / 2;
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, "Resyncing the match...", GUIFont::Centre);
+	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
+	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
 	g_WindowMan.UploadFrame();
 	NetModerationGUIProbe::AfterDraw();
@@ -2208,7 +2211,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
-					UpdateResyncUI();
+					UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()));
 					if (System::IsSetToQuit()) {
 						resyncError = "quit requested during resync";
 						resyncOk = false;
