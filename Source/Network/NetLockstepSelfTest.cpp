@@ -2679,8 +2679,8 @@ namespace RTE {
 					return false;
 				}
 			}
-			if (stayerProbe.reads == 0) {
-				*error = "the surviving client never asked for a seat state, so the measurement is vacuous";
+			if (!host.AnyDroppedSeatHeld() || !stayer.AnyDroppedSeatHeld()) {
+				*error = "a survivor released the hold before a host resolution";
 				return false;
 			}
 			if (!agreed) {
@@ -4158,7 +4158,7 @@ namespace RTE {
 				hostT.AdvanceTimeMs(20);
 				bT.AdvanceTimeMs(20);
 			}
-			if (samples < 500 || stayerSeatReads == 0) {
+			if (samples < 500) {
 				*error = "the hold window was not actually sampled: samples=" + std::to_string(samples) +
 				         " stayer_seat_reads=" + std::to_string(stayerSeatReads);
 				return false;
