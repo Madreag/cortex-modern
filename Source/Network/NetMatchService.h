@@ -188,6 +188,8 @@ namespace RTE {
 		NetMatchServiceState GetState() const;
 		bool WasEverStarted() const { return m_EverStarted.load(); }
 		NetLobbySnapshot GetLobbySnapshot() const;
+		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
+		std::string GetInputDelayText() const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
@@ -279,6 +281,7 @@ namespace RTE {
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
+		std::string m_InputDelayText; //!< The announced input-delay line, built beside each lobby publish.
 		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
 		/// The largest the session clock has ever run ahead of the admission clock at a pump. Zero on a
 		/// tree where they are one clock; the inflation itself on one where they are not, whenever the
