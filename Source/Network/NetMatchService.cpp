@@ -1,20 +1,26 @@
 #include "NetMatchService.h"
+#include "NetA7Journal.h"
 
 #include "ActivityMan.h"
 #include "Constants.h"
 #include "GameActivity.h"
+#include "FrameMan.h"
+#include "GUIInput.h"
 #include "GnsTransport.h"
 #include "NetIdentity.h"
+#include "NetProtocol.h"
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
 #include "System.h"
 #include "System/FaultInjection.h"
 #include "TimerMan.h"
+#include "UInputMan.h"
 
 #include "MovableMan.h"
 
 #include "nlohmann/json.hpp"
 
+#include <cstdlib>
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -50,6 +56,53 @@ static std::string ResyncSaveName() {
 
 		// The host dedupes joiners by nonce, so two clients on one session must present distinct ones.
 		// Transport-level identity only — the sim never sees it, so real randomness is fine here.
+		json AdmissionJsonFromHost(const NetReconnectHost& host) {
+			const NetReconnectHostStats& stats = host.GetStats();
+			return json{
+				{"new_joins", stats.newJoins},
+				{"ticket_offers_sent", stats.ticketOffersSent},
+				{"ticket_offer_retransmits", stats.ticketOfferRetransmits},
+				{"provisional_seats_opened", stats.provisionalSeatsOpened},
+				{"provisional_seats_committed", stats.provisionalSeatsCommitted},
+				{"provisional_seats_expired", stats.provisionalSeatsExpired},
+				{"provisional_seats_refused", stats.provisionalSeatsRefused},
+				{"provisional_seats_resumed", stats.provisionalSeatsResumed},
+				{"persistence_failures", stats.persistenceFailures},
+				{"reclaims_accepted", stats.reclaimsAccepted},
+				{"identity_rejections", stats.identityRejections},
+				{"denials_scheduled", stats.denialsScheduled},
+				{"denials_released", stats.denialsReleased},
+				{"replayed_results", stats.replayedResults},
+				{"stale_epoch_drops", stats.staleEpochDrops},
+				{"unknown_transaction_drops", stats.unknownTransactionDrops},
+				{"fenced_packets", stats.fencedPackets},
+				{"fenced_disconnects", stats.fencedDisconnects},
+				{"incarnations_bound", stats.incarnationsBound},
+				{"seats_dropped", stats.seatsDropped},
+				{"seats_closed_by_leave", stats.seatsClosedByLeave},
+				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
+				{"reseats_issued", stats.reseatsIssued},
+				{"reseats_without_a_ledger", stats.reseatsWithoutALedger},
+				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
+				{"reseat_live_on_team_not_named", stats.reseatLiveOnTeamNotNamed},
+				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"seat_holds_expired", stats.seatHoldsExpired},
+				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
+				{"applicants_registered", stats.applicantsRegistered},
+				{"applicants_refused", stats.applicantsRefused},
+				{"applicants_expired", stats.applicantsExpired},
+				{"applicants_displaced", stats.applicantsDisplaced},
+				{"substitution_offers_sent", stats.substitutionOffersSent},
+				{"substitution_offer_retransmits", stats.substitutionOfferRetransmits},
+				{"substitutions_committed", stats.substitutionsCommitted},
+				{"substitutions_cancelled", stats.substitutionsCancelled},
+				{"substitutions_superseded", stats.substitutionsSuperseded},
+				{"substitution_ack_failures", stats.substitutionAckFailures},
+				{"reassigned_reclaims_refused", stats.reassignedReclaimsRefused},
+				{"pending_applicants", 0},
+			};
+		}
+
 		uint64_t MakeClientNonce() {
 			std::random_device device;
 			return c_ClientNonce ^ (static_cast<uint64_t>(device()) << 32) ^ static_cast<uint64_t>(device());
@@ -124,6 +177,8 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 
+		if (!request.host && NetA7Journal::HasConnectGate() && !WaitForA7ConnectGate(error)) return false;
+
 		m_ActivityPreset = request.activityPreset;
 		SetState(NetMatchServiceState::Starting, request.host ? "Hosting direct-IP match" : "Joining direct-IP match");
 		{
@@ -163,6 +218,9 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_ErrorText;
 				return false;
 			}
+			m_PendingResyncState.reset();
+			m_ResyncRetainsLocalState = false;
+			m_ResyncSourceRound = 0;
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -184,6 +242,36 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::ResyncSnapshotAllowed(const Activity* activity) {
+		return activity != nullptr && activity->GetActivityState() != Activity::Over;
+	}
+
+	NetRejoinAnswer NetMatchService::ClassifyRejoin(const Activity* activity) {
+		return ResyncSnapshotAllowed(activity) ? NetRejoinAnswer::Resync : NetRejoinAnswer::MatchOver;
+	}
+
+	void NetMatchService::AnswerMatchOverRejoin(const std::string& result) {
+		const std::string text = result.empty() ? "match over" : result;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RejoinOutcome = "match_over";
+			if (m_Transport && m_Session && m_Coordinator) {
+				for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+					if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+						NetMessage message;
+						message.payload = NetDisconnect{static_cast<uint16_t>(NetRejectReason::SessionEnded), text};
+						std::vector<uint8_t> bytes;
+						if (NetProtocol::Encode(message, bytes)) {
+							m_Transport->Send(peer.transportPeerId, NetTransportLane::ControlReliable, bytes, nullptr);
+							m_Transport->Disconnect(peer.transportPeerId, text);
+						}
+					}
+				}
+			}
+		}
+		FinishMatch(text);
+	}
+
 	bool NetMatchService::ResyncMatch(std::string* error) {
 		JoinWorkerIfDone();
 		// The host snapshots the live (diverged) match BEFORE the teardown; both sides then reload
@@ -194,15 +282,39 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			isHost = m_IsHost;
 		}
+		const uint64_t a7Resync = NetA7Journal::BeginResync();
+		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
+		const uint64_t a7SaveBegin = a7Save ? AdmissionNowMs() : 0;
+		if (a7Save) NetA7Journal::Session("save_begin", a7SaveBegin, {{"resync", std::to_string(a7Resync)}}, "NetMatchService::AdmissionNowMs");
+		if (isHost && ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
+			AnswerMatchOverRejoin("match over");
+			if (error) {
+				*error = "match over";
+			}
+			return false;
+		}
 		if (isHost) {
+			// Snapshot callbacks stay on the game thread while waiting peers keep hearing from us.
+			std::jthread keepalive([this](std::stop_token stop) {
+				while (!stop.stop_requested()) {
+					{
+						std::lock_guard<std::mutex> lock(m_Mutex);
+						if (m_Session) m_Session->TickKeepalive(AdmissionNowMs());
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(50));
+				}
+			});
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
 			if (FaultInjected("slow_resync_save")) {
-				// Test-only: a save that outlasts the session budget, so the arm can show the round that
-				// follows drops nobody. Nothing script-visible moves - the sim is already torn down here.
+				// Keep the snapshot frozen across a save longer than the receive timeout.
 				std::this_thread::sleep_for(std::chrono::seconds(7));
+			}
+			if (a7Save) {
+				const uint64_t ended = AdmissionNowMs();
+				NetA7Journal::Session("save_end", ended, {{"resync", std::to_string(a7Resync)}, {"fault", "slow_resync_save"}, {"elapsed_ms", ended - a7SaveBegin}}, "NetMatchService::AdmissionNowMs");
 			}
 			const std::string savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + ResyncSaveName() + ".ccsave";
 			std::ifstream in(savePath, std::ios::binary);
@@ -215,7 +327,13 @@ static std::string ResyncSaveName() {
 				if (error) *error = "resync snapshot is empty";
 				return false;
 			}
+			NetResyncState state;
+			std::vector<uint8_t> envelope;
+			if (!ScenarioRunner::CaptureNetResyncState(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
+			stateBytes = std::move(envelope);
 		}
+		m_ResyncSourceRound = ScenarioRunner::GetLockstepRoundId();
+		m_ResyncRetainsLocalState = true;
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<GnsTransport> transport;
@@ -263,31 +381,13 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
 		std::string error;
-		const bool started = runner->StartNextMatch(*transport, *session, *coordinator, &error, std::move(stateBytes));
+		const bool started = runner->StartNextMatch(*transport, *session, *coordinator, &error, stateBytes);
 		std::string pendingLoad;
+		NetResyncState resyncState;
 		if (started) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
-			if (!receivedState.empty()) {
-				// Per-peer filename: same-machine instances share Userdata (the e2e), so concurrent
-				// receivers must never write or load the same file.
-				const std::string recvName = ResyncSaveName() + "_recv";
-				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + recvName + ".ccsave";
-				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
-				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));
-				out.close();
-				pendingLoad = out.good() ? recvName : "";
-				if (pendingLoad.empty()) {
-					error = "could not write the received resync snapshot";
-				}
-			} else if (m_IsHost) {
-				// The host reloads its own snapshot, so both sides launch the identical file.
-				pendingLoad = ResyncSaveName();
-			} else {
-				// A non-host with no received bytes means the transfer never completed; loading the
-				// host's filename off this peer's disk would restore a stale or absent snapshot.
-				pendingLoad = "";
-				error = "resync snapshot transfer did not complete";
-			}
+			if (receivedState.empty()) receivedState = std::move(stateBytes);
+			(void)PrepareReceivedResync(receivedState, *coordinator, pendingLoad, resyncState, &error);
 		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -297,6 +397,7 @@ static std::string ResyncSaveName() {
 			m_Runner = std::move(runner);
 			if (started && !pendingLoad.empty()) {
 				m_PendingResyncLoad = pendingLoad;
+				m_PendingResyncState = std::move(resyncState);
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Resynced; relaunching match";
 				m_ErrorText.clear();
@@ -307,6 +408,23 @@ static std::string ResyncSaveName() {
 			}
 			m_WorkerDone = true;
 		}
+	}
+
+	bool NetMatchService::PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error) {
+		std::vector<uint8_t> archive;
+		if (!NetResyncCodec::Decode(bytes, coordinator.GetConfig().sessionId, coordinator.GetConfig().startFrame, state, archive, error)) return false;
+		if ((m_ResyncSourceRound != 0 && state.sourceRound != m_ResyncSourceRound) || state.sourceRound == coordinator.GetRoundId()) {
+			if (error) *error = "resync snapshot round does not match the ended match";
+			return false;
+		}
+		const auto name = ResyncSaveName() + "_recv";
+		const auto path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
+		std::ofstream out(path, std::ios::binary | std::ios::trunc);
+		out.write(reinterpret_cast<const char*>(archive.data()), static_cast<std::streamsize>(archive.size()));
+		out.close();
+		if (!out.good()) { if (error) *error = "could not write the received resync snapshot"; return false; }
+		pendingLoad = name;
+		return true;
 	}
 
 	std::string NetMatchService::TakePendingResyncLoad() {
@@ -323,25 +441,47 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::StageResyncedMatchLaunch(std::string* error) {
 		const std::string pendingLoad = TakePendingResyncLoad();
-		if (pendingLoad.empty()) {
+		if (pendingLoad.empty() || !m_PendingResyncState) {
 			if (error) *error = "no resync snapshot to load";
+			return false;
+		}
+		const auto state = std::make_shared<NetResyncState>(*m_PendingResyncState);
+		const uint8_t localPeer = GetLocalPeerId();
+		const bool retainLocal = m_ResyncRetainsLocalState;
+		std::optional<NetResyncPlayerBindings> newestBinding;
+		if (const auto found = state->playerBindings.find(localPeer); found != state->playerBindings.end()) newestBinding = found->second;
+		for (const auto& pending: state->pendingPlayerBindings) if (pending.command.senderPeerId == localPeer && (!newestBinding || pending.frame > newestBinding->frame)) {
+			newestBinding = NetResyncPlayerBindings{pending.frame, std::get<NetGamePlayerBindings>(pending.command.payload)};
+		}
+		if (!retainLocal && !newestBinding) {
+			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
 		if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
 			if (error) *error = "resync snapshot load failed: " + pendingLoad;
 			return false;
 		}
-		g_ActivityMan.RemoveSavedGame(pendingLoad);
+		const char* keepResyncSaves = std::getenv("CC_KEEP_RESYNC_SAVES");
+		if (keepResyncSaves && keepResyncSaves[0] && keepResyncSaves[0] != '0') {
+			std::cout << "[net-match] keeping resync save: " << pendingLoad << std::endl;
+		} else {
+			g_ActivityMan.RemoveSavedGame(pendingLoad);
+		}
 		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
-		const int localTeam = GetLocalTeam();
-		if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
-			if (error) *error = "invalid local team";
-			return false;
-		}
-		if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetStartActivity())) {
-			gameActivity->ClearPlayers(false);
-			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-		}
+		struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; };
+		const auto local = std::make_shared<LocalState>();
+		if (!g_ActivityMan.SetPendingCheckpointCallbacks([local, retainLocal] {
+			local->input = g_UInputMan.SaveCheckpoint();
+			local->gui = GUIInput::SaveSharedCheckpoint();
+			local->frame = g_FrameMan.SaveNetLocalState();
+			return !retainLocal || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
+		}, [local, state, retainLocal, newestBinding](Activity& activity) {
+			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
+			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
+			if (!(retainLocal ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(newestBinding->bindings))) return false;
+			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
+			return ScenarioRunner::RestoreNetResyncState(*state);
+		})) { if (error) *error = "could not stage resync local state restoration"; return false; }
 		ScenarioRunner::ApplyDeterministicConfig();
 		return true;
 	}
@@ -384,6 +524,8 @@ static std::string ResyncSaveName() {
 		m_ReconnectHost.EndHostedSession();
 		m_ReconnectHost.TakeOutbound();
 		m_SeatStatuses.clear();
+		m_SeatPresence.Clear();
+		m_ModerationSeats.clear();
 		m_AdmissionAttached = false;
 	}
 
@@ -394,31 +536,27 @@ static std::string ResyncSaveName() {
 				return;
 			}
 			m_LeaveExchangeRun = true;
-			// A leave needs a live link. Without one this is an ambiguous loss, and §7 is explicit that
-			// the ticket must survive that - which is exactly when it is needed.
+			// Without a live link the recovery ticket must survive.
 			if (!m_AdmissionAttached || m_IsHost || !m_Session || !m_Session->IsReady() || !m_TicketStore.HasRecord()) {
 				return;
 			}
-			// §7: leaving is a protocol, not a flag. Only an acknowledged LeaveAck clears the ticket, and
-			// an unacknowledged one is an ambiguous loss that KEEPS it - so this waits exactly the P21
-			// budget and no longer, whatever the answer.
 			std::string error;
-			// Both ends of the leave read the clock its deadlines run on: the retransmit ladder below is
-			// driven from the plane's own tick, which is session-elapsed time and not the session's clock.
 			if (!m_ReconnectClient.BeginLeave(AdmissionNowMs(), &error)) {
 				return;
 			}
 		}
-		const uint64_t startMs = SteadyNowMs();
-		while (SteadyNowMs() - startMs <= NetReconnectClient::c_LeaveAckBudgetMs) {
+		for (;;) {
 			{
 				// The lock is dropped for the wait, so the game thread's own reads never stall on it.
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				if (!m_Session) {
 					break;
 				}
-				m_Session->Tick(AdmissionNowMs());
-				if (m_ReconnectClient.GetState() == NetH4ClientState::Left || m_ReconnectClient.WantsLinkClosed()) {
+				const uint64_t nowMs = AdmissionNowMs();
+				m_Session->Tick(nowMs);
+				// The client deadline must run even after the transport closes.
+				m_ReconnectClient.Tick(nowMs);
+				if (m_ReconnectClient.GetState() != NetH4ClientState::Leaving || m_ReconnectClient.WantsLinkClosed()) {
 					break;
 				}
 			}
@@ -471,6 +609,9 @@ static std::string ResyncSaveName() {
 			m_LocalTeam = -1;
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
+			m_PendingResyncState.reset();
+			m_ResyncRetainsLocalState = false;
+			m_ResyncSourceRound = 0;
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
 			m_State = NetMatchServiceState::Idle;
@@ -500,6 +641,9 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<GnsTransport> transport;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
+				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
+			}
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -692,12 +836,13 @@ static std::string ResyncSaveName() {
 		if (m_State != NetMatchServiceState::ReadyToLaunch || !m_Coordinator) {
 			return false;
 		}
-		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get());
+		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
 		m_Coordinator->DeferStopsToTickBoundary();
 		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
 		// The lockstep wait parks the sim thread; without this the plane could not answer a leave or a
 		// reclaim while the round waits on the very peer that sent it.
 		ScenarioRunner::SetSessionPump([this] { PumpSessionEvents(); });
+		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
 		m_PendingSessionEvents.clear();
@@ -712,16 +857,78 @@ static std::string ResyncSaveName() {
 		m_MatchWasRunning = true;
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
+		CaptureA7SeatView();
 		return true;
 	}
 
+	void NetMatchService::PumpSeatPresence() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Coordinator || m_State != NetMatchServiceState::Running) {
+			return;
+		}
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
+		CaptureA7SeatView();
+	}
+
+	void NetMatchService::PublishModerationView() {
+		if (!m_Coordinator || !m_IsHost || !m_AdmissionAttached || m_State != NetMatchServiceState::Running) return;
+		auto seats = m_ReconnectHost.GetModerationView();
+		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+		const auto& leaves = m_Coordinator->GetPeerLeaveFrames();
+		std::vector<NetSeatPresenceEntry> presence;
+		for (auto& seat: seats) {
+			if (seat.cpu || seat.lockstepPeerId == 0) continue;
+			for (const auto& member: m_LobbySnapshot.members) {
+				if (member.peerId == seat.lockstepPeerId) { seat.displayName = member.displayName; break; }
+			}
+			if (!seat.substituteName.empty()) seat.displayName = seat.substituteName;
+			if (seat.displayName.empty()) {
+				for (const auto& previous: m_ModerationSeats) {
+					if (previous.stableSeat == seat.stableSeat && previous.epoch == seat.epoch) { seat.displayName = previous.displayName; break; }
+				}
+			}
+			NetSeatPresenceEntry entry;
+			entry.stableSeat = seat.stableSeat;
+			entry.peerId = seat.lockstepPeerId;
+			entry.holderName = seat.displayName;
+			entry.holderGeneration = seat.holderGeneration;
+			entry.seatGeneration = seat.seatGeneration;
+			entry.incarnation = seat.incarnation;
+			if (seat.closed) {
+				entry.state = NetSeatPresenceState::Left;
+			} else if (seat.dropped) {
+				entry.state = seat.reclaiming ? NetSeatPresenceState::Reconnecting : NetSeatPresenceState::Disconnected;
+				entry.holdActive = seat.heldForReclaim;
+				entry.holdUntilMs = seat.holdUntilMs;
+			} else if (!seat.substituteName.empty()) {
+				entry.state = NetSeatPresenceState::Substituted;
+			}
+			const auto left = leaves.find(seat.lockstepPeerId);
+			if (seat.dropped && left != leaves.end()) {
+				entry.holdUntilFrame = left->second + NetLockstepCoordinator::c_ReclaimHoldFrames;
+				seat.holdFramesRemaining = appliedFrame < entry.holdUntilFrame ? entry.holdUntilFrame - appliedFrame : 0;
+			}
+			presence.push_back(std::move(entry));
+		}
+		std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
+		m_ModerationSeats = std::move(seats);
+		(void)m_Coordinator->PublishSeatSnapshot(std::move(presence), AdmissionNowMs());
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+	}
+
 	void NetMatchService::PumpSessionEvents() {
+		PumpSeatPresence();
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
-		if (m_PendingSessionEvents.empty() && !hostAdmission) {
+		const bool holdPause = m_Coordinator && m_Coordinator->AnyDroppedSeatHeld();
+		if (m_PendingSessionEvents.empty() && !hostAdmission && !holdPause) {
 			return;
 		}
 		std::vector<NetTransportEvent> events;
 		events.swap(m_PendingSessionEvents);
+		bool answerMatchOver = false;
+		std::string rejoinName;
+		{
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_Session || m_State != NetMatchServiceState::Running) {
 			return;
@@ -749,6 +956,9 @@ static std::string ResyncSaveName() {
 			// dropped seat's reclaim window would wait for the match to end.
 			m_Session->TickAdmissionPlane(nowMs);
 		}
+		if (holdPause && m_Session) {
+			m_Session->TickKeepalive(nowMs);
+		}
 		for (const NetTransportEvent& event: events) {
 			m_Session->InjectEvent(event, nowMs);
 		}
@@ -762,7 +972,20 @@ static std::string ResyncSaveName() {
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
 			}
+			if (m_Coordinator) {
+				for (const NetHoldResolutionNotice& notice: m_ReconnectHost.TakePendingHoldResolutions()) {
+					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
+					switch (notice.resolution) {
+						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
+						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
+						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
+					}
+					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
+				}
+			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
+			PublishModerationView();
+			CaptureA7SeatView();
 		}
 		if (events.empty()) {
 			return;
@@ -772,11 +995,21 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning()) {
 			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 				if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
-					std::cout << "[net-match] rejoin: " << (peer.displayName.empty() ? "a player" : peer.displayName) << " reconnected - resyncing the match" << std::endl;
-					m_Coordinator->RequestResync("player rejoined");
+					rejoinName = peer.displayName.empty() ? "a player" : peer.displayName;
+					if (ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
+						answerMatchOver = true;
+					} else {
+						std::cout << "[net-match] rejoin: " << rejoinName << " reconnected - resyncing the match" << std::endl;
+						m_Coordinator->RequestResync("player rejoined");
+					}
 					break;
 				}
 			}
+		}
+		}
+		if (answerMatchOver) {
+			std::cout << "[net-match] rejoin: " << rejoinName << " reconnected - match is over" << std::endl;
+			AnswerMatchOverRejoin("match over");
 		}
 	}
 
@@ -810,16 +1043,13 @@ static std::string ResyncSaveName() {
 			local.connected = true;
 			snapshot.members.push_back(local);
 		}
-		// §11: a dropped seat stays marked on the roster for as long as it is dropped, so the remaining
-		// players see who is missing rather than a toast they may have blinked past.
 		for (NetLobbyMember& member: snapshot.members) {
-			for (const NetH4SeatStatus& seat: m_SeatStatuses) {
-				if (seat.lockstepPeerId == member.peerId) {
-					member.dropped = seat.dropped;
-					member.reclaiming = seat.reclaiming;
-					break;
-				}
-			}
+			const auto current = m_SeatPresence.GetSeats().find(member.peerId);
+			if (current != m_SeatPresence.GetSeats().end() && !current->second.holderName.empty()) member.displayName = current->second.holderName;
+			const NetSeatPresenceState state = m_SeatPresence.StateOf(member.peerId);
+			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
+			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
+			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
 		}
 		return snapshot;
 	}
@@ -864,6 +1094,7 @@ static std::string ResyncSaveName() {
 			{"clock_divergence_max_ms", m_MaxClockDivergenceMs.load()},
 			{"client_state", NetReconnectClientStateName(m_ReconnectClient.GetState())},
 			{"client_used_stored_ticket", m_ReconnectClient.UsedStoredTicket()},
+			{"client_reclaim_outcome", m_ReconnectClient.ReclaimOutcome()},
 			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},
 			{"client_leave_acks", m_ReconnectClient.GetStats().leaveAcksReceived},
 			{"client_ambiguous_losses", m_ReconnectClient.GetStats().ambiguousLosses},
@@ -899,18 +1130,26 @@ static std::string ResyncSaveName() {
 		// §9b's moderation view, so a gate can read what the host was offered and what it decided.
 		json moderation = json::array();
 		if (m_AdmissionAttached && m_IsHost) {
-			for (const NetH4ModerationSeat& seat: m_ReconnectHost.GetModerationView()) {
+			for (const NetH4ModerationSeat& seat: m_ModerationSeats) {
 				json applicants = json::array();
 				for (const NetH4ApplicantView& applicant: seat.applicants) {
 					applicants.push_back(json{
 						{"connection", applicant.connection},
 						{"display_name", applicant.displayName},
 						{"approved", applicant.approved},
+						{"transaction_id", applicant.transactionId},
 					});
 				}
 				moderation.push_back(json{
 					{"stable_seat", seat.stableSeat},
 					{"lockstep_peer_id", static_cast<int>(seat.lockstepPeerId)},
+					{"cpu", seat.cpu},
+					{"display_name", seat.displayName},
+					{"epoch", seat.epoch},
+					{"incarnation", seat.incarnation},
+					{"hold_frames_remaining", seat.holdFramesRemaining},
+					{"substitution_transaction", seat.substitutionTransaction},
+					{"actions_available", m_State == NetMatchServiceState::Running},
 					{"committed", seat.committed},
 					{"dropped", seat.dropped},
 					{"closed", seat.closed},
@@ -919,14 +1158,53 @@ static std::string ResyncSaveName() {
 					{"substituting", seat.substituting},
 					{"holder_generation", seat.holderGeneration},
 					{"seat_generation", seat.seatGeneration},
+					{"dropped_for_ms", seat.droppedForMs},
 					{"applicants", applicants},
 				});
 			}
 		}
 		reconnect["moderation"] = moderation;
+		// §11's roster lines exactly as this peer shows them, so a two-process gate can read a CLIENT's.
+		json rosterLines = json::array();
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			const std::string line = m_SeatPresence.Line(member.peerId, member.displayName);
+			if (!line.empty()) {
+				rosterLines.push_back(json{
+					{"peer_id", static_cast<int>(member.peerId)},
+					{"state", NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId))},
+					{"line", line},
+				});
+			}
+		}
+		reconnect["roster_lines"] = rosterLines;
+		if (const auto& snapshot = m_SeatPresence.GetSnapshot()) {
+			json entries = json::array();
+			for (const auto& seat: snapshot->seats) {
+				entries.push_back({{"stable_seat", seat.stableSeat}, {"peer_id", seat.peerId},
+				                   {"state", NetSeatPresence::StateName(seat.state)}, {"holder_name", seat.holderName},
+				                   {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration},
+				                   {"incarnation", seat.incarnation}, {"hold_until_frame", seat.holdUntilFrame},
+				                   {"hold_active", seat.holdActive}, {"hold_until_ms", seat.holdUntilMs}});
+			}
+			reconnect["seat_snapshot"] = {{"epoch", snapshot->epoch}, {"session_id", snapshot->sessionId},
+			                              {"round_id", snapshot->roundId}, {"revision", snapshot->revision},
+			                              {"observed_at_ms", snapshot->observedAtMs}, {"seats", entries}};
+		}
+		if (!m_RejoinOutcome.empty()) {
+			reconnect["rejoin_outcome"] = m_RejoinOutcome;
+		}
 		report["reconnect"] = reconnect;
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+		} else if (!m_CapturedRunnerReport.empty()) {
+			report["runner"] = json::parse(m_CapturedRunnerReport);
+		} else {
+			const NetReconnectHostStats& stats = m_ReconnectHost.GetStats();
+			report["runner"] = json{
+				{"session",
+				 {{"admission", AdmissionJsonFromHost(m_ReconnectHost)},
+				  {"stats", {{"fenced_disconnects", stats.fencedDisconnects}, {"fenced_packets", stats.fencedPackets}}}}},
+			};
 		}
 		return report.dump();
 	}
@@ -1006,21 +1284,13 @@ static std::string ResyncSaveName() {
 		// launches from the received snapshot instead of a fresh activity. Launching a FRESH match
 		// while the others play the snapshot would desync instantly, so a failed write fails the join.
 		std::string pendingLoad;
+		std::optional<NetResyncState> pendingState;
 		if (started) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
 			if (!receivedState.empty()) {
-				// Per-peer filename, matching the resync worker's convention.
-				const std::string recvName = ResyncSaveName() + "_recv";
-				const std::string recvPath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + recvName + ".ccsave";
-				std::ofstream out(recvPath, std::ios::binary | std::ios::trunc);
-				out.write(reinterpret_cast<const char*>(receivedState.data()), static_cast<std::streamsize>(receivedState.size()));
-				out.close();
-				if (out.good()) {
-					pendingLoad = recvName;
-				} else {
-					error = "could not write the received match snapshot";
-					started = false;
-				}
+				NetResyncState state;
+				started = PrepareReceivedResync(receivedState, *coordinator, pendingLoad, state, &error);
+				if (started) pendingState = std::move(state);
 			}
 		}
 		{
@@ -1042,6 +1312,7 @@ static std::string ResyncSaveName() {
 				m_LocalPeerId = localLockstepId;
 				m_LocalTeam = localTeam;
 				m_PendingResyncLoad = pendingLoad;
+				m_PendingResyncState = std::move(pendingState);
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
@@ -1057,6 +1328,32 @@ static std::string ResyncSaveName() {
 			}
 			m_WorkerDone = true;
 		}
+	}
+
+	bool NetMatchService::WaitForA7ConnectGate(std::string* error) {
+		if (!NetA7Journal::HasConnectGate()) return true;
+		NetReconnectTicketStore store;
+		store.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		NetH4TicketRecord record;
+		const auto result = store.Load(UnixNowMs(nullptr), record, nullptr);
+		NetA7Journal::Emit("ticket_preload", {{"load_result", static_cast<int>(result)}, {"ticket_sha256", store.GetA7LoadedSha256()}});
+		return NetA7Journal::WaitForConnectGate(store.GetA7LoadedSha256(), error);
+	}
+
+	bool NetMatchService::CanSealA7Journal() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return !m_Worker.joinable() || m_WorkerDone;
+	}
+
+	void NetMatchService::CaptureA7SeatView() {
+		if (!NetA7Journal::Enabled()) return;
+		json rows = json::array();
+		if (m_IsHost && m_AdmissionAttached) {
+			for (const auto& seat: m_ReconnectHost.GetSeatStatuses()) {
+				rows.push_back({{"stable_seat", seat.stableSeat}, {"committed", seat.committed}, {"dropped", seat.dropped}, {"closed", seat.closed}});
+			}
+		}
+		NetA7Journal::SetSeatView(std::move(rows), AdmissionNowMs(), m_IsHost ? "host_admission_plane" : "host_rows_unavailable_on_client");
 	}
 
 	void NetMatchService::SetTicketStorePath(std::string path) {
@@ -1080,36 +1377,23 @@ static std::string ResyncSaveName() {
 		if (!m_AdmissionAttached || !m_IsHost) {
 			return {};
 		}
-		return m_ReconnectHost.GetModerationView();
+		auto seats = m_ModerationSeats;
+		for (auto& seat: seats) seat.actionsAvailable = m_State == NetMatchServiceState::Running;
+		return seats;
 	}
 
-	NetH4ModerationResult NetMatchService::WaitForSeat(uint16_t stableSeat) {
+	NetH4ModerationResult NetMatchService::ApplyModeration(const NetModerationSelection& selection, NetModerationAction action) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running) {
+		if (!m_AdmissionAttached || !m_IsHost) {
 			return NetH4ModerationResult::NotHosting;
 		}
-		return m_ReconnectHost.WaitForSeat(stableSeat);
-	}
-
-	NetH4ModerationResult NetMatchService::SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection) {
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running || !m_Session) {
-			return NetH4ModerationResult::NotHosting;
+		if (m_State != NetMatchServiceState::Running || !m_Session || !m_Coordinator) {
+			return NetH4ModerationResult::ActionUnavailable;
 		}
-		const NetH4ModerationResult result = m_ReconnectHost.SubstituteApplicant(stableSeat, applicantConnection, AdmissionNowMs());
-		// The offer has to leave now, not at the next pump: the substitute is waiting on it and P3's
-		// ladder is measured from the moment it was sent.
-		m_Session->TickAdmissionPlane(AdmissionNowMs());
-		return result;
-	}
-
-	NetH4ModerationResult NetMatchService::CancelSubstitution(uint16_t stableSeat) {
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_AdmissionAttached || !m_IsHost || m_State != NetMatchServiceState::Running || !m_Session) {
-			return NetH4ModerationResult::NotHosting;
-		}
-		const NetH4ModerationResult result = m_ReconnectHost.CancelSubstitution(stableSeat, AdmissionNowMs());
-		m_Session->TickAdmissionPlane(AdmissionNowMs());
+		const uint64_t nowMs = AdmissionNowMs();
+		const NetH4ModerationResult result = m_ReconnectHost.ApplyModeration(selection, action, nowMs);
+		m_Session->TickAdmissionPlane(nowMs);
+		PublishModerationView();
 		return result;
 	}
 

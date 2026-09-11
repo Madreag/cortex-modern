@@ -31,13 +31,16 @@ namespace RTE {
 				return NetGameCommandType::Reseat;
 			} else if constexpr (std::is_same_v<T, NetGameSoundOp>) {
 				return NetGameCommandType::SoundOp;
+			} else if constexpr (std::is_same_v<T, NetGamePlayerBindings>) {
+				return NetGameCommandType::PlayerBindings;
 			}
 		}, payload);
 	}
 
 	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload) {
 		return std::visit([](const auto& specific) -> int32_t {
-			return specific.team;
+			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings>) return -1;
+			else return specific.team;
 		}, payload);
 	}
 
@@ -67,6 +70,8 @@ namespace RTE {
 				return "Reseat";
 			case NetGameCommandType::SoundOp:
 				return "SoundOp";
+			case NetGameCommandType::PlayerBindings:
+				return "PlayerBindings";
 		}
 		return "Unknown";
 	}

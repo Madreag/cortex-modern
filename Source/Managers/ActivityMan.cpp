@@ -157,8 +157,9 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		if (MovableObject* object = g_MovableMan.FindObjectByUniqueID(uid)) object->OnSave();
 	}
 	g_MovableMan.CompleteQueuedMOIDDrawings();
-	AudioMan::CheckpointRegistryScope captureSounds;
-	const std::string runtimeGlobals = CaptureRuntimeGlobals();
+	AudioMan::SoundCheckpointSaveScope carriedSounds;
+	g_LuaMan.CollectGarbageForCheckpoint();
+	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	const std::string worldStructure = g_MovableMan.SaveWorldStructure();
 	const std::string sceneRuntime = scene->SaveRuntimeCheckpoint();
 
@@ -171,36 +172,40 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		~AwaitBitmapCopy() { if (task.valid()) task.wait(); }
 	} awaitBitmapCopy{copyBitmaps};
 
-	// We need a copy of our scene, because we have to do some fixup to remove PLACEONLOAD items and only keep the current MovableMan state.
-	std::unique_ptr<Scene> modifiableScene(dynamic_cast<Scene*>(scene->Clone()));
+	std::unique_ptr<Scene> modifiableScene;
+	{
+		AudioMan::CheckpointRegistryScope captureSounds;
+		// We need a copy of our scene, because we have to do some fixup to remove PLACEONLOAD items and only keep the current MovableMan state.
+		modifiableScene.reset(dynamic_cast<Scene*>(scene->Clone()));
 
-	// Delete any existing objects from our scene - we don't want to replace broken doors or repair any stuff when we load.
-	modifiableScene->ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, true);
+		// Delete any existing objects from our scene - we don't want to replace broken doors or repair any stuff when we load.
+		modifiableScene->ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, true);
 
-	// Become our own original preset, instead of being a copy of the Scene we got cloned from, so we don't still pick up the PlacedObjectSets from our parent when loading.
-	modifiableScene->SetPresetName(fileName);
-	modifiableScene->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
-	modifiableScene->SetSavedGameInternal(true);
+		// Become our own original preset, instead of being a copy of the Scene we got cloned from, so we don't still pick up the PlacedObjectSets from our parent when loading.
+		modifiableScene->SetPresetName(fileName);
+		modifiableScene->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
+		modifiableScene->SetSavedGameInternal(true);
 
-	// Make sure the terrain is also treated as an original preset, otherwise it will screw up if we save then load then save again, since it'll try to be a CopyOf of itself.
-	modifiableScene->GetTerrain()->SetPresetName(fileName);
-	modifiableScene->GetTerrain()->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
+		// Make sure the terrain is also treated as an original preset, otherwise it will screw up if we save then load then save again, since it'll try to be a CopyOf of itself.
+		modifiableScene->GetTerrain()->SetPresetName(fileName);
+		modifiableScene->GetTerrain()->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
 
-	// See our content files to point to our save game location. This won't actually save a file here- but it allows us to set these up as in-memory ContentFiles on load
-	// Meaning that our loading code doesn't need to care about whether it's loading a savegame or a file- it just sees it as an already loaded, cached bitmap
-	modifiableScene->GetTerrain()->GetContentFile().SetIsMemoryFile(true);
-	modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
-	modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
+		// See our content files to point to our save game location. This won't actually save a file here- but it allows us to set these up as in-memory ContentFiles on load
+		// Meaning that our loading code doesn't need to care about whether it's loading a savegame or a file- it just sees it as an already loaded, cached bitmap
+		modifiableScene->GetTerrain()->GetContentFile().SetIsMemoryFile(true);
+		modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
+		modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
 
-	modifiableScene->GetTerrain()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png");
-	modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save FG.png");
-	modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save BG.png");
+		modifiableScene->GetTerrain()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png");
+		modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save FG.png");
+		modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save BG.png");
 
-	for (int i = 0; i < Activity::MaxTeamCount; ++i) {
-		SceneLayer* unseenLayer = modifiableScene->GetUnseenLayer(i);
-		if (unseenLayer) {
-			unseenLayer->GetContentFile().SetIsMemoryFile(true);
-			unseenLayer->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + std::format("/Save UST{}.png", i));
+		for (int i = 0; i < Activity::MaxTeamCount; ++i) {
+			SceneLayer* unseenLayer = modifiableScene->GetUnseenLayer(i);
+			if (unseenLayer) {
+				unseenLayer->GetContentFile().SetIsMemoryFile(true);
+				unseenLayer->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + std::format("/Save UST{}.png", i));
+			}
 		}
 	}
 
@@ -212,9 +217,6 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	writer->NewPropertyWithValue("Activity", activity);
 	writer->NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
 	if (m_StartActivity) writer->NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
-	writer->NewPropertyWithValue("RuntimeGlobals", base64_encode(runtimeGlobals, true));
-	writer->NewPropertyWithValue("WorldStructure", base64_encode(worldStructure, true));
-	writer->NewPropertyWithValue("SceneRuntime", base64_encode(sceneRuntime, true));
 
 	// Pull all stuff from MovableMan into the Scene for saving, so existing Actors/ADoors are saved, without transferring ownership, so the game can continue.
 	// TODO- copying may be faster, and lets us move all this actual writing into async
@@ -224,15 +226,12 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	} borrowedObjects{*modifiableScene};
 	modifiableScene->RetrieveSceneObjects(false);
 
-	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
-	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
-	writer->NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
-	writer->NewPropertyWithValue("UniqueIDCounter", MovableObject::GetUniqueIDCounter());
-	writer->NewPropertyWithValue("LuaStateCursor", g_LuaMan.GetScriptStateCursor());
-	for (const auto& [tick, uid]: g_MovableMan.GetLockstepJoinQuarantine()) {
-		writer->NewPropertyWithValue("LockstepJoinQuarantine", std::to_string(tick) + "|" + std::to_string(uid));
-	}
+	std::string graphBlock;
 	{
+		auto graphStream = std::make_unique<std::stringstream>();
+		std::stringstream* graphText = graphStream.get();
+		Writer graphWriter(std::move(graphStream));
+		Writer::SnapshotScope graphSnapshot(graphWriter);
 		std::vector<std::string> graphs;
 		std::vector<std::string> luaProblems;
 		if (!g_MovableMan.SerializeScriptGraphs(graphs, luaProblems)) {
@@ -243,12 +242,38 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 			return false;
 		}
 		for (size_t index = 0; index < graphs.size(); ++index) {
-			writer->NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
+			graphWriter.NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
 		}
+		graphBlock = graphText->str();
 	}
+	std::string sceneBlock;
+	{
+		auto sceneStream = std::make_unique<std::stringstream>();
+		std::stringstream* sceneText = sceneStream.get();
+		Writer sceneWriter(std::move(sceneStream));
+		Writer::SnapshotScope sceneSnapshot(sceneWriter);
+		sceneWriter.NewPropertyWithValue("Scene", modifiableScene.get());
+		sceneBlock = sceneText->str();
+	}
+
+	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
+	const std::string runtimeGlobals = CaptureRuntimeGlobals(carriedSounds.Carried());
+
+	writer->NewPropertyWithValue("RuntimeGlobals", base64_encode(runtimeGlobals, true));
+	writer->NewPropertyWithValue("WorldStructure", base64_encode(worldStructure, true));
+	writer->NewPropertyWithValue("SceneRuntime", base64_encode(sceneRuntime, true));
+	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
+	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
+	writer->NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
+	writer->NewPropertyWithValue("UniqueIDCounter", MovableObject::GetUniqueIDCounter());
+	writer->NewPropertyWithValue("LuaStateCursor", g_LuaMan.GetScriptStateCursor());
+	for (const auto& [tick, uid]: g_MovableMan.GetLockstepJoinQuarantine()) {
+		writer->NewPropertyWithValue("LockstepJoinQuarantine", std::to_string(tick) + "|" + std::to_string(uid));
+	}
+	*writer->GetStream() << graphBlock;
 	writer->NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", g_SceneMan.GetPlaceObjectsOnLoad());
 	writer->NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", g_SceneMan.GetPlaceUnitsOnLoad());
-	writer->NewPropertyWithValue("Scene", modifiableScene.get());
+	*writer->GetStream() << sceneBlock;
 
 	// Save a small little file with index info (activity and original scene name) so we can display info in the samegame menu without needing to decompress and read through the entire zip
 	std::unique_ptr<std::stringstream> indexStream = std::make_unique<std::stringstream>();
@@ -689,6 +714,7 @@ void ActivityMan::RemoveSavedGame(const std::string& fileName) const {
 }
 
 bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
+	AudioMan::RestorePlayPhaseScope playPhase("staging");
 	MovableMan::ConstructionRegistryScope registryScope;
 	MovableObject::ScriptLoadDeferralScope scriptScope;
 	struct RestoreConstructionGlobals {
@@ -728,6 +754,13 @@ void ActivityMan::SetStartActivity(Activity* newActivity) {
 	RTEAssert(newActivity, "Trying to replace an activity with a null one!");
 	m_StartActivity.reset(newActivity);
 	m_StartActivityResumed = false;
+}
+
+bool ActivityMan::SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after) {
+	if (!m_RestartRestoresSnapshot || !m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene) return false;
+	m_PendingCheckpoint.beforeRestore = std::move(before);
+	m_PendingCheckpoint.afterRestore = std::move(after);
+	return true;
 }
 
 void ActivityMan::SetStartTutorialActivity() {
@@ -784,6 +817,7 @@ bool ActivityMan::SetStartEditorActivitySetToLaunchInto() {
 }
 
 int ActivityMan::StartActivity(Activity* activity) {
+	AudioMan::RestorePlayPhaseScope playPhase("Start");
 	RTEAssert(activity, "Trying to start a null activity!");
 
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
@@ -1052,6 +1086,10 @@ void ActivityMan::RenderUpdate() {
 }
 
 std::string ActivityMan::CaptureRuntimeGlobals() const {
+	return CaptureRuntimeGlobals(std::unordered_set<uint64_t>{});
+}
+
+std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried) const {
 	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	g_LuaMan.CollectGarbageForCheckpoint();
@@ -1064,13 +1102,24 @@ std::string ActivityMan::CaptureRuntimeGlobals() const {
 	writer(g_UInputMan.SaveCheckpoint());
 	writer(g_PostProcessMan.SaveCheckpoint());
 	writer(g_PrimitiveMan.SaveCheckpoint());
-	writer(g_GUISound.SaveCheckpoint());
-	writer(g_MusicMan.SaveCheckpoint());
-	writer(g_AudioMan.SaveCheckpoint());
+	const std::string gui = g_GUISound.SaveCheckpoint();
+	const std::string music = g_MusicMan.SaveCheckpoint();
+	writer(gui);
+	writer(music);
+	if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
+		writer(g_AudioMan.SaveCheckpoint());
+	} else {
+		std::unordered_set<uint64_t> managers;
+		g_AudioMan.CollectManagerSoundIdentities(managers);
+		writer(g_AudioMan.SaveCheckpoint([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
+			return !identity || worldCarried.contains(identity) || managers.contains(identity);
+		}));
+	}
 	return writer.Text();
 }
 
 bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly) {
+	AudioMan::RestorePlayPhaseScope playPhase(validateOnly ? "" : "apply");
 	try {
 		const bool legacy = text.starts_with("15 RuntimeGlobals1 ");
 		const bool version2 = text.starts_with("15 RuntimeGlobals2 ");
@@ -1177,6 +1226,16 @@ bool ActivityMan::RestartActivity() {
 	}
 	const std::string oldGlobals = CaptureRuntimeGlobals();
 	const std::string oldFrame = g_FrameMan.SaveCheckpoint();
+	try {
+		if (m_PendingCheckpoint.beforeRestore && !m_PendingCheckpoint.beforeRestore()) {
+			m_ActivityNeedsRestart = false;
+			return false;
+		}
+	} catch (const std::exception& exception) {
+		g_ConsoleMan.PrintString(std::string("ERROR: the saved game's local state could not be captured: ") + exception.what());
+		m_ActivityNeedsRestart = false;
+		return false;
+	}
 	std::unique_ptr<ContentFile::MemoryPNGScope> committedImages;
 	MovableMan::WorldSetAside originalWorld;
 	if (!g_MovableMan.SetAsideWorld(originalWorld, false)) { m_ActivityNeedsRestart = false; return false; }
@@ -1187,6 +1246,7 @@ bool ActivityMan::RestartActivity() {
 	bool restored = false;
 	try {
 		Entity::CheckpointCloneScope checkpointClones(true);
+		AudioMan::RestoredSoundRegistryScope restoredSounds;
 		if (!PrepareCheckpointMaterials(m_PendingCheckpoint.runtimeGlobals)) throw std::runtime_error("could not prepare saved Material owners");
 		g_AudioMan.ActivateCheckpointSoundRegistrations(m_PendingCheckpoint.soundRegistrations);
 		if (m_PendingCheckpoint.images) m_PendingCheckpoint.images->SetActive(true);
@@ -1202,7 +1262,12 @@ bool ActivityMan::RestartActivity() {
 		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
 		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
 		if (restored && m_PendingCheckpoint.luaStateCursor >= 0) g_LuaMan.SetScriptStateCursor(m_PendingCheckpoint.luaStateCursor);
+		if (restored && m_PendingCheckpoint.afterRestore) {
+			g_MovableMan.SetRestoringSnapshot(true);
+			restored = m_Activity && m_PendingCheckpoint.afterRestore(*m_Activity);
+		}
 	} catch (const std::exception& exception) {
+		restored = false;
 		g_ConsoleMan.PrintString(std::string("ERROR: the saved game could not be constructed: ") + exception.what());
 	}
 	g_MovableMan.SetRestoringSnapshot(false);

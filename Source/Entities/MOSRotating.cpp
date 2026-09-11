@@ -426,7 +426,8 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("SpecialBehaviour_AddWound", {
 		AEmitter* wound = new AEmitter;
 		reader >> wound;
-		AddWound(wound, wound->GetParentOffset());
+		// A saved wound already passed the live limit, so restore places it verbatim.
+		AddWound(wound, wound->GetParentOffset(), false);
 	});
 	MatchProperty("SpecialBehaviour_ClearGibs", {
 		bool clear; reader >> clear;

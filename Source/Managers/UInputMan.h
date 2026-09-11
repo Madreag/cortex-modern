@@ -69,7 +69,7 @@ namespace RTE {
 
 		/// Updates the state of this UInputMan. Supposed to be done every frame.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
-		int Update();
+		int Update(bool handleSpecialInput = true);
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool RunCheckpointSelfTest();

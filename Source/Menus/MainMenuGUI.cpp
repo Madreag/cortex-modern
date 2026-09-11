@@ -75,6 +75,15 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostPanel = nullptr;
 	m_MultiplayerJoinPanel = nullptr;
 	m_MultiplayerLobbyPanel = nullptr;
+	m_MultiplayerModerationPanel = nullptr;
+	m_MultiplayerModerationSummaryLabel = nullptr;
+	m_MultiplayerModerationStatusLabel = nullptr;
+	m_ModerationSeatLabels.fill(nullptr);
+	m_ModerationApplicantButtons.fill(nullptr);
+	m_ModerationWaitButtons.fill(nullptr);
+	m_ModerationSubstituteButtons.fill(nullptr);
+	m_ModerationCancelButtons.fill(nullptr);
+	m_PressedModeration.clear();
 	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_CreditsScrollPanel = nullptr;
@@ -161,6 +170,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerHostPanel"));
 	m_MultiplayerJoinPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerJoinPanel"));
 	m_MultiplayerLobbyPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLobbyPanel"));
+	m_MultiplayerModerationPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerModerationPanel"));
 
 	m_MainMenuButtons[MenuButton::MultiplayerHostGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerHostGame"));
 	m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerJoinGame"));
@@ -173,6 +183,8 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCancelReconnect"));
 	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBack"));
 	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinBack"));
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerModerate"));
+	m_MainMenuButtons[MenuButton::MultiplayerModerationBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationBack"));
 
 	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerName"));
 	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
@@ -191,6 +203,17 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerLobbyPlayerLabels[1] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer1"));
 	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
 	m_MultiplayerLobbyPlayerLabels[3] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer3"));
+
+	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
+	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationStatus"));
+	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
+		const std::string suffix = std::to_string(row);
+		m_ModerationSeatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSeat" + suffix));
+		m_ModerationApplicantButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationApplicant" + suffix));
+		m_ModerationWaitButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationWait" + suffix));
+		m_ModerationSubstituteButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationSubstitute" + suffix));
+		m_ModerationCancelButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationCancel" + suffix));
+	}
 
 	m_MultiplayerNameTextBox->SetText("Player");
 	m_MultiplayerNameTextBox->SetMaxTextLength(24);
@@ -430,8 +453,8 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 			if (m_MenuScreenChange) {
 				ShowMultiplayerScreen();
 			}
-			UpdateMultiplayerScreen();
 			backToMainMenu = HandleInputEvents();
+			UpdateMultiplayerScreen();
 			break;
 		case MenuScreen::SaveOrLoadGameScreen:
 			backToMainMenu = m_SaveLoadMenu->HandleInputEvents();
@@ -507,6 +530,18 @@ bool MainMenuGUI::HandleInputEvents() {
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
+		if (guiEvent.GetType() == GUIEvent::Notification && dynamic_cast<GUIButton*>(guiEvent.GetControl())) {
+			for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
+				const auto* control = guiEvent.GetControl();
+				if (control != m_ModerationApplicantButtons[row] && control != m_ModerationWaitButtons[row] &&
+				    control != m_ModerationSubstituteButtons[row] && control != m_ModerationCancelButtons[row]) continue;
+				if (guiEvent.GetMsg() == GUIButton::Pushed && row < m_ModerationUx.RowCount()) {
+					m_PressedModeration.try_emplace(control, m_ModerationUx.GetRow(row));
+				} else if (guiEvent.GetMsg() == GUIButton::UnPushed && !static_cast<GUIButton*>(guiEvent.GetControl())->IsCaptured()) {
+					m_PressedModeration.erase(control);
+				}
+			}
+		}
 		if (guiEvent.GetType() == GUIEvent::Command) {
 			if (guiEvent.GetControl() == m_MainMenuButtons[MenuButton::BackToMainButton]) {
 				return true;
@@ -621,6 +656,12 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_NetMatchService.GetReconnectUx().Cancel(MenuClockMs());
 		g_NetMatchService.GetReconnectUx().DismissOffer();
 		g_GUISound.BackButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerateButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Moderation;
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerationBackButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MultiplayerLanGamesList) {
 		// Clicking a discovered host fills the join fields; Connect stays the explicit action.
 		const int selected = m_MultiplayerLanGamesList->GetSelectedIndex();
@@ -628,6 +669,23 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			m_MultiplayerJoinAddressTextBox->SetText(m_LanHosts[static_cast<size_t>(selected)].address);
 			m_MultiplayerJoinPortTextBox->SetText(std::to_string(m_LanHosts[static_cast<size_t>(selected)].port));
 			g_GUISound.ItemChangeSound()->Play();
+		}
+	}
+	// §9b's three actions, one row per disconnected seat.
+	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
+		if (guiEventControl == m_ModerationApplicantButtons[row]) {
+			const auto pressed = m_PressedModeration.find(guiEventControl);
+			if (pressed != m_PressedModeration.end()) m_ModerationUx.CycleApplicant(pressed->second);
+			g_GUISound.ItemChangeSound()->Play();
+		} else if (guiEventControl == m_ModerationWaitButtons[row]) {
+			ActivateModerationRow(guiEventControl, NetModerationAction::Wait);
+			g_GUISound.ButtonPressSound()->Play();
+		} else if (guiEventControl == m_ModerationSubstituteButtons[row]) {
+			ActivateModerationRow(guiEventControl, NetModerationAction::Substitute);
+			g_GUISound.ButtonPressSound()->Play();
+		} else if (guiEventControl == m_ModerationCancelButtons[row]) {
+			ActivateModerationRow(guiEventControl, NetModerationAction::Cancel);
+			g_GUISound.BackButtonPressSound()->Play();
 		}
 	}
 }
@@ -700,10 +758,12 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 		std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	}
 
-	// Reconcile the sub-screen with the live service state.
-	if (snapshot.inLobby || snapshot.running) {
+	// Reconcile the sub-screen with the live service state. The moderation panel is a lobby screen
+	// the host opened, so it stays open until the host leaves it or the match ends under it.
+	const bool inMatchOrLobby = snapshot.inLobby || snapshot.running;
+	if (inMatchOrLobby && m_MultiplayerSubScreen != MultiplayerSubScreen::Moderation) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
-	} else if (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby) {
+	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation)) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		m_MultiplayerLandingStatusLabel->SetText(snapshot.errorText);
 	}
@@ -744,8 +804,13 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
 	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
+	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
+	m_MultiplayerModerationPanel->SetVisible(moderating);
 	RefreshLanGamesList();
 	RefreshReconnectControls();
+	if (moderating) {
+		RefreshModerationControls(snapshot);
+	}
 	if (!lobby) {
 		if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250) {
 			m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250);
@@ -773,7 +838,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const std::string name = member.displayName.size() > 14 ? member.displayName.substr(0, 13) + "." : member.displayName;
 		std::string row = name + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
-		row += NetReconnectUx::RosterMark(member.dropped, member.reclaiming);
+		// §11's persistent line for the seat, derived on this peer; the short mark while there is none.
+		row += member.statusLine.empty() ? std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming)) : " - " + member.statusLine;
 		if (!member.isLocal && member.connected) {
 			row += " - ";
 			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
@@ -826,6 +892,63 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// Start only once the remote peer is actually ready, not merely present.
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
+	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
+}
+
+void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
+	m_ModerationUx.Refresh(g_NetMatchService.GetModerationSeats());
+	m_MultiplayerModerationSummaryLabel->SetText(snapshot.isHost ? m_ModerationUx.GetSummaryText() : "Only the host decides about seats.");
+	m_MultiplayerModerationStatusLabel->SetText(m_ModerationUx.GetStatusText());
+	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
+		const bool used = row < m_ModerationUx.RowCount();
+		m_ModerationSeatLabels[row]->SetVisible(used);
+		m_ModerationApplicantButtons[row]->SetVisible(used);
+		m_ModerationWaitButtons[row]->SetVisible(used);
+		m_ModerationSubstituteButtons[row]->SetVisible(used);
+		m_ModerationCancelButtons[row]->SetVisible(used);
+		if (!used) {
+			m_ModerationSeatLabels[row]->SetText("");
+			continue;
+		}
+		const NetModerationUx::Row& seat = m_ModerationUx.GetRow(row);
+		m_ModerationSeatLabels[row]->SetText(seat.text);
+		m_ModerationApplicantButtons[row]->SetText(seat.applicantText);
+		m_ModerationApplicantButtons[row]->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
+		m_ModerationWaitButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Wait));
+		m_ModerationSubstituteButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Substitute));
+		m_ModerationCancelButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Cancel));
+	}
+}
+
+void MainMenuGUI::ActivateModerationRow(const GUIControl* control, NetModerationAction action) {
+	const auto pressed = m_PressedModeration.find(control);
+	if (pressed == m_PressedModeration.end()) return;
+	m_ModerationUx.Act(pressed->second, action);
+	m_PressedModeration.erase(pressed);
+	m_MultiplayerModerationStatusLabel->SetText(m_ModerationUx.GetStatusText());
+}
+
+bool MainMenuGUI::AutomationModerate(const std::string& action, int stableSeat) {
+	if (m_ActiveMenuScreen != MenuScreen::MultiplayerScreen || m_MultiplayerSubScreen != MultiplayerSubScreen::Moderation ||
+	    !m_MultiplayerModerationPanel->GetVisible() || !m_MultiplayerModerationPanel->GetEnabled()) return false;
+	NetModerationAction verb = NetModerationAction::Wait;
+	if (action == "substitute") {
+		verb = NetModerationAction::Substitute;
+	} else if (action == "cancel") {
+		verb = NetModerationAction::Cancel;
+	} else if (action != "wait") {
+		return false;
+	}
+	m_ModerationUx.Refresh(g_NetMatchService.GetModerationSeats());
+	const size_t row = stableSeat < 0 ? 0 : m_ModerationUx.FindSeat(static_cast<uint16_t>(stableSeat));
+	if (row >= m_ModerationUx.RowCount()) {
+		return false;
+	}
+	if (!NetModerationUx::Available(m_ModerationUx.GetRow(row), verb)) return false;
+	return m_ModerationUx.Act(row, verb) == NetH4ModerationResult::Ok;
 }
 
 // True only if the control and every ancestor panel are enabled and visible, i.e. a human could actually click it.
@@ -895,8 +1018,14 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 		case MultiplayerSubScreen::HostSetup: return "HostSetup";
 		case MultiplayerSubScreen::JoinSetup: return "JoinSetup";
 		case MultiplayerSubScreen::Lobby: return "Lobby";
+		case MultiplayerSubScreen::Moderation: return "Moderation";
 		default: return "Unknown";
 	}
+}
+
+bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
+	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
 }
 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {

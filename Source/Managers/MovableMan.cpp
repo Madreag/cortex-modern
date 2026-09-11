@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "NetA7Journal.h"
 #include "PrimitiveMan.h"
 #include <chrono>
 #include <map>
@@ -31,6 +32,8 @@
 #include "Scene.h"
 #include "FrameMan.h"
 #include "GameActivity.h"
+#include "ActivityMan.h"
+#include "CameraMan.h"
 #include "SceneMan.h"
 #include "AudioMan.h"
 #include "SoundSimulation.h"
@@ -38,6 +41,7 @@
 #include "ControllerFrame.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
+#include "NetLockstep.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
@@ -47,12 +51,14 @@
 #include "nlohmann/json.hpp"
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <execution>
 #include <fstream>
 #include <map>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
@@ -271,6 +277,40 @@ static bool IsLockstepLocalActor(const Actor* actor) {
 	return ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
 }
 
+void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
+	if (!NetA7Journal::Enabled()) return;
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		const auto uid = [](const Actor* actor) { return actor && g_MovableMan.IsActor(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : int64_t{0}; };
+		Actor* controlled = activity->GetControlledActor(Players::PlayerOne);
+		const int screen = activity->ScreenOfPlayer(Players::PlayerOne);
+		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
+			{"player_active", activity->PlayerActive(Players::PlayerOne)}, {"player_human", activity->PlayerHuman(Players::PlayerOne)},
+			{"team", activity->GetTeamOfPlayer(Players::PlayerOne)}, {"screen", screen},
+			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(Players::PlayerOne))},
+			{"view_state", static_cast<int>(activity->GetViewState())}, {"camera_target", nullptr},
+			{"seat_mode", nullptr}, {"seat_player", nullptr}};
+		if (uid(controlled) != 0) {
+			view["seat_mode"] = static_cast<int>(controlled->GetController()->GetSeatMode());
+			view["seat_player"] = controlled->GetController()->GetSeatPlayer();
+		}
+		if (screen >= 0) {
+			const Vector target = g_CameraMan.GetScrollTarget(screen);
+			view["camera_target"] = {target.m_X, target.m_Y};
+		}
+		NetA7Journal::Emit("local_control", std::move(view));
+	}
+	for (Actor* actor: m_Actors) {
+		if (!actor) continue;
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		const bool alive = actor->GetHealth() > 0 && actor->GetStatus() != Actor::DYING && !actor->IsDead() && !actor->IsSetToDelete();
+		NetA7Journal::Emit("unit_owner", {{"round_id", round}, {"frame", frame}, {"uid", uid}, {"team", actor->GetTeam()},
+			{"owner_peer_id", ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled())},
+			{"player_controlled", actor->IsPlayerControlled()}, {"status", actor->GetStatus()}, {"alive", alive},
+			{"controller_mode", static_cast<int>(actor->GetController()->GetInputMode())}, {"controller_player", actor->GetController()->GetPlayerRaw()},
+			{"controller_disabled", actor->GetController()->IsDisabled()}});
+	}
+}
+
 std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCensus() const {
 	// Only the settled list: an actor still in m_AddedActors has not been agreed on by every peer yet,
 	// and a ledger entry naming one would reseat something a returning peer never held.
@@ -402,6 +442,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
+		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
+			continue;
+		}
+		if (!ScenarioRunner::ConsumeLockstepGameCommand(command)) continue;
 		// Only a peer that controls a team may issue economy commands for it — ANY of a shared
 		// co-op team's human peers counts; every peer resolves this identically.
 		const int32_t commandTeam = NetGameCommandTeam(command.payload);
@@ -734,8 +779,70 @@ bool MovableMan::RunLockstepPausedTick() {
 	}
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 	ApplyLockstepGameCommands(readyFrame);
 	return true;
+}
+
+uint8_t MovableMan::ValueObservationAuthority(uint64_t objectUID) const {
+	const uint8_t host = ScenarioRunner::GetLockstepHostPeerId();
+	if (objectUID == 0) {
+		return host;
+	}
+	const MovableObject* object = const_cast<MovableMan*>(this)->FindObjectByUniqueID(static_cast<long>(objectUID));
+	const Actor* actor = object ? dynamic_cast<const Actor*>(object->GetRootParent()) : nullptr;
+	if (!actor) {
+		return host;
+	}
+	return ScenarioRunner::GetLockstepActorOwner(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
+}
+
+void MovableMan::CommitValueObservations(uint64_t frame, const std::vector<NetValueObservation>& local, const std::vector<NetValueObservation>& remote) {
+	(void)frame;
+	std::vector<const NetValueObservation*> observations;
+	observations.reserve(local.size() + remote.size());
+	for (const NetValueObservation& observation: local) {
+		observations.push_back(&observation);
+	}
+	for (const NetValueObservation& observation: remote) {
+		observations.push_back(&observation);
+	}
+	std::stable_sort(observations.begin(), observations.end(), [](const NetValueObservation* a, const NetValueObservation* b) {
+		return std::tie(a->senderPeerId, a->objectUID, a->ordinal) < std::tie(b->senderPeerId, b->objectUID, b->ordinal);
+	});
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	for (const NetValueObservation* observation: observations) {
+		if (lockstep && observation->senderPeerId != ValueObservationAuthority(observation->objectUID)) {
+			++m_ValueObservationsRejected;
+			continue;
+		}
+		MovableObject* object = FindObjectByUniqueID(static_cast<long>(observation->objectUID));
+		if (!object) {
+			continue;
+		}
+		MovableObject::PendingValueOp op;
+		op.objectUID = observation->objectUID;
+		op.map = static_cast<MovableObject::ValueMapKind>(observation->mapKind);
+		op.op = static_cast<MovableObject::ValueMapOp>(observation->op);
+		op.key = observation->key;
+		op.number = observation->numberValue;
+		op.text = observation->stringValue;
+		op.ordinal = observation->ordinal;
+		op.tick = observation->tick;
+		object->ApplySharedValueOp(op);
+		object->DropMatchingValueOverlay(op);
+	}
+}
+
+void MovableMan::CommitOfflineValueWrites() {
+	for (const MovableObject::PendingValueOp& op: MovableObject::SamplePendingValueOps()) {
+		MovableObject* object = FindObjectByUniqueID(static_cast<long>(op.objectUID));
+		if (!object) {
+			continue;
+		}
+		object->ApplySharedValueOp(op);
+		object->DropMatchingValueOverlay(op);
+	}
 }
 
 // The object's script set as one hash: each loaded path and whether it is enabled, in load order.
@@ -1053,6 +1160,7 @@ void MovableMan::Clear() {
 	m_MOSubtractionEnabled = true;
 	// HitWhatMOID / HitWhatTerrMaterial compare against this each tick; it's otherwise only incremented.
 	m_SimUpdateFrameNumber = 0;
+	m_ValueObservationsRejected = 0;
 }
 
 int MovableMan::Initialize() {
@@ -1715,6 +1823,7 @@ bool MovableMan::ValidateScriptGraphs(const std::vector<std::string>& graphs, st
 }
 
 bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld) {
+	AudioMan::RestorePlayPhaseScope playPhase("RestoreScriptGraphs");
 	if (!ValidateScriptGraphs(graphs, error)) return false;
 	std::vector<std::string> errors;
 	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();
@@ -4239,6 +4348,10 @@ void MovableMan::UpdateControllers() {
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
 
+	if (!lockstepActive) {
+		CommitOfflineValueWrites();
+	}
+
 	if (lockstepActive) {
 		std::string error;
 		// Sample this tick's local AI decisions and schedule them to APPLY inputDelayFrames ticks from
@@ -4288,6 +4401,7 @@ void MovableMan::UpdateControllers() {
 		}
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 		ApplyLockstepGameCommands(readyFrame);
 
 		if (ScenarioRunner::IsControllerLogRecording()) {

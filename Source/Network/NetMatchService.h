@@ -7,19 +7,77 @@
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
+#include "NetResyncState.h"
 #include "Singleton.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define g_NetMatchService NetMatchService::Instance()
 
 namespace RTE {
 
+	class Activity;
 	class GnsTransport;
+
+	enum class NetRejoinAnswer : uint8_t {
+		Resync = 0,
+		MatchOver = 1,
+	};
+
+	struct NetMatchE2ETickClock {
+		uint64_t startTick = UINT64_MAX;
+		uint64_t segmentTicks = 0;
+		uint64_t priorTicks = 0;
+
+		void NoteSimTick(uint64_t nowTick) {
+			if (startTick == UINT64_MAX) {
+				startTick = nowTick;
+			}
+			segmentTicks = nowTick - startTick;
+		}
+		void OnResyncRelaunch() {
+			priorTicks += segmentTicks;
+			startTick = UINT64_MAX;
+			segmentTicks = 0;
+		}
+		void OnNewMatch() {
+			priorTicks = 0;
+			startTick = UINT64_MAX;
+			segmentTicks = 0;
+		}
+		uint64_t Total() const { return priorTicks + segmentTicks; }
+		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
+	};
+
+	inline uint64_t ParseLockstepStopTick(const std::string& error, uint64_t fallbackTick) {
+		if (error.size() < 6 || error.compare(0, 5, "tick ") != 0) {
+			return fallbackTick;
+		}
+		uint64_t tick = 0;
+		bool any = false;
+		for (size_t i = 5; i < error.size(); ++i) {
+			const char c = error[i];
+			if (c < '0' || c > '9') {
+				break;
+			}
+			any = true;
+			tick = tick * 10 + static_cast<uint64_t>(c - '0');
+		}
+		return any ? tick : fallbackTick;
+	}
+
+	// Cap completion is the match frame, not how long this process has run.
+	inline bool NetMatchE2EReachedCap(uint64_t runningTicks, uint64_t matchTick, uint64_t cap) {
+		(void)runningTicks;
+		return matchTick >= cap;
+	}
 
 	enum class NetMatchServiceState {
 		Idle,
@@ -64,6 +122,7 @@ namespace RTE {
 		static void SetAutoSubstitute(bool enabled, uint16_t stableSeat, uint64_t delayMs, bool thenCancel);
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
+		bool CanSealA7Journal() const;
 
 		/// Reconvenes a completed match's still-connected session in the lobby for a rematch.
 		/// Fails (and settles the service into Failed) when the session was lost.
@@ -99,17 +158,15 @@ namespace RTE {
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
 		void PumpSessionEvents();
+		/// Consumes the host's current seat snapshot on the game thread.
+		void PumpSeatPresence();
 		/// The reconnect UX state machine (§11): auto-retry, the stored-ticket offer and the roster's
 		/// dropped/reclaiming marks. Game-thread only.
 		NetReconnectUx& GetReconnectUx() { return m_ReconnectUx; }
 		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
-		/// §9b's host moderation API. Every one of these is game-thread-only and match-only: the
-		/// admission plane runs on the worker while the lobby round is up, and there is nothing to
-		/// moderate in a lobby - a seat whose holder leaves there simply goes back in the pool.
+		/// Reads the cached moderation view; actions require a running match on the game thread.
 		std::vector<NetH4ModerationSeat> GetModerationSeats() const;
-		NetH4ModerationResult WaitForSeat(uint16_t stableSeat);
-		NetH4ModerationResult SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection);
-		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat);
+		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
@@ -126,12 +183,17 @@ namespace RTE {
 		uint8_t GetLocalPeerId() const;
 		int GetLocalTeam() const;
 
+		static bool ResyncSnapshotAllowed(const Activity* activity);
+		static NetRejoinAnswer ClassifyRejoin(const Activity* activity);
+		void AnswerMatchOverRejoin(const std::string& result);
+
 		static const char* StateName(NetMatchServiceState state);
 
 	private:
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
+		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
@@ -145,6 +207,7 @@ namespace RTE {
 		/// The H4 seat state the round consults before it adjudicates a lost transport. Called by the
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
+		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();
@@ -157,6 +220,8 @@ namespace RTE {
 		void DriveReconnectUx(uint64_t nowMs);
 		/// Elapsed milliseconds since this session began, for every admission deadline.
 		uint64_t AdmissionNowMs() const;
+		void CaptureA7SeatView();
+		bool WaitForA7ConnectGate(std::string* error);
 
 
 		mutable std::mutex m_Mutex;
@@ -171,6 +236,9 @@ namespace RTE {
 		int m_LocalTeam = -1;
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
+		std::optional<NetResyncState> m_PendingResyncState;
+		bool m_ResyncRetainsLocalState = false;
+		uint64_t m_ResyncSourceRound = 0;
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
@@ -180,6 +248,8 @@ namespace RTE {
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
 		NetReconnectUx m_ReconnectUx;
+		NetSeatPresence m_SeatPresence;
+		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
@@ -192,6 +262,8 @@ namespace RTE {
 		/// The moderator stand-in for the unattended gates: runs from PumpSessionEvents, on the game
 		/// thread, and does exactly what a host clicking the UI would do.
 		void DriveAutoSubstitution(uint64_t nowMs);
+		/// Called with the service lock on the game thread, when it owns the admission plane.
+		void PublishModerationView();
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
@@ -217,6 +289,8 @@ namespace RTE {
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelRequested{false};
 		std::atomic<bool> m_EverStarted{false};
+		std::string m_CapturedRunnerReport;
+		std::string m_RejoinOutcome;
 	};
 
 } // namespace RTE

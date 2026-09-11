@@ -10,6 +10,7 @@
 #include "AudioMan.h"
 #include "MetaMan.h"
 #include "ConsoleMan.h"
+#include "MenuMan.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
@@ -33,7 +34,14 @@
 #include "BuyMenuGUI.h"
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
+#include "GUICheckpoint.h"
+#include "GUIInput.h"
+#include "LuaMan.h"
+#include "ActivityMan.h"
+#include "OwnedMovableObjects.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 
@@ -1710,6 +1718,7 @@ void GameActivity::Update() {
 			}
 
 			m_InventoryMenuGUI[player]->SetInventoryActor(m_ControlledActor[player]);
+			if (g_MenuMan.IsNetworkPanelOpen()) m_InventoryMenuGUI[player]->SetEnabled(false);
 			m_InventoryMenuGUI[player]->Update();
 		}
 
@@ -1718,12 +1727,13 @@ void GameActivity::Update() {
 
 		// Enable or disable the Buy Menus if the brain is selected, Skip if an LZ selection button press was just performed
 		if (!skipBuyUpdate) {
+			if (g_MenuMan.IsNetworkPanelOpen()) m_pBuyGUI[player]->SetEnabled(false);
 			//            m_pBuyGUI[player]->SetEnabled(m_ControlledActor[player] == m_Brain[player] && m_ViewState[player] != ViewState::LandingZoneSelect && m_ActivityState != ActivityState::Over);
 			m_pBuyGUI[player]->Update();
 		}
 
 		// Trap the mouse if we're in gameplay and not in menus
-		g_UInputMan.TrapMousePos(!m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], player);
+		g_UInputMan.TrapMousePos(!g_MenuMan.IsNetworkPanelOpen() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], player);
 
 		// Start LZ picking mode if a purchase was made
 		if (m_pBuyGUI[player]->PurchaseMade()) {
@@ -2750,7 +2760,10 @@ bool GameActivity::ResolveCheckpointReferences() {
 
 void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const {
     for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
-    for (const SceneEditorGUI* editor: m_pEditorGUI) if (editor) visit(editor->GetCurrentObject());
+    for (const SceneEditorGUI* editor: m_pEditorGUI) if (editor) {
+        visit(editor->GetCurrentObject());
+        for (const auto& owner: editor->GetCheckpointRetainedOwners()) visit(owner.get());
+    }
 }
 
 bool GameActivity::PrepareCheckpointUI() {
@@ -2763,4 +2776,462 @@ bool GameActivity::PrepareCheckpointUI() {
         if (m_pBannerYellow[player] && m_pBannerYellow[player]->GetFontHeight() > 0 && !m_pBannerYellow[player]->Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) return false;
     }
     return LoadValueCheckpoint(values);
+}
+
+void GameActivity::CaptureNetPlayerBindings(NetGamePlayerBindings& out) const {
+	Activity::CaptureNetPlayerBindings(out);
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		out.players[player].viewTargets = {m_ObservationTarget[player].m_X, m_ObservationTarget[player].m_Y,
+			m_DeathViewTarget[player].m_X, m_DeathViewTarget[player].m_Y, m_ActorCursor[player].m_X, m_ActorCursor[player].m_Y,
+			m_LandingZone[player].m_X, m_LandingZone[player].m_Y};
+	}
+}
+
+bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
+	NetLocalPlayerState state;
+	if (!Activity::CaptureNetLocalPlayerState(state)) return false;
+	try {
+		GUICheckpoint::NetLocalCaptureScope localUI;
+		CheckpointWriter writer("NetLocalGameUI1");
+		writer(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
+			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
+			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames);
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			writer(NetActorUID(m_pLastMarkedActor[player]),
+				m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{},
+				m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{},
+				m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{},
+				m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{},
+				m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{},
+				SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()), m_PurchaseOverride[player].size());
+			for (const SceneObject* preset: m_PurchaseOverride[player]) writer(preset->GetClassName(), preset->GetPresetName(), preset->GetModuleName());
+		}
+		state.gameActivity = writer.Text();
+		out = std::move(state);
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+namespace {
+template <class T> bool RestoreNetLocalMenu(T*& target, const std::string& saved, Controller* controller) {
+	if (saved.empty() && !target) return true;
+	const std::string state = saved.empty() ? T{}.SaveCheckpoint() : saved;
+	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(state);
+	std::unique_ptr<T> candidate;
+	if (!target) { candidate = std::make_unique<T>(); target = candidate.get(); }
+	const bool restored = target->LoadCheckpoint(state) &&
+		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(state);
+	if (candidate) { if (restored) candidate.release(); else target = nullptr; }
+	return restored;
+}
+
+bool RestoreNetLocalBanner(GUIBanner*& target, const std::string& saved, const char* font, const char* blur) {
+	if (saved.empty() && !target) return true;
+	const std::string state = saved.empty() ? GUIBanner{}.SaveCheckpoint() : saved;
+	if (target && target->GetFontHeight() > 0) return target->LoadCheckpoint(state);
+	std::unique_ptr<GUIBanner> candidate;
+	if (!target) { candidate = std::make_unique<GUIBanner>(); target = candidate.get(); }
+	const bool restored = target->LoadCheckpoint(state) && (target->GetFontHeight() == 0 || target->Create(font, blur, 8)) && target->LoadCheckpoint(state);
+	if (candidate) { if (restored) candidate.release(); else target = nullptr; }
+	return restored;
+}
+}
+
+bool GameActivity::LoadNetLocalGameState(std::string_view text) {
+	try {
+		GUICheckpoint::NetLocalRestoreScope localUI;
+		CheckpointReader reader(text, "NetLocalGameUI1");
+		reader(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
+			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
+			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames);
+		struct Slot {
+			int64_t marked = 0;
+			std::string buy, editor, inventory, red, yellow, strategic;
+			std::list<const SceneObject*> purchases;
+		};
+		std::array<Slot, Players::MaxPlayerCount> slots;
+		for (auto& slot: slots) {
+			reader.Value(slot.marked); reader.Value(slot.buy); reader.Value(slot.editor); reader.Value(slot.inventory);
+			reader.Value(slot.red); reader.Value(slot.yellow); reader.Value(slot.strategic);
+			size_t count = 0;
+			reader.Value(count);
+			if (count > text.size()) return false;
+			for (size_t index = 0; index < count; ++index) {
+				std::string type, name, module;
+				reader.Value(type); reader.Value(name); reader.Value(module);
+				const auto* preset = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(type, name, module));
+				if (!preset) return false;
+				slot.purchases.push_back(preset);
+			}
+		}
+		reader.Finish();
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			auto& slot = slots[player];
+			Controller* controller = &m_PlayerController[player];
+			if (!RestoreNetLocalMenu(m_pBuyGUI[player], slot.buy, controller) || !RestoreNetLocalMenu(m_pEditorGUI[player], slot.editor, controller) ||
+				!RestoreNetLocalMenu(m_InventoryMenuGUI[player], slot.inventory, controller) ||
+				!RestoreNetLocalBanner(m_pBannerRed[player], slot.red, "Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png") ||
+				!RestoreNetLocalBanner(m_pBannerYellow[player], slot.yellow, "Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png")) return false;
+			auto strategic = LoadActivityOwnedEntity(slot.strategic);
+			if (strategic && !dynamic_cast<PieMenu*>(strategic.get())) return false;
+			m_StrategicModePieMenu[player].reset(static_cast<PieMenu*>(strategic.release()));
+			if (m_StrategicModePieMenu[player]) m_StrategicModePieMenu[player]->SetMenuController(controller);
+			m_pLastMarkedActor[player] = ResolveNetActor(slot.marked);
+			m_PurchaseOverride[player].swap(slot.purchases);
+		}
+		m_HasCheckpointMarkedActorIDs = false;
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+bool GameActivity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
+	if (!Activity::RestoreNetLocalPlayerState(state) || !LoadNetLocalGameState(state.gameActivity)) return false;
+	// Menu construction may alter cursor limits and screen occlusion.
+	return Activity::RestoreNetLocalPlayerState(state);
+}
+
+bool GameActivity::CreateNetLocalUI() {
+	GUICheckpoint::NetLocalRestoreScope localUI;
+	const uint8_t humanCount = GetHumanCount();
+	const bool wide = static_cast<float>(g_WindowMan.GetResX()) / g_WindowMan.GetResY() >= 1.6F;
+	g_FrameMan.ResetSplitScreens(wide ? humanCount > 1 : humanCount > 2, wide ? humanCount > 2 : humanCount > 1);
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		m_StrategicModePieMenu[player].reset();
+		InventoryMenuGUI inventory;
+		SceneEditorGUI editor;
+		BuyMenuGUI buy;
+		GUIBanner red, yellow;
+		Controller* controller = &m_PlayerController[player];
+		if (m_IsActive[player] && m_IsHuman[player]) {
+			if (inventory.Create(controller, m_ControlledActor[player]) < 0 || editor.Create(controller) < 0 || buy.Create(controller) < 0 ||
+				!red.Create("Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png", 8) ||
+				!yellow.Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) return false;
+			const int techModule = g_PresetMan.GetModuleID(GetTeamTech(m_Team[player]));
+			buy.SetNativeTechModule(techModule);
+			buy.SetForeignCostMultiplier(1.0);
+			buy.LoadAllLoadoutsFromFile();
+			editor.SetNativeTechModule(techModule);
+			const int screen = m_PlayerScreen[player];
+			const int x = g_FrameMan.GetVSplit() && (screen % 2) ? g_WindowMan.GetResX() / 2 : 0;
+			const int y = g_FrameMan.GetHSplit() && (screen >= 2 || (!g_FrameMan.GetVSplit() && screen == 1)) ? g_WindowMan.GetResY() / 2 : 0;
+			buy.SetPosOnScreen(x, y);
+			editor.SetPosOnScreen(x, y);
+		}
+		GUICheckpoint::NetLocalCaptureScope localValues;
+		if (!RestoreNetLocalMenu(m_InventoryMenuGUI[player], inventory.SaveCheckpoint(), controller) ||
+			!RestoreNetLocalMenu(m_pEditorGUI[player], editor.SaveCheckpoint(), controller) ||
+			!RestoreNetLocalMenu(m_pBuyGUI[player], buy.SaveCheckpoint(), controller) ||
+			!RestoreNetLocalBanner(m_pBannerRed[player], red.SaveCheckpoint(), "Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png") ||
+			!RestoreNetLocalBanner(m_pBannerYellow[player], yellow.SaveCheckpoint(), "Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png")) return false;
+	}
+	return true;
+}
+
+bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) {
+	if (!Activity::ApplyNetPlayerBindings(bindings)) return false;
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		const auto& targets = bindings.players[player].viewTargets;
+		m_ObservationTarget[player].SetXY(targets[0], targets[1]);
+		m_DeathViewTarget[player].SetXY(targets[2], targets[3]);
+		m_ActorCursor[player].SetXY(targets[4], targets[5]);
+		m_LandingZone[player].SetXY(targets[6], targets[7]);
+		m_ActorSelectTimer[player].Reset();
+		m_pLastMarkedActor[player] = nullptr;
+		m_AIReturnCraft[player] = true;
+		m_NextMultiOrderYOffset[player] = 0;
+		m_LuaLockActor[player] = false;
+		m_LuaLockActorMode[player] = Controller::CIM_AI;
+		m_BannerRepeats[player] = 0;
+		m_ReadyToStart[player] = false;
+		m_PurchaseOverride[player].clear();
+		m_BrainLZWidth[player] = BRAINLZWIDTHDEFAULT;
+		m_LZCursorWidth[player] = 0;
+		m_NetworkPlayerNames[player].clear();
+	}
+	m_HasCheckpointMarkedActorIDs = false;
+	return CreateNetLocalUI();
+}
+
+bool GameActivity::RunNetLocalUIRestoreSelfTest() {
+	bool passed = true;
+	const char* reclaimDiagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
+	if (reclaimDiagnostic && std::strcmp(reclaimDiagnostic, "1") == 0) std::cout << "[net-reclaim] diagnostic_enabled=1 assertions=unchanged collection=unchanged" << std::endl;
+	const auto check = [&](const char* name, bool value) {
+		passed = passed && value;
+		std::cout << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name << std::endl;
+	};
+	auto& lua = g_LuaMan.GetMasterScriptState();
+	const auto graphRoundTrip = [&](const char* name, const std::string& script) {
+		std::string graph;
+		std::vector<std::string> problems;
+		const auto report = [&](const char* stage, bool result) {
+			std::cout << "[net-local-ui-graph] " << name << " stage=" << stage << " result=" << result << " problems=" << problems.size() << " bytes=" << graph.size() << std::endl;
+			for (const auto& problem: problems) std::cout << "[net-local-ui-graph] " << name << " stage=" << stage << " problem=" << problem << std::endl;
+		};
+		const bool captured = lua.SerializeScriptGraph(graph, problems);
+		report("capture", captured);
+		if (!captured || !problems.empty()) return false;
+		std::cout << "[net-local-ui-graph] " << name << " explicit_preparation=0 implicit_preparation=deserialize" << std::endl;
+		const bool restored = lua.RestoreScriptGraph(graph, problems);
+		report("restore", restored);
+		if (!restored || !problems.empty()) return false;
+		const int probeResult = lua.RunScriptString(script);
+		std::cout << "[net-local-ui-graph] " << name << " stage=probe result=" << probeResult << " error=" << (probeResult == 0 ? "" : lua.GetLastError()) << std::endl;
+		return probeResult == 0;
+	};
+	const std::string clear = "_NetEditor=nil; _NetPreview=nil; _NetVector=nil; _NetController=nil; _NetPreviewUID=nil; _NetNested=nil; _NetNestedVector=nil; _NetPrivate=nil";
+	const std::string capture = R"lua(
+_NetEditor = ToGameActivity(ActivityMan:GetActivity()):GetEditorGUI(0)
+_NetPreview = _NetEditor:GetCurrentObject()
+_NetVector = _NetPreview.Pos
+_NetPreviewUID = ToActor(_NetPreview).UniqueID
+_NetController = ToActor(MovableMan:FindObjectByUniqueID(_NetPreviewUID)):GetController()
+)lua";
+	const std::string probe = R"lua(
+assert(MovableMan:FindObjectByUniqueID(_NetPreviewUID) ~= nil, "preview was deleted")
+assert(_ScriptGraphNativeAddress(_NetPreview) == _ScriptGraphNativeAddress(MovableMan:FindObjectByUniqueID(_NetPreviewUID)), "preview identity changed")
+assert(_ScriptGraphNativeAddress(_NetEditor) == _ScriptGraphNativeAddress(ToGameActivity(ActivityMan:GetActivity()):GetEditorGUI(0)), "editor identity changed")
+assert(_ScriptGraphNativeAddress(_NetController) == _ScriptGraphNativeAddress(ToActor(MovableMan:FindObjectByUniqueID(_NetPreviewUID)):GetController()), "controller identity changed")
+_NetVector.X = 137.25
+assert(_NetPreview.Pos.X == 137.25, "vector alias stopped being live")
+)lua";
+	struct Restore {
+		std::unique_ptr<Activity> activity;
+		Entity* tempEntity = g_LuaMan.GetMasterScriptState().GetTempEntity();
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		std::string camera = g_CameraMan.SaveCheckpoint(), frame = g_FrameMan.SaveCheckpoint(), input = g_UInputMan.SaveCheckpoint(), gui = GUIInput::SaveSharedCheckpoint();
+		std::vector<std::pair<Actor*, Controller::LocalInputState>> actorInputs;
+		Restore() {
+			for (auto* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object)) actorInputs.emplace_back(actor, actor->GetController()->CaptureLocalInputState());
+			g_ActivityMan.SwapCheckpointActivity(activity);
+		}
+		~Restore() {
+			g_LuaMan.GetMasterScriptState().SetTempEntity(tempEntity);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			activity.reset();
+			for (const auto& [actor, state]: actorInputs) actor->GetController()->RestoreLocalInputState(state);
+			g_CameraMan.LoadCheckpoint(camera); g_FrameMan.LoadCheckpoint(frame); g_UInputMan.LoadCheckpoint(input); GUIInput::LoadSharedCheckpoint(gui);
+			g_SimRNG = sim; g_RenderRNG = render;
+		}
+	} restore;
+	MovableMan::ConstructionRegistryScope registry;
+	MovableObject::ScriptLoadDeferralScope scripts;
+	std::vector<long> scriptIdentities;
+	try {
+		const auto* preset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
+		if (!preset) throw std::runtime_error("editor preview preset unavailable");
+		{
+			auto probe = std::unique_ptr<Actor>(static_cast<Actor*>(preset->Clone()));
+			std::unordered_set<const void*> ownerOnly{probe.get()};
+			lua.SetTempEntity(probe.get());
+			lua.RunScriptString("_NetProbe = ToActor(LuaMan.TempEntity); _NetProbe = nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			check("unreferenced_wrappers_are_not_aliases", !lua.HasNativeAliases(ownerOnly));
+			check("weak_table_is_not_an_alias", lua.RunScriptString(R"lua(
+_NetWeak = setmetatable({}, { __mode = "v" })
+_NetWeak[1] = ToActor(LuaMan.TempEntity)
+)lua") == 0 && !lua.HasNativeAliases(ownerOnly));
+			check("alias_from_suspended_parent_frame", lua.RunScriptString(R"lua(
+_NetWeak = nil
+_NetCo = coroutine.create(function(obj)
+	local held = obj
+	local function inner() coroutine.yield() end
+	inner()
+end)
+assert(select(1, coroutine.resume(_NetCo, ToActor(LuaMan.TempEntity))))
+)lua") == 0 && lua.HasNativeAliases(ownerOnly));
+			check("alias_from_child_dependency", lua.RunScriptString(R"lua(
+_NetCo = nil
+_NetChild = _ScriptGraphOwnerReference(ToActor(LuaMan.TempEntity), "actor-controller", 0, false)
+assert(_NetChild ~= nil)
+)lua") == 0 && lua.HasNativeAliases(ownerOnly));
+			lua.RunScriptString("_NetChild=nil; _NetCo=nil; _NetWeak=nil; _NetProbe=nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			lua.SetTempEntity(restore.tempEntity);
+		}
+		for (bool repair: {false, true}) {
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			fixture->m_pEditorGUI[0] = new SceneEditorGUI();
+			{
+				GUICheckpoint::NetLocalRestoreScope local;
+				if (fixture->m_pEditorGUI[0]->Create(&fixture->m_PlayerController[0]) < 0) throw std::runtime_error("editor fixture creation failed");
+			}
+			NetLocalPlayerState empty;
+			if (!fixture->CaptureNetLocalPlayerState(empty)) throw std::runtime_error("empty editor capture failed");
+			const std::string emptyEditor = fixture->m_pEditorGUI[0]->SaveCheckpoint();
+			auto preview = std::unique_ptr<Actor>(static_cast<Actor*>(preset->Clone()));
+			const long uid = preview->GetUniqueID();
+			fixture->m_pEditorGUI[0]->SetCurrentObject(preview.release());
+			if (lua.RunScriptString(capture) != 0) throw std::runtime_error("editor alias capture failed");
+			const bool restored = repair ? fixture->RestoreNetLocalPlayerState(empty) : fixture->m_pEditorGUI[0]->LoadCheckpoint(emptyEditor);
+			const bool aliases = restored && lua.RunScriptString(probe, false) == 0;
+			lua.ClearErrors();
+			check(repair ? "empty_local_preview_preserves_host_aliases" : "ordinary_overlay_detects_deleted_preview", repair ? aliases : restored && !aliases);
+			if (repair) {
+				auto* editor = fixture->m_pEditorGUI[0];
+				check("retained_owner_stays_registered", !editor->GetCurrentObject() && g_MovableMan.FindObjectByUniqueID(uid) && editor->GetCheckpointRetainedOwner(0) == g_MovableMan.FindObjectByUniqueID(uid));
+				{
+					struct PrivateAdoptionProbe : Actor { void SaveIdentity(long identity) { m_PersistedUniqueID = identity; } } candidate;
+					MovableMan::ConstructionRegistryScope isolated;
+					MovableObject::FaithfulCloneScope clones(false);
+					candidate.Actor::Create(*preset);
+					const auto* canonical = g_MovableMan.FindObjectByUniqueID(uid);
+					const long counter = MovableObject::GetUniqueIDCounter();
+					candidate.SaveIdentity(uid);
+					candidate.AdoptPersistedUniqueID();
+					check("private_adoption_never_shadows_canonical", candidate.GetUniqueID() == uid && canonical &&
+						g_MovableMan.FindObjectByUniqueID(uid) == canonical && !g_MovableMan.IsKnownObject(&candidate) && MovableObject::GetUniqueIDCounter() == counter);
+					candidate.SaveIdentity(counter + 31);
+					candidate.AdoptPersistedUniqueID();
+					check("private_adoption_never_advances_canonical_counter", candidate.GetUniqueID() == counter + 31 &&
+						!g_MovableMan.FindObjectByUniqueID(counter + 31) && !g_MovableMan.IsKnownObject(&candidate) && MovableObject::GetUniqueIDCounter() == counter);
+				}
+				check("retained_alias_graph_round_trip", graphRoundTrip("retained", probe));
+				const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+				if (!robot) throw std::runtime_error("nested editor preview preset unavailable");
+				editor->SetCurrentObject(static_cast<SceneObject*>(robot->Clone()));
+				const auto* item = dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset("MOPixel", "Spark Yellow 1", "Base.rte"));
+				if (!item) throw std::runtime_error("private inventory fixture unavailable");
+				static_cast<Actor*>(const_cast<SceneObject*>(editor->GetCurrentObject()))->AddInventoryItem(static_cast<MovableObject*>(item->Clone()));
+				NetLocalPlayerState withPreview;
+				if (!fixture->CaptureNetLocalPlayerState(withPreview)) throw std::runtime_error("peer preview capture failed");
+				const std::string previewNative = GUICheckpoint::SaveOwnedEntity(editor->GetCurrentObject());
+				editor->SetCurrentObject(nullptr);
+				auto canonical = GUICheckpoint::LoadOwnedEntity(previewNative);
+				const std::string canonicalBefore = GUICheckpoint::SaveOwnedEntity(canonical.get());
+				const long counterBefore = MovableObject::GetUniqueIDCounter();
+				check("different_class_preview_restores_privately", fixture->RestoreNetLocalPlayerState(withPreview) && dynamic_cast<const AHuman*>(editor->GetCurrentObject()) &&
+					g_MovableMan.FindObjectByUniqueID(static_cast<MovableObject*>(canonical.get())->GetUniqueID()) == canonical.get() && MovableObject::GetUniqueIDCounter() == counterBefore);
+				auto* privateActor = const_cast<AHuman*>(dynamic_cast<const AHuman*>(editor->GetCurrentObject()));
+				if (!privateActor) throw std::runtime_error("private actor was not restored");
+				lua.SetTempEntity(privateActor);
+				const int privateCapture = lua.RunScriptString(R"lua(
+_NetPrivate = ToAHuman(LuaMan.TempEntity)
+assert(_ScriptGraphNativeAddress(_NetPrivate) == _ScriptGraphNativeAddress(ToGameActivity(ActivityMan:GetActivity()):GetEditorGUI(0):GetCurrentObject()))
+_NetNested = _NetPrivate.Head
+_NetNestedVector = _NetNested.ParentOffset
+_NetVector = _NetPrivate.RecoilOffset
+)lua");
+				lua.SetTempEntity(restore.tempEntity);
+				check("private_nested_alias_capture", privateCapture == 0);
+				check("private_nested_alias_graph_round_trip", graphRoundTrip("private_nested", R"lua(
+assert(_ScriptGraphNativeAddress(_NetNested) == _ScriptGraphNativeAddress(_NetPrivate.Head))
+_NetNestedVector.X = 21.25
+assert(_NetPrivate.Head.ParentOffset.X == 21.25)
+_NetVector.X = 14.5
+assert(_NetPrivate.RecoilOffset.X == 14.5)
+)lua"));
+				privateActor->MoveScriptsToState(lua);
+				scriptIdentities.push_back(privateActor->GetUniqueID());
+				const int adopted = privateActor->AdoptScriptObject();
+				lua.SetTempEntity(restore.tempEntity);
+				if (adopted < 0) throw std::runtime_error("private script identity creation failed");
+				const long oldPrivateUID = privateActor->GetUniqueID();
+				Actor observer;
+				observer.MovableObject::Create();
+				observer.SetWhichMOToNotHit(privateActor->GetHead());
+				privateActor->SetWhichMOToNotHit(static_cast<MovableObject*>(canonical.get()));
+				std::cout << "[net-local-ui-publication] before incoming_uid=" << observer.GetMOToNotHitUID() << " head_uid=" << privateActor->GetHead()->GetUniqueID()
+				          << " external_uid=" << privateActor->GetMOToNotHitUID() << " canonical_uid=" << static_cast<MovableObject*>(canonical.get())->GetUniqueID()
+				          << " inventory_count=" << privateActor->GetInventory()->size() << std::endl;
+				const long counterBeforeCollision = MovableObject::GetUniqueIDCounter();
+				MovableObject::PinUniqueIDCounter(oldPrivateUID - 1);
+				check("publication_collision_refused_before_mutation", !privateActor->PublishNetPrivateObjectGraph() && privateActor->GetUniqueID() == oldPrivateUID &&
+					MovableObject::GetUniqueIDCounter() == oldPrivateUID - 1 && GUICheckpoint::SaveOwnedEntity(canonical.get()) == canonicalBefore);
+				MovableObject::PinUniqueIDCounter(counterBeforeCollision);
+				std::unordered_set<const Entity*> ownedEntities;
+				std::unordered_set<const MovableObject*> ownedObjects;
+				CollectOwnedMovableObjects(privateActor, ownedEntities, ownedObjects);
+				const long publishCounter = MovableObject::GetUniqueIDCounter();
+				const std::string publishRNG = g_SimRNG.SerializeStateForHashing();
+				check("private_publication_keeps_canonical_registry", privateActor->PublishNetPrivateObjectGraph() &&
+					GUICheckpoint::SaveOwnedEntity(canonical.get()) == canonicalBefore &&
+					MovableObject::GetUniqueIDCounter() == publishCounter + static_cast<long>(ownedObjects.size()) && g_SimRNG.SerializeStateForHashing() == publishRNG);
+				scriptIdentities.push_back(privateActor->GetUniqueID());
+				const bool incomingPointer = observer.GetWhichMOToNotHit() == privateActor->GetHead();
+				const bool incomingIdentity = observer.GetMOToNotHitUID() == privateActor->GetHead()->GetUniqueID();
+				const bool externalPointer = privateActor->GetWhichMOToNotHit() == canonical.get();
+				const bool externalIdentity = privateActor->GetMOToNotHitUID() == static_cast<MovableObject*>(canonical.get())->GetUniqueID();
+				const auto* inventoryItem = privateActor->GetInventory()->empty() ? nullptr : privateActor->GetInventory()->front();
+				const auto* registeredItem = inventoryItem ? g_MovableMan.FindObjectByUniqueID(inventoryItem->GetUniqueID()) : nullptr;
+				const bool inventoryIdentity = inventoryItem && registeredItem == inventoryItem;
+				std::cout << "[net-local-ui-publication] after incoming_pointer=" << incomingPointer << " incoming_identity=" << incomingIdentity
+				          << " incoming=" << observer.GetWhichMOToNotHit() << " head=" << privateActor->GetHead()
+				          << " incoming_uid=" << observer.GetMOToNotHitUID() << " head_uid=" << privateActor->GetHead()->GetUniqueID()
+				          << " external_pointer=" << externalPointer << " external_identity=" << externalIdentity
+				          << " external=" << privateActor->GetWhichMOToNotHit() << " canonical=" << canonical.get()
+				          << " external_uid=" << privateActor->GetMOToNotHitUID() << " canonical_uid=" << static_cast<MovableObject*>(canonical.get())->GetUniqueID()
+				          << " inventory_count=" << privateActor->GetInventory()->size() << " inventory_identity=" << inventoryIdentity
+				          << " inventory_item=" << inventoryItem << " registered_item=" << registeredItem << " inventory_uid=" << (inventoryItem ? inventoryItem->GetUniqueID() : 0) << std::endl;
+				check("publication_preserves_incoming_and_external_links", incomingPointer && incomingIdentity && externalPointer && externalIdentity && inventoryIdentity);
+				check("private_publication_keeps_native_and_lua_aliases", lua.RunScriptString(R"lua(
+assert(_ScriptGraphNativeAddress(_NetNested) == _ScriptGraphNativeAddress(_NetPrivate.Head))
+assert(_ScriptGraphNativeAddress(_NetPrivate) == _ScriptGraphNativeAddress(MovableMan:FindObjectByUniqueID(_NetPrivate.UniqueID)))
+assert(_ScriptGraphNativeAddress(_ScriptedObjects[tostring(_NetPrivate.UniqueID)]) == _ScriptGraphNativeAddress(_NetPrivate))
+_NetNestedVector.Y = 32.5
+assert(_NetPrivate.Head.ParentOffset.Y == 32.5)
+_NetVector.Y = 41.25
+assert(_NetPrivate.RecoilOffset.Y == 41.25)
+)lua") == 0 && g_MovableMan.FindObjectByUniqueID(oldPrivateUID) == canonical.get());
+				lua.RunScriptString("_ScriptedObjects[tostring(_NetPrivate.UniqueID)] = nil");
+				privateActor->DiscardScriptState();
+				observer.SetWhichMOToNotHit(nullptr);
+				lua.RunScriptString("_NetPrivate=nil; _NetNested=nil; _NetNestedVector=nil; _NetVector=nil; _NetEditor=nil; _NetPreview=nil; _NetController=nil");
+				g_LuaMan.CollectGarbageForCheckpoint();
+				check("property_only_alias_capture", lua.RunScriptString("_NetVector = ToMOSRotating(ToGameActivity(ActivityMan:GetActivity()):GetEditorGUI(0):GetCurrentObject()).RecoilOffset") == 0);
+				check("property_only_alias_keeps_displaced_owner", fixture->RestoreNetLocalPlayerState(empty) && g_MovableMan.IsKnownObject(privateActor) && lua.RunScriptString("_NetVector.X = 53.5; assert(_NetVector.X == 53.5)") == 0);
+			}
+			lua.RunScriptString(clear);
+			g_LuaMan.CollectGarbageForCheckpoint();
+			if (repair) {
+				auto* editor = fixture->m_pEditorGUI[0];
+				const char* diagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
+				const auto observeReclaim = [&](const char* stage) {
+					if (!diagnostic || std::strcmp(diagnostic, "1") != 0) return;
+					std::cout << "[net-reclaim] stage=" << stage << " original_uid=" << uid << " retained0=" << editor->GetCheckpointRetainedOwner(0)
+					          << " original_lookup=" << g_MovableMan.FindObjectByUniqueID(uid) << " slots=" << editor->GetCheckpointRetainedOwners().size() << std::endl;
+					for (size_t index = 0; index < editor->GetCheckpointRetainedOwners().size(); ++index) {
+						const auto* owner = editor->GetCheckpointRetainedOwner(index);
+						if (!owner) continue;
+						std::unordered_set<const Entity*> entities;
+						std::unordered_set<const MovableObject*> objects;
+						CollectOwnedMovableObjects(owner, entities, objects);
+						std::unordered_set<const void*> pointers(entities.begin(), entities.end());
+						std::unordered_set<long> identities;
+						for (const auto* object: objects) {
+							pointers.insert(&object->GetPos()); pointers.insert(&object->GetVel());
+							pointers.insert(&object->GetPrevPos()); pointers.insert(&object->GetPrevVel());
+							if (const auto* rotating = dynamic_cast<const MOSRotating*>(object)) { pointers.insert(&rotating->GetRecoilForce()); pointers.insert(&rotating->GetRecoilOffset()); }
+							if (const auto* part = dynamic_cast<const Attachable*>(object)) { pointers.insert(&part->GetParentOffset()); pointers.insert(&part->GetJointOffset()); pointers.insert(&part->GetJointPos()); }
+							if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object))) pointers.insert(actor->GetController());
+							if (g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) == object) identities.insert(object->GetUniqueID());
+						}
+						std::cout << "[net-reclaim] stage=" << stage << " slot=" << index << " owner=" << owner << " class=" << owner->GetClassName() << std::endl;
+						lua.HasNativeAliases(pointers);
+						for (auto& state: g_LuaMan.GetThreadedScriptStates()) state.HasNativeAliases(pointers);
+						for (const auto* object: g_MovableMan.SnapshotKnownObjects()) {
+							if (objects.contains(object)) continue;
+							for (long target: object->GetCheckpointBorrowedReferences()) if (identities.contains(target)) {
+								std::cout << "[net-reclaim-native] stage=" << stage << " slot=" << index << " source=" << object << " source_uid=" << object->GetUniqueID()
+								          << " class=" << object->GetClassName() << " target_uid=" << target << std::endl;
+							}
+						}
+					}
+				};
+				observeReclaim("before");
+				editor->ReclaimNetRetainedOwners();
+				observeReclaim("after");
+				check("unreferenced_owner_reclaimed", !editor->GetCheckpointRetainedOwner(0) && !g_MovableMan.FindObjectByUniqueID(uid));
+				const size_t count = editor->GetCheckpointRetainedOwners().size();
+				check("repeated_overlay_does_not_grow_retention", fixture->RestoreNetLocalPlayerState(empty) && fixture->RestoreNetLocalPlayerState(empty) && editor->GetCheckpointRetainedOwners().size() == count);
+			}
+		}
+	} catch (const std::exception& exception) { check(exception.what(), false); }
+	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");
+	lua.RunScriptString(clear);
+	g_LuaMan.CollectGarbageForCheckpoint();
+	return passed;
 }

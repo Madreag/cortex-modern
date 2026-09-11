@@ -390,6 +390,7 @@ namespace RTE {
 		std::list<Exit> m_Exits;
 		// Last used exit so we can alternate/cycle
 		std::list<Exit>::iterator m_CurrentExit;
+		int m_PersistedCurrentExit = -1;
 		// The delay between each exiting passenger Actor
 		long m_ExitInterval;
 		// Times the exit interval

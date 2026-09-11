@@ -849,6 +849,9 @@
     <ClInclude Include="Source\Network\NetLobbyProtocol.h" />
     <ClInclude Include="Source\Network\NetLobbySession.h" />
     <ClInclude Include="Source\Network\NetGameCommand.h" />
+    <ClInclude Include="Source\Network\NetResyncState.h" />
+    <ClInclude Include="Source\Network\NetResyncSelfTest.h" />
+    <ClInclude Include="Source\Network\NetResyncRuntimeSelfTest.h" />
     <ClInclude Include="Source\Network\NetLockstep.h" />
     <ClInclude Include="Source\Network\NetLockstepSelfTest.h" />
     <ClInclude Include="Source\Network\NetMatchConfig.h" />
@@ -873,8 +876,10 @@
     <ClInclude Include="Source\Network\NetSessionSelfTest.h" />
     <ClInclude Include="Source\Network\NetTransport.h" />
     <ClInclude Include="Source\Network\SimChecksum.h" />
+    <ClInclude Include="Source\Network\NetA7Journal.h" />
     <ClInclude Include="Source\AI\MetricsCollector.h" />
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
+    <ClInclude Include="Source\CI\NetModerationGUIProbe.h" />
     <ClInclude Include="Source\System\ScenarioRunner.h" />
     <ClInclude Include="Source\System\InputScript.h" />
     <ClInclude Include="Source\System\AIWriteScript.h" />
@@ -1008,6 +1013,7 @@
     <ClInclude Include="Source\Menus\BuyMenuGUI.h" />
     <ClInclude Include="Source\Menus\GibEditorGUI.h" />
     <ClInclude Include="Source\Menus\MainMenuGUI.h" />
+    <ClInclude Include="Source\Menus\NetModerationGUI.h" />
     <ClInclude Include="Source\Menus\MetagameGUI.h" />
     <ClInclude Include="Source\Menus\ObjectPickerGUI.h" />
     <ClInclude Include="Source\Menus\ScenarioGUI.h" />
@@ -1426,6 +1432,9 @@
     <ClCompile Include="Source\Network\NetLobbyProtocol.cpp" />
     <ClCompile Include="Source\Network\NetLobbySession.cpp" />
     <ClCompile Include="Source\Network\NetGameCommand.cpp" />
+    <ClCompile Include="Source\Network\NetResyncState.cpp" />
+    <ClCompile Include="Source\Network\NetResyncSelfTest.cpp" />
+    <ClCompile Include="Source\Network\NetResyncRuntimeSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetLockstep.cpp" />
     <ClCompile Include="Source\Network\NetLockstepSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetMatchConfig.cpp" />
@@ -1449,8 +1458,10 @@
     <ClCompile Include="Source\Network\NetSession.cpp" />
     <ClCompile Include="Source\Network\NetSessionSelfTest.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
+    <ClCompile Include="Source\Network\NetA7Journal.cpp" />
     <ClCompile Include="Source\AI\MetricsCollector.cpp" />
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />
+    <ClCompile Include="Source\CI\NetModerationGUIProbe.cpp" />
     <ClCompile Include="Source\System\ScenarioRunner.cpp" />
     <ClCompile Include="Source\System\InputScript.cpp" />
     <ClCompile Include="Source\System\AIWriteScript.cpp" />
@@ -1584,6 +1595,7 @@
     <ClCompile Include="Source\Menus\BuyMenuGUI.cpp" />
     <ClCompile Include="Source\Menus\GibEditorGUI.cpp" />
     <ClCompile Include="Source\Menus\MainMenuGUI.cpp" />
+    <ClCompile Include="Source\Menus\NetModerationGUI.cpp" />
     <ClCompile Include="Source\Menus\MetagameGUI.cpp" />
     <ClCompile Include="Source\Menus\ObjectPickerGUI.cpp" />
     <ClCompile Include="Source\Menus\ScenarioGUI.cpp" />
