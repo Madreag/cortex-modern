@@ -1606,6 +1606,7 @@ static void DrawFrameWithPreviews() {
 	LocalPrediction::BeginRender();
 	g_FrameMan.Draw();
 	g_MenuMan.DrawNetworkUI();
+	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	LocalPrediction::EndRender();
@@ -1630,6 +1631,8 @@ static void UpdateResyncUI(uint32_t elapsedSeconds) {
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
+	ScenarioRunner::DrawNetUiToasts();
+	ScenarioRunner::NoteResyncOverlayFrame();
 	g_WindowMan.UploadFrame();
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
@@ -2204,6 +2207,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			++s_netMatchResyncs;
 			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
 			std::cout << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot" << std::endl;
+			ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
 			bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
@@ -2242,6 +2246,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			}
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
+				// The relaunch drops the queue; the heal toast reports the frame it landed on.
+				ScenarioRunner::ClearNetUiToasts();
+				ScenarioRunner::PushNetUiToast("resync_finish", "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepAppliedFrame()) + ")");
 				if (s_netMatchServiceE2E) {
 					s_netMatchE2ETicks.OnResyncRelaunch();
 				}

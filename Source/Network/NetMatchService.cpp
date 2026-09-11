@@ -530,7 +530,17 @@ static std::string ResyncSaveName() {
 			if (last.first == state && last.second == line) {
 				continue;
 			}
+			const std::string previous = last.first;
 			last = {state, line};
+			if (!previous.empty()) {
+				const std::string who = member.displayName.empty() ? "Player " + std::to_string(member.peerId) : member.displayName;
+				const bool wasAway = previous == "Disconnected" || previous == "Reconnecting" || previous == "Left";
+				if ((state == "Disconnected" || state == "Left") && !wasAway) {
+					ScenarioRunner::PushNetUiToast("player_left", "Player " + who + " left");
+				} else if (state == "Present" && wasAway) {
+					ScenarioRunner::PushNetUiToast("player_rejoined", "Player " + who + " rejoined");
+				}
+			}
 			if (m_RosterTransitions.size() >= 256) {
 				++m_RosterTransitionsDropped;
 				continue;
