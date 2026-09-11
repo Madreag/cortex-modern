@@ -818,6 +818,15 @@ namespace RTE {
 				*error = "a rematch did not count its first executed tick";
 				return false;
 			}
+			NetMatchE2ETickClock returner;
+			returner.OnResyncRelaunch(241);
+			for (uint64_t tick = 242; tick <= 307; ++tick) {
+				returner.NoteSimTick(tick);
+			}
+			if (returner.EarlyOverIsSetupFailure() || returner.Total() < 100) {
+				*error = "a returner Over after a mid-match resync was a setup failure; total=" + std::to_string(returner.Total());
+				return false;
+			}
 			return true;
 		}
 
