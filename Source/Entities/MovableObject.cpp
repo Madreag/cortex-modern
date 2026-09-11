@@ -1,5 +1,6 @@
 #include "MovableObject.h"
 #include "CheckpointArchive.h"
+#include "OwnedMovableObjects.h"
 #include "SoundSimulation.h"
 
 #include <bit>
@@ -7,6 +8,10 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <limits>
+#include <algorithm>
+#include <map>
+#include <utility>
 
 #include "ActivityMan.h"
 #include "PresetMan.h"
@@ -475,6 +480,10 @@ void MovableObject::AdoptPersistedUniqueID() {
 	if (m_PersistedUniqueID <= 0) {
 		return;
 	}
+	if (IsFaithfulClone() && !FaithfulCloneRegisters()) {
+		m_UniqueID = std::exchange(m_PersistedUniqueID, 0);
+		return;
+	}
 	g_MovableMan.UnregisterObject(this);
 	if (const MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
 		g_ConsoleMan.PrintString("ERROR: restore adopted duplicate UniqueID " + std::to_string(m_PersistedUniqueID) + " (" + GetPresetName() + ")");
@@ -493,6 +502,57 @@ void MovableObject::ResolveFaithfulLinks() {
 		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOToNotHitUID);
 		m_FaithfulMOToNotHitUID = 0;
 	}
+}
+
+bool MovableObject::PublishNetPrivateObjectGraph() {
+	std::unordered_set<const Entity*> entities;
+	std::unordered_set<const MovableObject*> owned;
+	CollectOwnedMovableObjects(this, entities, owned);
+	std::vector<MovableObject*> objects;
+	for (const auto* object: owned) objects.push_back(const_cast<MovableObject*>(object));
+	std::sort(objects.begin(), objects.end(), [](const auto* left, const auto* right) { return left->GetUniqueID() < right->GetUniqueID(); });
+	std::vector<std::unique_lock<std::recursive_mutex>> scriptLocks;
+	scriptLocks.emplace_back(g_LuaMan.GetMasterScriptState().GetMutex());
+	for (auto& state: g_LuaMan.GetThreadedScriptStates()) scriptLocks.emplace_back(state.GetMutex());
+	std::vector<std::string> scriptNames(objects.size());
+	std::map<LuaStateWrapper*, std::vector<std::pair<const MovableObject*, long>>> scriptIdentities;
+	long counter;
+	for (;;) {
+		counter = GetUniqueIDCounter();
+		if (counter < 0 || objects.size() > static_cast<size_t>(std::numeric_limits<long>::max() - counter)) return false;
+		scriptIdentities.clear();
+		for (size_t index = 0; index < objects.size(); ++index) {
+			auto* object = objects[index];
+			const long next = counter + static_cast<long>(index) + 1;
+			if (g_MovableMan.IsKnownObject(object) || object->m_UniqueID <= 0 || object->m_PersistedUniqueID != 0 ||
+				(index && objects[index - 1]->m_UniqueID == object->m_UniqueID) || g_MovableMan.FindObjectByUniqueID(next)) return false;
+			if (object->ObjectScriptsInitialized()) {
+				if (!object->m_ThreadedLuaState) return false;
+				scriptIdentities[object->m_ThreadedLuaState].emplace_back(object, next);
+				scriptNames[index] = "_ScriptedObjects[\"" + std::to_string(next) + "\"]";
+			}
+		}
+		for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities, true)) return false;
+		long expected = counter;
+		if (m_UniqueIDCounter.compare_exchange_strong(expected, counter + static_cast<long>(objects.size()))) break;
+	}
+	for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities)) return false;
+	for (size_t index = 0; index < objects.size(); ++index) {
+		auto* object = objects[index];
+		const long next = counter + static_cast<long>(index) + 1;
+		if (!scriptNames[index].empty()) {
+			object->m_ScriptObjectName.swap(scriptNames[index]);
+		}
+		object->m_PersistedUniqueID = next;
+	}
+	AdoptPersistedUniqueID();
+	for (auto* object: objects) {
+		std::lock_guard lock(ReferenceLock(object));
+		for (auto* reference = object->m_IncomingWeakReferences; reference; reference = reference->m_Next) {
+			if (reference->m_ExpiryIdentity) *reference->m_ExpiryIdentity = object->m_UniqueID;
+		}
+	}
+	return true;
 }
 
 void MovableObject::DiscardPersistedSnapshotState() {
