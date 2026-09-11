@@ -1119,9 +1119,14 @@ void AudioMan::ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistr
 	}
 }
 
-AudioMan::CheckpointRegistryScope::CheckpointRegistryScope() : m_Original(g_AudioMan.CaptureCheckpointSoundRegistry()), m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()) {}
+thread_local int s_SkipCarriedSoundNotes = 0;
+
+AudioMan::CheckpointRegistryScope::CheckpointRegistryScope() : m_Original(g_AudioMan.CaptureCheckpointSoundRegistry()), m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()) {
+	++s_SkipCarriedSoundNotes;
+}
 
 AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
+	--s_SkipCarriedSoundNotes;
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(m_Original));
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_Cursor);
 }
@@ -1142,6 +1147,7 @@ void AudioMan::SoundCheckpointSaveScope::Note(uint64_t identity) {
 }
 
 void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
+	if (s_SkipCarriedSoundNotes) return;
 	if (auto* scope = SoundCheckpointSaveScope::Current()) scope->Note(identity);
 }
 
