@@ -41,6 +41,7 @@
 #include "ControllerFrame.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
+#include "NetLockstep.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
@@ -50,12 +51,14 @@
 #include "nlohmann/json.hpp"
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <execution>
 #include <fstream>
 #include <map>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
@@ -776,8 +779,70 @@ bool MovableMan::RunLockstepPausedTick() {
 	}
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 	ApplyLockstepGameCommands(readyFrame);
 	return true;
+}
+
+uint8_t MovableMan::ValueObservationAuthority(uint64_t objectUID) const {
+	const uint8_t host = ScenarioRunner::GetLockstepHostPeerId();
+	if (objectUID == 0) {
+		return host;
+	}
+	const MovableObject* object = const_cast<MovableMan*>(this)->FindObjectByUniqueID(static_cast<long>(objectUID));
+	const Actor* actor = object ? dynamic_cast<const Actor*>(object->GetRootParent()) : nullptr;
+	if (!actor) {
+		return host;
+	}
+	return ScenarioRunner::GetLockstepActorOwner(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
+}
+
+void MovableMan::CommitValueObservations(uint64_t frame, const std::vector<NetValueObservation>& local, const std::vector<NetValueObservation>& remote) {
+	(void)frame;
+	std::vector<const NetValueObservation*> observations;
+	observations.reserve(local.size() + remote.size());
+	for (const NetValueObservation& observation: local) {
+		observations.push_back(&observation);
+	}
+	for (const NetValueObservation& observation: remote) {
+		observations.push_back(&observation);
+	}
+	std::stable_sort(observations.begin(), observations.end(), [](const NetValueObservation* a, const NetValueObservation* b) {
+		return std::tie(a->senderPeerId, a->objectUID, a->ordinal) < std::tie(b->senderPeerId, b->objectUID, b->ordinal);
+	});
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	for (const NetValueObservation* observation: observations) {
+		if (lockstep && observation->senderPeerId != ValueObservationAuthority(observation->objectUID)) {
+			++m_ValueObservationsRejected;
+			continue;
+		}
+		MovableObject* object = FindObjectByUniqueID(static_cast<long>(observation->objectUID));
+		if (!object) {
+			continue;
+		}
+		MovableObject::PendingValueOp op;
+		op.objectUID = observation->objectUID;
+		op.map = static_cast<MovableObject::ValueMapKind>(observation->mapKind);
+		op.op = static_cast<MovableObject::ValueMapOp>(observation->op);
+		op.key = observation->key;
+		op.number = observation->numberValue;
+		op.text = observation->stringValue;
+		op.ordinal = observation->ordinal;
+		op.tick = observation->tick;
+		object->ApplySharedValueOp(op);
+		object->DropMatchingValueOverlay(op);
+	}
+}
+
+void MovableMan::CommitOfflineValueWrites() {
+	for (const MovableObject::PendingValueOp& op: MovableObject::SamplePendingValueOps()) {
+		MovableObject* object = FindObjectByUniqueID(static_cast<long>(op.objectUID));
+		if (!object) {
+			continue;
+		}
+		object->ApplySharedValueOp(op);
+		object->DropMatchingValueOverlay(op);
+	}
 }
 
 // The object's script set as one hash: each loaded path and whether it is enabled, in load order.
@@ -1095,6 +1160,7 @@ void MovableMan::Clear() {
 	m_MOSubtractionEnabled = true;
 	// HitWhatMOID / HitWhatTerrMaterial compare against this each tick; it's otherwise only incremented.
 	m_SimUpdateFrameNumber = 0;
+	m_ValueObservationsRejected = 0;
 }
 
 int MovableMan::Initialize() {
@@ -4281,6 +4347,10 @@ void MovableMan::UpdateControllers() {
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
 
+	if (!lockstepActive) {
+		CommitOfflineValueWrites();
+	}
+
 	if (lockstepActive) {
 		std::string error;
 		// Sample this tick's local AI decisions and schedule them to APPLY inputDelayFrames ticks from
@@ -4330,6 +4400,7 @@ void MovableMan::UpdateControllers() {
 		}
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 		ApplyLockstepGameCommands(readyFrame);
 
 		if (ScenarioRunner::IsControllerLogRecording()) {
