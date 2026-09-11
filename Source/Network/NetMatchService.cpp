@@ -294,6 +294,7 @@ static std::string ResyncSaveName() {
 			}
 			return false;
 		}
+		uint64_t dropFrame = 0;
 		if (isHost) {
 			// Snapshot callbacks stay on the game thread while waiting peers keep hearing from us.
 			std::jthread keepalive([this](std::stop_token stop) {
@@ -305,6 +306,19 @@ static std::string ResyncSaveName() {
 					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 				}
 			});
+			// UpdateSim already incremented; this tick is the drop frame and has not been simulated.
+			dropFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			const uint64_t lastCommitted = dropFrame > 0 ? dropFrame - 1 : 0;
+			if (dropFrame > 0) {
+				long long time = g_TimerMan.GetSimTimeTicks();
+				if (!g_TimerMan.IsSimTimeFrozen()) {
+					const long long delta = g_TimerMan.GetDeltaTimeTicks();
+					if (time >= delta) {
+						time -= delta;
+					}
+				}
+				g_TimerMan.RewindSimTo(static_cast<long long>(lastCommitted), time);
+			}
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
@@ -330,7 +344,7 @@ static std::string ResyncSaveName() {
 			}
 			NetResyncState state;
 			std::vector<uint8_t> envelope;
-			if (!ScenarioRunner::CaptureNetResyncState(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
+			if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
 			stateBytes = std::move(envelope);
 		}
 		m_ResyncSourceRound = ScenarioRunner::GetLockstepRoundId();
@@ -358,8 +372,7 @@ static std::string ResyncSaveName() {
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
 			if (isHost) {
-				// The snapshot restores verbatim at its saved sim tick, so the healed round's first frame follows it.
-				runner->SetStartFrame(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U);
+				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
 			}
 			m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
