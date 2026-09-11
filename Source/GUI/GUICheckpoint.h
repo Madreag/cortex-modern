@@ -26,6 +26,25 @@ namespace RTE {
 	class GUICheckpoint {
 		friend class FrameMan;
 	public:
+		class NetLocalCaptureScope {
+		public:
+			NetLocalCaptureScope();
+			~NetLocalCaptureScope();
+			NetLocalCaptureScope(const NetLocalCaptureScope&) = delete;
+			NetLocalCaptureScope& operator=(const NetLocalCaptureScope&) = delete;
+		};
+		static bool IsCapturingNetLocalUI();
+		class NetLocalRestoreScope {
+		public:
+			NetLocalRestoreScope();
+			~NetLocalRestoreScope();
+			NetLocalRestoreScope(const NetLocalRestoreScope&) = delete;
+			NetLocalRestoreScope& operator=(const NetLocalRestoreScope&) = delete;
+		private:
+			struct State;
+			std::unique_ptr<State> m_State;
+		};
+		static bool IsRestoringNetLocalUI();
 		static std::string SaveBitmap(const BITMAP* bitmap);
 		static BITMAP* LoadBitmap(std::string_view text, bool validateOnly = false);
 		static std::string SaveSharedBitmap(const BITMAP* bitmap);
@@ -39,7 +58,7 @@ namespace RTE {
 		static std::string SaveImage(const GUIBitmap* bitmap);
 		static std::unique_ptr<GUIBitmap> LoadImage(std::string_view text, bool validateOnly = false);
 		static std::string SaveOwnedEntity(const Entity* entity);
-		static std::unique_ptr<Entity> LoadOwnedEntity(std::string_view text, bool validateOnly = false);
+		static std::unique_ptr<Entity> LoadOwnedEntity(std::string_view text, bool validateOnly = false, bool privateOwner = false);
 		static std::string SaveEntityReference(const Entity* entity, const Scene* scene = nullptr);
 		/// A menu's non-owning object pointer, or nullptr once the object has left the world. Menus
 		/// refresh these every Update, so one MovableMan no longer knows is already gone.
@@ -56,6 +75,8 @@ namespace RTE {
 		static bool RunSelfTest();
 
 	private:
+		static thread_local int s_NetLocalCaptureDepth;
+		static thread_local int s_NetLocalRestoreDepth;
 		static thread_local int s_BitmapPoolAllocationFailureAfter;
 		static std::map<std::string, GUIPanel*> Panels(const GUIControlManager& manager);
 		static void PrepareOwnedPanels(GUIControlManager& manager, const std::unordered_set<std::string>& panelKeys);

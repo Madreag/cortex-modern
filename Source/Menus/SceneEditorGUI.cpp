@@ -2,6 +2,8 @@
 #include "GUICheckpoint.h"
 #include <iostream>
 #include "SceneEditorGUI.h"
+#include "OwnedMovableObjects.h"
+#include "LuaMan.h"
 
 #include "CameraMan.h"
 #include "FrameMan.h"
@@ -53,6 +55,9 @@ SceneEditorGUI::~SceneEditorGUI() {
 }
 
 void SceneEditorGUI::Clear() {
+	m_NetRetainedOwners.clear();
+	m_NetRetainedPrivateOwners.clear();
+	m_NetPrivateCurrentObject = false;
 	m_PendingCheckpoint.clear();
 	m_CheckpointInitialized = false;
 	m_pController = 0;
@@ -95,7 +100,7 @@ int SceneEditorGUI::Create(Controller* pController, FeatureSets featureSet, int 
 	SetFeatureSet(featureSet);
 
 	// A restored editor already carries the completed request and result.
-	if (m_PendingCheckpoint.empty()) UpdateBrainPath();
+	if (m_PendingCheckpoint.empty() && !GUICheckpoint::IsRestoringNetLocalUI()) UpdateBrainPath();
 
 	// Allocate and (re)create the Editor GUIs
 	if (!m_pPicker)
@@ -200,6 +205,7 @@ bool SceneEditorGUI::SetCurrentObject(SceneObject* pNewObject) {
 	// Replace the current object with the new one
 	delete m_pCurrentObject;
 	m_pCurrentObject = pNewObject;
+	m_NetPrivateCurrentObject = GUICheckpoint::IsRestoringNetLocalUI();
 
 	if (!m_pCurrentObject)
 		return false;
@@ -324,6 +330,7 @@ void SceneEditorGUI::Update() {
 
 	if (m_pCurrentObject && m_EditorGUIMode != PICKINGOBJECT && g_PresetMan.GetReloadEntityPresetCalledThisUpdate()) {
 		m_pCurrentObject = dynamic_cast<SceneObject*>(g_PresetMan.GetEntityPreset(m_pCurrentObject->GetClassName(), m_pCurrentObject->GetPresetName(), m_pCurrentObject->GetModuleName())->Clone());
+		m_NetPrivateCurrentObject = false;
 	}
 
 	/////////////////////////////////////////////
@@ -769,6 +776,7 @@ void SceneEditorGUI::Update() {
 							if (pActor && pActor->IsInGroup("Brains")) {
 								delete m_pCurrentObject;
 								m_pCurrentObject = pActor;
+								m_NetPrivateCurrentObject = false;
 							} else {
 								placeBrain = false;
 							}
@@ -778,11 +786,16 @@ void SceneEditorGUI::Update() {
 					}
 
 					if (placeBrain) {
+						if (m_NetPrivateCurrentObject) {
+							if (auto* movable = dynamic_cast<MovableObject*>(m_pCurrentObject); movable && !movable->PublishNetPrivateObjectGraph()) throw std::runtime_error("could not publish the local editor brain");
+							m_NetPrivateCurrentObject = false;
+						}
 						// Place and let go (passing ownership) of the new governor brain
 						g_SceneMan.GetScene()->SetResidentBrain(m_pController->GetPlayer(), m_pCurrentObject);
 						// NO! This deletes the brain we just passed ownership of! just let go, man
 						//                    SetCurrentObject(0);
 						m_pCurrentObject = 0;
+						m_NetPrivateCurrentObject = false;
 						// Nothing in cursor now, so force to pick somehting else to place right away
 						m_EditorGUIMode = PICKINGOBJECT;
 						m_ModeChanged = true;
@@ -1460,9 +1473,54 @@ bool SceneEditorGUI::UpdateBrainPath() {
 	return true;
 }
 
+namespace {
+bool NetEditorOwnerReferenced(const Entity* owner) {
+	std::unordered_set<const Entity*> entities;
+	std::unordered_set<const MovableObject*> objects;
+	CollectOwnedMovableObjects(owner, entities, objects);
+	std::unordered_set<const void*> pointers(entities.begin(), entities.end());
+	for (const auto* object: objects) {
+		pointers.insert(&object->GetPos()); pointers.insert(&object->GetVel());
+		pointers.insert(&object->GetPrevPos()); pointers.insert(&object->GetPrevVel());
+		if (const auto* rotating = dynamic_cast<const MOSRotating*>(object)) {
+			pointers.insert(&rotating->GetRecoilForce()); pointers.insert(&rotating->GetRecoilOffset());
+		}
+		if (const auto* part = dynamic_cast<const Attachable*>(object)) {
+			pointers.insert(&part->GetParentOffset()); pointers.insert(&part->GetJointOffset()); pointers.insert(&part->GetJointPos());
+		}
+		if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object))) pointers.insert(actor->GetController());
+	}
+	if (g_LuaMan.GetMasterScriptState().HasNativeAliases(pointers)) return true;
+	for (auto& state: g_LuaMan.GetThreadedScriptStates()) if (state.HasNativeAliases(pointers)) return true;
+	std::unordered_set<long> identities;
+	for (const auto* object: objects) if (g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) == object) identities.insert(object->GetUniqueID());
+	if (!identities.empty()) for (const auto* object: g_MovableMan.SnapshotKnownObjects()) {
+		if (objects.contains(object)) continue;
+		for (long uid: object->GetCheckpointBorrowedReferences()) if (identities.contains(uid)) return true;
+	}
+	return false;
+}
+}
+
+void SceneEditorGUI::RetainNetReferencedOwner(std::unique_ptr<Entity> owner, bool privateOwner) {
+	if (owner && NetEditorOwnerReferenced(owner.get())) {
+		m_NetRetainedOwners.reserve(m_NetRetainedOwners.size() + 1);
+		m_NetRetainedPrivateOwners.reserve(m_NetRetainedPrivateOwners.size() + 1);
+		m_NetRetainedOwners.push_back(std::move(owner));
+		m_NetRetainedPrivateOwners.push_back(privateOwner);
+	}
+}
+
+void SceneEditorGUI::ReclaimNetRetainedOwners() const {
+	for (auto& owner: m_NetRetainedOwners) if (owner && !NetEditorOwnerReferenced(owner.get())) owner.reset();
+}
+
 std::string SceneEditorGUI::SaveCheckpoint() const {
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
-	CheckpointWriter writer("SceneEditorGUI2");
+	if (!g_MovableMan.IsRestoringSnapshot()) ReclaimNetRetainedOwners();
+	const bool retainedOwners = !GUICheckpoint::IsCapturingNetLocalUI() && !m_NetRetainedOwners.empty();
+	const bool netOwners = retainedOwners || m_NetPrivateCurrentObject;
+	CheckpointWriter writer(netOwners ? "SceneEditorGUI3" : "SceneEditorGUI2");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
 	writer(GUICheckpoint::SaveOwnedEntity(m_pCurrentObject), GUICheckpoint::SaveOwnedEntity(m_PieMenu.get()), m_pPicker != nullptr);
@@ -1476,6 +1534,10 @@ std::string SceneEditorGUI::SaveCheckpoint() const {
 		writer(request.complete, request.status, request.path, request.pathLength, request.totalCost, request.startPos, request.targetPos);
 	}
 	writer(GUICheckpoint::SaveBitmap(m_DrawBitmap.get()));
+	if (netOwners) {
+		writer(m_NetPrivateCurrentObject, retainedOwners ? m_NetRetainedOwners.size() : size_t{0});
+		if (retainedOwners) for (size_t index = 0; index < m_NetRetainedOwners.size(); ++index) writer(static_cast<bool>(m_NetRetainedPrivateOwners[index]), GUICheckpoint::SaveOwnedEntity(m_NetRetainedOwners[index].get()));
+	}
 	return writer.Text();
 }
 
@@ -1485,7 +1547,8 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if (text.starts_with("15 SceneEditorGUI1 ")) {
 			CheckpointReader reader(text, "SceneEditorGUI1", validateOnly); VisitCheckpoint(reader, *this); reader.Finish(); return true;
 		}
-		CheckpointReader reader(text, "SceneEditorGUI2", validateOnly);
+		const bool retainedOwners = text.starts_with("15 SceneEditorGUI3 ");
+		CheckpointReader reader(text, retainedOwners ? "SceneEditorGUI3" : "SceneEditorGUI2", validateOnly);
 		reader(m_CheckpointInitialized);
 		VisitCheckpoint(reader, *this);
 		std::string current, pie, picker, blink, bitmap;
@@ -1506,21 +1569,59 @@ bool SceneEditorGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			if (!request->complete) return false;
 		}
 		reader.Value(bitmap); GUICheckpoint::LoadBitmap(bitmap, true);
+		std::vector<std::string> retained;
+		std::vector<bool> retainedPrivate;
+		bool privateCurrent = false;
+		if (retainedOwners) {
+			size_t count = 0;
+			reader.Value(privateCurrent); reader.Value(count);
+			if (count > text.size()) return false;
+			retained.resize(count);
+			retainedPrivate.resize(count);
+			for (size_t index = 0; index < count; ++index) {
+				bool privateOwner;
+				reader.Value(privateOwner); retainedPrivate[index] = privateOwner;
+				reader.Value(retained[index]); GUICheckpoint::LoadOwnedEntity(retained[index], true);
+			}
+		}
 		if (validateOnly) { reader.Finish(); return true; }
 		if (!m_pController) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
-		const bool keepObject = GUICheckpoint::SaveOwnedEntity(m_pCurrentObject) == current;
+		const bool keepObject = GUICheckpoint::SaveOwnedEntity(m_pCurrentObject) == current && (GUICheckpoint::IsRestoringNetLocalUI() || m_NetPrivateCurrentObject == privateCurrent);
 		const bool keepMenu = GUICheckpoint::SaveOwnedEntity(m_PieMenu.get()) == pie;
-		auto object = keepObject ? std::unique_ptr<Entity>{} : GUICheckpoint::LoadOwnedEntity(current);
+		auto object = keepObject ? std::unique_ptr<Entity>{} : GUICheckpoint::LoadOwnedEntity(current, false, privateCurrent);
 		auto menu = keepMenu ? std::unique_ptr<Entity>{} : GUICheckpoint::LoadOwnedEntity(pie);
 		if ((object && !dynamic_cast<SceneObject*>(object.get())) || (menu && !dynamic_cast<PieMenu*>(menu.get()))) return false;
 		const auto* objectToBlink = blinkCurrent ? (keepObject ? m_pCurrentObject : static_cast<const SceneObject*>(object.get())) : dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(blink));
 		std::unique_ptr<BITMAP, BitmapDeleter> image(GUICheckpoint::LoadBitmap(bitmap));
+		std::vector<std::unique_ptr<Entity>> restoredRetained;
+		std::vector<bool> keepRetained;
+		if (!GUICheckpoint::IsRestoringNetLocalUI()) {
+			restoredRetained.resize(retained.size());
+			keepRetained.resize(retained.size());
+			for (size_t index = 0; index < retained.size(); ++index) {
+				keepRetained[index] = index < m_NetRetainedOwners.size() && m_NetRetainedPrivateOwners[index] == retainedPrivate[index] && GUICheckpoint::SaveOwnedEntity(m_NetRetainedOwners[index].get()) == retained[index];
+				if (!keepRetained[index]) restoredRetained[index] = GUICheckpoint::LoadOwnedEntity(retained[index], false, retainedPrivate[index]);
+			}
+		}
 		if (hasPicker) {
 			if (!m_pPicker) { m_pPicker = new ObjectPickerGUI(); if (m_pPicker->Create(m_pController) < 0) return false; }
 			if (!m_pPicker->LoadCheckpoint(picker)) return false;
 		}
 		reader.Finish();
-		if (!keepObject) { delete m_pCurrentObject; m_pCurrentObject = static_cast<SceneObject*>(object.release()); }
+		if (GUICheckpoint::IsRestoringNetLocalUI()) {
+			ReclaimNetRetainedOwners();
+			if (!keepObject) RetainNetReferencedOwner(std::unique_ptr<Entity>(std::exchange(m_pCurrentObject, nullptr)), m_NetPrivateCurrentObject);
+			if (!keepMenu) RetainNetReferencedOwner(std::move(m_PieMenu), true);
+		} else {
+			if (!keepObject) delete m_pCurrentObject;
+			for (size_t index = 0; index < keepRetained.size(); ++index) if (keepRetained[index]) restoredRetained[index] = std::move(m_NetRetainedOwners[index]);
+			m_NetRetainedOwners.swap(restoredRetained);
+			m_NetRetainedPrivateOwners = std::move(retainedPrivate);
+		}
+		if (!keepObject) {
+			m_pCurrentObject = static_cast<SceneObject*>(object.release());
+			m_NetPrivateCurrentObject = m_pCurrentObject && (GUICheckpoint::IsRestoringNetLocalUI() || privateCurrent);
+		}
 		if (!keepMenu) m_PieMenu.reset(static_cast<PieMenu*>(menu.release()));
 		if (m_PieMenu) m_PieMenu->SetMenuController(m_pController);
 		if (!hasPicker) { delete m_pPicker; m_pPicker = nullptr; }
