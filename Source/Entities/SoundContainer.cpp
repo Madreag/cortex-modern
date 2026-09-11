@@ -271,7 +271,10 @@ int SoundContainer::Save(Writer& writer) const {
 	writer << m_MusicPreEntryTime;
 	writer.NewProperty("MusicExitTime");
 	writer << m_MusicExitTime;
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", base64_encode(SaveCheckpoint(), true));
+	if (writer.IsSnapshot()) {
+		writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", base64_encode(SaveCheckpoint(), true));
+		g_AudioMan.NoteCarriedSoundIdentity(m_CheckpointIdentity);
+	}
 
 	return 0;
 }

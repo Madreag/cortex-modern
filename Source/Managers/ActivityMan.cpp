@@ -158,7 +158,9 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	}
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	AudioMan::CheckpointRegistryScope captureSounds;
-	const std::string runtimeGlobals = CaptureRuntimeGlobals();
+	AudioMan::SoundCheckpointSaveScope carriedSounds;
+	g_LuaMan.CollectGarbageForCheckpoint();
+	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	const std::string worldStructure = g_MovableMan.SaveWorldStructure();
 	const std::string sceneRuntime = scene->SaveRuntimeCheckpoint();
 
@@ -212,9 +214,6 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	writer->NewPropertyWithValue("Activity", activity);
 	writer->NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
 	if (m_StartActivity) writer->NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
-	writer->NewPropertyWithValue("RuntimeGlobals", base64_encode(runtimeGlobals, true));
-	writer->NewPropertyWithValue("WorldStructure", base64_encode(worldStructure, true));
-	writer->NewPropertyWithValue("SceneRuntime", base64_encode(sceneRuntime, true));
 
 	// Pull all stuff from MovableMan into the Scene for saving, so existing Actors/ADoors are saved, without transferring ownership, so the game can continue.
 	// TODO- copying may be faster, and lets us move all this actual writing into async
@@ -224,15 +223,12 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 	} borrowedObjects{*modifiableScene};
 	modifiableScene->RetrieveSceneObjects(false);
 
-	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
-	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
-	writer->NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
-	writer->NewPropertyWithValue("UniqueIDCounter", MovableObject::GetUniqueIDCounter());
-	writer->NewPropertyWithValue("LuaStateCursor", g_LuaMan.GetScriptStateCursor());
-	for (const auto& [tick, uid]: g_MovableMan.GetLockstepJoinQuarantine()) {
-		writer->NewPropertyWithValue("LockstepJoinQuarantine", std::to_string(tick) + "|" + std::to_string(uid));
-	}
+	std::string graphBlock;
 	{
+		auto graphStream = std::make_unique<std::stringstream>();
+		std::stringstream* graphText = graphStream.get();
+		Writer graphWriter(std::move(graphStream));
+		Writer::SnapshotScope graphSnapshot(graphWriter);
 		std::vector<std::string> graphs;
 		std::vector<std::string> luaProblems;
 		if (!g_MovableMan.SerializeScriptGraphs(graphs, luaProblems)) {
@@ -243,12 +239,38 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 			return false;
 		}
 		for (size_t index = 0; index < graphs.size(); ++index) {
-			writer->NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
+			graphWriter.NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
 		}
+		graphBlock = graphText->str();
 	}
+	std::string sceneBlock;
+	{
+		auto sceneStream = std::make_unique<std::stringstream>();
+		std::stringstream* sceneText = sceneStream.get();
+		Writer sceneWriter(std::move(sceneStream));
+		Writer::SnapshotScope sceneSnapshot(sceneWriter);
+		sceneWriter.NewPropertyWithValue("Scene", modifiableScene.get());
+		sceneBlock = sceneText->str();
+	}
+
+	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
+	const std::string runtimeGlobals = CaptureRuntimeGlobals(carriedSounds.Carried());
+
+	writer->NewPropertyWithValue("RuntimeGlobals", base64_encode(runtimeGlobals, true));
+	writer->NewPropertyWithValue("WorldStructure", base64_encode(worldStructure, true));
+	writer->NewPropertyWithValue("SceneRuntime", base64_encode(sceneRuntime, true));
+	writer->NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
+	writer->NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
+	writer->NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
+	writer->NewPropertyWithValue("UniqueIDCounter", MovableObject::GetUniqueIDCounter());
+	writer->NewPropertyWithValue("LuaStateCursor", g_LuaMan.GetScriptStateCursor());
+	for (const auto& [tick, uid]: g_MovableMan.GetLockstepJoinQuarantine()) {
+		writer->NewPropertyWithValue("LockstepJoinQuarantine", std::to_string(tick) + "|" + std::to_string(uid));
+	}
+	*writer->GetStream() << graphBlock;
 	writer->NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", g_SceneMan.GetPlaceObjectsOnLoad());
 	writer->NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", g_SceneMan.GetPlaceUnitsOnLoad());
-	writer->NewPropertyWithValue("Scene", modifiableScene.get());
+	*writer->GetStream() << sceneBlock;
 
 	// Save a small little file with index info (activity and original scene name) so we can display info in the samegame menu without needing to decompress and read through the entire zip
 	std::unique_ptr<std::stringstream> indexStream = std::make_unique<std::stringstream>();
@@ -1059,6 +1081,10 @@ void ActivityMan::RenderUpdate() {
 }
 
 std::string ActivityMan::CaptureRuntimeGlobals() const {
+	return CaptureRuntimeGlobals(std::unordered_set<uint64_t>{});
+}
+
+std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried) const {
 	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	g_LuaMan.CollectGarbageForCheckpoint();
@@ -1071,9 +1097,19 @@ std::string ActivityMan::CaptureRuntimeGlobals() const {
 	writer(g_UInputMan.SaveCheckpoint());
 	writer(g_PostProcessMan.SaveCheckpoint());
 	writer(g_PrimitiveMan.SaveCheckpoint());
-	writer(g_GUISound.SaveCheckpoint());
-	writer(g_MusicMan.SaveCheckpoint());
-	writer(g_AudioMan.SaveCheckpoint());
+	const std::string gui = g_GUISound.SaveCheckpoint();
+	const std::string music = g_MusicMan.SaveCheckpoint();
+	writer(gui);
+	writer(music);
+	if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
+		writer(g_AudioMan.SaveCheckpoint());
+	} else {
+		std::unordered_set<uint64_t> managers;
+		g_AudioMan.CollectManagerSoundIdentities(managers);
+		writer(g_AudioMan.SaveCheckpoint([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
+			return !identity || worldCarried.contains(identity) || managers.contains(identity);
+		}));
+	}
 	return writer.Text();
 }
 
