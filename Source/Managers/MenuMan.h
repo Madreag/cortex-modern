@@ -15,6 +15,7 @@ namespace RTE {
 	class MainMenuGUI;
 	class ScenarioGUI;
 	class PauseMenuGUI;
+	class NetModerationGUI;
 
 	/// The singleton manager responsible for handling all the out-of-game menu screens (main menu, scenario menu, etc.).
 	class MenuMan : public Singleton<MenuMan> {
@@ -42,6 +43,11 @@ namespace RTE {
 
 		/// Draws the MenuMan to the screen.
 		void Draw() const;
+		void UpdateNetworkUI();
+		void DrawNetworkUI() const;
+		bool ToggleNetworkPanel();
+		bool IsNetworkPanelOpen() const;
+		NetModerationGUI* GetNetworkPanel() const { return m_NetworkPanel.get(); }
 #pragma endregion
 
 #pragma region Getters/Setters
@@ -85,6 +91,7 @@ namespace RTE {
 		std::unique_ptr<MainMenuGUI> m_MainMenu; //!< The main menu screen.
 		std::unique_ptr<ScenarioGUI> m_ScenarioMenu; //!< The scenario menu screen.
 		std::unique_ptr<PauseMenuGUI> m_PauseMenu; //!< The game pause menu screen.
+		std::unique_ptr<NetModerationGUI> m_NetworkPanel;
 
 #pragma region Updates
 		/// Sets the active menu screen to be enabled, updated and drawn to the screen, besides the title screen which is always active.

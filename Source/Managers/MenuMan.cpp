@@ -16,6 +16,7 @@
 #include "MainMenuGUI.h"
 #include "ScenarioGUI.h"
 #include "PauseMenuGUI.h"
+#include "NetModerationGUI.h"
 #include "MetagameGUI.h"
 #include "LoadingScreen.h"
 #include "System.h"
@@ -37,6 +38,7 @@ void MenuMan::Initialize(bool firstTimeInit) {
 	m_MainMenu = std::make_unique<MainMenuGUI>(m_GUIScreen.get(), m_GUIInput.get());
 	m_ScenarioMenu = std::make_unique<ScenarioGUI>(m_GUIScreen.get(), m_GUIInput.get());
 	m_PauseMenu = std::make_unique<PauseMenuGUI>(m_GUIScreen.get(), m_GUIInput.get());
+	m_NetworkPanel = std::make_unique<NetModerationGUI>(m_GUIScreen.get());
 
 	// TODO: MetaGameGUI doesn't seem to actually do anything with the Controller but removing conflicts with the second Create() method so that needs to be sorted out sometime in the year 3000.
 	m_MenuController = std::make_unique<Controller>(Controller::CIM_PLAYER);
@@ -47,6 +49,7 @@ void MenuMan::Reinitialize() {
 	g_MetaMan.GetGUI()->Destroy();
 
 	m_PauseMenu.reset();
+	m_NetworkPanel.reset();
 	m_ScenarioMenu.reset();
 	m_MainMenu.reset();
 	m_TitleScreen.reset();
@@ -108,6 +111,11 @@ void MenuMan::SkipTitleIntroForAutomation() {
 	m_TitleScreen->SkipIntro();
 	SetActiveMenu();
 }
+
+void MenuMan::UpdateNetworkUI() { if (m_NetworkPanel) m_NetworkPanel->Update(); }
+void MenuMan::DrawNetworkUI() const { if (m_NetworkPanel) m_NetworkPanel->Draw(); }
+bool MenuMan::IsNetworkPanelOpen() const { return m_NetworkPanel && m_NetworkPanel->IsOpen(); }
+bool MenuMan::ToggleNetworkPanel() { return m_NetworkPanel && m_NetworkPanel->SetOpen(!m_NetworkPanel->IsOpen()); }
 
 void MenuMan::HandleTransitionIntoMenuLoop() {
 	if (g_MetaMan.GameInProgress()) {
