@@ -18,9 +18,16 @@
 #include "MovableObject.h"
 #include "MovableMan.h"
 #include "Actor.h"
+#include "AEmitter.h"
 #include "HDFirearm.h"
+#include "GUISound.h"
+#include "LuaMan.h"
+#include "MusicMan.h"
 #include "NetLockstep.h"
 #include "ScenarioRunner.h"
+#include "Scene.h"
+#include "SceneObject.h"
+#include "Writer.h"
 
 #include <iostream>
 
@@ -28,9 +35,11 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <set>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 
 using namespace RTE;
 
@@ -1061,9 +1070,15 @@ void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint6
 void AudioMan::UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
 	m_LiveCheckpointSoundContainers.erase(container);
 	auto found = m_CheckpointSoundContainers.find(identity);
-	if (found == m_CheckpointSoundContainers.end()) return;
-	std::erase(found->second, container);
-	if (found->second.empty()) m_CheckpointSoundContainers.erase(found);
+	if (found != m_CheckpointSoundContainers.end()) {
+		std::erase(found->second, container);
+		if (found->second.empty()) m_CheckpointSoundContainers.erase(found);
+	}
+	if (!m_RestoredSoundRegistryActive) return;
+	auto restored = m_RestoredSoundContainers.find(identity);
+	if (restored == m_RestoredSoundContainers.end()) return;
+	std::erase(restored->second, container);
+	if (restored->second.empty()) m_RestoredSoundContainers.erase(restored);
 }
 
 SoundContainer* AudioMan::FindCheckpointSoundContainer(uint64_t identity) const {
@@ -1105,6 +1120,155 @@ AudioMan::CheckpointRegistryScope::CheckpointRegistryScope() : m_Original(g_Audi
 AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(m_Original));
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_Cursor);
+}
+
+thread_local AudioMan::SoundCheckpointSaveScope* AudioMan::SoundCheckpointSaveScope::s_Current = nullptr;
+
+AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope() : m_Previous(s_Current) {
+	s_Current = this;
+}
+
+AudioMan::SoundCheckpointSaveScope::~SoundCheckpointSaveScope() {
+	g_AudioMan.RememberCarriedSoundIdentities(m_Carried);
+	s_Current = m_Previous;
+}
+
+void AudioMan::SoundCheckpointSaveScope::Note(uint64_t identity) {
+	if (identity) m_Carried.insert(identity);
+}
+
+void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
+	if (auto* scope = SoundCheckpointSaveScope::Current()) scope->Note(identity);
+}
+
+void AudioMan::RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried) {
+	m_LastCarriedSoundIdentities = std::move(carried);
+}
+
+namespace {
+	void NoteSoundContainerIdentity(const std::string& native, std::unordered_set<uint64_t>& out) {
+		if (native.empty()) return;
+		try {
+			CheckpointReader reader(native, SoundContainer::CheckpointVersion(native));
+			std::string entity;
+			uint64_t identity = 0;
+			reader.Value(entity);
+			reader.Value(identity);
+			if (identity) out.insert(identity);
+		} catch (const std::exception&) {}
+	}
+
+	void NoteMusicSound(const std::string& text, std::unordered_set<uint64_t>& out) {
+		if (text.empty()) return;
+		CheckpointReader reader(text, "MusicSound1");
+		std::string native;
+		reader.Value(native);
+		NoteSoundContainerIdentity(native, out);
+	}
+
+	void NoteMusicSection(const std::string& text, std::unordered_set<uint64_t>& out) {
+		if (text.empty()) return;
+		CheckpointReader reader(text, "MusicSection1");
+		std::string entity;
+		std::vector<std::string> transitions, sounds;
+		unsigned int lastTransition = 0, lastSound = 0;
+		std::vector<unsigned int> transitionQueue, queue;
+		int cycle = 0;
+		std::string type;
+		reader.Value(entity);
+		reader.Value(transitions);
+		reader.Value(lastTransition);
+		reader.Value(transitionQueue);
+		reader.Value(sounds);
+		reader.Value(lastSound);
+		reader.Value(queue);
+		reader.Value(cycle);
+		reader.Value(type);
+		for (const std::string& sound: transitions) NoteMusicSound(sound, out);
+		for (const std::string& sound: sounds) NoteMusicSound(sound, out);
+	}
+
+	void NoteMusicSong(const std::string& text, std::unordered_set<uint64_t>& out) {
+		if (text.empty()) return;
+		CheckpointReader reader(text, "MusicSong1");
+		std::string entity, fallback;
+		std::vector<std::string> sections;
+		reader.Value(entity);
+		reader.Value(fallback);
+		reader.Value(sections);
+		NoteMusicSection(fallback, out);
+		for (const std::string& section: sections) NoteMusicSection(section, out);
+	}
+}
+
+void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const {
+	g_GUISound.VisitCheckpointSounds([&out](size_t, const SoundContainer& sound) {
+		if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
+	});
+	try {
+		CheckpointReader reader(g_MusicMan.SaveCheckpoint(), "MusicMan1");
+		bool playing = false;
+		std::string interrupting, song, nextType, currentType, previous, current;
+		int nextSection = 0;
+		std::array<int, 3> nextSound{};
+		Timer fadeTimer, timer;
+		bool fadePrevious = false, returnToDynamic = false;
+		double pausedTime = 0;
+		reader.Value(playing);
+		reader.Value(interrupting);
+		reader.Value(song);
+		reader.Value(nextType);
+		reader.Value(currentType);
+		reader.Value(nextSection);
+		reader.Value(previous);
+		reader.Value(current);
+		reader.Value(nextSound);
+		reader.Value(fadeTimer);
+		reader.Value(fadePrevious);
+		reader.Value(timer);
+		reader.Value(pausedTime);
+		reader.Value(returnToDynamic);
+		NoteMusicSound(interrupting, out);
+		NoteMusicSong(song, out);
+		NoteMusicSound(previous, out);
+		NoteMusicSound(current, out);
+	} catch (const std::exception&) {}
+}
+
+AudioMan::RestoredSoundRegistryScope::RestoredSoundRegistryScope() {
+	g_AudioMan.m_RestoredSoundContainers.clear();
+	g_AudioMan.m_RestoredManagerIdentities.clear();
+	g_AudioMan.m_RestoredSoundRegistryActive = true;
+	g_AudioMan.m_RestoredSoundRegistryRecording = true;
+}
+
+AudioMan::RestoredSoundRegistryScope::~RestoredSoundRegistryScope() {
+	g_AudioMan.m_RestoredSoundRegistryRecording = false;
+	g_AudioMan.m_RestoredSoundRegistryActive = false;
+	g_AudioMan.m_RestoredSoundContainers.clear();
+	g_AudioMan.m_RestoredManagerIdentities.clear();
+}
+
+void AudioMan::StopRecordingRestoredSoundRegistry() {
+	m_RestoredSoundRegistryRecording = false;
+}
+
+SoundContainer* AudioMan::FindRestoredCheckpointSoundContainer(uint64_t identity) const {
+	const auto found = m_RestoredSoundContainers.find(identity);
+	return found == m_RestoredSoundContainers.end() || found->second.empty() ? nullptr : found->second.back();
+}
+
+void AudioMan::RefreshRestoredManagerIdentities() {
+	m_RestoredManagerIdentities.clear();
+	CollectManagerSoundIdentities(m_RestoredManagerIdentities);
+}
+
+SoundContainer* AudioMan::ResolveCheckpointVoiceOwner(uint64_t identity) const {
+	if (!identity) return nullptr;
+	if (!m_RestoredSoundRegistryActive) return FindCheckpointSoundContainer(identity);
+	if (SoundContainer* owner = FindRestoredCheckpointSoundContainer(identity)) return owner;
+	if (m_RestoredManagerIdentities.contains(identity)) return FindCheckpointSoundContainer(identity);
+	return nullptr;
 }
 
 int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance) {
@@ -1429,9 +1593,52 @@ namespace {
 			} catch (const std::exception& error) { return refuse(error.what()); }
 		}
 	};
+
+	uint64_t ArchivedVoiceOwner(const std::string& text, int voiceIdentity) {
+		AudioRuntime state;
+		std::string refusal;
+		if (!state.Load(text, &refusal)) throw std::runtime_error("could not parse audio archive: " + refusal);
+		for (const AudioCheckpoint::Voice& voice: state.voices) {
+			if (voice.identity == voiceIdentity) return voice.owner;
+		}
+		throw std::runtime_error("voice " + std::to_string(voiceIdentity) + " is absent from the audio archive");
+	}
+
+	void CheckCarriedAudioOwners(const std::string& text, const std::unordered_set<uint64_t>& carried) {
+		std::unordered_set<uint64_t> managers;
+		g_AudioMan.CollectManagerSoundIdentities(managers);
+		AudioRuntime state;
+		std::string refusal;
+		if (!state.Load(text, &refusal)) throw std::runtime_error("could not parse audio archive: " + refusal);
+		for (const AudioCheckpoint::Voice& voice: state.voices) {
+			if (voice.owner && !carried.contains(voice.owner) && !managers.contains(voice.owner)) {
+				throw std::runtime_error("voice " + std::to_string(voice.identity) + " owner " + std::to_string(voice.owner) + " is not in the carried set");
+			}
+		}
+	}
+
+	std::string ContainedAudioSave(const AudioMan::SoundCheckpointSaveScope& scope) {
+		std::unordered_set<uint64_t> managers;
+		g_AudioMan.CollectManagerSoundIdentities(managers);
+		return g_AudioMan.SaveCheckpoint([&scope, &managers](uint64_t identity, const SoundContainer*) {
+			return !identity || scope.Contains(identity) || managers.contains(identity);
+		});
+	}
+
+	void WriteSnapshotObject(const SceneObject* object) {
+		auto stream = std::make_unique<std::stringstream>();
+		Writer writer(std::move(stream));
+		Writer::SnapshotScope snapshot(writer);
+		writer.NewProperty("ScriptEntity");
+		Scene::SaveSceneObject(writer, object, false, true);
+	}
 }
 
 std::string AudioMan::SaveCheckpoint() const {
+	return SaveCheckpoint(std::function<bool(uint64_t, const SoundContainer*)>{});
+}
+
+std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
 	AudioRuntime state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
 	state.nextSoundContainer = m_NextSoundContainerIdentity;
@@ -1466,11 +1673,19 @@ std::string AudioMan::SaveCheckpoint() const {
 			if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING)) continue;
 			state.samples.push_back(AudioCheckpoint::Sample::Capture(path, sound));
 		}
+		std::set<std::string> disownedPresets;
 		for (const auto& [identity, voice]: m_PlayingVoices) {
 			int bus = 0;
 			FMOD::ChannelGroup* group = nullptr;
 			if (voice.channel && voice.channel->getChannelGroup(&group) == FMOD_OK) bus = group == m_UIChannelGroup ? 1 : group == m_MusicChannelGroup ? 2 : 0;
-			state.voices.push_back(AudioCheckpoint::Voice::Capture(identity, voice.owner ? voice.owner->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus));
+			uint64_t ownerIdentity = voice.owner ? voice.owner->GetCheckpointIdentity() : 0;
+			if (contained && ownerIdentity && !contained(ownerIdentity, voice.owner)) {
+				if (disownedPresets.insert(voice.owner->GetPresetName()).second) {
+					std::cout << "[audio-checkpoint] disowned voice owner " << voice.owner->GetPresetName() << std::endl;
+				}
+				ownerIdentity = 0;
+			}
+			state.voices.push_back(AudioCheckpoint::Voice::Capture(identity, ownerIdentity, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus));
 		}
 		TraceCheckpointBoundary("save-captured");
 	}
@@ -1884,6 +2099,68 @@ bool AudioMan::RunCheckpointSelfTest() {
 		AudioCheckpoint::Require(m_AudioSystem->update());
 		if (!LoadCheckpoint(checkpoint) || replacement->SaveCheckpoint() != native || GetSoundContainerPlaybackCheckpoint(replacement.get()) != playback) throw std::runtime_error("saved audio cohort did not resume stopped playback");
 		std::cout << "[audio-checkpoint-selftest] stale-owner controls/firearm cleanup, additional and stopped playback restore PASS" << std::endl;
+		try {
+			const auto* actorPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
+			const auto* woundPreset = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", "Leaking Machinery", "Base.rte"));
+			if (!actorPreset || !woundPreset) throw std::runtime_error("missing wound owner selftest presets");
+			std::unique_ptr<Actor> actor(static_cast<Actor*>(actorPreset->Clone()));
+			AEmitter* wound = static_cast<AEmitter*>(woundPreset->Clone());
+			actor->AddWound(wound, Vector(), false);
+			wound->Update();
+			SoundContainer* burst = wound->GetBurstSound();
+			if (!burst) throw std::runtime_error("wound has no burst sound");
+			if (burst->GetPlayingChannels()->empty()) {
+				burst->SetPaused(true);
+				burst->SetImmobile(true);
+				burst->SetLoopSetting(-1);
+				if (!burst->Play()) throw std::runtime_error("wound burst voice did not play");
+			}
+			const int woundVoice = *burst->GetPlayingChannels()->begin();
+			Attachable* kept = actor->RemoveAttachable(wound, false, false);
+			if (!kept) throw std::runtime_error("RemoveAttachable did not keep the wound");
+			auto& wounds = const_cast<std::vector<AEmitter*>&>(actor->GetWoundList());
+			std::erase(wounds, wound);
+			{
+				SoundCheckpointSaveScope scope;
+				WriteSnapshotObject(actor.get());
+				const std::string audio = ContainedAudioSave(scope);
+				if (ArchivedVoiceOwner(audio, woundVoice) != 0) throw std::runtime_error("orphaned wound voice still named its owner");
+				CheckCarriedAudioOwners(audio, scope.Carried());
+				if (!LoadCheckpoint(audio) || m_PlayingVoices.at(woundVoice).owner) throw std::runtime_error("disowned wound voice did not apply on a clean owner");
+			}
+			delete kept;
+			std::cout << "[audio-checkpoint-selftest] PASS orphaned_wound_owner_is_disowned" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL orphaned_wound_owner_is_disowned " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
+			std::set<int> before;
+			for (const auto& [identity, voice]: m_PlayingVoices) before.insert(identity);
+			if (g_LuaMan.GetMasterScriptState().RunScriptString("_W19OwnerSound = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); _W19OwnerSound.Loops = -1; _W19OwnerSound.Immobile = true; _W19OwnerSound.Paused = true; _W19OwnerPlayed = _W19OwnerSound:Play()") < 0) {
+				throw std::runtime_error("lua copy owner did not play");
+			}
+			int luaVoice = 0;
+			for (const auto& [identity, voice]: m_PlayingVoices) {
+				if (!before.contains(identity) && voice.owner) { luaVoice = identity; break; }
+			}
+			if (!luaVoice) throw std::runtime_error("lua copy owner produced no voice");
+			{
+				SoundCheckpointSaveScope scope;
+				std::vector<std::string> graphs, problems;
+				if (!g_MovableMan.SerializeScriptGraphs(graphs, problems)) throw std::runtime_error("lua copy graph serialize failed");
+				const std::string audio = ContainedAudioSave(scope);
+				if (ArchivedVoiceOwner(audio, luaVoice) != 0) throw std::runtime_error("lua copy owner was archived");
+				CheckCarriedAudioOwners(audio, scope.Carried());
+			}
+			g_LuaMan.GetMasterScriptState().RunScriptString("_W19OwnerSound = nil; _W19OwnerPlayed = nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			std::cout << "[audio-checkpoint-selftest] PASS lua_copy_owner_is_disowned" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL lua_copy_owner_is_disowned " << error.what() << std::endl;
+			ok = false;
+		}
+		if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("owner selftests left the audio checkpoint unrestored");
 		std::unique_ptr<SoundContainer> orphan(static_cast<SoundContainer*>(preset->Clone()));
 		orphan->SetPaused(true); orphan->SetImmobile(true); orphan->SetLoopSetting(-1);
 		if (!orphan->Play()) throw std::runtime_error("orphan test sound did not play");
