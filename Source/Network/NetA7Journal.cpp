@@ -181,7 +181,7 @@ namespace RTE {
 			return std::fwrite(line.data(), 1, line.size(), s_State.file) == line.size() && std::fflush(s_State.file) == 0;
 		}
 
-		void Writer() {
+		void DrainJournal() {
 			uint64_t sequence = 0, reportedGaps = 0;
 			std::map<std::string, uint64_t> leaveOrdinals;
 			try {
@@ -260,7 +260,7 @@ namespace RTE {
 			{"capabilities", {"identity", "listening", "commit", "running", "progress", "terminal", "connect_gate", "handshake_age", "drop", "reclaim", "resumption", "leave_exchange", "save_gap", "owner_observation", "decision_clock_v1", "journal_integrity_v1", "loaded_ticket_sha256_v1", "leave_queue_clock_v1", "local_player_view_v1"}},
 			{"shared_hash_algorithm", c_HashAlgorithm}, {"shared_hash_scope", "existing approved SimGatedHash feeds; lua_state is RNG only"},
 			{"clock_domains", {{"at_ms", "journal_writer_delivery"}, {"captured_ms", "journal_producer_capture"}, {"session_ms", "authority_session_decision"}}}});
-		s_State.writer = std::thread(Writer);
+		s_State.writer = std::thread(DrainJournal);
 		return true;
 	}
 
