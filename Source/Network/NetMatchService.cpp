@@ -306,10 +306,12 @@ static std::string ResyncSaveName() {
 					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 				}
 			});
-			// UpdateSim already incremented; this tick is the drop frame and has not been simulated.
-			dropFrame = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-			const uint64_t lastCommitted = dropFrame > 0 ? dropFrame - 1 : 0;
-			if (dropFrame > 0) {
+			// The healed round resumes at the first frame the sim has not applied.
+			bool rewindSim = false;
+			if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), dropFrame, rewindSim, error)) {
+				return false;
+			}
+			if (rewindSim) {
 				long long time = g_TimerMan.GetSimTimeTicks();
 				if (!g_TimerMan.IsSimTimeFrozen()) {
 					const long long delta = g_TimerMan.GetDeltaTimeTicks();
@@ -317,7 +319,7 @@ static std::string ResyncSaveName() {
 						time -= delta;
 					}
 				}
-				g_TimerMan.RewindSimTo(static_cast<long long>(lastCommitted), time);
+				g_TimerMan.RewindSimTo(static_cast<long long>(dropFrame - 1), time);
 			}
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";

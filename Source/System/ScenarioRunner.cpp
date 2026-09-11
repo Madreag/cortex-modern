@@ -1157,6 +1157,22 @@ namespace RTE {
 		return dropFrame;
 	}
 
+	uint64_t ScenarioRunner::GetLockstepResumeFrame() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetResumeFrame() : 0;
+	}
+
+	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, bool& outRewind, std::string* error) {
+		const uint64_t lastApplied = resumeFrame > 0 ? resumeFrame - 1 : 0;
+		if (simUpdateCount != lastApplied && simUpdateCount != resumeFrame) {
+			if (error) *error = "resync sim tick " + std::to_string(simUpdateCount) + " is neither the applied tick " + std::to_string(lastApplied) + " nor the drop frame " + std::to_string(resumeFrame);
+			return false;
+		}
+		outDropFrame = resumeFrame;
+		// A failed frame wait leaves the counter on the unsimulated drop frame, a deferred stop on the applied tick.
+		outRewind = simUpdateCount == resumeFrame && resumeFrame > 0;
+		return true;
+	}
+
 	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
