@@ -7877,6 +7877,121 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestReplayPlayerBindings(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A5ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A5ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A5ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43125, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			NetGamePlayerBindings hostBinding;
+			hostBinding.players[0].active = true;
+			hostBinding.players[0].team = 0;
+			hostBinding.players[0].controlledUID = 100;
+			NetGamePlayerBindings clientBinding;
+			clientBinding.players[0].active = true;
+			clientBinding.players[0].team = 1;
+			clientBinding.players[0].controlledUID = 200;
+			const std::vector<NetGameCommand> hostCommands{{1, hostBinding}};
+			const std::vector<NetGameCommand> clientCommands{{2, clientBinding}};
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, hostCommands, error) ||
+			    !client.QueueLocalInput(0, {MakeFrame(200, 1)}, clientCommands, error)) {
+				return false;
+			}
+			std::vector<NetGameCommand> liveCommands;
+			std::vector<ControllerFrame> liveFrames;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&]() {
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) {
+					if (ready.frame == 0) {
+						liveFrames = ready.localFrames;
+						liveFrames.insert(liveFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+						std::sort(liveFrames.begin(), liveFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
+							return lhs.actorUniqueID < rhs.actorUniqueID;
+						});
+						liveCommands = ready.localCommands;
+						liveCommands.insert(liveCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+					}
+					++hostReady;
+				}
+				while (client.PopReadyFrame(ready)) {
+					++clientReady;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect();
+					return hostReady >= 1 && clientReady >= 1;
+				}, error, 8000)) {
+				return false;
+			}
+			std::map<uint8_t, NetGamePlayerBindings> liveBindings;
+			for (const NetGameCommand& command: liveCommands) {
+				if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+					liveBindings[command.senderPeerId] = *bindings;
+				}
+			}
+			if (liveBindings.size() != 2 || liveBindings[1] != hostBinding || liveBindings[2] != clientBinding) {
+				*error = "the live ready frame did not keep both peers' bindings";
+				return false;
+			}
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-binding-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			if (created) {
+				*error = "could not create binding-replay test directory";
+				return false;
+			}
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			const NetMatchConfig replayConfig = NetMatchConfigUtil::MakeDefault(0x50484134424E4431ULL);
+			NetMatchReplayWriter writer;
+			if (!writer.Open(path.string(), replayConfig, error)) {
+				return false;
+			}
+			if (!writer.WriteFrame(0, liveFrames, liveCommands, {}, {}, error)) {
+				return false;
+			}
+			writer.Close();
+			NetMatchReplayReader reader;
+			if (!reader.Open(path.string(), error)) {
+				return false;
+			}
+			NetLockstepFrame recorded;
+			bool eof = false;
+			if (!reader.ReadFrame(recorded, eof, error) || recorded.targetFrame != 0) {
+				*error = "the two-binding record did not read back";
+				return false;
+			}
+			std::map<uint8_t, NetGamePlayerBindings> replayedBindings;
+			for (const NetGameCommand& command: recorded.commands) {
+				if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+					replayedBindings[command.senderPeerId] = *bindings;
+				}
+			}
+			if (replayedBindings != liveBindings) {
+				*error = "replayed bindings per sender did not equal the live ones";
+				return false;
+			}
+			reader.Close();
+			std::cout << "[net-lockstep-selftest] PASS replay_player_bindings senders=2" << std::endl;
+			return true;
+		}
+
 		bool TestValueObservationNonOwnerDropped(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -8101,6 +8216,7 @@ namespace RTE {
 		    !TestValueObservationV19StillDecodes(&error) ||
 		    !TestValueObservationRelay(&error) ||
 		    !TestValueObservationReplay(&error) ||
+		    !TestReplayPlayerBindings(&error) ||
 		    !TestValueObservationNonOwnerDropped(&error) ||
 		    !TestValueObservationOverflowCarry(&error) ||
 		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||

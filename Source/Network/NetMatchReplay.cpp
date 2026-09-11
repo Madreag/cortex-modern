@@ -2,6 +2,8 @@
 
 #include "NetLobbyProtocol.h"
 
+#include <algorithm>
+
 namespace RTE {
 
 	namespace {
@@ -27,6 +29,34 @@ namespace RTE {
 				return false;
 			}
 			outValue = ReadU32(bytes);
+			return true;
+		}
+
+		size_t LockstepPacketSize(const uint8_t* data, size_t size) {
+			if (size < NetLockstepCodec::c_HeaderBytes) {
+				return 0;
+			}
+			const uint32_t payload = ReadU32(data + 12);
+			const size_t total = static_cast<size_t>(NetLockstepCodec::c_HeaderBytes) + payload;
+			return total > size ? 0 : total;
+		}
+
+		bool EncodeSenderPacket(const NetLockstepFrame& record, std::vector<uint8_t>& out, std::string* error) {
+			NetLockstepError codecError;
+			size_t observationsEncoded = record.observations.size();
+			size_t valueObservationsEncoded = record.valueObservations.size();
+			if (!NetLockstepCodec::Encode({record}, out, &codecError, nullptr, &observationsEncoded, &valueObservationsEncoded)) {
+				if (error) *error = "could not encode a replay frame: " + codecError.message;
+				return false;
+			}
+			if (observationsEncoded < record.observations.size()) {
+				if (error) *error = "a replay frame's sound observations do not fit one record";
+				return false;
+			}
+			if (valueObservationsEncoded < record.valueObservations.size()) {
+				if (error) *error = "a replay frame's value observations do not fit one record";
+				return false;
+			}
 			return true;
 		}
 	} // namespace
@@ -102,22 +132,60 @@ namespace RTE {
 			}
 		}
 		std::vector<uint8_t> wireBytes;
-		NetLockstepError codecError;
-		// A record stands on its own, so it spells every observation key out; if a tick had more of them
-		// than one packet holds, say so rather than write a recording that is quietly short.
-		size_t observationsEncoded = observations.size();
-		size_t valueObservationsEncoded = valueObservations.size();
-		if (!NetLockstepCodec::Encode({record}, wireBytes, &codecError, nullptr, &observationsEncoded, &valueObservationsEncoded)) {
-			if (error) *error = "could not encode a replay frame: " + codecError.message;
-			return false;
-		}
-		if (observationsEncoded < observations.size()) {
-			if (error) *error = "a replay frame's sound observations do not fit one record";
-			return false;
-		}
-		if (valueObservationsEncoded < valueObservations.size()) {
-			if (error) *error = "a replay frame's value observations do not fit one record";
-			return false;
+		const size_t bindingCount = static_cast<size_t>(std::count_if(commands.begin(), commands.end(), [](const NetGameCommand& command) {
+			return std::holds_alternative<NetGamePlayerBindings>(command.payload);
+		}));
+		if (bindingCount <= 1) {
+			if (!EncodeSenderPacket(record, wireBytes, error)) {
+				return false;
+			}
+		} else {
+			std::vector<uint8_t> senders;
+			auto note = [&senders](uint8_t sender) {
+				if (std::find(senders.begin(), senders.end(), sender) == senders.end()) {
+					senders.push_back(sender);
+				}
+			};
+			for (const NetGameCommand& command : commands) {
+				note(command.senderPeerId);
+			}
+			for (const NetSoundObservation& observation : observations) {
+				note(observation.senderPeerId);
+			}
+			for (const NetValueObservation& observation : valueObservations) {
+				note(observation.senderPeerId);
+			}
+			if (senders.empty()) {
+				senders.push_back(1);
+			}
+			for (uint8_t sender : senders) {
+				NetLockstepFrame part;
+				part.senderPeerId = sender;
+				part.targetFrame = frame;
+				if (sender == senders.front()) {
+					part.frames = frames;
+				}
+				for (const NetGameCommand& command : commands) {
+					if (command.senderPeerId == sender) {
+						part.commands.push_back(command);
+					}
+				}
+				for (const NetSoundObservation& observation : observations) {
+					if (observation.senderPeerId == sender) {
+						part.observations.push_back(observation);
+					}
+				}
+				for (const NetValueObservation& observation : valueObservations) {
+					if (observation.senderPeerId == sender) {
+						part.valueObservations.push_back(observation);
+					}
+				}
+				std::vector<uint8_t> packet;
+				if (!EncodeSenderPacket(part, packet, error)) {
+					return false;
+				}
+				wireBytes.insert(wireBytes.end(), packet.begin(), packet.end());
+			}
 		}
 		std::vector<uint8_t> bytes;
 		bytes.reserve(4 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
@@ -309,17 +377,39 @@ namespace RTE {
 				return false;
 			}
 		}
-		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes.data() + wireOffset, wireLength, m_ControllerFrameVersion);
-		if (!decoded.ok) {
-			if (error) *error = "could not decode a replay record: " + decoded.error.message;
-			return false;
+		size_t consumed = 0;
+		bool haveFrame = false;
+		while (consumed < wireLength) {
+			const size_t packetSize = LockstepPacketSize(bytes.data() + wireOffset + consumed, wireLength - consumed);
+			if (packetSize == 0) {
+				if (error) *error = "invalid replay wire frame length";
+				return false;
+			}
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes.data() + wireOffset + consumed, packetSize, m_ControllerFrameVersion);
+			if (!decoded.ok) {
+				if (error) *error = "could not decode a replay record: " + decoded.error.message;
+				return false;
+			}
+			const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
+			if (!frame) {
+				if (error) *error = "replay record is not a frame";
+				return false;
+			}
+			if (!haveFrame) {
+				outFrame = *frame;
+				haveFrame = true;
+			} else {
+				outFrame.frames.insert(outFrame.frames.end(), frame->frames.begin(), frame->frames.end());
+				outFrame.commands.insert(outFrame.commands.end(), frame->commands.begin(), frame->commands.end());
+				outFrame.observations.insert(outFrame.observations.end(), frame->observations.begin(), frame->observations.end());
+				outFrame.valueObservations.insert(outFrame.valueObservations.end(), frame->valueObservations.begin(), frame->valueObservations.end());
+			}
+			consumed += packetSize;
 		}
-		const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
-		if (!frame) {
+		if (!haveFrame) {
 			if (error) *error = "replay record is not a frame";
 			return false;
 		}
-		outFrame = *frame;
 		if (m_Version >= 5) {
 			const size_t senderOffset = wireOffset + wireLength;
 			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size() + outFrame.valueObservations.size()) {
