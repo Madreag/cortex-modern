@@ -338,7 +338,8 @@ namespace RTE {
 			return "";
 		}
 		const MovableMan::SpeculationStats& stats = g_MovableMan.GetSpeculationStats();
+		const std::string events = PreviewEventLedger::Describe();
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
-		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations);
+		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + (events.empty() ? std::string() : " " + events);
 	}
 } // namespace RTE
