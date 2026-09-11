@@ -3969,6 +3969,11 @@ namespace RTE {
 					++m_Stats.ignoredAdmissionFaults;
 					break;
 				}
+				// The old drop's close can land on the refilled seat; this round already listed them.
+				if (m_RelayHost && lockstepPeer != 0 && IgnoreStaleRefillLeave(lockstepPeer, nowMs)) {
+					++m_Stats.ignoredAdmissionFaults;
+					break;
+				}
 				// The relay host adjudicates a client drop as a leave at the first frame it has no data
 				// for, so the survivors keep playing; a host drop still ends the match. The relayed
 				// frames precede this notice on the reliable lane, so no survivor learns of the leave
@@ -4342,6 +4347,11 @@ namespace RTE {
 		}
 		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::PeerDropped) {
 			if (IsKnownRemotePeer(stop.senderPeerId)) {
+				if (m_Config.resumeFromSnapshot && m_RemoteTransports.contains(stop.senderPeerId) &&
+				    stop.frame <= m_Config.startFrame) {
+					++m_Stats.ignoredAdmissionFaults;
+					return;
+				}
 				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, stop.reason == NetLockstepStopReason::PeerLeft);
 			}
 			return;
@@ -4543,12 +4553,19 @@ namespace RTE {
 			}
 			return;
 		}
+		std::cout << "[net-match] rejoin: " << DescribePeer(peerId) << " reconnected - resyncing the match" << std::endl;
 		RequestResync(resolution == NetLockstepHoldResolution::Reclaimed ? "seat reclaimed" : "seat substituted", true);
 		(void)nowMs;
 	}
 
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
 		return !m_LeftSeatsHeld.empty();
+	}
+
+	bool NetLockstepCoordinator::IgnoreStaleRefillLeave(uint8_t peerId, uint64_t) const {
+		return m_Config.resumeFromSnapshot && m_RemoteTransports.contains(peerId) &&
+		       m_PeerLeaveFrames.find(peerId) == m_PeerLeaveFrames.end() &&
+		       m_PeerLastHeardMs.find(peerId) == m_PeerLastHeardMs.end();
 	}
 
 	bool NetLockstepCoordinator::SeatIsRefilling(uint8_t peerId) const {
