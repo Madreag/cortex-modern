@@ -1344,6 +1344,25 @@ std::string FrameMan::SaveCheckpoint() const {
 	return writer.Text();
 }
 
+std::string FrameMan::SaveNetLocalState() const {
+	CheckpointWriter writer("FrameManLocal1");
+	writer(m_HSplit, m_VSplit);
+	VisitCheckpoint(writer, *this);
+	return writer.Text();
+}
+
+bool FrameMan::LoadNetLocalState(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader reader(text, "FrameManLocal1", validateOnly);
+		bool hsplit, vsplit;
+		reader.Value(hsplit); reader.Value(vsplit);
+		reader.OnCommit([this, hsplit, vsplit] { if (m_HSplit != hsplit || m_VSplit != vsplit) ResetSplitScreens(hsplit, vsplit); });
+		VisitCheckpoint(reader, *this);
+		reader.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
 bool FrameMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
 		const bool legacy = text.starts_with("9 FrameMan1 ");
