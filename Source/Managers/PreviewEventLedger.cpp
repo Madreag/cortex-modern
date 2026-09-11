@@ -1,5 +1,6 @@
 #include "PreviewEventLedger.h"
 
+#include "AudioMan.h"
 #include "TimerMan.h"
 
 #include <algorithm>
@@ -53,6 +54,7 @@ namespace RTE {
 	}
 
 	void PreviewEventLedger::Retire(Entry& entry) {
+		for (int voice: entry.voices) g_AudioMan.RetirePredictedVoice(voice);
 		entry.voices.clear();
 	}
 
