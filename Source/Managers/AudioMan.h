@@ -124,6 +124,8 @@ namespace RTE {
 			RestorePlayPhaseScope(const RestorePlayPhaseScope&) = delete;
 			RestorePlayPhaseScope& operator=(const RestorePlayPhaseScope&) = delete;
 			static const char* Name();
+			static int RestorePlayCount();
+			static void ResetRestorePlayCount();
 		private:
 			const char* m_Previous;
 		};
