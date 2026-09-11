@@ -1627,6 +1627,9 @@ namespace RTE {
 					return false;
 				}
 			}
+			// Parked on a tick the sim has not run: the boundary FinishSimulationTick would use is here,
+			// and the frame we are waiting for may be from a peer the pump has just fenced.
+			s_LockstepCoordinator->ApplyPendingRecoveryStopWhileWaiting(tick);
 			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;

@@ -543,6 +543,10 @@ namespace RTE {
 		void DeferStopsToTickBoundary() { m_DeferStops = true; }
 		bool HasPendingRecoveryStop() const { return m_PendingRecoveryStop.has_value(); }
 		bool FinishSimulationTick(uint64_t completedTick);
+		/// Applies a pending recovery stop from inside the host's wait for a tick it has not simulated:
+		/// a parked wait is a tick boundary too, and the tick it waits on may never arrive.
+		/// @return Whether a stop was applied.
+		bool ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick);
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
 		/// would otherwise discard while it owns the transport queue.
 		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { m_SessionEventSink = std::move(sink); }
