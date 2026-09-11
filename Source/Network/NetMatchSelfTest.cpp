@@ -743,6 +743,38 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestE2ETickClockCountsExecutedTicks(std::string* error) {
+			NetMatchE2ETickClock heal;
+			for (uint64_t tick = 4; tick <= 60; ++tick) {
+				heal.NoteSimTick(tick);
+			}
+			heal.OnResyncRelaunch();
+			for (uint64_t tick = 60; tick <= 602; ++tick) {
+				heal.NoteSimTick(tick);
+			}
+			if (heal.Total() != 600) {
+				*error = "heal clock total=" + std::to_string(heal.Total()) + " wanted 600";
+				return false;
+			}
+			NetMatchE2ETickClock plain;
+			for (uint64_t tick = 4; tick <= 604; ++tick) {
+				plain.NoteSimTick(tick);
+			}
+			if (plain.Total() != 601) {
+				*error = "plain 4..604 total=" + std::to_string(plain.Total()) + " wanted 601";
+				return false;
+			}
+			NetMatchE2ETickClock once;
+			once.NoteSimTick(10);
+			once.NoteSimTick(10);
+			once.NoteSimTick(10);
+			if (once.Total() != 1) {
+				*error = "repeated notes of one tick total=" + std::to_string(once.Total()) + " wanted 1";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestE2ETickClockSurvivesResync(std::string* error) {
 			NetMatchE2ETickClock clock;
 			for (uint64_t tick = 1; tick <= 250; ++tick) {
@@ -763,9 +795,13 @@ namespace RTE {
 				return false;
 			}
 			clock.OnNewMatch();
-			clock.NoteSimTick(1);
-			if (clock.Total() != 0 || !clock.EarlyOverIsSetupFailure()) {
+			if (clock.Total() != 0) {
 				*error = "a rematch kept the previous match's running ticks";
+				return false;
+			}
+			clock.NoteSimTick(1);
+			if (clock.Total() != 1 || !clock.EarlyOverIsSetupFailure()) {
+				*error = "a rematch did not count its first executed tick";
 				return false;
 			}
 			return true;
@@ -1470,6 +1506,7 @@ namespace RTE {
 		std::string rejoinOverError;
 		std::string tickClockError;
 		std::string capTickError;
+		std::string executedTickError;
 		if (!TestFailedReportKeepsAdmissionCounters(&failedReportError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << failedReportError << std::endl;
 		}
@@ -1482,10 +1519,14 @@ namespace RTE {
 		if (!TestE2ECapUsesMatchTick(&capTickError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << capTickError << std::endl;
 		}
+		if (!TestE2ETickClockCountsExecutedTicks(&executedTickError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << executedTickError << std::endl;
+		}
 		if (!failedReportError.empty()) return fail(failedReportError);
 		if (!rejoinOverError.empty()) return fail(rejoinOverError);
 		if (!tickClockError.empty()) return fail(tickClockError);
 		if (!capTickError.empty()) return fail(capTickError);
+		if (!executedTickError.empty()) return fail(executedTickError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
