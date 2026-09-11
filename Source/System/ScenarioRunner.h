@@ -204,6 +204,10 @@ namespace RTE {
 		static void NoteResyncOverlayFrame();
 		static uint64_t GetResyncOverlayFrames();
 
+		/// The shell's SDL event poll (PollSDLEvents in Main.cpp), so a stalled lockstep wait can keep
+		/// the seats panel and the UI probe live while the sim thread is blocked. May be null.
+		static void SetStallEventPoll(void (*poll)());
+
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);

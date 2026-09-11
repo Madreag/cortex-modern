@@ -4063,6 +4063,7 @@ int main(int argc, char** argv) {
 	InstallRNGDrawTraceIfArmed();
 
 	InitializeManagers();
+	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 
