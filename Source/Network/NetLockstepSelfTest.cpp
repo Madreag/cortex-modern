@@ -7779,6 +7779,96 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestWaitSurvivesHoldAfterPreHoldStall(std::string* error) {
+			const uint16_t port = 43092;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000092ULL;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			for (; now <= 2000; now += 5) {
+				host.Tick(now);
+				client.Tick(now);
+				if (host.IsRunning() && client.IsRunning()) {
+					break;
+				}
+				hostT.AdvanceTimeMs(5);
+				clientT.AdvanceTimeMs(5);
+			}
+			if (!host.IsRunning()) {
+				*error = "pre-hold wait fixture never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			for (uint64_t guard = 0; guard < 400 && committed < 2; ++guard, now += 5) {
+				host.Tick(now);
+				client.Tick(now);
+				hostT.AdvanceTimeMs(5);
+				clientT.AdvanceTimeMs(5);
+				while (host.PopReadyFrame(ready)) {
+					++committed;
+				}
+			}
+			uint32_t pumps = 0;
+			bool dropped = false;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&] {
+				++pumps;
+				now += 15;
+				if (!dropped && pumps == 200) {
+					clientT.Stop();
+					dropped = true;
+				}
+				if (dropped && host.AnyDroppedSeatHeld() && pumps == 900) {
+					host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
+				}
+			});
+			const auto waitStart = std::chrono::steady_clock::now();
+			NetLockstepReadyFrame out;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(host.GetStats().nextFrame, out, &waitError);
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (pumps < 900) {
+				*error = "WaitForLockstepControllerFrame gave up before the hold resolved after " +
+				         std::to_string(elapsedMs) + "ms pumps=" + std::to_string(pumps) + ": " + waitError;
+				return false;
+			}
+			if (got) {
+				*error = "the wait produced a frame while the only remote was held";
+				return false;
+			}
+			if (elapsedMs < 10000) {
+				*error = "the wait did not cover the pre-hold stall plus the hold";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestAnnouncedLeaveStillClosesAtOnce(std::string* error) {
 			const uint16_t port = 43085;
 			LoopbackTransport hostT, leaverT, stayerT;
@@ -8505,6 +8595,7 @@ namespace RTE {
 		    !TestResyncRoundCommitsAfterReclaimed(&error) ||
 		    !TestHoldHeartbeatsKeepPeersUnadjudicated(&error) ||
 		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
+		    !TestWaitSurvivesHoldAfterPreHoldStall(&error) ||
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
