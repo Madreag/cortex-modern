@@ -313,6 +313,8 @@ namespace RTE {
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool RunPaletteCheckpointSelfTest();
+		std::string SaveNetLocalState() const;
+		bool LoadNetLocalState(std::string_view text, bool validateOnly = false);
 #pragma endregion
 
 	private:

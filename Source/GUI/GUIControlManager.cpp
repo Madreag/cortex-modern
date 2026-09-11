@@ -20,6 +20,7 @@
 #include "CheckpointArchive.h"
 #include "AllegroBitmap.h"
 #include "MovableMan.h"
+#include "LuaMan.h"
 #include "MovableObject.h"
 #include "Actor.h"
 #include "MOPixel.h"
@@ -44,10 +45,31 @@
 #include "PresetMan.h"
 
 #include <cassert>
+#include <optional>
 
 using namespace RTE;
 
 thread_local int GUICheckpoint::s_BitmapPoolAllocationFailureAfter = -1;
+thread_local int GUICheckpoint::s_NetLocalRestoreDepth = 0;
+thread_local int GUICheckpoint::s_NetLocalCaptureDepth = 0;
+
+GUICheckpoint::NetLocalCaptureScope::NetLocalCaptureScope() { ++s_NetLocalCaptureDepth; }
+GUICheckpoint::NetLocalCaptureScope::~NetLocalCaptureScope() { --s_NetLocalCaptureDepth; }
+bool GUICheckpoint::IsCapturingNetLocalUI() { return s_NetLocalCaptureDepth > 0; }
+
+struct GUICheckpoint::NetLocalRestoreScope::State {
+	RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+	bool restoring = g_MovableMan.IsRestoringSnapshot();
+	MovableObject::ScriptLoadDeferralScope scripts;
+	MovableObject::FaithfulCloneScope clones{false};
+	std::unique_ptr<MovableMan::ConstructionRegistryScope> registry = std::make_unique<MovableMan::ConstructionRegistryScope>();
+	State() { g_MovableMan.SetRestoringSnapshot(true); ++s_NetLocalRestoreDepth; }
+	~State() { registry.reset(); --s_NetLocalRestoreDepth; g_SimRNG = sim; g_RenderRNG = render; g_MovableMan.SetRestoringSnapshot(restoring); }
+};
+
+GUICheckpoint::NetLocalRestoreScope::NetLocalRestoreScope() : m_State(std::make_unique<State>()) {}
+GUICheckpoint::NetLocalRestoreScope::~NetLocalRestoreScope() = default;
+bool GUICheckpoint::IsRestoringNetLocalUI() { return s_NetLocalRestoreDepth > 0; }
 
 std::string GUICheckpoint::SaveBitmap(const BITMAP* bitmap) {
 	CheckpointWriter writer("GUIBitmap1");
@@ -133,7 +155,7 @@ std::string GUICheckpoint::SaveOwnedEntity(const Entity* entity) {
 	return checkpoint.Text();
 }
 
-std::unique_ptr<Entity> GUICheckpoint::LoadOwnedEntity(std::string_view text, bool validateOnly) {
+std::unique_ptr<Entity> GUICheckpoint::LoadOwnedEntity(std::string_view text, bool validateOnly, bool privateOwner) {
 	CheckpointReader checkpoint(text, "GUIOwnedEntity1");
 	bool present;
 	std::string type, native;
@@ -151,12 +173,19 @@ std::unique_ptr<Entity> GUICheckpoint::LoadOwnedEntity(std::string_view text, bo
 		return {};
 	}
 	Entity::CheckpointCloneScope checkpointClones(true);
+	std::optional<NetLocalRestoreScope> privateState;
+	if (privateOwner && !IsRestoringNetLocalUI()) privateState.emplace();
+	std::optional<MovableMan::ConstructionRegistryScope> localOwner;
+	if (IsRestoringNetLocalUI()) localOwner.emplace();
 	std::unique_ptr<Entity> entity(g_PresetMan.ReadReflectedPreset(reader));
 	if (!entity || entity->GetClassName() != type || reader.NextProperty()) throw std::runtime_error("invalid GUI owned entity body");
 	if (auto* movable = dynamic_cast<MovableObject*>(entity.get())) {
 		movable->AdoptPersistedUniqueID();
 		if (auto* actor = dynamic_cast<Actor*>(movable)) actor->ApplyPersistedControllerMode();
-		movable->ResolveFaithfulLinks();
+		if (IsRestoringNetLocalUI()) g_MovableMan.SetFaithfulLinkRoot(movable);
+		try { movable->ResolveFaithfulLinks(); }
+		catch (...) { if (IsRestoringNetLocalUI()) g_MovableMan.SetFaithfulLinkRoot(nullptr); throw; }
+		if (IsRestoringNetLocalUI()) g_MovableMan.SetFaithfulLinkRoot(nullptr);
 	}
 	return entity;
 }
@@ -341,6 +370,7 @@ const Entity* GUICheckpoint::LoadEntityReference(std::string_view text, bool val
 			if (placedIndex < objects->size()) entity = *std::next(objects->begin(), placedIndex);
 		}
 	}
+	if (kind == 1 && IsRestoringNetLocalUI() && (!entity || (dynamic_cast<const Actor*>(entity) && static_cast<const Actor*>(entity)->IsDead()))) return nullptr;
 	if (!entity || entity->GetClassName() != type) throw std::runtime_error("a GUI entity reference is missing");
 	return entity;
 }
@@ -1779,6 +1809,19 @@ bool GUICheckpoint::RunSelfTest() {
 			clear_to_color(bitmap.get(), 0); inventory.m_GUIControlManager->Draw(&screen);
 			check("inventory_full_rendered_pixels", SaveBitmap(bitmap.get()) == fullPixels);
 			check("inventory_bare_full_apply", bareInventory.LoadCheckpoint(fullInventory) && bareInventory.SaveCheckpoint() == fullInventory && bareInventory.m_GUISelectedItem && bareInventory.m_GUISelectedItem->Button == bareInventory.m_GUIInventoryItemButtons[0].second);
+			g_MovableMan.UnregisterObject(&inventoryItem);
+			check("ordinary_inventory_missing_reference_refused", !inventory.LoadCheckpoint(fullInventory));
+			{
+				NetLocalRestoreScope local;
+				check("peer_local_inventory_missing_reference_cleared", inventory.LoadCheckpoint(fullInventory) && inventory.GetInventoryActor() == &inventoryActor &&
+					!inventory.m_GUISelectedItem && !inventory.m_GUIInventoryItemButtons[0].first);
+				inventory.Draw(bitmap.get());
+				inventory.Update();
+				inventory.Draw(bitmap.get());
+				check("peer_local_inventory_update_draw_after_missing_item", !inventory.m_GUISelectedItem);
+			}
+			g_MovableMan.RegisterObject(&inventoryItem);
+			check("ordinary_inventory_reference_behavior_unchanged", inventory.LoadCheckpoint(fullInventory) && inventory.SaveCheckpoint() == fullInventory);
 			{
 				// A menu still pointing at an object that has left the world: a peer's drop kills an
 				// actor and the resync snapshot is taken before the menu's next Update drops the

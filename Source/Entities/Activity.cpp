@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "Activity.h"
+#include "GameActivity.h"
 
 #include "CameraMan.h"
 #include "PresetMan.h"
@@ -20,6 +21,12 @@
 #include "AllegroBitmap.h"
 
 #include "RTETools.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <map>
+#include <iostream>
 
 using namespace RTE;
 
@@ -974,6 +981,205 @@ void Activity::RestoreRollbackState(const RollbackState& in) {
 		m_Brain[player] = in.brainUID[player] ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(in.brainUID[player])) : nullptr;
 		m_BrainEvacuated[player] = in.brainEvacuated[player];
 	}
+}
+
+int64_t Activity::NetActorUID(const Actor* actor) {
+	return actor && g_MovableMan.IsKnownObject(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : 0;
+}
+
+Actor* Activity::ResolveNetActor(int64_t uid) {
+	if (uid <= 0 || uid > std::numeric_limits<long>::max()) return nullptr;
+	auto* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long>(uid)));
+	return actor && !actor->IsDead() ? actor : nullptr;
+}
+
+void Activity::CaptureNetPlayerBindings(NetGamePlayerBindings& out) const {
+	out = {};
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		auto& binding = out.players[player];
+		binding.active = m_IsActive[player];
+		binding.human = m_IsHuman[player];
+		binding.hadBrain = m_HadBrain[player];
+		binding.brainEvacuated = m_BrainEvacuated[player];
+		binding.team = static_cast<int8_t>(m_Team[player]);
+		binding.viewState = static_cast<uint8_t>(m_ViewState[player]);
+		binding.controlledUID = NetActorUID(m_ControlledActor[player]);
+		binding.brainUID = NetActorUID(m_Brain[player]);
+		const Vector camera = g_CameraMan.GetScrollTarget(m_PlayerScreen[player]);
+		binding.cameraX = camera.m_X;
+		binding.cameraY = camera.m_Y;
+	}
+}
+
+bool Activity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
+	try {
+		NetLocalPlayerState state;
+		CaptureNetPlayerBindings(state.bindings);
+		state.playerCount = m_PlayerCount;
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			state.screens[player] = m_PlayerScreen[player];
+			state.fundsShare[player] = m_TeamFundsShare[player];
+			state.fundsContribution[player] = m_FundsContribution[player];
+			state.deathTimers[player] = m_DeathTimer[player];
+			state.messageTimers[player] = m_MessageTimer[player];
+			state.controllers[player] = m_PlayerController[player].SaveCheckpoint();
+			state.controllerActorUIDs[player] = NetActorUID(m_PlayerController[player].GetControlledActor());
+		}
+		for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
+			if (auto* actor = dynamic_cast<Actor*>(object)) {
+				state.actorInputs.emplace_back(actor->GetUniqueID(), actor->GetController()->CaptureLocalInputState());
+			}
+		}
+		state.camera = g_CameraMan.SaveCheckpoint();
+		out = std::move(state);
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+bool Activity::ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings) {
+	for (const auto& player: bindings.players) {
+		if (player.team < Teams::NoTeam || player.team >= Teams::MaxTeamCount || player.viewState > ViewState::UnitSelectCircle ||
+			player.controlledUID < 0 || player.brainUID < 0 || !std::isfinite(player.cameraX) || !std::isfinite(player.cameraY) ||
+			std::any_of(player.viewTargets.begin(), player.viewTargets.end(), [](float value) { return !std::isfinite(value); })) return false;
+	}
+	m_PlayerCount = 0;
+	int screen = 0;
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		const auto& binding = bindings.players[player];
+		m_IsActive[player] = binding.active;
+		m_IsHuman[player] = binding.human;
+		m_HadBrain[player] = binding.hadBrain;
+		m_BrainEvacuated[player] = binding.brainEvacuated;
+		m_Team[player] = binding.team;
+		m_ViewState[player] = static_cast<ViewState>(binding.viewState);
+		m_Brain[player] = ResolveNetActor(binding.brainUID);
+		m_ControlledActor[player] = ResolveNetActor(binding.controlledUID);
+		m_PlayerCount += binding.active ? 1 : 0;
+		m_PlayerScreen[player] = binding.active && binding.human ? screen++ : -1;
+	}
+	m_HasCheckpointActorIDs = false;
+	return true;
+}
+
+bool Activity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
+	if (state.playerCount < 0 || state.playerCount > Players::MaxPlayerCount || !g_CameraMan.LoadCheckpoint(state.camera, true)) return false;
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		if (state.screens[player] < -1 || state.screens[player] >= Players::MaxPlayerCount ||
+			!m_PlayerController[player].LoadCheckpoint(state.controllers[player], true)) return false;
+	}
+	std::map<int64_t, const Controller::LocalInputState*> inputs;
+	for (const auto& [uid, input]: state.actorInputs) {
+		if (uid <= 0 || !inputs.emplace(uid, &input).second) return false;
+	}
+	if (!ApplyNetPlayerSlots(state.bindings)) return false;
+	m_PlayerCount = state.playerCount;
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		m_PlayerScreen[player] = state.screens[player];
+		m_TeamFundsShare[player] = state.fundsShare[player];
+		m_FundsContribution[player] = state.fundsContribution[player];
+		m_DeathTimer[player] = state.deathTimers[player];
+		m_MessageTimer[player] = state.messageTimers[player];
+		if (!m_PlayerController[player].LoadCheckpoint(state.controllers[player])) return false;
+		m_PlayerController[player].SetControlledActor(ResolveNetActor(state.controllerActorUIDs[player]));
+	}
+	for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
+		if (auto* actor = dynamic_cast<Actor*>(object)) {
+			const auto found = inputs.find(actor->GetUniqueID());
+			if (found == inputs.end()) actor->GetController()->ResetLocalInputState();
+			else actor->GetController()->RestoreLocalInputState(*found->second);
+		}
+	}
+	return g_CameraMan.LoadCheckpoint(state.camera);
+}
+
+bool Activity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) {
+	if (!ApplyNetPlayerSlots(bindings)) return false;
+	for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
+		if (auto* actor = dynamic_cast<Actor*>(object)) actor->GetController()->ResetLocalInputState();
+	}
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		m_PlayerController[player].Reset();
+		m_PlayerController[player].Create(Controller::CIM_PLAYER, player);
+		m_PlayerController[player].SetTeam(m_Team[player]);
+		m_DeathTimer[player].Reset();
+		m_MessageTimer[player].Reset();
+		m_TeamFundsShare[player] = 0;
+		m_FundsContribution[player] = 0;
+		if (m_IsActive[player] && m_IsHuman[player] && m_ControlledActor[player]) {
+			m_ControlledActor[player]->GetController()->ResetLocalInputState(Controller::CIM_PLAYER, player);
+		}
+		if (m_PlayerScreen[player] >= 0) {
+			const auto& binding = bindings.players[player];
+			g_CameraMan.SetScreenTeam(m_Team[player], m_PlayerScreen[player]);
+			g_CameraMan.SetScreenOcclusion(Vector(), m_PlayerScreen[player]);
+			g_CameraMan.SetScrollTarget(Vector(binding.cameraX, binding.cameraY), 1.0F, m_PlayerScreen[player]);
+			g_CameraMan.SetScroll(Vector(binding.cameraX, binding.cameraY), m_PlayerScreen[player]);
+		}
+	}
+	return true;
+}
+
+bool Activity::RunNetLocalPlayerStateSelfTest() {
+	bool passed = true;
+	const auto check = [&](const char* name, bool value) {
+		passed = passed && value;
+		std::cout << "[net-local-state-selftest] " << (value ? "PASS" : "FAIL") << " " << name << std::endl;
+	};
+	struct Restore {
+		long uid = MovableObject::GetUniqueIDCounter();
+		std::string camera = g_CameraMan.SaveCheckpoint();
+		std::vector<std::pair<Actor*, Controller::LocalInputState>> inputs;
+		Restore() { for (auto* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object)) inputs.emplace_back(actor, actor->GetController()->CaptureLocalInputState()); }
+		~Restore() { for (const auto& [actor, input]: inputs) actor->GetController()->RestoreLocalInputState(input); g_CameraMan.LoadCheckpoint(camera); MovableObject::PinUniqueIDCounter(uid); }
+	} restore;
+	try {
+		GameActivity fixture;
+		Actor carrier, controlled;
+		auto brain = std::make_unique<Actor>();
+		if (carrier.MovableObject::Create() < 0 || controlled.MovableObject::Create() < 0 || brain->MovableObject::Create() < 0) throw std::runtime_error("local binding actors could not be created");
+		Actor* exactBrain = brain.get();
+		exactBrain->SetTeam(TeamFour);
+		carrier.AddInventoryItem(brain.release());
+		fixture.m_Brain[0] = exactBrain;
+		fixture.m_ControlledActor[0] = &controlled;
+		fixture.m_Team[0] = TeamTwo;
+		fixture.m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+		fixture.m_PlayerController[0].SetControlledActor(&controlled);
+		controlled.GetController()->ResetLocalInputState(Controller::CIM_PLAYER, 0);
+		NetLocalPlayerState local;
+		check("capture_exact_inventory_brain", fixture.Activity::CaptureNetLocalPlayerState(local) && local.bindings.players[0].brainUID == exactBrain->GetUniqueID());
+		fixture.m_TeamFunds[0] = 739;
+		fixture.m_TeamDeaths[0] = 17;
+		fixture.m_ActivityState = ActivityState::Over;
+		fixture.m_Difficulty = 83;
+		std::array<bool, ControlState::CONTROLSTATECOUNT> bits{};
+		bits[ControlState::WEAPON_FIRE] = true;
+		Controller& controller = *controlled.GetController();
+		controller.ApplyWireState(bits, Vector(0.25F, -0.5F), Vector(-0.75F, 0.625F), Vector(11, 13), Vector(17, 19), Controller::CIM_NETWORK, 3, true);
+		controller.ApplyWireScheme(Controller::WireDeviceClass::Gamepad, 1.75F);
+		controller.SetWireApplyTick(137);
+		const auto canonical = [&] {
+			CheckpointWriter writer("NetControllerAuthority");
+			writer(controller.GetInputMode(), controller.GetPlayerRaw(), controller.IsQuickDisabled(), controller.GetWireApplyTick(), controller.HasWireScheme(),
+				controller.GetWireDeviceClass(), controller.GetWireDigitalAimSpeed(), controller.GetAnalogMove(), controller.GetAnalogAim(), controller.GetAnalogCursor(), controller.GetMouseMovement());
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) writer(controller.IsState(static_cast<ControlState>(state)));
+			return writer.Text();
+		};
+		const std::string authority = canonical();
+		fixture.m_Brain[0] = nullptr;
+		fixture.m_ControlledActor[0] = nullptr;
+		check("restore_inventory_brain_without_team_write", fixture.Activity::RestoreNetLocalPlayerState(local) && fixture.m_Brain[0] == exactBrain && exactBrain->GetTeam() == TeamFour);
+		check("preserve_shared_activity_authority", fixture.m_TeamFunds[0] == 739 && fixture.m_TeamDeaths[0] == 17 && fixture.m_ActivityState == ActivityState::Over && fixture.m_Difficulty == 83);
+		check("preserve_wire_state_and_restore_local_seat", canonical() == authority && controller.GetSeatMode() == Controller::CIM_PLAYER && controller.GetSeatPlayerRaw() == 0);
+		check("restore_exact_control_alias", fixture.m_ControlledActor[0] == &controlled && fixture.m_PlayerController[0].GetControlledActor() == &controlled);
+		exactBrain->SetStatus(Actor::DEAD);
+		check("dead_brain_clears_without_substitution", fixture.Activity::RestoreNetLocalPlayerState(local) && !fixture.m_Brain[0] && canonical() == authority);
+		NetGamePlayerBindings fresh = local.bindings;
+		for (auto& binding: fresh.players) binding.active = false;
+		fresh.players[0].brainUID = std::numeric_limits<int64_t>::max();
+		check("fresh_missing_identity_is_null", fixture.Activity::ApplyNetPlayerBindings(fresh) && !fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && canonical() == authority);
+	} catch (const std::exception& exception) { check(exception.what(), false); }
+	return passed;
 }
 
 std::string Activity::SaveCheckpoint() const {
