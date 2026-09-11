@@ -10,6 +10,7 @@ sources += files(
 'NetGameCommand.cpp',
 'NetResyncState.cpp',
 'NetResyncSelfTest.cpp',
+'NetResyncRuntimeSelfTest.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',
 'NetLanDiscovery.cpp',

@@ -5,8 +5,14 @@
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
 #include "NetReconnectUx.h"
+#include "NetResyncSelfTest.h"
+#include "NetResyncRuntimeSelfTest.h"
 #include "System/ScenarioRunner.h"
 #include "ActivityMan.h"
+#include "AudioMan.h"
+#include "MovableMan.h"
+#include "TimerMan.h"
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -24,6 +30,21 @@
 namespace RTE {
 
 	namespace {
+		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
+			const NetGameCommand pending{2, NetGameSwitchControl{4242, 0, 2}};
+			const NetGameCommand temporary{2, NetGameSwitchControl{7777, 0, 2}};
+			ScenarioRunner::DrainLocalGameCommands();
+			ScenarioRunner::EnqueueLocalGameCommand(pending);
+			g_MovableMan.SetRestoringSnapshot(true);
+			ScenarioRunner::EnqueueLocalGameCommand(temporary);
+			g_MovableMan.SetRestoringSnapshot(false);
+			if (ScenarioRunner::DrainLocalGameCommands() != std::vector<NetGameCommand>{pending}) {
+				*error = "snapshot construction changed the genuine pending command queue";
+				return false;
+			}
+			return true;
+		}
+
 		ControllerFrame MakeFrame(int64_t actorId, uint64_t stateMask) {
 			ControllerFrame frame;
 			frame.actorUniqueID = actorId;
@@ -160,6 +181,425 @@ namespace RTE {
 			frame.frames = {MakeFrame(100, 1)};
 			frame.observations = std::move(observations);
 			return frame;
+		}
+
+		class RecoveryTapTransport : public LoopbackTransport {
+		public:
+			struct SentChunk {
+				NetPeerId peer;
+				NetTransportLane lane;
+				NetLockstepRecoveryChunk chunk;
+				bool accepted;
+			};
+
+			size_t sendAttempts = 0;
+			std::vector<SentChunk> recovery;
+
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				++sendAttempts;
+				const bool accepted = LoopbackTransport::Send(peer, lane, bytes, error, congested);
+				const auto decoded = NetLockstepCodec::Decode(bytes);
+				if (decoded.ok) if (const auto* chunk = std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload)) recovery.push_back({peer, lane, *chunk, accepted});
+				return accepted;
+			}
+		};
+
+		bool CheckRecoveredInput(const RecoveryTapTransport& transport, const NetLockstepFrame& expected, uint64_t sessionId, bool complete, std::string* error) {
+			std::vector<uint8_t> canonical, accepted;
+			NetLockstepError codecError;
+			if (!NetLockstepCodec::EncodeRecoveryInput(expected, canonical, &codecError) || transport.recovery.empty()) {
+				*error = "the readoption fixture did not produce a complete-input recovery packet";
+				return false;
+			}
+			bool refused = false;
+			for (const auto& sent: transport.recovery) {
+				const auto& chunk = sent.chunk;
+				if (sent.peer != 1 || sent.lane != NetTransportLane::ControlReliable || chunk.sessionId != sessionId ||
+				    chunk.senderPeerId != expected.senderPeerId || chunk.roundId != expected.roundId || chunk.targetFrame != expected.targetFrame ||
+				    chunk.totalBytes != canonical.size() || chunk.offset != accepted.size() || chunk.bytes.empty() ||
+				    chunk.bytes.size() > canonical.size() - accepted.size() ||
+				    !std::equal(chunk.bytes.begin(), chunk.bytes.end(), canonical.begin() + static_cast<std::ptrdiff_t>(accepted.size()))) {
+					*error = "recovery changed its sender, session, round, target, payload or ordered retry offset";
+					return false;
+				}
+				if (sent.accepted) accepted.insert(accepted.end(), chunk.bytes.begin(), chunk.bytes.end());
+				else refused = true;
+			}
+			if (!complete) {
+				if (refused && accepted.size() < canonical.size()) return true;
+				*error = "the readoption fixture did not retain a refused recovery send";
+				return false;
+			}
+			NetLockstepFrame decoded;
+			if (accepted != canonical || !NetLockstepCodec::DecodeRecoveryInput(accepted, decoded, &codecError) || !(decoded == expected)) {
+				*error = "the reassembled recovered input differs from the original controller, commands or observations";
+				return false;
+			}
+			return true;
+		}
+
+		bool RecoveryWireCheck(bool condition, std::string* error, const std::string& message) {
+			if (!condition) *error = "recovery wire: " + message;
+			return condition;
+		}
+
+		NetLockstepFrame RecoveryWireInput(uint8_t peer, uint64_t target, uint64_t round, size_t observations = 3) {
+			NetLockstepFrame input{peer, target, {MakeFrame(peer * 100, uint64_t{1} << WEAPON_FIRE), MakeFrame(peer * 100 + 1, 3)},
+			                       {{peer, NetGameSetTeamFunds{0, 4100}, target * 4 + 1}, {peer, NetGameSetTeamFunds{1, 4200}, target * 4 + 2}}, round,
+			                       MakeObservationSet(peer, observations, target, 0.25F)};
+			input.frames[0].aimAngle = -0.0F;
+			if (!input.observations.empty()) input.observations[0].value = -0.0F;
+			return input;
+		}
+
+		bool SameRecoveryInputs(std::vector<NetLockstepFrame> actual, std::vector<NetLockstepFrame> expected) {
+			const auto order = [](const auto& a, const auto& b) { return std::tie(a.targetFrame, a.senderPeerId) < std::tie(b.targetFrame, b.senderPeerId); };
+			std::sort(actual.begin(), actual.end(), order);
+			std::sort(expected.begin(), expected.end(), order);
+			if (actual.size() != expected.size()) return false;
+			for (size_t index = 0; index < actual.size(); ++index) {
+				std::vector<uint8_t> a, b;
+				if (!NetLockstepCodec::EncodeRecoveryInput(actual[index], a) || !NetLockstepCodec::EncodeRecoveryInput(expected[index], b) || a != b) return false;
+			}
+			return true;
+		}
+
+		std::vector<NetLockstepRecoveryChunk> RecoveryWireChunks(const NetLockstepFrame& input, uint64_t session) {
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::EncodeRecoveryInput(input, bytes)) return {};
+			std::vector<NetLockstepRecoveryChunk> chunks;
+			for (size_t offset = 0; offset < bytes.size(); offset += NetLockstepCodec::c_MaxRecoveryChunkBytes) {
+				NetLockstepRecoveryChunk chunk;
+				chunk.senderPeerId = input.senderPeerId; chunk.sessionId = session; chunk.roundId = input.roundId; chunk.targetFrame = input.targetFrame;
+				chunk.totalBytes = static_cast<uint32_t>(bytes.size()); chunk.offset = static_cast<uint32_t>(offset);
+				chunk.bytes.assign(bytes.begin() + offset, bytes.begin() + std::min(bytes.size(), offset + NetLockstepCodec::c_MaxRecoveryChunkBytes));
+				chunks.push_back(std::move(chunk));
+			}
+			return chunks;
+		}
+
+		class RecoveryWireTransport : public RecoveryTapTransport {
+		public:
+			std::vector<NetTransportEvent> injected;
+			std::vector<NetTransportEvent> PollEvents() override {
+				auto events = LoopbackTransport::PollEvents();
+				for (auto& event: injected) events.push_back(std::move(event));
+				injected.clear();
+				return events;
+			}
+		};
+
+		struct RecoveryWireRound {
+			RecoveryWireTransport transport[4];
+			NetLockstepCoordinator peer[4];
+			NetLockstepConfig config[4];
+			uint8_t count = 0;
+			uint64_t now = 0;
+
+			void Pump(unsigned steps = 4) {
+				for (unsigned step = 0; step < steps; ++step) {
+					now += 5;
+					for (uint8_t index = 0; index < count; ++index) transport[index].AdvanceTimeMs(5);
+					for (uint8_t index = 0; index < count; ++index) peer[index].Tick(now);
+				}
+			}
+
+			bool Start(uint8_t peerCount, uint16_t port, std::string* error, bool prime = true) {
+				count = peerCount;
+				if (!transport[0].StartHost(port, error)) return false;
+				for (uint8_t index = 1; index < count; ++index) if (!transport[index].Connect("loopback", port, error)) return false;
+				for (uint8_t index = 0; index < count; ++index) {
+					auto& c = config[index];
+					c.sessionId = 0x5257430000000000ULL + port; c.roundId = index == 0 ? c.sessionId + 1 : 0;
+					c.startFrame = 41; c.resumeFromSnapshot = true; c.timeoutMs = 60000; c.localPeerId = index + 1; c.peerCount = count;
+					c.relayToOtherPeers = index == 0; c.frameLane = NetTransportLane::ControlReliable;
+					c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split";
+					if (index == 0) for (uint8_t remote = 1; remote < count; ++remote) c.remoteTransportPeerIds.emplace(remote + 1, remote);
+					else c.remoteTransportPeerIds.emplace(1, 1);
+					if (!peer[index].Start(transport[index], c, error)) return false;
+				}
+				Pump(10);
+				for (uint8_t index = 0; index < count; ++index) {
+					if (!RecoveryWireCheck(peer[index].IsRunning(), error, "fixture did not start")) return false;
+					if (prime && !peer[index].PrimeResyncInputs({}, error)) return false;
+				}
+				return true;
+			}
+
+			void Inject(uint8_t receiver, NetPeerId from, NetTransportLane lane, const std::vector<uint8_t>& bytes) {
+				transport[receiver].injected.push_back({NetTransportEventType::PacketReceived, from, lane, bytes, {}});
+			}
+		};
+
+		std::vector<uint64_t> RecoveryDictionaryState(const NetSoundObservationTables& tables) {
+			std::vector<uint64_t> state{tables.roundId, tables.transportSender, tables.bySender.size()};
+			for (const auto& [peer, dictionary]: tables.bySender) {
+				state.push_back(peer); state.push_back(dictionary.BindingCount());
+				for (uint16_t slot = 0; slot < NetSoundObservationDictionary::c_MaxSlots; ++slot) {
+					NetSoundObservationKey key;
+					if (dictionary.Resolve(slot, key)) state.insert(state.end(), {slot, key.objectUID, key.tick, key.phase, key.occurrence, key.ordinal});
+				}
+			}
+			return state;
+		}
+
+		bool TestRecoveryWireRefusals(std::string* error) {
+			enum Mutation { ForgedSender, UnboundHost, UnboundClient, OldSession, OldRound, WrongLane, Reserved8, Reserved16, ShortChunk,
+			                ZeroTotal, ExcessTotal, MisalignedOffset, MissingFirst, ChangedTotal, ConflictingRetry, IdenticalRetry,
+			                OuterSender, OuterTarget, InnerRound, UnboundMalformed, StaleDuringAssembly, SessionDuringAssembly, FutureTarget };
+			struct Case { Mutation mutation; const char* name; bool fatal; bool codecValid = true; };
+			const std::vector<Case> cases{
+				{ForgedSender, "bound transport forges another sender", false}, {UnboundHost, "unbound transport claims a client", false},
+				{UnboundClient, "unbound transport claims the host", false}, {OldSession, "wrong session", false}, {OldRound, "wrong round", false},
+				{WrongLane, "unreliable recovery", true}, {Reserved8, "reserved byte", true, false}, {Reserved16, "reserved word", true, false},
+				{ShortChunk, "short nonfinal chunk", true, false}, {ZeroTotal, "zero total", true, false}, {ExcessTotal, "oversized total", true, false},
+				{MisalignedOffset, "misaligned overlap", true, false}, {MissingFirst, "missing first chunk", true}, {ChangedTotal, "changed assembly total", true},
+				{ConflictingRetry, "conflicting repeated chunk", true}, {IdenticalRetry, "identical repeated chunk", false},
+				{OuterSender, "outer and inner senders differ", true}, {OuterTarget, "outer and inner targets differ", true},
+				{InnerRound, "outer and inner rounds differ", true}, {UnboundMalformed, "malformed admission", false, false},
+				{StaleDuringAssembly, "stale chunk during assembly", false}, {SessionDuringAssembly, "wrong session during assembly", false},
+				{FutureTarget, "target outside pending window", false}
+			};
+			for (size_t index = 0; index < cases.size(); ++index) {
+				const auto& test = cases[index];
+				RecoveryWireRound round;
+				if (!round.Start(3, static_cast<uint16_t>(44900 + index), error)) return false;
+				const uint8_t receiver = test.mutation == UnboundClient ? 1 : 0;
+				auto& coordinator = round.peer[receiver];
+				const uint8_t seedSender = receiver == 0 ? 2 : 1;
+				auto seed = RecoveryWireInput(seedSender, 44, coordinator.GetRoundId());
+				NetSoundObservationDictionary encoder;
+				std::vector<uint8_t> seedWire;
+				if (!NetLockstepCodec::Encode({seed}, seedWire, nullptr, &encoder)) return RecoveryWireCheck(false, error, "dictionary seed did not encode");
+				round.Inject(receiver, 1, NetTransportLane::ControlReliable, seedWire);
+				coordinator.Tick(++round.now);
+				const auto before = coordinator.CapturePendingInputs(40);
+				if (!RecoveryWireCheck(SameRecoveryInputs(before, {seed}), error, "live dictionary seed was not received")) return false;
+				NetSoundObservationTables tables;
+				tables.roundId = coordinator.GetRoundId();
+				if (!NetLockstepCodec::Decode(seedWire, ControllerFrame::c_Version, &tables).ok) return RecoveryWireCheck(false, error, "codec dictionary seed did not decode");
+				tables.Exactly(3).Bind(0, {7654, 3, 5, 7, 9});
+				const auto dictionaryBefore = RecoveryDictionaryState(tables);
+				const auto statsBefore = coordinator.GetStats();
+				const auto historyBefore = coordinator.CaptureLocalInputHistory();
+				const auto acksBefore = coordinator.GetAuthoritativeCommandAcks();
+				auto input = RecoveryWireInput(seedSender, 41, coordinator.GetRoundId(), 4096);
+				const auto chunks = RecoveryWireChunks(input, round.config[0].sessionId);
+				if (!RecoveryWireCheck(chunks.size() >= 3, error, "negative fixture did not span three chunks")) return false;
+				std::vector<NetLockstepRecoveryChunk> selected{chunks.front()};
+				NetPeerId from = 1;
+				NetTransportLane lane = NetTransportLane::ControlReliable;
+				bool finish = false;
+				switch (test.mutation) {
+					case ForgedSender: selected[0].senderPeerId = 3; break;
+					case UnboundHost: case UnboundClient: case UnboundMalformed: from = 99; break;
+					case OldSession: ++selected[0].sessionId; break;
+					case OldRound: ++selected[0].roundId; break;
+					case WrongLane: lane = NetTransportLane::InputUnreliable; break;
+					case MissingFirst: selected = {chunks[1]}; break;
+					case ChangedTotal: selected.push_back(chunks[1]); --selected.back().totalBytes; break;
+					case ConflictingRetry: selected.push_back(chunks[0]); selected.back().bytes.back() ^= 1; break;
+					case IdenticalRetry: selected.push_back(chunks[0]); finish = true; break;
+					case OuterSender: selected = chunks; from = 2; for (auto& chunk: selected) chunk.senderPeerId = 3; break;
+					case OuterTarget: selected = chunks; for (auto& chunk: selected) ++chunk.targetFrame; break;
+					case InnerRound: ++input.roundId; selected = RecoveryWireChunks(input, round.config[0].sessionId); for (auto& chunk: selected) --chunk.roundId; break;
+					case StaleDuringAssembly: selected.push_back(chunks[1]); ++selected.back().roundId; finish = true; break;
+					case SessionDuringAssembly: selected.push_back(chunks[1]); ++selected.back().sessionId; finish = true; break;
+					case FutureTarget: selected[0].targetFrame = coordinator.GetStats().nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew + 1; break;
+					default: break;
+				}
+				for (const auto& chunk: selected) {
+					std::vector<uint8_t> wire;
+					if (!EncodePacket({chunk}, wire, error)) return false;
+					const auto put32 = [&](size_t offset, uint32_t value) { for (size_t byte = 0; byte < 4; ++byte) wire[offset + byte] = static_cast<uint8_t>(value >> (byte * 8)); };
+					const size_t header = NetLockstepCodec::c_HeaderBytes;
+					switch (test.mutation) {
+						case Reserved8: case UnboundMalformed: wire[header + 1] = 1; break;
+						case Reserved16: wire[header + 2] = 1; break;
+						case ShortChunk: wire.pop_back(); put32(12, static_cast<uint32_t>(wire.size() - header)); break;
+						case ZeroTotal: put32(header + 28, 0); break;
+						case ExcessTotal: put32(header + 28, static_cast<uint32_t>(NetLockstepCodec::c_MaxRecoveryInputBytes + 1)); break;
+						case MisalignedOffset: put32(header + 32, 1); break;
+						default: break;
+					}
+					const auto decoded = NetLockstepCodec::Decode(wire, ControllerFrame::c_Version, &tables);
+					if (!RecoveryWireCheck(decoded.ok == test.codecValid && RecoveryDictionaryState(tables) == dictionaryBefore, error,
+					                       std::string(test.name) + " changed dictionaries or missed its codec control")) return false;
+					round.Inject(receiver, from, lane, wire);
+				}
+				coordinator.Tick(++round.now);
+				const auto& after = coordinator.GetStats();
+				NetLockstepReadyFrame ready;
+				if (!RecoveryWireCheck(SameRecoveryInputs(coordinator.CapturePendingInputs(40), before) &&
+				                       SameRecoveryInputs(coordinator.CaptureLocalInputHistory(), historyBefore) && !coordinator.PopReadyFrame(ready) &&
+				                       after.nextFrame == statsBefore.nextFrame && after.framesAccepted == statsBefore.framesAccepted &&
+				                       after.framePacketsReceived == statsBefore.framePacketsReceived && after.remoteControllerFramesReceived == statsBefore.remoteControllerFramesReceived &&
+				                       coordinator.GetAuthoritativeCommandAcks() == acksBefore && after.unresolvedObservationPackets == statsBefore.unresolvedObservationPackets &&
+				                       (test.fatal ? coordinator.IsFailed() && after.timeoutReason.find("ProtocolError") == 0 : coordinator.IsRunning()),
+				                       error, std::string(test.name) + " changed live input or terminal policy")) return false;
+				if (test.mutation == ForgedSender && !RecoveryWireCheck(after.peers.at(3).lastHeardMs == statsBefore.peers.at(3).lastHeardMs, error, "forgery refreshed its victim")) return false;
+				const bool stale = test.mutation == OldSession || test.mutation == OldRound || test.mutation == StaleDuringAssembly || test.mutation == SessionDuringAssembly;
+				if (!RecoveryWireCheck(after.staleRoundPackets == statsBefore.staleRoundPackets + (stale ? 1 : 0), error, "stale recovery guard was not exercised")) return false;
+				if (!RecoveryWireCheck(after.futureFrameDrops == statsBefore.futureFrameDrops + (test.mutation == FutureTarget ? 1 : 0), error, "future recovery guard was not exercised")) return false;
+				auto canary = seed;
+				canary.targetFrame = 45;
+				for (auto& observation: canary.observations) observation.value = 0.75F;
+				std::vector<uint8_t> referenceWire;
+				if (!NetLockstepCodec::Encode({canary}, referenceWire, nullptr, &encoder)) return false;
+				const auto reference = NetLockstepCodec::Decode(referenceWire, ControllerFrame::c_Version, &tables);
+				const auto* referenceFrame = reference.ok ? std::get_if<NetLockstepFrame>(&reference.packet.payload) : nullptr;
+				if (!RecoveryWireCheck(referenceWire.size() < seedWire.size() && referenceFrame && SameRecoveryInputs({*referenceFrame}, {canary}), error, "slot references changed after refused recovery")) return false;
+				if (!test.fatal) {
+					round.Inject(receiver, 1, NetTransportLane::ControlReliable, referenceWire);
+					coordinator.Tick(++round.now);
+					if (!RecoveryWireCheck(coordinator.IsRunning() && SameRecoveryInputs(coordinator.CapturePendingInputs(40), {seed, canary}), error, "live slot references changed after ignored recovery")) return false;
+				}
+				if (finish) {
+					for (size_t next = 1; next < chunks.size(); ++next) {
+						std::vector<uint8_t> wire;
+						if (!EncodePacket({chunks[next]}, wire, error)) return false;
+						round.Inject(receiver, 1, NetTransportLane::ControlReliable, wire);
+					}
+					coordinator.Tick(++round.now);
+					if (!RecoveryWireCheck(coordinator.IsRunning() && SameRecoveryInputs(coordinator.CapturePendingInputs(40), {seed, canary, input}) &&
+					                       coordinator.GetStats().framePacketsReceived == statsBefore.framePacketsReceived + 2,
+					                       error, "ignored chunk poisoned or duplicated the completed input")) return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS recovery_wire_refusals cases=" << cases.size() << std::endl;
+			return true;
+		}
+
+		bool CheckRecoveryRoute(const RecoveryTapTransport& transport, NetPeerId destination, const std::vector<NetLockstepFrame>& expected,
+		                        uint64_t session, std::string* error) {
+			using Key = std::pair<uint8_t, uint64_t>;
+			std::map<Key, std::vector<uint8_t>> canonical;
+			std::map<Key, size_t> accepted;
+			std::map<uint8_t, uint64_t> lastTarget;
+			for (const auto& input: expected) if (!NetLockstepCodec::EncodeRecoveryInput(input, canonical[{input.senderPeerId, input.targetFrame}])) return false;
+			for (const auto& sent: transport.recovery) {
+				if (sent.peer != destination) continue;
+				const auto& chunk = sent.chunk;
+				const Key key{chunk.senderPeerId, chunk.targetFrame};
+				const auto input = std::find_if(expected.begin(), expected.end(), [&](const auto& value) { return value.senderPeerId == key.first && value.targetFrame == key.second; });
+				if (!RecoveryWireCheck(input != expected.end(), error, "relay sent an input back to its author or to the wrong destination")) return false;
+				const auto& bytes = canonical.at(key);
+				const auto previous = lastTarget.find(chunk.senderPeerId);
+				if (previous != lastTarget.end() && previous->second != chunk.targetFrame) {
+					const Key prior{chunk.senderPeerId, previous->second};
+					if (!RecoveryWireCheck(previous->second < chunk.targetFrame && accepted[prior] == canonical.at(prior).size(), error, "relay reordered targets before finishing an input")) return false;
+				}
+				lastTarget[chunk.senderPeerId] = chunk.targetFrame;
+				const size_t offset = accepted[key];
+				if (!RecoveryWireCheck(sent.lane == NetTransportLane::ControlReliable && chunk.sessionId == session && chunk.roundId == input->roundId &&
+				                       chunk.totalBytes == bytes.size() && chunk.offset == offset && !chunk.bytes.empty() && chunk.bytes.size() <= bytes.size() - offset &&
+				                       std::equal(chunk.bytes.begin(), chunk.bytes.end(), bytes.begin() + offset), error, "relay changed scope, bytes or its refused retry offset")) return false;
+				if (sent.accepted) accepted[key] += chunk.bytes.size();
+			}
+			for (const auto& [key, bytes]: canonical) if (!RecoveryWireCheck(accepted[key] == bytes.size(), error, "relay did not finish every recipient's original input")) return false;
+			return true;
+		}
+
+		bool TestRecoveryWireRelayRetry(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				RecoveryWireRound round;
+				if (!round.Start(count, static_cast<uint16_t>(44960 + count), error)) return false;
+				std::vector<NetLockstepFrame> expected;
+				for (uint8_t sender = 1; sender <= count; ++sender) for (uint64_t target: {41ULL, 42ULL}) expected.push_back(RecoveryWireInput(sender, target, round.peer[0].GetRoundId(), 4096));
+				const auto queue = [&](uint8_t sender) {
+					for (const auto& input: expected) if (input.senderPeerId == sender && !round.peer[sender - 1].QueueRecoveredInput(input, error)) return false;
+					return true;
+				};
+				LoopbackTransportConfig refusal;
+				refusal.refuseSendsToPeer = 2; refusal.acceptedSendsBeforeRefusing = 1;
+				round.transport[0].SetFaultConfig(refusal);
+				if (!queue(2)) return false;
+				round.Pump(4);
+				const auto first = std::find_if(expected.begin(), expected.end(), [](const auto& input) { return input.senderPeerId == 2 && input.targetFrame == 41; });
+				const auto contains = [&](uint8_t receiver, const NetLockstepFrame& input) {
+					const auto pending = round.peer[receiver - 1].CapturePendingInputs(40);
+					return std::any_of(pending.begin(), pending.end(), [&](const auto& value) { return SameRecoveryInputs({value}, {input}); });
+				};
+				const auto& sends = round.transport[0].recovery;
+				const auto refused = std::find_if(sends.begin(), sends.end(), [](const auto& send) { return send.peer == 2 && !send.accepted && send.chunk.offset != 0; });
+				if (!RecoveryWireCheck(refused != sends.end() && !contains(3, *first) && contains(1, *first) && (count == 3 || contains(4, *first)),
+				                       error, "relay refusal did not leave one recipient partial while a healthy route received the full input")) return false;
+				for (uint8_t sender = 1; sender <= count; ++sender) if (sender != 2 && !queue(sender)) return false;
+				round.Pump(4);
+				NetLockstepReadyFrame ready;
+				for (uint8_t index = 0; index < count; ++index) if (!RecoveryWireCheck(round.peer[index].IsRunning() && round.peer[index].GetStats().nextFrame == 41 &&
+				                                                                 !round.peer[index].PopReadyFrame(ready), error, "partial relay committed an incomplete input")) return false;
+				round.transport[0].SetFaultConfig(LoopbackTransportConfig{});
+				round.Pump(40);
+				for (uint8_t index = 0; index < count; ++index) {
+					if (!RecoveryWireCheck(std::all_of(round.transport[index].recovery.begin(), round.transport[index].recovery.end(), [&](const auto& send) {
+						return index == 0 ? send.peer >= 1 && send.peer < count : send.peer == 1;
+					}), error, "recovery used a destination outside the round")) return false;
+				}
+				for (uint8_t receiver = 1; receiver <= count; ++receiver) {
+					auto& peer = round.peer[receiver - 1];
+					if (!RecoveryWireCheck(peer.IsRunning() && peer.GetStats().nextFrame == 43 && SameRecoveryInputs(peer.CapturePendingInputs(40), expected) &&
+					                       peer.GetStats().framePacketsReceived == 2U * (count - 1) && peer.GetStats().remoteControllerFramesAccepted == 4U * (count - 1) &&
+					                       peer.GetStats().observationsCarried == 0 && peer.GetStats().observationsDropped == 0 && peer.GetStats().relayBacklogBytes == 0,
+					                       error, "relay changed a recipient's sender, target, controller, ordered commands or 4096 observations")) return false;
+					for (uint64_t target: {41ULL, 42ULL}) if (!RecoveryWireCheck(peer.PopReadyFrame(ready) && ready.frame == target && ready.hasLocalInput &&
+					                                                                        ready.remoteFrameCounts.size() == count - 1, error, "relay changed ready-frame boundaries")) return false;
+					if (!RecoveryWireCheck(!peer.PopReadyFrame(ready) && peer.CapturePendingInputs(40).empty(), error, "relay retained or applied an input twice")) return false;
+					std::vector<NetLockstepFrame> route;
+					if (receiver == 1) continue;
+					for (const auto& input: expected) if (input.senderPeerId != receiver) route.push_back(input);
+					if (!CheckRecoveryRoute(round.transport[0], receiver - 1, route, round.config[0].sessionId, error)) return false;
+					route.clear();
+					for (const auto& input: expected) if (input.senderPeerId == receiver) route.push_back(input);
+					if (!CheckRecoveryRoute(round.transport[receiver - 1], 1, route, round.config[0].sessionId, error)) return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS recovery_wire_relay_retry peers=3,4 observations=4096 targets=2" << std::endl;
+			return true;
+		}
+
+		bool TestRecoveryInputMembership(std::string* error) {
+			{
+				RecoveryWireRound round;
+				if (!round.Start(2, 44950, error, false)) return false;
+				auto& host = round.peer[0];
+				const auto before = host.CapturePendingInputs(40);
+				const auto sends = round.transport[0].sendAttempts;
+				const auto unknown = RecoveryWireInput(3, 41, host.GetRoundId());
+				std::vector<uint8_t> valid;
+				std::string rejected;
+				if (!RecoveryWireCheck(NetLockstepCodec::EncodeRecoveryInput(unknown, valid) && !host.InstallResyncInputs({unknown}, &rejected) && !rejected.empty() &&
+				                       SameRecoveryInputs(host.CapturePendingInputs(40), before) && host.CaptureLocalInputHistory().empty() && host.NeedsResyncPriming() &&
+				                       host.IsRunning() && host.GetStats().nextFrame == 41 && host.GetStats().framesAccepted == 0 && round.transport[0].sendAttempts == sends,
+				                       error, "never-member input entered the round or changed the rejected installation")) return false;
+				const std::vector<NetLockstepFrame> inputs{RecoveryWireInput(1, 41, host.GetRoundId()), RecoveryWireInput(2, 41, host.GetRoundId())};
+				if (!host.InstallResyncInputs(inputs, error) || !host.PrimeResyncInputs({}, error)) return false;
+				host.Tick(++round.now);
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 42 && SameRecoveryInputs(host.CapturePendingInputs(40), inputs),
+				                       error, "refused never-member input poisoned a valid installation")) return false;
+			}
+			{
+				RecoveryWireRound round;
+				if (!round.Start(3, 44951, error, false)) return false;
+				auto& host = round.peer[0];
+				const auto accepted = RecoveryWireInput(3, 42, host.GetRoundId());
+				if (!round.peer[2].QueueRecoveredInput(accepted, error)) return false;
+				round.Pump(4);
+				if (!RecoveryWireCheck(SameRecoveryInputs(host.CapturePendingInputs(40), {accepted}), error, "departed-input fixture never accepted its source input")) return false;
+				round.transport[2].Disconnect(1, "membership control");
+				round.Pump(4);
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetConfig().peerCount == 3 && host.IsPeerGoneAtFrame(3, 42) &&
+				                       !host.UsesTransportPeer(2) && SameRecoveryInputs(host.CapturePendingInputs(40), {accepted}),
+				                       error, "departed configured slot lost its accepted future input")) return false;
+				std::vector<NetLockstepFrame> inputs{accepted};
+				for (uint8_t sender: {1, 2}) for (uint64_t target: {41ULL, 42ULL}) inputs.push_back(RecoveryWireInput(sender, target, host.GetRoundId()));
+				if (!host.InstallResyncInputs(inputs, error) || !host.PrimeResyncInputs({}, error)) return false;
+				host.Tick(++round.now);
+				if (!RecoveryWireCheck(host.IsRunning() && host.GetStats().nextFrame == 43 && SameRecoveryInputs(host.CapturePendingInputs(40), inputs),
+				                       error, "restoration dropped a configured departed sender's accepted controller, commands or observations")) return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS recovery_input_membership never_member=refused accepted_departed=preserved" << std::endl;
+			return true;
 		}
 
 		bool TestObservationSlotCodec(std::string* error) {
@@ -603,7 +1043,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x10, 0x00,
+				0x12, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -878,6 +1318,11 @@ namespace RTE {
 					if (!host.QueueLocalInput(produced, {MakeFrame(100, produced)}, {}, error) || !client.QueueLocalInput(produced, {MakeFrame(101, produced)}, {}, error)) return false;
 				}
 				if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted == 2 && client.GetStats().framesAccepted == 2; }, error)) return false;
+				const auto before = nlohmann::json::parse(host.BuildReportJson());
+				if (!before["completed_simulation_tick"].is_null() || before["ready_frames_pending"] != 2) {
+					*error = "prefetched frames were reported as completed simulation";
+					return false;
+				}
 				host.FinishSimulationTick(delay);
 				host.Complete("finished at applied tick");
 				for (int poll = 0; poll < 10; ++poll) {
@@ -895,6 +1340,11 @@ namespace RTE {
 					return false;
 				}
 				if (client.GetStats().timeoutReason != "Complete:finished at applied tick") return false;
+				const auto report = nlohmann::json::parse(client.BuildReportJson());
+				if (report["completed_simulation_tick"] != delay || report["ready_frames_pending"] != 1 || report["frames_accepted"] != 2) {
+					*error = "completion report lost its completed tick or prefetched tail";
+					return false;
+				}
 			}
 			std::cout << "[net-lockstep-selftest] PASS completion_drains_applied_ticks D=0,3" << std::endl;
 			return true;
@@ -2173,142 +2623,681 @@ namespace RTE {
 			return true;
 		}
 
-		// §11's roster line, asked of both peers still in the round. It is derived from the relayed
-		// notices alone, so a client has to reach the host's answer without asking the host anything.
-		bool TestSeatLineAgreesAcrossPeers(std::string* error) {
-			const uint16_t port = 43076;
-			const uint64_t sessionId = 0x7000000000000076ULL;
-			LoopbackTransport hostT, leaverT, stayerT;
-			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
-				return false;
-			}
-			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
-				NetLockstepConfig c;
-				c.sessionId = sessionId;
-				c.timeoutMs = 5000;
-				c.localPeerId = local;
-				c.peerCount = 3;
-				c.remoteTransportPeerIds = std::move(transports);
-				c.relayToOtherPeers = relay;
-				c.scenario = "LockstepSelfTest";
-				c.ownershipPolicy = "unique-id-split";
-				return c;
-			};
-			SeatStateStub hostStub;
-			hostStub.held = true;
-			ClientSeatStateProbe stayerProbe;
-			NetLockstepCoordinator host, leaver, stayer;
-			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
-			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
-			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
-				return false;
-			}
-			host.SetSeatStateSource(&QuerySeatStateStub, &hostStub);
-			stayer.SetSeatStateSource(&QuerySeatStateAsAClient, &stayerProbe);
-			NetSeatPresence hostLine, stayerLine;
-			auto absorb = [&] {
-				for (const NetLockstepSeatNotice& notice: host.TakeSeatNotices()) {
-					hostLine.Observe(notice);
-				}
-				for (const NetLockstepSeatNotice& notice: stayer.TakeSeatNotices()) {
-					stayerLine.Observe(notice);
-				}
-			};
-			uint64_t now = 0;
-			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
-				for (const uint64_t until = now + forMs; now <= until; now += 5) {
-					host.Tick(now);
-					leaver.Tick(now);
-					stayer.Tick(now);
-					absorb();
-					if (done()) {
-						return true;
-					}
-					hostT.AdvanceTimeMs(5);
-					leaverT.AdvanceTimeMs(5);
-					stayerT.AdvanceTimeMs(5);
-				}
-				return false;
-			};
-			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
-				*error = "the three-peer round never started";
-				return false;
-			}
-			for (uint64_t f = 0; f < 2; ++f) {
-				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
-				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
-				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
-					return false;
-				}
-			}
-			NetLockstepReadyFrame ready;
-			size_t committed = 0;
-			if (!drive(2000, [&] {
-					while (host.PopReadyFrame(ready)) {
-						++committed;
-					}
-					while (stayer.PopReadyFrame(ready)) {
-					}
-					return committed >= 2;
-				})) {
-				*error = "the three-peer round never committed a frame";
-				return false;
-			}
+		bool B2SnapshotFailure(std::string* error, const std::string& message) {
+			*error = "seat snapshot: " + message;
+			return false;
+		}
 
-			leaverT.Stop();
-			if (!drive(3000, [&] { return hostLine.StateOf(2) != NetSeatPresenceState::Present && stayerLine.StateOf(2) != NetSeatPresenceState::Present; })) {
-				*error = "a survivor never learned the seat had dropped";
-				return false;
+		std::vector<NetSeatPresenceEntry> B2SnapshotSeats(uint8_t count) {
+			std::vector<NetSeatPresenceEntry> seats;
+			for (uint8_t i = 0; i < count; ++i) {
+				NetSeatPresenceEntry seat;
+				seat.stableSeat = i;
+				seat.peerId = i + 1;
+				seat.holderGeneration = 10 + i;
+				seat.seatGeneration = 20 + i;
+				seat.incarnation = 30 + i;
+				seat.holderName = i == 0 ? "Host" : "Holder " + std::to_string(i + 1);
+				seats.push_back(std::move(seat));
 			}
-			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
-			const uint64_t deadline = leaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames;
-			const std::vector<std::pair<const char*, uint64_t>> samples = {
-			    {"at_the_drop", leaveFrame},
-			    {"mid_window", leaveFrame + NetLockstepCoordinator::c_ReclaimHoldFrames / 2},
-			    {"last_held_frame", deadline - 1},
-			    {"at_the_deadline", deadline},
-			    {"past_the_deadline", deadline + 600},
+			return seats;
+		}
+
+		NetLockstepSeatSnapshot B2SnapshotPacket(uint8_t count) {
+			NetLockstepSeatSnapshot snapshot;
+			snapshot.senderPeerId = 1;
+			snapshot.sessionId = 0x0102030405060708ULL;
+			for (size_t i = 0; i < snapshot.epoch.size(); ++i) snapshot.epoch[i] = static_cast<uint8_t>(i);
+			snapshot.roundId = 0x1112131415161718ULL;
+			snapshot.revision = 0x2122232425262728ULL;
+			snapshot.observedAtMs = 0x3132333435363738ULL;
+			snapshot.seats = B2SnapshotSeats(count);
+			return snapshot;
+		}
+
+		void B2SnapshotWriteLE(std::vector<uint8_t>& bytes, size_t offset, uint64_t value, size_t width) {
+			for (size_t i = 0; i < width; ++i) bytes[offset + i] = static_cast<uint8_t>(value >> (8 * i));
+		}
+
+		void B2SnapshotFixLength(std::vector<uint8_t>& bytes) {
+			B2SnapshotWriteLE(bytes, 12, bytes.size() - NetLockstepCodec::c_HeaderBytes, 4);
+		}
+
+		bool B2SnapshotRefused(const std::vector<uint8_t>& bytes, const std::string& context, std::string* error) {
+			if (NetLockstepCodec::Decode(bytes).ok) return B2SnapshotFailure(error, "decoded " + context);
+			return true;
+		}
+
+		bool TestB2SeatSnapshotCodec(std::string* error) {
+			NetLockstepSeatSnapshot canonical = B2SnapshotPacket(1);
+			auto& seat = canonical.seats.front();
+			seat.state = NetSeatPresenceState::Disconnected;
+			seat.holderGeneration = 0x11223344;
+			seat.seatGeneration = 0x55667788;
+			seat.incarnation = 0x99AABBCC;
+			seat.holdActive = true;
+			seat.holdUntilMs = 0x4142434445464748ULL;
+			seat.holdUntilFrame = 0x5152535455565758ULL;
+			seat.holderName = "A";
+			const std::vector<uint8_t> expected = {
+				0x43, 0x43, 0x4C, 0x33, 0x12, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
+				0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,
+				0x38, 0x37, 0x36, 0x35, 0x34, 0x33, 0x32, 0x31,
+				0x00, 0x00, 0x01, 0x01, 0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0xCC, 0xBB, 0xAA, 0x99,
+				0x01, 0x48, 0x47, 0x46, 0x45, 0x44, 0x43, 0x42, 0x41,
+				0x58, 0x57, 0x56, 0x55, 0x54, 0x53, 0x52, 0x51, 0x01, 0x00, 0x41,
 			};
-			for (const auto& [name, frame]: samples) {
-				hostLine.NoteFrame(frame);
-				stayerLine.NoteFrame(frame);
-				const std::string hostText = hostLine.Line(2, "Alice");
-				const std::string stayerText = stayerLine.Line(2, "Alice");
-				std::cout << "[net-lockstep-selftest] MEASURE seat_line_across_peers " << name << " frame=" << frame
-				          << " host=\"" << hostText << "\" stayer=\"" << stayerText << "\"" << std::endl;
-				if (hostText != stayerText) {
-					*error = std::string("the two survivors show different roster lines at ") + name;
-					return false;
-				}
-				const bool held = frame < deadline;
-				if (hostText.find(held ? "disconnected" : "left") == std::string::npos) {
-					*error = std::string("the roster line does not follow the hold's frame deadline at ") + name;
-					return false;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({canonical}, bytes, error)) return false;
+			if (bytes != expected || !NetLockstepCodec::LooksLikePacket(bytes) ||
+			    NetLockstepCodec::PacketTypeOf(NetLockstepPayload{canonical}) != NetLockstepPacketType::SeatSnapshot ||
+			    std::string(NetLockstepCodec::PacketTypeName(NetLockstepPacketType::SeatSnapshot)) != "SeatSnapshot") {
+				return B2SnapshotFailure(error, "canonical v17 bytes or packet type differ");
+			}
+			const auto decoded = NetLockstepCodec::Decode(expected);
+			if (!decoded.ok || decoded.packet != NetLockstepPacket{canonical}) return B2SnapshotFailure(error, "canonical fixture did not decode exactly");
+			std::vector<uint8_t> reencoded;
+			if (!EncodePacket(decoded.packet, reencoded, error) || reencoded != expected) return B2SnapshotFailure(error, "decode/encode was not canonical");
+
+			const auto base = B2SnapshotPacket(3);
+			if (!EncodePacket({base}, bytes, error)) return false;
+			for (size_t length = 0; length < bytes.size(); ++length) {
+				std::vector<uint8_t> cut(bytes.begin(), bytes.begin() + length);
+				const auto outer = NetLockstepCodec::Decode(cut);
+				const auto expectedError = length < NetLockstepCodec::c_HeaderBytes ? NetLockstepErrorCode::ShortHeader : NetLockstepErrorCode::PayloadLengthMismatch;
+				if (outer.ok || outer.error.code != expectedError) return B2SnapshotFailure(error, "outer truncation accepted or misclassified at " + std::to_string(length));
+				if (length >= NetLockstepCodec::c_HeaderBytes) {
+					B2SnapshotFixLength(cut);
+					const auto inner = NetLockstepCodec::Decode(cut);
+					if (inner.ok || inner.error.code != NetLockstepErrorCode::TruncatedPayload) return B2SnapshotFailure(error, "payload truncation accepted or misclassified at " + std::to_string(length));
 				}
 			}
 
-			// The other half of §11's line: what became of the seat. The host announces it once and both
-			// peers say the same thing, the host from the notice it sent.
-			host.AnnounceSeatChange(2, NetLockstepStopReason::SeatSubstituted, "Understudy");
-			if (!drive(2000, [&] { return stayerLine.StateOf(2) == NetSeatPresenceState::Substituted; })) {
-				*error = "the surviving client never heard that the seat had been substituted";
-				return false;
+			const size_t first = NetLockstepCodec::c_HeaderBytes + 52;
+			const size_t second = first + 35 + base.seats[0].holderName.size();
+			const size_t third = second + 35 + base.seats[1].holderName.size();
+			const std::vector<std::pair<const char*, std::function<void(std::vector<uint8_t>&)>>> malformed = {
+				{"zero sender", [](auto& b) { b[16] = 0; }},
+				{"out-of-range sender", [](auto& b) { b[16] = NetLockstepCodec::c_MaxPeerCount + 1; }},
+				{"too many subjects", [](auto& b) { b[17] = NetLockstepCodec::c_MaxPeerCount + 1; }},
+				{"too few declared subjects", [](auto& b) { b[17] = 2; }},
+				{"empty full snapshot", [](auto& b) { b[17] = 0; b.resize(68); B2SnapshotFixLength(b); }},
+				{"snapshot reserved low byte", [](auto& b) { b[18] = 1; }},
+				{"snapshot reserved high byte", [](auto& b) { b[19] = 1; }},
+				{"outer flag", [](auto& b) { b[10] = 1; }},
+				{"zero session", [](auto& b) { B2SnapshotWriteLE(b, 20, 0, 8); }},
+				{"zero epoch", [](auto& b) { std::fill(b.begin() + 28, b.begin() + 44, 0); }},
+				{"zero round", [](auto& b) { B2SnapshotWriteLE(b, 44, 0, 8); }},
+				{"zero revision", [](auto& b) { B2SnapshotWriteLE(b, 52, 0, 8); }},
+				{"duplicate stable seat", [=](auto& b) { B2SnapshotWriteLE(b, second, 0, 2); }},
+				{"descending stable seats", [=](auto& b) { B2SnapshotWriteLE(b, second, 4, 2); B2SnapshotWriteLE(b, third, 1, 2); }},
+				{"duplicate peer", [=](auto& b) { b[second + 2] = b[first + 2]; }},
+				{"zero subject peer", [=](auto& b) { b[first + 2] = 0; }},
+				{"out-of-range subject peer", [=](auto& b) { b[first + 2] = NetLockstepCodec::c_MaxPeerCount + 1; }},
+				{"unknown state", [=](auto& b) { b[first + 3] = 5; }},
+				{"noncanonical hold flag", [=](auto& b) { b[first + 16] = 2; }},
+				{"inactive hold with a deadline", [=](auto& b) { B2SnapshotWriteLE(b, first + 17, 1000, 8); }},
+				{"present seat with an active hold", [=](auto& b) { b[first + 16] = 1; B2SnapshotWriteLE(b, first + 17, 1000, 8); }},
+				{"oversized name", [=](auto& b) { B2SnapshotWriteLE(b, first + 33, NetProtocol::c_MaxDisplayNameBytes + 1, 2); }},
+				{"name control character", [=](auto& b) { b[first + 35] = '\n'; }},
+				{"name embedded NUL", [=](auto& b) { b[first + 35] = 0; }},
+				{"trailing payload", [](auto& b) { b.push_back(0); B2SnapshotFixLength(b); }},
+			};
+			for (const auto& [name, mutate]: malformed) {
+				auto bad = bytes;
+				mutate(bad);
+				if (!B2SnapshotRefused(bad, name, error)) return false;
 			}
-			hostLine.NoteFrame(deadline + 600);
-			stayerLine.NoteFrame(deadline + 600);
-			const std::string hostText = hostLine.Line(2, "Alice");
-			std::cout << "[net-lockstep-selftest] MEASURE seat_line_across_peers substituted host=\"" << hostText
-			          << "\" stayer=\"" << stayerLine.Line(2, "Alice") << "\"" << std::endl;
-			if (hostText != stayerLine.Line(2, "Alice") || hostText.find("substituted by Understudy") == std::string::npos) {
-				*error = "the survivors disagree about who has the seat now";
-				return false;
+			for (uint16_t version = NetLockstepCodec::c_MinVersion; version < 17; ++version) {
+				auto old = bytes;
+				B2SnapshotWriteLE(old, 4, version, 2);
+				const auto result = NetLockstepCodec::Decode(old);
+				if (result.ok || result.error.code != NetLockstepErrorCode::UnsupportedVersion) return B2SnapshotFailure(error, "seat packet accepted under old version " + std::to_string(version));
 			}
-			if (stayerProbe.reads == 0) {
-				*error = "the surviving client never ran the seat-state path, so the measurement is vacuous";
-				return false;
+			for (uint16_t type = 1; type < 6; ++type) {
+				auto retagged = bytes;
+				B2SnapshotWriteLE(retagged, 8, type, 2);
+				if (!B2SnapshotRefused(retagged, "seat payload tagged as type " + std::to_string(type), error)) return false;
+			}
+			NetLockstepStart start;
+			start.sessionId = 5; start.localPeerId = 1; start.peerCount = 3;
+			start.controllerFrameVersion = ControllerFrame::c_Version;
+			start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			start.scenario = "LockstepSelfTest"; start.ownershipPolicy = "unique-id-split"; start.roundId = 7;
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1; frame.roundId = 7;
+			const std::vector<NetLockstepPacket> otherTypes = {
+				{start}, {frame}, {NetLockstepAck{1, 2, 3}},
+				{NetLockstepStop{1, NetLockstepStopReason::Complete, 2, "done"}}, {NetLockstepChecksum{1, 2, {}, 7}},
+			};
+			for (const auto& packet: otherTypes) {
+				std::vector<uint8_t> retagged;
+				if (!EncodePacket(packet, retagged, error)) return false;
+				B2SnapshotWriteLE(retagged, 8, 6, 2);
+				if (!B2SnapshotRefused(retagged, "other payload tagged as SeatSnapshot", error)) return false;
+			}
+			for (uint16_t reason: {10, 11, 12}) {
+				NetLockstepError failure;
+				if (NetLockstepCodec::Encode({NetLockstepStop{1, static_cast<NetLockstepStopReason>(reason), 0, "status"}}, reencoded, &failure)) {
+					return B2SnapshotFailure(error, "removed seat status still encodes as Stop");
+				}
+			}
+			auto limit = B2SnapshotPacket(NetLockstepCodec::c_MaxPeerCount);
+			for (auto& entry: limit.seats) entry.holderName.assign(NetProtocol::c_MaxDisplayNameBytes, 'x');
+			if (!RoundTrip({limit}, error)) return false;
+			limit.seats[1].holderName.push_back('x');
+			NetLockstepError failure;
+			if (NetLockstepCodec::Encode({limit}, reencoded, &failure) || failure.code != NetLockstepErrorCode::StringTooLong) return B2SnapshotFailure(error, "overlong name encodes");
+			for (const auto invalid: {std::string("bad\nname"), std::string("bad\rname"), std::string("bad\0name", 8), std::string("bad\x7Fname")}) {
+				limit = B2SnapshotPacket(3); limit.seats[1].holderName = invalid;
+				if (NetLockstepCodec::Encode({limit}, reencoded, &failure) || failure.code != NetLockstepErrorCode::InvalidString) return B2SnapshotFailure(error, "invalid holder name encodes");
+			}
+			limit = B2SnapshotPacket(0);
+			if (NetLockstepCodec::Encode({limit}, reencoded, &failure)) return B2SnapshotFailure(error, "empty complete roster encodes");
+			limit = B2SnapshotPacket(NetLockstepCodec::c_MaxPeerCount + 1);
+			if (NetLockstepCodec::Encode({limit}, reencoded, &failure)) return B2SnapshotFailure(error, "too many subjects encode");
+			const std::vector<std::pair<const char*, std::function<void(NetLockstepSeatSnapshot&)>>> invalidObjects = {
+				{"zero sender", [](auto& s) { s.senderPeerId = 0; }},
+				{"zero session", [](auto& s) { s.sessionId = 0; }},
+				{"zero epoch", [](auto& s) { s.epoch.fill(0); }},
+				{"zero round", [](auto& s) { s.roundId = 0; }},
+				{"zero revision", [](auto& s) { s.revision = 0; }},
+				{"duplicate seat", [](auto& s) { s.seats[1].stableSeat = s.seats[0].stableSeat; }},
+				{"descending seats", [](auto& s) { std::swap(s.seats[0], s.seats[1]); }},
+				{"duplicate peer", [](auto& s) { s.seats[1].peerId = s.seats[0].peerId; }},
+				{"zero subject", [](auto& s) { s.seats[1].peerId = 0; }},
+				{"unknown state", [](auto& s) { s.seats[1].state = static_cast<NetSeatPresenceState>(5); }},
+				{"inactive hold deadline", [](auto& s) { s.seats[1].holdUntilMs = 1; }},
+				{"active hold on a present seat", [](auto& s) { s.seats[1].holdActive = true; s.seats[1].holdUntilMs = 1; }},
+			};
+			for (const auto& [name, mutate]: invalidObjects) {
+				limit = B2SnapshotPacket(3); mutate(limit);
+				if (NetLockstepCodec::Encode({limit}, reencoded, &failure)) return B2SnapshotFailure(error, std::string("encoded invalid object: ") + name);
 			}
 			return true;
 		}
+
+		class B2SnapshotTransport : public LoopbackTransport {
+		public:
+			struct Sent {
+				NetPeerId peer;
+				NetTransportLane lane;
+				NetLockstepSeatSnapshot snapshot;
+				bool accepted;
+				bool congested;
+			};
+			std::vector<Sent> sent;
+			std::vector<NetLockstepSeatSnapshot> received;
+			std::vector<NetTransportEvent> injected;
+
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
+				bool refusedForCongestion = false;
+				const bool accepted = LoopbackTransport::Send(peer, lane, bytes, error, &refusedForCongestion);
+				if (congested) *congested = refusedForCongestion;
+				const auto decoded = NetLockstepCodec::Decode(bytes);
+				if (decoded.ok) {
+					if (const auto* snapshot = std::get_if<NetLockstepSeatSnapshot>(&decoded.packet.payload)) sent.push_back({peer, lane, *snapshot, accepted, refusedForCongestion});
+				}
+				return accepted;
+			}
+
+			std::vector<NetTransportEvent> PollEvents() override {
+				auto events = LoopbackTransport::PollEvents();
+				for (auto& event: injected) events.push_back(std::move(event));
+				injected.clear();
+				for (const auto& event: events) {
+					if (event.type != NetTransportEventType::PacketReceived) continue;
+					const auto decoded = NetLockstepCodec::Decode(event.bytes);
+					if (decoded.ok) {
+						if (const auto* snapshot = std::get_if<NetLockstepSeatSnapshot>(&decoded.packet.payload)) received.push_back(*snapshot);
+					}
+				}
+				return events;
+			}
+		};
+
+		struct B2SnapshotRound {
+			B2SnapshotTransport transport[4];
+			NetLockstepCoordinator owned[4];
+			NetLockstepCoordinator* peers[4] = {&owned[0], &owned[1], &owned[2], &owned[3]};
+			NetSeatPresence views[4];
+			NetLockstepConfig config[4];
+			std::optional<NetLockstepSeatSnapshot> latest[4];
+			std::array<size_t, 4> reads{};
+			bool active[4] = {true, true, true, true};
+			NetPeerId hostSideId[4] = {0, 1, 2, 3};
+			uint8_t count = 0;
+			uint16_t port = 0;
+			uint64_t now = 0;
+			bool viewRejected = false;
+
+			void Pump(unsigned steps = 4) {
+				for (unsigned step = 0; step < steps; ++step) {
+					now += 5;
+					for (uint8_t i = 0; i < count; ++i) transport[i].AdvanceTimeMs(5);
+					for (uint8_t i = 0; i < count; ++i) {
+						if (!active[i]) continue;
+						peers[i]->Tick(now);
+						if (const auto snapshot = peers[i]->TakeSeatSnapshot()) {
+							latest[i] = *snapshot;
+							++reads[i];
+							if (!views[i].ApplySnapshot(*snapshot, now)) viewRejected = true;
+						}
+					}
+				}
+			}
+
+			bool Running(std::string* error) const {
+				for (uint8_t i = 0; i < count; ++i) {
+					if (active[i] && !peers[i]->IsRunning()) return B2SnapshotFailure(error, "peer " + std::to_string(i + 1) + " left Running: " + peers[i]->GetStats().timeoutReason);
+				}
+				return !viewRejected || B2SnapshotFailure(error, "presentation rejected a coordinator snapshot");
+			}
+
+			bool StartRound(uint64_t roundId, uint64_t startFrame, std::string* error) {
+				for (uint8_t i = 0; i < count; ++i) {
+					config[i].roundId = i == 0 ? roundId : 0;
+					config[i].startFrame = startFrame;
+					config[i].remoteTransportPeerIds.clear();
+					if (i == 0) {
+						for (uint8_t j = 1; j < count; ++j) config[i].remoteTransportPeerIds.emplace(j + 1, hostSideId[j]);
+					} else {
+						config[i].remoteTransportPeerIds.emplace(1, 1);
+					}
+					latest[i].reset(); reads[i] = 0;
+					if (!peers[i]->Start(transport[i], config[i], error)) return false;
+				}
+				Pump(10);
+				return Running(error);
+			}
+
+			bool Start(uint8_t peerCount, uint16_t listenPort, std::string* error) {
+				count = peerCount; port = listenPort;
+				if (!transport[0].StartHost(port, error)) return false;
+				for (uint8_t i = 1; i < count; ++i) if (!transport[i].Connect("loopback", port, error)) return false;
+				for (uint8_t i = 0; i < count; ++i) {
+					auto& c = config[i];
+					c.sessionId = 0xB200000000000000ULL + port;
+					c.timeoutMs = 60000; c.localPeerId = i + 1; c.peerCount = count;
+					c.relayToOtherPeers = i == 0;
+					c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split";
+					c.matchConfig.sessionId = c.sessionId; c.matchConfig.peerCount = count;
+					c.matchConfig.ownershipPolicy = NetActorOwnershipPolicy::UniqueIdModPeerCount;
+					for (uint8_t j = 0; j < count; ++j) c.matchConfig.players.push_back({static_cast<uint8_t>(j + 1), j, false, "Original " + std::to_string(j + 1)});
+					for (size_t j = 0; j < c.seatPresenceEpoch.size(); ++j) c.seatPresenceEpoch[j] = static_cast<uint8_t>(j + 1);
+				}
+				return StartRound(0xB217000000000000ULL + port, 0, error);
+			}
+
+			bool Equals(const NetLockstepSeatSnapshot& expected, std::string* error) const {
+				if (!Running(error)) return false;
+				for (uint8_t i = 0; i < count; ++i) {
+					if (!active[i]) continue;
+					if (!latest[i] || *latest[i] != expected || views[i].GetSnapshot() != std::optional<NetLockstepSeatSnapshot>{expected}) {
+						return B2SnapshotFailure(error, "full snapshot differs on peer " + std::to_string(i + 1) + " at revision " + std::to_string(expected.revision));
+					}
+					if (views[i].GetSeats().size() != expected.seats.size()) return B2SnapshotFailure(error, "presentation dropped a subject");
+					for (const auto& entry: expected.seats) {
+						const auto found = views[i].GetSeats().find(entry.peerId);
+						if (found == views[i].GetSeats().end() || found->second != entry) return B2SnapshotFailure(error, "presentation metadata differs");
+					}
+				}
+				return true;
+			}
+
+			bool Publish(const std::vector<NetSeatPresenceEntry>& seats, uint64_t observedAt, std::string* error) {
+				NetLockstepSeatSnapshot expected;
+				expected.senderPeerId = 1; expected.sessionId = config[0].sessionId; expected.epoch = config[0].seatPresenceEpoch;
+				expected.roundId = peers[0]->GetRoundId(); expected.revision = latest[0] ? latest[0]->revision + 1 : 1;
+				expected.observedAtMs = observedAt; expected.seats = seats;
+				if (!peers[0]->PublishSeatSnapshot(seats, observedAt)) return B2SnapshotFailure(error, "host refused a legitimate update");
+				Pump();
+				return Equals(expected, error);
+			}
+
+			bool SendToClients(const NetLockstepPacket& packet, std::string* error) {
+				std::vector<uint8_t> bytes;
+				if (!EncodePacket(packet, bytes, error)) return false;
+				for (uint8_t i = 1; i < count; ++i) {
+					if (active[i] && !transport[0].Send(hostSideId[i], NetTransportLane::ControlReliable, bytes, error)) return false;
+				}
+				Pump();
+				return true;
+			}
+
+			std::vector<uint64_t> Authority() const {
+				std::vector<uint64_t> result;
+				for (uint8_t i = 0; i < count; ++i) {
+					if (!active[i]) continue;
+					const auto& peer = *peers[i];
+					result.push_back(peer.GetStats().framesAccepted); result.push_back(peer.GetStats().nextFrame);
+					result.push_back(peer.GetStats().remoteControllerFramesReceived); result.push_back(peer.GetRoundId());
+					for (uint8_t subject = 1; subject <= count; ++subject) {
+						result.push_back(peer.IsPeerGoneAtFrame(subject, UINT64_MAX));
+						result.push_back(peer.ResolveActorOwner(subject, subject - 1, false));
+						result.push_back(peer.ResolveActorOwner(subject, subject - 1, true));
+						result.push_back(peer.ResolveTeamCommandAuthority(subject - 1));
+					}
+					for (const auto& [subject, frame]: peer.GetPeerLeaveFrames()) { result.push_back(subject); result.push_back(frame); }
+				}
+				return result;
+			}
+
+			bool Commit(uint64_t frame, std::string* error) {
+				size_t live = 0;
+				for (uint8_t i = 0; i < count; ++i) {
+					if (!active[i]) continue;
+					++live;
+					if (!peers[i]->QueueLocalInput(frame, {MakeFrame(100 + i * 100, frame + 1)}, {}, error)) return false;
+				}
+				Pump(10);
+				if (!Running(error)) return false;
+				for (uint8_t i = 0; i < count; ++i) {
+					if (!active[i]) continue;
+					NetLockstepReadyFrame ready;
+					if (!peers[i]->PopReadyFrame(ready) || ready.frame != frame || ready.localFrames.size() != 1 || ready.remoteFrames.size() != live - 1) {
+						return B2SnapshotFailure(error, "control frame did not commit all required senders on peer " + std::to_string(i + 1));
+					}
+					if (peers[i]->PopReadyFrame(ready)) return B2SnapshotFailure(error, "unexpected extra committed frame");
+				}
+				return true;
+			}
+		};
+
+		bool TestB2SeatSnapshotRelay(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				B2SnapshotRound round;
+				if (!round.Start(count, 44800 + count, error) || !round.Commit(0, error)) return false;
+				auto seats = B2SnapshotSeats(count);
+				const auto authority = round.Authority();
+				uint64_t observed = 100000;
+				if (!round.Publish(seats, observed++, error)) return false;
+				auto& subject = seats[1];
+				subject.state = NetSeatPresenceState::Disconnected; subject.holdActive = true;
+				subject.holdUntilMs = observed + 20000; subject.holdUntilFrame = 1201;
+				if (!round.Publish(seats, observed++, error)) return false;
+				NetSeatPresence countdown;
+				if (!countdown.ApplySnapshot(*round.latest[0], 900)) return B2SnapshotFailure(error, "fresh view refused the drop");
+				countdown.NoteFrame(1);
+				if (countdown.HoldFramesRemaining(2) != 1200 || countdown.HoldWallSecondsRemaining(2, 900) != 20 ||
+				    countdown.HoldWallSecondsRemaining(2, 901) != 20 || countdown.HoldWallSecondsRemaining(2, 20899) != 1 ||
+				    countdown.HoldWallSecondsRemaining(2, 20900) != 0) return B2SnapshotFailure(error, "hold countdown is not relative to receipt");
+				countdown.NoteFrame(50000);
+				if (countdown.HoldFramesRemaining(2) != 0 || countdown.StateOf(2) != NetSeatPresenceState::Disconnected ||
+				    countdown.HoldWallSecondsRemaining(2, UINT64_MAX) != 0) return B2SnapshotFailure(error, "hold expiry revoked return eligibility");
+				subject.state = NetSeatPresenceState::Reconnecting;
+				if (!round.Publish(seats, observed++, error)) return false;
+				subject.state = NetSeatPresenceState::Disconnected;
+				if (!round.Publish(seats, observed++, error)) return false;
+				subject.holdActive = false; subject.holdUntilMs = 0;
+				if (!round.Publish(seats, observed++, error)) return false;
+				subject.state = NetSeatPresenceState::Reconnecting;
+				if (!round.Publish(seats, observed++, error)) return false;
+				subject.state = NetSeatPresenceState::Present; ++subject.incarnation; ++subject.seatGeneration; subject.holdUntilFrame = 0;
+				if (!round.Publish(seats, observed++, error)) return false;
+				subject.state = NetSeatPresenceState::Substituted;
+				++subject.holderGeneration; ++subject.seatGeneration; subject.incarnation = 0; subject.holderName = "Understudy";
+				if (!round.Publish(seats, observed++, error)) return false;
+				for (uint8_t i = 0; i < count; ++i) {
+					const std::string text = round.views[i].Line(2, "Former holder");
+					if (text.find("Understudy") == std::string::npos || text.find("substitute") == std::string::npos || text.find("Former holder") != std::string::npos) return B2SnapshotFailure(error, "substitute line uses the former holder");
+				}
+				subject.state = NetSeatPresenceState::Left; ++subject.seatGeneration;
+				if (!round.Publish(seats, observed++, error)) return false;
+				if (round.Authority() != authority || !round.peers[0]->GetPeerLeaveFrames().empty()) return B2SnapshotFailure(error, "roster status changed simulation authority");
+				for (uint8_t i = 0; i < count; ++i) {
+					if (round.views[i].StateOf(1) != NetSeatPresenceState::Present || round.views[i].Line(2, "wrong").find("Understudy: left") == std::string::npos) return B2SnapshotFailure(error, "host sender was confused with its subject");
+				}
+				for (const auto& send: round.transport[0].sent) {
+					if (!send.accepted || send.lane != NetTransportLane::ControlReliable || send.snapshot.senderPeerId != 1 || send.snapshot.seats.size() != count) return B2SnapshotFailure(error, "host did not send complete reliable snapshots");
+				}
+				const auto reads = round.reads;
+				const size_t sent = round.transport[0].sent.size();
+				if (!round.peers[0]->PublishSeatSnapshot(seats, observed + 1000)) return B2SnapshotFailure(error, "unchanged publication failed");
+				round.Pump();
+				if (round.reads != reads || round.transport[0].sent.size() != sent) return B2SnapshotFailure(error, "unchanged roster generated a new revision");
+				if (!round.Commit(1, error)) return false;
+			}
+			return true;
+		}
+
+		bool TestB2SeatSnapshotAuthority(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				B2SnapshotRound round;
+				if (!round.Start(count, 44810 + count, error) || !round.Commit(0, error) || !round.Publish(B2SnapshotSeats(count), 1000, error)) return false;
+				const auto saved = *round.latest[0];
+				const auto authority = round.Authority();
+				const auto reads = round.reads;
+				const uint64_t victimHeard = round.peers[0]->GetStats().peers.at(3).lastHeardMs;
+				if (round.peers[1]->PublishSeatSnapshot(saved.seats, 2000)) return B2SnapshotFailure(error, "client published a roster");
+				LoopbackTransport stranger;
+				if (!stranger.Connect("loopback", round.port, error)) return false;
+				for (LoopbackTransport* source: {static_cast<LoopbackTransport*>(&round.transport[1]), &stranger}) {
+					for (uint8_t sender: {1, 2, 3}) {
+						auto forged = saved; forged.senderPeerId = sender; ++forged.revision; ++forged.observedAtMs;
+						forged.seats[1].state = NetSeatPresenceState::Left;
+						std::vector<uint8_t> bytes;
+						if (!EncodePacket({forged}, bytes, error)) return false;
+						const size_t sent = round.transport[0].sent.size();
+						if (!source->Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+						round.Pump();
+						if (round.transport[0].sent.size() != sent || round.reads != reads || round.peers[0]->GetStats().peers.at(3).lastHeardMs != victimHeard || !round.Equals(saved, error)) return B2SnapshotFailure(error, "bound or unbound non-host authored a roster or refreshed a victim's liveness");
+					}
+				}
+				auto forged = saved; ++forged.revision; ++forged.observedAtMs; forged.seats[1].state = NetSeatPresenceState::Left;
+				std::vector<uint8_t> bytes;
+				if (!EncodePacket({forged}, bytes, error)) return false;
+				for (uint8_t i = 1; i < count; ++i) round.transport[i].injected.push_back({NetTransportEventType::PacketReceived, 999, NetTransportLane::ControlReliable, bytes, {}});
+				round.Pump();
+				if (round.reads != reads || !round.Equals(saved, error)) return B2SnapshotFailure(error, "client trusted an unbound transport claiming the host");
+				auto truncated = bytes; truncated.pop_back(); B2SnapshotFixLength(truncated);
+				if (!stranger.Send(1, NetTransportLane::ControlReliable, truncated, error)) return false;
+				for (uint8_t i = 1; i < count; ++i) round.transport[i].injected.push_back({NetTransportEventType::PacketReceived, 999, NetTransportLane::ControlReliable, truncated, {}});
+				round.Pump();
+				if (round.reads != reads || !round.Equals(saved, error)) return B2SnapshotFailure(error, "malformed snapshot from an unbound transport ended or changed a round");
+				forged.senderPeerId = 2;
+				if (!round.SendToClients({forged}, error)) return false;
+				if (round.reads != reads || round.Authority() != authority || !round.Equals(saved, error)) return B2SnapshotFailure(error, "client accepted a non-host author through the relay");
+				auto real = saved.seats; real[1].state = NetSeatPresenceState::Disconnected;
+				if (!round.Publish(real, 3000, error) || !round.Commit(1, error)) return false;
+			}
+			return true;
+		}
+
+		bool TestB2SeatSnapshotReplayAndPublication(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				B2SnapshotRound round;
+				if (!round.Start(count, 44820 + count, error) || !round.Publish(B2SnapshotSeats(count), 1000, error)) return false;
+				auto seats = B2SnapshotSeats(count); seats[1].state = NetSeatPresenceState::Disconnected;
+				if (!round.Publish(seats, 2000, error)) return false;
+				const auto saved = *round.latest[0];
+				const auto reads = round.reads;
+				const auto authority = round.Authority();
+				const std::vector<std::pair<const char*, std::function<void(NetLockstepSeatSnapshot&)>>> regressions = {
+					{"session", [](auto& s) { --s.sessionId; }},
+					{"epoch", [](auto& s) { s.epoch[0] ^= 0x80; }},
+					{"round", [](auto& s) { --s.roundId; }},
+					{"duplicate revision", [&](auto& s) { s.revision = saved.revision; }},
+					{"older revision", [&](auto& s) { s.revision = saved.revision - 1; }},
+					{"time", [&](auto& s) { s.observedAtMs = saved.observedAtMs - 1; }},
+					{"seat generation", [](auto& s) { --s.seats[1].seatGeneration; }},
+					{"holder generation", [](auto& s) { --s.seats[1].holderGeneration; }},
+					{"incarnation", [](auto& s) { --s.seats[1].incarnation; }},
+					{"new holder without new seat generation", [](auto& s) { ++s.seats[1].holderGeneration; s.seats[1].incarnation = 0; }},
+					{"peer remap", [](auto& s) { std::swap(s.seats[0].peerId, s.seats[1].peerId); }},
+					{"stable-seat replacement", [](auto& s) { ++s.seats.back().stableSeat; }},
+					{"omitted subject", [](auto& s) { s.seats.pop_back(); }},
+					{"subject outside the round", [=](auto& s) { s.seats.back().peerId = count + 1; }},
+				};
+				for (const auto& [name, mutate]: regressions) {
+					auto replay = saved; ++replay.revision; ++replay.observedAtMs; replay.seats[1].holderName = "Poison";
+					mutate(replay);
+					if (!round.SendToClients({replay}, error)) return false;
+					if (round.reads != reads || round.Authority() != authority || !round.Equals(saved, error)) return B2SnapshotFailure(error, std::string("receiver accepted ") + name + " regression");
+					if (replay.sessionId == saved.sessionId && replay.epoch == saved.epoch && replay.roundId == saved.roundId && replay.revision > saved.revision) {
+						const size_t sent = round.transport[0].sent.size();
+						if (round.peers[0]->PublishSeatSnapshot(replay.seats, replay.observedAtMs)) return B2SnapshotFailure(error, std::string("publisher accepted ") + name + " regression");
+						round.Pump();
+						if (round.reads != reads || round.transport[0].sent.size() != sent || !round.Equals(saved, error)) return B2SnapshotFailure(error, "refused publication mutated or sent a roster");
+					}
+				}
+				seats[1].state = NetSeatPresenceState::Reconnecting;
+				if (!round.Publish(seats, saved.observedAtMs, error)) return false;
+				++seats[1].holderGeneration; ++seats[1].seatGeneration; seats[1].incarnation = 0;
+				seats[1].state = NetSeatPresenceState::Substituted; seats[1].holderName = "New holder";
+				if (!round.Publish(seats, 3000, error) || !round.Commit(0, error)) return false;
+			}
+			return true;
+		}
+
+		bool TestB2SeatSnapshotInitiallyComplete(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				B2SnapshotRound round;
+				if (!round.Start(count, 44830 + count, error)) return false;
+				auto incomplete = B2SnapshotSeats(count); incomplete.pop_back();
+				if (round.peers[0]->PublishSeatSnapshot(incomplete, 1000)) return B2SnapshotFailure(error, "first publication omitted a configured human");
+				auto packet = B2SnapshotPacket(count);
+				packet.sessionId = round.config[0].sessionId; packet.epoch = round.config[0].seatPresenceEpoch;
+				packet.roundId = round.peers[0]->GetRoundId(); packet.seats = incomplete;
+				if (!round.SendToClients({packet}, error)) return false;
+				for (uint8_t i = 0; i < count; ++i) if (round.latest[i] || round.views[i].GetSnapshot()) return B2SnapshotFailure(error, "first received roster omitted a configured human");
+				if (!round.Publish(B2SnapshotSeats(count), 1000, error)) return false;
+			}
+			return true;
+		}
+
+		bool TestB2SeatSnapshotCoalesces(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				for (bool congestion: {false, true}) {
+					B2SnapshotRound round;
+					if (!round.Start(count, 44840 + count + (congestion ? 10 : 0), error) || !round.Publish(B2SnapshotSeats(count), 1000, error)) return false;
+					const auto original = *round.latest[0];
+					round.transport[0].sent.clear();
+					for (uint8_t i = 1; i < count; ++i) round.transport[i].received.clear();
+					std::vector<uint8_t> encoded;
+					if (!EncodePacket({original}, encoded, error)) return false;
+					LoopbackTransportConfig faults;
+					if (congestion) {
+						faults.sendBufferBytes = static_cast<uint32_t>(encoded.size()); faults.meterOnlyPeer = 1;
+					} else {
+						faults.refuseSendsToPeer = 1;
+					}
+					round.transport[0].SetFaultConfig(faults);
+					if (congestion) {
+						if (!EncodePacket({NetLockstepAck{1, 0, 0}}, encoded, error) || !round.transport[0].Send(1, NetTransportLane::ControlReliable, encoded, error)) return false;
+					}
+					auto seats = original.seats;
+					for (unsigned update = 0; update < 64; ++update) {
+						seats[1].state = update % 2 == 0 ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Reconnecting;
+						if (!round.peers[0]->PublishSeatSnapshot(seats, 2000 + update)) return B2SnapshotFailure(error, "refused transport prevented publication");
+					}
+					round.Pump();
+					if (!round.Running(error) || !round.latest[0] || round.latest[0]->revision != original.revision + 64 || round.latest[1] != std::optional<NetLockstepSeatSnapshot>{original} ||
+					    !round.transport[1].received.empty() || round.peers[0]->HasPendingRelayWork() || round.peers[0]->GetStats().relayBacklogBytes != 0) return B2SnapshotFailure(error, "refused UI updates entered the simulation backlog or reached the blocked peer");
+					for (uint8_t i = 2; i < count; ++i) if (round.latest[i] != round.latest[0] || round.transport[i].received.size() != 64) return B2SnapshotFailure(error, "one blocked destination stalled a healthy peer's roster");
+					const auto refused = std::count_if(round.transport[0].sent.begin(), round.transport[0].sent.end(), [&](const auto& send) { return send.peer == 1 && !send.accepted && send.congested == congestion; });
+					if (refused < 64) return B2SnapshotFailure(error, "transport refusal control was not exercised");
+					const auto final = *round.latest[0];
+					if (congestion) faults.drainBytesPerSecond = 1024 * 1024;
+					else faults = {};
+					round.transport[0].SetFaultConfig(faults);
+					round.Pump(10);
+					if (!round.Equals(final, error) || round.transport[1].received != std::vector<NetLockstepSeatSnapshot>{final}) return B2SnapshotFailure(error, "recovery sent queued intermediate rosters instead of one latest snapshot");
+					const size_t sends = round.transport[0].sent.size();
+					round.Pump(20);
+					if (round.transport[0].sent.size() != sends) return B2SnapshotFailure(error, "delivered roster remained pending");
+					round.transport[0].SetFaultConfig({});
+					if (!round.Commit(0, error)) return false;
+				}
+			}
+			return true;
+		}
+
+		bool TestB2SeatSnapshotResyncSeedsNewPeer(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				B2SnapshotRound round;
+				if (!round.Start(count, 44860 + count, error) || !round.Commit(0, error)) return false;
+				auto seats = B2SnapshotSeats(count);
+				seats[1].state = NetSeatPresenceState::Substituted; seats[1].holderName = "Returning substitute";
+				if (!round.Publish(seats, 1000, error)) return false;
+				const auto previous = *round.latest[0];
+				round.peers[0]->RequestResync("snapshot seed control");
+				round.Pump(10);
+				for (uint8_t i = 0; i < count; ++i) if (round.peers[i]->IsRunning()) return B2SnapshotFailure(error, "resync control did not end the old round");
+				round.active[1] = false;
+				round.transport[1].Stop(); round.Pump();
+				if (!round.transport[1].Connect("loopback", round.port, error)) return false;
+				NetLockstepCoordinator newcomer;
+				round.peers[1] = &newcomer; round.views[1].Clear(); round.active[1] = true;
+				round.hostSideId[1] = count;
+				if (!round.StartRound(previous.roundId + 1, 10, error) || round.peers[0]->UsesTransportPeer(1) || !round.peers[0]->UsesTransportPeer(count)) return B2SnapshotFailure(error, "new round did not bind the replacement connection");
+				if (!round.SendToClients({previous}, error)) return false;
+				for (uint8_t i = 0; i < count; ++i) if (round.latest[i]) return B2SnapshotFailure(error, "old round seeded the new round");
+				if (!round.Publish(seats, 2000, error) || round.latest[1]->revision != 1 || round.latest[1]->roundId != previous.roundId + 1) return B2SnapshotFailure(error, "new peer was not seeded by the complete new-round snapshot");
+				const auto current = *round.latest[0];
+				const auto reads = round.reads;
+				auto ancient = previous; ancient.revision = UINT64_MAX; ancient.observedAtMs = UINT64_MAX;
+				if (!round.SendToClients({ancient}, error) || round.reads != reads || !round.Equals(current, error)) return B2SnapshotFailure(error, "high-revision old round replaced the new seed");
+				std::vector<uint8_t> bytes;
+				auto forged = current; forged.senderPeerId = 2; ++forged.revision; ++forged.observedAtMs; forged.seats[1].holderName = "Old transport";
+				if (!EncodePacket({forged}, bytes, error)) return false;
+				const uint64_t heard = round.peers[0]->GetStats().peers.at(2).lastHeardMs;
+				round.transport[0].injected.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}});
+				round.Pump();
+				if (round.reads != reads || round.peers[0]->GetStats().peers.at(2).lastHeardMs != heard || !round.Equals(current, error) || !round.Commit(10, error)) return B2SnapshotFailure(error, "old connection altered the new round");
+			}
+			return true;
+		}
+
+		bool TestB2SeatSnapshotDoesNotReviveDepartedTransport(std::string* error) {
+			for (uint8_t count: {3, 4}) {
+				B2SnapshotRound round;
+				if (!round.Start(count, 44870 + count, error) || !round.Commit(0, error) || !round.Publish(B2SnapshotSeats(count), 1000, error)) return false;
+				round.peers[1]->Leave("holder leaves"); round.active[1] = false; round.Pump();
+				if (!round.Running(error) || round.peers[0]->UsesTransportPeer(1) || !round.transport[1].IsPeerConnected(1)) return B2SnapshotFailure(error, "leave did not remove only the binding while retaining the stale socket control");
+				for (uint8_t i = 0; i < count; ++i) {
+					if (!round.active[i]) continue;
+					if (!round.peers[i]->IsPeerGoneAtFrame(2, 1)) return B2SnapshotFailure(error, "survivor did not apply the genuine leave");
+					round.peers[i]->DeferStopsToTickBoundary();
+				}
+				auto seats = B2SnapshotSeats(count);
+				seats[1].state = NetSeatPresenceState::Substituted; ++seats[1].holderGeneration; ++seats[1].seatGeneration;
+				seats[1].incarnation = 0; seats[1].holderName = "Replacement awaiting resync";
+				const auto authority = round.Authority();
+				if (!round.Publish(seats, 2000, error) || round.Authority() != authority || round.peers[0]->UsesTransportPeer(1)) return B2SnapshotFailure(error, "substitution status granted the departed socket authority");
+				const auto saved = *round.latest[0];
+				const auto reads = round.reads;
+				const uint64_t heard = round.peers[0]->GetStats().peers.at(2).lastHeardMs;
+				for (uint8_t sender: {1, 2}) {
+					auto forged = saved; forged.senderPeerId = sender; ++forged.revision; ++forged.observedAtMs;
+					forged.seats[1].state = NetSeatPresenceState::Present;
+					std::vector<uint8_t> bytes;
+					if (!EncodePacket({forged}, bytes, error) || !round.transport[1].Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+					round.Pump();
+					if (round.reads != reads || round.Authority() != authority || round.peers[0]->GetStats().peers.at(2).lastHeardMs != heard || !round.Equals(saved, error)) return B2SnapshotFailure(error, "departed socket changed its roster, liveness, or authority");
+				}
+				const NetLockstepStopReason terminal[] = {NetLockstepStopReason::Complete, NetLockstepStopReason::MissingFrameTimeout, NetLockstepStopReason::Desync,
+					NetLockstepStopReason::ProtocolError, NetLockstepStopReason::PeerDisconnected, NetLockstepStopReason::InternalError, NetLockstepStopReason::ResyncRequested};
+				for (const auto reason: terminal) {
+					const NetLockstepPacket stop{NetLockstepStop{2, reason, 1, "stale terminal stop"}};
+					std::vector<uint8_t> bytes;
+					if (!EncodePacket(stop, bytes, error) || !round.transport[1].Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+					if (!round.SendToClients(stop, error) || !round.Running(error) || round.Authority() != authority) return B2SnapshotFailure(error, "departed peer's terminal stop changed a survivor");
+					for (uint8_t i = 0; i < count; ++i) if (round.active[i] && round.peers[i]->HasPendingRecoveryStop()) return B2SnapshotFailure(error, "departed peer scheduled a deferred terminal stop");
+				}
+				for (uint8_t i = 2; i < count; ++i) if (round.peers[i]->GetStats().stopsFromLeftPeers != 7) return B2SnapshotFailure(error, "left-peer terminal-stop guard was not exercised on every survivor");
+				if (!round.Commit(1, error)) return false;
+				round.peers[0]->RequestResync("genuine host recovery");
+				if (!round.peers[0]->HasPendingRecoveryStop() || !round.peers[0]->FinishSimulationTick(1)) return B2SnapshotFailure(error, "host recovery did not settle at its completed tick");
+				round.Pump();
+				for (uint8_t i = 2; i < count; ++i) if (!round.peers[i]->IsFailed() || round.peers[i]->GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) return B2SnapshotFailure(error, "genuine host stop was suppressed with stale stops");
+			}
+			return true;
+		}
+
 
 		// A peer that ANNOUNCED its leave said it is not coming back, so nothing is held for it - the
 		// wire tells the two apart, and every peer reads the same answer.
@@ -3134,7 +4123,7 @@ namespace RTE {
 		// A6: the drop of the last remote with nobody left on its team is the branch that asks whether the
 		// seat is held - and on the host it is asked from inside the pump that holds the service's lock.
 		// The round must answer that from what it already knows, never by asking back.
-		bool TestSeatStateNeverReadUnderTheServiceLock(std::string* error) {
+		bool TestSeatStateNeverReadUnderTheServiceLock(std::string* error, bool sharedTeam = false) {
 			const uint16_t port = 43042;
 			const uint64_t sessionId = 0x7000000000000042ULL;
 			LoopbackTransport hostT, clientT;
@@ -3152,7 +4141,7 @@ namespace RTE {
 				c.scenario = "LockstepSelfTest";
 				c.ownershipPolicy = "unique-id-split";
 				c.matchConfig.hostPeerId = 1;
-				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, static_cast<uint8_t>(sharedTeam ? 0 : 1), false, "Client"}};
 				return c;
 			};
 			ServiceLockedSeatStateStub stub;
@@ -3214,13 +4203,14 @@ namespace RTE {
 			}
 
 			const int64_t clientActor = 4242;
+			const int32_t clientTeam = sharedTeam ? 0 : 1;
 			uint32_t pumps = 0;
 			uint8_t censusOwner = 0;
 			bool censusOwnerGone = true;
 			bool censusLocal = false;
 			bool censusHolding = false;
 			// The world the drop's census walks. MovableMan resolves each of these on the line below.
-			const std::vector<std::pair<int64_t, int32_t>> world = {{clientActor, 1}, {4243, 1}, {7777, 0}};
+			const std::vector<std::pair<int64_t, int32_t>> world = {{clientActor, clientTeam}, {4243, clientTeam}, {7777, 0}};
 			NetReconnectLedger ledger;
 			std::vector<int64_t> ledgered;
 			std::vector<int64_t> restored;
@@ -3235,18 +4225,28 @@ namespace RTE {
 			// The census the drop takes, run from inside the service's critical section exactly as
 			// PumpSessionEvents runs it - and driven from the production wait loop, not a hand-rolled one.
 			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (sharedTeam) {
+				ScenarioRunner::SetLockstepControlOverride(clientActor, 2);
+				ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(host.GetStats().nextFrame);
+				if (ScenarioRunner::GetLockstepActorOwner(clientActor, clientTeam, false) != 1 ||
+				    ScenarioRunner::GetLockstepDropTimeActorOwner(clientActor, clientTeam, false) != 2) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					*error = "co-op handoff cleanup lost the owner before admission could record its drop";
+					return false;
+				}
+			}
 			ScenarioRunner::SetSessionPump([&] {
 				const ServiceLockScope serviceLock(stub);
 				++pumps;
-				censusOwner = host.ResolveActorOwner(clientActor, 1, false);
-				censusOwnerGone = host.IsActorOwnerGone(clientActor, 1, false, host.GetStats().nextFrame);
-				censusLocal = host.IsLocalActor(clientActor, 1, false);
+				censusOwner = host.ResolveActorOwner(clientActor, clientTeam, false);
+				censusOwnerGone = host.IsActorOwnerGone(clientActor, clientTeam, false, host.GetStats().nextFrame);
+				censusLocal = host.IsLocalActor(clientActor, clientTeam, false);
 				censusHolding = host.IsHoldingSeatForReclaim();
 				// The rest of the abort stack: CollectDropOwnership's census, the drop it ledgers and the
 				// restoration IssueReseat builds from it all run inside the service's critical section too.
 				const std::vector<NetH4LedgerActor> dropCensus = takeCensus();
 				ledgered = NetReconnectLedger::CollectOwnedActorUIDs(dropCensus, 2);
-				ledger.RecordDrop(0, 2, 1, host.GetStats().nextFrame, ledgered);
+				ledger.RecordDrop(0, 2, clientTeam, host.GetStats().nextFrame, ledgered);
 				restored = ledger.BuildRestoration(0, NetMatchMode::PvPSkirmish, takeCensus());
 			});
 			std::string reentry;
@@ -3283,7 +4283,7 @@ namespace RTE {
 			}
 			// And what the ledger frames produced there: the leaver's own units, not the ones the leave
 			// renamed, and a restoration that hands exactly those back.
-			const std::vector<int64_t> expected = {clientActor, 4243};
+			const std::vector<int64_t> expected = sharedTeam ? std::vector<int64_t>{clientActor} : std::vector<int64_t>{clientActor, 4243};
 			if (ledgered != expected || restored != expected) {
 				*error = "the drop ledgered " + std::to_string(ledgered.size()) + " units and restored " +
 				         std::to_string(restored.size()) + " under the service's lock";
@@ -4884,7 +5884,9 @@ namespace RTE {
 			const uint64_t sessionId = 0x70000000000000A3ULL;
 			const uint64_t roundOne = 0x9A5E0000000000A3ULL;
 			const uint64_t roundTwo = roundOne + 0x100ULL;
-			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
 			NetLockstepCoordinator host, client;
 			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
 			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
@@ -4996,6 +5998,7 @@ namespace RTE {
 				*error = "a committed round was moved by another round's start";
 				return false;
 			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, true, error)) return false;
 			std::cout << "[net-lockstep-selftest] PASS client_follows_the_hosts_new_round readoptions=" << client.GetStats().roundReadoptions << std::endl;
 			return true;
 		}
@@ -5381,7 +6384,9 @@ namespace RTE {
 			const uint64_t sessionId = 0x70000000000000A4ULL;
 			const uint64_t roundOne = 0x9A5E0000000000A4ULL;
 			const uint64_t roundTwo = roundOne + 0x100ULL;
-			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
 			NetLockstepCoordinator host, client;
 			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
 			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
@@ -5431,6 +6436,7 @@ namespace RTE {
 				return false;
 			}
 			drive([&] { return false; }, 500);
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, false, error)) return false;
 			if (host.GetStats().framePacketsReceived != 0) {
 				*error = "the fixture did not refuse the re-send it is about to test";
 				return false;
@@ -5447,6 +6453,7 @@ namespace RTE {
 				*error = "the refused re-send never reached the host: host=" + host.BuildReportJson();
 				return false;
 			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, true, error)) return false;
 			std::cout << "[net-lockstep-selftest] PASS readopt_resend_survives_a_refused_send frames_sent="
 			          << client.GetStats().framePacketsSent << std::endl;
 			return true;
@@ -5459,7 +6466,9 @@ namespace RTE {
 			const uint64_t sessionId = 0x70000000000000A5ULL;
 			const uint64_t roundOne = 0x9A5E0000000000A5ULL;
 			const uint64_t roundTwo = roundOne + 0x100ULL;
-			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
 			NetLockstepCoordinator host, client;
 			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
 			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
@@ -5508,6 +6517,7 @@ namespace RTE {
 				*error = "the round never re-formed on the start the link did take: " + client.BuildReportJson();
 				return false;
 			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, false, error)) return false;
 			if (host.GetStats().framePacketsReceived != 0) {
 				*error = "the fixture did not refuse the owed frame it is about to test";
 				return false;
@@ -5525,6 +6535,7 @@ namespace RTE {
 				*error = "an owed frame the follower had already committed was never sent: host=" + host.BuildReportJson();
 				return false;
 			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, true, error)) return false;
 			std::cout << "[net-lockstep-selftest] PASS owed_frame_outlives_its_local_commit frames_sent="
 			          << client.GetStats().framePacketsSent << std::endl;
 			return true;
@@ -5536,7 +6547,9 @@ namespace RTE {
 			const uint64_t sessionId = 0x70000000000000A6ULL;
 			const uint64_t roundOne = 0x9A5E0000000000A6ULL;
 			const uint64_t roundTwo = roundOne + 0x100ULL;
-			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
 			NetLockstepCoordinator host, client;
 			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
 			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
@@ -5584,6 +6597,7 @@ namespace RTE {
 				*error = "the client never followed the host onto the new round";
 				return false;
 			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, false, error)) return false;
 			// The round fails while a frame is still owed.
 			NetLockstepStop stop;
 			stop.senderPeerId = 1;
@@ -5599,9 +6613,10 @@ namespace RTE {
 				return false;
 			}
 			const uint32_t sentAtFailure = client.GetStats().framePacketsSent;
+			const size_t attemptsAtStop = clientTransport.sendAttempts;
 			clientTransport.SetFaultConfig(LoopbackTransportConfig{});
 			drive([&] { return false; }, 1000);
-			if (client.GetStats().framePacketsSent != sentAtFailure) {
+			if (client.GetStats().framePacketsSent != sentAtFailure || clientTransport.sendAttempts != attemptsAtStop) {
 				*error = "a failed round kept re-sending: frame_packets_sent " + std::to_string(sentAtFailure) +
 				         " -> " + std::to_string(client.GetStats().framePacketsSent);
 				return false;
@@ -5609,9 +6624,296 @@ namespace RTE {
 			std::cout << "[net-lockstep-selftest] PASS failed_round_stops_resending frames_sent=" << sentAtFailure << std::endl;
 			return true;
 		}
+		bool TestCoordinatorOwedFrameRetryEndsWithTheRound(std::string* error) {
+			const uint16_t port = 43130;
+			const uint64_t sessionId = 0x70000000000000D0ULL;
+			const uint64_t roundOne = 0x9A5E0000000000D0ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 500;
+			clientConfig.timeoutMs = 500;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the round never started";
+				return false;
+			}
+			if (!client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 50);
+			LoopbackTransportConfig refuse;
+			refuse.refuseSendsToPeer = 1;
+			refuse.acceptedSendsBeforeRefusing = 1;
+			clientTransport.SetFaultConfig(refuse);
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetRoundId() == roundTwo && client.IsRunning() && host.IsRunning(); }, 4000)) {
+				*error = "the client never followed on the start the link took";
+				return false;
+			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, false, error)) return false;
+			if (host.GetStats().framePacketsReceived != 0) {
+				*error = "the fixture did not refuse the owed frame";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetStats().framesAccepted == 1; }, 2000)) {
+				*error = "the follower never committed the frame it owes";
+				return false;
+			}
+			// The client's own grace is 500ms and nothing is pending on it, so it keeps retrying and
+			// stays Running. The host, which IS waiting, gives up on its own grace.
+			if (!drive([&] { return !host.IsRunning(); }, 4000)) {
+				*error = "the host never gave up on the frame the link refuses";
+				return false;
+			}
+			if (!drive([&] { return !client.IsRunning(); }, 2000)) {
+				*error = "the host's stop never reached the follower: " + client.BuildReportJson();
+				return false;
+			}
+			const uint32_t sentAtStop = client.GetStats().framePacketsSent;
+			const size_t attemptsAtStop = clientTransport.sendAttempts;
+			clientTransport.SetFaultConfig(LoopbackTransportConfig{});
+			drive([&] { return false; }, 2000);
+			if (client.GetStats().framePacketsSent != sentAtStop || clientTransport.sendAttempts != attemptsAtStop) {
+				*error = "the retry outlived the round: frame_packets_sent " + std::to_string(sentAtStop) +
+				         " -> " + std::to_string(client.GetStats().framePacketsSent);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS owed_frame_retry_ends_with_the_round frames_sent="
+			          << sentAtStop << " client=" << NetLockstepCoordinator::StateName(client.GetState()) << std::endl;
+			return true;
+		}
+
+		bool TestCoordinatorOwedFrameKeepsItsCommands(std::string* error) {
+			const uint16_t port = 43131;
+			const uint64_t sessionId = 0x70000000000000D1ULL;
+			const uint64_t roundOne = 0x9A5E0000000000D1ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 60000;
+			clientConfig.timeoutMs = 60000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the round never started";
+				return false;
+			}
+			const NetGameCommand queued{2, NetGameSetTeamFunds{1, 4200}};
+			resent.commands = {queued};
+			resent.observations = MakeObservationSet(2, 12, 71, 0.25F);
+			if (!client.QueueLocalInput(0, {MakeFrame(200, 1)}, {queued}, error, resent.observations)) {
+				return false;
+			}
+			drive([&] { return false; }, 50);
+			LoopbackTransportConfig refuse;
+			refuse.refuseSendsToPeer = 1;
+			refuse.acceptedSendsBeforeRefusing = 1;
+			clientTransport.SetFaultConfig(refuse);
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetRoundId() == roundTwo && client.IsRunning() && host.IsRunning(); }, 4000)) {
+				*error = "the client never followed on the start the link took";
+				return false;
+			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, false, error)) return false;
+			if (host.GetStats().framePacketsReceived != 0) {
+				*error = "the fixture did not refuse the owed frame";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetStats().framesAccepted == 1; }, 2000)) {
+				*error = "the follower never committed the frame it owes";
+				return false;
+			}
+			NetLockstepReadyFrame clientReady;
+			if (!client.PopReadyFrame(clientReady) || clientReady.frame != 0 ||
+			    clientReady.localFrames.size() != 1 ||
+			    ControllerFrameCodec::Encode(clientReady.localFrames.front()) != ControllerFrameCodec::Encode(MakeFrame(200, 1)) ||
+			    clientReady.localCommands != std::vector<NetGameCommand>{queued} || clientReady.localObservations != resent.observations) {
+				*error = "the follower committed different input or commands";
+				return false;
+			}
+			clientTransport.SetFaultConfig(LoopbackTransportConfig{});
+			std::vector<NetLockstepReadyFrame> hostReady;
+			if (!drive([&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady.push_back(ready);
+					}
+					return hostReady.size() == 1;
+				}, 4000)) {
+				*error = "the owed frame never reached the host: " + host.BuildReportJson();
+				return false;
+			}
+			if (hostReady[0].frame != clientReady.frame ||
+			    hostReady[0].remoteFrames.size() != 1 ||
+			    ControllerFrameCodec::Encode(hostReady[0].remoteFrames.front()) != ControllerFrameCodec::Encode(clientReady.localFrames.front()) ||
+			    hostReady[0].remoteCommands != clientReady.localCommands || hostReady[0].remoteObservations != clientReady.localObservations ||
+			    client.GetStats().observationsCarried != 0 || client.GetStats().observationsDropped != 0 ||
+			    host.GetStats().observationsCarried != 0 || host.GetStats().observationsDropped != 0) {
+				*error = "the owed frame reached the host carrying " +
+				         std::to_string(hostReady[0].remoteCommands.size()) + " of its 1 command";
+				return false;
+			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, true, error)) return false;
+			std::cout << "[net-lockstep-selftest] PASS owed_frame_keeps_its_commands" << std::endl;
+			return true;
+		}
+
+		bool TestCoordinatorStoppedRoundStopsResending(std::string* error) {
+			const uint16_t port = 43132;
+			const uint64_t sessionId = 0x70000000000000D2ULL;
+			const uint64_t roundOne = 0x9A5E0000000000D2ULL;
+			const uint64_t roundTwo = roundOne + 0x100ULL;
+			NetLockstepFrame resent{2, 0, {MakeFrame(200, 1)}, {}, roundTwo, {}};
+			LoopbackTransport hostTransport;
+			RecoveryTapTransport clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, sessionId, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, sessionId, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = roundOne;
+			hostConfig.timeoutMs = 60000;
+			clientConfig.timeoutMs = 60000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](const std::function<bool()>& done, uint64_t maxMs) {
+				for (uint64_t elapsed = 0; elapsed <= maxMs; elapsed += 5, now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (StartsSent({&host, &client}) > c_RoundStartBudget) {
+						return false;
+					}
+					hostTransport.AdvanceTimeMs(5);
+					clientTransport.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 1000)) {
+				*error = "the round never started";
+				return false;
+			}
+			if (!client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			drive([&] { return false; }, 50);
+			LoopbackTransportConfig refuse;
+			refuse.refuseSendsToPeer = 1;
+			refuse.acceptedSendsBeforeRefusing = 1;
+			clientTransport.SetFaultConfig(refuse);
+			NetLockstepConfig hostRestart = hostConfig;
+			hostRestart.roundId = roundTwo;
+			hostRestart.remoteTransportPeerId = 1;
+			if (!host.Start(hostTransport, hostRestart, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetRoundId() == roundTwo && client.IsRunning() && host.IsRunning(); }, 4000)) {
+				*error = "the client never followed on the start the link took";
+				return false;
+			}
+			if (!CheckRecoveredInput(clientTransport, resent, sessionId, false, error)) return false;
+			if (host.GetStats().framePacketsReceived != 0) {
+				*error = "the fixture did not refuse the owed frame";
+				return false;
+			}
+			const uint32_t sentWhileOwing = client.GetStats().framePacketsSent;
+			// The match ends between two flushes: the round is Stopped, not Failed.
+			NetLockstepStop complete;
+			complete.senderPeerId = 1;
+			complete.reason = NetLockstepStopReason::Complete;
+			complete.frame = 1;
+			complete.message = "match over";
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({complete}, bytes, error) || !hostTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!drive([&] { return client.GetState() == NetLockstepState::Stopped; }, 1000)) {
+				*error = "the client never stopped on the host's Complete";
+				return false;
+			}
+			const size_t attemptsAtStop = clientTransport.sendAttempts;
+			clientTransport.SetFaultConfig(LoopbackTransportConfig{});
+			drive([&] { return false; }, 2000);
+			if (client.GetStats().framePacketsSent != sentWhileOwing || clientTransport.sendAttempts != attemptsAtStop) {
+				*error = "a stopped round kept re-sending: frame_packets_sent " + std::to_string(sentWhileOwing) +
+				         " -> " + std::to_string(client.GetStats().framePacketsSent);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS stopped_round_stops_resending frames_sent="
+			          << sentWhileOwing << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		if (!AudioMan::IsConstructed()) AudioMan::Construct();
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
@@ -5619,6 +6921,10 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||
+		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
+		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
+		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
+		    !TestCoordinatorStoppedRoundStopsResending(&error) ||
 		    !TestCoordinatorFailedRoundStopsResending(&error) ||
 		    !TestCoordinatorOwedFrameOutlivesItsLocalCommit(&error) ||
 		    !TestCoordinatorReadoptResendSurvivesARefusedSend(&error) ||
@@ -5645,7 +6951,17 @@ namespace RTE {
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
-		    !TestSeatLineAgreesAcrossPeers(&error) ||
+		    !TestB2SeatSnapshotCodec(&error) ||
+		    !TestRecoveryWireRefusals(&error) ||
+		    !TestRecoveryWireRelayRetry(&error) ||
+		    !TestRecoveryInputMembership(&error) ||
+		    !TestB2SeatSnapshotRelay(&error) ||
+		    !TestB2SeatSnapshotAuthority(&error) ||
+		    !TestB2SeatSnapshotReplayAndPublication(&error) ||
+		    !TestB2SeatSnapshotInitiallyComplete(&error) ||
+		    !TestB2SeatSnapshotCoalesces(&error) ||
+		    !TestB2SeatSnapshotResyncSeedsNewPeer(&error) ||
+		    !TestB2SeatSnapshotDoesNotReviveDepartedTransport(&error) ||
 		    !TestAnnouncedLeaveHoldsNothing(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
@@ -5658,6 +6974,7 @@ namespace RTE {
 		    !TestCoordinatorDroppedSeatHold(&error) ||
 		    !TestCoordinatorHeldSeatKeepsPlaying(&error) ||
 		    !TestSeatStateNeverReadUnderTheServiceLock(&error) ||
+		    !TestSeatStateNeverReadUnderTheServiceLock(&error, true) ||
 		    !TestHeldSeatOwnershipAgreesAcrossPeers(&error) ||
 		    !TestSessionPumpRunsWhileTheRoundWaits(&error) ||
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
@@ -5676,6 +6993,7 @@ namespace RTE {
 			return fail(error);
 		}
 
+		if (NetResyncSelfTest::Run() != 0 || NetResyncRuntimeSelfTest::Run() != 0) return fail("resync regression suite failed");
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 		return 0;
 	}
