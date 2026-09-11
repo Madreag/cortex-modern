@@ -28,6 +28,7 @@
 #include "Scene.h"
 #include "SceneObject.h"
 #include "Writer.h"
+#include "Reader.h"
 
 #include "backward/backward.hpp"
 
@@ -48,6 +49,7 @@ using namespace RTE;
 
 namespace {
 	thread_local const char* s_RestorePlayPhase = "";
+	int s_RestorePlayCount = 0;
 
 	void PrintRestorePlayBacktrace() {
 		backward::StackTrace stack;
@@ -522,6 +524,8 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	if (!soundContainer) return false;
 	const bool restoring = g_MovableMan.IsRestoringSnapshot();
 	const char* phase = RestorePlayPhaseScope::Name();
+	const bool physicalPlay = !s_PlaybackSuppressed && m_AudioEnabled;
+	if (restoring && physicalPlay) ++s_RestorePlayCount;
 	if (restoring || (phase && std::strcmp(phase, "staging") == 0)) {
 		std::cout << "[audio-checkpoint] play during restore: preset \"" << soundContainer->GetPresetName() << "\" identity " << soundContainer->GetCheckpointIdentity()
 		          << " owner-class " << soundContainer->GetClass().GetName() << " phase " << (phase && phase[0] ? phase : "none") << " restoring=" << (restoring ? 1 : 0) << std::endl;
@@ -1317,6 +1321,14 @@ const char* AudioMan::RestorePlayPhaseScope::Name() {
 	return s_RestorePlayPhase ? s_RestorePlayPhase : "";
 }
 
+int AudioMan::RestorePlayPhaseScope::RestorePlayCount() {
+	return s_RestorePlayCount;
+}
+
+void AudioMan::RestorePlayPhaseScope::ResetRestorePlayCount() {
+	s_RestorePlayCount = 0;
+}
+
 void AudioMan::StopRecordingRestoredSoundRegistry() {
 	m_RestoredSoundRegistryRecording = false;
 }
@@ -2055,6 +2067,7 @@ std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* 
 }
 bool AudioMan::RunCheckpointSelfTest() {
 	if (!m_AudioEnabled) return false;
+	RestorePlayPhaseScope::ResetRestorePlayCount();
 	const std::string original = SaveCheckpoint();
 	std::map<SoundContainer*, std::string> originalOwners;
 	for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) originalOwners.try_emplace(voice.owner, voice.owner->SaveCheckpoint());
@@ -2295,6 +2308,66 @@ bool AudioMan::RunCheckpointSelfTest() {
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL carried_owners_match_archive " << error.what() << std::endl;
 			ok = false;
+		}
+		try {
+			const auto* actorPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
+			const auto* woundPreset = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", "Leaking Machinery", "Base.rte"));
+			if (!actorPreset || !woundPreset) throw std::runtime_error("missing wound restore selftest presets");
+			std::unique_ptr<Actor> actor(static_cast<Actor*>(actorPreset->Clone()));
+			constexpr int woundLimit = 3;
+			actor->SetGibWoundLimit(woundLimit);
+			while (!actor->GetAttachableList().empty()) {
+				Attachable* attachable = actor->GetAttachableList().front();
+				if (Attachable* removed = actor->RemoveAttachable(attachable, false, false)) delete removed;
+				else break;
+			}
+			std::vector<uint64_t> burstIdentities;
+			for (int index = 0; index < woundLimit; ++index) {
+				AEmitter* wound = static_cast<AEmitter*>(woundPreset->Clone());
+				actor->AddWound(wound, Vector(static_cast<float>(index), 0.0F), false);
+				SoundContainer* burst = wound->GetBurstSound();
+				if (!burst || !burst->GetCheckpointIdentity()) throw std::runtime_error("live wound has no registered burst identity");
+				burstIdentities.push_back(burst->GetCheckpointIdentity());
+			}
+			if (static_cast<int>(actor->GetWoundList().size()) != woundLimit) throw std::runtime_error("live actor did not keep every accepted wound");
+			auto stream = std::make_unique<std::stringstream>();
+			auto* text = stream.get();
+			Writer writer(std::move(stream));
+			writer.NewProperty("WoundRestoreFixture");
+			Scene::SaveSceneObject(writer, actor.get(), false, true);
+			RestorePlayPhaseScope::ResetRestorePlayCount();
+			const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
+			g_MovableMan.SetRestoringSnapshot(true);
+			std::unique_ptr<Actor> restored;
+			try {
+				Reader reader(std::make_unique<std::stringstream>(text->str()), "Base.rte/WoundRestore.ini", false, nullptr, true);
+				reader.SetCheckpoint(true);
+				reader.SetThrowOnError(true);
+				if (!reader.NextProperty() || reader.ReadPropName() != "WoundRestoreFixture") throw std::runtime_error("wound restore fixture body unavailable");
+				std::unique_ptr<Entity> entity(g_PresetMan.ReadReflectedPreset(reader));
+				restored.reset(dynamic_cast<Actor*>(entity.release()));
+			} catch (...) {
+				g_MovableMan.SetRestoringSnapshot(wasRestoring);
+				throw;
+			}
+			g_MovableMan.SetRestoringSnapshot(wasRestoring);
+			if (!restored) throw std::runtime_error("snapshot INI did not restore an actor");
+			if (restored->IsSetToDelete()) throw std::runtime_error("restored actor was marked for delete");
+			if (static_cast<int>(restored->GetWoundList().size()) != woundLimit) throw std::runtime_error("restored wound count " + std::to_string(restored->GetWoundList().size()) + " != " + std::to_string(woundLimit));
+			for (uint64_t identity: burstIdentities) {
+				if (!FindCheckpointSoundContainer(identity)) throw std::runtime_error("restored burst identity " + std::to_string(identity) + " is not registered");
+			}
+			if (RestorePlayPhaseScope::RestorePlayCount() != 0) throw std::runtime_error("play during restore count " + std::to_string(RestorePlayPhaseScope::RestorePlayCount()));
+			std::cout << "[audio-checkpoint-selftest] PASS saved_wounds_survive_snapshot_read" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL saved_wounds_survive_snapshot_read " << error.what() << std::endl;
+			ok = false;
+		}
+		if (RestorePlayPhaseScope::RestorePlayCount() != 0) {
+			std::cout << "[audio-checkpoint-selftest] FAIL play_during_restore count " << RestorePlayPhaseScope::RestorePlayCount() << std::endl;
+			ok = false;
+		} else {
+			std::cout << "[audio-checkpoint-selftest] PASS play_during_restore" << std::endl;
 		}
 		if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("owner selftests left the audio checkpoint unrestored");
 		std::unique_ptr<SoundContainer> orphan(static_cast<SoundContainer*>(preset->Clone()));
