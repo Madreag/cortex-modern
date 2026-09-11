@@ -42,6 +42,7 @@ namespace RTE {
 	bool NetMatchRunner::Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		m_Config = config;
 		m_UseLobbyProtocol = config.useLobbyProtocol;
+		m_ResyncRound = false;
 		m_MatchConfig = config.matchConfig;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
@@ -122,6 +123,7 @@ namespace RTE {
 			return false;
 		}
 		m_SetupError.clear();
+		m_ResyncRound = !stateToStream.empty();
 		m_StateToStream = std::move(stateToStream);
 		m_ReceivedStateBytes.clear();
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
@@ -242,6 +244,7 @@ namespace RTE {
 		lobbyConfig.autoReady = m_Config.autoReady;
 		lobbyConfig.autoStart = m_Config.autoStart;
 		lobbyConfig.session = &session;
+		lobbyConfig.sessionNowMs = m_Config.nowMs;
 		lobbyConfig.autoInputDelay = m_Config.autoInputDelay;
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately.
@@ -257,6 +260,7 @@ namespace RTE {
 		}
 
 		const auto startTime = std::chrono::steady_clock::now();
+		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastTransferProgressMs = 0;
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -273,6 +277,10 @@ namespace RTE {
 			const uint64_t roundMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), m_Config.nowMs ? m_Config.nowMs() : 0);
 			m_Lobby.Tick(clocks.lobbyMs);
+			if (const uint64_t progress = m_Lobby.GetStateTransferProgressSerial(); progress != transferProgress) {
+				transferProgress = progress;
+				lastTransferProgressMs = clocks.budgetMs;
+			}
 			// The lobby round owns the transport queue, so the plane only gets its time from here.
 			session.TickAdmissionPlane(clocks.planeMs);
 			if (m_Config.publishLobby) {
@@ -291,7 +299,7 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (clocks.budgetMs > maxWaitMs) {
+			if (clocks.budgetMs >= lastTransferProgressMs && clocks.budgetMs - lastTransferProgressMs > maxWaitMs) {
 				SetFailed("timed out waiting for lobby start");
 				if (error) *error = m_SetupError;
 				return false;
@@ -303,6 +311,12 @@ namespace RTE {
 	bool NetMatchRunner::StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		NetLockstepConfig lockstepConfig;
 		lockstepConfig.sessionId = session.GetSessionId();
+		lockstepConfig.resumeFromSnapshot = m_ResyncRound || !m_ReceivedStateBytes.empty();
+		if (const auto* admission = session.GetReconnectHost()) {
+			lockstepConfig.seatPresenceEpoch = admission->GetEpoch();
+		} else if (const auto* admission = session.GetReconnectClient(); admission && admission->IsAdmitted() && admission->HasRecord()) {
+			lockstepConfig.seatPresenceEpoch = admission->GetRecord().epoch;
+		}
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
 		lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, lockstepConfig.localPeerId);

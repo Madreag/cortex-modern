@@ -53,15 +53,14 @@ namespace RTE {
 
 	/// What a setup round clocks each of its parts with.
 	struct NetMatchRunnerClocks {
-		uint64_t lobbyMs = 0;  //!< NetLobbySession adds the session clock it captured at Start, so this is per round.
+		uint64_t lobbyMs = 0;  //!< Lobby retransmissions and its own wait budget use time since round start.
 		uint64_t planeMs = 0;  //!< The admission plane's deadlines are session-elapsed time.
 		uint64_t budgetMs = 0; //!< The round's own wait budget, which is per round like the lobby's.
 	};
 
 	class NetMatchRunner {
 	public:
-		/// Splits a setup round's clocks. Handing the lobby the session clock double-counts it, because
-		/// the lobby adds its own base - which is what the base is for.
+		/// Keeps lobby wait intervals separate from admission's session-elapsed deadlines.
 		static NetMatchRunnerClocks ResolveRoundClocks(uint64_t roundMs, bool hasSessionClock, uint64_t sessionClockMs) {
 			return {roundMs, hasSessionClock ? sessionClockMs : roundMs, roundMs};
 		}
@@ -107,6 +106,7 @@ namespace RTE {
 		NetMatchConfig m_MatchConfig;
 		NetHash32 m_MatchConfigHash{};
 		bool m_UseLobbyProtocol = false;
+		bool m_ResyncRound = false;
 		std::string m_SetupError;
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
