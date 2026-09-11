@@ -110,6 +110,14 @@ namespace RTE {
 		bool s_LockstepStallOverlayEnabled = false;
 		bool s_LockstepPaused = false;
 		int s_LockstepResumeCountdown = -1;
+		struct NetUiToast {
+			ScenarioRunner::NetUiToastRecord record;
+			uint64_t shownAtMs = 0;
+		};
+		std::deque<NetUiToast> s_NetUiToasts;                    //!< On-screen queue; cleared on resync relaunch.
+		std::vector<ScenarioRunner::NetUiToastRecord> s_NetUiToastLog; //!< Report log; survives the queue.
+		uint64_t s_NetUiResyncOverlayFrames = 0;
+		constexpr uint64_t c_NetUiToastMs = 3000;
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
 		std::string s_ReplayRecordArmedPath;
@@ -641,6 +649,52 @@ namespace RTE {
 		s_SeatPresence = presence;
 	}
 
+	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text) {
+		const uint64_t tick = s_LockstepCoordinator ? s_LockstepAppliedFrame : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		NetUiToast toast;
+		toast.record = {tick, kind, text};
+		toast.shownAtMs = NetLockstepNowMs();
+		s_NetUiToasts.push_back(toast);
+		s_NetUiToastLog.push_back(toast.record);
+	}
+
+	void ScenarioRunner::ClearNetUiToasts() {
+		s_NetUiToasts.clear();
+	}
+
+	void ScenarioRunner::DrawNetUiToasts() {
+		BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+		GUIFont* smallFont = g_FrameMan.GetSmallFont();
+		if (!backbuffer || !smallFont) {
+			return;
+		}
+		const uint64_t nowMs = NetLockstepNowMs();
+		while (!s_NetUiToasts.empty() && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
+			s_NetUiToasts.pop_front();
+		}
+		if (s_NetUiToasts.empty()) {
+			return;
+		}
+		AllegroBitmap drawBitmap(backbuffer);
+		int y = 8;
+		for (const NetUiToast& toast: s_NetUiToasts) {
+			smallFont->DrawAligned(&drawBitmap, backbuffer->w / 2, y, toast.record.text, GUIFont::Centre);
+			y += smallFont->GetFontHeight() + 2;
+		}
+	}
+
+	const std::vector<ScenarioRunner::NetUiToastRecord>& ScenarioRunner::GetNetUiToastLog() {
+		return s_NetUiToastLog;
+	}
+
+	void ScenarioRunner::NoteResyncOverlayFrame() {
+		++s_NetUiResyncOverlayFrames;
+	}
+
+	uint64_t ScenarioRunner::GetResyncOverlayFrames() {
+		return s_NetUiResyncOverlayFrames;
+	}
+
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
 		if (!coordinator && s_LockstepCoordinator) {
 			for (auto& input: s_LockstepCoordinator->CaptureLocalInputHistory()) s_LocalInputHistory[input.targetFrame] = std::move(input);
@@ -854,6 +908,7 @@ namespace RTE {
 			const std::string line = "match paused at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " sim ms " + std::to_string(g_TimerMan.GetSimTimeMS());
 			g_ConsoleMan.PrintString("NETWORK: " + line);
 			std::cout << "[net-match] " << line << std::endl;
+			PushNetUiToast("paused", "Match paused");
 		} else if (!pause && s_LockstepPaused && s_LockstepResumeCountdown < 0) {
 			s_LockstepResumeCountdown = static_cast<int>(3.0F / c_DefaultDeltaTimeS + 0.5F);
 			const std::string line = "match resuming in " + std::to_string(s_LockstepResumeCountdown) + " ticks";
@@ -873,6 +928,7 @@ namespace RTE {
 			const std::string line = "match resumed at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " sim ms " + std::to_string(g_TimerMan.GetSimTimeMS());
 			g_ConsoleMan.PrintString("NETWORK: " + line);
 			std::cout << "[net-match] " << line << std::endl;
+			PushNetUiToast("resumed", "Match resumed");
 		}
 	}
 
@@ -1575,6 +1631,7 @@ namespace RTE {
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
+		bool stalledOnHold = false;
 		uint32_t nextPumpMs = 0;
 		while (true) {
 			s_LockstepCoordinator->Tick(NetLockstepNowMs());
@@ -1598,6 +1655,9 @@ namespace RTE {
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
+						if (stalledOnHold) {
+							PushNetUiToast("resumed", "Match resumed");
+						}
 					}
 					// The recorder captures every committed tick: all peers' frames and commands. The
 					// codec wants one UID-sorted set; command order re-sorts by sender at apply.
@@ -1654,9 +1714,12 @@ namespace RTE {
 				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
+					stalledOnHold = holdPause;
 					if (holdPause) {
-						std::cout << "[net-match] match paused waiting for " << (holdName.empty() ? "a player" : holdName)
+						const std::string who = holdName.empty() ? "a player" : holdName;
+						std::cout << "[net-match] match paused waiting for " << who
 						          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
+						PushNetUiToast("paused", "Match paused: waiting for " + who + " to return");
 					} else {
 						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 					}
