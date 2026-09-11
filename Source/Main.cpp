@@ -255,6 +255,8 @@ static long long s_lpExpectEquipTick = 0;
 static long long s_lpExpectEquipSlack = 0; //!< Ticks the preview's pickup may lag the canonical one (the reach ray is a random cast).
 static long long s_lpExpectFireTick = 0;
 static long long s_lpExpectFireSlack = 0;
+static long long s_eventLedgerPressTick = 0; //!< -local-prediction-event-ledger: the tick the tracked press is sampled at.
+static bool s_eventLedgerChecked = false;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -836,6 +838,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(text.c_str(), nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-local-prediction-event-ledger") {
+			// The tick the tracked press is sampled at; the shot's sound must be audible by the next one.
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[preview-event-selftest] bad press tick '" << text << "': expected a whole number" << std::endl;
+				return false;
+			}
+			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
@@ -1775,9 +1787,62 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	}
 }
 
+// -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
+// match has; a replay run pumps its ticks without frames, so nothing would preview at all.
+static void PreviewEventLedgerFrameOnTick() {
+	if (s_eventLedgerPressTick <= 0) {
+		return;
+	}
+	LocalPrediction::RunPreview();
+	DrawFrameWithPreviews();
+}
+
+// -local-prediction-event-ledger: the shot a previewed actor fires must be audible on the preview that
+// runs it, not D ticks later at its committed tick, and it must reach the output exactly once.
+static void CheckPreviewEventLedgerSelfTest() {
+	if (s_eventLedgerPressTick <= 0 || s_eventLedgerChecked) {
+		return;
+	}
+	s_eventLedgerChecked = true;
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail) {
+		std::cout << "[preview-event-selftest] " << (ok ? "PASS " : "FAIL ") << name << ": " << detail << std::endl;
+		passed = passed && ok;
+	};
+	const uint64_t press = static_cast<uint64_t>(s_eventLedgerPressTick);
+	const std::vector<PreviewEventLedger::SoundStart>& starts = PreviewEventLedger::GetSoundStarts();
+	const PreviewEventLedger::SoundStart* tracked = nullptr;
+	for (const PreviewEventLedger::SoundStart& start: starts) {
+		if (start.committedTick >= press && !tracked) {
+			tracked = &start;
+		}
+	}
+	if (!tracked) {
+		check("a_previewed_actor_played_a_sound", false, "no physical voice from a previewed actor at or after tick " + std::to_string(press) + " (" + std::to_string(PreviewEventLedger::GetSoundStartCount()) + " recorded in the run)");
+	} else {
+		size_t sameKey = 0;
+		for (const PreviewEventLedger::SoundStart& start: starts) {
+			if (start.emitterUID == tracked->emitterUID && start.eventTick == tracked->eventTick && start.seq == tracked->seq) {
+				++sameKey;
+			}
+		}
+		check("the_sound_starts_on_the_preview_tick", tracked->committedTick <= press + 1,
+		      "first physical voice for the press at committed tick " + std::to_string(tracked->committedTick) + " (event tick " + std::to_string(tracked->eventTick) + ", seq " + std::to_string(tracked->seq) + ", predicted=" + std::to_string(tracked->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
+		check("the_event_reaches_the_output_once", sameKey == 1, std::to_string(sameKey) + " physical starts for that event");
+	}
+	const PreviewEventLedger::Counters& counters = PreviewEventLedger::GetCounters();
+	check("the_counters_balance", counters.playedAtPreview == counters.adoptedAtCommit + counters.expired + PreviewEventLedger::GetLiveEntryCount(),
+	      PreviewEventLedger::Describe() + " live=" + std::to_string(PreviewEventLedger::GetLiveEntryCount()));
+	std::cout << "[preview-event-selftest] " << (passed ? "PASS" : "FAIL") << " press tick " << press << std::endl;
+	if (!passed) {
+		s_netReplayExitCode = 5;
+	}
+}
+
 // A requested test that never reached its tick is a failed test; stopping early cannot pass it.
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
+	CheckPreviewEventLedgerSelfTest();
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
 		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");
@@ -2649,6 +2714,7 @@ void RunGameLoop() {
 			DumpSimStateIfArmed(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);
+			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
 			{
