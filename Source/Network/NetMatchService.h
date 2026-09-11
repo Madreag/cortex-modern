@@ -50,11 +50,8 @@ namespace RTE {
 			}
 			return lastTick - firstTick + 1;
 		}
-		void OnResyncRelaunch(uint64_t restoredMatchTicks = 0) {
+		void OnResyncRelaunch() {
 			priorTicks += SegmentTicks();
-			if (priorTicks == 0) {
-				priorTicks = restoredMatchTicks;
-			}
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
 		}
