@@ -8,12 +8,18 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetMatchReplay.h"
+#include "NetMatchRunner.h"
 #include "NetMatchService.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <variant>
@@ -638,7 +644,7 @@ namespace RTE {
 			chunk.totalBytes = 100000;
 			chunk.chunkIndex = 1;
 			chunk.chunkCount = 3;
-			chunk.bytes.resize(1024);
+			chunk.bytes.resize(NetLobbyProtocol::c_MaxStateChunkBytes);
 			for (size_t i = 0; i < chunk.bytes.size(); ++i) {
 				chunk.bytes[i] = static_cast<uint8_t>(i * 31 + 7);
 			}
@@ -687,6 +693,421 @@ namespace RTE {
 			if (clientLobby.TakeReceivedState() != stateBytes) {
 				*error = "received state differs from the sent state";
 				return false;
+			}
+			return true;
+		}
+
+		NetLobbyStateChunk MakeStateChunk(uint64_t transferId, uint32_t totalBytes, uint16_t chunkIndex, uint8_t fill = 0xA5) {
+			NetLobbyStateChunk chunk;
+			chunk.transferId = transferId;
+			chunk.totalBytes = totalBytes;
+			chunk.chunkIndex = chunkIndex;
+			chunk.chunkCount = NetLobbyProtocol::GetStateChunkCount(totalBytes);
+			const size_t begin = static_cast<size_t>(chunkIndex) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			chunk.bytes.assign(std::min(NetLobbyProtocol::c_MaxStateChunkBytes, static_cast<size_t>(totalBytes) - begin), fill);
+			return chunk;
+		}
+
+		bool TestLobbyStateChunkBounds(std::string* error) {
+			constexpr size_t chunkBytes = NetLobbyProtocol::c_MaxStateChunkBytes;
+			constexpr uint32_t maximum = NetLobbyProtocol::c_MaxTotalStateBytes;
+			if (maximum != 2147483648U || NetLobbyProtocol::GetStateChunkCount(maximum) != 43691 ||
+			    NetLobbyProtocol::GetStateChunkCount(0) != 0 || NetLobbyProtocol::GetStateChunkCount(static_cast<size_t>(maximum) + 1) != 0 ||
+			    NetLobbyProtocol::GetStateChunkCount(std::numeric_limits<size_t>::max()) != 0 ||
+			    NetLobbyProtocol::GetStateChunkCount(2 * chunkBytes) != 2 || NetLobbyProtocol::GetStateChunkCount(2 * chunkBytes + 1) != 3) {
+				*error = "state transfer bounds narrowed or overflowed";
+				return false;
+			}
+			for (const uint32_t total: {1U, 49152U, 49153U, 67108864U, 67108865U, maximum}) {
+				const uint16_t last = NetLobbyProtocol::GetStateChunkCount(total) - 1;
+				if (!RoundTrip(MakeStateChunk(1, total, 0), error) || !RoundTrip(MakeStateChunk(1, total, last), error)) return false;
+			}
+			const auto setLE = [](std::vector<uint8_t>& bytes, size_t offset, uint64_t value, size_t count) {
+				for (size_t i = 0; i < count; ++i) bytes.at(offset + i) = static_cast<uint8_t>(value >> (8 * i));
+			};
+			const auto reject = [&](const NetLobbyStateChunk& chunk) {
+				std::vector<uint8_t> encoded;
+				if (NetLobbyProtocol::Encode({chunk}, encoded)) return false;
+				if (!NetLobbyProtocol::Encode({MakeStateChunk(1, 1, 0)}, encoded)) return false;
+				encoded.resize(36 + chunk.bytes.size());
+				setLE(encoded, 12, 20 + chunk.bytes.size(), 4);
+				setLE(encoded, 16, chunk.transferId, 8);
+				setLE(encoded, 24, chunk.totalBytes, 4);
+				setLE(encoded, 28, chunk.chunkIndex, 2);
+				setLE(encoded, 30, chunk.chunkCount, 2);
+				setLE(encoded, 32, chunk.bytes.size(), 4);
+				std::copy(chunk.bytes.begin(), chunk.bytes.end(), encoded.begin() + 36);
+				return !NetLobbyProtocol::Decode(encoded).ok;
+			};
+			const NetLobbyStateChunk valid = MakeStateChunk(1, 2 * static_cast<uint32_t>(chunkBytes) + 7, 0);
+			std::vector<NetLobbyStateChunk> invalid(12, valid);
+			invalid[0].transferId = 0;
+			invalid[1].totalBytes = 0;
+			invalid[2].totalBytes = maximum + 1;
+			invalid[3].chunkIndex = valid.chunkCount;
+			invalid[4].chunkCount = 0;
+			invalid[5].chunkCount = 65535;
+			invalid[6].bytes.clear();
+			invalid[7].bytes.pop_back();
+			invalid[8].bytes.push_back(0);
+			invalid[9].chunkIndex = valid.chunkCount - 1;
+			invalid[10] = MakeStateChunk(1, 1, 0);
+			invalid[10].totalBytes = maximum;
+			invalid[10].chunkCount = 43691;
+			invalid[11] = invalid[10];
+			invalid[11].chunkCount = 1;
+			for (size_t i = 0; i < invalid.size(); ++i) {
+				if (!reject(invalid[i])) {
+					*error = "state chunk encoder/decoder accepted malformed case " + std::to_string(i);
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool TestLobbyStateChunkConsistency(std::string* error) {
+			constexpr uint32_t total = 2 * static_cast<uint32_t>(NetLobbyProtocol::c_MaxStateChunkBytes) + 7;
+			const std::array<const char*, 11> cases = {"exact duplicates", "changed duplicate", "mixed total", "mixed count", "gap", "new id without first chunk", "regressed id", "unreliable chunk", "premature start", "size-only header", "maximum prefix"};
+			for (size_t test = 0; test < cases.size(); ++test) {
+				LoopbackTransport hostTransport, clientTransport;
+				NetPeerId hostPeer = 0, clientPeer = 0;
+				if (!StartLoopbackTransports(static_cast<uint16_t>(43120 + test), hostTransport, clientTransport, hostPeer, clientPeer, error)) return false;
+				NetLobbySession client;
+				NetLobbySessionConfig config;
+				config.localPeerId = 2;
+				config.remotePeerId = 1;
+				config.remoteTransportPeerId = clientPeer;
+				config.matchConfig = MakeConfig();
+				if (!client.Start(clientTransport, config, error)) return false;
+				uint64_t now = 0;
+				const auto send = [&](const NetLobbyPayload& payload, NetTransportLane lane = NetTransportLane::ControlReliable) {
+					std::vector<uint8_t> bytes;
+					if (!NetLobbyProtocol::Encode({payload}, bytes) || !hostTransport.Send(hostPeer, lane, bytes, error)) return false;
+					client.Tick(++now);
+					return true;
+				};
+				const NetLobbyStateChunk first = MakeStateChunk(100, test == 10 ? NetLobbyProtocol::c_MaxTotalStateBytes : total, 0);
+				if (!send(first) || client.IsFailed() || client.GetStateTransferProgressSerial() != 1 || client.HasCompleteStateTransfer() || !client.TakeReceivedState().empty()) {
+					*error = "state transfer first chunk was not retained as partial";
+					return false;
+				}
+				if (test == 10) {
+					if (client.GetStateTransferProgress() != std::pair<uint32_t, uint32_t>{49152, NetLobbyProtocol::c_MaxTotalStateBytes}) {
+						*error = "maximum state header did not retain only the received prefix";
+						return false;
+					}
+					continue;
+				}
+				if (test == 0) {
+					if (!send(NetLobbyPeerState{1, true, 0, 0, "Host", "test"}) || !send(first) || client.GetStateTransferProgressSerial() != 1 ||
+					    !send(MakeStateChunk(100, total, 1)) || !send(first) || client.GetStateTransferProgressSerial() != 2 ||
+					    !send(MakeStateChunk(100, total, 2)) || !send(MakeStateChunk(100, total, 2)) || client.IsFailed() ||
+					    client.GetStateTransferProgressSerial() != 3 || !client.HasCompleteStateTransfer() ||
+					    client.TakeReceivedState() != std::vector<uint8_t>(total, 0xA5) || !client.TakeReceivedState().empty()) {
+						*error = "state transfer duplicates/keepalive changed progress or completed bytes";
+						return false;
+					}
+					continue;
+				}
+				NetLobbyStateChunk bad = MakeStateChunk(100, total, 1);
+				if (test == 1) { bad = first; bad.bytes[17] ^= 1; }
+				if (test == 2) ++bad.totalBytes;
+				if (test == 3) bad = MakeStateChunk(100, total + static_cast<uint32_t>(NetLobbyProtocol::c_MaxStateChunkBytes), 1);
+				if (test == 4) bad = MakeStateChunk(100, total, 2);
+				if (test == 5) ++bad.transferId;
+				if (test == 6) {
+					if (!send(MakeStateChunk(101, total, 0, 0x3C)) || client.IsFailed()) return false;
+					bad = first;
+				}
+				const uint64_t progress = client.GetStateTransferProgressSerial();
+				const auto received = client.GetStateTransferProgress();
+				if (test == 8) {
+					if (!send(NetLobbyStart{config.matchConfig.sessionId, 0, config.matchConfig.inputDelayFrames, client.GetMatchConfigHash()})) return false;
+				} else if (test == 9) {
+					std::vector<uint8_t> bytes;
+					if (!NetLobbyProtocol::Encode({MakeStateChunk(100, 1, 0)}, bytes)) return false;
+					for (size_t i = 0; i < 4; ++i) bytes[24 + i] = static_cast<uint8_t>(NetLobbyProtocol::c_MaxTotalStateBytes >> (8 * i));
+					if (!hostTransport.Send(hostPeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+					client.Tick(++now);
+				} else if (!send(bad, test == 7 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable)) return false;
+				if (!client.IsFailed() || client.GetStateTransferProgressSerial() != progress || client.GetStateTransferProgress() != received) {
+					*error = std::string("state transfer accepted ") + cases[test];
+					return false;
+				}
+			}
+			return true;
+		}
+
+		class StateTransferTap final: public INetTransport {
+		public:
+			explicit StateTransferTap(LoopbackTransport& transport): m_Transport(transport) {}
+			bool StartHost(uint16_t port, std::string* error) override { return m_Transport.StartHost(port, error) && (!afterHostStart || afterHostStart(port, error)); }
+			bool Connect(const std::string& address, uint16_t port, std::string* error) override { return m_Transport.Connect(address, port, error); }
+			void Disconnect(NetPeerId peer, const std::string& reason) override { m_Transport.Disconnect(peer, reason); }
+			void Stop() override { m_Transport.Stop(); }
+			std::vector<NetTransportEvent> PollEvents() override { if (beforePoll) beforePoll(); return m_Transport.PollEvents(); }
+			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) override {
+				if (!m_Transport.Send(peer, lane, bytes, error, congested)) return false;
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				if (decoded.ok) {
+					if (const auto* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload)) {
+						chunks.emplace_back(peer, *chunk);
+						wrongLane = wrongLane || lane != NetTransportLane::ControlReliable;
+					}
+					if (std::holds_alternative<NetLobbyStart>(decoded.message.payload) && afterLobbyStart) afterLobbyStart();
+				}
+				return true;
+			}
+			std::vector<std::pair<NetPeerId, NetLobbyStateChunk>> chunks;
+			bool wrongLane = false;
+			std::function<bool(uint16_t, std::string*)> afterHostStart;
+			std::function<void()> beforePoll;
+			std::function<void()> afterLobbyStart;
+		private:
+			LoopbackTransport& m_Transport;
+		};
+
+		bool TestLobbyStateTransferRestart(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			if (!StartLoopbackTransports(43130, hostTransport, clientTransport, hostPeer, clientPeer, error)) return false;
+			StateTransferTap tap(hostTransport);
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true;
+			config.localPeerId = 1;
+			config.remotePeerId = 2;
+			config.remoteTransportPeerId = hostPeer;
+			config.matchConfig = MakeConfig();
+			config.autoStart = false;
+			if (!host.Start(tap, config, error)) return false;
+			config.host = false;
+			config.localPeerId = 2;
+			config.remotePeerId = 1;
+			config.remoteTransportPeerId = clientPeer;
+			if (!client.Start(clientTransport, config, error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); client.Tick(now++); };
+			const std::vector<uint8_t> original(5 * NetLobbyProtocol::c_MaxStateChunkBytes + 17, 0xA5);
+			const std::vector<uint8_t> replacement(original.size(), 0x3C);
+			host.BeginStateTransfer(original);
+			tick();
+			if (!host.HasPendingStateChunks() || client.HasCompleteStateTransfer() || client.GetStateTransferProgressSerial() != 2) {
+				*error = "state transfer did not stop at its two-chunk tick budget";
+				return false;
+			}
+			host.BeginStateTransfer(replacement);
+			if (host.GetStateTransferProgressSerial() != 2) {
+				*error = "restarting state transfer reset its progress serial";
+				return false;
+			}
+			for (int i = 0; i < 8 && host.HasPendingStateChunks(); ++i) tick();
+			if (host.IsFailed() || client.IsFailed() || !client.HasCompleteStateTransfer() || client.TakeReceivedState() != replacement ||
+			    host.GetStateTransferProgressSerial() != 8 || client.GetStateTransferProgressSerial() != 8 || tap.chunks.size() != 8 ||
+			    tap.chunks[0].second.transferId + 1 != tap.chunks[2].second.transferId || tap.chunks[2].second.chunkIndex != 0) {
+				*error = "same-size restart mixed old/new state or lost progress";
+				return false;
+			}
+			const uint64_t firstId = 0x50355354ULL ^ static_cast<uint32_t>(original.size()) ^ (6ULL << 32);
+			const std::vector<uint8_t> smaller(17, 0x72);
+			host.BeginStateTransfer(smaller);
+			host.RequestStart();
+			for (int i = 0; i < 8 && !(host.IsStarted() && client.IsStarted()); ++i) tick();
+			if (!host.IsStarted() || !client.IsStarted() || client.TakeReceivedState() != smaller || tap.wrongLane ||
+			    tap.chunks.size() != 9 || tap.chunks.front().second.transferId != firstId || tap.chunks.back().second.transferId != firstId + 2 ||
+			    host.GetStateTransferProgressSerial() != 9 || client.GetStateTransferProgressSerial() != 9) {
+				*error = "state transfer restart after consumption changed ordinary bytes or stalled start";
+				return false;
+			}
+			if (!client.Start(clientTransport, config, error) || client.GetStateTransferProgressSerial() != 0) {
+				*error = "new lobby did not reset state transfer progress";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestLobbyStateTransferBackpressure(std::string* error) {
+			LoopbackTransport hostTransport, clientATransport, clientBTransport;
+			if (!hostTransport.StartHost(43131, error) || !clientATransport.Connect("loopback", 43131, error) || !clientBTransport.Connect("loopback", 43131, error)) return false;
+			StateTransferTap tap(hostTransport);
+			NetLobbySession host, clientA, clientB;
+			NetMatchConfig match = MakeConfig();
+			match.peerCount = 3;
+			match.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client B"});
+			const auto config = [&](bool isHost, uint8_t local, std::map<uint8_t, NetPeerId> peers) {
+				NetLobbySessionConfig result;
+				result.host = isHost;
+				result.localPeerId = local;
+				result.remoteTransportPeerIds = std::move(peers);
+				result.matchConfig = match;
+				result.autoStart = false;
+				return result;
+			};
+			if (!host.Start(tap, config(true, 1, {{2, 1}, {3, 2}}), error) ||
+			    !clientA.Start(clientATransport, config(false, 2, {{1, 1}}), error) ||
+			    !clientB.Start(clientBTransport, config(false, 3, {{1, 1}}), error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); clientA.Tick(now); clientB.Tick(now++); };
+			for (int i = 0; i < 4; ++i) tick();
+			LoopbackTransportConfig fault;
+			fault.sendBufferBytes = static_cast<uint32_t>(NetLobbyProtocol::c_MaxStateChunkBytes);
+			fault.meterOnlyPeer = 2;
+			hostTransport.SetFaultConfig(fault);
+			const std::vector<uint8_t> state(5 * NetLobbyProtocol::c_MaxStateChunkBytes + 17, 0x59);
+			host.BeginStateTransfer(state);
+			host.RequestStart();
+			for (int i = 0; i < 4; ++i) tick();
+			if (host.IsFailed() || host.IsStarted() || !host.HasPendingStateChunks() || tap.chunks.size() != 1 || tap.chunks.front().first != 1 ||
+			    host.GetStateTransferProgressSerial() != 1 || clientA.GetStateTransferProgressSerial() != 1 || clientB.GetStateTransferProgressSerial() != 0) {
+				*error = "state transfer retry repeated an accepted destination or started under backpressure";
+				return false;
+			}
+			hostTransport.SetFaultConfig({});
+			for (int i = 0; i < 8 && !(host.IsStarted() && clientA.IsStarted() && clientB.IsStarted()); ++i) tick();
+			std::map<NetPeerId, uint16_t> nextChunk;
+			for (const auto& [peer, chunk]: tap.chunks) {
+				if (chunk.chunkIndex != nextChunk[peer]++ || chunk.bytes.size() > NetLobbyProtocol::c_MaxStateChunkBytes) {
+					*error = "state transfer duplicated, reordered or oversized a destination chunk";
+					return false;
+				}
+			}
+			if (!host.IsStarted() || !clientA.IsStarted() || !clientB.IsStarted() || tap.wrongLane || nextChunk[1] != 6 || nextChunk[2] != 6 ||
+			    clientA.TakeReceivedState() != state || clientB.TakeReceivedState() != state || host.HasPendingStateChunks() ||
+			    host.GetStateTransferProgressSerial() != 12 || clientA.GetStateTransferProgressSerial() != 6 || clientB.GetStateTransferProgressSerial() != 6) {
+				*error = "state transfer did not resume every destination exactly after backpressure";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestRunnerStateTransferProgress(std::string* error) {
+			for (const bool stalled: {false, true}) {
+				LoopbackTransport hostTransport, clientTransport;
+				StateTransferTap tap(hostTransport);
+				NetSession hostSession, clientSession;
+				NetLobbySession clientLobby;
+				NetLockstepCoordinator hostCoordinator, clientCoordinator;
+				NetMatchRunner runner;
+				const auto startedAt = std::chrono::steady_clock::now();
+				const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+				NetMatchRunnerConfig config;
+				config.host = true;
+				config.matchConfig = MakeConfig();
+				config.useLobbyProtocol = true;
+				config.lobbyWaitMs = 150;
+				config.sessionWaitMs = 1000;
+				config.lockstepWaitMs = 500;
+				config.postSessionSettleMs = config.postLobbySettleMs = 0;
+				config.nowMs = nowMs;
+				config.sessionConfig.port = stalled ? 43134 : 43133;
+				config.sessionConfig.sessionId = config.matchConfig.sessionId;
+				config.sessionConfig.displayName = "Host";
+				config.sessionConfig.heartbeatIntervalMs = 25;
+				auto& identity = config.sessionConfig.localIdentity;
+				identity.gameVersion = "7.0.0-test";
+				identity.networkProtocolVersion = NetProtocol::c_Version;
+				identity.controllerFrameVersion = ControllerFrame::c_Version;
+				identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				identity.buildId = "state-transfer-selftest";
+				identity.platform = "test";
+				NetSessionConfig clientConfig = config.sessionConfig;
+				clientConfig.displayName = "Client";
+				++clientConfig.localNonce;
+				tap.afterHostStart = [&](uint16_t, std::string* startError) { return clientSession.StartClient(clientTransport, "loopback", clientConfig, startError); };
+				uint64_t transportClock = 0, lobbyStartedAt = 0;
+				bool lobbyActive = false, coordinatorActive = false;
+				std::string peerError;
+				std::vector<uint8_t> received;
+				// Both real loopback endpoints are pumped on the runner's thread.
+				tap.beforePoll = [&] {
+					const uint64_t now = nowMs();
+					hostTransport.AdvanceTimeMs(now - transportClock);
+					clientTransport.AdvanceTimeMs(now - transportClock);
+					transportClock = now;
+					if (!clientSession.IsReady()) clientSession.Tick(now);
+					if (!clientSession.IsReady() || !peerError.empty()) return;
+					if (!lobbyActive) {
+						NetLobbySessionConfig lobbyConfig;
+						lobbyConfig.localPeerId = 2;
+						lobbyConfig.remotePeerId = 1;
+						lobbyConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+						lobbyConfig.matchConfig = config.matchConfig;
+						lobbyConfig.session = &clientSession;
+						lobbyConfig.sessionNowMs = nowMs;
+						lobbyActive = clientLobby.Start(clientTransport, lobbyConfig, &peerError);
+						lobbyStartedAt = now;
+					}
+					if (!lobbyActive) return;
+					if (!coordinatorActive) {
+						clientLobby.Tick(now - lobbyStartedAt);
+						if (!clientLobby.IsStarted()) return;
+						received = clientLobby.TakeReceivedState();
+						NetLockstepConfig lockstepConfig;
+						lockstepConfig.sessionId = clientSession.GetSessionId();
+						lockstepConfig.resumeFromSnapshot = !received.empty();
+						lockstepConfig.localPeerId = 2;
+						lockstepConfig.remoteTransportPeerIds = {{1, clientSession.GetRemoteTransportPeerId()}};
+						lockstepConfig.matchConfig = clientLobby.GetMatchConfig();
+						lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, 2);
+						lockstepConfig.startFrame = clientLobby.GetStartFrame();
+						lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
+						lockstepConfig.scenario = config.scenario;
+						coordinatorActive = clientCoordinator.Start(clientTransport, lockstepConfig, &peerError);
+					}
+					if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
+				};
+				tap.afterLobbyStart = tap.beforePoll;
+				bool transferActive = false;
+				uint64_t transferStartedAt = 0, lastProgress = 0;
+				std::vector<uint64_t> progressTimes;
+				config.publishLobby = [&](const NetLobbySnapshot&) {
+					const uint64_t progress = runner.GetLobbySession().GetStateTransferProgressSerial();
+					if (transferActive && progress != lastProgress) {
+						lastProgress = progress;
+						progressTimes.push_back(nowMs() - transferStartedAt);
+					}
+				};
+				if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !clientCoordinator.IsRunning()) {
+					*error = "state transfer runner setup failed: " + *error + "; peer=" + peerError;
+					return false;
+				}
+				hostCoordinator.Complete("state transfer test round");
+				tap.beforePoll();
+				if (!clientCoordinator.IsStopped()) { *error = "state transfer runner prior round did not stop"; return false; }
+				lobbyActive = coordinatorActive = false;
+				clientLobby = NetLobbySession{};
+				LoopbackTransportConfig throttle;
+				throttle.sendBufferBytes = static_cast<uint32_t>(NetLobbyProtocol::c_MaxStateChunkBytes) + 36 + 4096;
+				throttle.drainBytesPerSecond = stalled ? 0 : 2 * 1024 * 1024;
+				hostTransport.SetFaultConfig(throttle);
+				const std::vector<uint8_t> state(11 * NetLobbyProtocol::c_MaxStateChunkBytes + 17, 0x67);
+				const uint32_t messagesBefore = hostSession.GetStats().receivedMessages;
+				transferActive = true;
+				transferStartedAt = nowMs();
+				std::string transferError;
+				const bool ok = runner.StartNextMatch(tap, hostSession, hostCoordinator, &transferError, state);
+				const uint64_t elapsed = nowMs() - transferStartedAt;
+				if (progressTimes.empty() || !peerError.empty() || elapsed <= config.lobbyWaitMs || tap.wrongLane) {
+					*error = "runner state transfer did not exercise its elapsed deadline; peer=" + peerError;
+					return false;
+				}
+				if (stalled) {
+					if (ok || transferError != "timed out waiting for lobby start" || lastProgress != 1 || received.size() != 0 ||
+					    elapsed - progressTimes.back() <= config.lobbyWaitMs || hostSession.GetStats().receivedMessages < messagesBefore + 2) {
+						*error = "runner stalled state transfer did not time out amid session keepalives: " + transferError;
+						return false;
+					}
+				} else {
+					uint64_t previous = 0;
+					for (const uint64_t progressAt: progressTimes) {
+						if (progressAt - previous > config.lobbyWaitMs) { *error = "throttled transfer had a real progress stall"; return false; }
+						previous = progressAt;
+					}
+					if (!ok || received != state || lastProgress != 12 || progressTimes.back() <= config.lobbyWaitMs || !clientCoordinator.IsRunning()) {
+						*error = "runner timed out a progressing state transfer: " + transferError;
+						return false;
+					}
+				}
 			}
 			return true;
 		}
@@ -864,6 +1285,11 @@ namespace RTE {
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
+		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
+		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);
+		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
+		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
+		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
