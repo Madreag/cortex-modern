@@ -1240,6 +1240,7 @@ bool ActivityMan::RestartActivity() {
 	bool restored = false;
 	try {
 		Entity::CheckpointCloneScope checkpointClones(true);
+		AudioMan::RestoredSoundRegistryScope restoredSounds;
 		if (!PrepareCheckpointMaterials(m_PendingCheckpoint.runtimeGlobals)) throw std::runtime_error("could not prepare saved Material owners");
 		g_AudioMan.ActivateCheckpointSoundRegistrations(m_PendingCheckpoint.soundRegistrations);
 		if (m_PendingCheckpoint.images) m_PendingCheckpoint.images->SetActive(true);
