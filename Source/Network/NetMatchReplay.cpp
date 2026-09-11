@@ -67,6 +67,10 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, std::string* error) {
+		return WriteFrame(frame, frames, commands, observations, {}, error);
+	}
+
+	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error) {
 		if (!m_Out.is_open()) {
 			if (error) *error = "replay writer is not open";
 			return false;
@@ -78,6 +82,7 @@ namespace RTE {
 		record.frames = frames;
 		record.commands = commands;
 		record.observations = observations;
+		record.valueObservations = valueObservations;
 		for (const NetGameCommand& command : commands) {
 			if (command.senderPeerId == 0 || command.senderPeerId > NetLockstepCodec::c_MaxPeerCount) {
 				if (error) *error = "invalid replay command sender";
@@ -90,12 +95,19 @@ namespace RTE {
 				return false;
 			}
 		}
+		for (const NetValueObservation& observation : valueObservations) {
+			if (observation.senderPeerId == 0 || observation.senderPeerId > NetLockstepCodec::c_MaxPeerCount) {
+				if (error) *error = "invalid replay value observation sender";
+				return false;
+			}
+		}
 		std::vector<uint8_t> wireBytes;
 		NetLockstepError codecError;
 		// A record stands on its own, so it spells every observation key out; if a tick had more of them
 		// than one packet holds, say so rather than write a recording that is quietly short.
 		size_t observationsEncoded = observations.size();
-		if (!NetLockstepCodec::Encode({record}, wireBytes, &codecError, nullptr, &observationsEncoded)) {
+		size_t valueObservationsEncoded = valueObservations.size();
+		if (!NetLockstepCodec::Encode({record}, wireBytes, &codecError, nullptr, &observationsEncoded, &valueObservationsEncoded)) {
 			if (error) *error = "could not encode a replay frame: " + codecError.message;
 			return false;
 		}
@@ -103,14 +115,21 @@ namespace RTE {
 			if (error) *error = "a replay frame's sound observations do not fit one record";
 			return false;
 		}
+		if (valueObservationsEncoded < valueObservations.size()) {
+			if (error) *error = "a replay frame's value observations do not fit one record";
+			return false;
+		}
 		std::vector<uint8_t> bytes;
-		bytes.reserve(4 + wireBytes.size() + commands.size() + observations.size());
+		bytes.reserve(4 + wireBytes.size() + commands.size() + observations.size() + valueObservations.size());
 		AppendU32(bytes, static_cast<uint32_t>(wireBytes.size()));
 		bytes.insert(bytes.end(), wireBytes.begin(), wireBytes.end());
 		for (const NetGameCommand& command : commands) {
 			bytes.push_back(command.senderPeerId);
 		}
 		for (const NetSoundObservation& observation : observations) {
+			bytes.push_back(observation.senderPeerId);
+		}
+		for (const NetValueObservation& observation : valueObservations) {
 			bytes.push_back(observation.senderPeerId);
 		}
 		std::vector<uint8_t> lengthPrefix;
@@ -303,7 +322,7 @@ namespace RTE {
 		outFrame = *frame;
 		if (m_Version >= 5) {
 			const size_t senderOffset = wireOffset + wireLength;
-			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size()) {
+			if (bytes.size() - senderOffset != outFrame.commands.size() + outFrame.observations.size() + outFrame.valueObservations.size()) {
 				if (error) *error = "replay command sender count mismatch";
 				return false;
 			}
@@ -323,6 +342,15 @@ namespace RTE {
 					return false;
 				}
 				outFrame.observations[i].senderPeerId = sender;
+			}
+			const size_t valueOffset = observationOffset + outFrame.observations.size();
+			for (size_t i = 0; i < outFrame.valueObservations.size(); ++i) {
+				const uint8_t sender = bytes[valueOffset + i];
+				if (sender == 0 || sender > NetLockstepCodec::c_MaxPeerCount) {
+					if (error) *error = "invalid replay value observation sender";
+					return false;
+				}
+				outFrame.valueObservations[i].senderPeerId = sender;
 			}
 		}
 		m_LastStatus = NetReplayReadStatus::Frame;
