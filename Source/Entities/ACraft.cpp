@@ -204,6 +204,7 @@ void ACraft::Clear() {
 	m_Exits.clear();
 	m_ReadExitIncomingCursor = 0;
 	m_CurrentExit = m_Exits.begin();
+	m_PersistedCurrentExit = -1;
 	m_ExitInterval = 1000;
 	m_ExitTimer.Reset();
 	m_ExitLinePhase = 0;
@@ -234,6 +235,8 @@ int ACraft::Create() {
 	}
 
 	m_CurrentExit = m_Exits.begin();
+	if (m_PersistedCurrentExit >= 0) std::advance(m_CurrentExit, std::min<int>(m_PersistedCurrentExit, static_cast<int>(m_Exits.size())));
+	m_PersistedCurrentExit = -1;
 
 	return 0;
 }
@@ -259,6 +262,7 @@ int ACraft::Create(const ACraft& reference) {
 	for (std::list<Exit>::const_iterator eItr = reference.m_Exits.begin(); eItr != reference.m_Exits.end(); ++eItr)
 		m_Exits.push_back(*eItr);
 	m_CurrentExit = m_Exits.begin();
+	m_PersistedCurrentExit = -1;
 	m_ExitInterval = reference.m_ExitInterval;
 	m_HasDelivered = reference.m_HasDelivered;
 	m_LandingCraft = reference.m_LandingCraft;
@@ -378,6 +382,7 @@ int ACraft::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> index;
 		m_CurrentExit = m_Exits.begin();
 		std::advance(m_CurrentExit, std::min<int>(std::max(index, 0), static_cast<int>(m_Exits.size())));
+		m_PersistedCurrentExit = reader.IsCheckpoint() ? std::max(index, 0) : -1;
 	});
 	MatchProperty("ExitIncomingMOUniqueID", {
 		long uid = 0;
@@ -420,6 +425,7 @@ void ACraft::DiscardPersistedSnapshotState() {
 	for (MovableObject* item: m_CollectedInventory) item->DiscardPersistedSnapshotState();
 	m_PersistedHatchTimerAnchor.pending = false;
 	m_PersistedExitTimerAnchor.pending = false;
+	m_PersistedCurrentExit = -1;
 	m_PersistedACraftRuntime.clear();
 }
 
