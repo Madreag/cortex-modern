@@ -14,6 +14,7 @@
 #include "Material.h"
 #include "MovableMan.h"
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <set>
@@ -1411,7 +1412,7 @@ namespace RTE {
 		std::map<ValueOverlayKey, ValueOverlayEntry> m_ValueOverlay;
 		std::vector<PendingValueOp> m_PendingValueOps;
 		uint32_t m_ValueWriteOrdinal = 0;
-		bool m_ValueWritesNoted = false;
+		std::atomic<bool> m_ValueWritesNoted{false};
 		static std::string ms_EmptyString;
 
 		// Special post processing flash effect file and Bitmap. Shuold be loaded from a 32bpp bitmap
