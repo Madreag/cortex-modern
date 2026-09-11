@@ -65,6 +65,7 @@ PORTS = {
     "substitute_delayed_duplicate": 44570,
     "substitute_vanishes_before_ack": 44580,
 }
+# Wall-clock budget: sim ticks plus the 20 s hold pause (commits freeze until Substituted).
 TICKS = 3600
 # P2's window is 20 s, and the ack-lost gate has to outlive it after the approval.
 TICKS_BY_GATE = {"substitute_ack_lost": 6000}
@@ -80,7 +81,7 @@ ACK_HELD = "[net-h4-fault] ack-drop"
 DROP_AFTER_S = 22.0
 JOINER_STAGGER_S = 1.5
 DROP_ADJUDICATED = "left the match at frame"
-TIMEOUT_S = 600.0
+TIMEOUT_S = 660.0
 
 
 def sha256(path: Path) -> str:
