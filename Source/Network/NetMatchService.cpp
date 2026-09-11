@@ -187,6 +187,7 @@ static std::string ResyncSaveName() {
 			m_IsHost = request.host;
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.host ? 0 : 1;
+			m_InputDelayText.clear();
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
 			m_BeaconGamePort = request.port;
@@ -654,6 +655,7 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
+			m_InputDelayText.clear();
 			m_LeaveExchangeRun = false;
 			m_MatchWasRunning = false;
 			EndAdmissionSession();
@@ -695,6 +697,7 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Match stopped";
 			m_ErrorText = error;
 			m_LobbySnapshot = {};
+			m_InputDelayText.clear();
 			EndAdmissionSession();
 		}
 		runner.reset();
@@ -1097,8 +1100,15 @@ static std::string ResyncSaveName() {
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
+			// The local seat's spare row slot carries the announced input delay until §11 needs it.
+			if (member.statusLine.empty() && member.isLocal) member.statusLine = m_InputDelayText;
 		}
 		return snapshot;
+	}
+
+	std::string NetMatchService::GetInputDelayText() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_InputDelayText;
 	}
 
 	std::string NetMatchService::GetStatusText() const {
@@ -1323,9 +1333,25 @@ static std::string ResyncSaveName() {
 		runnerConfig.readyRequested = &m_ReadyRequested;
 		runnerConfig.startRequested = &m_StartRequested;
 		runnerConfig.cancelRequested = &m_CancelRequested;
-		runnerConfig.publishLobby = [this](const NetLobbySnapshot& snapshot) {
+		NetMatchRunner* runnerRaw = runner.get();
+		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_LobbySnapshot = snapshot;
+			// The announced delay comes from the lobby's exchanged config (host-authored, already
+			// auto-adjusted) — never recomputed here, so every peer renders the same value.
+			const NetMatchConfig& config = runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
+			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
+			                                   : runnerRaw->GetMatchConfig();
+			uint8_t localPeerId = m_LocalPeerId;
+			uint32_t pingMs = 0;
+			for (const NetLobbyMember& member: snapshot.members) {
+				if (member.isLocal) {
+					localPeerId = member.peerId;
+					pingMs = member.pingMs;
+				}
+			}
+			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
+			    (config.peerInputDelayFrames.empty() ? " (fixed)" : " (auto, " + std::to_string(pingMs) + "ms ping)");
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
