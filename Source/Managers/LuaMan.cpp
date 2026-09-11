@@ -3573,29 +3573,87 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& objects) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	if (!m_State || objects.empty()) return false;
-	auto* registry = luabind::detail::class_registry::get_registry(m_State);
-	struct Walk { const void* cpp; const void* lua; const std::unordered_set<const void*>* objects; bool found = false; int state = -1; bool diagnostic = false; } walk;
-	lua_rawgeti(m_State, LUA_REGISTRYINDEX, registry->cpp_instance());
-	walk.cpp = lua_topointer(m_State, -1); lua_pop(m_State, 1);
-	lua_rawgeti(m_State, LUA_REGISTRYINDEX, registry->lua_instance());
-	walk.lua = lua_topointer(m_State, -1); lua_pop(m_State, 1);
-	walk.objects = &objects;
-	const char* diagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
-	walk.diagnostic = diagnostic && std::strcmp(diagnostic, "1") == 0;
-	if (walk.diagnostic) walk.state = g_LuaMan.GetStateIndex(this);
-	LuaThreadCodec::VisitUserdata(m_State, [](void* data, size_t size, const void* metatable, void* raw) {
-		auto& context = *static_cast<Walk*>(raw);
-		if (size < sizeof(luabind::detail::object_rep) || (metatable != context.cpp && metatable != context.lua)) return;
-		const auto* rep = static_cast<const luabind::detail::object_rep*>(data);
-		if (!context.objects->contains(rep->ptr())) return;
-		if (context.diagnostic && !context.found) {
-			std::cout << "[net-reclaim-alias] state=" << context.state << " class=" << (rep->crep() ? rep->crep()->name() : "none")
-			          << " native=" << rep->ptr() << " userdata=" << data << " flags=" << rep->flags()
-			          << " dependencies=" << rep->get_dependencies().is_valid() << " instance=" << rep->get_lua_table().is_valid() << std::endl;
+	// Integer registry slots and weak table entries are not strong script aliases.
+	struct Reach {
+		lua_State* L;
+		const std::unordered_set<const void*>* objects;
+		std::unordered_set<const void*> seen;
+		static int WeakMode(lua_State* L, int index) {
+			int mode = 0;
+			if (!lua_getmetatable(L, index)) return 0;
+			lua_pushliteral(L, "__mode");
+			lua_rawget(L, -2);
+			if (const char* text = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : nullptr) {
+				if (std::strchr(text, 'k')) mode |= 1;
+				if (std::strchr(text, 'v')) mode |= 2;
+			}
+			lua_pop(L, 2);
+			return mode;
 		}
-		context.found = true;
-	}, &walk);
-	return walk.found;
+		bool Walk(int index) {
+			if (index < 0) index = lua_gettop(L) + index + 1;
+			if (auto* rep = luabind::detail::is_class_object(L, index); rep && objects->contains(rep->ptr())) return true;
+			const int type = lua_type(L, index);
+			if (type != LUA_TTABLE && type != LUA_TUSERDATA && type != LUA_TFUNCTION && type != LUA_TTHREAD) return false;
+			if (const void* id = lua_topointer(L, index); id && !seen.insert(id).second) return false;
+			if (type == LUA_TTABLE) {
+				const int weak = WeakMode(L, index);
+				lua_pushnil(L);
+				while (lua_next(L, index) != 0) {
+					if ((!(weak & 2) && Walk(-1)) || (!(weak & 1) && Walk(-2))) { lua_pop(L, 2); return true; }
+					lua_pop(L, 1);
+				}
+			} else if (type == LUA_TUSERDATA) {
+				if (auto* rep = luabind::detail::is_class_object(L, index); rep && rep->get_lua_table().is_valid()) {
+					rep->get_lua_table().get(L);
+					const bool found = Walk(-1);
+					lua_pop(L, 1);
+					if (found) return true;
+				}
+			} else if (type == LUA_TFUNCTION) {
+				for (int upvalue = 1;; ++upvalue) {
+					if (!lua_getupvalue(L, index, upvalue)) break;
+					const bool found = Walk(-1);
+					lua_pop(L, 1);
+					if (found) return true;
+				}
+			} else if (lua_State* thread = lua_tothread(L, index); thread && thread != L) {
+				const int top = lua_gettop(thread);
+				for (int slot = 1; slot <= top; ++slot) {
+					lua_pushvalue(thread, slot);
+					lua_xmove(thread, L, 1);
+					const bool found = Walk(-1);
+					lua_pop(L, 1);
+					if (found) return true;
+				}
+			}
+			if (type == LUA_TFUNCTION || type == LUA_TUSERDATA || type == LUA_TTHREAD) {
+				lua_getfenv(L, index);
+				const bool found = Walk(-1);
+				lua_pop(L, 1);
+				if (found) return true;
+			}
+			if (type == LUA_TTABLE || type == LUA_TUSERDATA) {
+				if (lua_getmetatable(L, index)) {
+					const bool found = Walk(-1);
+					lua_pop(L, 1);
+					if (found) return true;
+				}
+			}
+			return false;
+		}
+	} reach{m_State, &objects, {}};
+	const int top = lua_gettop(m_State);
+	for (int index = 1; index <= top; ++index) if (reach.Walk(index)) return true;
+	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+	if (reach.Walk(-1)) { lua_pop(m_State, 1); return true; }
+	lua_pop(m_State, 1);
+	lua_pushnil(m_State);
+	while (lua_next(m_State, LUA_REGISTRYINDEX) != 0) {
+		if (lua_type(m_State, -2) != LUA_TNUMBER && (reach.Walk(-1) || reach.Walk(-2))) { lua_pop(m_State, 2); return true; }
+		lua_pop(m_State, 1);
+	}
+	return false;
 }
 
 bool LuaStateWrapper::RekeyScriptObjects(const std::vector<std::pair<const MovableObject*, long>>& identities, bool validateOnly) {
