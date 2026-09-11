@@ -516,10 +516,6 @@ namespace RTE {
 				SetError(error, NetLockstepErrorCode::StringTooLong, offset, "value observation string exceeds max encoded length");
 				return false;
 			}
-			if (observation.mapKind == 0 && observation.op == 0 && !std::isfinite(observation.numberValue)) {
-				SetError(error, NetLockstepErrorCode::InvalidValue, offset, "value observation number is not finite");
-				return false;
-			}
 			return true;
 		}
 
