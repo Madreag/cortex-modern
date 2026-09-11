@@ -45,6 +45,16 @@ namespace RTE {
 		PeerLeft = 7, // A clean leave: the frame field is the FIRST frame without the leaver's data; survivors continue.
 		PeerDropped = 9, // The same, for a transport that died: the seat may still be reclaimed, so survivors hold a scripted outcome until the reclaim frame.
 		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
+		Reclaimed = 10, // Host: the held seat's player was admitted back; resume through the rejoin path at this frame.
+		Substituted = 11, // Host: a moderator reseat takes the held seat; resume through the reseat path at this frame.
+		Expired = 12, // Host: the admission hold timed out; the seat is gone and commits resume without it.
+	};
+
+	enum class NetLockstepHoldResolution : uint16_t {
+		None = 0,
+		Reclaimed = 1,
+		Substituted = 2,
+		Expired = 3,
 	};
 
 	enum class NetSeatPresenceState : uint8_t {
@@ -396,7 +406,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 18;
+		static constexpr uint16_t c_Version = 19;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -406,6 +416,8 @@ namespace RTE {
 		// Version 16 distinguishes a dropped peer from a clean leave; admission hashes this version.
 		// Version 17 carries authenticated, complete seat-presence snapshots.
 		// Version 18 carries each peer's local player bindings with its applied inputs.
+		// Version 19 carries host hold resolutions (Reclaimed / Substituted / Expired) on the stop wire.
+		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
@@ -547,14 +559,20 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
-		// P2's 20 000 ms reclaim window as a count of frames at the pinned timestep (c_DefaultDeltaTimeS
-		// = 0.0166666 s, so 20 000 / 16.6666 = 1200). A frame, never a clock: every peer must reach the
-		// same answer at the same tick, and only the tick is shared.
+		// Kept for UI estimates that still speak in frames (HoldSeconds(1200) == 20). The hold itself
+		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
-		/// Whether a dropped seat is still inside its reclaim window as of the given frame. Derived from
-		/// the relayed leave notice alone, so every peer in the round answers identically at the same
-		/// tick - the question above is about a round with nobody left and is answered host-side.
+		static constexpr uint64_t c_HoldPauseMs = 20000;
+		static constexpr uint64_t c_HoldHeartbeatMs = 50;
+		/// Whether any dropped seat is still waiting on a host resolution. The frame argument is the
+		/// applied tick the activity gate names; the answer no longer moves with a frame deadline.
 		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
+		bool AnyDroppedSeatHeld() const { return !m_DroppedSeats.empty(); }
+		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
+		/// Host: end one held seat and tell every peer at the held frame.
+		void ResolveHeldSeat(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs);
+		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
+		std::string DescribeHeldPause(uint32_t& secondsLeft, uint64_t nowMs) const;
 		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
 		bool PublishSeatSnapshot(std::vector<NetSeatPresenceEntry> seats, uint64_t observedAtMs);
 		std::optional<NetLockstepSeatSnapshot> TakeSeatSnapshot();
@@ -612,6 +630,11 @@ namespace RTE {
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false);
+		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
+		void MaybeSendHoldHeartbeats(uint64_t nowMs);
+		static bool IsHoldResolutionReason(NetLockstepStopReason reason);
+		static NetLockstepStopReason StopReasonOf(NetLockstepHoldResolution resolution);
+		static NetLockstepHoldResolution HoldResolutionOf(NetLockstepStopReason reason);
 		/// The first frame this peer has no data for, walking up from the committed one.
 		uint64_t FirstFrameWithout(uint8_t peerId) const;
 		/// How long the host lets a required remote go quiet before calling it gone. Half the
@@ -668,7 +691,10 @@ namespace RTE {
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
-		std::set<uint8_t> m_DroppedSeats;   //!< Left peers whose transport died rather than announcing; carried by the leave notice, so every peer has it.
+		std::set<uint8_t> m_DroppedSeats;   //!< Unresolved dropped seats; the round commits nothing while this is non-empty.
+		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;
+		std::map<uint8_t, uint64_t> m_DroppedAtMs;
+		uint64_t m_LastHoldHeartbeatMs = 0;
 		std::optional<NetLockstepSeatSnapshot> m_SeatSnapshot;
 		bool m_SeatSnapshotUnread = false;
 		std::set<uint8_t> m_PendingSeatSnapshotPeers;
