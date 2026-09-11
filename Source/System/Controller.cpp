@@ -1,6 +1,7 @@
 #include "Controller.h"
 #include "UInputMan.h"
 #include "ConsoleMan.h"
+#include "MenuMan.h"
 #include "SettingsMan.h"
 #include "MovableMan.h"
 #include "Actor.h"
@@ -119,6 +120,43 @@ void Controller::CopyCheckpointFrom(const Controller& reference) {
 	m_JoyAccelTimer = reference.m_JoyAccelTimer;
 	m_KeyAccelTimer = reference.m_KeyAccelTimer;
 	m_MouseMovement = reference.m_MouseMovement;
+}
+
+Controller::LocalInputState Controller::CaptureLocalInputState() const {
+	LocalInputState state;
+	state.seatMode = m_SeatMode;
+	state.seatPlayer = m_SeatPlayer;
+	state.ignore = {m_NextIgnore, m_PrevIgnore, m_WeaponChangeNextIgnore, m_WeaponChangePrevIgnore,
+		m_WeaponPickupIgnore, m_WeaponDropIgnore, m_WeaponReloadIgnore, m_WeaponPrimaryHotkeyIgnore};
+	state.releaseTimer = m_ReleaseTimer;
+	state.joyAccelTimer = m_JoyAccelTimer;
+	state.keyAccelTimer = m_KeyAccelTimer;
+	state.cursorAngleLimits = m_AnalogCursorAngleLimits;
+	return state;
+}
+
+void Controller::RestoreLocalInputState(const LocalInputState& state) {
+	m_SeatMode = state.seatMode;
+	m_SeatPlayer = state.seatPlayer;
+	m_NextIgnore = state.ignore[0];
+	m_PrevIgnore = state.ignore[1];
+	m_WeaponChangeNextIgnore = state.ignore[2];
+	m_WeaponChangePrevIgnore = state.ignore[3];
+	m_WeaponPickupIgnore = state.ignore[4];
+	m_WeaponDropIgnore = state.ignore[5];
+	m_WeaponReloadIgnore = state.ignore[6];
+	m_WeaponPrimaryHotkeyIgnore = state.ignore[7];
+	m_ReleaseTimer = state.releaseTimer;
+	m_JoyAccelTimer = state.joyAccelTimer;
+	m_KeyAccelTimer = state.keyAccelTimer;
+	m_AnalogCursorAngleLimits = state.cursorAngleLimits;
+}
+
+void Controller::ResetLocalInputState(InputMode mode, int player) {
+	LocalInputState state;
+	state.seatMode = mode;
+	state.seatPlayer = player;
+	RestoreLocalInputState(state);
 }
 
 bool Controller::RelativeCursorMovement(Vector& cursorPos, float moveScale) const {
@@ -260,7 +298,7 @@ void Controller::Update() {
 }
 
 void Controller::RenderUpdate() {
-	if (m_Disabled || m_SeatMode != InputMode::CIM_PLAYER) {
+	if (m_Disabled || m_SeatMode != InputMode::CIM_PLAYER || g_MenuMan.IsNetworkPanelOpen()) {
 		return;
 	}
 	if (m_ControlledActor && (m_ControlledActor->GetHealth() == 0.0f || m_ControlledActor->GetStatus() == Actor::DYING || m_ControlledActor->GetStatus() == Actor::DEAD)) {
@@ -303,7 +341,7 @@ void Controller::GetInputFromPlayer() {
 	std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates = m_ControlStates;
 	ResetCommandState();
 
-	if ((g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) || m_SeatPlayer < 0) {
+	if ((g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) || m_SeatPlayer < 0 || g_MenuMan.IsNetworkPanelOpen()) {
 		return;
 	}
 

@@ -7,6 +7,9 @@
 
 #include "BS_thread_pool.hpp"
 
+#include <functional>
+#include <unordered_set>
+
 #define g_ActivityMan ActivityMan::Instance()
 
 namespace RTE {
@@ -132,6 +135,7 @@ namespace RTE {
 		/// @return Whether the save was queued. WaitForSaveGameTask returns its result.
 		bool SaveCurrentGame(const std::string& fileName);
 		std::string CaptureRuntimeGlobals() const;
+		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried) const;
 		bool RestoreRuntimeGlobals(std::string_view text, bool validateOnly = false);
 		bool PrepareCheckpointMaterials(std::string_view runtimeGlobals);
 		bool PrepareCheckpointPrimitives(std::string_view runtimeGlobals);
@@ -146,6 +150,9 @@ namespace RTE {
 		/// @param fileName Path to the file.
 		/// @return Whether or not the saved game was successfully staged.
 		bool LoadGameToRestart(const std::string& fileName);
+
+		// These callbacks belong only to the currently staged checkpoint.
+		bool SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after);
 
 		/// Whether the staged save carries complete VM continuation state.
 		bool HasFullScriptGraphToRestore() const { return !m_PendingCheckpoint.scriptGraphs.empty() && m_PendingCheckpoint.scriptGraphs.front().starts_with("SG3;"); }
@@ -283,6 +290,8 @@ namespace RTE {
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 			std::string runtimeGlobals, worldStructure, sceneRuntime;
 			std::vector<std::string> scriptGraphs;
+			std::function<bool()> beforeRestore;
+			std::function<bool(Activity&)> afterRestore;
 		};
 		PendingCheckpoint m_PendingCheckpoint;
 		bool m_RestartRestoresSnapshot = false;

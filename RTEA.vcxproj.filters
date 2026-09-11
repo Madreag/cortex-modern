@@ -424,6 +424,12 @@
     <ClInclude Include="Source\Menus\MainMenuGUI.h">
       <Filter>Menus</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Menus\NetModerationGUI.h">
+      <Filter>Menus</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\CI\NetModerationGUIProbe.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Menus\MetagameGUI.h">
       <Filter>Menus</Filter>
     </ClInclude>
@@ -450,6 +456,9 @@
     </ClInclude>
     <ClInclude Include="Source\GUI\GUISound.h">
       <Filter>GUI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetA7Journal.h">
+      <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\SimChecksum.h">
       <Filter>Network</Filter>
@@ -521,6 +530,15 @@
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetGameCommand.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetResyncState.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetResyncSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetResyncRuntimeSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetLockstep.h">
@@ -796,6 +814,9 @@
     <ClCompile Include="Source\System\Matrix.cpp">
       <Filter>System</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetA7Journal.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\SimChecksum.cpp">
       <Filter>Network</Filter>
     </ClCompile>
@@ -866,6 +887,15 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetGameCommand.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetResyncState.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetResyncSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetResyncRuntimeSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetLockstep.cpp">
@@ -1233,6 +1263,12 @@
     </ClCompile>
     <ClCompile Include="Source\Menus\MainMenuGUI.cpp">
       <Filter>Menus</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Menus\NetModerationGUI.cpp">
+      <Filter>Menus</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\CI\NetModerationGUIProbe.cpp">
+      <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\Menus\MetagameGUI.cpp">
       <Filter>Menus</Filter>

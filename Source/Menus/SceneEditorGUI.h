@@ -17,12 +17,14 @@
 
 #include <memory>
 #include <list>
+#include <vector>
 
 struct BITMAP;
 
 namespace RTE {
 
 	class SceneObject;
+	class Entity;
 	class ObjectPickerGUI;
 	class PieMenu;
 	struct BigTexture;
@@ -122,6 +124,9 @@ namespace RTE {
 		const SceneObject* GetCurrentObject() const { return m_pCurrentObject; }
 		PieMenu* GetCheckpointPieMenu() const { return m_PieMenu.get(); }
 		ObjectPickerGUI* GetCheckpointPicker() const { return m_pPicker; }
+		const std::vector<std::unique_ptr<Entity>>& GetCheckpointRetainedOwners() const { return m_NetRetainedOwners; }
+		Entity* GetCheckpointRetainedOwner(size_t index) const { return index < m_NetRetainedOwners.size() ? m_NetRetainedOwners[index].get() : nullptr; }
+		void ReclaimNetRetainedOwners() const;
 
 		/// Sets the current mode of this editor.
 		/// @param newMode The new mode to set to, see the EditorGUIMode enum.
@@ -171,6 +176,10 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		mutable std::vector<std::unique_ptr<Entity>> m_NetRetainedOwners;
+		std::vector<bool> m_NetRetainedPrivateOwners;
+		bool m_NetPrivateCurrentObject = false;
+		void RetainNetReferencedOwner(std::unique_ptr<Entity> owner, bool privateOwner);
 		/// Updates the path to the current brain in the cursor or resident in the scene, if any. If there's none, the path is cleared.
 		/// @return Whether a brain was found in the cursor or the scene.
 		bool UpdateBrainPath();

@@ -1,7 +1,9 @@
 """H4 Phase B §9b two-process gates: explicit substitution over a real socket.
 
-Four gates, each one a live 3-peer match on loopback plus a fourth process that asks the host for a
-seat whose holder is gone:
+Nine gates, each one a live 3-peer match on loopback plus a fourth process that asks the host for a
+seat whose holder is gone. The first four drive the host's own moderator stand-in; the last five
+drive §9b's MODERATION PANEL through -net-match-e2e-moderate, so the gate takes the path a host
+clicks, and inject their fault with -net-h4-fault:
 
   substitute_commit         a dropped seat is reassigned to an applicant the host approves, and the
                             substitute plays on with the ledgered ownership
@@ -11,6 +13,16 @@ seat whose holder is gone:
                             stays reassignable
   substitute_bounds         three applicants for one seat: two are registered, the third is refused,
                             and none of them holds anything
+  substitute_disconnect_before_ack  the applicant's link dies before the host acts on it: the panel's
+                            wait is recorded, the substitute never happens, and the seat is untouched
+  substitute_ack_lost       the substitute never sends its ack: the offer ladder runs out, P2 closes
+                            the window, and the seat is still the original holder's
+  substitute_commit_result_lost  the host throws its commit result away once; the substitute's own
+                            retry gets the identical result back from the txId cache
+  substitute_delayed_duplicate   the substitute keeps re-presenting an ack the host already answered;
+                            every duplicate meets the cache and the seat changes hands exactly once
+  substitute_vanishes_before_ack the approved substitute holds its ack and then disappears: the
+                            record is invalidated and removed, so the host's later cancel finds none
 
 Every process runs through tools/run_sim_test.py, so each gets a private writable runtime with sound
 muted, no window and its own Temp. Recovery records are kept OUTSIDE the runtimes, because the point
@@ -47,12 +59,29 @@ PORTS = {
     "substitute_returner_wins": 44510,
     "substitute_host_cancel": 44520,
     "substitute_bounds": 44530,
+    "substitute_disconnect_before_ack": 44540,
+    "substitute_ack_lost": 44550,
+    "substitute_commit_result_lost": 44560,
+    "substitute_delayed_duplicate": 44570,
+    "substitute_vanishes_before_ack": 44580,
 }
+# Wall-clock budget: sim ticks plus the 20 s hold pause (commits freeze until Substituted).
 TICKS = 3600
+# P2's window is 20 s, and the ack-lost gate has to outlive it after the approval.
+TICKS_BY_GATE = {"substitute_ack_lost": 6000}
+PANEL_GATES = (
+    "substitute_disconnect_before_ack",
+    "substitute_ack_lost",
+    "substitute_commit_result_lost",
+    "substitute_delayed_duplicate",
+    "substitute_vanishes_before_ack",
+)
+APPLICANT_ASKED = "[net-reconnect] applicant"
+ACK_HELD = "[net-h4-fault] ack-drop"
 DROP_AFTER_S = 22.0
 JOINER_STAGGER_S = 1.5
 DROP_ADJUDICATED = "left the match at frame"
-TIMEOUT_S = 600.0
+TIMEOUT_S = 660.0
 
 
 def sha256(path: Path) -> str:
@@ -147,7 +176,9 @@ class Checks:
         return 0 if not failed else 1
 
 
-def peer_args(port: int, ticket: Path, report: Path, extra: list[str]) -> list[str]:
+def peer_args(
+    port: int, ticket: Path, report: Path, extra: list[str], ticks: int = TICKS
+) -> list[str]:
     return [
         "-net-match-service-e2e",
         "-net-port",
@@ -155,7 +186,7 @@ def peer_args(port: int, ticket: Path, report: Path, extra: list[str]) -> list[s
         "-net-match-peers",
         "3",
         "-net-match-ticks",
-        str(TICKS),
+        str(ticks),
         "-net-reconnect-ticket",
         str(ticket),
         "-net-match-report",
@@ -164,8 +195,20 @@ def peer_args(port: int, ticket: Path, report: Path, extra: list[str]) -> list[s
     ]
 
 
+def panel_actions(*actions: str, seat: int = None, delay_ms: int = 0) -> list[str]:
+    """The host's own moderation panel, driven headless: one -net-match-e2e-moderate per action."""
+    argv: list[str] = []
+    for action in actions:
+        argv += ["-net-match-e2e-moderate", action]
+    argv += ["-net-match-e2e-moderate-seat", str(SUBSTITUTED_SEAT if seat is None else seat)]
+    if delay_ms:
+        argv += ["-net-match-e2e-moderate-delay", str(delay_ms)]
+    return argv
+
+
 def build_argvs(gate: str, root: Path, ticket: Path) -> dict:
     port = PORTS[gate]
+    ticks = TICKS_BY_GATE.get(gate, TICKS)
     host_extra = ["-net-host", "-net-match-e2e-resync"]
     if gate == "substitute_commit":
         host_extra += [
@@ -190,21 +233,36 @@ def build_argvs(gate: str, root: Path, ticket: Path) -> dict:
             "0",
             "-net-h4-substitute-cancel",
         ]
+    elif gate == "substitute_disconnect_before_ack":
+        # The panel's wait is a recorded decision; the substitute that follows finds nobody left to
+        # approve, because the applicant's link died while the host was still deciding.
+        host_extra += panel_actions("wait", "substitute", delay_ms=9000)
+    elif gate == "substitute_ack_lost":
+        host_extra += panel_actions("substitute")
+    elif gate == "substitute_commit_result_lost":
+        host_extra += panel_actions("substitute") + ["-net-h4-fault", "commit-drop"]
+    elif gate == "substitute_delayed_duplicate":
+        host_extra += panel_actions("substitute")
+    elif gate == "substitute_vanishes_before_ack":
+        # The cancel lands after the substitute is gone: the disconnect already withdrew the record.
+        host_extra += panel_actions("substitute", "cancel", delay_ms=10000)
     argvs = {
         "host": peer_args(
-            port, root / "host.ticket", root / "host_report.json", host_extra
+            port, root / "host.ticket", root / "host_report.json", host_extra, ticks
         ),
         "leaver": peer_args(
             port,
             ticket,
             root / "leaver_report.json",
             ["-net-join", "127.0.0.1", "-net-match-e2e-resync"],
+            ticks,
         ),
         "stayer": peer_args(
             port,
             root / "stayer.ticket",
             root / "stayer_report.json",
             ["-net-join", "127.0.0.1", "-net-match-e2e-resync"],
+            ticks,
         ),
     }
     applicant = [
@@ -214,6 +272,10 @@ def build_argvs(gate: str, root: Path, ticket: Path) -> dict:
         "-net-h4-apply",
         str(SUBSTITUTED_SEAT),
     ]
+    if gate in ("substitute_ack_lost", "substitute_vanishes_before_ack"):
+        applicant += ["-net-h4-fault", "ack-drop"]
+    elif gate == "substitute_delayed_duplicate":
+        applicant += ["-net-h4-fault", "ack-duplicate"]
     if gate == "substitute_bounds":
         for index in range(1, 4):
             argvs[f"applicant{index}"] = peer_args(
@@ -224,7 +286,11 @@ def build_argvs(gate: str, root: Path, ticket: Path) -> dict:
             )
     else:
         argvs["substitute"] = peer_args(
-            port, root / "substitute.ticket", root / "substitute_report.json", applicant
+            port,
+            root / "substitute.ticket",
+            root / "substitute_report.json",
+            applicant,
+            ticks,
         )
     if gate == "substitute_returner_wins":
         argvs["returner"] = peer_args(
@@ -232,6 +298,7 @@ def build_argvs(gate: str, root: Path, ticket: Path) -> dict:
             ticket,
             root / "returner_report.json",
             ["-net-join", "127.0.0.1", "-net-match-e2e-resync"],
+            ticks,
         )
     return argvs
 
@@ -291,6 +358,28 @@ def run_gate(
         for key in joiners:
             runs[key].start()
             time.sleep(JOINER_STAGGER_S)
+        # The two gates whose substitute has to go away act on a fact, not a stopwatch: the host says
+        # the applicant asked, and the substitute itself says it is sitting on its ack.
+        if gate == "substitute_disconnect_before_ack":
+            checks.check(
+                "applicant_asked",
+                wait_for_log(root / "host", APPLICANT_ASKED, 180.0),
+                APPLICANT_ASKED,
+            )
+            runs["substitute"].terminate(
+                code=137, reason="injected loss of the applicant before the host acts on it"
+            )
+            records["substitute"] = runs["substitute"].finish()
+        elif gate == "substitute_vanishes_before_ack":
+            checks.check(
+                "substitute_held_its_ack",
+                wait_for_log(root / "substitute", ACK_HELD, 180.0),
+                ACK_HELD,
+            )
+            runs["substitute"].terminate(
+                code=137, reason="injected loss of the approved substitute before its ack"
+            )
+            records["substitute"] = runs["substitute"].finish()
         for key, run in runs.items():
             if key not in records:
                 records[key] = run.finish()
@@ -322,6 +411,13 @@ def run_gate(
         reconnect.get("census_refusals"),
     )
     checks.check("no_authority_error", "Rejected a Reseat" not in host_log)
+    # §11: the surviving CLIENT derived its own roster line from the wire, without asking the host.
+    stayer_lines = reconnect_of(read_json(root / "stayer_report.json")).get("roster_lines")
+    checks.check(
+        "stayer_shows_the_seat_line",
+        bool(stayer_lines),
+        stayer_lines,
+    )
     checks.check(
         "seat_dropped",
         (admission.get("seats_dropped") or 0) >= 1,
@@ -455,6 +551,149 @@ def run_gate(
                 "client_state"
             )
             checks.check(f"applicant{index}_inert", state != "Joined", state)
+    elif gate in PANEL_GATES:
+        substitute = read_json(root / "substitute_report.json")
+        seats = [
+            seat
+            for seat in reconnect.get("moderation", [])
+            if seat.get("stable_seat") == SUBSTITUTED_SEAT
+        ]
+        checks.check(
+            "applicant_registered",
+            (admission.get("applicants_registered") or 0) >= 1,
+            admission.get("applicants_registered"),
+        )
+        checks.check(
+            "panel_drove_the_action",
+            "[net-match-e2e] moderate armed" in host_log,
+        )
+        if gate == "substitute_disconnect_before_ack":
+            checks.check(
+                "panel_wait_recorded",
+                "[net-moderation] wait seat=" in host_log and "result=Ok" in host_log,
+            )
+            # The applicant dies as it registers, so whether the panel got its approval in first is a
+            # race the gate does not need to win: either no offer went out, or the one that did was
+            # invalidated and removed with the connection it named.
+            checks.check(
+                "nothing_survived_the_applicants_loss",
+                (admission.get("substitution_offers_sent") or 0) == 0
+                or (admission.get("substitutions_cancelled") or 0) >= 1,
+                f"offers={admission.get('substitution_offers_sent')} cancelled={admission.get('substitutions_cancelled')}",
+            )
+            checks.check(
+                "substitution_did_not_commit",
+                (admission.get("substitutions_committed") or 0) == 0,
+                admission.get("substitutions_committed"),
+            )
+            checks.check("no_reseat", "[net-reconnect] reseating team" not in host_log)
+            checks.check(
+                "seat_stayed_reassignable",
+                bool(seats) and seats[0].get("substituting") is False,
+                seats,
+            )
+        elif gate == "substitute_ack_lost":
+            checks.check(
+                "panel_substituted",
+                "[net-moderation] substitute seat=" in host_log
+                and "result=Ok" in host_log,
+            )
+            checks.check(
+                "offer_was_sent",
+                (admission.get("substitution_offers_sent") or 0) >= 1,
+                admission.get("substitution_offers_sent"),
+            )
+            checks.check(
+                "offer_ladder_retransmitted",
+                (admission.get("substitution_offer_retransmits") or 0) >= 1,
+                admission.get("substitution_offer_retransmits"),
+            )
+            checks.check(
+                "substitution_did_not_commit",
+                (admission.get("substitutions_committed") or 0) == 0,
+                admission.get("substitutions_committed"),
+            )
+            checks.check(
+                "substitute_not_joined",
+                reconnect_of(substitute).get("client_state") != "Joined",
+                reconnect_of(substitute).get("client_state"),
+            )
+            checks.check(
+                "substitute_held_its_ack", ACK_HELD in log_text(root / "substitute")
+            )
+            checks.check(
+                "seat_stayed_reassignable",
+                bool(seats) and seats[0].get("substituting") is False,
+                seats,
+            )
+        elif gate == "substitute_commit_result_lost":
+            checks.check(
+                "host_dropped_a_commit_result",
+                "[net-h4-fault] commit-drop" in host_log,
+            )
+            checks.check(
+                "result_was_replayed",
+                (admission.get("replayed_results") or 0) >= 1,
+                admission.get("replayed_results"),
+            )
+            checks.check(
+                "committed_exactly_once",
+                (admission.get("substitutions_committed") or 0) == 1,
+                admission.get("substitutions_committed"),
+            )
+            checks.check(
+                "substitute_joined",
+                reconnect_of(substitute).get("client_state") == "Joined",
+                reconnect_of(substitute).get("client_state"),
+            )
+            checks.check("reseat_issued", "[net-reconnect] reseating team" in host_log)
+        elif gate == "substitute_delayed_duplicate":
+            checks.check(
+                "substitute_re_presented_its_ack",
+                "[net-h4-fault] ack-duplicate" in log_text(root / "substitute"),
+            )
+            checks.check(
+                "duplicates_met_the_cache",
+                (admission.get("replayed_results") or 0) >= 1,
+                admission.get("replayed_results"),
+            )
+            checks.check(
+                "committed_exactly_once",
+                (admission.get("substitutions_committed") or 0) == 1,
+                admission.get("substitutions_committed"),
+            )
+            checks.check(
+                "seat_bound_once_per_holder",
+                (admission.get("incarnations_bound") or 0) >= 1,
+                admission.get("incarnations_bound"),
+            )
+            checks.check(
+                "substitute_joined",
+                reconnect_of(substitute).get("client_state") == "Joined",
+                reconnect_of(substitute).get("client_state"),
+            )
+        elif gate == "substitute_vanishes_before_ack":
+            checks.check(
+                "panel_substituted",
+                "[net-moderation] substitute seat=" in host_log
+                and "result=Ok" in host_log,
+            )
+            checks.check(
+                "cancel_found_nothing_left",
+                "[net-moderation] cancel seat=" in host_log
+                and "result=NoSubstitutionPending" in host_log,
+            )
+            checks.check(
+                "substitution_did_not_commit",
+                (admission.get("substitutions_committed") or 0) == 0,
+                admission.get("substitutions_committed"),
+            )
+            checks.check("no_reseat", "[net-reconnect] reseating team" not in host_log)
+            checks.check(
+                "seat_stayed_reassignable",
+                bool(seats) and seats[0].get("substituting") is False,
+                seats,
+            )
 
     return checks.finish(
         {

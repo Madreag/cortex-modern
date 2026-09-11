@@ -67,6 +67,7 @@ namespace RTE {
 		uint32_t GetStores() const { return m_Stores; }
 		uint32_t GetStoreFailures() const { return m_StoreFailures; }
 		uint32_t GetLoads() const { return m_Loads; }
+		const std::string& GetA7LoadedSha256() const { return m_A7LoadedSha256; }
 		uint32_t GetRefusedLoads() const { return m_RefusedLoads; }
 		uint32_t GetClears() const { return m_Clears; }
 
@@ -79,6 +80,7 @@ namespace RTE {
 		uint32_t m_Stores = 0;
 		uint32_t m_StoreFailures = 0;
 		uint32_t m_Loads = 0;
+		std::string m_A7LoadedSha256;
 		uint32_t m_RefusedLoads = 0;
 		uint32_t m_Clears = 0;
 	};

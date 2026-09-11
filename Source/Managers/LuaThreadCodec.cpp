@@ -533,6 +533,42 @@ namespace {
 } // namespace
 
 namespace RTE::LuaThreadCodec {
+	bool VisitThreadStack(lua_State* thread, lua_State* dest, bool (*visitor)(lua_State* dest, void* context), void* context) {
+		if (!thread || !dest || !visitor) return false;
+		TValue* stack = tvref(thread->stack);
+		const ptrdiff_t topIndex = thread->top - stack;
+		if (topIndex <= 1 + LJ_FR2) return false;
+		std::vector<char> kind(static_cast<size_t>(topIndex) + 1, 0);
+		int guard = 0;
+		for (TValue* frame = thread->base - 1; frame > stack + LJ_FR2;) {
+			const ptrdiff_t index = frame - stack;
+			if (++guard > 100000 || index <= 0 || index >= topIndex) break;
+			kind[static_cast<size_t>(index)] = 1;
+			const bool lua = frame_islua(frame) != 0;
+			if (!lua && frame_iscont(frame) && !frame_iscont_fficb(frame) && frame_contv(frame) != LJ_CONT_TAILCALL) {
+				if (index >= 3) {
+					kind[static_cast<size_t>(index - 3)] = 2;
+					kind[static_cast<size_t>(index - 2)] = 3;
+				}
+				if (index >= 4 && frame_contf(frame) == reinterpret_cast<ASMFunction>(lj_cont_stitch)) {
+					kind[static_cast<size_t>(index - 4)] = 4;
+				}
+			}
+			frame = lua ? frame_prevl(frame) : frame_prevd(frame);
+		}
+		for (ptrdiff_t i = 1 + LJ_FR2; i < topIndex; ++i) {
+			if (!lua_checkstack(dest, 1)) return false;
+			stack = tvref(thread->stack);
+			if (kind[static_cast<size_t>(i)] != 0 || tvisnil(stack + i)) continue;
+			copyTV(dest, dest->top, stack + i);
+			incr_top(dest);
+			const bool found = visitor(dest, context);
+			dest->top--;
+			if (found) return true;
+		}
+		return false;
+	}
+
 	void VisitUserdata(lua_State* state, void (*visitor)(void*, size_t, const void*, void*), void* context) {
 		auto visit = [&](GCobj* object) {
 			if (object->gch.gct == ~LJ_TUDATA) {

@@ -25,6 +25,8 @@
 #include "GUI.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
+#include "NetModerationGUI.h"
+#include "NetModerationGUIProbe.h"
 #include "AllegroScreen.h"
 #include "AllegroBitmap.h"
 
@@ -83,6 +85,7 @@
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "SimChecksum.h"
+#include "NetA7Journal.h"
 #include "ScenarioRunner.h"
 #include "InputScript.h"
 #include "AIWriteScript.h"
@@ -193,8 +196,7 @@ static uint8_t s_netMatchPeers = 2;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
-static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
-static uint64_t s_netMatchServiceE2ERunningTicks = 0;
+static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
 // Loop-pace accounting, accumulated only while a lockstep match or playback runs: the honest
@@ -270,6 +272,13 @@ public:
 };
 static std::string s_menuScriptPath;
 static std::string s_menuScriptOutDir;
+// §9b's moderation panel, driven headless: the gate names the actions, the seat and how long to wait
+// before each. They take the panel's own path, so a gate exercises what a host clicks.
+static std::vector<std::string> s_netMatchE2eModerate;
+static size_t s_netMatchE2eModerateAt = 0;
+static int s_netMatchE2eModerateSeat = -1;
+static uint64_t s_netMatchE2eModerateDelayMs = 0;
+static uint64_t s_netMatchE2eModerateReadyMs = 0;
 
 bool NetGameplayRequested() {
 	return s_netLockstep || s_netMatch;
@@ -685,6 +694,29 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-h4-fault") {
+			const std::string kind = argValue[++i];
+			NetH4SetFault(NetH4FaultFromName(kind));
+			std::cout << "[net-h4-fault] armed " << kind << std::endl;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-moderate") {
+			// Repeatable: the actions run in order, one per delay, on the one seat.
+			s_netMatchE2eModerate.emplace_back(argValue[++i]);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-moderate-seat") {
+			s_netMatchE2eModerateSeat = static_cast<int>(std::strtol(argValue[++i], nullptr, 10));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-moderate-delay") {
+			s_netMatchE2eModerateDelayMs = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-replay-out") {
 			s_netReplayOutPath = argValue[++i];
 			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
@@ -919,6 +951,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 /// Polls the SDL event queue and passes events to be handled by the relevant managers.
 /// </summary>
 void PollSDLEvents() {
+	NetModerationGUIProbe::BeforePoll();
 	SDL_Event sdlEvent;
 	while (SDL_PollEvent(&sdlEvent)) {
 		switch (sdlEvent.type) {
@@ -953,6 +986,42 @@ void PollSDLEvents() {
 			g_WindowMan.QueueWindowEvent(sdlEvent);
 		}
 	}
+}
+
+// The e2e driver uses the same live panel as the host.
+static void DriveModerationE2e() {
+	if (s_netMatchE2eModerateAt >= s_netMatchE2eModerate.size()) {
+		return;
+	}
+	NetModerationGUI* menu = g_MenuMan.GetNetworkPanel();
+	if (!menu) {
+		return;
+	}
+	const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
+	const bool anythingToDecide = std::any_of(seats.begin(), seats.end(), [](const NetH4ModerationSeat& seat) {
+		return seat.dropped || seat.closed || seat.substituting;
+	});
+	if (!anythingToDecide) {
+		return;
+	}
+	const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	if (s_netMatchE2eModerateReadyMs == 0) {
+		s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
+		std::cout << "[net-match-e2e] moderate armed actions=" << s_netMatchE2eModerate.size()
+		          << " seat=" << s_netMatchE2eModerateSeat << " delay_ms=" << s_netMatchE2eModerateDelayMs << std::endl;
+	}
+	if (nowMs < s_netMatchE2eModerateReadyMs) {
+		return;
+	}
+	// A substitution needs an applicant; until one turns up the panel's own button is disabled too,
+	// so the driver waits exactly as a host would rather than pressing a dead button.
+	const std::string& action = s_netMatchE2eModerate[s_netMatchE2eModerateAt];
+	if (!menu->AutomationModerate(action, s_netMatchE2eModerateSeat)) {
+		return;
+	}
+	std::cout << "[net-match-e2e] moderate " << action << " seat=" << s_netMatchE2eModerateSeat << " done" << std::endl;
+	++s_netMatchE2eModerateAt;
+	s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
 }
 
 /// <summary>
@@ -1079,6 +1148,23 @@ void ProcessMenuScript() {
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+	} else if (cmd == "assert_control") {
+		std::string control;
+		iss >> control;
+		const bool exists = menu->AutomationControlExists(control);
+		std::cout << "[menu-script] assert_control " << control << " " << (exists ? "PASS" : "FAIL") << std::endl;
+		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
+	} else if (cmd == "moderate") {
+		// The same panel action a host clicks, driven from a menu script.
+		std::string action;
+		int seat = -1;
+		iss >> action;
+		if (!(iss >> seat)) {
+			seat = -1;
+		}
+		const bool ok = menu->AutomationModerate(action, seat);
+		std::cout << "[menu-script] moderate " << action << " seat=" << seat << " ok=" << ok << std::endl;
+		if (!ok) { return MenuScriptFail("moderate found no seat to act on: " + action); }
 	} else if (cmd == "settext") {
 		std::string control;
 		std::string text;
@@ -1519,11 +1605,32 @@ static void DrawFrameWithPreviews() {
 	g_SceneMan.SetRenderDrawContext(true);
 	LocalPrediction::BeginRender();
 	g_FrameMan.Draw();
+	g_MenuMan.DrawNetworkUI();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	LocalPrediction::EndRender();
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
+	NetModerationGUIProbe::AfterDraw();
+}
+
+static void UpdateResyncUI() {
+	PollSDLEvents();
+	g_UInputMan.Update(false);
+	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
+		g_MenuMan.ToggleNetworkPanel();
+	}
+	g_MenuMan.UpdateNetworkUI();
+	g_WindowMan.ClearBackbuffer();
+	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
+	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, g_WindowMan.GetResX() / 2, g_WindowMan.GetResY() - 24,
+	    "Resynchronizing the match...  Seats [F6]", GUIFont::Centre);
+	g_MenuMan.DrawNetworkUI();
+	g_WindowMan.UploadFrame();
+	NetModerationGUIProbe::AfterDraw();
+	g_UInputMan.EndFrame();
+	g_UInputMan.EndSimUpdate();
 }
 
 // The previews' gameplay against -lpinv-expect. A preview that starts before the canonical pickup must
@@ -1992,7 +2099,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 static bool IsFirstE2ERematchReady() {
 	const Activity* activity = g_ActivityMan.GetActivity();
 	return s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
-	       activity && activity->IsOver() && s_netMatchServiceE2ERunningTicks >= 100;
+	       activity && activity->IsOver() && s_netMatchE2ETicks.Total() >= 100;
 }
 
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
@@ -2026,7 +2133,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		System::SetQuit(true);
 	} else {
 		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-		const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
+		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		const bool e2eReachedCap = s_netMatchServiceE2E && NetMatchE2EReachedCap(s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
 		const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
 			(error.find("Complete:") != std::string::npos ||
 			 error.find("MissingFrameTimeout") != std::string::npos ||
@@ -2071,6 +2179,20 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			g_ActivityMan.SetInActivity(false);
 			ScenarioRunner::ClearControllerReplayError();
 			returnToMenuAfterNetworkEnd = true;
+		} else if (error.find("Complete:") != std::string::npos &&
+		           error.find("e2e complete") == std::string::npos &&
+		           (g_NetMatchService.GetState() == NetMatchServiceState::Completed ||
+		            error.find("match over") != std::string::npos)) {
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.FinishMatch(BuildNetMatchResultText());
+			}
+			g_ActivityMan.EndActivity();
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
+			}
 		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
 		           g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
@@ -2086,6 +2208,12 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
+					UpdateResyncUI();
+					if (System::IsSetToQuit()) {
+						resyncError = "quit requested during resync";
+						resyncOk = false;
+						break;
+					}
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
 						resyncError = g_NetMatchService.GetErrorText();
 						resyncOk = false;
@@ -2112,9 +2240,16 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
 				if (s_netMatchServiceE2E) {
-					// Round accounting restarts from the restored sim count.
-					s_netMatchServiceE2EStartTick = UINT64_MAX;
-					s_netMatchServiceE2ERunningTicks = 0;
+					s_netMatchE2ETicks.OnResyncRelaunch();
+				}
+			} else if (resyncError == "match over") {
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				ScenarioRunner::ClearControllerReplayError();
+				if (s_netMatchServiceE2E) {
+					System::SetQuit(true);
+				} else {
+					returnToMenuAfterNetworkEnd = true;
 				}
 			} else {
 				std::cerr << "[net-match] resync failed: " << resyncError << std::endl;
@@ -2248,7 +2383,8 @@ void RunGameLoop() {
 			constexpr uint64_t c_DesyncCheckIntervalTicks = 30;
 			const bool desyncSampleTick = ScenarioRunner::IsLockstepControllerSyncActive() && !s_recordTickHashes &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
-			const bool hashThisTick = s_recordTickHashes || desyncSampleTick;
+			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick;
 			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);
 			}
@@ -2457,6 +2593,7 @@ void RunGameLoop() {
 
 				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
 				g_NetMatchService.PumpSessionEvents();
+				DriveModerationE2e();
 
 				g_FrameMan.Update();
 
@@ -2509,6 +2646,11 @@ void RunGameLoop() {
 			if (hashThisTick) {
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
+					const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+					NetA7Journal::AppliedTick(round, simTick, ScenarioRunner::GetLockstepLocalPeerId(), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult)));
+					g_MovableMan.RecordA7UnitOwnership(round, simTick);
+				}
 				if (s_recordTickHashes && s_rbProbePhase != 3) {
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 				}
@@ -2926,13 +3068,12 @@ void RunGameLoop() {
 					}
 					std::cout << "[net-match-service-e2e] rematch: round 2 launching" << std::endl;
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
-					s_netMatchServiceE2EStartTick = UINT64_MAX;
-					s_netMatchServiceE2ERunningTicks = 0;
+					s_netMatchE2ETicks.OnNewMatch();
 					break;
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
 				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchServiceE2ERunningTicks < 100)) {
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure())) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
@@ -2940,15 +3081,12 @@ void RunGameLoop() {
 					break;
 				}
 				if (activityState == Activity::Running || activityState == Activity::Over) {
-					if (s_netMatchServiceE2EStartTick == UINT64_MAX) {
-						s_netMatchServiceE2EStartTick = nowTick;
-					}
-					s_netMatchServiceE2ERunningTicks = nowTick - s_netMatchServiceE2EStartTick;
+					s_netMatchE2ETicks.NoteSimTick(nowTick);
 					// In-match census; the report runs after EndActivity, which releases actors.
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					if (s_netMatchServiceE2ERunningTicks > tickCap) {
+					if (s_netMatchE2ETicks.Total() > tickCap) {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
@@ -3078,6 +3216,7 @@ void RunGameLoop() {
 			t_simRNGOverride = &g_RenderRNG;
 			g_SceneMan.SetRenderDrawContext(true);
 			g_UInputMan.Update();
+			g_MenuMan.UpdateNetworkUI();
 			g_ActivityMan.RenderUpdate();
 			g_UInputMan.EndFrame();
 			g_SceneMan.SetRenderDrawContext(false);
@@ -3467,7 +3606,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
 	out << "\"actors_peak\":" << s_netMatchE2EActorCensusPeak << ",";
 	out << "\"pace\":" << BuildLoopPaceJson() << ",";
-	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
+	out << "\"running_ticks\":" << s_netMatchE2ETicks.Total() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
@@ -3619,6 +3758,7 @@ int RunNetReplayPlayback() {
 
 int RunNetMatchServiceE2E() {
 	std::string setupError;
+	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
 	if (s_netHost == !s_netJoinAddress.empty()) {
 		setupError = "-net-match-service-e2e requires exactly one of -net-host or -net-join <address>";
 	}
@@ -3734,9 +3874,17 @@ int RunNetMatchServiceE2E() {
 
 	std::string reportError;
 	const int exitCode = setupError.empty() ? s_netMatchServiceE2EExitCode : 1;
+	const bool a7ReportSettled = !NetA7Journal::Enabled() || g_NetMatchService.CanSealA7Journal();
+	if (!a7ReportSettled) {
+		NetA7Journal::Gap("service worker still active before report generation");
+		(void)NetA7Journal::Seal("", 1);
+		return 1;
+	}
 	const std::string report = BuildNetMatchServiceE2EReportJson(exitCode, setupError);
 	if (!WriteTextFile(s_netLockstepReportPath, report, &reportError)) {
 		std::cerr << "[net-match-service-e2e] report failed: " << reportError << std::endl;
+		NetA7Journal::Gap("native report write failed");
+		(void)NetA7Journal::Seal("", 1);
 		return 1;
 	}
 	if (!s_netLockstepReportPath.empty()) {
@@ -3745,7 +3893,7 @@ int RunNetMatchServiceE2E() {
 			std::cout << "[localpred] " << stats << std::endl;
 		}
 	}
-	return exitCode;
+	return NetA7Journal::Seal(s_netLockstepReportPath, exitCode) ? exitCode : 1;
 }
 
 /// <summary>

@@ -1,5 +1,6 @@
 #include "MovableObject.h"
 #include "CheckpointArchive.h"
+#include "OwnedMovableObjects.h"
 #include "SoundSimulation.h"
 
 #include <bit>
@@ -7,12 +8,17 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <limits>
+#include <algorithm>
+#include <map>
+#include <utility>
 
 #include "ActivityMan.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
+#include "TimerMan.h"
 #include "LuaMan.h"
 #include "Atom.h"
 #include "Actor.h"
@@ -26,6 +32,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <array>
+#include <tuple>
 
 using namespace RTE;
 
@@ -42,6 +49,9 @@ std::array<std::mutex, 256> g_MovableReferenceLocks;
 std::mutex& ReferenceLock(const MovableObject* object) {
     return g_MovableReferenceLocks[(reinterpret_cast<uintptr_t>(object) >> 4) % g_MovableReferenceLocks.size()];
 }
+
+std::mutex g_PendingValueMutex;
+std::vector<MovableObject*> g_PendingValueObjects;
 }
 
 MovableObjectReference::MovableObjectReference(const MovableObject* object) { *this = object; }
@@ -194,6 +204,7 @@ void MovableObject::Clear() {
 	m_StringValueMap.clear();
 	m_NumberValueMap.clear();
 	m_ObjectValueMap.clear();
+	ClearValueOverlay();
 	m_ThreadedLuaState = nullptr;
 	m_ForceIntoMasterLuaState = g_SettingsMan.EnableLuaDebugging();
 	m_ScriptObjectName.clear();
@@ -475,6 +486,10 @@ void MovableObject::AdoptPersistedUniqueID() {
 	if (m_PersistedUniqueID <= 0) {
 		return;
 	}
+	if (IsFaithfulClone() && !FaithfulCloneRegisters()) {
+		m_UniqueID = std::exchange(m_PersistedUniqueID, 0);
+		return;
+	}
 	g_MovableMan.UnregisterObject(this);
 	if (const MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
 		g_ConsoleMan.PrintString("ERROR: restore adopted duplicate UniqueID " + std::to_string(m_PersistedUniqueID) + " (" + GetPresetName() + ")");
@@ -493,6 +508,57 @@ void MovableObject::ResolveFaithfulLinks() {
 		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOToNotHitUID);
 		m_FaithfulMOToNotHitUID = 0;
 	}
+}
+
+bool MovableObject::PublishNetPrivateObjectGraph() {
+	std::unordered_set<const Entity*> entities;
+	std::unordered_set<const MovableObject*> owned;
+	CollectOwnedMovableObjects(this, entities, owned);
+	std::vector<MovableObject*> objects;
+	for (const auto* object: owned) objects.push_back(const_cast<MovableObject*>(object));
+	std::sort(objects.begin(), objects.end(), [](const auto* left, const auto* right) { return left->GetUniqueID() < right->GetUniqueID(); });
+	std::vector<std::unique_lock<std::recursive_mutex>> scriptLocks;
+	scriptLocks.emplace_back(g_LuaMan.GetMasterScriptState().GetMutex());
+	for (auto& state: g_LuaMan.GetThreadedScriptStates()) scriptLocks.emplace_back(state.GetMutex());
+	std::vector<std::string> scriptNames(objects.size());
+	std::map<LuaStateWrapper*, std::vector<std::pair<const MovableObject*, long>>> scriptIdentities;
+	long counter;
+	for (;;) {
+		counter = GetUniqueIDCounter();
+		if (counter < 0 || objects.size() > static_cast<size_t>(std::numeric_limits<long>::max() - counter)) return false;
+		scriptIdentities.clear();
+		for (size_t index = 0; index < objects.size(); ++index) {
+			auto* object = objects[index];
+			const long next = counter + static_cast<long>(index) + 1;
+			if (g_MovableMan.IsKnownObject(object) || object->m_UniqueID <= 0 || object->m_PersistedUniqueID != 0 ||
+				(index && objects[index - 1]->m_UniqueID == object->m_UniqueID) || g_MovableMan.FindObjectByUniqueID(next)) return false;
+			if (object->ObjectScriptsInitialized()) {
+				if (!object->m_ThreadedLuaState) return false;
+				scriptIdentities[object->m_ThreadedLuaState].emplace_back(object, next);
+				scriptNames[index] = "_ScriptedObjects[\"" + std::to_string(next) + "\"]";
+			}
+		}
+		for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities, true)) return false;
+		long expected = counter;
+		if (m_UniqueIDCounter.compare_exchange_strong(expected, counter + static_cast<long>(objects.size()))) break;
+	}
+	for (const auto& [state, identities]: scriptIdentities) if (!state->RekeyScriptObjects(identities)) return false;
+	for (size_t index = 0; index < objects.size(); ++index) {
+		auto* object = objects[index];
+		const long next = counter + static_cast<long>(index) + 1;
+		if (!scriptNames[index].empty()) {
+			object->m_ScriptObjectName.swap(scriptNames[index]);
+		}
+		object->m_PersistedUniqueID = next;
+	}
+	AdoptPersistedUniqueID();
+	for (auto* object: objects) {
+		std::lock_guard lock(ReferenceLock(object));
+		for (auto* reference = object->m_IncomingWeakReferences; reference; reference = reference->m_Next) {
+			if (reference->m_ExpiryIdentity) *reference->m_ExpiryIdentity = object->m_UniqueID;
+		}
+	}
+	return true;
 }
 
 void MovableObject::DiscardPersistedSnapshotState() {
@@ -740,6 +806,7 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 			m_RequestedSyncedUpdate = requested;
 			m_pScreenEffect = hasEffect ? m_ScreenEffectFile.GetAsBitmap() : nullptr;
 			if (hasEffect && !m_pScreenEffect) throw std::runtime_error("could not restore movable object screen effect");
+			ClearValueOverlay();
 		});
 		archive.Finish();
 		return true;
@@ -1418,7 +1485,126 @@ int MovableObject::UpdateScripts() {
 	return status;
 }
 
+bool MovableObject::InLocalAIValueDomain() {
+	return SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
+}
+
+void MovableObject::NoteValueWrites() {
+	if (m_ValueWritesNoted.load(std::memory_order_relaxed)) {
+		return;
+	}
+	std::lock_guard<std::mutex> lock(g_PendingValueMutex);
+	if (m_ValueWritesNoted.load(std::memory_order_relaxed)) {
+		return;
+	}
+	m_ValueWritesNoted.store(true, std::memory_order_relaxed);
+	g_PendingValueObjects.push_back(this);
+}
+
+void MovableObject::UnnoteValueWrites() {
+	if (!m_ValueWritesNoted.load(std::memory_order_relaxed)) {
+		return;
+	}
+	std::lock_guard<std::mutex> lock(g_PendingValueMutex);
+	if (!m_ValueWritesNoted.load(std::memory_order_relaxed)) {
+		return;
+	}
+	std::erase(g_PendingValueObjects, this);
+	m_ValueWritesNoted.store(false, std::memory_order_relaxed);
+}
+
+void MovableObject::ClearValueOverlay() {
+	UnnoteValueWrites();
+	m_ValueOverlay.clear();
+	m_PendingValueOps.clear();
+	m_ValueWriteOrdinal = 0;
+}
+
+const MovableObject::ValueOverlayEntry* MovableObject::FindValueOverlay(ValueMapKind map, const std::string& key) const {
+	const auto itr = m_ValueOverlay.find(ValueOverlayKey{map, key});
+	return itr == m_ValueOverlay.end() ? nullptr : &itr->second;
+}
+
+void MovableObject::RecordLocalValueWrite(ValueMapKind map, ValueMapOp op, const std::string& key, double number, const std::string& text) {
+	const uint32_t ordinal = ++m_ValueWriteOrdinal;
+	ValueOverlayEntry& entry = m_ValueOverlay[ValueOverlayKey{map, key}];
+	entry.op = op;
+	entry.number = number;
+	entry.text = text;
+	entry.ordinal = ordinal;
+	PendingValueOp pending;
+	pending.objectUID = static_cast<uint64_t>(GetUniqueID());
+	pending.map = map;
+	pending.op = op;
+	pending.key = key;
+	pending.number = number;
+	pending.text = text;
+	pending.ordinal = ordinal;
+	pending.tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	m_PendingValueOps.push_back(std::move(pending));
+	NoteValueWrites();
+}
+
+std::vector<MovableObject::PendingValueOp> MovableObject::TakePendingValueOps() {
+	return std::exchange(m_PendingValueOps, {});
+}
+
+std::vector<MovableObject::PendingValueOp> MovableObject::SamplePendingValueOps() {
+	std::vector<MovableObject*> noted;
+	{
+		std::lock_guard<std::mutex> lock(g_PendingValueMutex);
+		noted.swap(g_PendingValueObjects);
+		for (MovableObject* object: noted) {
+			object->m_ValueWritesNoted.store(false, std::memory_order_relaxed);
+		}
+	}
+	std::vector<PendingValueOp> sampled;
+	for (MovableObject* object: noted) {
+		std::vector<PendingValueOp> taken = object->TakePendingValueOps();
+		sampled.insert(sampled.end(), std::make_move_iterator(taken.begin()), std::make_move_iterator(taken.end()));
+	}
+	std::sort(sampled.begin(), sampled.end(), [](const PendingValueOp& a, const PendingValueOp& b) {
+		return std::tie(a.objectUID, a.tick, a.ordinal, a.key) < std::tie(b.objectUID, b.tick, b.ordinal, b.key);
+	});
+	return sampled;
+}
+
+void MovableObject::ApplySharedValueOp(const PendingValueOp& op) {
+	if (op.map == ValueMapKind::Number) {
+		if (op.op == ValueMapOp::Remove) {
+			m_NumberValueMap.erase(op.key);
+		} else {
+			m_NumberValueMap[op.key] = op.number;
+		}
+		return;
+	}
+	if (op.op == ValueMapOp::Remove) {
+		m_StringValueMap.erase(op.key);
+	} else {
+		m_StringValueMap[op.key] = op.text;
+	}
+}
+
+void MovableObject::DropMatchingValueOverlay(const PendingValueOp& op) {
+	const auto itr = m_ValueOverlay.find(ValueOverlayKey{op.map, op.key});
+	if (itr != m_ValueOverlay.end() && itr->second.ordinal == op.ordinal) {
+		m_ValueOverlay.erase(itr);
+	}
+}
+
+void MovableObject::CommitPendingValueOps() {
+	for (const PendingValueOp& op: m_PendingValueOps) {
+		ApplySharedValueOp(op);
+	}
+	ClearValueOverlay();
+}
+
 const std::string& MovableObject::GetStringValue(const std::string& key) const {
+	if (InLocalAIValueDomain()) {
+		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::String, key)) {
+			return entry->op == ValueMapOp::Remove ? ms_EmptyString : entry->text;
+		}
+	}
 	auto itr = m_StringValueMap.find(key);
 	if (itr == m_StringValueMap.end()) {
 		return ms_EmptyString;
@@ -1428,15 +1614,19 @@ const std::string& MovableObject::GetStringValue(const std::string& key) const {
 }
 
 std::string MovableObject::GetEncodedStringValue(const std::string& key) const {
-	auto itr = m_StringValueMap.find(key);
-	if (itr == m_StringValueMap.end()) {
+	const std::string& stored = GetStringValue(key);
+	if (stored.empty() && !StringValueExists(key)) {
 		return ms_EmptyString;
 	}
-
-	return base64_decode(itr->second);
+	return base64_decode(stored);
 }
 
 double MovableObject::GetNumberValue(const std::string& key) const {
+	if (InLocalAIValueDomain()) {
+		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::Number, key)) {
+			return entry->op == ValueMapOp::Remove ? 0.0 : entry->number;
+		}
+	}
 	auto itr = m_NumberValueMap.find(key);
 	if (itr == m_NumberValueMap.end()) {
 		return 0.0;
@@ -1455,14 +1645,22 @@ Entity* MovableObject::GetObjectValue(const std::string& key) const {
 }
 
 void MovableObject::SetStringValue(const std::string& key, const std::string& value) {
+	if (InLocalAIValueDomain()) {
+		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Set, key, 0, value);
+		return;
+	}
 	m_StringValueMap[key] = value;
 }
 
 void MovableObject::SetEncodedStringValue(const std::string& key, const std::string& value) {
-	m_StringValueMap[key] = base64_encode(value, true);
+	SetStringValue(key, base64_encode(value, true));
 }
 
 void MovableObject::SetNumberValue(const std::string& key, double value) {
+	if (InLocalAIValueDomain()) {
+		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Set, key, value, {});
+		return;
+	}
 	m_NumberValueMap[key] = value;
 }
 
@@ -1471,10 +1669,18 @@ void MovableObject::SetObjectValue(const std::string& key, Entity* value) {
 }
 
 void MovableObject::RemoveStringValue(const std::string& key) {
+	if (InLocalAIValueDomain()) {
+		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Remove, key, 0, {});
+		return;
+	}
 	m_StringValueMap.erase(key);
 }
 
 void MovableObject::RemoveNumberValue(const std::string& key) {
+	if (InLocalAIValueDomain()) {
+		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Remove, key, 0, {});
+		return;
+	}
 	m_NumberValueMap.erase(key);
 }
 
@@ -1483,10 +1689,20 @@ void MovableObject::RemoveObjectValue(const std::string& key) {
 }
 
 bool MovableObject::StringValueExists(const std::string& key) const {
+	if (InLocalAIValueDomain()) {
+		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::String, key)) {
+			return entry->op != ValueMapOp::Remove;
+		}
+	}
 	return m_StringValueMap.find(key) != m_StringValueMap.end();
 }
 
 bool MovableObject::NumberValueExists(const std::string& key) const {
+	if (InLocalAIValueDomain()) {
+		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::Number, key)) {
+			return entry->op != ValueMapOp::Remove;
+		}
+	}
 	return m_NumberValueMap.find(key) != m_NumberValueMap.end();
 }
 
@@ -1620,4 +1836,56 @@ void MovableObject::SetPostScreenEffectToDraw() const {
 			g_PostProcessMan.RegisterPostEffect(m_Pos, m_pScreenEffect, m_ScreenEffectHash, Lerp(m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength, m_AgeTimer.GetElapsedSimTimeMS()), m_EffectRotAngle, m_MOID);
 		}
 	}
+}
+
+bool MovableObject::RunValueMapSelfTest() {
+	MovableMan::ConstructionRegistryScope isolated;
+	Actor object;
+	if (object.MovableObject::Create(1) < 0) {
+		std::cout << "[value-map-selftest] FAIL create" << std::endl;
+		return false;
+	}
+	const uint64_t uid = static_cast<uint64_t>(object.GetUniqueID());
+	{
+		SoundSimulationScope local(uid, 1, SoundExecutionDomain::LocalSimulation);
+		object.SetNumberValue("k", 7);
+		if (object.GetNumberValue("k") != 7 || !object.NumberValueExists("k")) {
+			std::cout << "[value-map-selftest] FAIL local_read_after_write" << std::endl;
+			return false;
+		}
+		object.SetStringValue("s", "hi");
+		if (object.GetStringValue("s") != "hi" || !object.StringValueExists("s")) {
+			std::cout << "[value-map-selftest] FAIL local_string_read_after_write" << std::endl;
+			return false;
+		}
+	}
+	if (object.GetNumberValue("k") != 0 || object.NumberValueExists("k") || object.GetNumberValueMap().count("k") ||
+	    object.StringValueExists("s") || !object.GetStringValue(std::string("s")).empty()) {
+		std::cout << "[value-map-selftest] FAIL shared_uncommitted" << std::endl;
+		return false;
+	}
+	g_MovableMan.CommitOfflineValueWrites();
+	if (object.GetNumberValue("k") != 7 || !object.NumberValueExists("k") || object.GetStringValue("s") != "hi") {
+		std::cout << "[value-map-selftest] FAIL offline_same_tick" << std::endl;
+		return false;
+	}
+	{
+		SoundSimulationScope local(uid, 1, SoundExecutionDomain::LocalSimulation);
+		object.RemoveNumberValue("k");
+		if (object.NumberValueExists("k") || object.GetNumberValue("k") != 0) {
+			std::cout << "[value-map-selftest] FAIL local_remove_hides" << std::endl;
+			return false;
+		}
+	}
+	if (!object.NumberValueExists("k") || object.GetNumberValue("k") != 7) {
+		std::cout << "[value-map-selftest] FAIL shared_holds_until_commit" << std::endl;
+		return false;
+	}
+	g_MovableMan.CommitOfflineValueWrites();
+	if (object.NumberValueExists("k") || object.GetNumberValue("k") != 0) {
+		std::cout << "[value-map-selftest] FAIL remove_propagates" << std::endl;
+		return false;
+	}
+	std::cout << "[value-map-selftest] PASS local_read_after_write shared_uncommitted offline_same_tick remove_propagates" << std::endl;
+	return true;
 }
