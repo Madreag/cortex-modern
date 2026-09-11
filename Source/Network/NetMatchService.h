@@ -11,6 +11,7 @@
 #include "Singleton.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -22,7 +23,38 @@
 
 namespace RTE {
 
+	class Activity;
 	class GnsTransport;
+
+	enum class NetRejoinAnswer : uint8_t {
+		Resync = 0,
+		MatchOver = 1,
+	};
+
+	struct NetMatchE2ETickClock {
+		uint64_t startTick = UINT64_MAX;
+		uint64_t segmentTicks = 0;
+		uint64_t priorTicks = 0;
+
+		void NoteSimTick(uint64_t nowTick) {
+			if (startTick == UINT64_MAX) {
+				startTick = nowTick;
+			}
+			segmentTicks = nowTick - startTick;
+		}
+		void OnResyncRelaunch() {
+			priorTicks += segmentTicks;
+			startTick = UINT64_MAX;
+			segmentTicks = 0;
+		}
+		void OnNewMatch() {
+			priorTicks = 0;
+			startTick = UINT64_MAX;
+			segmentTicks = 0;
+		}
+		uint64_t Total() const { return priorTicks + segmentTicks; }
+		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
+	};
 
 	enum class NetMatchServiceState {
 		Idle,
@@ -128,6 +160,10 @@ namespace RTE {
 		uint8_t GetLocalPeerId() const;
 		int GetLocalTeam() const;
 
+		static bool ResyncSnapshotAllowed(const Activity* activity);
+		static NetRejoinAnswer ClassifyRejoin(const Activity* activity);
+		void AnswerMatchOverRejoin(const std::string& result);
+
 		static const char* StateName(NetMatchServiceState state);
 
 	private:
@@ -229,6 +265,8 @@ namespace RTE {
 		std::atomic<bool> m_StartRequested{false};
 		std::atomic<bool> m_CancelRequested{false};
 		std::atomic<bool> m_EverStarted{false};
+		std::string m_CapturedRunnerReport;
+		std::string m_RejoinOutcome;
 	};
 
 } // namespace RTE
