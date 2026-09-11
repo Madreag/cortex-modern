@@ -183,6 +183,19 @@ namespace RTE {
 		return taken;
 	}
 
+	std::vector<NetHoldResolutionNotice> NetReconnectHost::TakePendingHoldResolutions() {
+		std::vector<NetHoldResolutionNotice> taken = std::move(m_PendingHoldResolutions);
+		m_PendingHoldResolutions.clear();
+		return taken;
+	}
+
+	void NetReconnectHost::QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution) {
+		if (lockstepPeerId == 0) {
+			return;
+		}
+		m_PendingHoldResolutions.push_back({lockstepPeerId, resolution});
+	}
+
 	bool NetReconnectHost::MatchesEpoch(const NetAuthBytes16& epoch) const {
 		if (m_Registry == nullptr || !m_Registry->IsActive()) {
 			return false;
@@ -550,6 +563,7 @@ namespace RTE {
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, supersededConnection, true});
 		Send(connection, committed);
 		IssueReseat(*seat);
+		QueueHoldResolution(seat->seat.lockstepPeerId, NetHoldResolution::Reclaimed);
 	}
 
 	void NetReconnectHost::HandleLeaveRequest(NetPeerId connection, const NetH4LeaveRequest& message, uint64_t nowMs) {
@@ -1165,6 +1179,7 @@ namespace RTE {
 		// §8: the substitute receives the ledgered ownership from resumed tick 1, through the same
 		// system-authored reseat a returning holder gets.
 		IssueReseat(*seat);
+		QueueHoldResolution(seat->seat.lockstepPeerId, NetHoldResolution::Substituted);
 		m_Substitutions.erase(m_Substitutions.begin() + static_cast<std::ptrdiff_t>(index));
 		DropApplicantsFor(connection);
 	}
@@ -1327,6 +1342,7 @@ namespace RTE {
 			if (seat.dropped && !seat.holdExpired && nowMs >= seat.droppedAtMs && nowMs - seat.droppedAtMs > c_ProvisionalExpiryMs) {
 				seat.holdExpired = true;
 				++m_Stats.seatHoldsExpired;
+				QueueHoldResolution(seat.seat.lockstepPeerId, NetHoldResolution::Expired);
 			}
 		}
 		m_TxCache.Expire(nowMs);
