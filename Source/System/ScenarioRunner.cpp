@@ -38,6 +38,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace RTE {
@@ -1073,6 +1074,12 @@ namespace RTE {
 		if (g_MovableMan.IsSpeculative()) {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
 			return;
+		}
+		if (NetGameCommandTypeOf(command.payload) != NetGameCommandType::Reseat) {
+			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
+			if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
+				return;
+			}
 		}
 		s_PendingLocalGameCommands.push_back(command);
 	}
