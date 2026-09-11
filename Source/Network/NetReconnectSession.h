@@ -449,6 +449,7 @@ namespace RTE {
 		void ReleaseSeat(SeatState& seat);
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
+		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 
 		/// Whether an explicit host action may hand this seat to somebody else: a live match, a real

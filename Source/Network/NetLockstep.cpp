@@ -4430,12 +4430,6 @@ namespace RTE {
 		m_LeftSeatsHeld.clear();
 		for (uint8_t peerId: m_DroppedSeats) {
 			m_LeftSeatsHeld.insert(peerId);
-			(void)SeatStateOf(peerId, c_InvalidNetPeerId);
-		}
-		for (const auto& left: m_PeerLeaveFrames) {
-			if (m_DroppedSeats.find(left.first) == m_DroppedSeats.end()) {
-				(void)SeatStateOf(left.first, c_InvalidNetPeerId);
-			}
 		}
 	}
 

@@ -616,6 +616,8 @@ namespace RTE {
 
 		static const char* StateName(NetLockstepState state);
 
+		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
 		/// Sends to every remote, or to one when onlyPeerId names it.
