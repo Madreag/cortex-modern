@@ -32,27 +32,23 @@ namespace RTE {
 	};
 
 	struct NetMatchE2ETickClock {
-		uint64_t startTick = UINT64_MAX;
-		uint64_t segmentTicks = 0;
-		uint64_t priorTicks = 0;
+		uint64_t lastTick = UINT64_MAX;
+		uint64_t executedTicks = 0;
 
 		void NoteSimTick(uint64_t nowTick) {
-			if (startTick == UINT64_MAX) {
-				startTick = nowTick;
+			if (nowTick != lastTick) {
+				++executedTicks;
+				lastTick = nowTick;
 			}
-			segmentTicks = nowTick - startTick;
 		}
 		void OnResyncRelaunch() {
-			priorTicks += segmentTicks;
-			startTick = UINT64_MAX;
-			segmentTicks = 0;
+			lastTick = UINT64_MAX;
 		}
 		void OnNewMatch() {
-			priorTicks = 0;
-			startTick = UINT64_MAX;
-			segmentTicks = 0;
+			lastTick = UINT64_MAX;
+			executedTicks = 0;
 		}
-		uint64_t Total() const { return priorTicks + segmentTicks; }
+		uint64_t Total() const { return executedTicks; }
 		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
 	};
 
