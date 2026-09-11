@@ -2791,6 +2791,59 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestAdmissionHoldIssuesResolutions() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 91;
+			ConfigureEndpoint(player, "hold-resolve", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the seeding join did not settle: " + error);
+			}
+			NetH4TicketRecord record;
+			if (player.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			const uint8_t held = MakeSeatTable()[0].lockstepPeerId;
+			wire.host.SetLiveMatch(true);
+			wire.host.NotifyDisconnect(player.connection, 120);
+			player.connected = false;
+			if (!wire.host.TakePendingHoldResolutions().empty()) {
+				return Fail("a drop queued a hold resolution before the admission clock expired");
+			}
+			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
+			wire.host.Tick(wire.nowMs);
+			const auto expired = wire.host.TakePendingHoldResolutions();
+			if (expired.size() != 1 || expired[0].lockstepPeerId != held || expired[0].resolution != NetHoldResolution::Expired) {
+				return Fail("Tick expiry did not queue Expired");
+			}
+
+			Endpoint returner;
+			returner.connection = 92;
+			ConfigureEndpoint(returner, "hold-resolve-return", &unixNow);
+			wire.Add(&returner);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the reclaim did not settle: " + error);
+			}
+			if (returner.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the reclaim after expiry did not join");
+			}
+			const auto reclaimed = wire.host.TakePendingHoldResolutions();
+			if (reclaimed.size() != 1 || reclaimed[0].lockstepPeerId != held || reclaimed[0].resolution != NetHoldResolution::Reclaimed) {
+				return Fail("a reclaim admission did not queue Reclaimed");
+			}
+			return 0;
+		}
+
 		// §7's ordering: the leave has to be answered while the link is still up. The negative control
 		// is the defect this replaces - tearing the link down first leaves the ticket unanswered.
 		int TestLeaveExchangeBeatsTeardown() {
@@ -3674,6 +3727,11 @@ namespace RTE {
 			}
 			if (wire.host.GetStats().substitutionsCommitted != 1 || wire.host.HasSubstitution(0)) {
 				return Fail("the committed transaction did not close out");
+			}
+			const auto substituted = wire.host.TakePendingHoldResolutions();
+			if (substituted.size() != 1 || substituted[0].resolution != NetHoldResolution::Substituted ||
+			    substituted[0].lockstepPeerId != MakeSeatTable()[0].lockstepPeerId) {
+				return Fail("a moderation commit did not queue Substituted");
 			}
 			NetPeerId seatHolder = c_InvalidNetPeerId;
 			uint32_t generation = 0;
@@ -5817,6 +5875,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSeatHoldWindow(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAdmissionHoldIssuesResolutions(); result != 0) {
 			return result;
 		}
 		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {
