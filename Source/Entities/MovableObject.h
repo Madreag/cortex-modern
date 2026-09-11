@@ -1068,6 +1068,7 @@ namespace RTE {
 		/// saved unique ID (floating the counter past it) and re-anchors the rest timer. No-op
 		/// without saved values. Subclasses recurse their children.
 		virtual void AdoptPersistedUniqueID();
+		bool PublishNetPrivateObjectGraph();
 
 		/// Re-points non-owned MO references by UniqueID once a restored world is registered.
 		virtual void ResolveFaithfulLinks();
