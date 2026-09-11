@@ -11,6 +11,7 @@ sources += files(
 'MetaMan.cpp',
 'MovableMan.cpp',
 'LocalPrediction.cpp',
+'PreviewEventLedger.cpp',
 'TerrainLayerSnapshot.cpp',
 'MusicMan.cpp',
 #'NetworkClient.cpp',

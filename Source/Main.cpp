@@ -91,6 +91,7 @@
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "PreviewEventLedger.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
@@ -406,6 +407,7 @@ int ShutDown(int exitCode) {
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	LocalPrediction::Clear();
+	PreviewEventLedger::Clear();
 	if (s_rbProbeOriginals.held) {
 		// These originals outlive the managers, so a refusal here is discarded while there is still an engine to do it.
 		if (!g_MovableMan.ReinstateWorld(s_rbProbeOriginals)) {
@@ -2348,6 +2350,7 @@ void RunGameLoop() {
 
 		if (!g_ActivityMan.ActivityRunning()) {
 			LocalPrediction::Clear();
+			PreviewEventLedger::Clear();
 		}
 
 		const bool paceActiveAtIterStart = ScenarioRunner::IsLockstepControllerSyncActive();
@@ -2379,6 +2382,7 @@ void RunGameLoop() {
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
+			PreviewEventLedger::ExpireForTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
@@ -3619,7 +3623,11 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
 	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
-	    << ",\"violations\":" << LocalPrediction::GetViolations() << "},";
+	    << ",\"violations\":" << LocalPrediction::GetViolations()
+	    << ",\"events_played_at_preview\":" << PreviewEventLedger::GetCounters().playedAtPreview
+	    << ",\"events_suppressed_at_commit\":" << PreviewEventLedger::GetCounters().adoptedAtCommit
+	    << ",\"events_expired\":" << PreviewEventLedger::GetCounters().expired
+	    << ",\"events_retimed\":" << PreviewEventLedger::GetCounters().retimed << "},";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
@@ -3911,6 +3919,9 @@ int main(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-preview-event-ledger-selftest") {
+			return PreviewEventLedger::RunSelfTest() ? 0 : 1;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-protocol-selftest") {
 			return NetProtocolSelfTest::Run();
