@@ -8,6 +8,8 @@ sources += files(
 'NetAuthCrypto.cpp',
 'NetAuthSelfTest.cpp',
 'NetGameCommand.cpp',
+'NetResyncState.cpp',
+'NetResyncSelfTest.cpp',
 'NetIdentity.cpp',
 'NetIdentitySelfTest.cpp',
 'NetLanDiscovery.cpp',
