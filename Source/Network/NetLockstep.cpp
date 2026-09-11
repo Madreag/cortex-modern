@@ -3417,6 +3417,16 @@ namespace RTE {
 		return false;
 	}
 
+	bool NetLockstepCoordinator::ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick) {
+		if (!m_DeferStops || !IsRunning() || m_Config.localPeerId != m_Config.matchConfig.hostPeerId || !m_PendingRecoveryStop) {
+			return false;
+		}
+		const NetLockstepStop stop = *m_PendingRecoveryStop;
+		m_PendingRecoveryStop.reset();
+		Fail(stop.reason, waitingTick, stop.message);
+		return true;
+	}
+
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
 		if (m_ReadyFrames.empty()) {
 			return false;

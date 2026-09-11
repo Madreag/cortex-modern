@@ -7888,6 +7888,116 @@ namespace RTE {
 			return true;
 		}
 
+		// A reclaimed LIVE seat fences the old transport without a drop, so the pump's resync is the only
+		// one and it lands while the host is parked on frames that never come.
+		bool TestParkedWaitAppliesPendingResync(std::string* error) {
+			const uint16_t port = 43096;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000096ULL;
+				c.timeoutMs = 1000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.DeferStopsToTickBoundary();
+			client.DeferStopsToTickBoundary();
+			// The wait runs the coordinator on the real clock, so the fixture drives it on that one too.
+			auto drive = [&](const std::function<bool()>& done, uint64_t budgetMs) {
+				const uint64_t start = NetLockstepNowMs();
+				while (true) {
+					const uint64_t now = NetLockstepNowMs();
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (now - start >= budgetMs) {
+						return false;
+					}
+					hostT.AdvanceTimeMs(1);
+					clientT.AdvanceTimeMs(1);
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 3000)) {
+				*error = "parked-wait fixture never reached Running";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1; }, 3000)) {
+				*error = "parked-wait fixture never committed frame 0";
+				return false;
+			}
+			NetLockstepReadyFrame committed;
+			while (host.PopReadyFrame(committed)) {
+			}
+			host.FinishSimulationTick(0);
+			// Tick 1 is queued locally and the remote's frames stop with no drop notice: the fenced reclaim.
+			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error)) {
+				return false;
+			}
+			if (host.AnyDroppedSeatHeld()) {
+				*error = "the fenced reclaim fixture dropped a seat; the defect needs the no-drop path";
+				return false;
+			}
+			uint32_t pumps = 0;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&] {
+				++pumps;
+				host.RequestResync("player rejoined");
+			});
+			const auto waitStart = std::chrono::steady_clock::now();
+			NetLockstepReadyFrame out;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(1, out, &waitError);
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (got) {
+				*error = "the wait produced a frame the fenced peer never sent";
+				return false;
+			}
+			if (waitError != "ResyncRequested:player rejoined") {
+				*error = "the parked wait ended with \"" + waitError + "\" after " + std::to_string(elapsedMs) +
+				         "ms instead of the resync the pump scheduled (pumps=" + std::to_string(pumps) + ")";
+				return false;
+			}
+			if (host.HasPendingRecoveryStop()) {
+				*error = "the parked wait left the recovery stop pending";
+				return false;
+			}
+			if (host.GetStats().nextFrame != 1 || host.GetStats().framesAccepted != 1) {
+				*error = "the parked wait's resync did not land at the tick the sim had not run";
+				return false;
+			}
+			if (elapsedMs >= 500) {
+				*error = "the parked wait applied the resync only after " + std::to_string(elapsedMs) + "ms";
+				return false;
+			}
+			if (!drive([&] { return client.IsFailed(); }, 3000) || !client.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+				*error = "the parked wait's resync never reached the client";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS parked_wait_applies_pending_resync frame=1 pumps=" << pumps
+			          << " ms=" << elapsedMs << std::endl;
+			return true;
+		}
+
 		bool TestAnnouncedLeaveStillClosesAtOnce(std::string* error) {
 			const uint16_t port = 43085;
 			LoopbackTransport hostT, leaverT, stayerT;
@@ -8638,6 +8748,7 @@ namespace RTE {
 		    !TestHoldHeartbeatsKeepPeersUnadjudicated(&error) ||
 		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
 		    !TestWaitSurvivesHoldAfterPreHoldStall(&error) ||
+		    !TestParkedWaitAppliesPendingResync(&error) ||
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
