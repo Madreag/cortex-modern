@@ -83,6 +83,7 @@ void MainMenuGUI::Clear() {
 	m_ModerationWaitButtons.fill(nullptr);
 	m_ModerationSubstituteButtons.fill(nullptr);
 	m_ModerationCancelButtons.fill(nullptr);
+	m_PressedModeration.clear();
 	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_CreditsScrollPanel = nullptr;
@@ -452,8 +453,8 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 			if (m_MenuScreenChange) {
 				ShowMultiplayerScreen();
 			}
-			UpdateMultiplayerScreen();
 			backToMainMenu = HandleInputEvents();
+			UpdateMultiplayerScreen();
 			break;
 		case MenuScreen::SaveOrLoadGameScreen:
 			backToMainMenu = m_SaveLoadMenu->HandleInputEvents();
@@ -529,6 +530,18 @@ bool MainMenuGUI::HandleInputEvents() {
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
+		if (guiEvent.GetType() == GUIEvent::Notification && dynamic_cast<GUIButton*>(guiEvent.GetControl())) {
+			for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
+				const auto* control = guiEvent.GetControl();
+				if (control != m_ModerationApplicantButtons[row] && control != m_ModerationWaitButtons[row] &&
+				    control != m_ModerationSubstituteButtons[row] && control != m_ModerationCancelButtons[row]) continue;
+				if (guiEvent.GetMsg() == GUIButton::Pushed && row < m_ModerationUx.RowCount()) {
+					m_PressedModeration.try_emplace(control, m_ModerationUx.GetRow(row));
+				} else if (guiEvent.GetMsg() == GUIButton::UnPushed && !static_cast<GUIButton*>(guiEvent.GetControl())->IsCaptured()) {
+					m_PressedModeration.erase(control);
+				}
+			}
+		}
 		if (guiEvent.GetType() == GUIEvent::Command) {
 			if (guiEvent.GetControl() == m_MainMenuButtons[MenuButton::BackToMainButton]) {
 				return true;
@@ -661,16 +674,17 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	// §9b's three actions, one row per disconnected seat.
 	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
 		if (guiEventControl == m_ModerationApplicantButtons[row]) {
-			m_ModerationUx.CycleApplicant(row);
+			const auto pressed = m_PressedModeration.find(guiEventControl);
+			if (pressed != m_PressedModeration.end()) m_ModerationUx.CycleApplicant(pressed->second);
 			g_GUISound.ItemChangeSound()->Play();
 		} else if (guiEventControl == m_ModerationWaitButtons[row]) {
-			ActivateModerationRow(row, NetModerationAction::Wait);
+			ActivateModerationRow(guiEventControl, NetModerationAction::Wait);
 			g_GUISound.ButtonPressSound()->Play();
 		} else if (guiEventControl == m_ModerationSubstituteButtons[row]) {
-			ActivateModerationRow(row, NetModerationAction::Substitute);
+			ActivateModerationRow(guiEventControl, NetModerationAction::Substitute);
 			g_GUISound.ButtonPressSound()->Play();
 		} else if (guiEventControl == m_ModerationCancelButtons[row]) {
-			ActivateModerationRow(row, NetModerationAction::Cancel);
+			ActivateModerationRow(guiEventControl, NetModerationAction::Cancel);
 			g_GUISound.BackButtonPressSound()->Play();
 		}
 	}
@@ -902,20 +916,24 @@ void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
 		const NetModerationUx::Row& seat = m_ModerationUx.GetRow(row);
 		m_ModerationSeatLabels[row]->SetText(seat.text);
 		m_ModerationApplicantButtons[row]->SetText(seat.applicantText);
-		m_ModerationApplicantButtons[row]->SetEnabled(seat.applicants > 1);
-		m_ModerationWaitButtons[row]->SetEnabled(seat.substitutable);
-		// A seat is never handed to nobody, and never to a second applicant while one is committing.
-		m_ModerationSubstituteButtons[row]->SetEnabled(seat.substitutable && !seat.substituting && seat.applicant != c_InvalidNetPeerId);
-		m_ModerationCancelButtons[row]->SetEnabled(seat.substituting);
+		m_ModerationApplicantButtons[row]->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
+		m_ModerationWaitButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Wait));
+		m_ModerationSubstituteButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Substitute));
+		m_ModerationCancelButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Cancel));
 	}
 }
 
-void MainMenuGUI::ActivateModerationRow(size_t row, NetModerationAction action) {
-	m_ModerationUx.Act(row, action);
+void MainMenuGUI::ActivateModerationRow(const GUIControl* control, NetModerationAction action) {
+	const auto pressed = m_PressedModeration.find(control);
+	if (pressed == m_PressedModeration.end()) return;
+	m_ModerationUx.Act(pressed->second, action);
+	m_PressedModeration.erase(pressed);
 	m_MultiplayerModerationStatusLabel->SetText(m_ModerationUx.GetStatusText());
 }
 
 bool MainMenuGUI::AutomationModerate(const std::string& action, int stableSeat) {
+	if (m_ActiveMenuScreen != MenuScreen::MultiplayerScreen || m_MultiplayerSubScreen != MultiplayerSubScreen::Moderation ||
+	    !m_MultiplayerModerationPanel->GetVisible() || !m_MultiplayerModerationPanel->GetEnabled()) return false;
 	NetModerationAction verb = NetModerationAction::Wait;
 	if (action == "substitute") {
 		verb = NetModerationAction::Substitute;
@@ -929,12 +947,8 @@ bool MainMenuGUI::AutomationModerate(const std::string& action, int stableSeat) 
 	if (row >= m_ModerationUx.RowCount()) {
 		return false;
 	}
-	// Substituting needs someone to substitute; the caller retries when an applicant turns up.
-	if (verb == NetModerationAction::Substitute && m_ModerationUx.GetRow(row).applicant == c_InvalidNetPeerId) {
-		return false;
-	}
-	ActivateModerationRow(row, verb);
-	return true;
+	if (!NetModerationUx::Available(m_ModerationUx.GetRow(row), verb)) return false;
+	return m_ModerationUx.Act(row, verb) == NetH4ModerationResult::Ok;
 }
 
 // True only if the control and every ancestor panel are enabled and visible, i.e. a human could actually click it.

@@ -879,6 +879,7 @@
     <ClInclude Include="Source\Network\NetA7Journal.h" />
     <ClInclude Include="Source\AI\MetricsCollector.h" />
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
+    <ClInclude Include="Source\CI\NetModerationGUIProbe.h" />
     <ClInclude Include="Source\System\ScenarioRunner.h" />
     <ClInclude Include="Source\System\InputScript.h" />
     <ClInclude Include="Source\System\AIWriteScript.h" />
@@ -1012,6 +1013,7 @@
     <ClInclude Include="Source\Menus\BuyMenuGUI.h" />
     <ClInclude Include="Source\Menus\GibEditorGUI.h" />
     <ClInclude Include="Source\Menus\MainMenuGUI.h" />
+    <ClInclude Include="Source\Menus\NetModerationGUI.h" />
     <ClInclude Include="Source\Menus\MetagameGUI.h" />
     <ClInclude Include="Source\Menus\ObjectPickerGUI.h" />
     <ClInclude Include="Source\Menus\ScenarioGUI.h" />
@@ -1459,6 +1461,7 @@
     <ClCompile Include="Source\Network\NetA7Journal.cpp" />
     <ClCompile Include="Source\AI\MetricsCollector.cpp" />
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />
+    <ClCompile Include="Source\CI\NetModerationGUIProbe.cpp" />
     <ClCompile Include="Source\System\ScenarioRunner.cpp" />
     <ClCompile Include="Source\System\InputScript.cpp" />
     <ClCompile Include="Source\System\AIWriteScript.cpp" />
@@ -1592,6 +1595,7 @@
     <ClCompile Include="Source\Menus\BuyMenuGUI.cpp" />
     <ClCompile Include="Source\Menus\GibEditorGUI.cpp" />
     <ClCompile Include="Source\Menus\MainMenuGUI.cpp" />
+    <ClCompile Include="Source\Menus\NetModerationGUI.cpp" />
     <ClCompile Include="Source\Menus\MetagameGUI.cpp" />
     <ClCompile Include="Source\Menus\ObjectPickerGUI.cpp" />
     <ClCompile Include="Source\Menus\ScenarioGUI.cpp" />

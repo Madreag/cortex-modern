@@ -1,4 +1,5 @@
 #include "NetReconnectSession.h"
+#include "NetA7Journal.h"
 
 #include "System/FaultInjection.h"
 
@@ -7,6 +8,7 @@
 #include "NetSeatAuth.h"
 
 #include <algorithm>
+#include <iostream>
 #include <utility>
 
 namespace RTE {
@@ -46,9 +48,33 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity) {
+		const NetAuthBytes16 epoch = registry ? registry->GetEpoch() : NetAuthBytes16{};
+		if (epoch != m_ConfiguredEpoch || hostSessionId != m_HostSessionId) {
+			m_Admission.Reset();
+			m_TxCache.Clear();
+			m_Ledger.Clear();
+			for (Substitution& pending: m_Substitutions) pending.credential.fill(0);
+			m_Substitutions.clear();
+			m_Applicants.clear();
+			m_Provisionals.clear();
+			m_PendingReclaims.clear();
+			m_Fences.clear();
+			m_Outbound.clear();
+			m_PendingReseats.clear();
+			m_Commits.clear();
+			m_Seats.clear();
+			m_NowMs = 0;
+			m_LiveMatch = false;
+			m_Stats = {};
+		}
 		m_Registry = registry;
 		m_HostSessionId = hostSessionId;
+		m_ConfiguredEpoch = epoch;
 		m_LocalIdentity = std::move(localIdentity);
+	}
+
+	NetAuthBytes16 NetReconnectHost::GetEpoch() const {
+		return m_Registry ? m_Registry->GetEpoch() : NetAuthBytes16{};
 	}
 
 	void NetReconnectHost::SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode) {
@@ -60,13 +86,8 @@ namespace RTE {
 			state.seat = seat;
 			// A rematch keeps the epoch and the tickets, so a seat that is already held keeps its holder.
 			if (const SeatState* existing = FindSeat(seat.stableSeat)) {
-				state.identity = existing->identity;
-				state.holderGeneration = existing->holderGeneration;
-				state.incarnation = existing->incarnation;
-				state.activeConnection = existing->activeConnection;
-				state.committed = existing->committed;
-				state.closed = existing->closed;
-				state.saturated = existing->saturated;
+				state = *existing;
+				state.seat = seat;
 			}
 			next.push_back(state);
 		}
@@ -154,12 +175,6 @@ namespace RTE {
 			return NetH4Fault::CommitDrop;
 		}
 		return NetH4Fault::None;
-	}
-
-	std::vector<NetH4SeatHandover> NetReconnectHost::TakeSeatHandovers() {
-		std::vector<NetH4SeatHandover> taken = std::move(m_SeatHandovers);
-		m_SeatHandovers.clear();
-		return taken;
 	}
 
 	std::vector<NetGameReseat> NetReconnectHost::TakePendingReseats() {
@@ -476,6 +491,7 @@ namespace RTE {
 				return;
 			}
 		}
+		if (pending != m_PendingReclaims.end()) pending->proofFinished = true;
 		NetH4ChallengeRecord issued;
 		if (!m_Admission.ConsumeChallenge(connection, message.txId, nowMs, issued)) {
 			// Consumed on the first attempt whether or not it verified, so a replay reads as expired.
@@ -529,8 +545,9 @@ namespace RTE {
 			m_PendingReclaims.erase(pending);
 		}
 		++m_Stats.reclaimsAccepted;
+		if (NetA7Journal::Enabled()) NetA7Journal::Session("reclaim", nowMs, {{"stable_seat", seat->seat.stableSeat}, {"peer_id", seat->seat.lockstepPeerId},
+			{"incarnation", seat->incarnation}, {"holder_generation", seat->holderGeneration}}, "NetReconnectHost::nowMs");
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, supersededConnection, true});
-		m_SeatHandovers.push_back({seat->seat.stableSeat, seat->seat.lockstepPeerId, std::string(), false});
 		Send(connection, committed);
 		IssueReseat(*seat);
 	}
@@ -580,6 +597,8 @@ namespace RTE {
 		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, true};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
+		if (dropAck && NetA7Journal::Enabled()) NetA7Journal::Session("leave_ack_suppressed", nowMs, {{"transaction", NetA7Journal::Hex(message.txId.data(), message.txId.size())},
+			{"stable_seat", message.stableSeat}, {"closed", seat->closed}, {"committed", seat->committed}}, "NetReconnectHost::nowMs");
 		if (!dropAck) {
 			Send(connection, ack);
 		}
@@ -633,6 +652,12 @@ namespace RTE {
 		}
 		m_Ledger.RecordDrop(seat.seat.stableSeat, seat.seat.lockstepPeerId, seat.seat.team, frame, std::move(owned));
 		++m_Stats.ledgerDropsRecorded;
+		if (NetA7Journal::Enabled()) {
+			const auto* ledger = m_Ledger.Find(seat.seat.stableSeat);
+			if (!ledger || ledger->droppedAtFrame != frame) NetA7Journal::Gap("drop has no current-frame ledger observation");
+			else NetA7Journal::Session("drop", m_NowMs, {{"stable_seat", seat.seat.stableSeat}, {"peer_id", seat.seat.lockstepPeerId},
+				{"frame", frame}, {"reason", "connection lost"}, {"ledger_uids", ledger->actorUIDs}}, "NetReconnectHost::m_NowMs");
+		}
 	}
 
 	void NetReconnectHost::ReleaseSeat(SeatState& seat) {
@@ -726,6 +751,8 @@ namespace RTE {
 			case NetH4ModerationResult::SubstitutionInFlight: return "SubstitutionInFlight";
 			case NetH4ModerationResult::NoSubstitutionPending: return "NoSubstitutionPending";
 			case NetH4ModerationResult::ProviderUnavailable: return "ProviderUnavailable";
+			case NetH4ModerationResult::StaleSelection: return "StaleSelection";
+			case NetH4ModerationResult::ActionUnavailable: return "ActionUnavailable";
 		}
 		return "Unknown";
 	}
@@ -887,6 +914,7 @@ namespace RTE {
 			NetH4ModerationSeat entry;
 			entry.stableSeat = seat.seat.stableSeat;
 			entry.lockstepPeerId = seat.seat.lockstepPeerId;
+			entry.cpu = seat.seat.cpu;
 			entry.team = seat.seat.team;
 			entry.committed = seat.committed;
 			entry.dropped = seat.committed && seat.activeConnection == c_InvalidNetPeerId;
@@ -896,8 +924,18 @@ namespace RTE {
 			entry.substituting = std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [&seat](const Substitution& pending) {
 				return pending.stableSeat == seat.seat.stableSeat;
 			});
+			for (const auto& pending: m_Substitutions) {
+				if (pending.stableSeat == seat.seat.stableSeat) entry.substitutionTransaction = pending.txId;
+			}
 			entry.holderGeneration = seat.holderGeneration;
 			entry.seatGeneration = seat.seatGeneration;
+			entry.incarnation = seat.incarnation;
+			entry.epoch = m_ConfiguredEpoch;
+			entry.holdUntilMs = entry.dropped && entry.heldForReclaim ? seat.droppedAtMs + c_ProvisionalExpiryMs : 0;
+			entry.substituteName = seat.substituteName;
+			entry.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
+				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
+			});
 			entry.droppedAtMs = seat.droppedAtMs;
 			entry.droppedForMs = entry.dropped && m_NowMs > seat.droppedAtMs ? m_NowMs - seat.droppedAtMs : 0;
 			for (const Applicant& applicant : m_Applicants) {
@@ -905,11 +943,64 @@ namespace RTE {
 					continue;
 				}
 				entry.applicants.push_back({applicant.connection, applicant.stableSeat, applicant.displayName,
-				                            applicant.appliedAtMs, applicant.appliedAtMs + c_ProvisionalExpiryMs, applicant.approved});
+				                            applicant.appliedAtMs, applicant.appliedAtMs + c_ProvisionalExpiryMs, applicant.approved, applicant.txId});
 			}
 			view.push_back(std::move(entry));
 		}
 		return view;
+	}
+
+	NetModerationSelection NetSelectModerationSeat(const NetH4ModerationSeat& seat, NetPeerId applicant) {
+		NetModerationSelection selected{seat.epoch, seat.stableSeat, seat.holderGeneration, seat.seatGeneration, seat.incarnation};
+		selected.substitutionTransaction = seat.substitutionTransaction;
+		for (const auto& candidate: seat.applicants) {
+			if (candidate.connection == applicant) {
+				selected.applicant = applicant;
+				selected.applicantTransaction = candidate.transactionId;
+			}
+		}
+		return selected;
+	}
+
+	NetH4ModerationResult NetModerationAvailability(const NetH4ModerationSeat& seat, const NetModerationSelection& selected, NetModerationAction action) {
+		if (selected.epoch != seat.epoch || selected.stableSeat != seat.stableSeat ||
+		    selected.holderGeneration != seat.holderGeneration || selected.seatGeneration != seat.seatGeneration ||
+		    selected.incarnation != seat.incarnation) return NetH4ModerationResult::StaleSelection;
+		if (!seat.actionsAvailable || seat.cpu) return NetH4ModerationResult::ActionUnavailable;
+		switch (action) {
+			case NetModerationAction::Wait:
+				return seat.substitutable ? NetH4ModerationResult::Ok : NetH4ModerationResult::ActionUnavailable;
+			case NetModerationAction::Cancel:
+				if (selected.substitutionTransaction != seat.substitutionTransaction) return NetH4ModerationResult::StaleSelection;
+				return seat.substituting ? NetH4ModerationResult::Ok : NetH4ModerationResult::ActionUnavailable;
+			case NetModerationAction::Substitute:
+				if (!seat.substitutable || seat.substituting) return NetH4ModerationResult::ActionUnavailable;
+				if (selected.applicant == c_InvalidNetPeerId) return NetH4ModerationResult::ActionUnavailable;
+				for (const auto& candidate: seat.applicants) {
+					if (candidate.connection == selected.applicant && candidate.transactionId == selected.applicantTransaction) {
+						return candidate.approved ? NetH4ModerationResult::ActionUnavailable : NetH4ModerationResult::Ok;
+					}
+				}
+				return NetH4ModerationResult::StaleSelection;
+		}
+		return NetH4ModerationResult::ActionUnavailable;
+	}
+
+	NetH4ModerationResult NetReconnectHost::ApplyModeration(const NetModerationSelection& selected, NetModerationAction action, uint64_t nowMs) {
+		if (!m_Registry || !m_Registry->IsActive() || !m_LiveMatch) return NetH4ModerationResult::NotHosting;
+		if (m_ConfiguredEpoch != m_Registry->GetEpoch()) return NetH4ModerationResult::StaleSelection;
+		Tick(nowMs);
+		for (const auto& seat: GetModerationView()) {
+			if (seat.stableSeat != selected.stableSeat) continue;
+			const auto available = NetModerationAvailability(seat, selected, action);
+			if (available != NetH4ModerationResult::Ok) return available;
+			switch (action) {
+				case NetModerationAction::Wait: return WaitForSeat(selected.stableSeat);
+				case NetModerationAction::Substitute: return SubstituteApplicant(selected.stableSeat, selected.applicant, nowMs);
+				case NetModerationAction::Cancel: return CancelSubstitution(selected.stableSeat, nowMs);
+			}
+		}
+		return NetH4ModerationResult::StaleSelection;
 	}
 
 	NetH4ModerationResult NetReconnectHost::WaitForSeat(uint16_t stableSeat) {
@@ -1062,7 +1153,7 @@ namespace RTE {
 		m_TxCache.Store(message.txId, key, committed, nowMs);
 		++m_Stats.substitutionsCommitted;
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, c_InvalidNetPeerId, false, true});
-		m_SeatHandovers.push_back({seat->seat.stableSeat, seat->seat.lockstepPeerId, pending->displayName, true});
+		seat->substituteName = pending->displayName;
 		if (NetH4GetFault() == NetH4Fault::CommitDrop) {
 			// The gate's commit-result-lost fault: the transaction is committed and cached, and the
 			// answer is thrown away exactly once. The substitute's own retry has to recover it.
@@ -1154,6 +1245,7 @@ namespace RTE {
 		m_Fences.clear();
 		m_PendingReseats.clear();
 		m_Commits.clear();
+		m_LiveMatch = false;
 		for (SeatState& seat : m_Seats) {
 			seat.holderGeneration = 0;
 			seat.incarnation = 0;
@@ -1165,6 +1257,7 @@ namespace RTE {
 			seat.holdExpired = false;
 			seat.retiredGeneration = 0;
 			seat.retiredUntilMs = 0;
+			seat.substituteName.clear();
 			BumpSeatGeneration(seat);
 		}
 	}
@@ -1272,7 +1365,7 @@ namespace RTE {
 			status.closed = seat.closed;
 			status.dropped = seat.committed && seat.activeConnection == c_InvalidNetPeerId;
 			status.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
-				return pending.stableSeat == seat.seat.stableSeat;
+				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
 			});
 			status.substituting = std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [&seat](const Substitution& pending) {
 				return pending.stableSeat == seat.seat.stableSeat;
@@ -1320,6 +1413,9 @@ namespace RTE {
 		m_Retransmits = 0;
 		++m_Stats.requestsSent;
 		m_Outbound.push_back({c_InvalidNetPeerId, m_PendingRequest});
+		if (NetA7Journal::Enabled() && std::holds_alternative<NetH4LeaveRequest>(m_PendingRequest))
+			NetA7Journal::Session("leave_queued", m_RequestSentMs, {{"transaction", NetA7Journal::Hex(m_TxId.data(), m_TxId.size())},
+				{"ordinal", m_Retransmits}}, "NetReconnectClient::m_RequestSentMs");
 	}
 
 	void NetReconnectClient::Resend(uint64_t nowMs) {
@@ -1327,6 +1423,9 @@ namespace RTE {
 		++m_Retransmits;
 		++m_Stats.retransmits;
 		m_Outbound.push_back({c_InvalidNetPeerId, m_PendingRequest});
+		if (NetA7Journal::Enabled() && std::holds_alternative<NetH4LeaveRequest>(m_PendingRequest))
+			NetA7Journal::Session("leave_queued", m_RequestSentMs, {{"transaction", NetA7Journal::Hex(m_TxId.data(), m_TxId.size())},
+				{"ordinal", m_Retransmits}}, "NetReconnectClient::m_RequestSentMs");
 	}
 
 	const char* NetReconnectClientStateName(NetH4ClientState state) {
@@ -1382,6 +1481,8 @@ namespace RTE {
 		}
 		NetH4TicketRecord record;
 		m_LastLoad = m_Store->Load(UnixNowMs(), record, nullptr);
+		if (NetA7Journal::Enabled()) NetA7Journal::Session("ticket_loaded", nowMs, {{"load_result", static_cast<int>(m_LastLoad)},
+			{"ticket_sha256", m_Store->GetA7LoadedSha256()}, {"host_matches", m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress}}, "NetReconnectClient::nowMs");
 		// A record for a different host names a different session's seat; only this host's reclaims.
 		if (m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress) {
 			m_UsedStoredTicket = true;
@@ -1477,6 +1578,11 @@ namespace RTE {
 			return false;
 		}
 		m_State = NetH4ClientState::Leaving;
+		if (NetA7Journal::Enabled()) {
+			m_A7PreviousLeaveElapsedMs = 0;
+			NetA7Journal::Session("leave_begin", nowMs, {{"transaction", NetA7Journal::Hex(m_TxId.data(), m_TxId.size())},
+				{"frame", NetA7Journal::AppliedFrame()}, {"client_retransmits", m_Stats.retransmits}}, "NetReconnectClient::nowMs");
+		}
 		m_Error.clear();
 		m_WantsLinkClosed = false;
 		SendRequest(NetH4LeaveRequest{c_NetH4Version, m_TxId, m_Record.epoch, m_Record.stableSeat, m_Record.holderGeneration}, nowMs);
@@ -1641,10 +1747,14 @@ namespace RTE {
 				// every retransmit lands on the txId cache instead of on a live transaction.
 				std::cout << "[net-h4-fault] ack-duplicate: re-presenting the committed ack for seat " << committed->stableSeat << std::endl;
 			}
+			const bool a7NewCommit = m_State != NetH4ClientState::Joined || m_Incarnation != committed->incarnation || m_AssignedPeerId != committed->assignedPeerId;
 			m_Incarnation = committed->incarnation;
 			m_AssignedPeerId = committed->assignedPeerId;
 			m_State = NetH4ClientState::Joined;
 			++m_Stats.commitsReceived;
+			if (NetA7Journal::Enabled() && a7NewCommit) NetA7Journal::Session("commit", nowMs, {{"stable_seat", committed->stableSeat},
+				{"peer_id", static_cast<unsigned>(committed->assignedPeerId) + 1}, {"incarnation", committed->incarnation}, {"holder_generation", committed->holderGeneration},
+				{"used_stored_ticket", m_UsedStoredTicket}, {"loaded_ticket_sha256", m_Store ? m_Store->GetA7LoadedSha256() : std::string()}}, "NetReconnectClient::nowMs");
 			return true;
 		}
 		if (const auto* ack = std::get_if<NetH4LeaveAck>(&payload)) {
@@ -1684,11 +1794,16 @@ namespace RTE {
 		if (!m_HasPendingRequest) {
 			return;
 		}
+		const uint64_t a7PreviousLeaveElapsedMs = m_A7PreviousLeaveElapsedMs;
+		if (NetA7Journal::Enabled() && m_State == NetH4ClientState::Leaving && nowMs >= m_RequestOpenedMs) m_A7PreviousLeaveElapsedMs = nowMs - m_RequestOpenedMs;
 		if (m_State == NetH4ClientState::Leaving && nowMs >= m_RequestOpenedMs && nowMs - m_RequestOpenedMs >= c_LeaveAckBudgetMs) {
 			// Unacknowledged: an ambiguous loss, so the record stays and the link closes.
 			m_HasPendingRequest = false;
 			m_WantsLinkClosed = true;
 			++m_Stats.unacknowledgedLeaves;
+			++m_Stats.ambiguousLosses;
+			if (NetA7Journal::Enabled()) NetA7Journal::Session("leave_settled", nowMs, {{"transaction", NetA7Journal::Hex(m_TxId.data(), m_TxId.size())},
+				{"acked", false}, {"unacknowledged", true}, {"previous_tick_elapsed_ms", a7PreviousLeaveElapsedMs}}, "NetReconnectClient::nowMs");
 			return;
 		}
 		if (m_Retransmits >= NetReconnectHost::c_MaxRetransmits) {
