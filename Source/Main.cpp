@@ -2240,7 +2240,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
 				if (s_netMatchServiceE2E) {
-					s_netMatchE2ETicks.OnResyncRelaunch(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+					s_netMatchE2ETicks.OnResyncRelaunch();
 				}
 			} else if (resyncError == "match over") {
 				g_NetMatchService.FinishMatch("match over");
@@ -2323,9 +2323,6 @@ void RunGameLoop() {
 		g_WindowMan.UploadFrame();
 		if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) {
 			return;
-		}
-		if (s_netMatchServiceE2E && s_netMatchE2ETicks.Total() == 0) {
-			s_netMatchE2ETicks.OnResyncRelaunch(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		}
 	}
 
