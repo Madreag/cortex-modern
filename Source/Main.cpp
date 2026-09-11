@@ -568,6 +568,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-join-wait-for") {
+			NetMatchService::SetJoinWaitPath(argValue[++i]);
+			continue;
+		}
+
 		// Phase B, unattended gates: the joiner asks the host for a seat instead of joining one, and
 		// the host approves the first applicant for that seat the way a moderator would.
 		if (!lastArg && currentArg == "-net-h4-apply") {
