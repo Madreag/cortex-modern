@@ -1401,6 +1401,45 @@ namespace RTE {
 		}
 	}
 
+	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
+		auto pumpOne = [&](NetHoldResolution resolution) -> bool {
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AdmissionAttached = true;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			NetLockstepCoordinator& coordinator = *service.m_Coordinator;
+			coordinator.m_RelayHost = true;
+			coordinator.m_State = NetLockstepState::Running;
+			coordinator.m_RemotePeerIds = {2};
+			coordinator.m_DroppedSeats.insert(2);
+			coordinator.m_DroppedAtMs[2] = 0;
+			coordinator.m_PeerLeaveFrames[2] = 0;
+			coordinator.m_LeftSeatsHeld.insert(2);
+			coordinator.SetSeatStateSource(&NetMatchService::QuerySeatState, &service);
+			service.m_ReconnectHost.QueueHoldResolution(2, resolution);
+			service.PumpSessionEvents();
+			if (coordinator.AnyDroppedSeatHeld()) {
+				*error = resolution == NetHoldResolution::Expired
+				             ? "Expired left the dropped seat held after PumpSessionEvents"
+				             : "Reclaimed left the dropped seat held after PumpSessionEvents";
+				return false;
+			}
+			const NetLockstepHoldResolution expected = resolution == NetHoldResolution::Expired
+			                                               ? NetLockstepHoldResolution::Expired
+			                                               : NetLockstepHoldResolution::Reclaimed;
+			if (coordinator.HeldSeatResolution(2) != expected) {
+				*error = resolution == NetHoldResolution::Expired
+				             ? "Expired did not resolve the held seat"
+				             : "Reclaimed did not resolve the held seat";
+				return false;
+			}
+			return true;
+		};
+		return pumpOne(NetHoldResolution::Expired) && pumpOne(NetHoldResolution::Reclaimed);
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -1447,6 +1486,7 @@ namespace RTE {
 		if (!rejoinOverError.empty()) return fail(rejoinOverError);
 		if (!tickClockError.empty()) return fail(tickClockError);
 		if (!capTickError.empty()) return fail(capTickError);
+		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
