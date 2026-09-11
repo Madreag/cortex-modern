@@ -8026,12 +8026,35 @@ namespace RTE {
 				*error = "value observation codec lost a field";
 				return false;
 			}
-			NetLockstepFrame nanFrame = frame;
-			nanFrame.valueObservations = {MakeValueObservation(1, 1, 1, 1, "k", std::numeric_limits<double>::quiet_NaN())};
+			// A script may store any double; the wire carries the exact bits so every peer commits the same value.
+			NetLockstepFrame specialFrame = frame;
+			specialFrame.valueObservations = {
+			    MakeValueObservation(1, 1, 1, 1, "nan", std::numeric_limits<double>::quiet_NaN()),
+			    MakeValueObservation(1, 1, 1, 2, "inf", std::numeric_limits<double>::infinity()),
+			    MakeValueObservation(1, 1, 1, 3, "ninf", -std::numeric_limits<double>::infinity()),
+			    MakeValueObservation(1, 1, 1, 4, "nzero", -0.0),
+			};
+			std::vector<uint8_t> specialBytes;
 			NetLockstepError encodeError;
-			if (NetLockstepCodec::Encode({nanFrame}, bytes, &encodeError) || encodeError.code != NetLockstepErrorCode::InvalidValue) {
-				*error = "a non-finite number value observation was not InvalidValue";
+			if (!NetLockstepCodec::Encode({specialFrame}, specialBytes, &encodeError)) {
+				*error = "non-finite number value observations did not encode: " + encodeError.message;
 				return false;
+			}
+			const NetLockstepDecodeResult specialDecoded = NetLockstepCodec::Decode(specialBytes);
+			const NetLockstepFrame* specialGot = specialDecoded.ok ? std::get_if<NetLockstepFrame>(&specialDecoded.packet.payload) : nullptr;
+			if (!specialGot || specialGot->valueObservations.size() != specialFrame.valueObservations.size()) {
+				*error = "non-finite number value observations did not decode";
+				return false;
+			}
+			for (size_t i = 0; i < specialFrame.valueObservations.size(); ++i) {
+				uint64_t sent = 0;
+				uint64_t got = 0;
+				std::memcpy(&sent, &specialFrame.valueObservations[i].numberValue, sizeof(sent));
+				std::memcpy(&got, &specialGot->valueObservations[i].numberValue, sizeof(got));
+				if (sent != got) {
+					*error = "number value observation " + specialFrame.valueObservations[i].key + " did not round-trip bit-exactly";
+					return false;
+				}
 			}
 			std::vector<uint8_t> truncated;
 			if (!EncodePacket({frame}, truncated, error)) {
