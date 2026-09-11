@@ -3567,6 +3567,8 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 	}, &walk);
 }
 
+} // namespace
+
 bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& objects) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	if (!m_State || objects.empty()) return false;
@@ -3633,6 +3635,8 @@ bool LuaStateWrapper::RekeyScriptObjects(const std::vector<std::pair<const Movab
 	lua_settop(m_State, top);
 	return true;
 }
+
+namespace {
 
 static int ScriptGraphNativeRelease(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
