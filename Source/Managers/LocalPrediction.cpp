@@ -128,6 +128,7 @@ namespace RTE {
 		const std::mt19937 rngState = g_SimRNG.GetEngineState();
 		const uint64_t rngDraws = g_SimRNG.GetDrawCount();
 		const long uidCounter = MovableObject::GetUniqueIDCounter();
+		const uint64_t soundIdentityCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		Activity::RollbackState activityState;
 		activity->CaptureRollbackState(activityState);
 		static TerrainLayerSnapshot terrain;
@@ -241,6 +242,8 @@ namespace RTE {
 		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
+		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
 		PostProcessMan::SetRegistrationSuppressed(false);
 		AudioMan::SetPlaybackSuppressed(false);
 		LuaMan::SetScriptsFrozen(false);
