@@ -1,0 +1,197 @@
+test_cases_filter_selects_named_jobs_only (test_run_breadth_repairs.CasesFilterTests.test_cases_filter_selects_named_jobs_only) ... FAIL
+test_unknown_case_is_rejected (test_run_breadth_repairs.CasesFilterTests.test_unknown_case_is_rejected) ... FAIL
+test_heal_child_uses_source40_input_delay (test_run_breadth_repairs.ChildDelayTests.test_heal_child_uses_source40_input_delay) ... FAIL
+test_invariance_child_keeps_source40_input_delay (test_run_breadth_repairs.ChildDelayTests.test_invariance_child_keeps_source40_input_delay) ... ok
+test_any_other_line_difference_fails (test_run_breadth_repairs.DeferralUidTests.test_any_other_line_difference_fails) ... FAIL
+test_extra_line_fails (test_run_breadth_repairs.DeferralUidTests.test_extra_line_fails) ... FAIL
+test_identical_lines_pass (test_run_breadth_repairs.DeferralUidTests.test_identical_lines_pass) ... FAIL
+test_reordered_lines_fail (test_run_breadth_repairs.DeferralUidTests.test_reordered_lines_fail) ... FAIL
+test_spawn_child_line_missing_fails (test_run_breadth_repairs.DeferralUidTests.test_spawn_child_line_missing_fails) ... FAIL
+test_spawn_child_ok_zero_fails (test_run_breadth_repairs.DeferralUidTests.test_spawn_child_ok_zero_fails) ... FAIL
+test_uid_only_difference_passes (test_run_breadth_repairs.DeferralUidTests.test_uid_only_difference_passes) ... FAIL
+test_soundset_hasanysounds_passes_bool (test_run_breadth_repairs.ExtraFixtureTests.test_soundset_hasanysounds_passes_bool) ... FAIL
+test_201_to_8_passes (test_run_breadth_repairs.FakeLagOracleTests.test_201_to_8_passes) ... FAIL
+test_400_to_13_passes (test_run_breadth_repairs.FakeLagOracleTests.test_400_to_13_passes) ... FAIL
+test_400_to_14_fails_formula (test_run_breadth_repairs.FakeLagOracleTests.test_400_to_14_fails_formula) ... FAIL
+test_401_to_14_passes (test_run_breadth_repairs.FakeLagOracleTests.test_401_to_14_passes) ... FAIL
+test_430_to_14_fails_band (test_run_breadth_repairs.FakeLagOracleTests.test_430_to_14_fails_band) ... FAIL
+test_line_missing_fails (test_run_breadth_repairs.FakeLagOracleTests.test_line_missing_fails) ... FAIL
+test_peer_input_delays_disagree_fails (test_run_breadth_repairs.FakeLagOracleTests.test_peer_input_delays_disagree_fails) ... FAIL
+test_child_heal_imports_recovery_e2e (test_run_breadth_repairs.HealImportTests.test_child_heal_imports_recovery_e2e) ... FAIL
+test_import_recovery_e2e_with_stage_on_path (test_run_breadth_repairs.HealImportTests.test_import_recovery_e2e_with_stage_on_path) ... ok
+
+======================================================================
+FAIL: test_cases_filter_selects_named_jobs_only (test_run_breadth_repairs.CasesFilterTests.test_cases_filter_selects_named_jobs_only)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 199, in test_cases_filter_selects_named_jobs_only
+    self.fail("select_jobs missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: select_jobs missing
+
+======================================================================
+FAIL: test_unknown_case_is_rejected (test_run_breadth_repairs.CasesFilterTests.test_unknown_case_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 207, in test_unknown_case_is_rejected
+    self.fail("select_jobs missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: select_jobs missing
+
+======================================================================
+FAIL: test_heal_child_uses_source40_input_delay (test_run_breadth_repairs.ChildDelayTests.test_heal_child_uses_source40_input_delay)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 190, in test_heal_child_uses_source40_input_delay
+    self.assertEqual(self._run_child("heal"), 3)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 3
+
+======================================================================
+FAIL: test_any_other_line_difference_fails (test_run_breadth_repairs.DeferralUidTests.test_any_other_line_difference_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_extra_line_fails (test_run_breadth_repairs.DeferralUidTests.test_extra_line_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_identical_lines_pass (test_run_breadth_repairs.DeferralUidTests.test_identical_lines_pass)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_reordered_lines_fail (test_run_breadth_repairs.DeferralUidTests.test_reordered_lines_fail)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_spawn_child_line_missing_fails (test_run_breadth_repairs.DeferralUidTests.test_spawn_child_line_missing_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_spawn_child_ok_zero_fails (test_run_breadth_repairs.DeferralUidTests.test_spawn_child_ok_zero_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_uid_only_difference_passes (test_run_breadth_repairs.DeferralUidTests.test_uid_only_difference_passes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 78, in setUp
+    self.fail("compat_lines_match missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: compat_lines_match missing
+
+======================================================================
+FAIL: test_soundset_hasanysounds_passes_bool (test_run_breadth_repairs.ExtraFixtureTests.test_soundset_hasanysounds_passes_bool)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 120, in test_soundset_hasanysounds_passes_bool
+    self.assertIn("GetTopLevelSoundSet():HasAnySounds(true)", text)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'GetTopLevelSoundSet():HasAnySounds(true)' not found in '-- Ordinary mod code covering the SoundContainer/SoundSet surfaces the repair lane\'s fixture did not\n-- measure on the pre-generation reference: mutating Vector methods through the Pos alias, the\n-- structural SoundSet mutators, SetTopLevelSoundSet, AudioMan:StopAll, a property read back in a\n-- later AI pass, and one SoundContainer written by two different actors\' AI hooks.\n--\n-- Nothing here knows about domains, cohorts or deferral. Each case prints one [extra] line with the\n-- observed values; the verdict is the line-by-line comparison against the reference executable.\n\nlocal SHORT = "UserScenes.rte/ProbeShort.flac"\nlocal LONG = "UserScenes.rte/ProbeLong.flac"\n\nlocal function num(v)\n\tif v == nil then return "nil" end\n\treturn string.format("%.17g", v)\nend\n\nlocal function flag(v)\n\tif v == nil then return "nil" end\n\tif type(v) == "boolean" then return v and "1" or "0" end\n\treturn tostring(v)\nend\n\nlocal function say(case, detail)\n\tprint(string.format("[extra] case=%s %s", case, detail))\nend\n\nlocal function makeSound(path, loops, overlap, immobile)\n\tlocal sound = SoundContainer()\n\tlocal set = SoundSet()\n\tset:AddSound(path)\n\tsound:SetTopLevelSoundSet(set)\n\tsound.Immobile = immobile\n\tsound.Loops = loops\n\tsound.Volume = 1\n\tsound.Pitch = 1\n\tsound.PitchVariation = 0\n\tsound.AffectedByGlobalPitch = false\n\tsound.SoundOverlapMode = overlap\n\tsound.BusRouting = SoundContainer.SFX\n\treturn sound\nend\n\nfunction Create(self)\nend\n\nfunction Update(self)\n\tif not IsAHuman(self) then return end\n\tif _XClaim == nil then return end\n\tif self.UniqueID ~= _XClaim then return end\n\tif not self.xOwner then return end\n\n\tself.xStep = (self.xStep or 0) + 1\n\tlocal step = self.xStep\n\n\tif step == 1 then\n\t\tself.xPos = makeSound(SHORT, 0, SoundContainer.OVERLAP, false)\n\t\tself.xMethod = makeSound(SHORT, 0, SoundContainer.OVERLAP, false)\n\t\tself.xSet = makeSound(SHORT, 0, SoundContainer.OVERLAP, true)\n\t\tself.xCycle = makeSound(SHORT, 0, SoundContainer.OVERLAP, true)\n\t\tself.xTop = makeSound(SHORT, 0, SoundContainer.OVERLAP, true)\n\t\tself.xStopAll = makeSound(LONG, -1, SoundContainer.OVERLAP, true)\n\t\tself.xLater = makeSound(SHORT, 0, SoundContainer.OVERLAP, true)\n\t\t_XShared = makeSound(SHORT, 0, SoundContainer.OVERLAP, true)\n\t\t_XShared.Volume = 0.5\n\t\tprint(string.format("[extra] claim actor=%d", self.UniqueID))\n\t\treturn\n\tend\n\tif self.xPos == nil then return end\n\n\t-- ---- shared-scope arm: the mutating Vector surface through the Pos alias ------------------\n\tif step == 4 then\n\t\tlocal s = self.xPos\n\t\ts.Pos = Vector(1, 2)\n\t\tlocal ok1 = pcall(function() s.Pos:SetXY(51.5, 52.5) end)\n\t\tsay("shared_pos_setxy", "call_ok=" .. flag(ok1) ..\n\t\t\t" x=" .. num(s.Pos.X) .. " y=" .. num(s.Pos.Y))\n\telseif step == 5 then\n\t\tlocal s = self.xMethod\n\t\ts.Pos = Vector(3, 4)\n\t\tlocal p = s.Pos\n\t\tlocal ok1 = pcall(function() p:SetXY(10, 20) end)\n\t\tlocal ok2 = pcall(function() p:FlipX() end)\n\t\tlocal ok3 = pcall(function() p:SetMagnitude(50) end)\n\t\tsay("shared_pos_methods", "setxy=" .. flag(ok1) .. " flipx=" .. flag(ok2) ..\n\t\t\t" setmag=" .. flag(ok3) .. " x=" .. num(s.Pos.X) .. " y=" .. num(s.Pos.Y) ..\n\t\t\t" mag=" .. num(s.Pos.Magnitude))\n\telseif step == 6 then\n\t\tlocal s = self.xPos\n\t\ts.Pos = Vector(6, 8)\n\t\tlocal ok1 = pcall(function() s.Pos.AbsRadAngle = 0.0 end)\n\t\tsay("shared_pos_absradangle", "call_ok=" .. flag(ok1) ..\n\t\t\t" x=" .. num(s.Pos.X) .. " y=" .. num(s.Pos.Y))\n\telseif step == 7 then\n\t\t-- Structural SoundSet mutation from the shared hook: the control arm for the same calls\n\t\t-- made from the AI hook later.\n\t\tlocal s = self.xSet\n\t\tlocal before = s:GetTopLevelSoundSet():HasAnySounds()\n\t\ts:GetTopLevelSoundSet():AddSound(LONG)\n\t\tlocal removed = s:GetTopLevelSoundSet():RemoveSound(LONG)\n\t\tsay("shared_soundset_structural", "before=" .. flag(before) ..\n\t\t\t" removed=" .. flag(removed) .. " any=" .. flag(s:HasAnySounds()))\n\telseif step == 8 then\n\t\tlocal s = self.xCycle\n\t\ts:GetTopLevelSoundSet().SoundSelectionCycleMode = SoundSet.ALL\n\t\tsay("shared_soundset_cyclemode", "mode=" .. flag(s:GetTopLevelSoundSet().SoundSelectionCycleMode))\n\telseif step == 20 then\n\t\tself.xStopAllPlayed = self.xStopAll:Play()\n\t\tsay("shared_stopall_setup", "played=" .. flag(self.xStopAllPlayed) ..\n\t\t\t" playing=" .. flag(self.xStopAll:IsBeingPlayed()))\n\tend\n\n\tif step <= 20 then return end\n\n\t-- ---- the AI-hook results, read from the shared hook ---------------------------------------\n\tif self.xAiSetXY and not self.xAiSetXYReported then\n\t\tself.xAiSetXYReported = true\n\t\tsay("ai_pos_setxy", "ai_ok=" .. flag(self.xAiSetXYOk) .. " ai_x=" .. num(self.xAiSetXYX) ..\n\t\t\t" ai_y=" .. num(self.xAiSetXYY) .. " upd_x=" .. num(self.xPos.Pos.X) ..\n\t\t\t" upd_y=" .. num(self.xPos.Pos.Y))\n\tend\n\tif self.xAiAliasMethodLate and not self.xAiAliasMethodReported then\n\t\tself.xAiAliasMethodReported = true\n\t\tsay("ai_pos_retained_alias_method", "ai_x=" .. num(self.xAiAliasMethodX) ..\n\t\t\t" upd_x=" .. num(self.xMethod.Pos.X) .. " upd_y=" .. num(self.xMethod.Pos.Y))\n\tend\n\tif self.xAiStructural and not self.xAiStructuralReported then\n\t\tself.xAiStructuralReported = true\n\t\tsay("ai_soundset_addsound", "ai_ok=" .. flag(self.xAiStructuralOk) ..\n\t\t\t" ai_any=" .. flag(self.xAiStructuralAny) .. " upd_any=" .. flag(self.xSet:HasAnySounds()))\n\tend\n\tif self.xAiCycle and not self.xAiCycleReported then\n\t\tself.xAiCycleReported = true\n\t\tsay("ai_soundset_cyclemode", "ai_mode=" .. flag(self.xAiCycleMode) ..\n\t\t\t" upd_mode=" .. flag(self.xCycle:GetTopLevelSoundSet().SoundSelectionCycleMode))\n\tend\n\tif self.xAiTop and not self.xAiTopReported then\n\t\tself.xAiTopReported = true\n\t\tsay("ai_set_top_level_sound_set", "ai_ok=" .. flag(self.xAiTopOk) ..\n\t\t\t" ai_any=" .. flag(self.xAiTopAny) .. " upd_any=" .. flag(self.xTop:HasAnySounds()))\n\tend\n\tif self.xAiLaterWrote and not self.xAiLaterReported and self.xAiLaterRead ~= nil then\n\t\tself.xAiLaterReported = true\n\t\tsay("ai_property_next_pass", "ai_same_pass=" .. num(self.xAiLaterSame) ..\n\t\t\t" ai_next_pass=" .. num(self.xAiLaterRead) .. " upd=" .. num(self.xLater.Volume))\n\tend\n\tif self.xAiStopAll and not self.xAiStopAllReported then\n\t\tself.xAiStopAllReported = true\n\t\tsay("ai_audioman_stopall", "ai_playing_after=" .. flag(self.xAiStopAllSeen) ..\n\t\t\t" upd_playing=" .. flag(self.xStopAll:IsBeingPlayed()))\n\tend\n\tif step == 130 and not self.xSharedReported then\n\t\tself.xSharedReported = true\n\t\tsay("two_actor_shared_container", "volume=" .. num(_XShared.Volume) ..\n\t\t\t" writers=" .. flag(_XSharedWriters) .. " primary=" .. flag(_XSharedPrimary) ..\n\t\t\t" secondary=" .. flag(_XSharedSecondary))\n\tend\n\tif step == 140 then\n\t\tsay("done", "step=" .. step .. " ai_runs=" .. flag(self.xAiRuns))\n\tend\nend\n\nfunction UpdateAI(self)\n\tif not IsAHuman(self) then return end\n\tif _XClaim == nil then _XClaim = self.UniqueID end\n\tif _XClaim ~= self.UniqueID then\n\t\t-- The second AI actor writes the one shared container too.\n\t\tif _XSecond == nil then _XSecond = self.UniqueID end\n\t\tif _XSecond ~= self.UniqueID then return end\n\t\tif _XShared ~= nil and (_XSharedSecondary or 0) < 40 then\n\t\t\t_XShared.Volume = 0.875\n\t\t\t_XSharedSecondary = (_XSharedSecondary or 0) + 1\n\t\t\t_XSharedWriters = 2\n\t\tend\n\t\treturn\n\tend\n\tself.xOwner = true\n\tself.xAiRuns = (self.xAiRuns or 0) + 1\n\tif self.xPos == nil then return end\n\tlocal step = self.xStep or 0\n\tif step <= 20 then return end\n\n\tif _XShared ~= nil and (_XSharedPrimary or 0) < 40 then\n\t\t_XShared.Volume = 0.125\n\t\t_XSharedPrimary = (_XSharedPrimary or 0) + 1\n\tend\n\n\tif not self.xAiSetXY then\n\t\tself.xAiSetXY = true\n\t\tlocal s = self.xPos\n\t\ts.Pos = Vector(5, 6)\n\t\tself.xAiSetXYOk = pcall(function() s.Pos:SetXY(61.5, 62.5) end)\n\t\tself.xAiSetXYX = s.Pos.X\n\t\tself.xAiSetXYY = s.Pos.Y\n\t\treturn\n\tend\n\n\tif not self.xAiAliasMethod then\n\t\tself.xAiAliasMethod = true\n\t\tlocal s = self.xMethod\n\t\ts.Pos = Vector(7, 8)\n\t\tself.xAiHeldAlias = s.Pos\n\t\tself.xAiAliasStep = step\n\t\treturn\n\tend\n\n\tif not self.xAiStructural then\n\t\tself.xAiStructural = true\n\t\tlocal s = self.xSet\n\t\tself.xAiStructuralOk = pcall(function() s:GetTopLevelSoundSet():AddSound(LONG) end)\n\t\tself.xAiStructuralAny = s:HasAnySounds()\n\t\treturn\n\tend\n\n\tif not self.xAiCycle then\n\t\tself.xAiCycle = true\n\t\tlocal s = self.xCycle\n\t\ts:GetTopLevelSoundSet().SoundSelectionCycleMode = SoundSet.FORWARDS\n\t\tself.xAiCycleMode = s:GetTopLevelSoundSet().SoundSelectionCycleMode\n\t\treturn\n\tend\n\n\tif not self.xAiTop then\n\t\tself.xAiTop = true\n\t\tlocal s = self.xTop\n\t\tlocal replacement = SoundSet()\n\t\treplacement:AddSound(LONG)\n\t\tself.xAiTopOk = pcall(function() s:SetTopLevelSoundSet(replacement) end)\n\t\tself.xAiTopAny = s:HasAnySounds()\n\t\treturn\n\tend\n\n\tif not self.xAiLaterWrote then\n\t\tself.xAiLaterWrote = true\n\t\tself.xLater.Volume = 0.375\n\t\tself.xAiLaterSame = self.xLater.Volume\n\t\treturn\n\tend\n\tif self.xAiLaterWrote and self.xAiLaterRead == nil then\n\t\tself.xAiLaterRead = self.xLater.Volume\n\t\treturn\n\tend\n\n\tif not self.xAiAliasMethodLate and self.xAiAliasStep and step >= self.xAiAliasStep + 25 then\n\t\tself.xAiAliasMethodLate = true\n\t\tpcall(function() self.xAiHeldAlias:SetXY(91.5, 92.5) end)\n\t\tself.xAiAliasMethodX = self.xMethod.Pos.X\n\t\treturn\n\tend\n\n\tif not self.xAiStopAll and step >= 95 then\n\t\tself.xAiStopAll = true\n\t\tAudioMan:StopAll()\n\t\tself.xAiStopAllSeen = self.xStopAll:IsBeingPlayed()\n\t\treturn\n\tend\nend\n'
+
+======================================================================
+FAIL: test_201_to_8_passes (test_run_breadth_repairs.FakeLagOracleTests.test_201_to_8_passes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_400_to_13_passes (test_run_breadth_repairs.FakeLagOracleTests.test_400_to_13_passes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_400_to_14_fails_formula (test_run_breadth_repairs.FakeLagOracleTests.test_400_to_14_fails_formula)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_401_to_14_passes (test_run_breadth_repairs.FakeLagOracleTests.test_401_to_14_passes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_430_to_14_fails_band (test_run_breadth_repairs.FakeLagOracleTests.test_430_to_14_fails_band)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_line_missing_fails (test_run_breadth_repairs.FakeLagOracleTests.test_line_missing_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_peer_input_delays_disagree_fails (test_run_breadth_repairs.FakeLagOracleTests.test_peer_input_delays_disagree_fails)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 127, in setUp
+    self.fail("fake_lag_auto_delay_failures missing")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: fake_lag_auto_delay_failures missing
+
+======================================================================
+FAIL: test_child_heal_imports_recovery_e2e (test_run_breadth_repairs.HealImportTests.test_child_heal_imports_recovery_e2e)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\test_run_breadth_repairs.py", line 67, in test_child_heal_imports_recovery_e2e
+    self.assertTrue(imported)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 21 tests in 0.020s
+
+FAILED (failures=19)

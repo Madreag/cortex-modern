@@ -1,0 +1,377 @@
+{
+  "gate": "reclaim_socket",
+  "passed": false,
+  "executable_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "configuration": null,
+  "finished_utc": "2026-09-10T02:19:37.173710+00:00",
+  "checks": [
+    {
+      "name": "executable_matches_manifest",
+      "status": "pass",
+      "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "evidence": []
+    },
+    {
+      "name": "host_exit_zero",
+      "status": "fail",
+      "detail": "1",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host"
+      ]
+    },
+    {
+      "name": "first_client_dropped_midmatch",
+      "status": "pass",
+      "detail": "terminated by the driver",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1"
+      ]
+    },
+    {
+      "name": "returner_reclaimed_stored_ticket",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client2_report.json"
+      ]
+    },
+    {
+      "name": "returner_committed",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client2_report.json"
+      ]
+    },
+    {
+      "name": "host_saw_seat_drop_and_return",
+      "status": "fail",
+      "detail": "0 committed seats",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host_report.json"
+      ]
+    },
+    {
+      "name": "returner_on_same_stable_seat",
+      "status": "pass",
+      "detail": "shared ticket path",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client.ticket"
+      ]
+    },
+    {
+      "name": "host_census_clean",
+      "status": "pass",
+      "detail": "0",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host_report.json"
+      ]
+    },
+    {
+      "name": "host_reseat_issued",
+      "status": "pass",
+      "detail": "no ledgered survivors; printed=False; host_seats_dropped=1, host_ledger_drops_recorded=1, host_reseats_issued=0, host_reseats_without_a_ledger=0, host_reseats_without_survivors=1, host_reseat_live_on_team_not_named=0",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\stdout.log",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host_report.json"
+      ]
+    },
+    {
+      "name": "resync_round_survived",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\stdout.log"
+      ]
+    },
+    {
+      "name": "funds_unchanged",
+      "status": "pass",
+      "detail": "no funds command was issued in this gate",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\stdout.log"
+      ]
+    },
+    {
+      "name": "no_authority_error",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\stdout.log",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\stdout.log"
+      ]
+    }
+  ],
+  "records": {
+    "client1": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 620,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "46400",
+        "-net-match-ticks",
+        "900",
+        "-net-reconnect-ticket",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client.ticket",
+        "-net-join",
+        "127.0.0.1",
+        "-net-match-e2e-resync",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1_report.json"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\runtime",
+      "timeout_seconds": 420.0,
+      "private_desktop": "CortexTest_5f9c5b71e09e4a8f8241095d6ed80c25",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:19:17.261272+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1"
+        }
+      ],
+      "evidence_expected": [],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 19252,
+      "started_utc": "2026-09-10T02:19:18.920171+00:00",
+      "injected_termination": "injected mid-match client drop",
+      "exit_code": 137,
+      "elapsed_seconds": 9.623,
+      "ended_utc": "2026-09-10T02:19:28.543281+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 417,
+      "verdict_lines": [],
+      "verdict_count": 0,
+      "last_verdict": null,
+      "verdict_present": false,
+      "evidence_present": [],
+      "evidence_missing": [],
+      "evidence_complete": true
+    },
+    "returner": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 620,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "46400",
+        "-net-match-ticks",
+        "900",
+        "-net-reconnect-ticket",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client.ticket",
+        "-net-join",
+        "127.0.0.1",
+        "-net-match-e2e-resync",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client2_report.json"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\runtime",
+      "timeout_seconds": 420.0,
+      "private_desktop": "CortexTest_170a52e050314a3f8c16bba99074e504",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:19:17.388540+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner"
+        }
+      ],
+      "evidence_expected": [],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 27048,
+      "started_utc": "2026-09-10T02:19:29.560418+00:00",
+      "exit_code": 1,
+      "elapsed_seconds": 7.611,
+      "ended_utc": "2026-09-10T02:19:37.171104+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 672,
+      "verdict_lines": [
+        "[net-match] state transfer complete: 5075515 bytes"
+      ],
+      "verdict_count": 1,
+      "last_verdict": "[net-match] state transfer complete: 5075515 bytes",
+      "verdict_present": true,
+      "evidence_present": [],
+      "evidence_missing": [],
+      "evidence_complete": true
+    },
+    "host": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 620,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "46400",
+        "-net-match-ticks",
+        "900",
+        "-net-reconnect-ticket",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host.ticket",
+        "-net-host",
+        "-net-match-e2e-resync",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host_report.json"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime",
+      "timeout_seconds": 420.0,
+      "private_desktop": "CortexTest_71276203b53e4e8da7fece3fe5e115ca",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:19:17.133122+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host"
+        }
+      ],
+      "evidence_expected": [],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 5140,
+      "started_utc": "2026-09-10T02:19:17.404235+00:00",
+      "exit_code": 1,
+      "elapsed_seconds": 19.768,
+      "ended_utc": "2026-09-10T02:19:37.172005+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 1090,
+      "verdict_lines": [],
+      "verdict_count": 0,
+      "last_verdict": null,
+      "verdict_present": false,
+      "evidence_present": [],
+      "evidence_missing": [],
+      "evidence_complete": true
+    }
+  }
+}

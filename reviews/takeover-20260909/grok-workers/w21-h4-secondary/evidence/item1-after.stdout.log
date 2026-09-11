@@ -1,0 +1,31 @@
+[net-match] A left the match at frame 2 (connection lost)
+[net-match] A left the match at frame 2 (connection lost)
+[net-match] A left the match at frame 2 (connection lost)
+[net-match] A left the match at frame 2 (connection lost)
+[net-reconnect-session-selftest] PASS: moderation view ages the drop from the plane's clock
+[net-reconnect] applicant Carol asked for seat 0
+[net-reconnect] applicant Dana asked for seat 0
+[net-reconnect] applicant Eve asked for seat 0
+[net-reconnect] applicant first asked for seat 0
+[net-reconnect] applicant second asked for seat 0
+[net-reconnect] applicant substitute asked for seat 0
+[net-reconnect] applicant silent asked for seat 0
+[net-reconnect] applicant cancelled asked for seat 0
+[net-reconnect] applicant vanishing asked for seat 0
+[net-reconnect] applicant unstorable asked for seat 0
+[net-reconnect] applicant race-a-substitute asked for seat 0
+[net-reconnect] applicant race-b-substitute asked for seat 0
+[net-reconnect] applicant subst-ledger-in asked for seat 0
+[net-reconnect] applicant subst-ledger-none asked for seat 1
+[net-reconnect] applicant early-loss asked for seat 0
+[net-reconnect-session-selftest] GATE initial-disconnect-before-ack PASS
+[net-reconnect] applicant late asked for seat 0
+[net-reconnect-session-selftest] GATE ack-lost PASS
+[net-reconnect] applicant resultlost-sub asked for seat 0
+[net-reconnect-session-selftest] GATE commit-result-lost PASS
+[net-reconnect] applicant dupe-sub asked for seat 0
+[net-reconnect-session-selftest] GATE delayed-duplicate PASS
+[net-reconnect] applicant vanisher asked for seat 0
+[net-reconnect] applicant vanish-next asked for seat 0
+[net-reconnect-session-selftest] GATE substitute-disappears-before-ack PASS
+[net-reconnect-session-selftest] PASS

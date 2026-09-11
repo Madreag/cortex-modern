@@ -1,0 +1,22 @@
+--- clean_leave.py.pre
++++ clean_leave.py
+@@ -47,6 +47,7 @@
+ PORT_CLEAN = 46470
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT_AMBIGUOUS = 46472
++# Announced leave stays tick-based; no hold pause.
+ TICKS = 900
+ LEAVE_AFTER_S = 20.0
+ TIMEOUT_S = 420.0
+@@ -198,9 +199,9 @@
+         # may still join as a NEW player, which is a fresh join, not a reclaim - that is the check.
+         checks.check(
+             "clean_old_ticket_refused",
+-            stale_reconnect.get("client_used_stored_ticket") is not True
++            stale_reconnect.get("client_reclaim_outcome") != "reclaim_accepted"
+             or int(stale_reconnect.get("client_commits") or 0) == 0,
+-            f"used_stored_ticket={stale_reconnect.get('client_used_stored_ticket')} commits={stale_reconnect.get('client_commits')}",
++            f"reclaim_outcome={stale_reconnect.get('client_reclaim_outcome')} used_stored_ticket={stale_reconnect.get('client_used_stored_ticket')} commits={stale_reconnect.get('client_commits')}",
+             [root / "clean_stale_report.json"],
+         )
+     else:

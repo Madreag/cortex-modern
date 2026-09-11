@@ -141,15 +141,19 @@
                  scenario = v.json(root / job.meta["rung"] / "trace.json")
                  runs = scenario.get("runs", [])
                  v.require(len(runs) == 1 and runs[0].get("scenario") == "ActorStress" and runs[0].get("ticks") == reference["ticks"] + 1 and runs[0].get("numeric", {}).get("ended_externally") == 1,
-@@ -1882,6 +1962,7 @@
+@@ -1880,8 +1960,10 @@
+     module = load_driver(path, "breadth_existing_driver")
+     if module.REPO.resolve() != REPO.resolve():
          raise PinError("existing driver is not approved-tree configured")
-     module.INPUT_DELAY = 0
+-    module.INPUT_DELAY = 0
++    # Source40 20260909_112620_heal_26d39dc2/result.json input_delay
++    module.INPUT_DELAY = 3 if options.child == "heal" else 0
      module.GLOBAL_SCRIPT = None
 +    sys.path.insert(0, str(STAGE))
      result = module.invariance(out) if options.child == "invariance" else module.heal(out)
      try:
          pin.verify()
-@@ -1900,6 +1981,7 @@
+@@ -1900,6 +1982,7 @@
      parser.add_argument("--source", type=int, required=True)
      parser.add_argument("--build-manifest", type=Path, required=True)
      parser.add_argument("--out", type=Path, required=True)
@@ -157,7 +161,7 @@
      parser.add_argument("--child", choices=("invariance", "heal"), help=argparse.SUPPRESS)
      options = parser.parse_args()
      options.out = options.out.resolve()
-@@ -1922,6 +2004,10 @@
+@@ -1922,6 +2005,10 @@
      jobs = plan(options.source, pin.path, options.out, pin.sha)
      if tuple(job.id for job in jobs) != REQUIRED_CASES or len(REQUIRED_CASES) != 81:
          raise RuntimeError("breadth coverage inventory is incomplete")

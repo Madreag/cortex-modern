@@ -1,0 +1,46 @@
+===== D:\Projects\RESUME.md exists=True =====
+RESUME.md:53 hits=['AIOrder']
+**2026-09-11 05:30 UTC - PHASE 1 PROGRESS (Grok workers W1-W7; reports under `reviews/takeover-20260909/grok-workers/`; every verdict re-derived by the lead).** MAIN `stage2/p4b-interp-lockstep` = `9751a90e29`, pushed: the tools-only comparator repair (`compare_snapshots.py` accepts Activity1-3 and maps `actor_links[player][1]`, the controlled actor, not `[0]` the brain, per `Activity.cpp:985-987`; 61/61 detecting tests, 36 fail on the old file; the retained `mp_snapshot_p5` pair is FAIL on the old comparator and PASS on the new one; no mask or tolerance added). The approved executable is stil
+
+RESUME.md:60 hits=['AIOrder']
+2. **Triage the 13 Source41 breadth non-pass cases** against the Source38-40 verdict tables (`lanes/source33-lanes/report.md`): known residue vs Source41 regression vs harness/fixture defect. First: `fl200` auto-delay (Source40 gave 14) and the `Rejected a AIOrder command from a peer that does not control team 1` host exits (transport-authority commit `9b84ddc7df` suspect). Fix the harness/fixture defects (`heal` import path in the breadth wrapper, `compat_review_extra.lua` invalid `SoundSet:HasAnySounds`, the `compat_deferral` comparison's missing documented UID exclusion, if that is what it 
+
+RESUME.md:65 hits=['clean_leave', 'reclaim_socket', 'fencing', 'rejoin_after_resync', 'state Over']
+7. Then the long-red H4 gates (`clean_leave`, `reclaim_socket`, `fencing_two_transports`, `rejoin_after_resync`; "activity ended in state Over" residue), B1 substitution 2/4, then section B-1 items 5b, 7, 8 and the measured 100-200 ms feel.
+
+RESUME.md:71 hits=['clean_leave', 'reclaim_socket', 'fencing', 'rejoin_after_resync', 'AIOrder']
+**2026-09-10 22:07 UTC - RECOVERY HANDOFF after the Codex usage-limit stop (thread 01a07bf2-1ee0-7b63-86f8-21dc6ef8e3cc; root and its three subagents errored at 02:47:05 UTC with usage_limit_exceeded; nothing was recorded between 02:34 and the stop). Reconstructed from the thread's tool log and the disk. Main D:/Projects/p4b-interp-validation is unchanged at c8f8188ae0 (Source41, 138 ahead of origin, unpushed); approved executable bb3cf264b4e7 unchanged. The worker tree D:/Projects/takeover-fixes (stage2/takeover-next HEAD 60cb698146 = main + round-start 8f493e8ecf + B2 moderation 703e3f1202 +
+
+RESUME.md:95 hits=['clean_leave', 'reclaim_socket', 'rejoin_after_resync', 'state Over']
+**2026-09-09 ~02:20 UTC WORKFLOW CHANGE AND FIRST CHECKPOINT PUSH.** The user, on an independent reviewer's recommendation, authorised routine pushes of verified development checkpoints to origin after major fix groups (still no PRs, no squash or rewrite, no attribution anywhere, and cleanup of folders, worktrees, run roots or evidence remains UNAUTHORISED: the retirement inventory in this session's transcript had errors - `stage2_p2\gns_spike` is the live `GNS_ROOT`/`GNS_DEP_ROOT` dependency, `testing-audit-engine` holds 35 uncommitted changes with untracked `LuaThreadCodec` files, `archive-l
+
+RESUME.md:103 hits=['reclaim_socket']
+RESUMED 2026-09-08 ~20:05 UTC after the 1 pm (Phoenix) reset: the lobby-grace and Phase B lanes were cut at the limit (17 and 34 uncommitted files kept in their worktrees) and are resumed on their sessions with `resume-after-limit.md`; the breadth lane was cut at gate 1 and the family driver went on to the matrix, which is running from `D:\mx\s38` (19 of 104 jobs done at the resume) - the breadth lane follow-up 4 is resumed only after the matrix releases the executable; a new independent review of the set-aside repair runs as lane `setaside-review` (runs under `D:\mx\wsr`); Mac Source38 is gre
+
+RESUME.md:107 hits=['clean_leave', 'reclaim_socket', 'fencing', 'rejoin_after_resync', 'state Over']
+**2026-09-08 second checkpoint (~08:45 UTC, commits landed ~09:35 UTC): HEAD `bb9207773`, 200 ahead and unpushed. The Source32 tree is committed as eleven per-concern local commits split from the verified working source by the `reviews/claude-review-2026-09-08/lanes/commit-plan` lane (patches proven byte-exact against the tree before use): `bb728e006` carries the pre-existing Lua/native object graph checkpoint generation, `f5f0c15ed` the logical sound lifecycle, `6083dab12` the scoped-draw unsigned negation, `511a43e87` the selftest progress echo, `1581cb6e8` restore-side stitch collapsing, `b
+
+RESUME.md:441 hits=['AIOrder']
+| **Gates at `d3b6b5360`** (binary 03:20; every dir below ran on it — `chain5`) | trust battery 22/22 (`test_trust_20260906_033120_*`; predicted pickup 144 / shot 161 exact) · boundary gates 7/7 (`boundary_gates_20260906_032742_48964`: 9 selftests incl. codec v10, legacy replays 10/10, D=0 tick-600 `88c5ecc5…` unchanged, pickup_fire D=3 18/18, seat switch 4/4, AI writes 6/6, aim speed 4/4) · gameplay battery 10/10 e2e green incl. deliver/buy/pause/ai_orders at D=3 (`gameplay_20260906_032053_46452`; the two semantic misses were the checker's timing and the single-dummy control, both re-cut — ne
+
+RESUME.md:1119 hits=['AIOrder']
+      AI's own mode changes through `NetGameSetActorAIMode`, the orders get a `NetGameAIOrder`.
+
+RESUME.md:1120 hits=['AIOrder']
+      **Done (`d3b6b5360`, lockstep codec v10; v8/v9 recordings still decode):** `NetGameAIOrder`
+
+RESUME.md:1124 hits=['AIOrder']
+      `-AIOrderCommandHost` (`-net-match-e2e-ai-order-command`: go-to at 50, follow at 200, squad at
+
+RESUME.md:1151 hits=['AIOrder']
+      as `NetGameAIOrder::PopWaypoint` (carrying the point, so a stale pop cannot eat a fresh order);
+
+RESUME.md:1298 hits=['fencing']
+      Proof; txId cache), single-active-incarnation fencing, the leave protocol, a durable per-process
+
+===== D:\Projects\STAGE2_H4_RECONNECT_PLAN.md exists=True =====
+STAGE2_H4_RECONNECT_PLAN.md:30 hits=['fencing']
+> 2026-09-08 ~10:35 UTC third checkpoint: HEAD 802938a1a, 279 ahead and unpushed. Source37 (Windows 5ee60605) carries the night's integrated families: the lockstep grace and relay repairs, H4 Phase A slices A1–A5 (admission transaction, fencing, ticket store, ledger and reseat, live admission, reconnect UX, held seats, lobby seat return), the script-owned object checkpoint repairs, the construction-scope registry repair, and the mod-compatibility correction (sound AI-hook operations defer to the committed tick instead of being discarded, SoundContainer.Pos is a live alias again; an independent
+
+STAGE2_H4_RECONNECT_PLAN.md:149 hits=['fencing']
+| P20 | Incarnation number (§6, used by §4/§7 fencing) | **u32 LE per (stable seat, holder generation)**, 1 at the seat's first commit, +1 on every successful proof that binds a new transport; the seat stores only the CURRENT value. Any packet or timeout attributed to a lower incarnation is discarded. Saturates at `UINT32_MAX` and refuses further reclaims on that generation (fail closed). | The fence needs a total order neither connection can both claim; a host-incremented per-seat counter is the only value both peers agree on before the superseded transport is torn down. `SenderOwnsTransport`

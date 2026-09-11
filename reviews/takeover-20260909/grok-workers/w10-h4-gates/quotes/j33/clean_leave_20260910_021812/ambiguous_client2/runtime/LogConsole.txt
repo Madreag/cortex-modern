@@ -1,0 +1,12 @@
+- RTE Lua Console -
+See the Data Realms Wiki for commands: http://www.datarealms.com/wiki/
+Press F1 for a list of helpful shortcuts
+-------------------------------------
+Sound loading completed: 984 pending samples, 1245ms
+SYSTEM: Game "p5resync_8800_recv" staged for restart!
+SYSTEM: Activity was reset!
+SYSTEM: Scene "Grasslands" was loaded
+SYSTEM: Activity "P4 Alpha Duel" was successfully started
+NETWORK: Holding the match open for a player who can still return
+SYSTEM: Activity "P4 Alpha Duel" was ended
+SYSTEM: Entire console contents saved to LogConsole.txt

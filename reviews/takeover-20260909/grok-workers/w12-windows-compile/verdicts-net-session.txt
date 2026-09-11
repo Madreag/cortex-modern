@@ -1,0 +1,2 @@
+[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current
+[net-session-selftest] PASS

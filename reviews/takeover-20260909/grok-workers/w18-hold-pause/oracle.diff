@@ -1,0 +1,177 @@
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\common.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\common.py"
+index 9339c25..18dcbd7 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\common.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\common.py"
+@@ -135,6 +135,9 @@ def wait_for_log(run, needle: str, timeout_s: float) -> bool:
+ def wait_in_match(run, settle_s: float = 4.0, timeout_s: float = 240.0) -> bool:
+     """Blocks until this peer is really in the running match, then settles briefly.
+ 
++    A hold pause keeps the match Running; this wait still returns once the lobby
++    snapshot says Running, including during a later seat hold.
++
+     LANE FIX: replaces the fixed *_AFTER_S sleeps. Those were never calibrated (the A3 lane
+     only ever ran these drivers with --dry-run) and on a fast machine they fire at or after
+     the end of the match instead of in the middle of it.
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\reclaim_socket.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\reclaim_socket.py"
+index a347127..8c4006e 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\reclaim_socket.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\reclaim_socket.py"
+@@ -46,9 +46,10 @@ from common import (  # noqa: E402
+ 
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT = 46400
++# Wall-clock budget: 900 sim ticks plus the 20 s hold pause (ticks do not advance while held).
+ TICKS = 900
+ DROP_AFTER_S = 25.0
+-TIMEOUT_S = 420.0
++TIMEOUT_S = 480.0
+ 
+ 
+ def build_argvs(root: Path, ticket: Path) -> dict:
+@@ -190,6 +191,30 @@ def main() -> int:
+         "",
+         [root / "host/stdout.log"],
+     )
++    report = host_report if isinstance(host_report, dict) else {}
++    host_lockstep = report.get("lockstep") or {}
++    host_leaves = host_lockstep.get("peer_leave_frames") or {}
++    host_next = host_lockstep.get("next_frame")
++    leave_frames = []
++    if isinstance(host_leaves, dict):
++        for value in host_leaves.values():
++            try:
++                leave_frames.append(int(value))
++            except (TypeError, ValueError):
++                pass
++    checks.check(
++        "match_continued_after_reclaim",
++        "activity ended in state Over" not in host_log
++        and (report.get("activity") or {}).get("state") != "Over",
++        str((report.get("activity") or {}).get("state")),
++        [root / "host/stdout.log", root / "host_report.json"],
++    )
++    checks.check(
++        "resume_frame_equals_drop_frame",
++        not leave_frames or host_next in leave_frames,
++        f"next_frame={host_next} leaves={host_leaves}",
++        [root / "host_report.json"],
++    )
+     checks.check(
+         "funds_unchanged",
+         "SetTeamFunds" not in host_log,
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\rejoin_after_resync.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\rejoin_after_resync.py"
+index 028e071..f399696 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\rejoin_after_resync.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\rejoin_after_resync.py"
+@@ -52,9 +52,10 @@ from common import (  # noqa: E402
+ PORT_RESYNC = 46430
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT_REMATCH = 46432
++# Wall-clock budget: 900 sim ticks plus the 20 s hold pause (ticks freeze while a seat is held).
+ TICKS = 900
+ DROP_AFTER_S = 25.0
+-TIMEOUT_S = 480.0
++TIMEOUT_S = 540.0
+ 
+ 
+ def resync_argvs(root: Path) -> dict:
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\fencing_two_transports.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\fencing_two_transports.py"
+index b40afd8..f40cde5 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\fencing_two_transports.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\fencing_two_transports.py"
+@@ -48,9 +48,10 @@ from common import (  # noqa: E402
+ 
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT = 46420
++# Wall-clock budget including the 20 s hold pause; 1200 is no longer a frame-deadline hold.
+ TICKS = 1200
+ SECOND_AFTER_S = 20.0
+-TIMEOUT_S = 480.0
++TIMEOUT_S = 540.0
+ 
+ 
+ def build_argvs(root: Path) -> dict:
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\clean_leave.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\clean_leave.py"
+index 661b50f..aede343 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\clean_leave.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\clean_leave.py"
+@@ -47,6 +47,7 @@ from common import (  # noqa: E402
+ PORT_CLEAN = 46470
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT_AMBIGUOUS = 46472
++# Announced leave stays tick-based; no hold pause.
+ TICKS = 900
+ LEAVE_AFTER_S = 20.0
+ TIMEOUT_S = 420.0
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\crash_relaunch_provisional.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\crash_relaunch_provisional.py"
+index 6f59da4..d35adea 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\crash_relaunch_provisional.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\crash_relaunch_provisional.py"
+@@ -51,8 +51,9 @@ from common import (  # noqa: E402
+ PORT_A = 46410
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT_B = 46412
++# Wall-clock budget: 900 sim ticks plus the 20 s hold pause when a seat is held.
+ TICKS = 900
+-TIMEOUT_S = 420.0
++TIMEOUT_S = 480.0
+ # P2 is 20 000 ms; arm B waits past it with a margin so the expiry is not a race.
+ PAST_PROVISIONAL_S = 26.0
+ 
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\peers_3_4_regression.py" "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+index dc5344e..3ee0222 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\peers_3_4_regression.py"
++++ "b/D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+@@ -58,8 +58,9 @@ PORT_3 = 46460
+ PORT_4 = 46462
+ # LANE EDIT: +2800, out of the 43300-44300 band and clear of the matrix band.
+ PORT_DROP = 46464
++# Wall-clock budget: 600 sim ticks plus the 20 s hold pause on the drop arm.
+ TICKS = 600
+-TIMEOUT_S = 480.0
++TIMEOUT_S = 540.0
+ DROP_AFTER_S = 25.0
+ 
+ 
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\h4_substitution_gates.py" "b/D:\\Projects\\hold-pause\\tools\\h4_substitution_gates.py"
+index 38bc687..06e02a3 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\h4_substitution_gates.py"
++++ "b/D:\\Projects\\hold-pause\\tools\\h4_substitution_gates.py"
+@@ -65,6 +65,7 @@ PORTS = {
+     "substitute_delayed_duplicate": 44570,
+     "substitute_vanishes_before_ack": 44580,
+ }
++# Wall-clock budget: sim ticks plus the 20 s hold pause (commits freeze until Substituted).
+ TICKS = 3600
+ # P2's window is 20 s, and the ack-lost gate has to outlive it after the approval.
+ TICKS_BY_GATE = {"substitute_ack_lost": 6000}
+@@ -80,7 +81,7 @@ ACK_HELD = "[net-h4-fault] ack-drop"
+ DROP_AFTER_S = 22.0
+ JOINER_STAGGER_S = 1.5
+ DROP_ADJUDICATED = "left the match at frame"
+-TIMEOUT_S = 600.0
++TIMEOUT_S = 660.0
+ 
+ 
+ def sha256(path: Path) -> str:
+
+diff --git "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\a7_driver.py" "b/D:\\Projects\\reviews\\takeover-20260909\\a7-repaired-driver\\a7_driver.py"
+index 7d4a05d..5f09add 100644
+--- "a/D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w18-hold-pause\\oracle-pre\\a7_driver.py"
++++ "b/D:\\Projects\\reviews\\takeover-20260909\\a7-repaired-driver\\a7_driver.py"
+@@ -24,6 +24,7 @@ ARMS = {
+     'coop_hand_back': {'folder': 'f', 'port': 44518, 'frames': 12000,
+                        'capabilities': {'connect_gate', 'drop', 'reclaim', 'owner_observation', 'local_player_view_v1', 'resumption'}},
+ }
++# HOLD_MS is the admission wall-clock; lockstep commits freeze until Reclaimed/Substituted/Expired.
+ P14_MS, P21_MS, HOLD_MS = 5000, 2000, 20000
+ 
+ 
+

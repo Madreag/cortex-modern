@@ -1,0 +1,644 @@
+CMD C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe D:\Projects\hold-pause\RTEA.sln /t:RTEA /p:Configuration=Final /p:Platform=x64 /m /nologo /v:minimal
+
+D:\Projects\hold-pause\RTEA.common.props(3,3): warning MSB4011: "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.Cpp.Default.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (61,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(212,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(266,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(319,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(373,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(435,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(497,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(560,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(623,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\hold-pause\RTEA.vcxproj(683,3): warning MSB4011: "D:\Projects\hold-pause\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\hold-pause\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+  Prerequisites for building static lib
+  class.cpp
+  class_info.cpp
+  class_registry.cpp
+  class_rep.cpp
+  create_class.cpp
+  error.cpp
+  minilua.c
+  allegro.c
+  blit.c
+  bmp.c
+  clip3d.c
+  clip3df.c
+  colblend.c
+  find_best_match.cpp
+  color.c
+  config.c
+  cblit16.c
+  cblit24.c
+  cblit32.c
+  cblit8.c
+  ccpu.c
+  ccsprite.c
+  cgfx15.c
+  cgfx16.c
+  cgfx24.c
+  cgfx32.c
+  cgfx8.c
+  cmisc.c
+  cscan15.c
+  cscan16.c
+  cscan24.c
+  cscan32.c
+  cscan8.c
+  cspr15.c
+  cspr16.c
+  cspr24.c
+  cspr32.c
+  cspr8.c
+  cstretch.c
+  czscan15.c
+  czscan16.c
+  czscan24.c
+  czscan32.c
+  czscan8.c
+  datafile.c
+  dataregi.c
+  digmid.c
+  dispsw.c
+  dither.c
+  drvlist.c
+  file.c
+  fli.c
+  flood.c
+  font.c
+  fontbios.c
+  fontbmp.c
+  fontdat.c
+  fontgrx.c
+  fonttxt.c
+  fsel.c
+  gfx.c
+  glyph.c
+  graphics.c
+  gsprite.c
+  gui.c
+  guiproc.c
+  inline.c
+  joystick.c
+  keyboard.c
+  lbm.c
+  libc.c
+  lzss.c
+  math.c
+  math3d.c
+  midi.c
+  ccolconv.c
+  colconv.c
+  mixer.c
+  modesel.c
+  mouse.c
+     Creating library minilua.lib and object minilua.exp
+  pcx.c
+  poly3d.c
+  polygon.c
+  quantize.c
+  quat.c
+  readbmp.c
+  readfont.c
+  readsmp.c
+  rle.c
+  rotate.c
+  rsfb.c
+  scene3d.c
+  sound.c
+  spline.c
+  stream.c
+  text.c
+  tga.c
+  timer.c
+  unicode.c
+  vtable.c
+  vtable15.c
+  vtable16.c
+  vtable24.c
+  vtable32.c
+  vtable8.c
+  gdi.c
+  wddaccel.c
+  wddbmp.c
+  wddbmpl.c
+  buildvm.c
+  buildvm_asm.c
+  buildvm_fold.c
+  buildvm_lib.c
+  buildvm_peobj.c
+  wddfull.c
+  wddlock.c
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\src\class_rep.cpp(447,56): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind.vcxproj]
+  wddmode.c
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\src\class_rep.cpp(479,68): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind.vcxproj]
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\src\class_rep.cpp(595,78): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind.vcxproj]
+  wddovl.c
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\src\class_rep.cpp(639,72): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind.vcxproj]
+  wddraw.c
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\src\class_rep.cpp(972,75): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind.vcxproj]
+  wddwin.c
+  wdispsw.c
+  wdsinput.c
+     Creating library buildvm.lib and object buildvm.exp
+  wdsndmix.c
+  wdsound.c
+  wdxver.c
+  function.cpp
+  wfile.c
+  wgdi.c
+  implicit_cast.cpp
+  link_compatibility.cpp
+  object_rep.cpp
+  wgfxdrv.c
+  open.cpp
+  winput.c
+  overload_rep.cpp
+D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\src\win\wfile.c(57,26): warning C4996: 'GetVersion': was declared deprecated [D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\allegro.vcxproj]
+D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\src\win\wdxver.c(95,9): warning C4996: 'GetVersionExA': was declared deprecated [D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\allegro.vcxproj]
+  wjoydrv.c
+  wjoydx.c
+  wjoyhelp.c
+  wjoyw32.c
+  wkeybd.c
+  wmidi.c
+  wmouse.c
+  pcall.cpp
+  
+  === Successfully complete pre-build job for Windows/x64 ===
+  wsnddrv.c
+  wsndwo.c
+  wsystem.c
+  wthread.c
+  wtimer.c
+  ref.cpp
+  wwnd.c
+  scope.cpp
+  stack_content_by_name.cpp
+  lib_aux.c
+  lib_base.c
+  lib_bit.c
+  lib_buffer.c
+  lib_debug.c
+  lib_ffi.c
+  lib_init.c
+  lib_io.c
+  lib_jit.c
+  lib_math.c
+  lib_os.c
+D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\src\win\wsystem.c(144,14): warning C4996: 'GetVersion': was declared deprecated [D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\allegro.vcxproj]
+  weak_ref.cpp
+  lib_package.c
+  lib_string.c
+  lib_table.c
+  lj_alloc.c
+  lj_api.c
+  wrapper_base.cpp
+  lj_asm.c
+  lj_bc.c
+  lj_bcread.c
+  lj_bcwrite.c
+  lj_buf.c
+  lj_carith.c
+  lj_ccall.c
+  lj_ccallback.c
+  lj_cconv.c
+  lj_cdata.c
+D:\Projects\hold-pause\external\sources\LuaJIT-2.1\src\lj_cconv.c(202,40): warning C4244: '=': conversion from 'int64_t' to 'int32_t', possible loss of data [D:\Projects\hold-pause\external\sources\LuaJIT-2.1\libluajit.vcxproj]
+  lj_char.c
+  lj_clib.c
+  lj_cparse.c
+  lj_crecord.c
+D:\Projects\hold-pause\external\sources\LuaJIT-2.1\src\lj_ccallback.c(139,22): warning C5287: operands are different enum types 'x86Op' and '<unnamed-enum-RID_EAX>'; use an explicit cast to silence this warning [D:\Projects\hold-pause\external\sources\LuaJIT-2.1\libluajit.vcxproj]
+D:\Projects\hold-pause\external\sources\LuaJIT-2.1\src\lj_ccallback.c(146,36): warning C5287: operands are different enum types 'x86Op' and '<unnamed-enum-RID_EAX>'; use an explicit cast to silence this warning [D:\Projects\hold-pause\external\sources\LuaJIT-2.1\libluajit.vcxproj]
+  lj_ctype.c
+  lj_debug.c
+  allegro.vcxproj -> D:\Projects\hold-pause\external\sources\allegro 4.4.3.1-custom\_Bin\allegro-release.lib
+  lj_dispatch.c
+  lj_err.c
+  lj_ffrecord.c
+  lj_fopen.c
+  lj_func.c
+  lj_gc.c
+  lj_ir.c
+  lj_lex.c
+  lj_lib.c
+  lj_load.c
+  lj_mcode.c
+  lj_meta.c
+  lj_obj.c
+  lj_opt_dce.c
+  lj_opt_fold.c
+  lj_opt_loop.c
+  lj_opt_mem.c
+  lj_opt_narrow.c
+  lj_opt_sink.c
+  lj_opt_split.c
+  lj_parse.c
+D:\Projects\hold-pause\external\sources\LuaJIT-2.1\src\lj_opt_fold.c(317,24): warning C4244: '=': conversion from 'int64_t' to 'int32_t', possible loss of data [D:\Projects\hold-pause\external\sources\LuaJIT-2.1\libluajit.vcxproj]
+  lj_prng.c
+  lj_profile.c
+  lj_record.c
+  lj_serialize.c
+  lj_snap.c
+  lj_state.c
+  lj_str.c
+  lj_strfmt.c
+  lj_strfmt_num.c
+  lj_strscan.c
+  lj_tab.c
+  lj_trace.c
+  lj_udata.c
+  lj_vmevent.c
+  lj_vmmath.c
+  libluajit.vcxproj -> D:\Projects\hold-pause\external\sources\LuaJIT-2.1\_Bin\luajit-release.lib
+  Post build linking
+  luajit.c
+     Creating library luajit.lib and object luajit.exp
+  luabind.vcxproj -> D:\Projects\hold-pause\external\sources\luabind-0.7.1\_Bin\luabind-release.lib
+  
+  === Successfully complete post-build job for Windows/ ===
+  StandardIncludes.cpp
+  TracyClient.cpp
+  AEJetpack.cpp
+  DynamicSong.cpp
+  AllegroBitmap.cpp
+  AllegroScreen.cpp
+  GUIInputWrapper.cpp
+  GLResourceMan.cpp
+  MusicMan.cpp
+  Activity.cpp
+  ADSensor.cpp
+  Emission.cpp
+  Gib.cpp
+  MetaSave.cpp
+  PEmitter.cpp
+  Round.cpp
+  SLBackground.cpp
+  SoundSet.cpp
+  TerrainFrosting.cpp
+  GUIReader.cpp
+  GUISound.cpp
+  GUIWriter.cpp
+  MenuMan.cpp
+  PerformanceMan.cpp
+  PostProcessMan.cpp
+  PrimitiveMan.cpp
+  CameraMan.cpp
+  ThreadMan.cpp
+  WindowMan.cpp
+  LoadingScreen.cpp
+  ModManagerGUI.cpp
+  PauseMenuGUI.cpp
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\xutility(508,85): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file '/Source/Managers/PostProcessMan.cpp')
+      C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\xutility(508,85):
+      the template instantiation context (the oldest one first) is
+          D:\Projects\hold-pause\Source\Managers\PostProcessMan.cpp(280,34):
+          see reference to function template instantiation 'RTE::PostEffect &std::list<RTE::PostEffect,std::allocator<RTE::PostEffect>>::emplace_back<RTE::Vector,BITMAP*,size_t,size_t,float>(RTE::Vector &&,BITMAP *&&,size_t &&,size_t &&,float &&)' being compiled
+              D:\Projects\hold-pause\Source\Managers\PostProcessMan.cpp(280,46):
+              see the first reference to 'std::list<RTE::PostEffect,std::allocator<RTE::PostEffect>>::emplace_back' in 'RTE::PostProcessMan::RunCheckpointSelfTest'
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\list(1009,29):
+          see reference to function template instantiation 'std::_List_node<_Ty,std::_Default_allocator_traits<_Alloc>::void_pointer> *std::list<_Ty,_Alloc>::_Emplace<RTE::Vector,BITMAP*,unsigned __int64,unsigned __int64,float>(std::_List_node<_Ty,std::_Default_allocator_traits<_Alloc>::void_pointer> *const ,RTE::Vector &&,BITMAP *&&,unsigned __int64 &&,unsigned __int64 &&,float &&)' being compiled
+          with
+          [
+              _Ty=RTE::PostEffect,
+              _Alloc=std::allocator<RTE::PostEffect>
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\list(1034,44):
+          see reference to function template instantiation 'std::_List_node_emplace_op2<std::allocator<std::_List_node<_Ty,std::_Default_allocator_traits<_Alloc>::void_pointer>>>::_List_node_emplace_op2<RTE::Vector,BITMAP*,unsigned __int64,unsigned __int64,float>(_Alnode &,RTE::Vector &&,BITMAP *&&,unsigned __int64 &&,unsigned __int64 &&,float &&)' being compiled
+          with
+          [
+              _Ty=RTE::PostEffect,
+              _Alloc=std::allocator<RTE::PostEffect>,
+              _Alnode=std::allocator<std::_List_node<RTE::PostEffect,std::_Default_allocator_traits<std::allocator<RTE::PostEffect>>::void_pointer>>
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\list(595,25):
+          see reference to function template instantiation 'void std::_Default_allocator_traits<_Alloc>::construct<_Ty,RTE::Vector,BITMAP*,unsigned __int64,unsigned __int64,float>(_Alloc &,_Objty *const ,RTE::Vector &&,BITMAP *&&,unsigned __int64 &&,unsigned __int64 &&,float &&)' being compiled
+          with
+          [
+              _Alloc=std::allocator<std::_List_node<RTE::PostEffect,std::_Default_allocator_traits<std::allocator<RTE::PostEffect>>::void_pointer>>,
+              _Ty=RTE::PostEffect,
+              _Objty=RTE::PostEffect
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\xmemory(734,14):
+          see reference to function template instantiation '_Ty *std::construct_at<_Objty,RTE::Vector,BITMAP*,unsigned __int64,unsigned __int64,float>(_Ty *const ,RTE::Vector &&,BITMAP *&&,unsigned __int64 &&,unsigned __int64 &&,float &&) noexcept(<expr>)' being compiled
+          with
+          [
+              _Ty=RTE::PostEffect,
+              _Objty=RTE::PostEffect
+          ]
+  
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\xutility(509,90): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file '/Source/Managers/PostProcessMan.cpp')
+      C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\xutility(509,90):
+      the template instantiation context (the oldest one first) is
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\list(595,25):
+          see reference to function template instantiation 'void std::_Default_allocator_traits<_Alloc>::construct<_Ty,RTE::Vector,BITMAP*,unsigned __int64,unsigned __int64,float>(_Alloc &,_Objty *const ,RTE::Vector &&,BITMAP *&&,unsigned __int64 &&,unsigned __int64 &&,float &&)' being compiled
+          with
+          [
+              _Alloc=std::allocator<std::_List_node<RTE::PostEffect,std::_Default_allocator_traits<std::allocator<RTE::PostEffect>>::void_pointer>>,
+              _Ty=RTE::PostEffect,
+              _Objty=RTE::PostEffect
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\include\xmemory(734,14):
+          see reference to function template instantiation '_Ty *std::construct_at<_Objty,RTE::Vector,BITMAP*,unsigned __int64,unsigned __int64,float>(_Ty *const ,RTE::Vector &&,BITMAP *&&,unsigned __int64 &&,unsigned __int64 &&,float &&) noexcept(false)' being compiled
+          with
+          [
+              _Ty=RTE::PostEffect,
+              _Objty=RTE::PostEffect
+          ]
+  
+  SaveLoadMenuGUI.cpp
+  ScenarioActivityConfigGUI.cpp
+  SettingsAudioGUI.cpp
+  SettingsGameplayGUI.cpp
+  SettingsGUI.cpp
+  SettingsInputGUI.cpp
+  SettingsInputMappingGUI.cpp
+  SettingsInputMappingWizardGUI.cpp
+  SettingsMiscGUI.cpp
+  SettingsVideoGUI.cpp
+  TitleScreen.cpp
+  InventoryMenuGUI.cpp
+  RenderTarget.cpp
+  Shader.cpp
+  Draw.cpp
+  BigTexture.cpp
+D:\Projects\hold-pause\Source\Renderer\BigTexture.cpp(136,5): warning C4312: 'reinterpret_cast': conversion from 'int' to 'void *' of greater size [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file '/Source/Renderer/BigTexture.cpp')
+  
+  AllegroTools.cpp
+  Atom.cpp
+  base64.cpp
+  Controller.cpp
+  Entity.cpp
+  GenericSavedData.cpp
+  GLCheck.cpp
+  InputMapping.cpp
+  InputScheme.cpp
+  GraphicalPrimitive.cpp
+  PieQuadrant.cpp
+  Semver200_comparator.cpp
+  Semver200_modifier.cpp
+  Semver200_parser.cpp
+  Serializable.cpp
+  SpatialPartitionGrid.cpp
+  Box.cpp
+  Color.cpp
+  ControllerFrame.cpp
+  ControllerLog.cpp
+  GnsTransport.cpp
+  LoopbackTransport.cpp
+  NetActorOwnership.cpp
+  NetAdmissionSelfTest.cpp
+  NetAuthCrypto.cpp
+  NetAuthSelfTest.cpp
+  NetIdentity.cpp
+  NetIdentitySelfTest.cpp
+  NetLobbyProtocol.cpp
+  NetLobbySession.cpp
+  NetGameCommand.cpp
+  NetResyncState.cpp
+  NetResyncSelfTest.cpp
+  NetResyncRuntimeSelfTest.cpp
+  NetLockstep.cpp
+D:\Projects\hold-pause\Source\Network\NetLockstep.cpp(524,60): warning C4805: '|': unsafe mix of type 'const bool' and type 'int' in operation [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file '/Source/Network/NetLockstep.cpp')
+  
+  NetLockstepSelfTest.cpp
+  NetMatchConfig.cpp
+  NetMatchRunner.cpp
+  NetMatchService.cpp
+  NetLanDiscovery.cpp
+  NetMatchReplay.cpp
+  NetMatchSelfTest.cpp
+  NetProtocol.cpp
+  NetProtocolSelfTest.cpp
+  NetReconnectAdmission.cpp
+  NetReconnectLedger.cpp
+  NetReconnectSession.cpp
+  NetReconnectSessionSelfTest.cpp
+  NetReconnectTicketStore.cpp
+  NetReconnectUx.cpp
+  NetReconnectSelfTest.cpp
+  NetReconnectTranscript.cpp
+  NetReconnectTxCache.cpp
+  NetSeatAuth.cpp
+  NetSession.cpp
+  NetSessionSelfTest.cpp
+  SimChecksum.cpp
+  NetA7Journal.cpp
+  MetricsCollector.cpp
+  DeterminismCheck.cpp
+D:\Projects\hold-pause\Source\CI\DeterminismCheck.cpp(19,9): warning C4005: 'WIN32_LEAN_AND_MEAN': macro redefinition [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file '/Source/CI/DeterminismCheck.cpp')
+      D:\Projects\hold-pause\Source\CI\DeterminismCheck.cpp(19,9):
+      'WIN32_LEAN_AND_MEAN' previously declared on the command line
+  
+D:\Projects\hold-pause\Source\CI\DeterminismCheck.cpp(20,9): warning C4005: 'NOMINMAX': macro redefinition [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file '/Source/CI/DeterminismCheck.cpp')
+      D:\Projects\hold-pause\Source\CI\DeterminismCheck.cpp(20,9):
+      'NOMINMAX' previously declared on the command line
+  
+  NetModerationGUIProbe.cpp
+  ScenarioRunner.cpp
+  InputScript.cpp
+  AIWriteScript.cpp
+  FaultInjection.cpp
+  ContentFile.cpp
+  DataModule.cpp
+  RTEError.cpp
+  RTETools.cpp
+  Matrix.cpp
+  micropather.cpp
+  PathFinder.cpp
+  Reader.cpp
+  System.cpp
+  Timer.cpp
+  Vector.cpp
+  Writer.cpp
+  AchievementMan.cpp
+  ActivityMan.cpp
+  AudioMan.cpp
+  ConsoleMan.cpp
+  FrameMan.cpp
+  MetaMan.cpp
+  MovableMan.cpp
+  LocalPrediction.cpp
+  TerrainLayerSnapshot.cpp
+  PresetMan.cpp
+  SceneMan.cpp
+  SettingsMan.cpp
+  TimerMan.cpp
+  UInputMan.cpp
+  GUIBanner.cpp
+  GUIButton.cpp
+  GUICheckbox.cpp
+  GUICollectionBox.cpp
+  GUIComboBox.cpp
+  GUIControl.cpp
+  GUIControlFactory.cpp
+  GUIControlManager.cpp
+  GUIEvent.cpp
+  GUIFont.cpp
+  GUIInput.cpp
+  GUILabel.cpp
+  GUIListBox.cpp
+  GUIListPanel.cpp
+  GUIManager.cpp
+  GUIPanel.cpp
+  GUIProgressBar.cpp
+  GUIProperties.cpp
+  GUIPropertyPage.cpp
+  GUIRadioButton.cpp
+  GUIScrollbar.cpp
+  GUIScrollPanel.cpp
+  GUISkin.cpp
+  GUISlider.cpp
+  GUITab.cpp
+  GUITextBox.cpp
+  GUITextPanel.cpp
+  GUIUtil.cpp
+  imgui.cpp
+  imgui_demo.cpp
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  imgui_impl_sdl3.cpp
+  imgui_impl_opengl3.cpp
+  ACDropShip.cpp
+  ACrab.cpp
+  ACraft.cpp
+  ACRocket.cpp
+  Actor.cpp
+  ADoor.cpp
+  AEmitter.cpp
+  AHuman.cpp
+  Arm.cpp
+  AtomGroup.cpp
+  Attachable.cpp
+  BunkerAssembly.cpp
+  BunkerAssemblyScheme.cpp
+  Deployment.cpp
+  GlobalScript.cpp
+  HDFirearm.cpp
+  HeldDevice.cpp
+  Icon.cpp
+  Leg.cpp
+  LimbPath.cpp
+  Loadout.cpp
+  Magazine.cpp
+  Material.cpp
+  MetaPlayer.cpp
+  MOPixel.cpp
+  MOSParticle.cpp
+  MOSprite.cpp
+  MOSRotating.cpp
+  MovableObject.cpp
+  PieMenu.cpp
+  PieSlice.cpp
+  Scene.cpp
+  SceneLayer.cpp
+  SceneObject.cpp
+  SLTerrain.cpp
+  SoundContainer.cpp
+  TDExplosive.cpp
+  TerrainDebris.cpp
+  TerrainObject.cpp
+  ThrownDevice.cpp
+  Turret.cpp
+  ActorEditor.cpp
+  AreaEditor.cpp
+  AssemblyEditor.cpp
+  BaseEditor.cpp
+  EditorActivity.cpp
+  GameActivity.cpp
+  GAScripted.cpp
+  GATutorial.cpp
+  GibEditor.cpp
+  SceneEditor.cpp
+  AreaEditorGUI.cpp
+  AreaPickerGUI.cpp
+  AssemblyEditorGUI.cpp
+  BuyMenuGUI.cpp
+  GibEditorGUI.cpp
+  MainMenuGUI.cpp
+  NetModerationGUI.cpp
+  MetagameGUI.cpp
+  ObjectPickerGUI.cpp
+  ScenarioGUI.cpp
+  SceneEditorGUI.cpp
+  Main.cpp
+  LuaAdapters.cpp
+  LuabindObjectWrapper.cpp
+  LuaBindingsActivities.cpp
+  LuaBindingsEntities.cpp
+  LuaBindingsGUI.cpp
+  LuaBindingsManagers.cpp
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297: 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,const luabind::adl::object *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller': function assumed not to throw an exception but does [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file 'Source/Lua/LuaAdapters.cpp')
+      D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7):
+      destructor or deallocator has a (possibly implicit) non-throwing exception specification
+      D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7):
+      the template instantiation context (the oldest one first) is
+          D:\Projects\hold-pause\Source\Lua\LuaAdapters.cpp(302,12):
+          see reference to class template instantiation 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,const luabind::adl::object *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>' being compiled
+          D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(252,6):
+          while compiling class template member function 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,const luabind::adl::object *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller(void)'
+              D:\Projects\hold-pause\Source\Lua\LuaAdapters.cpp(302,31):
+              see the first reference to 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,const luabind::adl::object *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller' in 'RTE::LuaAdaptersScene::CalculatePathAsync'
+  
+  LuaBindingsMisc.cpp
+  LuaBindingsInput.cpp
+  LuaBindingsPrimitives.cpp
+  LuaBindingsSystem.cpp
+  LuaMan.cpp
+  LuaThreadCodec.cpp
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297: 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller': function assumed not to throw an exception but does [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:         with [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:         [ [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:             _Ty2=const RTE::PathRequest [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:         ] [D:\Projects\hold-pause\RTEA.vcxproj]
+  (compiling source file 'Source/Managers/LuaMan.cpp')
+      D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7):
+      destructor or deallocator has a (possibly implicit) non-throwing exception specification
+      D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7):
+      the template instantiation context (the oldest one first) is
+          D:\Projects\hold-pause\Source\Managers\LuaMan.cpp(5797,12):
+          see reference to class template instantiation 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>' being compiled
+          with
+          [
+              _Ty2=const RTE::PathRequest
+          ]
+          D:\Projects\hold-pause\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(252,6):
+          while compiling class template member function 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller(void)'
+          with
+          [
+              _Ty2=const RTE::PathRequest
+          ]
+              D:\Projects\hold-pause\Source\Managers\LuaMan.cpp(5797,31):
+              see the first reference to 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller' in 'RTE::LuaMan::ExecuteLuaScriptCallbacks'
+          with
+          [
+              _Ty2=const RTE::PathRequest
+          ]
+  
+  gl.c
+  rlgl.c
+  rlutils.c
+  rtextures.c
+  rshapes.c
+D:\Projects\hold-pause\Source\Renderer\raylib\rtextures.c(5063,20): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\Source\Renderer\raylib\rtextures.c(5063,26): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\Source\Renderer\raylib\rtextures.c(5063,32): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\Source\Renderer\raylib\rtextures.c(5063,38): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\hold-pause\RTEA.vcxproj]
+D:\Projects\hold-pause\Source\Renderer\raylib\rlgl.c(3914,32): warning C4090: '=': different 'const' qualifiers [D:\Projects\hold-pause\RTEA.vcxproj]
+     Creating library .\Cortex Command.lib and object .\Cortex Command.exp
+  Generating code
+  Finished generating code
+  LINK : the 32-bit linker (C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\HostX86\x64\link.exe) failed to do memory mapped file I/O on `_Bin\x64\Final\Cortex Command.iobj' and is going to restart linking with a 64-bit linker for better throughput
+  LINK : restarting link with 64-bit linker `C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\HostX64\x64\link.exe'
+     Creating library .\Cortex Command.lib and object .\Cortex Command.exp
+  Generating code
+  Finished generating code
+  RTEA.vcxproj -> D:\Projects\hold-pause\Cortex Command.exe

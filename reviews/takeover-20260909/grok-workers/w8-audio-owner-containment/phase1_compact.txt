@@ -1,0 +1,14 @@
+save_count=1847 unique=623
+with_voices=1662 with_missing=0
+valid_token=1665 valid_audiovoice1=1665 no_RuntimeGlobals=92 fatal=24
+voice_rows_nonzero_owner=5287 owner0_playing=154
+carried_by={'gui': 1547, 'ini': 3740, 'none': 2590}
+
+representative parsed saves:
+  voices=5 missing=0 token=5 tags=5 D:\mx\s38\archive_loads\bad_number\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+  voices=5 missing=0 token=5 tags=5 D:\mx\s38\archive_loads\bad_number\runtime\Userdata\UserSavedGames.rte\load_seed.ccsave
+  voices=5 missing=0 token=5 tags=5 D:\mx\s38\archive_loads\crc_error\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+  voices=5 missing=0 token=5 tags=5 D:\mx\s38\archive_loads\crc_error\runtime\Userdata\UserSavedGames.rte\load_seed.ccsave
+  voices=5 missing=0 token=5 tags=5 D:\mx\s38\archive_loads\empty_archive\runtime\Userdata\UserSavedGames.rte\load_seed.ccsave
+  voices=12 missing=0 token=12 tags=12 D:\mx\s40lanes\h4\peers_3_4_regression_20260909_105714\drop3_host\runtime\Userdata\UserSavedGames.rte\p5resync_56264.ccsave
+saves_with_9310_in_ini=6 saves_with_9310_as_voice_owner=0

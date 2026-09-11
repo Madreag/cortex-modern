@@ -1,0 +1,88 @@
+{
+  "runner": "win32_test_runner.py",
+  "runner_pid": 2324,
+  "argv": [
+    "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+    "-headless",
+    "-net-match-service-e2e",
+    "-net-port",
+    "46430",
+    "-net-match-ticks",
+    "900",
+    "-net-reconnect-ticket",
+    "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host.ticket",
+    "-net-host",
+    "-net-match-e2e-resync",
+    "-net-match-report",
+    "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host_report.json"
+  ],
+  "cwd": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime",
+  "timeout_seconds": 480.0,
+  "private_desktop": "CortexTest_9a6347ea45a04a2db9b1da1d455fcee7",
+  "input_desktop_before": "Default",
+  "created_utc": "2026-09-10T02:21:32.787924+00:00",
+  "headless_env": "1",
+  "env_set": {
+    "TEMP": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\Temp",
+    "TMP": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\Temp",
+    "CCCP_HEADLESS": "1"
+  },
+  "desktop_switch_restricted": true,
+  "job_kill_on_close": true,
+  "started": true,
+  "startup_checks": [
+    {
+      "check": "exe_exists",
+      "ok": true,
+      "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+    },
+    {
+      "check": "exe_sha256_recorded",
+      "ok": true,
+      "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+    },
+    {
+      "check": "cwd_exists",
+      "ok": true,
+      "detail": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime"
+    },
+    {
+      "check": "data_junction_resolves",
+      "ok": true,
+      "detail": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+    },
+    {
+      "check": "userdata_writable",
+      "ok": true,
+      "detail": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\Userdata"
+    },
+    {
+      "check": "out_dir_private_writable",
+      "ok": true,
+      "detail": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host"
+    }
+  ],
+  "evidence_expected": [],
+  "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+  "exe_bytes": 18177536,
+  "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+  "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "game_runtime_checks": true,
+  "job_memory_limit_bytes": 8589934592,
+  "pid": 27136,
+  "started_utc": "2026-09-10T02:21:33.062190+00:00",
+  "exit_code": 1,
+  "elapsed_seconds": 19.765,
+  "ended_utc": "2026-09-10T02:21:52.827031+00:00",
+  "input_desktop_after": "Default",
+  "timed_out": false,
+  "job_closed": true,
+  "stdout_bytes": 1103,
+  "verdict_lines": [],
+  "verdict_count": 0,
+  "last_verdict": null,
+  "verdict_present": false,
+  "evidence_present": [],
+  "evidence_missing": [],
+  "evidence_complete": true
+}

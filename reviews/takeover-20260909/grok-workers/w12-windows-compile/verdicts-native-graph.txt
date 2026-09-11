@@ -1,0 +1,640 @@
+[script-graph-selftest] PASS native_path_callback_survives_purge
+[gui-checkpoint-selftest] PASS bitmap_pool_conflicts_leave_cache_unchanged
+[gui-checkpoint-selftest] PASS activity_icon_allocation_refusal_atomic
+[gui-checkpoint-selftest] PASS activity_icon_trailing_refusal_atomic
+[gui-checkpoint-selftest] PASS activity_icon_late_metadata_refusal_atomic
+[gui-checkpoint-selftest] PASS icon_preparation_releases_obsolete_bitmap_owners
+[gui-checkpoint-selftest] PASS icon_preparation_commits_once_across_copies
+[gui-checkpoint-selftest] PASS icon_copy_releases_unrelated_bitmap_owners
+[gui-checkpoint-selftest] PASS icon_copy_releases_last_bitmap_owner
+[gui-checkpoint-selftest] PASS fixture_has_event_and_selection
+[gui-checkpoint-selftest] PASS restore_live_controls
+[gui-checkpoint-selftest] PASS control_pointer_identity
+[gui-checkpoint-selftest] PASS button_state
+[gui-checkpoint-selftest] PASS list_content
+[gui-checkpoint-selftest] PASS selected_item_identity
+[gui-checkpoint-selftest] PASS text_cursor_and_selection
+[gui-checkpoint-selftest] PASS selection_controls
+[gui-checkpoint-selftest] PASS range_controls
+[gui-checkpoint-selftest] PASS input_offset
+[gui-checkpoint-selftest] PASS queued_events
+[gui-checkpoint-selftest] PASS canonical_checkpoint
+[gui-checkpoint-selftest] PASS rendered_pixels
+[gui-checkpoint-selftest] PASS fresh_custom_skin_and_controls
+[gui-checkpoint-selftest] PASS fresh_canonical_checkpoint
+[gui-checkpoint-selftest] PASS fresh_rendered_pixels
+[gui-checkpoint-selftest] PASS fresh_button_click
+[gui-checkpoint-selftest] PASS missing_font_atomic
+[gui-checkpoint-selftest] PASS missing_skin_image_atomic
+[gui-checkpoint-selftest] PASS missing_owned_panel_atomic
+[gui-checkpoint-selftest] PASS owned_panel_growth
+[gui-checkpoint-selftest] PASS owned_panel_shrink
+[gui-checkpoint-selftest] PASS truncated_checkpoint_atomic
+[gui-checkpoint-selftest] PASS trailing_checkpoint_atomic
+[gui-checkpoint-selftest] PASS restored_button_click
+[gui-checkpoint-selftest] PASS shared_input_restore
+[gui-checkpoint-selftest] PASS shared_input_observation
+[gui-checkpoint-selftest] PASS shared_input_atomic
+[gui-checkpoint-selftest] PASS shared_text_input_activation
+[gui-checkpoint-selftest] PASS shared_text_input_area
+[gui-checkpoint-selftest] PASS shared_text_input_canonical
+[gui-checkpoint-selftest] PASS banner_restore_and_font_pixels
+[gui-checkpoint-selftest] PASS banner_rendered_pixels
+[gui-checkpoint-selftest] PASS banner_bare_restore
+[gui-checkpoint-selftest] PASS banner_bare_rendered_pixels
+[gui-checkpoint-selftest] PASS banner_truncated_atomic
+[gui-checkpoint-selftest] PASS inventory_initial_pixels
+[gui-checkpoint-selftest] PASS inventory_later_full_mode_created
+[gui-checkpoint-selftest] PASS inventory_remove_later_full_mode
+[gui-checkpoint-selftest] PASS inventory_carousel_canonical
+[gui-checkpoint-selftest] PASS inventory_carousel_aliases
+[gui-checkpoint-selftest] PASS inventory_carousel_pixels
+[gui-checkpoint-selftest] PASS inventory_pending_checkpoint
+[gui-checkpoint-selftest] PASS inventory_pending_carousel_apply
+[gui-checkpoint-selftest] PASS inventory_full_restore
+[gui-checkpoint-selftest] PASS inventory_full_selection_aliases
+[gui-checkpoint-selftest] PASS inventory_full_rendered_pixels
+[gui-checkpoint-selftest] PASS inventory_bare_full_apply
+[gui-checkpoint-selftest] PASS ordinary_inventory_missing_reference_refused
+[gui-checkpoint-selftest] PASS peer_local_inventory_missing_reference_cleared
+[gui-checkpoint-selftest] PASS peer_local_inventory_update_draw_after_missing_item
+[gui-checkpoint-selftest] PASS ordinary_inventory_reference_behavior_unchanged
+[gui-checkpoint-selftest] PASS inventory_departed_object_is_unknown
+[gui-checkpoint-selftest] PASS inventory_departed_actor_saves_absent
+[gui-checkpoint-selftest] PASS inventory_departed_actor_restores_empty
+[gui-checkpoint-selftest] PASS inventory_departed_items_restore_empty
+[gui-checkpoint-selftest] PASS inventory_live_reference_round_trips
+[gui-checkpoint-selftest] PASS orphaned_reference_still_refused
+[gui-checkpoint-selftest] PASS orphaned_reference_names_the_entity
+[gui-checkpoint-selftest] PASS inventory_malformed_atomic
+[gui-checkpoint-selftest] PASS frame_font_restore
+[gui-checkpoint-selftest] PASS frame_font_pointer_identity
+[gui-checkpoint-selftest] PASS frame_font_canonical
+[gui-checkpoint-selftest] PASS frame_font_rendered_pixels
+[gui-checkpoint-selftest] PASS frame_font_malformed_atomic
+[gui-checkpoint-selftest] PASS frame_font_original_slots
+[gui-checkpoint-selftest] PASS scene_placed_object_aliases
+[gui-checkpoint-selftest] PASS scene_placed_missing_index
+[gui-checkpoint-selftest] PASS scene_placed_class_mismatch
+[gui-checkpoint-selftest] PASS legacy_entity_reference
+[gui-checkpoint-selftest] PASS failed_checkpoint_clone_rejected
+[gui-checkpoint-selftest] PASS failed_checkpoint_clone_pool_cleanup
+[gui-checkpoint-selftest] PASS failed_checkpoint_clone_original_unchanged
+[gui-checkpoint-selftest] PASS buy_menu_record_from_fewer_modules
+[gui-checkpoint-selftest] PASS buy_menu_record_from_more_modules
+[gui-checkpoint-selftest] PASS object_picker_record_from_fewer_modules
+[gui-checkpoint-selftest] PASS object_picker_module_flags_sized
+[gui-checkpoint-selftest] PASS object_picker_module_flags_kept
+[gui-checkpoint-selftest] PASS object_picker_module_flags_round_trip
+[gui-checkpoint-selftest] PASS complete checked=87
+[net-local-state-selftest] PASS capture_exact_inventory_brain
+[net-local-state-selftest] PASS restore_inventory_brain_without_team_write
+[net-local-state-selftest] PASS preserve_shared_activity_authority
+[net-local-state-selftest] PASS preserve_wire_state_and_restore_local_seat
+[net-local-state-selftest] PASS restore_exact_control_alias
+[net-local-state-selftest] PASS dead_brain_clears_without_substitution
+[net-local-state-selftest] PASS fresh_missing_identity_is_null
+[net-local-ui-selftest] PASS ordinary_overlay_detects_deleted_preview
+[net-local-ui-selftest] PASS empty_local_preview_preserves_host_aliases
+[net-local-ui-selftest] PASS retained_owner_stays_registered
+[net-local-ui-selftest] PASS private_adoption_never_shadows_canonical
+[net-local-ui-selftest] PASS private_adoption_never_advances_canonical_counter
+[net-local-ui-selftest] PASS retained_alias_graph_round_trip
+[net-local-ui-selftest] PASS different_class_preview_restores_privately
+[net-local-ui-selftest] PASS private_nested_alias_capture
+[net-local-ui-selftest] PASS private_nested_alias_graph_round_trip
+[net-local-ui-selftest] PASS publication_collision_refused_before_mutation
+[net-local-ui-selftest] PASS private_publication_keeps_canonical_registry
+[net-local-ui-selftest] PASS publication_preserves_incoming_and_external_links
+[net-local-ui-selftest] PASS private_publication_keeps_native_and_lua_aliases
+[net-local-ui-selftest] PASS property_only_alias_capture
+[net-local-ui-selftest] PASS property_only_alias_keeps_displaced_owner
+[net-local-ui-selftest] FAIL unreferenced_owner_reclaimed
+[net-local-ui-selftest] PASS repeated_overlay_does_not_grow_retention
+[craft-exit-selftest] PASS nonfirst_source_selection
+[craft-exit-selftest] PASS nonfirst_source_graph_registered
+[craft-exit-selftest] PASS nonfirst_ordinary_clone_starts_at_first_exit
+[craft-exit-selftest] PASS nonfirst_ordinary_clone_source_registry_preserved
+[craft-exit-selftest] PASS nonfirst_faithful_clone_source_graph_absent
+[craft-exit-selftest] PASS nonfirst_faithful_clone_preserves_selection
+[craft-exit-selftest] PASS nonfirst_faithful_clone_complete_graph_registered
+[craft-exit-selftest] PASS nonfirst_faithful_clone_source_registry_restored
+[craft-exit-selftest] PASS nonfirst_reflected_load_source_graph_absent
+[craft-exit-selftest] PASS nonfirst_reflected_load_preserves_selection
+[craft-exit-selftest] PASS nonfirst_adoption_preserves_selection
+[craft-exit-selftest] PASS nonfirst_adoption_complete_graph_registered
+[craft-exit-selftest] PASS nonfirst_reflected_load_source_registry_restored
+[craft-exit-selftest] PASS nonfirst_native_load_source_graph_absent
+[craft-exit-selftest] PASS nonfirst_native_load_preserves_selection
+[craft-exit-selftest] PASS nonfirst_native_complete_graph_registered
+[craft-exit-selftest] PASS nonfirst_native_source_registry_restored
+[craft-exit-selftest] PASS nonfirst_private_native_load_preserves_selection
+[craft-exit-selftest] PASS nonfirst_private_native_source_registry_preserved
+[craft-exit-selftest] PASS nonfirst_private_native_source_registry_restored
+[craft-exit-selftest] PASS nonfirst_ordinary_startup_starts_at_first_exit
+[craft-exit-selftest] PASS empty_source_selection
+[craft-exit-selftest] PASS empty_source_graph_registered
+[craft-exit-selftest] PASS empty_ordinary_clone_starts_at_first_exit
+[craft-exit-selftest] PASS empty_ordinary_clone_source_registry_preserved
+[craft-exit-selftest] PASS empty_faithful_clone_source_graph_absent
+[craft-exit-selftest] PASS empty_faithful_clone_preserves_selection
+[craft-exit-selftest] PASS empty_faithful_clone_complete_graph_registered
+[craft-exit-selftest] PASS empty_faithful_clone_source_registry_restored
+[craft-exit-selftest] PASS empty_reflected_load_source_graph_absent
+[craft-exit-selftest] PASS empty_reflected_load_preserves_selection
+[craft-exit-selftest] PASS empty_adoption_preserves_selection
+[craft-exit-selftest] PASS empty_adoption_complete_graph_registered
+[craft-exit-selftest] PASS empty_reflected_load_source_registry_restored
+[craft-exit-selftest] PASS empty_native_load_source_graph_absent
+[craft-exit-selftest] PASS empty_native_load_preserves_selection
+[craft-exit-selftest] PASS empty_native_complete_graph_registered
+[craft-exit-selftest] PASS empty_native_source_registry_restored
+[craft-exit-selftest] PASS empty_private_native_load_preserves_selection
+[craft-exit-selftest] PASS empty_private_native_source_registry_preserved
+[craft-exit-selftest] PASS empty_private_native_source_registry_restored
+[craft-exit-selftest] PASS empty_ordinary_startup_starts_at_first_exit
+[audio-checkpoint-selftest] PASS assigned_bools_round_trip
+[audio-checkpoint-selftest] PASS unset_setting_byte_reaches_the_archive
+[audio-checkpoint-selftest] PASS unset_setting_byte_is_refused_and_named invalid runtime checkpoint integer '100'
+[audio-checkpoint-selftest] PASS mute_on_focus_loss_initialised
+[audio-checkpoint-selftest] stale-owner controls/firearm cleanup, additional and stopped playback restore PASS
+[audio-logical-selftest] PASS plays_logically
+[audio-logical-selftest] PASS sample_metadata 0.046440
+[audio-logical-selftest] PASS logical_independent_of_output
+[audio-logical-selftest] PASS sim_time_advances
+[audio-logical-selftest] PASS still_playing_midway
+[audio-logical-selftest] PASS registered_while_live
+[audio-logical-selftest] PASS finishes_by_sim_time
+[audio-logical-selftest] PASS retired_when_finished
+[audio-logical-selftest] PASS loops_until_stopped
+[audio-logical-selftest] PASS finite_loops
+[audio-logical-selftest] PASS pitch_scales_progress
+[audio-logical-selftest] PASS pause_holds_progress
+[audio-logical-selftest] PASS restart_replaces_voice
+[audio-logical-selftest] PASS fade_keeps_liveness
+[audio-logical-selftest] PASS ai_reads_the_simulation_cohort
+[audio-logical-selftest] PASS ai_alias_reads_back
+[audio-logical-selftest] PASS ai_writes_wait_for_the_drain
+[audio-logical-selftest] PASS ai_writes_land_at_the_drain 3
+[audio-logical-selftest] PASS deferred_call_survives_the_wire
+[audio-logical-selftest] PASS checkpoint_carries_playback
+[audio-logical-selftest] PASS checkpoint_rejects_invalid_voice
+[audio-logical-selftest] PASS ui_bus_in_simulation_is_logical
+[audio-logical-selftest] PASS identical_progress
+[audio-logical-selftest] PASS shared_inside_local_stays_local
+[audio-logical-selftest] PASS local_scopes_keep_shared_keys
+[audio-logical-selftest] PASS committed_latest_reading 0.500000
+[audio-logical-selftest] PASS committed_table_checkpoint
+[audio-logical-selftest] PASS committed_table_prunes_stale
+[audio-logical-selftest] PASS deferred_ordinal_survives_a_restore key 3/3 ordinal 2 loaded 1
+[audio-logical-selftest] PASS drained_order_is_deterministic 16975:0:0 16975:1:1 16985:0:0 16985:1:1 
+[audio-logical-selftest] PASS legacy_sound_container_record_loads version 1 loaded 1 rate 44100.000000 pitch 0.465141 fields 1 playback 1 round 1 preset Robot Death identity 9144 voices 1 channels 1
+[audio-logical-selftest] PASS ai_alias_only_write_defers 1 ops, x 55.000000
+[audio-logical-selftest] PASS shared_alias_only_write_settles 77.000000
+[audio-logical-selftest] PASS dropped_reading_is_sampled_again 1
+[music-checkpoint-selftest] full song/selection, owner rollback, alias and paused playback PASS
+[gui-sound-checkpoint-selftest] 27 native owners, failed-apply identity/playback, nested values and selection continuation PASS
+[input-checkpoint-selftest] PASS inconsistent_gamepad_atomic
+[input-checkpoint-selftest] PASS capture_has_keyboard_edges
+[input-checkpoint-selftest] PASS capture_has_mouse_and_text
+[input-checkpoint-selftest] PASS perturbation_detected
+[input-checkpoint-selftest] PASS truncated_atomic
+[input-checkpoint-selftest] PASS trailing_atomic
+[input-checkpoint-selftest] PASS validate_only
+[input-checkpoint-selftest] PASS restore
+[input-checkpoint-selftest] PASS canonical
+[input-checkpoint-selftest] PASS keyboard_edges
+[input-checkpoint-selftest] PASS mouse_edges_and_values
+[input-checkpoint-selftest] PASS text_and_sensitivity
+[input-checkpoint-selftest] PASS mapping_values_and_identity
+[input-checkpoint-selftest] PASS joystick_edges
+[input-checkpoint-selftest] PASS complete checked=14
+[path-case-selftest] PASS long_path_created 335 characters
+[path-case-selftest] PASS unreadable_directory_created
+[path-case-selftest] PASS existing_path_found 9 entries walked
+[path-case-selftest] PASS missing_path_not_found
+[path-case-selftest] PASS unreadable_directory_skipped
+[content-file-selftest] PASS selftest_files_are_private Mods/SelfTest.rte/ContentFileSelfTestImage.png
+[content-file-selftest] PASS readable_image_loads
+[content-file-selftest] PASS non_image_file_is_present
+[content-file-selftest] PASS non_image_returns_null
+[content-file-selftest] PASS non_image_reports_sdl_error Unsupported image format
+[reader-selftest] PASS checkpoint_tolerates_unknown_property 3.250000,-4.500000
+[reader-selftest] PASS ordinary_reader_refuses_unknown_property
+[reader-selftest] PASS checkpoint_refuses_structural_error
+[reader-selftest] PASS checkpoint_warns_on_unknown_property
+[post-process-checkpoint-selftest] PASS content_cache_glow_aliases
+[post-process-checkpoint-selftest] PASS validate_full_queues
+[post-process-checkpoint-selftest] PASS all_queues_and_pixels_restored
+[post-process-checkpoint-selftest] PASS independent_pending_queue_counts
+[post-process-checkpoint-selftest] PASS shared_bitmap_owner_aliases
+[post-process-checkpoint-selftest] PASS independent_owned_pixel_observations
+[post-process-checkpoint-selftest] PASS scene_effect_query_continuation
+[post-process-checkpoint-selftest] PASS registration_suppression_restored
+[post-process-checkpoint-selftest] PASS trailing_data_rejection_atomic
+[post-process-checkpoint-selftest] PASS truncated_data_rejection_atomic
+[post-process-checkpoint-selftest] PASS queue_clear_boundaries
+[post-process-checkpoint-selftest] PASS original_manager_restored
+[palette-checkpoint-selftest] PASS validate_palette_and_tables
+[palette-checkpoint-selftest] PASS all_palette_state_restored
+[palette-checkpoint-selftest] PASS palette_arrays_and_rgb_observation
+[palette-checkpoint-selftest] PASS active_table_alias_and_alpha
+[palette-checkpoint-selftest] PASS blender_continuation
+[palette-checkpoint-selftest] PASS trailing_palette_rejection_atomic
+[palette-checkpoint-selftest] PASS truncated_palette_rejection_atomic
+[palette-checkpoint-selftest] PASS external_table_and_true_alpha_owner
+[palette-checkpoint-selftest] PASS original_palette_restored
+[bitmap-checkpoint-selftest] PASS decode_valid_clipped_bitmap
+[bitmap-checkpoint-selftest] PASS pixels_and_clip_values
+[bitmap-checkpoint-selftest] PASS clipped_draw_continuation
+[bitmap-checkpoint-selftest] PASS invalid_clip_atomic
+[bitmap-checkpoint-selftest] PASS truncated_atomic
+[bitmap-checkpoint-selftest] PASS legacy_full_clip
+[bitmap-checkpoint-selftest] PASS empty_replaces_previous_image
+[bitmap-checkpoint-selftest] PASS decode_valid_clipped_bitmap
+[bitmap-checkpoint-selftest] PASS pixels_and_clip_values
+[bitmap-checkpoint-selftest] PASS clipped_draw_continuation
+[bitmap-checkpoint-selftest] PASS invalid_clip_atomic
+[bitmap-checkpoint-selftest] PASS truncated_atomic
+[bitmap-checkpoint-selftest] PASS legacy_full_clip
+[bitmap-checkpoint-selftest] PASS empty_replaces_previous_image
+[bitmap-checkpoint-selftest] PASS decode_valid_clipped_bitmap
+[bitmap-checkpoint-selftest] PASS pixels_and_clip_values
+[bitmap-checkpoint-selftest] PASS clipped_draw_continuation
+[bitmap-checkpoint-selftest] PASS invalid_clip_atomic
+[bitmap-checkpoint-selftest] PASS truncated_atomic
+[bitmap-checkpoint-selftest] PASS legacy_full_clip
+[bitmap-checkpoint-selftest] PASS empty_replaces_previous_image
+[bitmap-checkpoint-selftest] PASS decode_valid_clipped_bitmap
+[bitmap-checkpoint-selftest] PASS pixels_and_clip_values
+[bitmap-checkpoint-selftest] PASS clipped_draw_continuation
+[bitmap-checkpoint-selftest] PASS invalid_clip_atomic
+[bitmap-checkpoint-selftest] PASS truncated_atomic
+[bitmap-checkpoint-selftest] PASS legacy_full_clip
+[bitmap-checkpoint-selftest] PASS empty_replaces_previous_image
+[bitmap-checkpoint-selftest] PASS decode_valid_clipped_bitmap
+[bitmap-checkpoint-selftest] PASS pixels_and_clip_values
+[bitmap-checkpoint-selftest] PASS clipped_draw_continuation
+[bitmap-checkpoint-selftest] PASS invalid_clip_atomic
+[bitmap-checkpoint-selftest] PASS truncated_atomic
+[bitmap-checkpoint-selftest] PASS legacy_full_clip
+[bitmap-checkpoint-selftest] PASS empty_replaces_previous_image
+[bitmap-checkpoint-selftest] PASS invalid_empty_depth
+[bitmap-checkpoint-selftest] PASS complete checked=36
+[piemenu-checkpoint-selftest] PASS validation_does_not_mutate
+[piemenu-checkpoint-selftest] PASS malformed_is_atomic
+[piemenu-checkpoint-selftest] PASS values_and_bitmap_identity
+[piemenu-checkpoint-selftest] PASS independent_values
+[piemenu-checkpoint-selftest] PASS independent_pixels_and_clip
+[piemenu-checkpoint-selftest] PASS faithful_clone_preserves_runtime
+[piemenu-checkpoint-selftest] PASS clone_owns_its_bitmaps
+[native-reference-selftest] reset/deletion, reused address, copied/moved links and owner-first destruction PASS; pool_reused=1
+[sprite-checkpoint-selftest] PASS cached_frame_and_icon_aliases
+[sprite-checkpoint-selftest] PASS public_pixel_mutation
+[sprite-checkpoint-selftest] PASS preset_pixels_remain_independent
+[sprite-checkpoint-selftest] PASS clone_keeps_mutated_pixels
+[sprite-checkpoint-selftest] PASS clone_pixel_mutations_are_independent
+[sprite-checkpoint-selftest] PASS fresh_mutated_frame_restore
+[sprite-checkpoint-selftest] PASS trailing_rejected_atomically
+[sprite-checkpoint-selftest] PASS truncated_rejected_atomically
+[sprite-checkpoint-selftest] PASS queued_bitmap_survives_source_reset
+[sprite-checkpoint-selftest] PASS queued_expired_source_checkpoint
+[sprite-checkpoint-selftest] PASS fresh_cached_restore_alias
+[sprite-checkpoint-selftest] PASS child_icon_owner_shared
+[sprite-checkpoint-selftest] PASS child_icon_survives_actor_delete
+[primitive-checkpoint-selftest] PASS empty_after_set_aside
+[primitive-checkpoint-selftest] PASS fresh_queue_restore
+[primitive-checkpoint-selftest] PASS LinePrimitive
+[primitive-checkpoint-selftest] PASS ArcPrimitive
+[primitive-checkpoint-selftest] PASS SplinePrimitive
+[primitive-checkpoint-selftest] PASS BoxPrimitive
+[primitive-checkpoint-selftest] PASS BoxFillPrimitive
+[primitive-checkpoint-selftest] PASS RoundedBoxPrimitive
+[primitive-checkpoint-selftest] PASS RoundedBoxFillPrimitive
+[primitive-checkpoint-selftest] PASS CirclePrimitive
+[primitive-checkpoint-selftest] PASS CircleFillPrimitive
+[primitive-checkpoint-selftest] PASS EllipsePrimitive
+[primitive-checkpoint-selftest] PASS EllipseFillPrimitive
+[primitive-checkpoint-selftest] PASS TrianglePrimitive
+[primitive-checkpoint-selftest] PASS TriangleFillPrimitive
+[primitive-checkpoint-selftest] PASS PolygonPrimitive
+[primitive-checkpoint-selftest] PASS PolygonFillPrimitive
+[primitive-checkpoint-selftest] PASS TextPrimitive
+[primitive-checkpoint-selftest] PASS BitmapPrimitive
+[primitive-checkpoint-selftest] PASS shared_vertices_and_order
+[primitive-checkpoint-selftest] PASS canonical_queue
+[primitive-checkpoint-selftest] PASS malformed_atomic
+[primitive-checkpoint-selftest] PASS truncated_atomic
+[primitive-checkpoint-selftest] PASS repeat_preserves_adopted_identity
+[primitive-checkpoint-selftest] PASS held_vertices_preserve_identity
+[primitive-lua-selftest] PASS public_tables_atomic_adoption_shared_vertices_concrete_types
+[penetration-selftest] PASS zero_impulse_zero_strength
+[penetration-selftest] PASS moving_particle_zero_strength
+[penetration-selftest] PASS partial_resistance
+[penetration-selftest] PASS penetration_threshold
+[penetration-selftest] PASS fractional_resistance
+[penetration-selftest] PASS small_impulse
+[material-checkpoint] native values, distinct copies, alias restoration, rejected-load rollback: PASS
+[script-graph-selftest] PASS activity_checkpoint_team_icons
+[script-graph-selftest] PASS activity_icon_null_pool_refusal_atomic
+[script-graph-selftest] PASS activity_icon_cache_conflict_refusal_atomic
+[script-graph-selftest] PASS activity_icon_shared_distinct_bitmap_lifetime
+[script-graph-selftest] PASS activity_icon_legacy_activity1
+[script-graph-selftest] FAIL native_runtime_checkpoint_values
+[script-graph-selftest] PASS checkpoint_settles_script_owned_sound
+[script-graph-selftest] PASS checkpoint_drops_unreachable_script_owner
+[script-graph-selftest] PASS construction_scope_forgets_destroyed_owner
+[script-graph-selftest] PASS set_aside_world_forgets_destroyed_owner
+[script-graph-selftest] PASS set_aside_world_discard_forgets_destroyed_owner
+[script-graph-selftest] PASS reinstate_keeps_a_detached_live_owner
+[script-graph-selftest] PASS reidentify_then_destroy_forgets
+[script-graph-selftest] PASS set_aside_settles_before_the_graph_capture
+[script-graph-selftest] PASS reinstate_refuses_before_it_moves_the_world
+[script-graph-selftest] PASS refused_reinstate_finishes_the_restore
+[script-graph-selftest] PASS sound_registry_copy_forgets_destroyed_owner
+[script-graph-selftest] PASS checkpoint_ignores_shadowed_script_owner
+[script-graph-selftest] PASS restore_takes_only_the_recorded_ignore_link
+[script-graph-selftest] PASS native_recreate_and_turret_lifetime
+[script-graph-selftest] PASS native_reference_outlives_coroutine
+[script-graph-selftest] PASS portable_rng_continuation 44 cases, 10000 outputs each
+[script-graph-selftest] PASS native_sound_set_deep_copy
+[script-graph-selftest] PASS save_text_binary_roundtrip
+[script-graph-progress] [script-graph-selftest] PASS legacy_field_values
+[script-graph-progress] [script-graph-selftest] PASS legacy_table_aliases
+[script-graph-progress] [script-graph-selftest] PASS legacy_native_values
+[script-graph-progress] [script-graph-selftest] PASS legacy_field_reader
+[script-graph-progress] [script-graph-selftest] PASS legacy_object_initialized 
+[script-graph-progress] [script-graph-selftest] PASS legacy_object_fields_installed
+[script-graph-progress] [script-graph-selftest] PASS wrapped_yield_reached
+[script-graph-progress] [script-graph-selftest] PASS gmatch_started
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_control_reached 10 vs 7
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_capture_canonical
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_raw_collapses
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_canonical_resumes
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_raw_resumes
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_malformed_refused
+[script-graph-progress] [script-graph-selftest] PASS metamethod_yield_reached idx:foo
+[script-graph-progress] [script-graph-selftest] PASS serialize_no_problems 
+[script-graph-progress] [script-graph-selftest] PASS roots_listed
+[script-graph-progress] [script-graph-selftest] PASS restore_no_problems 
+[script-graph-progress] [script-graph-selftest] PASS roots_present
+[script-graph-progress] [script-graph-selftest] PASS canonical_reserialize len 1649480 vs 1649480, problems 0
+[script-graph-progress] [script-graph-selftest] PASS closure_counter_rewound
+[script-graph-progress] [script-graph-selftest] PASS shared_upvalue_between_closures
+[script-graph-progress] [script-graph-selftest] PASS cross_object_alias
+[script-graph-progress] [script-graph-selftest] PASS global_table_rewound 7
+[script-graph-progress] [script-graph-selftest] PASS engine_table_fields_rewound
+[script-graph-progress] [script-graph-selftest] PASS engine_table_new_fields_removed
+[script-graph-progress] [script-graph-selftest] PASS engine_function_override_rewound
+[script-graph-progress] [script-graph-selftest] PASS engine_global_override_rewound
+[script-graph-progress] [script-graph-selftest] PASS protected_metatable_restored
+[script-graph-progress] [script-graph-selftest] PASS global_vector_rewound_and_aliased
+[script-graph-progress] [script-graph-selftest] PASS global_timer_rewound_and_aliased
+[script-graph-progress] [script-graph-selftest] PASS userdata_lua_fields_rewound
+[script-graph-progress] [script-graph-selftest] PASS new_global_removed
+[script-graph-progress] [script-graph-selftest] PASS new_module_removed
+[script-graph-progress] [script-graph-selftest] PASS within_object_alias
+[script-graph-progress] [script-graph-selftest] PASS module_function_resident
+[script-graph-progress] [script-graph-selftest] PASS module_upvalue_rewound
+[script-graph-progress] [script-graph-selftest] PASS helper_calls_live_resident
+[script-graph-progress] [script-graph-selftest] PASS metatable_by_name
+[script-graph-progress] [script-graph-selftest] PASS sandbox_env_same_table
+[script-graph-progress] [script-graph-selftest] PASS sandbox_env_value_rewound 10
+[script-graph-progress] [script-graph-selftest] PASS sandbox_closure_uses_env
+[script-graph-progress] [script-graph-selftest] PASS numbers_roundtrip
+[script-graph-progress] [script-graph-selftest] PASS binary_string_roundtrip
+[script-graph-progress] [script-graph-selftest] PASS mixed_keys_roundtrip boolean=1,boolean=2,number=3,table=4,table=5
+[script-graph-progress] [script-graph-selftest] PASS key_alias_without_metamethod
+[script-graph-progress] [script-graph-selftest] PASS self_cycle
+[script-graph-progress] [script-graph-selftest] PASS cached_native_method
+[script-graph-progress] [script-graph-selftest] PASS native_gib_nullable_preset
+[script-graph-progress] [script-graph-selftest] PASS native_alarm_values_and_owner
+[script-graph-progress] [script-graph-selftest] PASS native_module_reference
+[script-graph-progress] [script-graph-selftest] PASS native_path_request_and_iterator
+[script-graph-progress] [script-graph-selftest] PASS native_iterator_alias
+[script-graph-progress] [script-graph-selftest] PASS native_iterator_continuation
+[script-graph-progress] [script-graph-selftest] PASS controller_reference_alias
+[script-graph-progress] [script-graph-selftest] PASS controller_reference_targets_actor
+[script-graph-progress] [script-graph-selftest] PASS cross_root_reference
+[script-graph-progress] [script-graph-selftest] PASS vector_state 3.25,-4.5
+[script-graph-progress] [script-graph-selftest] PASS vector_alias_kept 100
+[script-graph-progress] [script-graph-selftest] PASS vector_storage_independent 3.25
+[script-graph-progress] [script-graph-selftest] PASS timer_state
+[script-graph-progress] [script-graph-selftest] PASS timer_alias_kept 777
+[script-graph-progress] [script-graph-selftest] PASS timer_storage_independent 5000
+[script-graph-progress] [script-graph-selftest] PASS entity_copy_instance_state 4
+[script-graph-progress] [script-graph-selftest] PASS entity_copy_alias_kept 2
+[script-graph-progress] [script-graph-selftest] PASS entity_copy_storage_independent 4
+[script-graph-progress] [script-graph-selftest] PASS entity_copy_has_sounds
+[script-graph-progress] [script-graph-selftest] PASS owned_entity_identity
+[script-graph-progress] [script-graph-selftest] PASS owned_primitive_alias
+[script-graph-progress] [script-graph-selftest] PASS owned_primitive_state
+[script-graph-progress] [script-graph-selftest] PASS owned_sprite_pixel_state
+[script-graph-progress] [script-graph-selftest] PASS primitive_sprite_pixel_alias
+[script-graph-progress] [script-graph-selftest] PASS engine_field_alias_kept 77
+[script-graph-progress] [script-graph-selftest] PASS owned_entity_storage_independent 640
+[script-graph-progress] [script-graph-selftest] PASS coroutine_continues true/42/dead vs true/42/dead
+[script-graph-progress] [script-graph-selftest] PASS coroutine_open_upvalue_continues true/1/suspended vs true/1/suspended
+[script-graph-progress] [script-graph-selftest] PASS coroutine_open_upvalue_shared 1
+[script-graph-progress] [script-graph-selftest] PASS coroutine_pcall_frame true/true/dead
+[script-graph-progress] [script-graph-selftest] PASS coroutine_metamethod_frame true/foo!/dead
+[script-graph-progress] [script-graph-selftest] PASS coroutine_vararg_frame true/1/dead
+[script-graph-progress] [script-graph-selftest] PASS coroutine_not_started
+[script-graph-progress] [script-graph-selftest] PASS coroutine_dead
+[script-graph-progress] [script-graph-selftest] PASS coroutine_wrap_continues
+[script-graph-progress] [script-graph-selftest] PASS coroutine_wrap_alias
+[script-graph-progress] [script-graph-selftest] PASS coroutine_wrap_not_started
+[script-graph-progress] [script-graph-selftest] PASS gmatch_continues
+[script-graph-progress] [script-graph-selftest] PASS coroutine_cross_references
+[script-graph-progress] [script-graph-selftest] PASS coroutine_stitch_continues true/9/suspended vs true/9/suspended
+[script-graph-progress] [script-graph-selftest] PASS coroutine_interpreted_continues true/9/suspended vs true/9/suspended
+[script-graph-progress] [script-graph-selftest] PASS dumps_roundtrip_in_engine 0 of 97 unstable; first nil
+[script-graph-progress] [script-graph-selftest] PASS negative_coroutine_stack_limit
+[script-graph-progress] [script-graph-selftest] PASS negative_coroutine_frame_size
+[script-graph-progress] [script-graph-selftest] PASS negative_unsupported_userdata_fails an unsupported userdata (userdata) at object[1][bad]
+[script-graph-progress] [script-graph-selftest] PASS negative_unregistered_constructor_fails
+[script-graph-progress] [script-graph-selftest] PASS negative_nameless_native_function_fails a native function with no global name at object[1][bad]
+[script-graph-progress] [script-graph-selftest] PASS negative_light_userdata_fails an unsupported userdata (userdata) at object[1][bad]
+[script-graph-progress] [script-graph-selftest] PASS negative_missing_entity_fails_restore the object 99999999 (AHuman) is not in the world
+[script-graph-progress] [script-graph-selftest] PASS held_capture 
+[script-graph-progress] [script-graph-selftest] PASS held_restore 
+[script-graph-progress] [script-graph-selftest] PASS held_vector_identity_and_value
+[script-graph-progress] [script-graph-selftest] PASS held_timer_identity_and_value
+[script-graph-progress] [script-graph-selftest] PASS held_alarm_alias_and_value
+[script-graph-progress] [script-graph-selftest] PASS held_controller_value
+[script-graph-progress] [script-graph-selftest] PASS held_path_request_and_iterator
+[script-graph-progress] [script-graph-selftest] PASS held_owned_iterator_continuation
+[script-graph-progress] [script-graph-selftest] PASS alias_sweep_128 
+[script-graph-progress] [script-graph-selftest] PASS global_environment_capture 
+[script-graph-progress] [script-graph-selftest] PASS global_environment_restore 
+[script-graph-progress] [script-graph-selftest] PASS global_environment_identity
+[script-graph-progress] [script-graph-selftest] PASS global_nonstring_keys
+[script-graph-progress] [script-graph-selftest] PASS global_added_keys_removed
+[script-graph-progress] [script-graph-selftest] PASS global_binding_rewound
+[script-graph-progress] [script-graph-selftest] PASS global_metatable_rewound
+[script-graph-progress] [script-graph-selftest] PASS global_environment_reserialize
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_valid_current table: 0x0282aa63db10
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_valid_start_offset_index table: 0x0282aa4a5140
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_valid_top_soundset_index table: 0x0282aa470558
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_truncated_string
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_fractional_count
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_bad_rng
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_missing_node
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_invalid_soundset_index
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_duplicate_node
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_invalid_limb_vector_index
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_wrong_cell_kind
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_wrong_scalar_tag
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_truncated
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_trailing
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_wrong_section
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_unknown_factory
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_reject_negative_length
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_valid_SG1 table: 0x0282a4fb0428
+[script-graph-progress] [script-graph-selftest] PASS legacy_graph_SG1
+[script-graph-progress] [script-graph-selftest] PASS strict_graph_valid_SG2 table: 0x0282aa576e08
+[script-graph-progress] [script-graph-selftest] PASS legacy_graph_SG2
+[script-graph-progress] [script-graph-selftest] PASS negative_vm_rng_checkpoint
+[script-graph-progress] [script-graph-selftest] PASS native_vm_rng_rewound
+[script-graph-selftest] PASS a_hold_never_names_a_swept_object
+[script-graph-selftest] PASS legacy_field_values
+[script-graph-selftest] PASS legacy_table_aliases
+[script-graph-selftest] PASS legacy_native_values
+[script-graph-selftest] PASS legacy_field_reader
+[script-graph-selftest] PASS legacy_object_initialized 
+[script-graph-selftest] PASS legacy_object_fields_installed
+[script-graph-selftest] PASS wrapped_yield_reached
+[script-graph-selftest] PASS gmatch_started
+[script-graph-selftest] PASS coroutine_stitch_control_reached 10 vs 7
+[script-graph-selftest] PASS coroutine_stitch_capture_canonical
+[script-graph-selftest] PASS coroutine_stitch_raw_collapses
+[script-graph-selftest] PASS coroutine_stitch_canonical_resumes
+[script-graph-selftest] PASS coroutine_stitch_raw_resumes
+[script-graph-selftest] PASS coroutine_stitch_malformed_refused
+[script-graph-selftest] PASS metamethod_yield_reached idx:foo
+[script-graph-selftest] PASS serialize_no_problems 
+[script-graph-selftest] PASS roots_listed
+[script-graph-selftest] PASS restore_no_problems 
+[script-graph-selftest] PASS roots_present
+[script-graph-selftest] PASS canonical_reserialize len 1649480 vs 1649480, problems 0
+[script-graph-selftest] PASS closure_counter_rewound
+[script-graph-selftest] PASS shared_upvalue_between_closures
+[script-graph-selftest] PASS cross_object_alias
+[script-graph-selftest] PASS global_table_rewound 7
+[script-graph-selftest] PASS engine_table_fields_rewound
+[script-graph-selftest] PASS engine_table_new_fields_removed
+[script-graph-selftest] PASS engine_function_override_rewound
+[script-graph-selftest] PASS engine_global_override_rewound
+[script-graph-selftest] PASS protected_metatable_restored
+[script-graph-selftest] PASS global_vector_rewound_and_aliased
+[script-graph-selftest] PASS global_timer_rewound_and_aliased
+[script-graph-selftest] PASS userdata_lua_fields_rewound
+[script-graph-selftest] PASS new_global_removed
+[script-graph-selftest] PASS new_module_removed
+[script-graph-selftest] PASS within_object_alias
+[script-graph-selftest] PASS module_function_resident
+[script-graph-selftest] PASS module_upvalue_rewound
+[script-graph-selftest] PASS helper_calls_live_resident
+[script-graph-selftest] PASS metatable_by_name
+[script-graph-selftest] PASS sandbox_env_same_table
+[script-graph-selftest] PASS sandbox_env_value_rewound 10
+[script-graph-selftest] PASS sandbox_closure_uses_env
+[script-graph-selftest] PASS numbers_roundtrip
+[script-graph-selftest] PASS binary_string_roundtrip
+[script-graph-selftest] PASS mixed_keys_roundtrip boolean=1,boolean=2,number=3,table=4,table=5
+[script-graph-selftest] PASS key_alias_without_metamethod
+[script-graph-selftest] PASS self_cycle
+[script-graph-selftest] PASS cached_native_method
+[script-graph-selftest] PASS native_gib_nullable_preset
+[script-graph-selftest] PASS native_alarm_values_and_owner
+[script-graph-selftest] PASS native_module_reference
+[script-graph-selftest] PASS native_path_request_and_iterator
+[script-graph-selftest] PASS native_iterator_alias
+[script-graph-selftest] PASS native_iterator_continuation
+[script-graph-selftest] PASS controller_reference_alias
+[script-graph-selftest] PASS controller_reference_targets_actor
+[script-graph-selftest] PASS cross_root_reference
+[script-graph-selftest] PASS vector_state 3.25,-4.5
+[script-graph-selftest] PASS vector_alias_kept 100
+[script-graph-selftest] PASS vector_storage_independent 3.25
+[script-graph-selftest] PASS timer_state
+[script-graph-selftest] PASS timer_alias_kept 777
+[script-graph-selftest] PASS timer_storage_independent 5000
+[script-graph-selftest] PASS entity_copy_instance_state 4
+[script-graph-selftest] PASS entity_copy_alias_kept 2
+[script-graph-selftest] PASS entity_copy_storage_independent 4
+[script-graph-selftest] PASS entity_copy_has_sounds
+[script-graph-selftest] PASS owned_entity_identity
+[script-graph-selftest] PASS owned_primitive_alias
+[script-graph-selftest] PASS owned_primitive_state
+[script-graph-selftest] PASS owned_sprite_pixel_state
+[script-graph-selftest] PASS primitive_sprite_pixel_alias
+[script-graph-selftest] PASS engine_field_alias_kept 77
+[script-graph-selftest] PASS owned_entity_storage_independent 640
+[script-graph-selftest] PASS coroutine_continues true/42/dead vs true/42/dead
+[script-graph-selftest] PASS coroutine_open_upvalue_continues true/1/suspended vs true/1/suspended
+[script-graph-selftest] PASS coroutine_open_upvalue_shared 1
+[script-graph-selftest] PASS coroutine_pcall_frame true/true/dead
+[script-graph-selftest] PASS coroutine_metamethod_frame true/foo!/dead
+[script-graph-selftest] PASS coroutine_vararg_frame true/1/dead
+[script-graph-selftest] PASS coroutine_not_started
+[script-graph-selftest] PASS coroutine_dead
+[script-graph-selftest] PASS coroutine_wrap_continues
+[script-graph-selftest] PASS coroutine_wrap_alias
+[script-graph-selftest] PASS coroutine_wrap_not_started
+[script-graph-selftest] PASS gmatch_continues
+[script-graph-selftest] PASS coroutine_cross_references
+[script-graph-selftest] PASS coroutine_stitch_continues true/9/suspended vs true/9/suspended
+[script-graph-selftest] PASS coroutine_interpreted_continues true/9/suspended vs true/9/suspended
+[script-graph-selftest] PASS dumps_roundtrip_in_engine 0 of 97 unstable; first nil
+[script-graph-selftest] PASS negative_coroutine_stack_limit
+[script-graph-selftest] PASS negative_coroutine_frame_size
+[script-graph-selftest] PASS negative_unsupported_userdata_fails an unsupported userdata (userdata) at object[1][bad]
+[script-graph-selftest] PASS negative_unregistered_constructor_fails
+[script-graph-selftest] PASS negative_nameless_native_function_fails a native function with no global name at object[1][bad]
+[script-graph-selftest] PASS negative_light_userdata_fails an unsupported userdata (userdata) at object[1][bad]
+[script-graph-selftest] PASS negative_missing_entity_fails_restore the object 99999999 (AHuman) is not in the world
+[script-graph-selftest] PASS held_capture 
+[script-graph-selftest] PASS held_restore 
+[script-graph-selftest] PASS held_vector_identity_and_value
+[script-graph-selftest] PASS held_timer_identity_and_value
+[script-graph-selftest] PASS held_alarm_alias_and_value
+[script-graph-selftest] PASS held_controller_value
+[script-graph-selftest] PASS held_path_request_and_iterator
+[script-graph-selftest] PASS held_owned_iterator_continuation
+[script-graph-selftest] PASS alias_sweep_128 
+[script-graph-selftest] PASS global_environment_capture 
+[script-graph-selftest] PASS global_environment_restore 
+[script-graph-selftest] PASS global_environment_identity
+[script-graph-selftest] PASS global_nonstring_keys
+[script-graph-selftest] PASS global_added_keys_removed
+[script-graph-selftest] PASS global_binding_rewound
+[script-graph-selftest] PASS global_metatable_rewound
+[script-graph-selftest] PASS global_environment_reserialize
+[script-graph-selftest] PASS strict_graph_valid_current table: 0x0282aa63db10
+[script-graph-selftest] PASS strict_graph_valid_start_offset_index table: 0x0282aa4a5140
+[script-graph-selftest] PASS strict_graph_valid_top_soundset_index table: 0x0282aa470558
+[script-graph-selftest] PASS strict_graph_reject_truncated_string
+[script-graph-selftest] PASS strict_graph_reject_fractional_count
+[script-graph-selftest] PASS strict_graph_reject_bad_rng
+[script-graph-selftest] PASS strict_graph_reject_missing_node
+[script-graph-selftest] PASS strict_graph_reject_invalid_soundset_index
+[script-graph-selftest] PASS strict_graph_reject_duplicate_node
+[script-graph-selftest] PASS strict_graph_reject_invalid_limb_vector_index
+[script-graph-selftest] PASS strict_graph_reject_wrong_cell_kind
+[script-graph-selftest] PASS strict_graph_reject_wrong_scalar_tag
+[script-graph-selftest] PASS strict_graph_reject_truncated
+[script-graph-selftest] PASS strict_graph_reject_trailing
+[script-graph-selftest] PASS strict_graph_reject_wrong_section
+[script-graph-selftest] PASS strict_graph_reject_unknown_factory
+[script-graph-selftest] PASS strict_graph_reject_negative_length
+[script-graph-selftest] PASS strict_graph_valid_SG1 table: 0x0282a4fb0428
+[script-graph-selftest] PASS legacy_graph_SG1
+[script-graph-selftest] PASS strict_graph_valid_SG2 table: 0x0282aa576e08
+[script-graph-selftest] PASS legacy_graph_SG2
+[script-graph-selftest] PASS negative_vm_rng_checkpoint
+[script-graph-selftest] PASS native_vm_rng_rewound
+[script-graph-selftest] FAIL
+[script-graph-selftest] PASS rollback_probe_capture_settles_first
+[script-graph-selftest] PASS contract_audit_observation_settles_first
+[script-graph-selftest] PASS refused_reinstate_leaves_the_next_hold_possible

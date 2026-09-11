@@ -1,0 +1,1906 @@
+{
+  "D:\\mx\\s41r2\\heal_global_d0\\result.json": [
+    {
+      "line": 2,
+      "text": "  \"lane\": \"resync_heal\","
+    },
+    {
+      "line": 3,
+      "text": "  \"what\": \"the host perturbs its sim at 50; runtime desync detection must fire and both peers must heal from the host's snapshot\","
+    },
+    {
+      "line": 4,
+      "text": "  \"mode\": \"resync\","
+    },
+    {
+      "line": 23,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 24,
+      "text": "      \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 25,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 37,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 38,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 55,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 56,
+      "text": "        \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 57,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 63,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json\""
+    },
+    {
+      "line": 65,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    },
+    {
+      "line": 73,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 74,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 94,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\""
+    },
+    {
+      "line": 99,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 104,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 109,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\""
+    },
+    {
+      "line": 113,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 114,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 136,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 137,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 156,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 157,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 163,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json\""
+    },
+    {
+      "line": 165,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    },
+    {
+      "line": 173,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 174,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 194,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\""
+    },
+    {
+      "line": 199,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 204,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 209,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\""
+    },
+    {
+      "line": 213,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 214,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 238,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 239,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 251,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\launch.json\","
+    },
+    {
+      "line": 252,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\stdout.log\""
+    },
+    {
+      "line": 260,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 268,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\launch.json\","
+    },
+    {
+      "line": 269,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\stdout.log\""
+    },
+    {
+      "line": 277,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 285,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 293,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 301,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 309,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 313,
+      "text": "      \"name\": \"host_resynced\","
+    },
+    {
+      "line": 315,
+      "text": "      \"detail\": \"resyncs=1 actors=2 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 317,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 325,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 333,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 341,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 349,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 353,
+      "text": "      \"name\": \"client_resynced\","
+    },
+    {
+      "line": 355,
+      "text": "      \"detail\": \"resyncs=1 actors=2 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 357,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 365,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 366,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 374,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 375,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 383,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 391,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client_report.json": [
+    {
+      "line": 1,
+      "text": "{\"exit_code\":0,\"setup_error\":\"\",\"runtime_error\":\"\",\"activity_preset\":\"P4 Alpha Duel\",\"activity_state\":\"Over\",\"winner_team\":0,\"entered_editor\":false,\"rematches\":0,\"resyncs\":1,\"actors\":2,\"actors_peak\":6,\"pace\":{\"iterations\":595,\"sim_ticks\":602,\"wall_ms\":10035,\"sim_ms\":9596,\"draw_ms\":435,\"wall_tps\":59.9858,\"sim_ms_per_tick\":15.9406,\"draw_ms_per_iter\":0.732052,\"net_wait_ms\":8501,\"accrued_ms\":10036,\"trimmed_ms\":15,\"wall_seen_ms\":10036,\"cap_lost_ms\":0,\"paused_lost_ms\":0,\"update_calls\":595,\"reset_calls\":0,\"time_scale\":1},\"running_ticks\":600,\"frames_planned\":600,\"local_prediction\":{\"enabled\":true,\"previews\":0,\"actor_ticks\":0,\"ms_total\":0,\"shadows\":0,\"taken\":0,\"violations\":0},\"controller_boundary\":{\"equip_commands\":0,\"sound_commands\":0,\"aim_intents\":0,\"flip_intents\":0,\"direct_writes\":0},\"replay_recording\":{\"frames\":0,\"closed\":false},\"setup_surface\":\"fixed-alpha-duel\",\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",\"service\":{\"activity_preset\":\"P4 Alpha Duel\",\"error\":\"\",\"is_host\":false,\"local_peer_id\":2,\"local_team\":1,\"reconnect\":{\"admission_attached\":true,\"admission_clock_ms\":15054,\"admission_enabled\":true,\"census_refusals\":0,\"client_ambiguous_losses\":0,\"client_applications_acknowledged\":0,\"client_applications_sent\":0,\"client_commits\":1,\"client_confirmed_session_ends\":0,\"client_leave_acks\":0,\"client_reject_reason\":\"\",\"client_retransmits\":0,\"client_state\":\"Joined\",\"client_substitution_acks\":0,\"client_substitution_offers\":0,\"client_unacknowledged_leaves\":0,\"client_used_stored_ticket\":false,\"clock_divergence_max_ms\":0,\"host_ledger_drops_recorded\":0,\"host_reseat_live_on_team_not_named\":0,\"host_reseats_issued\":0,\"host_reseats_without_a_ledger\":0,\"host_reseats_without_survivors\":0,\"host_seats_dropped\":0,\"moderation\":[],\"seats\":[],\"ticket_clears\":0,\"ticket_refused_loads\":0,\"ticket_store_path\":\"D:/mx/s41r2/heal_global_d0/fresh/e2e/resync_heal/client/runtime/Userdata/reconnect.ticket\",\"ticket_stored\":true,\"ticket_stores\":1,\"ux_a"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host_report.json": [
+    {
+      "line": 1,
+      "text": "{\"exit_code\":0,\"setup_error\":\"\",\"runtime_error\":\"\",\"activity_preset\":\"P4 Alpha Duel\",\"activity_state\":\"Over\",\"winner_team\":0,\"entered_editor\":false,\"rematches\":0,\"resyncs\":1,\"actors\":2,\"actors_peak\":6,\"pace\":{\"iterations\":15901,\"sim_ticks\":663,\"wall_ms\":14345,\"sim_ms\":1483,\"draw_ms\":9029,\"wall_tps\":46.2168,\"sim_ms_per_tick\":2.23776,\"draw_ms_per_iter\":0.567845,\"net_wait_ms\":356,\"accrued_ms\":10955,\"trimmed_ms\":0,\"wall_seen_ms\":10955,\"cap_lost_ms\":0,\"paused_lost_ms\":0,\"update_calls\":15901,\"reset_calls\":0,\"time_scale\":1},\"running_ticks\":601,\"frames_planned\":600,\"local_prediction\":{\"enabled\":true,\"previews\":0,\"actor_ticks\":0,\"ms_total\":0,\"shadows\":0,\"taken\":0,\"violations\":0},\"controller_boundary\":{\"equip_commands\":0,\"sound_commands\":0,\"aim_intents\":0,\"flip_intents\":0,\"direct_writes\":0},\"replay_recording\":{\"frames\":0,\"closed\":false},\"setup_surface\":\"fixed-alpha-duel\",\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",\"service\":{\"activity_preset\":\"P4 Alpha Duel\",\"error\":\"\",\"is_host\":true,\"local_peer_id\":1,\"local_team\":0,\"reconnect\":{\"admission_attached\":true,\"admission_clock_ms\":17621,\"admission_enabled\":true,\"census_refusals\":0,\"client_ambiguous_losses\":0,\"client_applications_acknowledged\":0,\"client_applications_sent\":0,\"client_commits\":0,\"client_confirmed_session_ends\":0,\"client_leave_acks\":0,\"client_reject_reason\":\"\",\"client_retransmits\":0,\"client_state\":\"Idle\",\"client_substitution_acks\":0,\"client_substitution_offers\":0,\"client_unacknowledged_leaves\":0,\"client_used_stored_ticket\":false,\"clock_divergence_max_ms\":0,\"host_ledger_drops_recorded\":0,\"host_reseat_live_on_team_not_named\":0,\"host_reseats_issued\":0,\"host_reseats_without_a_ledger\":0,\"host_reseats_without_survivors\":0,\"host_seats_dropped\":0,\"moderation\":[{\"applicants\":[],\"closed\":false,\"committed\":false,\"dropped\":false,\"held_for_reclaim\":false,\"holder_generation\":0,\"lockstep_peer_id\":1,\"seat_generation\":1,\"stable_seat\":0,\"substitutable\":false,\"substituting\":false"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\result.json": [
+    {
+      "line": 2,
+      "text": "  \"lane\": \"resync_heal\","
+    },
+    {
+      "line": 3,
+      "text": "  \"what\": \"the host perturbs its sim at 50; runtime desync detection must fire and both peers must heal from the host's snapshot\","
+    },
+    {
+      "line": 4,
+      "text": "  \"mode\": \"resync\","
+    },
+    {
+      "line": 23,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 24,
+      "text": "      \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 25,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 37,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 38,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 55,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 56,
+      "text": "        \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 57,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 63,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json\""
+    },
+    {
+      "line": 65,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    },
+    {
+      "line": 73,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 74,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 94,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\""
+    },
+    {
+      "line": 99,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 104,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 109,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\""
+    },
+    {
+      "line": 113,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 114,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 136,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 137,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 156,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 157,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 163,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json\""
+    },
+    {
+      "line": 165,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    },
+    {
+      "line": 173,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 174,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 194,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\""
+    },
+    {
+      "line": 199,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 204,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 209,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\""
+    },
+    {
+      "line": 213,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 214,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 238,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 239,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 251,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\launch.json\","
+    },
+    {
+      "line": 252,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\stdout.log\""
+    },
+    {
+      "line": 260,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 268,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\launch.json\","
+    },
+    {
+      "line": 269,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\stdout.log\""
+    },
+    {
+      "line": 277,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 285,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 293,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 301,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 309,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 313,
+      "text": "      \"name\": \"host_resynced\","
+    },
+    {
+      "line": 315,
+      "text": "      \"detail\": \"resyncs=1 actors=2 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 317,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 325,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 333,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 341,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 349,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 353,
+      "text": "      \"name\": \"client_resynced\","
+    },
+    {
+      "line": 355,
+      "text": "      \"detail\": \"resyncs=1 actors=2 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 357,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 365,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 366,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 374,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 375,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 383,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 391,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\launch.json": [
+    {
+      "line": 14,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 15,
+      "text": "    \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 16,
+      "text": "    \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 22,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json\""
+    },
+    {
+      "line": 24,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    },
+    {
+      "line": 32,
+      "text": "    \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 33,
+      "text": "    \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 53,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\""
+    },
+    {
+      "line": 58,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 63,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 68,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\""
+    },
+    {
+      "line": 72,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 73,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 95,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 96,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\runtime.json": [
+    {
+      "line": 3,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\stdout.log": [
+    {
+      "line": 7,
+      "text": "[net-match] resync: desync detected, reloading from the host snapshot"
+    },
+    {
+      "line": 10,
+      "text": "[net-match] launching from the received snapshot: p5resync_25836"
+    },
+    {
+      "line": 12,
+      "text": "[net-match] resync: match relaunched from the snapshot"
+    },
+    {
+      "line": 16,
+      "text": "[gib] tick=226 uid=1048659 Green Dummy Head impact=0 travel=0 wounds=1"
+    },
+    {
+      "line": 17,
+      "text": "[gib] tick=226 uid=1048640 Green Dummy Head impact=0 travel=0 wounds=2"
+    },
+    {
+      "line": 19,
+      "text": "[gib] tick=326 uid=1049902 Green Dummy Head Gib A impact=0 travel=367.945 wounds=0"
+    },
+    {
+      "line": 21,
+      "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host_report.json"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\trace.json.console.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 13,
+      "text": "NETWORK: Resyncing from the host (1): Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 14,
+      "text": "SYSTEM: Game saved to \"p5resync_25836\"!"
+    },
+    {
+      "line": 15,
+      "text": "SYSTEM: Game \"p5resync_25836\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\trace.json.simdump.txt": [
+    {
+      "line": 2,
+      "text": "400 actor uid=1048577 Brain Robot pos=0x1.b783a00000000p+9,0x1.7721f20000000p+9 prev=0x1.b784c80000000p+9,0x1.7728820000000p+9 vel=-0x1.bb1eaa0000000p-6,-0x1.f2f4420000000p-2 angvel=-0x1.3c62e20000000p-12 moid=1/1 scr=6e1dcf2dd451a7e5 mass=0x1.0600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.a5a8160000000p+5/0x1.0600000000000p+7 atoms=37:b6842f2ced15d8ef rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.bb1f160000000p-6,-0x1.3b2ad40000000p-3 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=-0x1.b2c1900000000p-20 awm=0x1.2400000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.e000000000000p+4 ninv=2 ctrl=0x2080 mode=2 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.9000000000000p+6 aim=0x1.851e980000000p-5 flip=0 pie=3:8:-:-:- inv=[1048590:Battle Rifle;1048593:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.6866f9db22d0ep+11/0x1.a0a6666666666p+12 recent=-0x1.aca0000000000p-2,-0x1.4c00000000000p-4 view=0x1.c67bac0000000p+9,0x1.7649ac0000000p+9 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestSpawnedUID:0x1.0077a00000000p+20;TestSpawnedVM:0x1.0020000000000p+20;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=0 jet=0x1.3880000000000p+11 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048587 bg=0 offhandwait=0 gun=Battle Rifle rounds=15 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=0 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 882.98596 770.9131 889.92944 770.9998 paths=57bdcf02d840dc8f feet=5942c4073bd74e8e"
+    },
+    {
+      "line": 15,
+      "text": "400 actor uid=1048615 Green Dummy pos=0x1.a17c800000000p+9,0x1.7c26c20000000p+9 prev=0x1.a17c8c0000000p+9,0x1.7c39280000000p+9 vel=-0x1.185d9c0000000p-10,-0x1.0a28820000000p-1 angvel=-0x1.9f549c0000000p-19 moid=8/8 scr=6e1dcf2dd451a7e5 mass=0x1.1600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.bbf8be0000000p+6/0x1.1600000000000p+7 atoms=31:73cc6b058afb3355 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x1.5665280000000p-22 awm=0x1.3000000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=2 ctrl=0x8080 mode=2 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.9000000000000p+6 aim=0x1.e246360000000p-2 flip=0 pie=3:8:-:-:- inv=[1048628:Battle Rifle;1048631:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=-0x1.3e80000000000p-5,0x1.04b0000000000p-2 view=0x1.1486000000000p+10,0x1.36ba000000000p+9 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=0 jet=0x1.7700000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048625 bg=0 offhandwait=0 gun=Battle Rifle rounds=6 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=3749850 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 833.9972 776.9918 840.94226 775.99915 paths=5c58a981a6234ee6 feet=c7a91c419b6ab339"
+    },
+    {
+      "line": 16,
+      "text": "400 att uid=1048616 Green Dummy Arm BG par=1048615 moid=9/8 frame=3 pos=0x1.a54a440000000p+9,0x1.7768a60000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.a5e1c80000000p-2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a37c800000000p+9,0x1.77a6c20000000p+9 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.a84b100000000p+9,0x1.7586140000000p+9 hoff=0x1.33a41c0000000p+3,-0x1.1056900000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 17,
+      "text": "400 att uid=1048618 Green Dummy Leg BG par=1048615 moid=10/8 frame=4 pos=0x1.a34da80000000p+9,0x1.7f37900000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.28f88e0000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a27c800000000p+9,0x1.7ca6c20000000p+9 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.f27d200000000p-1,0x1.aea7b20000000p+3 tgt=0x1.a200000000000p+9,0x1.8380000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 18,
+      "text": "400 att uid=1048617 Green Dummy Foot BG par=1048618 moid=255/255 frame=0 pos=0x1.a37fe20000000p+9,0x1.8461620000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a1ffe20000000p+9,0x1.8361620000000p+9 po=0x1.0fc7d20000000p+3,0x1.0000240000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 21,
+      "text": "400 att uid=1048621 Green Dummy Head par=1048615 moid=11/8 frame=0 pos=0x1.a00c0e0000000p+9,0x1.72cd5e0000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.4614140000000p-2 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.a0fc800000000p+9,0x1.75a6c20000000p+9 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 22,
+      "text": "400 att uid=1048623 Green Dummy Leg FG par=1048615 moid=12/8 frame=4 pos=0x1.a174ca0000000p+9,0x1.7f58040000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.1486500000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a17c800000000p+9,0x1.7ca6c20000000p+9 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.560cce0000000p+2,0x1.9e12100000000p+3 tgt=0x1.9e80000000000p+9,0x1.8400000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 23,
+      "text": "400 att uid=1048622 Green Dummy Foot FG par=1048623 moid=255/255 frame=0 pos=0x1.a050660000000p+9,0x1.841f0a0000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.9ed0660000000p+9,0x1.831f0a0000000p+9 po=0x1.1ffffe0000000p+3,0x1.00001c0000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 24,
+      "text": "400 att uid=1048624 Green Dummy Arm FG par=1048615 moid=13/8 frame=0 pos=0x1.a345580000000p+9,0x1.7882500000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.49cf2a0000000p-4 mass=0x1.5000000000000p+4 awm=0x1.c000000000000p+3 jp=0x1.a17c800000000p+9,0x1.7826c20000000p+9 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x1.31745e0000000p+0/0x1.5000000000000p+4 atoms=11 hand=0x1.a47a020000000p+9,0x1.77e8fc0000000p+9 hoff=0x1.7ec17e0000000p+2,-0x1.ee2df00000000p-2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 55,
+      "text": "400 particle uid=1048653 Green Dummy pos=0x1.2c00000000000p+9,0x1.9000000000000p+6 prev=0x1.2c00000000000p+9,0x1.9000000000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x1.afb85e0000000p-3 moid=24/24 scr=6e1dcf2dd451a7e5 mass=0x1.38001a0000000p+6 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.44b8f00000000p+5/0x1.38001a0000000p+6 atoms=18:e81b325393148f28 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x0.0000000000000p+0 awm=0x1.5800340000000p+5 inv=0x0.0000000000000p+0 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=0 ctrl=0x0 mode=2 dis=1 status=4 team=-1 aimode=4 wp=0 health=-0x1.8a3d700000000p+1 aim=0x0.0000000000000p+0 flip=1 pie=3:8:-:-:- inv=[] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x1.6866f9db22d0ep+11/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.6866f9db22d0ep+11 recent=0x0.0000000000000p+0,0x0.0000000000000p+0 view=0x1.1d00000000000p+9,0x1.9000000000000p+6 prevhealth=-0x1.8a3d700000000p+1 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[AI_StuckForTime:0x1.d4bb333333333p+11;TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;] imp=0x0.0000000000000p+0 wounds=1 jet=0x1.c200000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/01 htmr=0x1.6c9199999999ap+11/0x1.6c9199999999ap+11/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=0 bg=0 offhandwait=0 limbs=591.13336 83.91401 586.075 84.25502 586.146 103.01641 584.07434 102.4407 paths=8d4309995dded17d feet=8ff8b11163e23fc1"
+    },
+    {
+      "line": 56,
+      "text": "400 att uid=1048654 Green Dummy Arm BG par=1048653 moid=25/24 frame=4 pos=0x1.2841d80000000p+9,0x1.67cdb80000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.6d9a0c0000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2a00000000000p+9,0x1.6c00000000000p+6 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x1.9745d20000000p-2/0x1.c000000000000p+2 atoms=11 hand=0x1.2507ea0000000p+9,0x1.52d1660000000p+6 hoff=-0x1.3e05b00000000p+3,-0x1.92e99a0000000p+2 htgts=0 reached=0 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 57,
+      "text": "400 att uid=1048656 Green Dummy Leg BG par=1048653 moid=26/24 frame=2 pos=0x1.2869b40000000p+9,0x1.8e07a00000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.9880b00000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2b00000000000p+9,0x1.9400000000000p+6 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.3ffffe0000000p+3,0x1.0000500000000p+0 tgt=0x1.2600000000000p+9,0x1.9800000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 58,
+      "text": "400 att uid=1048655 Green Dummy Foot BG par=1048656 moid=255/255 frame=1 pos=0x1.24db100000000p+9,0x1.8cdb0a0000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.33f8c20000000p+2 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2600000000000p+9,0x1.9800020000000p+6 po=0x1.4331280000000p+2,0x1.0000000000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 59,
+      "text": "400 att uid=1048657 Jetpack par=1048653 moid=255/255 frame=0 pos=0x1.2f00000000000p+9,0x1.8400000000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+0 awm=0x0.0000000000000p+0 jp=0x1.2f00000000000p+9,0x1.8c00000000000p+6 po=-0x1.8000000000000p+2,-0x1.0000000000000p+0 jo=0x0.0000000000000p+0,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=1 dmg=0x0.0000000000000p+0 em=0/0/1/0/-0x1.f570d60000000p-1/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x0.0000000000000p+0/0x0.0000000000000p+0/0x0.0000000000000p+0/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12"
+    },
+    {
+      "line": 61,
+      "text": "400 att uid=1048661 Green Dummy Leg FG par=1048653 moid=27/24 frame=2 pos=0x1.295a380000000p+9,0x1.9013e40000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.9ec1dc0000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2c00000000000p+9,0x1.9400000000000p+6 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.3ffffe0000000p+3,0x1.00006e0000000p+1 tgt=0x1.2700000000000p+9,0x1.9c00000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 62,
+      "text": "400 att uid=1048660 Green Dummy Foot FG par=1048661 moid=255/255 frame=1 pos=0x1.25b9aa0000000p+9,0x1.91cd500000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.3a39ee0000000p+2 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2700000000000p+9,0x1.9c00020000000p+6 po=0x1.4cacb20000000p+2,0x1.fffff00000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 63,
+      "text": "400 att uid=1048662 Green Dummy Arm FG par=1048653 moid=28/24 frame=4 pos=0x1.2a5e100000000p+9,0x1.69905c0000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.63026a0000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2c00000000000p+9,0x1.7000000000000p+6 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x1.9745d20000000p-2/0x1.c000000000000p+2 atoms=11 hand=0x1.278d5a0000000p+9,0x1.4fe1f20000000p+6 hoff=-0x1.1ca9700000000p+3,-0x1.00f06e0000000p+3 htgts=0 reached=0 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 64,
+      "text": "400 wnd uid=1049900 Leaking Machinery par=1048653 moid=255/255 frame=0 pos=0x1.2c80000000000p+9,0x1.5c00000000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=-0x1.a5c7080000000p+0 mass=0x1.a36e2e0000000p-14 awm=0x0.0000000000000p+0 jp=0x1.2c80000000000p+9,0x1.5c00000000000p+6 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x0.0000000000000p+0 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=1 dmg=0x0.0000000000000p+0 em=1/16/0/1/0x0.0000000000000p+0/0x1.6a7c49ba5e354p+11/0x0.0000000000000p+0/0x1.dda10c9c374d2p-3/0x1.dda10c9c374d2p-3/0x1.dda10c9c374d2p-3/0x1.dda10c9c374d2p-3/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\runtime\\LogConsole.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 13,
+      "text": "NETWORK: Resyncing from the host (1): Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 14,
+      "text": "SYSTEM: Game saved to \"p5resync_25836\"!"
+    },
+    {
+      "line": 15,
+      "text": "SYSTEM: Game \"p5resync_25836\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\launch.json": [
+    {
+      "line": 15,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 16,
+      "text": "    \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 22,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json\""
+    },
+    {
+      "line": 24,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    },
+    {
+      "line": 32,
+      "text": "    \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 33,
+      "text": "    \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 53,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\""
+    },
+    {
+      "line": 58,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 63,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 68,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\""
+    },
+    {
+      "line": 72,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 73,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 97,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 98,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\runtime.json": [
+    {
+      "line": 3,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d0\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\stdout.log": [
+    {
+      "line": 6,
+      "text": "[net-match] resync: desync detected, reloading from the host snapshot"
+    },
+    {
+      "line": 9,
+      "text": "[net-match] launching from the received snapshot: p5resync_3596_recv"
+    },
+    {
+      "line": 11,
+      "text": "[net-match] resync: match relaunched from the snapshot"
+    },
+    {
+      "line": 15,
+      "text": "[gib] tick=226 uid=1048659 Green Dummy Head impact=0 travel=0 wounds=1"
+    },
+    {
+      "line": 16,
+      "text": "[gib] tick=226 uid=1048640 Green Dummy Head impact=0 travel=0 wounds=2"
+    },
+    {
+      "line": 18,
+      "text": "[gib] tick=326 uid=1049902 Green Dummy Head Gib A impact=0 travel=367.945 wounds=0"
+    },
+    {
+      "line": 20,
+      "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client_report.json"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\trace.json.console.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 14,
+      "text": "NETWORK: Resyncing from the host (1): tick 62 lockstep stopped: Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 15,
+      "text": "SYSTEM: Game \"p5resync_3596_recv\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\trace.json.simdump.txt": [
+    {
+      "line": 2,
+      "text": "400 actor uid=1048577 Brain Robot pos=0x1.b783a00000000p+9,0x1.7721f20000000p+9 prev=0x1.b784c80000000p+9,0x1.7728820000000p+9 vel=-0x1.bb1eaa0000000p-6,-0x1.f2f4420000000p-2 angvel=-0x1.3c62e20000000p-12 moid=1/1 scr=6e1dcf2dd451a7e5 mass=0x1.0600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.a5a8160000000p+5/0x1.0600000000000p+7 atoms=37:b6842f2ced15d8ef rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.bb1f160000000p-6,-0x1.3b2ad40000000p-3 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=-0x1.b2c1900000000p-20 awm=0x1.2400000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.e000000000000p+4 ninv=2 ctrl=0x2080 mode=2 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.9000000000000p+6 aim=0x1.851e980000000p-5 flip=0 pie=3:8:-:-:- inv=[1048590:Battle Rifle;1048593:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.6866f9db22d0ep+11/0x1.a0a6666666666p+12 recent=-0x1.aca0000000000p-2,-0x1.4c00000000000p-4 view=0x1.c67bac0000000p+9,0x1.7649ac0000000p+9 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestSpawnedUID:0x1.0077a00000000p+20;TestSpawnedVM:0x1.0020000000000p+20;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=0 jet=0x1.3880000000000p+11 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048587 bg=0 offhandwait=0 gun=Battle Rifle rounds=15 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=0 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 882.98596 770.9131 889.92944 770.9998 paths=57bdcf02d840dc8f feet=5942c4073bd74e8e"
+    },
+    {
+      "line": 15,
+      "text": "400 actor uid=1048615 Green Dummy pos=0x1.a17c800000000p+9,0x1.7c26c20000000p+9 prev=0x1.a17c8c0000000p+9,0x1.7c39280000000p+9 vel=-0x1.185d9c0000000p-10,-0x1.0a28820000000p-1 angvel=-0x1.9f549c0000000p-19 moid=8/8 scr=6e1dcf2dd451a7e5 mass=0x1.1600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.bbf8be0000000p+6/0x1.1600000000000p+7 atoms=31:73cc6b058afb3355 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x1.5665280000000p-22 awm=0x1.3000000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=2 ctrl=0x8080 mode=2 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.9000000000000p+6 aim=0x1.e246360000000p-2 flip=0 pie=3:8:-:-:- inv=[1048628:Battle Rifle;1048631:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=-0x1.3e80000000000p-5,0x1.04b0000000000p-2 view=0x1.1486000000000p+10,0x1.36ba000000000p+9 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=0 jet=0x1.7700000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048625 bg=0 offhandwait=0 gun=Battle Rifle rounds=6 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=3749850 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 833.9972 776.9918 840.94226 775.99915 paths=5c58a981a6234ee6 feet=c7a91c419b6ab339"
+    },
+    {
+      "line": 16,
+      "text": "400 att uid=1048616 Green Dummy Arm BG par=1048615 moid=9/8 frame=3 pos=0x1.a54a440000000p+9,0x1.7768a60000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.a5e1c80000000p-2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a37c800000000p+9,0x1.77a6c20000000p+9 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.a84b100000000p+9,0x1.7586140000000p+9 hoff=0x1.33a41c0000000p+3,-0x1.1056900000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 17,
+      "text": "400 att uid=1048618 Green Dummy Leg BG par=1048615 moid=10/8 frame=4 pos=0x1.a34da80000000p+9,0x1.7f37900000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.28f88e0000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a27c800000000p+9,0x1.7ca6c20000000p+9 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.f27d200000000p-1,0x1.aea7b20000000p+3 tgt=0x1.a200000000000p+9,0x1.8380000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 18,
+      "text": "400 att uid=1048617 Green Dummy Foot BG par=1048618 moid=255/255 frame=0 pos=0x1.a37fe20000000p+9,0x1.8461620000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a1ffe20000000p+9,0x1.8361620000000p+9 po=0x1.0fc7d20000000p+3,0x1.0000240000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 21,
+      "text": "400 att uid=1048621 Green Dummy Head par=1048615 moid=11/8 frame=0 pos=0x1.a00c0e0000000p+9,0x1.72cd5e0000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.4614140000000p-2 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.a0fc800000000p+9,0x1.75a6c20000000p+9 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 22,
+      "text": "400 att uid=1048623 Green Dummy Leg FG par=1048615 moid=12/8 frame=4 pos=0x1.a174ca0000000p+9,0x1.7f58040000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.1486500000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a17c800000000p+9,0x1.7ca6c20000000p+9 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.560cce0000000p+2,0x1.9e12100000000p+3 tgt=0x1.9e80000000000p+9,0x1.8400000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 23,
+      "text": "400 att uid=1048622 Green Dummy Foot FG par=1048623 moid=255/255 frame=0 pos=0x1.a050660000000p+9,0x1.841f0a0000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.9ed0660000000p+9,0x1.831f0a0000000p+9 po=0x1.1ffffe0000000p+3,0x1.00001c0000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 24,
+      "text": "400 att uid=1048624 Green Dummy Arm FG par=1048615 moid=13/8 frame=0 pos=0x1.a345580000000p+9,0x1.7882500000000p+9 vel=-0x1.30e1340000000p-10,-0x1.b996140000000p-2 angvel=0x0.0000000000000p+0 rot=0x1.49cf2a0000000p-4 mass=0x1.5000000000000p+4 awm=0x1.c000000000000p+3 jp=0x1.a17c800000000p+9,0x1.7826c20000000p+9 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x1.31745e0000000p+0/0x1.5000000000000p+4 atoms=11 hand=0x1.a47a020000000p+9,0x1.77e8fc0000000p+9 hoff=0x1.7ec17e0000000p+2,-0x1.ee2df00000000p-2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 55,
+      "text": "400 particle uid=1048653 Green Dummy pos=0x1.2c00000000000p+9,0x1.9000000000000p+6 prev=0x1.2c00000000000p+9,0x1.9000000000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x1.afb85e0000000p-3 moid=24/24 scr=6e1dcf2dd451a7e5 mass=0x1.38001a0000000p+6 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.44b8f00000000p+5/0x1.38001a0000000p+6 atoms=18:e81b325393148f28 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x0.0000000000000p+0 awm=0x1.5800340000000p+5 inv=0x0.0000000000000p+0 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=0 ctrl=0x0 mode=2 dis=1 status=4 team=-1 aimode=4 wp=0 health=-0x1.8a3d700000000p+1 aim=0x0.0000000000000p+0 flip=1 pie=3:8:-:-:- inv=[] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x1.6866f9db22d0ep+11/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.6866f9db22d0ep+11 recent=0x0.0000000000000p+0,0x0.0000000000000p+0 view=0x1.1d00000000000p+9,0x1.9000000000000p+6 prevhealth=-0x1.8a3d700000000p+1 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;] imp=0x0.0000000000000p+0 wounds=1 jet=0x1.c200000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/01 htmr=0x1.6c9199999999ap+11/0x1.6c9199999999ap+11/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=0 bg=0 offhandwait=0 limbs=591.13336 83.91401 586.075 84.25502 586.146 103.01641 584.07434 102.4407 paths=8d4309995dded17d feet=8ff8b11163e23fc1"
+    },
+    {
+      "line": 56,
+      "text": "400 att uid=1048654 Green Dummy Arm BG par=1048653 moid=25/24 frame=4 pos=0x1.2841d80000000p+9,0x1.67cdb80000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.6d9a0c0000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2a00000000000p+9,0x1.6c00000000000p+6 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x1.9745d20000000p-2/0x1.c000000000000p+2 atoms=11 hand=0x1.2507ea0000000p+9,0x1.52d1660000000p+6 hoff=-0x1.3e05b00000000p+3,-0x1.92e99a0000000p+2 htgts=0 reached=0 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 57,
+      "text": "400 att uid=1048656 Green Dummy Leg BG par=1048653 moid=26/24 frame=2 pos=0x1.2869b40000000p+9,0x1.8e07a00000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.9880b00000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2b00000000000p+9,0x1.9400000000000p+6 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.3ffffe0000000p+3,0x1.0000500000000p+0 tgt=0x1.2600000000000p+9,0x1.9800000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 58,
+      "text": "400 att uid=1048655 Green Dummy Foot BG par=1048656 moid=255/255 frame=1 pos=0x1.24db100000000p+9,0x1.8cdb0a0000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.33f8c20000000p+2 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2600000000000p+9,0x1.9800020000000p+6 po=0x1.4331280000000p+2,0x1.0000000000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 59,
+      "text": "400 att uid=1048657 Jetpack par=1048653 moid=255/255 frame=0 pos=0x1.2f00000000000p+9,0x1.8400000000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+0 awm=0x0.0000000000000p+0 jp=0x1.2f00000000000p+9,0x1.8c00000000000p+6 po=-0x1.8000000000000p+2,-0x1.0000000000000p+0 jo=0x0.0000000000000p+0,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=1 dmg=0x0.0000000000000p+0 em=0/0/1/0/-0x1.f570d60000000p-1/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x0.0000000000000p+0/0x0.0000000000000p+0/0x0.0000000000000p+0/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12"
+    },
+    {
+      "line": 61,
+      "text": "400 att uid=1048661 Green Dummy Leg FG par=1048653 moid=27/24 frame=2 pos=0x1.295a380000000p+9,0x1.9013e40000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.9ec1dc0000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2c00000000000p+9,0x1.9400000000000p+6 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.3ffffe0000000p+3,0x1.00006e0000000p+1 tgt=0x1.2700000000000p+9,0x1.9c00000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 62,
+      "text": "400 att uid=1048660 Green Dummy Foot FG par=1048661 moid=255/255 frame=1 pos=0x1.25b9aa0000000p+9,0x1.91cd500000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.3a39ee0000000p+2 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2700000000000p+9,0x1.9c00020000000p+6 po=0x1.4cacb20000000p+2,0x1.fffff00000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 63,
+      "text": "400 att uid=1048662 Green Dummy Arm FG par=1048653 moid=28/24 frame=4 pos=0x1.2a5e100000000p+9,0x1.69905c0000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.63026a0000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2c00000000000p+9,0x1.7000000000000p+6 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x1.9745d20000000p-2/0x1.c000000000000p+2 atoms=11 hand=0x1.278d5a0000000p+9,0x1.4fe1f20000000p+6 hoff=-0x1.1ca9700000000p+3,-0x1.00f06e0000000p+3 htgts=0 reached=0 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 64,
+      "text": "400 wnd uid=1049900 Leaking Machinery par=1048653 moid=255/255 frame=0 pos=0x1.2c80000000000p+9,0x1.5c00000000000p+6 vel=-0x1.2d977a0000000p+2,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=-0x1.a5c7080000000p+0 mass=0x1.a36e2e0000000p-14 awm=0x0.0000000000000p+0 jp=0x1.2c80000000000p+9,0x1.5c00000000000p+6 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x0.0000000000000p+0 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=1 dmg=0x0.0000000000000p+0 em=1/16/0/1/0x0.0000000000000p+0/0x1.6a7c49ba5e354p+11/0x0.0000000000000p+0/0x1.dda10c9c374d2p-3/0x1.dda10c9c374d2p-3/0x1.dda10c9c374d2p-3/0x1.dda10c9c374d2p-3/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11/0x1.6a7c49ba5e354p+11:0x1.6a7c49ba5e354p+11"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\runtime\\LogConsole.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 14,
+      "text": "NETWORK: Resyncing from the host (1): tick 62 lockstep stopped: Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 15,
+      "text": "SYSTEM: Game \"p5resync_3596_recv\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\result.json": [
+    {
+      "line": 2,
+      "text": "  \"lane\": \"resync_heal\","
+    },
+    {
+      "line": 3,
+      "text": "  \"what\": \"the host perturbs its sim at 50; runtime desync detection must fire and both peers must heal from the host's snapshot\","
+    },
+    {
+      "line": 4,
+      "text": "  \"mode\": \"resync\","
+    },
+    {
+      "line": 23,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 26,
+      "text": "      \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 27,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 39,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 42,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 59,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 62,
+      "text": "        \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 63,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 69,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json\""
+    },
+    {
+      "line": 71,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    },
+    {
+      "line": 79,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 80,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 100,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\""
+    },
+    {
+      "line": 105,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 110,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 115,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\""
+    },
+    {
+      "line": 119,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 120,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 142,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 143,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 162,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 165,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 171,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json\""
+    },
+    {
+      "line": 173,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    },
+    {
+      "line": 181,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 182,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 202,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\""
+    },
+    {
+      "line": 207,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 212,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 217,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\""
+    },
+    {
+      "line": 221,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 222,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 246,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 247,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 259,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\launch.json\","
+    },
+    {
+      "line": 260,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\stdout.log\""
+    },
+    {
+      "line": 268,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 276,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\launch.json\","
+    },
+    {
+      "line": 277,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\stdout.log\""
+    },
+    {
+      "line": 285,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 293,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 301,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 309,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 317,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 321,
+      "text": "      \"name\": \"host_resynced\","
+    },
+    {
+      "line": 323,
+      "text": "      \"detail\": \"resyncs=1 actors=5 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 325,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 333,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 341,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 349,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 357,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 361,
+      "text": "      \"name\": \"client_resynced\","
+    },
+    {
+      "line": 363,
+      "text": "      \"detail\": \"resyncs=1 actors=5 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 365,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 373,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 374,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 382,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 383,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 391,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 399,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 407,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client_report.json": [
+    {
+      "line": 1,
+      "text": "{\"exit_code\":0,\"setup_error\":\"\",\"runtime_error\":\"\",\"activity_preset\":\"P4 Alpha Duel\",\"activity_state\":\"Over\",\"winner_team\":-1,\"entered_editor\":false,\"rematches\":0,\"resyncs\":1,\"actors\":5,\"actors_peak\":6,\"pace\":{\"iterations\":10428,\"sim_ticks\":602,\"wall_ms\":10006,\"sim_ms\":1252,\"draw_ms\":8460,\"wall_tps\":60.1608,\"sim_ms_per_tick\":2.08094,\"draw_ms_per_iter\":0.811291,\"net_wait_ms\":19,\"accrued_ms\":10010,\"trimmed_ms\":0,\"wall_seen_ms\":10010,\"cap_lost_ms\":0,\"paused_lost_ms\":0,\"update_calls\":10428,\"reset_calls\":0,\"time_scale\":1},\"running_ticks\":601,\"frames_planned\":600,\"local_prediction\":{\"enabled\":true,\"previews\":56,\"actor_ticks\":168,\"ms_total\":229.528,\"shadows\":0,\"taken\":0,\"violations\":0},\"controller_boundary\":{\"equip_commands\":0,\"sound_commands\":0,\"aim_intents\":0,\"flip_intents\":0,\"direct_writes\":0},\"replay_recording\":{\"frames\":0,\"closed\":false},\"setup_surface\":\"fixed-alpha-duel\",\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",\"service\":{\"activity_preset\":\"P4 Alpha Duel\",\"error\":\"\",\"is_host\":false,\"local_peer_id\":2,\"local_team\":1,\"reconnect\":{\"admission_attached\":true,\"admission_clock_ms\":16502,\"admission_enabled\":true,\"census_refusals\":0,\"client_ambiguous_losses\":0,\"client_applications_acknowledged\":0,\"client_applications_sent\":0,\"client_commits\":1,\"client_confirmed_session_ends\":0,\"client_leave_acks\":0,\"client_reject_reason\":\"\",\"client_retransmits\":0,\"client_state\":\"Joined\",\"client_substitution_acks\":0,\"client_substitution_offers\":0,\"client_unacknowledged_leaves\":0,\"client_used_stored_ticket\":false,\"clock_divergence_max_ms\":0,\"host_ledger_drops_recorded\":0,\"host_reseat_live_on_team_not_named\":0,\"host_reseats_issued\":0,\"host_reseats_without_a_ledger\":0,\"host_reseats_without_survivors\":0,\"host_seats_dropped\":0,\"moderation\":[],\"seats\":[],\"ticket_clears\":0,\"ticket_refused_loads\":0,\"ticket_store_path\":\"D:/mx/s41r2/heal_global_d3/fresh/e2e/resync_heal/client/runtime/Userdata/reconnect.ticket\",\"ticket_stored\":true,\"ticket_sto"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host_report.json": [
+    {
+      "line": 1,
+      "text": "{\"exit_code\":0,\"setup_error\":\"\",\"runtime_error\":\"\",\"activity_preset\":\"P4 Alpha Duel\",\"activity_state\":\"Over\",\"winner_team\":-1,\"entered_editor\":false,\"rematches\":0,\"resyncs\":1,\"actors\":5,\"actors_peak\":6,\"pace\":{\"iterations\":6590,\"sim_ticks\":663,\"wall_ms\":14346,\"sim_ms\":1381,\"draw_ms\":9368,\"wall_tps\":46.2138,\"sim_ms_per_tick\":2.08437,\"draw_ms_per_iter\":1.42167,\"net_wait_ms\":11,\"accrued_ms\":10962,\"trimmed_ms\":0,\"wall_seen_ms\":10962,\"cap_lost_ms\":0,\"paused_lost_ms\":0,\"update_calls\":6590,\"reset_calls\":0,\"time_scale\":1},\"running_ticks\":600,\"frames_planned\":600,\"local_prediction\":{\"enabled\":true,\"previews\":657,\"actor_ticks\":1971,\"ms_total\":2916.25,\"shadows\":0,\"taken\":0,\"violations\":0},\"controller_boundary\":{\"equip_commands\":0,\"sound_commands\":0,\"aim_intents\":0,\"flip_intents\":0,\"direct_writes\":0},\"replay_recording\":{\"frames\":0,\"closed\":false},\"setup_surface\":\"fixed-alpha-duel\",\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",\"service\":{\"activity_preset\":\"P4 Alpha Duel\",\"error\":\"\",\"is_host\":true,\"local_peer_id\":1,\"local_team\":0,\"reconnect\":{\"admission_attached\":true,\"admission_clock_ms\":16120,\"admission_enabled\":true,\"census_refusals\":0,\"client_ambiguous_losses\":0,\"client_applications_acknowledged\":0,\"client_applications_sent\":0,\"client_commits\":0,\"client_confirmed_session_ends\":0,\"client_leave_acks\":0,\"client_reject_reason\":\"\",\"client_retransmits\":0,\"client_state\":\"Idle\",\"client_substitution_acks\":0,\"client_substitution_offers\":0,\"client_unacknowledged_leaves\":0,\"client_used_stored_ticket\":false,\"clock_divergence_max_ms\":0,\"host_ledger_drops_recorded\":0,\"host_reseat_live_on_team_not_named\":0,\"host_reseats_issued\":0,\"host_reseats_without_a_ledger\":0,\"host_reseats_without_survivors\":0,\"host_seats_dropped\":0,\"moderation\":[{\"applicants\":[],\"closed\":false,\"committed\":false,\"dropped\":false,\"held_for_reclaim\":false,\"holder_generation\":0,\"lockstep_peer_id\":1,\"seat_generation\":1,\"stable_seat\":0,\"substitutable\":false,\"substitutin"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\result.json": [
+    {
+      "line": 2,
+      "text": "  \"lane\": \"resync_heal\","
+    },
+    {
+      "line": 3,
+      "text": "  \"what\": \"the host perturbs its sim at 50; runtime desync detection must fire and both peers must heal from the host's snapshot\","
+    },
+    {
+      "line": 4,
+      "text": "  \"mode\": \"resync\","
+    },
+    {
+      "line": 23,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 26,
+      "text": "      \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 27,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 39,
+      "text": "      \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 42,
+      "text": "      \"-net-match-e2e-resync\""
+    },
+    {
+      "line": 59,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 62,
+      "text": "        \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 63,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 69,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json\""
+    },
+    {
+      "line": 71,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    },
+    {
+      "line": 79,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 80,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 100,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\""
+    },
+    {
+      "line": 105,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 110,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 115,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\""
+    },
+    {
+      "line": 119,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 120,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 142,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 143,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 162,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 165,
+      "text": "        \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 171,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json\""
+    },
+    {
+      "line": 173,
+      "text": "      \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    },
+    {
+      "line": 181,
+      "text": "        \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 182,
+      "text": "        \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 202,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\""
+    },
+    {
+      "line": 207,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 212,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 217,
+      "text": "          \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\""
+    },
+    {
+      "line": 221,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 222,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 246,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 247,
+      "text": "        \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 259,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\launch.json\","
+    },
+    {
+      "line": 260,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host\\\\stdout.log\""
+    },
+    {
+      "line": 268,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 276,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\launch.json\","
+    },
+    {
+      "line": 277,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client\\\\stdout.log\""
+    },
+    {
+      "line": 285,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 293,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 301,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 309,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 317,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 321,
+      "text": "      \"name\": \"host_resynced\","
+    },
+    {
+      "line": 323,
+      "text": "      \"detail\": \"resyncs=1 actors=5 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 325,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 333,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 341,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 349,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 357,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 361,
+      "text": "      \"name\": \"client_resynced\","
+    },
+    {
+      "line": 363,
+      "text": "      \"detail\": \"resyncs=1 actors=5 actors_peak=6 initial_actors=5\","
+    },
+    {
+      "line": 365,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 373,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 374,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 382,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 383,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\client_report.json\""
+    },
+    {
+      "line": 391,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 399,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    },
+    {
+      "line": 407,
+      "text": "        \"fresh\\\\e2e\\\\resync_heal\\\\host_report.json\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\launch.json": [
+    {
+      "line": 14,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 17,
+      "text": "    \"-determinism-selftest-perturb\","
+    },
+    {
+      "line": 18,
+      "text": "    \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 24,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json\""
+    },
+    {
+      "line": 26,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    },
+    {
+      "line": 34,
+      "text": "    \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 35,
+      "text": "    \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 55,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\""
+    },
+    {
+      "line": 60,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 65,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 70,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\""
+    },
+    {
+      "line": 74,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 75,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 97,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host_report.json\","
+    },
+    {
+      "line": 98,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\trace.json.simdump.txt\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\runtime.json": [
+    {
+      "line": 3,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\host\\\\runtime\","
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\stdout.log": [
+    {
+      "line": 7,
+      "text": "[net-match] resync: desync detected, reloading from the host snapshot"
+    },
+    {
+      "line": 10,
+      "text": "[net-match] launching from the received snapshot: p5resync_4420"
+    },
+    {
+      "line": 12,
+      "text": "[net-match] resync: match relaunched from the snapshot"
+    },
+    {
+      "line": 16,
+      "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host_report.json"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\trace.json.console.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 13,
+      "text": "NETWORK: Resyncing from the host (1): Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 14,
+      "text": "SYSTEM: Game saved to \"p5resync_4420\"!"
+    },
+    {
+      "line": 15,
+      "text": "SYSTEM: Game \"p5resync_4420\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\trace.json.simdump.txt": [
+    {
+      "line": 2,
+      "text": "400 actor uid=1048577 Brain Robot pos=0x1.b88d840000000p+9,0x1.772c7a0000000p+9 prev=0x1.b88d620000000p+9,0x1.7727f60000000p+9 vel=0x1.3d00f40000000p-10,-0x1.5484ea0000000p-2 angvel=0x1.e9b9640000000p-13 moid=1/1 scr=6e1dcf2dd451a7e5 mass=0x1.0600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.a5a8160000000p+5/0x1.0600000000000p+7 atoms=37:b6842f2ced15d8ef rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=0x1.9b8d200000000p-9,0x1.b1cac80000000p-4 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x1.ae1a7e0000000p-16 awm=0x1.2400000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.e000000000000p+4 ninv=2 ctrl=0x4 mode=1 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.0ba5e40000000p+6 aim=0x0.0000000000000p+0 flip=0 pie=3:8:-:-:- inv=[1048590:Battle Rifle;1048593:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.9b711eb851eb8p+12/0x1.a0a6666666666p+12 recent=0x1.c608000000000p-1,-0x1.4640000000000p-4 view=0x1.c780000000000p+9,0x1.7700000000000p+9 prevhealth=0x1.0ba5e40000000p+6 alarm=0x1.8ffbe76c8b439p+5@0x1.eabdd00000000p+9,0x1.6eaf720000000p+9 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestSpawnedUID:0x1.0051700000000p+20;TestSpawnedVM:0x1.800ba00000000p+22;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=7 jet=0x1.3880000000000p+11 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048587 bg=0 offhandwait=0 gun=Battle Rifle rounds=15 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=0 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 884.9954 770.8543 892.00854 770.29596 paths=5ecaaa6b2d39cf54 feet=a291046d9e7e13e"
+    },
+    {
+      "line": 22,
+      "text": "400 actor uid=1048596 Brain Robot pos=0x1.1802c00000000p+10,0x1.6f60be0000000p+9 prev=0x1.1802c00000000p+10,0x1.6f649a0000000p+9 vel=0x1.82dd380000000p-14,-0x1.b202f20000000p-2 angvel=0x1.8410100000000p-11 moid=8/8 scr=6e1dcf2dd451a7e5 mass=0x1.06001a0000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.a5a8160000000p+5/0x1.0600000000000p+7 atoms=37:108ca0cff08d8c1 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=0x1.8349b60000000p-14,-0x1.72b7f80000000p-4 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=-0x1.0cedb00000000p-19 awm=0x1.2400340000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.e000000000000p+4 ninv=2 ctrl=0x8000 mode=2 dis=0 status=0 team=1 aimode=1 wp=0 health=0x1.ca8f5a0000000p+5 aim=-0x1.d008000000000p-7 flip=1 pie=3:8:-:-:- inv=[1048609:Battle Rifle;1048612:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.5cf1c28f5c28fp+12/0x1.a0a6666666666p+12 recent=0x1.5e00000000000p-6,-0x1.81c4000000000p+0 view=0x1.1080320000000p+10,0x1.6f36600000000p+9 prevhealth=0x1.ca8f5a0000000p+5 alarm=0x1.a8fba5e353f7dp+9@0x1.fe2b5c0000000p+9,0x1.722b180000000p+9 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=11 jet=0x1.3880000000000p+11 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/01 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048606 bg=0 offhandwait=0 gun=Battle Rifle rounds=8 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=6516406 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 1116.2893 749.2035 1109.8453 748.9861 paths=26301f68d85afe7f feet=cfaa0e009a51ae42"
+    },
+    {
+      "line": 46,
+      "text": "400 actor uid=1048615 Green Dummy pos=0x1.a3ea940000000p+9,0x1.7caa780000000p+9 prev=0x1.a3ec540000000p+9,0x1.7cb3640000000p+9 vel=-0x1.ca0d000000000p-4,-0x1.74878c0000000p-1 angvel=0x1.99752c0000000p+1 moid=15/15 scr=6e1dcf2dd451a7e5 mass=0x1.12000c0000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.bbf8be0000000p+6/0x1.1600000000000p+7 atoms=31:b4c06dc1946e1355 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=-0x1.19d8340000000p-1 awm=0x1.28001a0000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=2 ctrl=0x0 mode=2 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.82cccc0000000p+6 aim=0x1.38d62e0000000p-5 flip=0 pie=3:8:-:-:- inv=[1048628:Battle Rifle;1048631:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=0x1.2db5000000000p+2,0x1.f556000000000p+1 view=0x1.b27d340000000p+9,0x1.7bed640000000p+9 prevhealth=0x1.82cccc0000000p+6 alarm=0x1.8bd147ae147aep+10@0x1.d0cb6a0000000p+9,0x1.6935480000000p+9 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=1 jet=0x1.7700000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.8ffbe76c8b439p+7/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048625 bg=0 offhandwait=0 gun=Battle Rifle rounds=0 reloading=1/0 reloadms=0x1.dafb22d0e5604p+9/0x1.1f80000000000p+11 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=1 lastfire=5699772 acttmr=6466408 prefire=0 frame=0/0] limbs=855.6934 749.4666 861.4876 756.8629 838.469 776.9998 845.7851 775.9997 paths=923f86110e190080 feet=595a4fc19eef8628"
+    },
+    {
+      "line": 47,
+      "text": "400 att uid=1048616 Green Dummy Arm BG par=1048615 moid=16/15 frame=4 pos=0x1.a735820000000p+9,0x1.7b87260000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.239c760000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a7f98c0000000p+9,0x1.79e0780000000p+9 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.a70af40000000p+9,0x1.7fcdd20000000p+9 hoff=-0x1.dd2ed40000000p+0,0x1.7b56420000000p+3 htgts=1 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 48,
+      "text": "400 att uid=1048618 Green Dummy Leg BG par=1048615 moid=17/15 frame=3 pos=0x1.a58b320000000p+9,0x1.8019a20000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=-0x1.8e5b160000000p+0 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a481ce0000000p+9,0x1.7d9d780000000p+9 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=0x1.58344c0000000p-3,0x1.6d5d940000000p+3 tgt=0x1.a480000000000p+9,0x1.8380000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 49,
+      "text": "400 att uid=1048617 Green Dummy Foot BG par=1048618 moid=255/255 frame=0 pos=0x1.a617500000000p+9,0x1.8452ee0000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a497500000000p+9,0x1.8352ee0000000p+9 po=0x1.9acf6e0000000p+2,0x1.fffffe0000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 52,
+      "text": "400 att uid=1048621 Green Dummy Head par=1048615 moid=18/15 frame=0 pos=0x1.a738bc0000000p+9,0x1.73e2060000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x1.111cce0000000p-8 rot=-0x1.c548ae0000000p-4 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.a6e3ea0000000p+9,0x1.76dd540000000p+9 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=0 moi=0x1.386b1e0000000p+0/0x1.3000000000000p+4 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 53,
+      "text": "400 att uid=1048623 Green Dummy Leg FG par=1048615 moid=19/15 frame=4 pos=0x1.a3aff00000000p+9,0x1.7fc8d00000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.1603380000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a3a7a00000000p+9,0x1.7d17900000000p+9 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.42b4b60000000p+2,0x1.a1ef3a0000000p+3 tgt=0x1.a100000000000p+9,0x1.8400000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 54,
+      "text": "400 att uid=1048622 Green Dummy Foot FG par=1048623 moid=255/255 frame=0 pos=0x1.a2a2360000000p+9,0x1.849f4c0000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a122360000000p+9,0x1.839f4c0000000p+9 po=0x1.2000000000000p+3,0x1.ffffec0000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 55,
+      "text": "400 att uid=1048624 Green Dummy Arm FG par=1048615 moid=20/15 frame=0 pos=0x1.a569a00000000p+9,0x1.7af9f80000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.2a0c7a0000000p+2 mass=0x1.3000000000000p+4 awm=0x1.8000000000000p+3 jp=0x1.a6023a0000000p+9,0x1.7941be0000000p+9 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x1.31745e0000000p+0/0x1.5000000000000p+4 atoms=11 hand=0x1.a5d7b80000000p+9,0x1.7c40900000000p+9 hoff=-0x1.5411340000000p-2,0x1.7f694c0000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 59,
+      "text": "400 actor uid=1048634 Green Dummy pos=0x1.2340020000000p+10,0x1.7608480000000p+9 prev=0x1.2340020000000p+10,0x1.7608480000000p+9 vel=-0x1.6000bc0000000p-5,-0x1.5b16840000000p-1 angvel=0x1.90c1740000000p-4 moid=22/22 scr=6e1dcf2dd451a7e5 mass=0x1.1600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.bbf8be0000000p+6/0x1.1600000000000p+7 atoms=31:91e552b63ccd32f7 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.6000bc0000000p-5,-0x1.60d8040000000p-2 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x0.0000000000000p+0 awm=0x1.3000000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=2 ctrl=0x0 mode=2 dis=0 status=0 team=1 aimode=1 wp=0 health=0x1.9000000000000p+6 aim=0x1.428f5c0000000p-3 flip=0 pie=3:8:-:-:- inv=[1048647:Battle Rifle;1048650:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=0x0.0000000000000p+0,0x0.0000000000000p+0 view=0x1.2aa83c0000000p+10,0x1.73a5b20000000p+9 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x1.3e07dc0000000p+4 wounds=0 jet=0x1.7700000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048948 bg=0 offhandwait=0 gun=Old Stock Battle Rifle rounds=15 reloading=0/0 reloadms=0x1.9e9116872b021p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=33332 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 1165.0034 755.99677 1170.8514 756.99005 paths=69b9838b7a9be1be feet=535208eebf537dc8"
+    },
+    {
+      "line": 60,
+      "text": "400 att uid=1048635 Green Dummy Arm BG par=1048634 moid=23/22 frame=1 pos=0x1.24cb2e0000000p+10,0x1.72fdec0000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=-0x1.4df0c80000000p-1 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2440020000000p+10,0x1.7188480000000p+9 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.25e2da0000000p+10,0x1.73fc9c0000000p+9 hoff=0x1.a2d8780000000p+2,0x1.3a29fc0000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 61,
+      "text": "400 att uid=1048637 Green Dummy Leg BG par=1048634 moid=24/22 frame=0 pos=0x1.2411060000000p+10,0x1.7926440000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.246d440000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.23c0020000000p+10,0x1.7688480000000p+9 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.036d840000000p+0,0x1.c1bf660000000p+2 tgt=0x1.2380000000000p+10,0x1.7a00000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 62,
+      "text": "400 att uid=1048636 Green Dummy Foot BG par=1048637 moid=255/255 frame=0 pos=0x1.243f260000000p+10,0x1.7b0bc60000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.237f260000000p+10,0x1.7a0bc60000000p+9 po=0x1.0cccd00000000p+1,0x1.0000060000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 65,
+      "text": "400 att uid=1048640 Green Dummy Head par=1048634 moid=25/22 frame=0 pos=0x1.22deda0000000p+10,0x1.6c8b260000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.62128a0000000p-4 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.2300020000000p+10,0x1.6f88480000000p+9 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 66,
+      "text": "400 att uid=1048642 Green Dummy Leg FG par=1048634 moid=26/22 frame=0 pos=0x1.22f7500000000p+10,0x1.792a120000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.07a3900000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2340020000000p+10,0x1.7688480000000p+9 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.0001fe0000000p+2,0x1.7bdc020000000p+2 tgt=0x1.2240000000000p+10,0x1.7980000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 67,
+      "text": "400 att uid=1048641 Green Dummy Foot FG par=1048642 moid=255/255 frame=0 pos=0x1.2300000000000p+10,0x1.7a80000000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2240000000000p+10,0x1.7980000000000p+9 po=0x1.1426a80000000p+1,0x1.ffffea0000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 68,
+      "text": "400 att uid=1048643 Green Dummy Arm FG par=1048634 moid=27/22 frame=0 pos=0x1.2399b40000000p+10,0x1.73b64a0000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=-0x1.cb66e40000000p-1 mass=0x1.5000000000000p+4 awm=0x1.c000000000000p+3 jp=0x1.2340020000000p+10,0x1.7208480000000p+9 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.242f860000000p+10,0x1.7460920000000p+9 hoff=0x1.df09920000000p+1,0x1.2c25040000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 72,
+      "text": "400 actor uid=1048653 Green Dummy pos=0x1.2c00000000000p+9,0x1.9000000000000p+6 prev=0x1.2c00000000000p+9,0x1.9000000000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x1.49500a0000000p-3 moid=29/29 scr=6e1dcf2dd451a7e5 mass=0x1.8400000000000p+6 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.023a780000000p+5/0x1.c800000000000p+5 atoms=31:e10995ae1bd4de0d rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x0.0000000000000p+0 awm=0x1.f000000000000p+5 inv=0x0.0000000000000p+0 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=0 ctrl=0x0 mode=2 dis=0 status=0 team=-1 aimode=4 wp=0 health=0x1.9000000000000p+6 aim=0x0.0000000000000p+0 flip=1 pie=3:8:-:-:- inv=[] mstate=4 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=0x0.0000000000000p+0,0x0.0000000000000p+0 view=0x1.1d00000000000p+9,0x1.9000000000000p+6 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[AI_StuckForTime:0x1.963bd70a3d70ap+12;TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;] imp=0x0.0000000000000p+0 wounds=0 jet=0x1.c200000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/01 htmr=0x1.0aa7ef9db22d1p+7/0x1.0aa7ef9db22d1p+6/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=0 bg=0 offhandwait=0 limbs=0 0 600.0976 76.09806 598.00006 117.44981 593.4372 114.235596 paths=3799096df84a47b5 feet=750b73a39dfdafa"
+    },
+    {
+      "line": 73,
+      "text": "400 att uid=1048654 Green Dummy Arm BG par=1048653 moid=30/29 frame=4 pos=0x1.29b6180000000p+9,0x1.5d9fc60000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.25f9fa0000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2a00000000000p+9,0x1.6c00000000000p+6 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.2ae16a0000000p+9,0x1.3de9ea0000000p+6 hoff=0x1.c2d46c0000000p+0,-0x1.70b0ae0000000p+3 htgts=1 reached=0 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 74,
+      "text": "400 att uid=1048656 Green Dummy Leg BG par=1048653 moid=31/29 frame=4 pos=0x1.29de2a0000000p+9,0x1.a78b3a0000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.f33b940000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2b00000000000p+9,0x1.9400000000000p+6 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.74817c0000000p-1,0x1.b2fede0000000p+3 tgt=0x1.2a80000000000p+9,0x1.c800000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 75,
+      "text": "400 att uid=1048655 Green Dummy Foot BG par=1048656 moid=255/255 frame=0 pos=0x1.2922e00000000p+9,0x1.d25fdc0000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2aa2e00000000p+9,0x1.ca5fdc0000000p+6 po=0x1.139e400000000p+3,0x1.ffffd40000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 76,
+      "text": "400 att uid=1048657 Jetpack par=1048653 moid=255/255 frame=0 pos=0x1.2f00000000000p+9,0x1.8400000000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+0 awm=0x0.0000000000000p+0 jp=0x1.2f00000000000p+9,0x1.8c00000000000p+6 po=-0x1.8000000000000p+2,-0x1.0000000000000p+0 jo=0x0.0000000000000p+0,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=1 dmg=0x0.0000000000000p+0 em=0/0/1/0/-0x1.8000000000000p-23/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x0.0000000000000p+0/0x0.0000000000000p+0/0x0.0000000000000p+0/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12"
+    },
+    {
+      "line": 78,
+      "text": "400 att uid=1048659 Green Dummy Head par=1048653 moid=32/29 frame=0 pos=0x1.2c80000000000p+9,0x1.4400000000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.2c80000000000p+9,0x1.5c00000000000p+6 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 79,
+      "text": "400 att uid=1048661 Green Dummy Leg FG par=1048653 moid=33/29 frame=4 pos=0x1.2b1cfc0000000p+9,0x1.a856c40000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.9d9e5e0000000p+0 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2c00000000000p+9,0x1.9400000000000p+6 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=0x1.41bea80000000p-1,0x1.bf8c680000000p+3 tgt=0x1.2d00000000000p+9,0x1.d400000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 80,
+      "text": "400 att uid=1048660 Green Dummy Foot FG par=1048661 moid=255/255 frame=0 pos=0x1.2ad0700000000p+9,0x1.d3f18c0000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2c50700000000p+9,0x1.cbf18c0000000p+6 po=0x1.2000000000000p+3,0x1.fffff40000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 81,
+      "text": "400 att uid=1048662 Green Dummy Arm FG par=1048653 moid=34/29 frame=1 pos=0x1.2c2c0e0000000p+9,0x1.7e7eb80000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.eae7800000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2c00000000000p+9,0x1.7000000000000p+6 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.2af7740000000p+9,0x1.903a480000000p+6 hoff=-0x1.088c8a0000000p+1,0x1.01d23e0000000p+3 htgts=0 reached=0 dmg=0x0.0000000000000p+0"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\runtime\\LogConsole.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 13,
+      "text": "NETWORK: Resyncing from the host (1): Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 14,
+      "text": "SYSTEM: Game saved to \"p5resync_4420\"!"
+    },
+    {
+      "line": 15,
+      "text": "SYSTEM: Game \"p5resync_4420\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\launch.json": [
+    {
+      "line": 15,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 18,
+      "text": "    \"-net-match-e2e-resync\","
+    },
+    {
+      "line": 24,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json\""
+    },
+    {
+      "line": 26,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    },
+    {
+      "line": 34,
+      "text": "    \"TEMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 35,
+      "text": "    \"TMP\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Temp\","
+    },
+    {
+      "line": 55,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\""
+    },
+    {
+      "line": 60,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Data -> D:\\\\Projects\\\\p4b-interp-validation\\\\Data\""
+    },
+    {
+      "line": 65,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\\\\Userdata\""
+    },
+    {
+      "line": 70,
+      "text": "      \"detail\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\""
+    },
+    {
+      "line": 74,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 75,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    },
+    {
+      "line": 99,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client_report.json\","
+    },
+    {
+      "line": 100,
+      "text": "    \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\trace.json.simdump.txt\""
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\runtime.json": [
+    {
+      "line": 3,
+      "text": "  \"cwd\": \"D:\\\\mx\\\\s41r2\\\\heal_global_d3\\\\fresh\\\\e2e\\\\resync_heal\\\\client\\\\runtime\","
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\stdout.log": [
+    {
+      "line": 7,
+      "text": "[net-match] resync: desync detected, reloading from the host snapshot"
+    },
+    {
+      "line": 10,
+      "text": "[net-match] launching from the received snapshot: p5resync_4448_recv"
+    },
+    {
+      "line": 12,
+      "text": "[net-match] resync: match relaunched from the snapshot"
+    },
+    {
+      "line": 16,
+      "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client_report.json"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\trace.json.console.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 15,
+      "text": "NETWORK: Resyncing from the host (1): tick 63 lockstep stopped: Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 16,
+      "text": "SYSTEM: Game \"p5resync_4448_recv\" staged for restart!"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\trace.json.simdump.txt": [
+    {
+      "line": 2,
+      "text": "400 actor uid=1048577 Brain Robot pos=0x1.b88d840000000p+9,0x1.772c7a0000000p+9 prev=0x1.b88d620000000p+9,0x1.7727f60000000p+9 vel=0x1.3d00f40000000p-10,-0x1.5484ea0000000p-2 angvel=0x1.e9b9640000000p-13 moid=1/1 scr=6e1dcf2dd451a7e5 mass=0x1.0600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.a5a8160000000p+5/0x1.0600000000000p+7 atoms=37:b6842f2ced15d8ef rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=0x1.9b8d200000000p-9,0x1.b1cac80000000p-4 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x1.ae1a7e0000000p-16 awm=0x1.2400000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.e000000000000p+4 ninv=2 ctrl=0x4 mode=1 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.0ba5e40000000p+6 aim=0x0.0000000000000p+0 flip=0 pie=3:8:-:-:- inv=[1048590:Battle Rifle;1048593:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.9b711eb851eb8p+12/0x1.a0a6666666666p+12 recent=0x1.c608000000000p-1,-0x1.4640000000000p-4 view=0x1.c780000000000p+9,0x1.7700000000000p+9 prevhealth=0x1.0ba5e40000000p+6 alarm=0x1.8ffbe76c8b439p+5@0x1.eabdd00000000p+9,0x1.6eaf720000000p+9 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestSpawnedUID:0x1.0051700000000p+20;TestSpawnedVM:0x1.800ba00000000p+22;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=7 jet=0x1.3880000000000p+11 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048587 bg=0 offhandwait=0 gun=Battle Rifle rounds=15 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=0 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 884.9954 770.8543 892.00854 770.29596 paths=5ecaaa6b2d39cf54 feet=a291046d9e7e13e"
+    },
+    {
+      "line": 22,
+      "text": "400 actor uid=1048596 Brain Robot pos=0x1.1802c00000000p+10,0x1.6f60be0000000p+9 prev=0x1.1802c00000000p+10,0x1.6f649a0000000p+9 vel=0x1.82dd380000000p-14,-0x1.b202f20000000p-2 angvel=0x1.8410100000000p-11 moid=8/8 scr=6e1dcf2dd451a7e5 mass=0x1.06001a0000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.a5a8160000000p+5/0x1.0600000000000p+7 atoms=37:108ca0cff08d8c1 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=0x1.8349b60000000p-14,-0x1.72b7f80000000p-4 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=-0x1.0cedb00000000p-19 awm=0x1.2400340000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.e000000000000p+4 ninv=2 ctrl=0x8000 mode=2 dis=0 status=0 team=1 aimode=1 wp=0 health=0x1.ca8f5a0000000p+5 aim=-0x1.d008000000000p-7 flip=1 pie=3:8:-:-:- inv=[1048609:Battle Rifle;1048612:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.5cf1c28f5c28fp+12/0x1.a0a6666666666p+12 recent=0x1.5e00000000000p-6,-0x1.81c4000000000p+0 view=0x1.1080320000000p+10,0x1.6f36600000000p+9 prevhealth=0x1.ca8f5a0000000p+5 alarm=0x1.a8fba5e353f7dp+9@0x1.fe2b5c0000000p+9,0x1.722b180000000p+9 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=11 jet=0x1.3880000000000p+11 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/01 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048606 bg=0 offhandwait=0 gun=Battle Rifle rounds=8 reloading=0/0 reloadms=0x1.a0a6666666666p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=6516406 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 1116.2893 749.2035 1109.8453 748.9861 paths=26301f68d85afe7f feet=cfaa0e009a51ae42"
+    },
+    {
+      "line": 46,
+      "text": "400 actor uid=1048615 Green Dummy pos=0x1.a3ea940000000p+9,0x1.7caa780000000p+9 prev=0x1.a3ec540000000p+9,0x1.7cb3640000000p+9 vel=-0x1.ca0d000000000p-4,-0x1.74878c0000000p-1 angvel=0x1.99752c0000000p+1 moid=15/15 scr=6e1dcf2dd451a7e5 mass=0x1.12000c0000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.bbf8be0000000p+6/0x1.1600000000000p+7 atoms=31:b4c06dc1946e1355 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=-0x1.19d8340000000p-1 awm=0x1.28001a0000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=2 ctrl=0x0 mode=2 dis=0 status=0 team=0 aimode=1 wp=0 health=0x1.82cccc0000000p+6 aim=0x1.38d62e0000000p-5 flip=0 pie=3:8:-:-:- inv=[1048628:Battle Rifle;1048631:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=0x1.2db5000000000p+2,0x1.f556000000000p+1 view=0x1.b27d340000000p+9,0x1.7bed640000000p+9 prevhealth=0x1.82cccc0000000p+6 alarm=0x1.8bd147ae147aep+10@0x1.d0cb6a0000000p+9,0x1.6935480000000p+9 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x0.0000000000000p+0 wounds=1 jet=0x1.7700000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.8ffbe76c8b439p+7/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048625 bg=0 offhandwait=0 gun=Battle Rifle rounds=0 reloading=1/0 reloadms=0x1.dafb22d0e5604p+9/0x1.1f80000000000p+11 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=1 lastfire=5699772 acttmr=6466408 prefire=0 frame=0/0] limbs=855.6934 749.4666 861.4876 756.8629 838.469 776.9998 845.7851 775.9997 paths=923f86110e190080 feet=595a4fc19eef8628"
+    },
+    {
+      "line": 47,
+      "text": "400 att uid=1048616 Green Dummy Arm BG par=1048615 moid=16/15 frame=4 pos=0x1.a735820000000p+9,0x1.7b87260000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.239c760000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a7f98c0000000p+9,0x1.79e0780000000p+9 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.a70af40000000p+9,0x1.7fcdd20000000p+9 hoff=-0x1.dd2ed40000000p+0,0x1.7b56420000000p+3 htgts=1 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 48,
+      "text": "400 att uid=1048618 Green Dummy Leg BG par=1048615 moid=17/15 frame=3 pos=0x1.a58b320000000p+9,0x1.8019a20000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=-0x1.8e5b160000000p+0 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a481ce0000000p+9,0x1.7d9d780000000p+9 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=0x1.58344c0000000p-3,0x1.6d5d940000000p+3 tgt=0x1.a480000000000p+9,0x1.8380000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 49,
+      "text": "400 att uid=1048617 Green Dummy Foot BG par=1048618 moid=255/255 frame=0 pos=0x1.a617500000000p+9,0x1.8452ee0000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a497500000000p+9,0x1.8352ee0000000p+9 po=0x1.9acf6e0000000p+2,0x1.fffffe0000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 52,
+      "text": "400 att uid=1048621 Green Dummy Head par=1048615 moid=18/15 frame=0 pos=0x1.a738bc0000000p+9,0x1.73e2060000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x1.111cce0000000p-8 rot=-0x1.c548ae0000000p-4 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.a6e3ea0000000p+9,0x1.76dd540000000p+9 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=0 moi=0x1.386b1e0000000p+0/0x1.3000000000000p+4 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 53,
+      "text": "400 att uid=1048623 Green Dummy Leg FG par=1048615 moid=19/15 frame=4 pos=0x1.a3aff00000000p+9,0x1.7fc8d00000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.1603380000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.a3a7a00000000p+9,0x1.7d17900000000p+9 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.42b4b60000000p+2,0x1.a1ef3a0000000p+3 tgt=0x1.a100000000000p+9,0x1.8400000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 54,
+      "text": "400 att uid=1048622 Green Dummy Foot FG par=1048623 moid=255/255 frame=0 pos=0x1.a2a2360000000p+9,0x1.849f4c0000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.a122360000000p+9,0x1.839f4c0000000p+9 po=0x1.2000000000000p+3,0x1.ffffec0000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 55,
+      "text": "400 att uid=1048624 Green Dummy Arm FG par=1048615 moid=20/15 frame=0 pos=0x1.a569a00000000p+9,0x1.7af9f80000000p+9 vel=-0x1.4f91e00000000p-5,-0x1.ac2ab80000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.2a0c7a0000000p+2 mass=0x1.3000000000000p+4 awm=0x1.8000000000000p+3 jp=0x1.a6023a0000000p+9,0x1.7941be0000000p+9 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x1.31745e0000000p+0/0x1.5000000000000p+4 atoms=11 hand=0x1.a5d7b80000000p+9,0x1.7c40900000000p+9 hoff=-0x1.5411340000000p-2,0x1.7f694c0000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 59,
+      "text": "400 actor uid=1048634 Green Dummy pos=0x1.2340020000000p+10,0x1.7608480000000p+9 prev=0x1.2340020000000p+10,0x1.7608480000000p+9 vel=-0x1.6000bc0000000p-5,-0x1.5b16840000000p-1 angvel=0x1.90c1740000000p-4 moid=22/22 scr=6e1dcf2dd451a7e5 mass=0x1.1600000000000p+7 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.bbf8be0000000p+6/0x1.1600000000000p+7 atoms=31:91e552b63ccd32f7 rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.6000bc0000000p-5,-0x1.60d8040000000p-2 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x0.0000000000000p+0 awm=0x1.3000000000000p+6 inv=0x1.c000000000000p+4 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=2 ctrl=0x0 mode=2 dis=0 status=0 team=1 aimode=1 wp=0 health=0x1.9000000000000p+6 aim=0x1.428f5c0000000p-3 flip=0 pie=3:8:-:-:- inv=[1048647:Battle Rifle;1048650:Battle Rifle;] mstate=2 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=0x0.0000000000000p+0,0x0.0000000000000p+0 view=0x1.2aa83c0000000p+10,0x1.73a5b20000000p+9 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;] imp=0x1.3e07dc0000000p+4 wounds=0 jet=0x1.7700000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/00 htmr=0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=1048948 bg=0 offhandwait=0 gun=Old Stock Battle Rifle rounds=15 reloading=0/0 reloadms=0x1.9e9116872b021p+12/-0x1.0624dd2f1a9fcp-10 fire=00 gate[act=0 fired1=0 clicked=0 full=0 reload=0 lastfire=33332 acttmr=6666400 prefire=0 frame=0/0] limbs=0 0 0 0 1165.0034 755.99677 1170.8514 756.99005 paths=69b9838b7a9be1be feet=535208eebf537dc8"
+    },
+    {
+      "line": 60,
+      "text": "400 att uid=1048635 Green Dummy Arm BG par=1048634 moid=23/22 frame=1 pos=0x1.24cb2e0000000p+10,0x1.72fdec0000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=-0x1.4df0c80000000p-1 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2440020000000p+10,0x1.7188480000000p+9 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.25e2da0000000p+10,0x1.73fc9c0000000p+9 hoff=0x1.a2d8780000000p+2,0x1.3a29fc0000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 61,
+      "text": "400 att uid=1048637 Green Dummy Leg BG par=1048634 moid=24/22 frame=0 pos=0x1.2411060000000p+10,0x1.7926440000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.246d440000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.23c0020000000p+10,0x1.7688480000000p+9 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.036d840000000p+0,0x1.c1bf660000000p+2 tgt=0x1.2380000000000p+10,0x1.7a00000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 62,
+      "text": "400 att uid=1048636 Green Dummy Foot BG par=1048637 moid=255/255 frame=0 pos=0x1.243f260000000p+10,0x1.7b0bc60000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.237f260000000p+10,0x1.7a0bc60000000p+9 po=0x1.0cccd00000000p+1,0x1.0000060000000p+1 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 65,
+      "text": "400 att uid=1048640 Green Dummy Head par=1048634 moid=25/22 frame=0 pos=0x1.22deda0000000p+10,0x1.6c8b260000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.62128a0000000p-4 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.2300020000000p+10,0x1.6f88480000000p+9 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 66,
+      "text": "400 att uid=1048642 Green Dummy Leg FG par=1048634 moid=26/22 frame=0 pos=0x1.22f7500000000p+10,0x1.792a120000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x1.07a3900000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2340020000000p+10,0x1.7688480000000p+9 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.0001fe0000000p+2,0x1.7bdc020000000p+2 tgt=0x1.2240000000000p+10,0x1.7980000000000p+9 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 67,
+      "text": "400 att uid=1048641 Green Dummy Foot FG par=1048642 moid=255/255 frame=0 pos=0x1.2300000000000p+10,0x1.7a80000000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2240000000000p+10,0x1.7980000000000p+9 po=0x1.1426a80000000p+1,0x1.ffffea0000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 68,
+      "text": "400 att uid=1048643 Green Dummy Arm FG par=1048634 moid=27/22 frame=0 pos=0x1.2399b40000000p+10,0x1.73b64a0000000p+9 vel=0x1.a667000000000p-10,-0x1.ab6b8e0000000p-3 angvel=0x0.0000000000000p+0 rot=-0x1.cb66e40000000p-1 mass=0x1.5000000000000p+4 awm=0x1.c000000000000p+3 jp=0x1.2340020000000p+10,0x1.7208480000000p+9 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=0 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.242f860000000p+10,0x1.7460920000000p+9 hoff=0x1.df09920000000p+1,0x1.2c25040000000p+2 htgts=0 reached=1 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 72,
+      "text": "400 actor uid=1048653 Green Dummy pos=0x1.2c00000000000p+9,0x1.9000000000000p+6 prev=0x1.2c00000000000p+9,0x1.9000000000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x1.49500a0000000p-3 moid=29/29 scr=6e1dcf2dd451a7e5 mass=0x1.8400000000000p+6 frc=0:14650fb0739d0383 imps=0:14650fb0739d0383 moi=0x1.023a780000000p+5/0x1.c800000000000p+5 atoms=31:e10995ae1bd4de0d rest=0x1.a0a6666666666p+12 osc=0 settle=0 pvel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 wdmg=00 air=0x0.0000000000000p+0/0x1.4000000000000p+2/0x1.0000000000000p+0 rot=0x0.0000000000000p+0 awm=0x1.f000000000000p+5 inv=0x0.0000000000000p+0 gold=0x0.0000000000000p+0 base=0x1.1800000000000p+5 ninv=0 ctrl=0x0 mode=2 dis=0 status=0 team=-1 aimode=4 wp=0 health=0x1.9000000000000p+6 aim=0x0.0000000000000p+0 flip=1 pie=3:8:-:-:- inv=[] mstate=4 goldpicked=0 atmr=0x1.1b526e978d4fep+9/0x0.0000000000000p+0/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12 recent=0x0.0000000000000p+0,0x0.0000000000000p+0 view=0x1.1d00000000000p+9,0x1.9000000000000p+6 prevhealth=0x1.9000000000000p+6 alarm=0x1.4d53333333333p+13@0x0.0000000000000p+0,0x0.0000000000000p+0 script=1/399/399/0 nv=[TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;] imp=0x0.0000000000000p+0 wounds=0 jet=0x1.c200000000000p+10 bonus=0x1.0000000000000p+0 emit=0 hstate=0/0/00/0/01 htmr=0x1.0aa7ef9db22d1p+7/0x1.0aa7ef9db22d1p+6/0x1.a0a6666666666p+12 crouch=0x0.0000000000000p+0/-0x1.0000000000000p+0 fg=0 bg=0 offhandwait=0 limbs=0 0 600.0976 76.09806 598.00006 117.44981 593.4372 114.235596 paths=3799096df84a47b5 feet=750b73a39dfdafa"
+    },
+    {
+      "line": 73,
+      "text": "400 att uid=1048654 Green Dummy Arm BG par=1048653 moid=30/29 frame=4 pos=0x1.29b6180000000p+9,0x1.5d9fc60000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.25f9fa0000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2a00000000000p+9,0x1.6c00000000000p+6 po=0x1.0000000000000p+2,-0x1.2000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.2ae16a0000000p+9,0x1.3de9ea0000000p+6 hoff=0x1.c2d46c0000000p+0,-0x1.70b0ae0000000p+3 htgts=1 reached=0 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 74,
+      "text": "400 att uid=1048656 Green Dummy Leg BG par=1048653 moid=31/29 frame=4 pos=0x1.29de2a0000000p+9,0x1.a78b3a0000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.f33b940000000p+2 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2b00000000000p+9,0x1.9400000000000p+6 po=0x1.0000000000000p+1,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=-0x1.74817c0000000p-1,0x1.b2fede0000000p+3 tgt=0x1.2a80000000000p+9,0x1.c800000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 75,
+      "text": "400 att uid=1048655 Green Dummy Foot BG par=1048656 moid=255/255 frame=0 pos=0x1.2922e00000000p+9,0x1.d25fdc0000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2aa2e00000000p+9,0x1.ca5fdc0000000p+6 po=0x1.139e400000000p+3,0x1.ffffd40000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 76,
+      "text": "400 att uid=1048657 Jetpack par=1048653 moid=255/255 frame=0 pos=0x1.2f00000000000p+9,0x1.8400000000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+0 awm=0x0.0000000000000p+0 jp=0x1.2f00000000000p+9,0x1.8c00000000000p+6 po=-0x1.8000000000000p+2,-0x1.0000000000000p+0 jo=0x0.0000000000000p+0,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=1 dmg=0x0.0000000000000p+0 em=0/0/1/0/-0x1.8000000000000p-23/0x1.a0a6666666666p+12/0x1.a0a6666666666p+12/0x0.0000000000000p+0/0x0.0000000000000p+0/0x0.0000000000000p+0/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12/0x1.a0a6666666666p+12:0x1.a0a6666666666p+12"
+    },
+    {
+      "line": 78,
+      "text": "400 att uid=1048659 Green Dummy Head par=1048653 moid=32/29 frame=0 pos=0x1.2c80000000000p+9,0x1.4400000000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.3000000000000p+4 awm=0x0.0000000000000p+0 jp=0x1.2c80000000000p+9,0x1.5c00000000000p+6 po=-0x1.0000000000000p+0,-0x1.a000000000000p+3 jo=0x0.0000000000000p+0,0x1.8000000000000p+2 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 79,
+      "text": "400 att uid=1048661 Green Dummy Leg FG par=1048653 moid=33/29 frame=4 pos=0x1.2b1cfc0000000p+9,0x1.a856c40000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.9d9e5e0000000p+0 mass=0x1.c000000000000p+3 awm=0x1.0000000000000p+2 jp=0x1.2c00000000000p+9,0x1.9400000000000p+6 po=0x0.0000000000000p+0,0x1.0000000000000p+0 jo=-0x1.4000000000000p+2,0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=13 ankle=0x1.41bea80000000p-1,0x1.bf8c680000000p+3 tgt=0x1.2d00000000000p+9,0x1.d400000000000p+6 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 80,
+      "text": "400 att uid=1048660 Green Dummy Foot FG par=1048661 moid=255/255 frame=0 pos=0x1.2ad0700000000p+9,0x1.d3f18c0000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x0.0000000000000p+0 mass=0x1.0000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2c50700000000p+9,0x1.cbf18c0000000p+6 po=0x1.2000000000000p+3,0x1.fffff40000000p+0 jo=-0x1.8000000000000p+1,-0x1.0000000000000p+1 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=20 dmg=0x0.0000000000000p+0"
+    },
+    {
+      "line": 81,
+      "text": "400 att uid=1048662 Green Dummy Arm FG par=1048653 moid=34/29 frame=1 pos=0x1.2c2c0e0000000p+9,0x1.7e7eb80000000p+6 vel=-0x1.2d97780000000p+0,0x0.0000000000000p+0 angvel=0x0.0000000000000p+0 rot=0x1.eae7800000000p+2 mass=0x1.c000000000000p+2 awm=0x0.0000000000000p+0 jp=0x1.2c00000000000p+9,0x1.7000000000000p+6 po=0x0.0000000000000p+0,-0x1.0000000000000p+3 jo=-0x1.c000000000000p+1,-0x1.0000000000000p+0 hf=1 moi=0x0.0000000000000p+0/0x0.0000000000000p+0 atoms=11 hand=0x1.2af7740000000p+9,0x1.903a480000000p+6 hoff=-0x1.088c8a0000000p+1,0x1.01d23e0000000p+3 htgts=0 reached=0 dmg=0x0.0000000000000p+0"
+    }
+  ],
+  "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\runtime\\LogConsole.txt": [
+    {
+      "line": 8,
+      "text": "PRINT: [global-callback] start=1 actor=1048653"
+    },
+    {
+      "line": 15,
+      "text": "NETWORK: Resyncing from the host (1): tick 63 lockstep stopped: Desync:sim state diverged at tick 60 (Client)"
+    },
+    {
+      "line": 16,
+      "text": "SYSTEM: Game \"p5resync_4448_recv\" staged for restart!"
+    }
+  ]
+}

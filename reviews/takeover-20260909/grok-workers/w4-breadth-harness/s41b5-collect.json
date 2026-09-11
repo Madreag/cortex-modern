@@ -1,0 +1,518 @@
+{
+  "breadth": {
+    "path": "D:\\mx\\s41b5\\breadth.json",
+    "execution_pass": false,
+    "complete": true,
+    "stop_reason": null,
+    "missing_jobs": [],
+    "validation_errors": [
+      "declared breadth inventory differs",
+      "breadth step coverage/order differs; missing, duplicate, or unexpected case"
+    ],
+    "expected_jobs": [
+      "heal"
+    ],
+    "source_head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "steps": [
+      {
+        "id": "heal",
+        "family": "heal",
+        "passed": true,
+        "exit": 0,
+        "failures": [],
+        "evidence": [
+          "D:\\mx\\s41b5\\j73\\fresh\\e2e\\resync_heal\\client\\launch.json",
+          "D:\\mx\\s41b5\\j73\\fresh\\e2e\\resync_heal\\client_report.json",
+          "D:\\mx\\s41b5\\j73\\fresh\\e2e\\resync_heal\\host\\launch.json",
+          "D:\\mx\\s41b5\\j73\\fresh\\e2e\\resync_heal\\host_report.json",
+          "D:\\mx\\s41b5\\j73\\result.json"
+        ],
+        "counters": [
+          {
+            "path": "D:\\mx\\s41b5\\j73\\fresh\\e2e\\resync_heal\\client_report.json",
+            "values": {
+              "clock_divergence_max_ms": [
+                [
+                  "service.reconnect.clock_divergence_max_ms",
+                  0
+                ]
+              ],
+              "timeout_resumptions": [
+                [
+                  "service.runner.session.stats.timeout_resumptions",
+                  0
+                ]
+              ],
+              "census_refusals": [
+                [
+                  "service.reconnect.census_refusals",
+                  0
+                ]
+              ],
+              "host_reseats_issued": [
+                [
+                  "service.reconnect.host_reseats_issued",
+                  0
+                ]
+              ],
+              "host_reseats_without_a_ledger": [
+                [
+                  "service.reconnect.host_reseats_without_a_ledger",
+                  0
+                ]
+              ],
+              "host_reseats_without_survivors": [
+                [
+                  "service.reconnect.host_reseats_without_survivors",
+                  0
+                ]
+              ],
+              "host_reseat_live_on_team_not_named": [
+                [
+                  "service.reconnect.host_reseat_live_on_team_not_named",
+                  0
+                ]
+              ],
+              "host_ledger_drops_recorded": [
+                [
+                  "service.reconnect.host_ledger_drops_recorded",
+                  0
+                ]
+              ],
+              "host_seats_dropped": [
+                [
+                  "service.reconnect.host_seats_dropped",
+                  0
+                ]
+              ],
+              "round_readoptions": [
+                [
+                  "service.runner.lockstep.round_readoptions",
+                  0
+                ]
+              ],
+              "start_answers_suppressed": [
+                [
+                  "service.runner.lockstep.start_answers_suppressed",
+                  0
+                ]
+              ],
+              "start_packets_sent": [
+                [
+                  "service.runner.lobby.stats.start_packets_sent",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.start_packets_sent",
+                  1
+                ]
+              ],
+              "start_retransmits": [
+                [
+                  "service.runner.lockstep.start_retransmits",
+                  0
+                ]
+              ],
+              "peer_leave_frames": [
+                [
+                  "service.runner.lockstep.peer_leave_frames",
+                  {}
+                ]
+              ],
+              "stops_from_left_peers": [
+                [
+                  "service.runner.lockstep.stops_from_left_peers",
+                  0
+                ]
+              ],
+              "unresolved_observation_packets": [
+                [
+                  "service.runner.lockstep.unresolved_observation_packets",
+                  0
+                ]
+              ],
+              "relay_send_failures": [
+                [
+                  "service.runner.lockstep.peers.1.relay_send_failures",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.relay_send_failures",
+                  0
+                ]
+              ],
+              "relay_resends": [
+                [
+                  "service.runner.lockstep.peers.1.relay_resends",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.relay_resends",
+                  0
+                ]
+              ],
+              "relay_congestion_holds": [
+                [
+                  "service.runner.lockstep.relay_congestion_holds",
+                  0
+                ]
+              ],
+              "relay_longest_congestion_hold_ms": [
+                [
+                  "service.runner.lockstep.relay_longest_congestion_hold_ms",
+                  0
+                ]
+              ],
+              "relay_backlog_overflows": [
+                [
+                  "service.runner.lockstep.peers.1.relay_backlog_overflows",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.relay_backlog_overflows",
+                  0
+                ]
+              ],
+              "timeout_reason": [
+                [
+                  "service.runner.lockstep.timeout_reason",
+                  "Complete:e2e complete"
+                ]
+              ]
+            }
+          },
+          {
+            "path": "D:\\mx\\s41b5\\j73\\fresh\\e2e\\resync_heal\\host_report.json",
+            "values": {
+              "clock_divergence_max_ms": [
+                [
+                  "service.reconnect.clock_divergence_max_ms",
+                  0
+                ]
+              ],
+              "timeout_resumptions": [
+                [
+                  "service.runner.session.stats.timeout_resumptions",
+                  0
+                ]
+              ],
+              "census_refusals": [
+                [
+                  "service.reconnect.census_refusals",
+                  0
+                ]
+              ],
+              "host_reseats_issued": [
+                [
+                  "service.reconnect.host_reseats_issued",
+                  0
+                ]
+              ],
+              "host_reseats_without_a_ledger": [
+                [
+                  "service.reconnect.host_reseats_without_a_ledger",
+                  0
+                ]
+              ],
+              "host_reseats_without_survivors": [
+                [
+                  "service.reconnect.host_reseats_without_survivors",
+                  0
+                ]
+              ],
+              "host_reseat_live_on_team_not_named": [
+                [
+                  "service.reconnect.host_reseat_live_on_team_not_named",
+                  0
+                ]
+              ],
+              "host_ledger_drops_recorded": [
+                [
+                  "service.reconnect.host_ledger_drops_recorded",
+                  0
+                ]
+              ],
+              "host_seats_dropped": [
+                [
+                  "service.reconnect.host_seats_dropped",
+                  0
+                ]
+              ],
+              "round_readoptions": [
+                [
+                  "service.runner.lockstep.round_readoptions",
+                  0
+                ]
+              ],
+              "start_answers_suppressed": [
+                [
+                  "service.runner.lockstep.start_answers_suppressed",
+                  0
+                ]
+              ],
+              "start_packets_sent": [
+                [
+                  "service.runner.lobby.stats.start_packets_sent",
+                  1
+                ],
+                [
+                  "service.runner.lockstep.start_packets_sent",
+                  2
+                ]
+              ],
+              "start_retransmits": [
+                [
+                  "service.runner.lockstep.start_retransmits",
+                  1
+                ]
+              ],
+              "peer_leave_frames": [
+                [
+                  "service.runner.lockstep.peer_leave_frames",
+                  {}
+                ]
+              ],
+              "stops_from_left_peers": [
+                [
+                  "service.runner.lockstep.stops_from_left_peers",
+                  0
+                ]
+              ],
+              "unresolved_observation_packets": [
+                [
+                  "service.runner.lockstep.unresolved_observation_packets",
+                  0
+                ]
+              ],
+              "relay_send_failures": [
+                [
+                  "service.runner.lockstep.peers.2.relay_send_failures",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.relay_send_failures",
+                  0
+                ]
+              ],
+              "relay_resends": [
+                [
+                  "service.runner.lockstep.peers.2.relay_resends",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.relay_resends",
+                  0
+                ]
+              ],
+              "relay_congestion_holds": [
+                [
+                  "service.runner.lockstep.relay_congestion_holds",
+                  0
+                ]
+              ],
+              "relay_longest_congestion_hold_ms": [
+                [
+                  "service.runner.lockstep.relay_longest_congestion_hold_ms",
+                  0
+                ]
+              ],
+              "relay_backlog_overflows": [
+                [
+                  "service.runner.lockstep.peers.2.relay_backlog_overflows",
+                  0
+                ],
+                [
+                  "service.runner.lockstep.relay_backlog_overflows",
+                  0
+                ]
+              ],
+              "timeout_reason": [
+                [
+                  "service.runner.lockstep.timeout_reason",
+                  "Complete:e2e complete"
+                ]
+              ]
+            }
+          }
+        ],
+        "started": "2026-09-11T05:25:40Z",
+        "finished": "2026-09-11T05:26:13Z",
+        "source_before": {
+          "head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+          "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+          "source_files": 9043,
+          "unchanged_vendor_font_samples": {
+            "Source/GUI/imgui/misc/fonts/Cousine-Regular.ttf": "0d5d5eeb6a342432bd63a3c0d16e8470160e019933ee5af3e159d06d665dacce",
+            "Source/GUI/imgui/misc/fonts/DroidSans.ttf": "4e2371bc0e4cf6983342e150412f140da79d674c9be0b56458401f581072ecd3",
+            "Source/GUI/imgui/misc/fonts/Karla-Regular.ttf": "907c55a993e35b3ae4f3b8b8c28367f4b6d431df8e9ca6fbd382d8317dd3684e",
+            "Source/GUI/imgui/misc/fonts/ProggyClean.ttf": "527d2a443ce051f93f7e77b855609722b8cb220a9f104b4aa037be5c90b71324",
+            "Source/GUI/imgui/misc/fonts/ProggyTiny.ttf": "79bf8d3896ba83ae2f9c4fa214dce8fc689eae47950474947a4cc5c6e14a9bfc",
+            "Source/GUI/imgui/misc/fonts/Roboto-Medium.ttf": "8559132c89ad51d8a2ba5b171887a44a7ba93776e205f553573de228e64b45f8"
+          },
+          "verified_utc": "2026-09-11T05:25:40Z"
+        },
+        "log": "D:\\mx\\s41b5\\logs\\heal.log",
+        "source_after": {
+          "head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+          "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+          "source_files": 9043,
+          "unchanged_vendor_font_samples": {
+            "Source/GUI/imgui/misc/fonts/Cousine-Regular.ttf": "0d5d5eeb6a342432bd63a3c0d16e8470160e019933ee5af3e159d06d665dacce",
+            "Source/GUI/imgui/misc/fonts/DroidSans.ttf": "4e2371bc0e4cf6983342e150412f140da79d674c9be0b56458401f581072ecd3",
+            "Source/GUI/imgui/misc/fonts/Karla-Regular.ttf": "907c55a993e35b3ae4f3b8b8c28367f4b6d431df8e9ca6fbd382d8317dd3684e",
+            "Source/GUI/imgui/misc/fonts/ProggyClean.ttf": "527d2a443ce051f93f7e77b855609722b8cb220a9f104b4aa037be5c90b71324",
+            "Source/GUI/imgui/misc/fonts/ProggyTiny.ttf": "79bf8d3896ba83ae2f9c4fa214dce8fc689eae47950474947a4cc5c6e14a9bfc",
+            "Source/GUI/imgui/misc/fonts/Roboto-Medium.ttf": "8559132c89ad51d8a2ba5b171887a44a7ba93776e205f553573de228e64b45f8"
+          },
+          "verified_utc": "2026-09-11T05:26:14Z"
+        }
+      }
+    ]
+  },
+  "heal_out": "D:\\mx\\s41b5\\j73",
+  "result_path": "D:\\mx\\s41b5\\j73\\result.json",
+  "input_delay": 3,
+  "lane": "resync_heal",
+  "pass": true,
+  "complete": true,
+  "source_unchanged": true,
+  "checks": [
+    {
+      "name": "host_process_exit",
+      "status": "pass",
+      "detail": "exit_code=0 timed_out=False elapsed=21.352"
+    },
+    {
+      "name": "host_report_present",
+      "status": "pass",
+      "detail": "host_report.json"
+    },
+    {
+      "name": "client_process_exit",
+      "status": "pass",
+      "detail": "exit_code=0 timed_out=False elapsed=23.239"
+    },
+    {
+      "name": "client_report_present",
+      "status": "pass",
+      "detail": "client_report.json"
+    },
+    {
+      "name": "host_liveness",
+      "status": "pass",
+      "detail": "running_ticks=600 runtime_error='' setup_error='' activity_state=Over winner_team=0"
+    },
+    {
+      "name": "host_lockstep_completed",
+      "status": "pass",
+      "detail": "service=Running runner=Running timeout_reason='Complete:e2e complete' input_delay=None"
+    },
+    {
+      "name": "host_no_editor",
+      "status": "pass",
+      "detail": "entered_editor=False"
+    },
+    {
+      "name": "host_pace_recorded",
+      "status": "pass",
+      "detail": "wall_tps=47.7846 sim_ms_per_tick=1.84961 (recorded, not asserted: two peers share one CPU here)"
+    },
+    {
+      "name": "host_resynced",
+      "status": "pass",
+      "detail": "resyncs=1 actors=2 actors_peak=4 initial_actors=4"
+    },
+    {
+      "name": "client_liveness",
+      "status": "pass",
+      "detail": "running_ticks=601 runtime_error='' setup_error='' activity_state=Over winner_team=0"
+    },
+    {
+      "name": "client_lockstep_completed",
+      "status": "pass",
+      "detail": "service=Running runner=Running timeout_reason='Complete:e2e complete' input_delay=None"
+    },
+    {
+      "name": "client_no_editor",
+      "status": "pass",
+      "detail": "entered_editor=False"
+    },
+    {
+      "name": "client_pace_recorded",
+      "status": "pass",
+      "detail": "wall_tps=60.1549 sim_ms_per_tick=13.5932 (recorded, not asserted: two peers share one CPU here)"
+    },
+    {
+      "name": "client_resynced",
+      "status": "pass",
+      "detail": "resyncs=1 actors=2 actors_peak=4 initial_actors=4"
+    },
+    {
+      "name": "config_agreement",
+      "status": "pass",
+      "detail": "host=8c5c9bd8637f18753f39d6032aecde167705ea33895b5456f33b2798f5b6d3ff client=8c5c9bd8637f18753f39d6032aecde167705ea33895b5456f33b2798f5b6d3ff"
+    },
+    {
+      "name": "census_agreement",
+      "status": "pass",
+      "detail": "host actors=2 client actors=2 (peak host=4 client=4); a matching count says the rosters agree, not what the actors did"
+    },
+    {
+      "name": "scenario_identity_recorded",
+      "status": "pass",
+      "detail": "activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish input_delay=3 peers=2 players=[{'cpu': False, 'display_name': 'Host', 'peer_id': 1, 'team': 0}, {'cpu': False, 'display_name': 'Client', 'peer_id': 2, 'team': 1}]"
+    },
+    {
+      "name": "prediction_counters_recorded",
+      "status": "pass",
+      "detail": "enabled=True previews=636 actor_ticks=1908 taken=0 violations=0"
+    },
+    {
+      "name": "prediction_executed",
+      "status": "pass",
+      "detail": "previews=636 violations=0"
+    },
+    {
+      "name": "host_script_continued",
+      "status": "pass",
+      "detail": null
+    },
+    {
+      "name": "host_no_script_errors",
+      "status": "pass",
+      "detail": null
+    },
+    {
+      "name": "client_script_continued",
+      "status": "pass",
+      "detail": null
+    },
+    {
+      "name": "client_no_script_errors",
+      "status": "pass",
+      "detail": null
+    }
+  ],
+  "heal_log": "resync_heal PASS []\n{\"case\": \"heal_mod_semantics\", \"pass\": true, \"failed\": []}\n",
+  "host_local_prediction": {
+    "enabled": true,
+    "previews": 636,
+    "actor_ticks": 1908,
+    "ms_total": 2627.94,
+    "shadows": 129,
+    "taken": 0,
+    "violations": 0
+  },
+  "client_local_prediction": {
+    "enabled": true,
+    "previews": 55,
+    "actor_ticks": 165,
+    "ms_total": 231.248,
+    "shadows": 0,
+    "taken": 0,
+    "violations": 0
+  },
+  "host_resyncs": 1,
+  "client_resyncs": 1
+}

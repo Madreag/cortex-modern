@@ -1,0 +1,7 @@
+[net-reconnect-session-selftest] PASS: moderation view ages the drop from the plane's clock
+[net-reconnect-session-selftest] GATE initial-disconnect-before-ack PASS
+[net-reconnect-session-selftest] GATE ack-lost PASS
+[net-reconnect-session-selftest] GATE commit-result-lost PASS
+[net-reconnect-session-selftest] GATE delayed-duplicate PASS
+[net-reconnect-session-selftest] GATE substitute-disappears-before-ack PASS
+[net-reconnect-session-selftest] PASS

@@ -1,0 +1,24 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260910233747
+Username: EROL-PC\egerm
+RunAs User: EROL-PC\egerm
+Configuration Name: 
+Machine: EROL-PC (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\windows\system32\windowspowershell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\Projects\reviews\takeover-20260909\grok-workers\firewall_register_task.ps1
+Process ID: 4588
+PSVersion: 5.1.26100.8085
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8085
+BuildVersion: 10.0.26100.8085
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+PS>$global:?
+True
+**********************
+Windows PowerShell transcript end
+End time: 20260910233748
+**********************

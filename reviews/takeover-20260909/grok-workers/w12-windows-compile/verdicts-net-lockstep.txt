@@ -1,0 +1,79 @@
+[net-lockstep-selftest] PASS owed_frame_retry_ends_with_the_round frames_sent=1 client=Failed
+[net-lockstep-selftest] PASS owed_frame_keeps_its_commands
+[net-lockstep-selftest] PASS stopped_round_stops_resending frames_sent=1
+[net-lockstep-selftest] PASS failed_round_stops_resending frames_sent=1
+[net-lockstep-selftest] PASS owed_frame_outlives_its_local_commit frames_sent=2
+[net-lockstep-selftest] PASS readopt_resend_survives_a_refused_send frames_sent=2
+[net-lockstep-selftest] PASS review_authority_start_does_not_fail_the_round
+[net-lockstep-selftest] PASS review_readopt_clears_the_left_peer
+[net-lockstep-selftest] PASS review_readopt_clears_the_deferred_stop deferred_mode_kept
+[net-lockstep-selftest] PASS review_four_peer_stray_start_rate starts=2 in 1005ms
+[net-lockstep-selftest] PASS client_follows_the_hosts_new_round readoptions=1
+[net-lockstep-selftest] PASS restarted_peer_is_not_handed_the_old_round suppressed
+[net-lockstep-selftest] PASS repeated_start_carries_the_round relayed=4
+[net-lockstep-selftest] PASS repeated_starts_do_not_amplify host=1 client=1
+[net-lockstep-selftest] PASS observation_slot_codec repeat=5B first_use=21B legacy=44B budget_stop=1024/4096 lost_rebinding=refused v14_control_committed_key=700000
+[net-lockstep-selftest] PASS recovery_stops_at_completed_tick D=0,3 desync/rejoin
+[net-lockstep-selftest] PASS completion_drains_applied_ticks D=0,3
+[net-lockstep-selftest] PASS recovery_wire_refusals cases=23
+[net-lockstep-selftest] PASS recovery_wire_relay_retry peers=3,4 observations=4096 targets=2
+[net-lockstep-selftest] PASS recovery_input_membership never_member=refused accepted_departed=preserved
+[net-lockstep-selftest] PASS observation_overflow_carry burst=2048 carried=3534 delivered=4096/4096 sustained_dropped=19730
+[net-lockstep-selftest] PASS stale_round_frame_counts_as_traffic last_heard=0->5000 stale=1 unresolved=0
+[net-lockstep-selftest] PASS observation_faults_told_apart admission=1 unresolved=1
+[net-lockstep-selftest] PASS stale_round_leaves_the_live_table shape=0 stale=1 unresolved=0 last_heard=10->15 frames=5 observations=12
+[net-lockstep-selftest] PASS stale_round_leaves_the_live_table shape=1 stale=1 unresolved=0 last_heard=10->15 frames=5 observations=12
+[net-lockstep-selftest] PASS resync_stragglers_are_not_holes stale=3 unresolved=0 last_heard=15 recovered_frames=4
+[net-lockstep-selftest] PASS refused_block_leaves_no_bindings bindings_after_refusal=0 next_packet=ok one_slot_twice=2_bindings mid_block_reference=first_key
+[net-lockstep-selftest] PASS four_peer_observation_relay n=64 relayed_bytes_per_frame first_use=1501 steady=445 (was 2940) factor first_use=1.95869 steady=6.60674 relay_bytes_sent=38880 largest_relay_packet_bytes=1501
+[net-lockstep-selftest] PASS four_peer_observation_relay n=256 relayed_bytes_per_frame first_use=5821 steady=1598 (was 11388) factor first_use=1.95636 steady=7.12641 relay_bytes_sent=140898 largest_relay_packet_bytes=5821
+[net-lockstep-selftest] PASS four_peer_observation_relay n=512 relayed_bytes_per_frame first_use=11581 steady=3134 (was 22652) factor first_use=1.95596 steady=7.22782 relay_bytes_sent=276834 largest_relay_packet_bytes=11581
+[net-lockstep-selftest] PASS congested_relay_holds_every_peer refusals=1329 holds=3 resends=42 dropped_silent=0 peers_left=0 frames=8
+[net-lockstep-selftest] PASS four_peer_round_runs_to_length peers_left=0 frames=45 refusals=0 holds=0 longest_hold_ms=0 overflows=0 ignored_stops=0 closed_on_eviction=0 client_frames=40/40/40
+[net-lockstep-selftest] PASS dead_link_loses_only_its_own_seat peers_left=1 frames=55 refusals=602 holds=1 longest_hold_ms=3000 overflows=0 ignored_stops=0 closed_on_eviction=1 client_frames=0/50/50
+[net-lockstep-selftest] PASS dead_link_healed_in_time_keeps_every_seat peers_left=0 frames=46 refusals=2 holds=0 longest_hold_ms=0 overflows=0 ignored_stops=0 closed_on_eviction=0 client_frames=45/45/45
+[net-resync-selftest] PASS player_bindings_roundtrip
+[net-resync-selftest] PASS player_binding_signed_zero
+[net-resync-selftest] PASS command_capacity_and_order
+[net-resync-selftest] PASS command_sequences
+[net-resync-selftest] PASS player_binding_limits
+[net-resync-selftest] PASS checksum_applied_commands
+[net-resync-selftest] PASS player_binding_applied_commands
+[net-resync-selftest] PASS legacy_v8_v17_bytes
+[net-resync-selftest] PASS resync_roundtrip
+[net-resync-selftest] PASS resync_refusal_atomicity
+[net-resync-selftest] PASS resync_input_limits
+[net-resync-selftest] PASS future_command_input_ids
+[net-resync-selftest] PASS future_command_wire_ids
+[net-resync-selftest] PASS future_player_bindings
+[net-resync-selftest] PASS complete_input_window
+[net-resync-selftest] PASS complete_input_refusals
+[net-resync-runtime-selftest] PASS: asymmetric priming 0/3
+[net-resync-runtime-selftest] PASS: asymmetric priming 3/0
+[net-resync-runtime-selftest] PASS: asymmetric priming 1/3
+[net-resync-runtime-selftest] PASS: asymmetric priming 3/1
+[net-resync-runtime-selftest] PASS: start mode
+[net-resync-runtime-selftest] PASS: lost start
+[net-resync-runtime-selftest] PASS: primed round readoption
+[net-resync-runtime-selftest] PASS: production requeue
+[net-resync-runtime-selftest] PASS: scenario lifetime
+[net-resync-runtime-selftest] PASS: binding ACK authority
+[net-resync-runtime-selftest] PASS: checksum ACK authority
+[net-resync-runtime-selftest] PASS: snapshot capture
+[net-resync-runtime-selftest] PASS: full asymmetric input 0/3
+[net-resync-runtime-selftest] PASS: full asymmetric input 3/0
+[net-resync-runtime-selftest] PASS: full asymmetric input 1/3
+[net-resync-runtime-selftest] PASS: full asymmetric input 3/1
+[net-resync-runtime-selftest] PASS: recovery chunk retry
+[net-resync-runtime-selftest] PASS: three-peer capture
+[net-resync-runtime-selftest] PASS: local history bound
+[net-resync-runtime-selftest] PASS: second heal before resend
+[net-resync-runtime-selftest] PASS: unknown local input
+[net-resync-runtime-selftest] PASS: authoritative input restore
+[net-resync-runtime-selftest] PASS: restore metadata refusals
+[net-resync-runtime-selftest] PASS: restore history conflicts
+[net-resync-runtime-selftest] PASS: unsent intent targets
+[net-resync-runtime-selftest] PASS: repeated full restore 1/3
+[net-resync-runtime-selftest] PASS: repeated full restore 3/1
+[net-resync-runtime-selftest] PASS
+[net-lockstep-selftest] PASS

@@ -1,0 +1,106 @@
+msbuild=C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe
+sln=D:\Projects\takeover-build\RTEA.sln
+cmd=C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe D:\Projects\takeover-build\RTEA.sln /t:RTEA /p:Configuration=Final /p:Platform=x64 /m /nologo /v:minimal
+GNS_ROOT=D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release
+GNS_DEP_ROOT=D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release\vcpkg_installed\x64-windows
+CL=/MP6
+cwd=D:\Projects\takeover-build
+
+
+D:\Projects\takeover-build\RTEA.common.props(3,3): warning MSB4011: "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.Cpp.Default.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (61,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(212,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(266,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(319,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(373,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(435,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(497,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(560,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(623,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+D:\Projects\takeover-build\RTEA.vcxproj(683,3): warning MSB4011: "D:\Projects\takeover-build\RTEA.common.props" cannot be imported again. It was already imported at "D:\Projects\takeover-build\RTEA.vcxproj (159,3)". This is most likely a build authoring error. This subsequent import will be ignored. 
+  Prerequisites for building static lib
+  luabind.vcxproj -> D:\Projects\takeover-build\external\sources\luabind-0.7.1\_Bin\luabind-release.lib
+  allegro.vcxproj -> D:\Projects\takeover-build\external\sources\allegro 4.4.3.1-custom\_Bin\allegro-release.lib
+  minilua.c
+     Creating library minilua.lib and object minilua.exp
+  buildvm.c
+  buildvm_asm.c
+  buildvm_fold.c
+  buildvm_lib.c
+  buildvm_peobj.c
+     Creating library buildvm.lib and object buildvm.exp
+  
+  === Successfully complete pre-build job for Windows/x64 ===
+  lib_base.c
+  lib_bit.c
+  lib_buffer.c
+  lib_debug.c
+  lib_ffi.c
+  lib_io.c
+  lib_jit.c
+  lib_math.c
+  lib_os.c
+  lib_string.c
+  lib_table.c
+  lj_bc.c
+  lj_crecord.c
+  lj_dispatch.c
+  lj_err.c
+  lj_ffrecord.c
+  lj_opt_fold.c
+  lj_record.c
+D:\Projects\takeover-build\external\sources\LuaJIT-2.1\src\lj_opt_fold.c(317,24): warning C4244: '=': conversion from 'int64_t' to 'int32_t', possible loss of data [D:\Projects\takeover-build\external\sources\LuaJIT-2.1\libluajit.vcxproj]
+  libluajit.vcxproj -> D:\Projects\takeover-build\external\sources\LuaJIT-2.1\_Bin\luajit-release.lib
+  Post build linking
+  luajit.c
+     Creating library luajit.lib and object luajit.exp
+  
+  === Successfully complete post-build job for Windows/ ===
+  LuaMan.cpp
+D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297: 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller': function assumed not to throw an exception but does [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:         with [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:         [ [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:             _Ty2=const RTE::PathRequest [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7): warning C4297:         ] [D:\Projects\takeover-build\RTEA.vcxproj]
+  (compiling source file 'Source/Managers/LuaMan.cpp')
+      D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7):
+      destructor or deallocator has a (possibly implicit) non-throwing exception specification
+      D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(266,7):
+      the template instantiation context (the oldest one first) is
+          D:\Projects\takeover-build\Source\Managers\LuaMan.cpp(5797,12):
+          see reference to class template instantiation 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>' being compiled
+          with
+          [
+              _Ty2=const RTE::PathRequest
+          ]
+          D:\Projects\takeover-build\external\sources\luabind-0.7.1\luabind\detail\call_function.hpp(252,6):
+          while compiling class template member function 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller(void)'
+          with
+          [
+              _Ty2=const RTE::PathRequest
+          ]
+              D:\Projects\takeover-build\Source\Managers\LuaMan.cpp(5797,31):
+              see the first reference to 'luabind::detail::proxy_function_void_caller<boost::tuples::tuple<const int *,_Ty2 *,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type,boost::tuples::null_type>>::~proxy_function_void_caller' in 'RTE::LuaMan::ExecuteLuaScriptCallbacks'
+          with
+          [
+              _Ty2=const RTE::PathRequest
+          ]
+  
+  gl.c
+  rlgl.c
+  rlutils.c
+  rtextures.c
+  rshapes.c
+D:\Projects\takeover-build\Source\Renderer\raylib\rtextures.c(5063,20): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\Source\Renderer\raylib\rtextures.c(5063,26): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\Source\Renderer\raylib\rtextures.c(5063,32): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\Source\Renderer\raylib\rtextures.c(5063,38): warning C4244: 'initializing': conversion from 'float' to 'unsigned char', possible loss of data [D:\Projects\takeover-build\RTEA.vcxproj]
+D:\Projects\takeover-build\Source\Renderer\raylib\rlgl.c(3914,32): warning C4090: '=': different 'const' qualifiers [D:\Projects\takeover-build\RTEA.vcxproj]
+     Creating library .\Cortex Command.lib and object .\Cortex Command.exp
+  Generating code
+  Finished generating code
+  LINK : the 32-bit linker (C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\HostX86\x64\link.exe) failed to do memory mapped file I/O on `_Bin\x64\Final\Cortex Command.iobj' and is going to restart linking with a 64-bit linker for better throughput
+  LINK : restarting link with 64-bit linker `C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\HostX64\x64\link.exe'
+     Creating library .\Cortex Command.lib and object .\Cortex Command.exp
+  Generating code
+  Finished generating code
+  RTEA.vcxproj -> D:\Projects\takeover-build\Cortex Command.exe

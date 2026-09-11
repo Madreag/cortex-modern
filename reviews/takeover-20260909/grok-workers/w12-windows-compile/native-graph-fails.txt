@@ -1,0 +1,8 @@
+D:\mx\w12\native-graph\stdout.log
+[net-local-ui-selftest] FAIL unreferenced_owner_reclaimed
+[script-graph-selftest] FAIL native_runtime_checkpoint_values
+[script-graph-selftest] FAIL
+
+Mac positive20 native-graph stdout (same names):
+[net-local-ui-selftest] PASS unreferenced_owner_reclaimed
+[script-graph-selftest] PASS native_runtime_checkpoint_values
