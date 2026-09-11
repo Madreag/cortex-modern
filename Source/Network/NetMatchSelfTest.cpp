@@ -722,6 +722,27 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestE2ECapUsesMatchTick(std::string* error) {
+			// Returner joined at 2070: process Total() is 9935, match frame is 12005, cap is 12000.
+			if (!NetMatchE2EReachedCap(9935, 12005, 12000)) {
+				*error = "returner at match tick 12005 / running 9935 was not a cap completion";
+				return false;
+			}
+			if (NetMatchE2EReachedCap(9935, 5000, 12000)) {
+				*error = "returner at match tick 5000 was treated as a cap completion";
+				return false;
+			}
+			if (!NetMatchE2EReachedCap(12001, 12005, 12000)) {
+				*error = "host at match tick 12005 / running 12001 was not a cap completion";
+				return false;
+			}
+			if (ParseLockstepStopTick("tick 12005 lockstep wait: Complete:e2e complete", 0) != 12005) {
+				*error = "stop error tick 12005 was not parsed as the match frame";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestE2ETickClockSurvivesResync(std::string* error) {
 			NetMatchE2ETickClock clock;
 			for (uint64_t tick = 1; tick <= 250; ++tick) {
@@ -1409,6 +1430,7 @@ namespace RTE {
 		std::string failedReportError;
 		std::string rejoinOverError;
 		std::string tickClockError;
+		std::string capTickError;
 		if (!TestFailedReportKeepsAdmissionCounters(&failedReportError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << failedReportError << std::endl;
 		}
@@ -1418,9 +1440,13 @@ namespace RTE {
 		if (!TestE2ETickClockSurvivesResync(&tickClockError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << tickClockError << std::endl;
 		}
+		if (!TestE2ECapUsesMatchTick(&capTickError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << capTickError << std::endl;
+		}
 		if (!failedReportError.empty()) return fail(failedReportError);
 		if (!rejoinOverError.empty()) return fail(rejoinOverError);
 		if (!tickClockError.empty()) return fail(tickClockError);
+		if (!capTickError.empty()) return fail(capTickError);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
