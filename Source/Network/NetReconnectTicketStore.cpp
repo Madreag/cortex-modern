@@ -1,4 +1,5 @@
 #include "NetReconnectTicketStore.h"
+#include "NetA7Journal.h"
 
 #include "NetReconnectTranscript.h"
 #include "System/System.h"
@@ -207,6 +208,7 @@ namespace RTE {
 	}
 
 	NetH4TicketLoadResult NetReconnectTicketStore::Load(uint64_t nowUnixMs, NetH4TicketRecord& out, std::string* error) {
+		if (NetA7Journal::Enabled()) m_A7LoadedSha256.clear();
 		std::error_code code;
 		if (!std::filesystem::exists(m_Path, code)) {
 			SetError(error, "no recovery record");
@@ -244,6 +246,10 @@ namespace RTE {
 			return NetH4TicketLoadResult::Stale;
 		}
 		out = record;
+		if (NetA7Journal::Enabled()) {
+			m_A7LoadedSha256 = NetA7Journal::Sha256(bytes.data(), bytes.size());
+			if (m_A7LoadedSha256.empty()) NetA7Journal::Gap("loaded ticket SHA-256 unavailable");
+		}
 		++m_Loads;
 		return NetH4TicketLoadResult::Loaded;
 	}

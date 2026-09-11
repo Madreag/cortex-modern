@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "NetA7Journal.h"
 #include "PrimitiveMan.h"
 #include <chrono>
 #include <map>
@@ -31,6 +32,8 @@
 #include "Scene.h"
 #include "FrameMan.h"
 #include "GameActivity.h"
+#include "ActivityMan.h"
+#include "CameraMan.h"
 #include "SceneMan.h"
 #include "AudioMan.h"
 #include "SoundSimulation.h"
@@ -271,6 +274,40 @@ static bool IsLockstepLocalActor(const Actor* actor) {
 	return ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
 }
 
+void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
+	if (!NetA7Journal::Enabled()) return;
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		const auto uid = [](const Actor* actor) { return actor && g_MovableMan.IsActor(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : int64_t{0}; };
+		Actor* controlled = activity->GetControlledActor(Players::PlayerOne);
+		const int screen = activity->ScreenOfPlayer(Players::PlayerOne);
+		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
+			{"player_active", activity->PlayerActive(Players::PlayerOne)}, {"player_human", activity->PlayerHuman(Players::PlayerOne)},
+			{"team", activity->GetTeamOfPlayer(Players::PlayerOne)}, {"screen", screen},
+			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(Players::PlayerOne))},
+			{"view_state", static_cast<int>(activity->GetViewState())}, {"camera_target", nullptr},
+			{"seat_mode", nullptr}, {"seat_player", nullptr}};
+		if (uid(controlled) != 0) {
+			view["seat_mode"] = static_cast<int>(controlled->GetController()->GetSeatMode());
+			view["seat_player"] = controlled->GetController()->GetSeatPlayer();
+		}
+		if (screen >= 0) {
+			const Vector target = g_CameraMan.GetScrollTarget(screen);
+			view["camera_target"] = {target.m_X, target.m_Y};
+		}
+		NetA7Journal::Emit("local_control", std::move(view));
+	}
+	for (Actor* actor: m_Actors) {
+		if (!actor) continue;
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		const bool alive = actor->GetHealth() > 0 && actor->GetStatus() != Actor::DYING && !actor->IsDead() && !actor->IsSetToDelete();
+		NetA7Journal::Emit("unit_owner", {{"round_id", round}, {"frame", frame}, {"uid", uid}, {"team", actor->GetTeam()},
+			{"owner_peer_id", ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled())},
+			{"player_controlled", actor->IsPlayerControlled()}, {"status", actor->GetStatus()}, {"alive", alive},
+			{"controller_mode", static_cast<int>(actor->GetController()->GetInputMode())}, {"controller_player", actor->GetController()->GetPlayerRaw()},
+			{"controller_disabled", actor->GetController()->IsDisabled()}});
+	}
+}
+
 std::vector<MovableMan::LockstepActorOwner> MovableMan::BuildLockstepOwnershipCensus() const {
 	// Only the settled list: an actor still in m_AddedActors has not been agreed on by every peer yet,
 	// and a ledger entry naming one would reseat something a returning peer never held.
@@ -402,6 +439,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
+		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
+			continue;
+		}
+		if (!ScenarioRunner::ConsumeLockstepGameCommand(command)) continue;
 		// Only a peer that controls a team may issue economy commands for it — ANY of a shared
 		// co-op team's human peers counts; every peer resolves this identically.
 		const int32_t commandTeam = NetGameCommandTeam(command.payload);

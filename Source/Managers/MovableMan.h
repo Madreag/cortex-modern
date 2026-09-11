@@ -462,6 +462,7 @@ namespace RTE {
 		/// Every settled live actor with the lockstep peer that held it. Sim thread only:
 		/// the reconnect ledger records a dropped seat's share of this at the frame it dropped.
 		std::vector<LockstepActorOwner> BuildLockstepOwnershipCensus() const;
+		void RecordA7UnitOwnership(uint64_t round, uint64_t frame) const;
 
 		/// Gets the number of particles (MOPixel:s) currently held.
 		/// @return The number of particles.

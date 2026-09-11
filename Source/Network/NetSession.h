@@ -147,6 +147,8 @@ namespace RTE {
 			std::string displayName;
 			NetSessionState state = NetSessionState::Handshake;
 			uint64_t connectedAtMs = 0;
+			uint64_t a7PreviousHandshakeAgeMs = 0;
+			uint64_t a7ConnectionId = 0;
 			uint64_t lastReceiveMs = 0;
 			bool resumedWithoutTraffic = false; //!< Its window was restarted by a resumption and it has not spoken since; the next one does not restart it again.
 			uint64_t lastHeartbeatMs = 0;
@@ -209,6 +211,9 @@ namespace RTE {
 		NetSessionRole m_Role = NetSessionRole::None;
 		NetSessionState m_State = NetSessionState::Stopped;
 		uint64_t m_NowMs = 0;
+		uint64_t m_A7NextConnectionId = 0;
+		uint64_t m_A7ClientConnectedMs = 0;
+		bool m_A7HeartbeatAttempted = false;
 		uint64_t m_StateStartedMs = 0;
 		uint64_t m_LastReceiveMs = 0;
 		uint64_t m_LastTimeoutCheckMs = 0;
