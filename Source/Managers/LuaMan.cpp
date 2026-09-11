@@ -36,6 +36,7 @@
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
+#include "OwnedMovableObjects.h"
 #include "SLBackground.h"
 #include "Writer.h"
 #include "Reader.h"
@@ -44,11 +45,14 @@
 #include "luabind/detail/object_rep.hpp"
 
 #include <cmath>
+#include <charconv>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <map>
 #include <sstream>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 
 #include "tracy/Tracy.hpp"
@@ -622,8 +626,12 @@ local function visitUserdata(value, ctx)
 		local payload
 		if kind == "controller-value" then payload = "Q" .. stringToken(native[2]) .. visit(native[3], ctx)
 		else
-			payload = (native[6] and "Y" or "x") .. visit(native[2], ctx) .. stringToken(native[3]) .. "n" .. native[4] .. ";" .. (native[5] and "t;" or "f;")
-			if native[6] then payload = payload .. stringToken(native[6]) .. stringToken(native[7]) end
+			local typedOnly = native[6] and native[7] == ""
+			payload = (typedOnly and "Z" or native[6] and "Y" or "x") .. visit(native[2], ctx) .. stringToken(native[3]) .. "n" .. native[4] .. ";" .. (native[5] and "t;" or "f;")
+			if native[6] then
+				payload = payload .. stringToken(native[6])
+				if not typedOnly then payload = payload .. stringToken(native[7]) end
+			end
 		end
 		ctx.nodes[id] = "U" .. id .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx)
 		return "#" .. id .. ";"
@@ -1019,9 +1027,10 @@ local function newReader(text)
 			return { t = "field", uid = uid, property = name }
 		elseif c == "q" then return { t = "controller", uid = self:integer(self:readUntil(";"), 0) }
 		elseif c == "Q" then return { t = "controller-value", checkpoint = self:readString(), actor = self:readToken() }
-		elseif c == "x" or c == "Y" then
+		elseif c == "x" or c == "Y" or c == "Z" then
 			local token = { t = "owner-ref", owner = self:readToken(), property = self:readString(), index = self:index(0), constant = self:typed("bool").v }
-			if c == "Y" then token.class = self:readString(); token.checkpoint = self:readString() end
+			if c ~= "x" then token.class = self:readString() end
+			if c == "Y" then token.checkpoint = self:readString() end
 			return token
 		elseif c == "g" then
 			local segments = {}
@@ -1199,7 +1208,12 @@ function Graph.validate(text)
 	if graph.rng and graph.rng.t ~= "nil" and not _ScriptGraphRandomState(graph.rng.v, true) then error("script graph: invalid random state") end
 	for _, node in ipairs(graph.nodes) do
 		if node.value and node.value.t == "controller-value" and not _ScriptGraphControllerState(nil, node.value.checkpoint) then error("script graph: invalid controller checkpoint") end
-		if node.value and node.value.t == "owner-ref" and node.value.checkpoint and not _ScriptGraphOwnerState(nil, node.value.class, node.value.checkpoint) then error("script graph: invalid owner checkpoint") end
+		if node.value and node.value.t == "owner-ref" then
+			local value = node.value
+			if value.checkpoint and not _ScriptGraphOwnerState(nil, value.class, value.checkpoint) then error("script graph: invalid owner checkpoint") end
+			local values = (_ScriptGraphBaseline or {}).values or _G
+			if value.class and not value.checkpoint and not values["To" .. value.class] then error("script graph: unknown owner class " .. value.class) end
+		end
 		if node.code then
 			local fn, message = (loadstring or load)(node.code)
 			if not fn then error("script graph: invalid closure: " .. tostring(message)) end
@@ -1393,7 +1407,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			if owner then
 				if t == "gib" then value = _ScriptGraphGib(owner, token.index)
 				elseif t == "owner-ref" then
-					value = _ScriptGraphOwnerReference(owner, token.property, token.index, token.constant)
+					value = _ScriptGraphOwnerReference(owner, token.property, token.index, token.constant, token.class)
 					if value and token.checkpoint and not _ScriptGraphOwnerState(value, token.class, token.checkpoint) then note("a borrowed owner checkpoint could not be restored") end
 				else value = _ScriptGraphProperty(owner, token.property, token.constant) end
 			end
@@ -2457,6 +2471,14 @@ static int ScriptGraphProperty(lua_State* L) {
 	return 1;
 }
 
+static void ScriptGraphPushEntity(lua_State* L, const Entity* entity, const std::string& type) {
+	const auto& casts = LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions;
+	const auto cast = casts.find(type);
+	if (!entity || cast == casts.end()) { lua_pushnil(L); return; }
+	std::unique_ptr<LuabindObjectWrapper> value(cast->second(const_cast<Entity*>(entity), L));
+	value->GetLuabindObject()->push(L);
+}
+
 static int ScriptGraphPropertyOwner(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep) return 0;
@@ -2477,9 +2499,16 @@ static int ScriptGraphPropertyOwner(lua_State* L) {
 		luabind::object(L, activity).push(L);
 		lua_rawseti(L, candidates, ++candidateCount);
 		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-			if (auto* editor = activity->GetEditorGUI(player); editor && editor->GetCurrentObject()) {
-				luabind::object(L, editor->GetCurrentObject()).push(L);
-				lua_rawseti(L, candidates, ++candidateCount);
+			if (auto* editor = activity->GetEditorGUI(player)) {
+				std::unordered_set<const Entity*> entities;
+				std::unordered_set<const MovableObject*> objects;
+				CollectOwnedMovableObjects(editor->GetCurrentObject(), entities, objects);
+				for (const auto& retained: editor->GetCheckpointRetainedOwners()) CollectOwnedMovableObjects(retained.get(), entities, objects);
+				for (const auto* candidate: entities) {
+					ScriptGraphPushEntity(L, candidate, candidate->GetClassName());
+					if (auto* owner = luabind::detail::is_class_object(L, -1)) owner->set_flags(owner->flags() | luabind::detail::object_rep::constant);
+					lua_rawseti(L, candidates, ++candidateCount);
+				}
 			}
 		}
 	}
@@ -2491,7 +2520,11 @@ static int ScriptGraphPropertyOwner(lua_State* L) {
 			if (std::strcmp(owner->crep()->name(), "Gib") == 0) names = {"Offset"};
 			else if (std::strcmp(owner->crep()->name(), "AlarmEvent") == 0) names = {"ScenePos"};
 			else if (ClassDerivesFrom(owner->crep(), "GameActivity")) names = {"CursorTimer", "GameTimer", "GameOverTimer"};
-			else if (ClassDerivesFrom(owner->crep(), "SceneObject")) names = {"Pos"};
+			else if (ClassDerivesFrom(owner->crep(), "MovableObject")) {
+				names = {"Pos", "Vel", "PrevPos", "PrevVel"};
+				if (ClassDerivesFrom(owner->crep(), "MOSRotating")) { names.push_back("RecoilForce"); names.push_back("RecoilOffset"); }
+				if (ClassDerivesFrom(owner->crep(), "Attachable")) { names.push_back("ParentOffset"); names.push_back("JointOffset"); names.push_back("JointPos"); }
+			} else if (ClassDerivesFrom(owner->crep(), "SceneObject")) names = {"Pos"};
 		}
 		for (const char* propertyName: names) {
 			const int ownerIndex = lua_gettop(L);
@@ -2999,9 +3032,12 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 	const char* property = luaL_checkstring(L, 2);
 	const int index = luaL_checkinteger(L, 3);
 	const bool constant = lua_toboolean(L, 4);
+	const char* type = lua_type(L, 5) == LUA_TSTRING ? lua_tostring(L, 5) : nullptr;
 	const auto push = [&](auto* value) {
 		if (!value) { lua_pushnil(L); return 1; }
-		luabind::object(L, value).push(L);
+		if constexpr (std::is_base_of_v<Entity, std::remove_cv_t<std::remove_pointer_t<decltype(value)>>>) {
+			ScriptGraphPushEntity(L, value, type ? type : value->GetClassName());
+		} else luabind::object(L, value).push(L);
 		if (auto* rep = luabind::detail::is_class_object(L, -1)) {
 			rep->set_flags((rep->flags() & ~luabind::detail::object_rep::constant) | (constant ? luabind::detail::object_rep::constant : 0));
 			rep->add_dependency(L, 1);
@@ -3041,6 +3077,21 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 			auto* editor = static_cast<SceneEditorGUI*>(owner->ptr());
 			if (std::strcmp(property, "current-object") == 0) return push(editor->GetCurrentObject());
 			if (std::strcmp(property, "editor-pie") == 0) return push(editor->GetCheckpointPieMenu());
+			if (std::strcmp(property, "retained-editor-owner") == 0) return push(editor->GetCheckpointRetainedOwner(static_cast<size_t>(index)));
+		} else if (ClassDerivesFrom(owner->crep(), "MovableObject")) {
+			auto* object = static_cast<MovableObject*>(owner->ptr());
+			if (std::strcmp(property, "actor-controller") == 0) {
+				auto* actor = dynamic_cast<Actor*>(object);
+				return push(actor ? actor->GetController() : nullptr);
+			}
+			std::string_view path(property);
+			constexpr std::string_view prefix = "owned-movable-part:";
+			if (path.starts_with(prefix)) {
+				path.remove_prefix(prefix.size());
+				long uid = 0;
+				const auto parsed = std::from_chars(path.data(), path.data() + path.size(), uid);
+				if (parsed.ec == std::errc{} && parsed.ptr == path.data() + path.size()) return push(object->FindPartByUniqueID(uid));
+			}
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "background") == 0) {
 			const auto& layers = static_cast<Scene*>(owner->ptr())->GetBackLayers();
 			if (static_cast<size_t>(index) < layers.size()) return push(*std::next(layers.begin(), index));
@@ -3079,13 +3130,35 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		else if (type == "SceneEditorGUI") checkpoint = static_cast<const SceneEditorGUI*>(rep->ptr())->SaveCheckpoint();
 		else if (type == "GUIBanner") checkpoint = static_cast<const GUIBanner*>(rep->ptr())->SaveCheckpoint();
 		else if (type == "SLBackground") checkpoint = static_cast<const SLBackground*>(rep->ptr())->SaveCheckpoint();
-		if (checkpoint.empty()) return 5;
+		if (checkpoint.empty() && !ClassDerivesFrom(rep->crep(), "Entity")) return 5;
 		lua_pushlstring(L, type.data(), type.size());
 		lua_pushlstring(L, checkpoint.data(), checkpoint.size());
 		return 7;
 	};
 	if (const int index = g_PrimitiveMan.FindCheckpointPrimitive(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive", index);
 	if (const int index = g_PrimitiveMan.FindCheckpointVertex(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive-vertex", index);
+	const auto editorMember = [&](SceneEditorGUI* editor) {
+		if (!editor) return 0;
+		if (rep->ptr() == editor->GetCheckpointPieMenu()) return found(editor, "editor-pie", 0);
+		const auto owned = [&](const Entity* root, const char* property, int index) {
+			if (!root) return 0;
+			if (rep->ptr() == root) return found(editor, property, index);
+			const auto* movable = dynamic_cast<const MovableObject*>(root);
+			if (!movable) return 0;
+			std::unordered_set<const Entity*> entities;
+			std::unordered_set<const MovableObject*> objects;
+			CollectOwnedMovableObjects(root, entities, objects);
+			for (const auto* object: objects) {
+				if (rep->ptr() == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
+				if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object)); actor && rep->ptr() == actor->GetController()) return found(actor, "actor-controller", 0);
+			}
+			return 0;
+		};
+		if (const int count = owned(editor->GetCurrentObject(), "current-object", 0)) return count;
+		const auto& retained = editor->GetCheckpointRetainedOwners();
+		for (size_t index = 0; index < retained.size(); ++index) if (const int count = owned(retained[index].get(), "retained-editor-owner", static_cast<int>(index))) return count;
+		return 0;
+	};
 	const auto activityMember = [&](Activity* activity) {
 		if (!activity) return 0;
 		for (int index = 0; index < Players::MaxPlayerCount; ++index) {
@@ -3093,10 +3166,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			if (auto* game = dynamic_cast<GameActivity*>(activity)) {
 				if (rep->ptr() == game->GetBuyGUI(index)) return found(game, "buy-menu", index);
 				if (rep->ptr() == game->GetEditorGUI(index)) return found(game, "editor-menu", index);
-				if (auto* editor = game->GetEditorGUI(index)) {
-					if (rep->ptr() == editor->GetCurrentObject()) return found(editor, "current-object", 0);
-					if (rep->ptr() == editor->GetCheckpointPieMenu()) return found(editor, "editor-pie", 0);
-				}
+				if (const int count = editorMember(game->GetEditorGUI(index))) return count;
 				if (rep->ptr() == game->GetBanner(GameActivity::YELLOW, index)) return found(game, "yellow-banner", index);
 				if (rep->ptr() == game->GetBanner(GameActivity::RED, index)) return found(game, "red-banner", index);
 			}
@@ -3112,9 +3182,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			if (owner && ClassDerivesFrom(owner->crep(), "Activity")) {
 				if (const int count = activityMember(static_cast<Activity*>(owner->ptr()))) return count;
 			} else if (owner && std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
-				auto* editor = static_cast<SceneEditorGUI*>(owner->ptr());
-				if (rep->ptr() == editor->GetCurrentObject()) return found(editor, "current-object", 0);
-				if (rep->ptr() == editor->GetCheckpointPieMenu()) return found(editor, "editor-pie", 0);
+				if (const int count = editorMember(static_cast<SceneEditorGUI*>(owner->ptr()))) return count;
 			}
 			lua_pop(L, 1);
 		}
@@ -3497,6 +3565,73 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 			(*context.visit)(static_cast<MovableObject*>(rep->ptr()));
 		}
 	}, &walk);
+}
+
+bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& objects) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (!m_State || objects.empty()) return false;
+	auto* registry = luabind::detail::class_registry::get_registry(m_State);
+	struct Walk { const void* cpp; const void* lua; const std::unordered_set<const void*>* objects; bool found = false; int state = -1; bool diagnostic = false; } walk;
+	lua_rawgeti(m_State, LUA_REGISTRYINDEX, registry->cpp_instance());
+	walk.cpp = lua_topointer(m_State, -1); lua_pop(m_State, 1);
+	lua_rawgeti(m_State, LUA_REGISTRYINDEX, registry->lua_instance());
+	walk.lua = lua_topointer(m_State, -1); lua_pop(m_State, 1);
+	walk.objects = &objects;
+	const char* diagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
+	walk.diagnostic = diagnostic && std::strcmp(diagnostic, "1") == 0;
+	if (walk.diagnostic) walk.state = g_LuaMan.GetStateIndex(this);
+	LuaThreadCodec::VisitUserdata(m_State, [](void* data, size_t size, const void* metatable, void* raw) {
+		auto& context = *static_cast<Walk*>(raw);
+		if (size < sizeof(luabind::detail::object_rep) || (metatable != context.cpp && metatable != context.lua)) return;
+		const auto* rep = static_cast<const luabind::detail::object_rep*>(data);
+		if (!context.objects->contains(rep->ptr())) return;
+		if (context.diagnostic && !context.found) {
+			std::cout << "[net-reclaim-alias] state=" << context.state << " class=" << (rep->crep() ? rep->crep()->name() : "none")
+			          << " native=" << rep->ptr() << " userdata=" << data << " flags=" << rep->flags()
+			          << " dependencies=" << rep->get_dependencies().is_valid() << " instance=" << rep->get_lua_table().is_valid() << std::endl;
+		}
+		context.found = true;
+	}, &walk);
+	return walk.found;
+}
+
+bool LuaStateWrapper::RekeyScriptObjects(const std::vector<std::pair<const MovableObject*, long>>& identities, bool validateOnly) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (identities.empty()) return true;
+	if (!m_State) return false;
+	const int top = lua_gettop(m_State);
+	lua_getglobal(m_State, "_ScriptedObjects");
+	if (!lua_istable(m_State, -1)) { lua_settop(m_State, top); return false; }
+	const int objects = top + 1;
+	lua_newtable(m_State);
+	const int held = top + 2;
+	std::unordered_set<long> destinations;
+	for (size_t index = 0; index < identities.size(); ++index) {
+		const auto [object, newID] = identities[index];
+		if (!object || object->GetUniqueID() <= 0 || newID <= 0 || !destinations.insert(newID).second) { lua_settop(m_State, top); return false; }
+		const std::string oldKey = std::to_string(object->GetUniqueID()), newKey = std::to_string(newID);
+		lua_pushlstring(m_State, oldKey.data(), oldKey.size()); lua_rawget(m_State, objects);
+		auto* rep = luabind::detail::is_class_object(m_State, -1);
+		if (!rep || rep->ptr() != object) { lua_settop(m_State, top); return false; }
+		lua_rawseti(m_State, held, static_cast<int>(index + 1));
+		lua_pushlstring(m_State, newKey.data(), newKey.size()); lua_rawget(m_State, objects);
+		auto* occupant = luabind::detail::is_class_object(m_State, -1);
+		const bool available = lua_isnil(m_State, -1) || (occupant && std::any_of(identities.begin(), identities.end(), [&](const auto& entry) { return occupant->ptr() == entry.first && entry.first->GetUniqueID() == newID; }));
+		lua_pop(m_State, 1);
+		if (!available) { lua_settop(m_State, top); return false; }
+	}
+	if (!validateOnly) {
+		for (const auto& [object, newID]: identities) {
+			const std::string key = std::to_string(object->GetUniqueID());
+			lua_pushlstring(m_State, key.data(), key.size()); lua_pushnil(m_State); lua_rawset(m_State, objects);
+		}
+		for (size_t index = 0; index < identities.size(); ++index) {
+			const std::string key = std::to_string(identities[index].second);
+			lua_pushlstring(m_State, key.data(), key.size()); lua_rawgeti(m_State, held, static_cast<int>(index + 1)); lua_rawset(m_State, objects);
+		}
+	}
+	lua_settop(m_State, top);
+	return true;
 }
 
 static int ScriptGraphNativeRelease(lua_State* L) {
@@ -4533,6 +4668,112 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	LoadScriptGraphHelper();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
+	checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+	{
+		const auto check = [&](const std::string& name, bool passed) {
+			std::cout << "[craft-exit-selftest] " << (passed ? "PASS" : "FAIL") << " " << name << std::endl;
+			checkpointValues = passed && checkpointValues;
+		};
+		struct CraftExitFixture : ACDropShip {
+			void SelectExit(size_t count) {
+				m_Exits.clear();
+				m_Exits.resize(count);
+				m_CurrentExit = m_Exits.begin();
+				if (count > 1) ++m_CurrentExit;
+			}
+		};
+		MovableMan::ConstructionRegistryScope registry;
+		MovableObject::ScriptLoadDeferralScope scripts;
+		try {
+			const auto* preset = dynamic_cast<const ACDropShip*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+			if (!preset) throw std::runtime_error("craft exit fixture preset unavailable");
+			for (size_t count: {size_t{2}, size_t{0}}) {
+				CraftExitFixture fixture;
+				if (fixture.ACDropShip::Create(*preset) < 0) throw std::runtime_error("craft exit fixture creation failed");
+				fixture.SelectExit(count);
+				const int selected = count > 1 ? 1 : 0;
+				const std::string label = count ? "nonfirst_" : "empty_";
+				check(label + "source_selection", fixture.GetCurrentExitIndex() == selected);
+				std::unordered_set<const Entity*> sourceEntities;
+				std::unordered_set<const MovableObject*> sourceObjects;
+				CollectOwnedMovableObjects(&fixture, sourceEntities, sourceObjects);
+				const auto sourceRegistered = [&] {
+					return !sourceObjects.empty() && std::all_of(sourceObjects.begin(), sourceObjects.end(), [](const auto* object) {
+						return object->GetUniqueID() > 0 && g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) == object;
+					});
+				};
+				const auto detachSource = [&](const char* phase) {
+					if (!sourceRegistered()) throw std::runtime_error("craft source graph is not registered before isolation");
+					for (const auto* object: sourceObjects) g_MovableMan.UnregisterObject(const_cast<MovableObject*>(object));
+					check(label + phase + "_source_graph_absent", std::all_of(sourceObjects.begin(), sourceObjects.end(), [](const auto* object) {
+						return !g_MovableMan.FindObjectByUniqueID(object->GetUniqueID());
+					}));
+				};
+				const auto candidateRegistered = [&](const Entity* candidate) {
+					std::unordered_set<const Entity*> entities;
+					std::unordered_set<const MovableObject*> objects;
+					CollectOwnedMovableObjects(candidate, entities, objects);
+					if (objects.size() != sourceObjects.size()) return false;
+					std::unordered_set<long> identities;
+					for (const auto* source: sourceObjects) identities.insert(source->GetUniqueID());
+					for (const auto* object: objects) {
+						if (sourceObjects.contains(object) || !identities.erase(object->GetUniqueID()) || g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) != object) return false;
+					}
+					return identities.empty();
+				};
+				check(label + "source_graph_registered", sourceRegistered());
+				{
+					MovableMan::ConstructionRegistryScope isolated;
+					std::unique_ptr<ACraft> ordinary(static_cast<ACraft*>(fixture.Clone()));
+					check(label + "ordinary_clone_starts_at_first_exit", ordinary->GetCurrentExitIndex() == 0);
+				}
+				check(label + "ordinary_clone_source_registry_preserved", sourceRegistered());
+				{
+					MovableMan::ConstructionRegistryScope isolated;
+					detachSource("faithful_clone");
+					MovableObject::FaithfulCloneScope clone(true);
+					std::unique_ptr<ACraft> faithful(static_cast<ACraft*>(fixture.Clone()));
+					check(label + "faithful_clone_preserves_selection", faithful->GetCurrentExitIndex() == selected);
+					check(label + "faithful_clone_complete_graph_registered", candidateRegistered(faithful.get()));
+				}
+				check(label + "faithful_clone_source_registry_restored", sourceRegistered());
+				const std::string owned = GUICheckpoint::SaveOwnedEntity(&fixture);
+				{
+					MovableMan::ConstructionRegistryScope isolated;
+					auto stream = std::make_unique<std::stringstream>();
+					auto* text = stream.get();
+					Writer writer(std::move(stream));
+					writer.NewProperty("CraftExitFixture");
+					Scene::SaveSceneObject(writer, &fixture, false, true);
+					Reader reader(std::make_unique<std::stringstream>(text->str()), "Base.rte/CraftExitCheckpoint.ini", false, nullptr, true);
+					reader.SetCheckpoint(true);
+					reader.SetThrowOnError(true);
+					if (!reader.NextProperty() || reader.ReadPropName() != "CraftExitFixture") throw std::runtime_error("craft exit fixture body unavailable");
+					detachSource("reflected_load");
+					std::unique_ptr<Entity> entity(g_PresetMan.ReadReflectedPreset(reader));
+					auto* reflected = dynamic_cast<ACraft*>(entity.get());
+					check(label + "reflected_load_preserves_selection", reflected && reflected->GetCurrentExitIndex() == selected);
+					if (reflected) reflected->AdoptPersistedUniqueID();
+					check(label + "adoption_preserves_selection", reflected && reflected->GetCurrentExitIndex() == selected);
+					check(label + "adoption_complete_graph_registered", candidateRegistered(reflected));
+				}
+				check(label + "reflected_load_source_registry_restored", sourceRegistered());
+				for (bool privateOwner: {false, true}) {
+					{
+						MovableMan::ConstructionRegistryScope isolated;
+						if (!privateOwner) detachSource("native_load");
+						auto entity = GUICheckpoint::LoadOwnedEntity(owned, false, privateOwner);
+						const auto* native = dynamic_cast<const ACraft*>(entity.get());
+						check(label + (privateOwner ? "private_native_load_preserves_selection" : "native_load_preserves_selection"), native && native->GetCurrentExitIndex() == selected);
+						check(label + (privateOwner ? "private_native_source_registry_preserved" : "native_complete_graph_registered"), privateOwner ? sourceRegistered() : candidateRegistered(native));
+					}
+					check(label + (privateOwner ? "private_native_source_registry_restored" : "native_source_registry_restored"), sourceRegistered());
+				}
+				check(label + "ordinary_startup_starts_at_first_exit", fixture.ACDropShip::Create() == 0 && fixture.GetCurrentExitIndex() == 0);
+			}
+		} catch (const std::exception& exception) { check(exception.what(), false); }
+	}
 	checkpointValues = g_AudioMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_AudioMan.RunLogicalPlaybackSelfTest() && checkpointValues;
 	checkpointValues = g_MusicMan.RunCheckpointSelfTest() && checkpointValues;
