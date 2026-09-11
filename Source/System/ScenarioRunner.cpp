@@ -1153,6 +1153,10 @@ namespace RTE {
 		return commands;
 	}
 
+	uint64_t ScenarioRunner::ResyncResumeStartFrame(uint64_t dropFrame) {
+		return dropFrame;
+	}
+
 	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
