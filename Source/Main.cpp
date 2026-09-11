@@ -2133,7 +2133,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		System::SetQuit(true);
 	} else {
 		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-		const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchE2ETicks.Total() >= e2eTickCap;
+		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		const bool e2eReachedCap = s_netMatchServiceE2E && NetMatchE2EReachedCap(s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
 		const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
 			(error.find("Complete:") != std::string::npos ||
 			 error.find("MissingFrameTimeout") != std::string::npos ||
@@ -2179,6 +2180,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			ScenarioRunner::ClearControllerReplayError();
 			returnToMenuAfterNetworkEnd = true;
 		} else if (error.find("Complete:") != std::string::npos &&
+		           error.find("e2e complete") == std::string::npos &&
 		           (g_NetMatchService.GetState() == NetMatchServiceState::Completed ||
 		            error.find("match over") != std::string::npos)) {
 			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {

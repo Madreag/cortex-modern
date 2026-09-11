@@ -56,6 +56,29 @@ namespace RTE {
 		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
 	};
 
+	inline uint64_t ParseLockstepStopTick(const std::string& error, uint64_t fallbackTick) {
+		if (error.size() < 6 || error.compare(0, 5, "tick ") != 0) {
+			return fallbackTick;
+		}
+		uint64_t tick = 0;
+		bool any = false;
+		for (size_t i = 5; i < error.size(); ++i) {
+			const char c = error[i];
+			if (c < '0' || c > '9') {
+				break;
+			}
+			any = true;
+			tick = tick * 10 + static_cast<uint64_t>(c - '0');
+		}
+		return any ? tick : fallbackTick;
+	}
+
+	// Cap completion is the match frame, not how long this process has run.
+	inline bool NetMatchE2EReachedCap(uint64_t runningTicks, uint64_t matchTick, uint64_t cap) {
+		(void)runningTicks;
+		return matchTick >= cap;
+	}
+
 	enum class NetMatchServiceState {
 		Idle,
 		Starting,
