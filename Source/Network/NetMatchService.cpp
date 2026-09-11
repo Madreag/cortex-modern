@@ -881,7 +881,9 @@ static std::string ResyncSaveName() {
 		}
 		outActivityPreset = m_ActivityPreset;
 		m_MatchWasRunning = true;
-		ResetRosterTransitionHistory();
+		if (!m_PendingResyncState.has_value()) {
+			ResetRosterTransitionHistory();
+		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		CaptureA7SeatView();
