@@ -122,6 +122,8 @@ namespace RTE {
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
 		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr);
 		static bool RestoreNetResyncState(const NetResyncState& state, std::string* error = nullptr);
+		/// The in-progress sim tick is the drop frame; the resumed round starts there.
+		static uint64_t ResyncResumeStartFrame(uint64_t dropFrame);
 		/// Pumps the coordinator until the relay host owes no peer a forward, or the budget runs out,
 		/// then keeps relaying for lingerMs. The star's hub is the only route between its clients, so
 		/// quitting with a forward still held takes the round off every client that was waiting on it.
