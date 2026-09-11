@@ -1197,7 +1197,8 @@ void ProcessMenuScript() {
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
-				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\"";
+				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
+				  << " input_delay=\"" << g_NetMatchService.GetInputDelayText() << "\"";
 		for (const NetLobbyMember& member: snapshot.members) {
 			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
 					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
@@ -3631,6 +3632,17 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
 	out << "\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",";
+	// Presentation-only instrumentation: banners queued, wait-screen frames drawn, the announced
+	// input-delay line. None of it touches sim state, tick hashes or saves.
+	out << "\"ui\":{\"toasts\":[";
+	const std::vector<ScenarioRunner::NetUiToastRecord>& uiToasts = ScenarioRunner::GetNetUiToastLog();
+	for (size_t i = 0; i < uiToasts.size(); ++i) {
+		if (i) out << ",";
+		out << "{\"tick\":" << uiToasts[i].tick << ",\"kind\":\"" << JsonEscape(uiToasts[i].kind)
+		    << "\",\"text\":\"" << JsonEscape(uiToasts[i].text) << "\"}";
+	}
+	out << "],\"resync_overlay_frames\":" << ScenarioRunner::GetResyncOverlayFrames()
+	    << ",\"input_delay_text\":\"" << JsonEscape(g_NetMatchService.GetInputDelayText()) << "\"},";
 	out << "\"service\":" << g_NetMatchService.BuildReportJson();
 	out << "}";
 	return out.str();
