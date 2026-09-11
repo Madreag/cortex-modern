@@ -20,6 +20,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include <cstdlib>
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -460,7 +461,12 @@ static std::string ResyncSaveName() {
 			if (error) *error = "resync snapshot load failed: " + pendingLoad;
 			return false;
 		}
-		g_ActivityMan.RemoveSavedGame(pendingLoad);
+		const char* keepResyncSaves = std::getenv("CC_KEEP_RESYNC_SAVES");
+		if (keepResyncSaves && keepResyncSaves[0] && keepResyncSaves[0] != '0') {
+			std::cout << "[net-match] keeping resync save: " << pendingLoad << std::endl;
+		} else {
+			g_ActivityMan.RemoveSavedGame(pendingLoad);
+		}
 		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
 		struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; };
 		const auto local = std::make_shared<LocalState>();
