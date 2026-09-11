@@ -288,7 +288,7 @@ namespace RTE {
 			std::vector<NetTransportEvent> injected;
 			std::vector<NetTransportEvent> PollEvents() override {
 				auto events = LoopbackTransport::PollEvents();
-				for (auto& event: injected) events.push_back(std::move(event));
+				events.insert(events.begin(), injected.begin(), injected.end());
 				injected.clear();
 				return events;
 			}
@@ -7269,6 +7269,312 @@ namespace RTE {
 			return true;
 		}
 
+		// Production DefersStops, so Reclaimed must request resync on this tick. A 2-peer Tick
+		// that treats the emptied hold as "nobody coming back" Stops with PeerLeft instead.
+		bool DriveTwoPeerHoldResolution(uint16_t port, uint64_t sessionId, NetLockstepHoldResolution resolution,
+		                                NetLockstepCoordinator& host, LoopbackTransport& hostT, LoopbackTransport& clientT,
+		                                uint64_t& leaveFrame, uint64_t& now, std::string* error) {
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			NetLockstepCoordinator client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.DeferStopsToTickBoundary();
+			now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+				*error = "two-peer hold fixture never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "two-peer hold fixture never committed";
+				return false;
+			}
+			clientT.Stop();
+			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
+				*error = "two-peer hold fixture never recorded the drop";
+				return false;
+			}
+			leaveFrame = host.GetPeerLeaveFrames().at(2);
+			host.ResolveHeldSeat(2, resolution, now);
+			host.Tick(now + 5);
+			host.FinishSimulationTick(leaveFrame > 0 ? leaveFrame - 1 : 0);
+			return true;
+		}
+
+		bool TestTwoPeerReclaimedRequestsResync(std::string* error) {
+			LoopbackTransport hostT, clientT;
+			NetLockstepCoordinator host;
+			uint64_t leaveFrame = 0;
+			uint64_t now = 0;
+			if (!DriveTwoPeerHoldResolution(43086, 0x7000000000000086ULL, NetLockstepHoldResolution::Reclaimed, host, hostT, clientT, leaveFrame, now, error)) {
+				return false;
+			}
+			if (host.IsStopped()) {
+				*error = "Reclaimed stopped a 2-peer round: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
+				*error = "Reclaimed did not request resync: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (host.GetStats().nextFrame != leaveFrame) {
+				*error = "the ResyncRequested stop moved off the held frame";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestTwoPeerSubstitutedRequestsResync(std::string* error) {
+			LoopbackTransport hostT, clientT;
+			NetLockstepCoordinator host;
+			uint64_t leaveFrame = 0;
+			uint64_t now = 0;
+			if (!DriveTwoPeerHoldResolution(43087, 0x7000000000000087ULL, NetLockstepHoldResolution::Substituted, host, hostT, clientT, leaveFrame, now, error)) {
+				return false;
+			}
+			if (host.IsStopped()) {
+				*error = "Substituted stopped a 2-peer round: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
+				*error = "Substituted did not request resync: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (host.GetStats().nextFrame != leaveFrame) {
+				*error = "the Substituted resync moved off the held frame";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestTwoPeerExpiredEndsLastPlayer(std::string* error) {
+			LoopbackTransport hostT, clientT;
+			NetLockstepCoordinator host;
+			uint64_t leaveFrame = 0;
+			uint64_t now = 0;
+			if (!DriveTwoPeerHoldResolution(43088, 0x7000000000000088ULL, NetLockstepHoldResolution::Expired, host, hostT, clientT, leaveFrame, now, error)) {
+				return false;
+			}
+			if (!host.IsStopped() || host.GetStats().timeoutReason.find("PeerLeft") == std::string::npos) {
+				*error = "Expired did not stop the last-player round: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			return true;
+		}
+
+		bool TestThreePeerReclaimedRequestsResync(std::string* error) {
+			const uint16_t port = 43089;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000089ULL;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.DeferStopsToTickBoundary();
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					leaver.Tick(now);
+					stayer.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "three-peer reclaim fixture never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			if (!drive(2000, [&] {
+					while (host.PopReadyFrame(ready)) {
+						++committed;
+					}
+					return committed >= 2;
+				})) {
+				*error = "three-peer reclaim fixture never committed";
+				return false;
+			}
+			leaverT.Stop();
+			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && host.AnyDroppedSeatHeld(); })) {
+				*error = "three-peer reclaim fixture never recorded the drop";
+				return false;
+			}
+			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now);
+			host.Tick(now + 5);
+			if (host.IsStopped()) {
+				*error = "Reclaimed stopped a 3-peer round: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
+				*error = "3-peer Reclaimed did not request resync: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			return true;
+		}
+
+		bool TestResyncRoundCommitsAfterReclaimed(std::string* error) {
+			LoopbackTransport hostT, clientT;
+			NetLockstepCoordinator host;
+			uint64_t leaveFrame = 0;
+			uint64_t now = 0;
+			if (!DriveTwoPeerHoldResolution(43090, 0x7000000000000090ULL, NetLockstepHoldResolution::Reclaimed, host, hostT, clientT, leaveFrame, now, error)) {
+				return false;
+			}
+			RecoveryWireTransport resyncHostT, resyncClientT;
+			if (!resyncHostT.StartHost(43091, error) || !resyncClientT.Connect("loopback", 43091, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000091ULL;
+				c.roundId = relay ? 0x7000000000000092ULL : 0;
+				c.startFrame = leaveFrame;
+				c.resumeFromSnapshot = true;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			NetLockstepCoordinator resyncHost, resyncClient;
+			if (!resyncHost.Start(resyncHostT, cfg(1, {{2, 1}}, true), error) ||
+			    !resyncClient.Start(resyncClientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			NetLockstepStop leftover;
+			leftover.senderPeerId = 2;
+			leftover.reason = NetLockstepStopReason::PeerDropped;
+			leftover.frame = leaveFrame;
+			leftover.message = "connection lost";
+			std::vector<uint8_t> leftoverBytes;
+			if (!EncodePacket({leftover}, leftoverBytes, error)) {
+				return false;
+			}
+			resyncHostT.injected.push_back({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "connection lost"});
+			resyncHostT.injected.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, leftoverBytes, {}});
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					resyncHost.Tick(now);
+					resyncClient.Tick(now);
+					if (done()) {
+						return true;
+					}
+					resyncHostT.AdvanceTimeMs(5);
+					resyncClientT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return resyncHost.IsRunning() && resyncClient.IsRunning(); })) {
+				*error = "resync round after reclaim never started";
+				return false;
+			}
+			if (!resyncHost.PrimeResyncInputs({}, error) || !resyncClient.PrimeResyncInputs({}, error)) {
+				return false;
+			}
+			if (resyncHost.GetPeerLeaveFrames().count(2) != 0 || resyncHost.AnyDroppedSeatHeld()) {
+				*error = "resync round re-held the returner's seat";
+				return false;
+			}
+			if (!resyncHost.QueueLocalInput(leaveFrame, {MakeFrame(100, 3)}, {}, error) ||
+			    !resyncClient.QueueLocalInput(leaveFrame, {MakeFrame(200, 3)}, {}, error)) {
+				return false;
+			}
+			NetLockstepReadyFrame ready;
+			size_t hostCommitted = 0;
+			size_t clientCommitted = 0;
+			if (!drive(2000, [&] {
+					while (resyncHost.PopReadyFrame(ready)) {
+						++hostCommitted;
+					}
+					while (resyncClient.PopReadyFrame(ready)) {
+						++clientCommitted;
+					}
+					return hostCommitted >= 1 && clientCommitted >= 1;
+				})) {
+				*error = "resync round after reclaim never committed";
+				return false;
+			}
+			if (resyncHost.IsStopped() || resyncHost.IsFailed()) {
+				*error = "resync round stopped instead of committing: " + resyncHost.GetStats().timeoutReason;
+				return false;
+			}
+			return true;
+		}
+
 		bool TestHoldHeartbeatsKeepPeersUnadjudicated(std::string* error) {
 			const uint16_t port = 43083;
 			const uint32_t timeoutMs = 400;
@@ -7468,6 +7774,96 @@ namespace RTE {
 			}
 			if (pumps < 40) {
 				*error = "the wait never reached the hold resolution pump";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestWaitSurvivesHoldAfterPreHoldStall(std::string* error) {
+			const uint16_t port = 43092;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000092ULL;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			for (; now <= 2000; now += 5) {
+				host.Tick(now);
+				client.Tick(now);
+				if (host.IsRunning() && client.IsRunning()) {
+					break;
+				}
+				hostT.AdvanceTimeMs(5);
+				clientT.AdvanceTimeMs(5);
+			}
+			if (!host.IsRunning()) {
+				*error = "pre-hold wait fixture never started";
+				return false;
+			}
+			for (uint64_t f = 0; f < 2; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			NetLockstepReadyFrame ready;
+			size_t committed = 0;
+			for (uint64_t guard = 0; guard < 400 && committed < 2; ++guard, now += 5) {
+				host.Tick(now);
+				client.Tick(now);
+				hostT.AdvanceTimeMs(5);
+				clientT.AdvanceTimeMs(5);
+				while (host.PopReadyFrame(ready)) {
+					++committed;
+				}
+			}
+			uint32_t pumps = 0;
+			bool dropped = false;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&] {
+				++pumps;
+				now += 15;
+				if (!dropped && pumps == 200) {
+					clientT.Stop();
+					dropped = true;
+				}
+				if (dropped && host.AnyDroppedSeatHeld() && pumps == 900) {
+					host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, now);
+				}
+			});
+			const auto waitStart = std::chrono::steady_clock::now();
+			NetLockstepReadyFrame out;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(host.GetStats().nextFrame, out, &waitError);
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (pumps < 900) {
+				*error = "WaitForLockstepControllerFrame gave up before the hold resolved after " +
+				         std::to_string(elapsedMs) + "ms pumps=" + std::to_string(pumps) + ": " + waitError;
+				return false;
+			}
+			if (got) {
+				*error = "the wait produced a frame while the only remote was held";
+				return false;
+			}
+			if (elapsedMs < 10000) {
+				*error = "the wait did not cover the pre-hold stall plus the hold";
 				return false;
 			}
 			return true;
@@ -8192,8 +8588,14 @@ namespace RTE {
 		    !TestHoldPauseCommitsNothing(&error) ||
 		    !TestHoldExpiredResumesWithoutSeat(&error) ||
 		    !TestHoldReclaimedResyncsAtLeaveFrame(&error) ||
+		    !TestTwoPeerReclaimedRequestsResync(&error) ||
+		    !TestTwoPeerSubstitutedRequestsResync(&error) ||
+		    !TestTwoPeerExpiredEndsLastPlayer(&error) ||
+		    !TestThreePeerReclaimedRequestsResync(&error) ||
+		    !TestResyncRoundCommitsAfterReclaimed(&error) ||
 		    !TestHoldHeartbeatsKeepPeersUnadjudicated(&error) ||
 		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
+		    !TestWaitSurvivesHoldAfterPreHoldStall(&error) ||
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
