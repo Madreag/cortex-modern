@@ -58,6 +58,10 @@ namespace RTE {
 
 		/// Public member variable, method and friend function declarations
 	public:
+		void CaptureNetPlayerBindings(NetGamePlayerBindings& out) const override;
+		bool CaptureNetLocalPlayerState(NetLocalPlayerState& out) const override;
+		bool RestoreNetLocalPlayerState(const NetLocalPlayerState& state) override;
+		bool ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) override;
 
 		std::string SaveCheckpoint() const override;
 		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
@@ -176,6 +180,7 @@ namespace RTE {
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
 		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return m_pEditorGUI[which]; }
+		static bool RunNetLocalUIRestoreSelfTest();
 
 		/// Locks a player controlled actor to a specific controller mode.
 		/// Locking the actor will disable player input, including switching actors.
@@ -683,6 +688,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool LoadNetLocalGameState(std::string_view text);
+		bool CreateNetLocalUI();
 		std::string SaveValueCheckpoint() const;
 		bool LoadValueCheckpoint(std::string_view text, bool validateOnly = false);
 		std::array<long, Players::MaxPlayerCount> m_CheckpointMarkedActorIDs{};

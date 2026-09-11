@@ -7,6 +7,9 @@
 #include "Controller.h"
 #include "GenericSavedData.h"
 #include "Entity.h"
+#include "NetGameCommand.h"
+
+#include <vector>
 
 namespace RTE {
 
@@ -26,6 +29,23 @@ namespace RTE {
 		virtual bool ResolveCheckpointReferences();
 		/// Initializes a cloned checkpoint's presentation without starting the activity or its scripts.
 		virtual bool PrepareCheckpointUI() { return true; }
+
+		struct NetLocalPlayerState {
+			NetGamePlayerBindings bindings;
+			int playerCount = 0;
+			std::array<int, Players::MaxPlayerCount> screens{};
+			std::array<float, Players::MaxPlayerCount> fundsShare{}, fundsContribution{};
+			std::array<Timer, Players::MaxPlayerCount> deathTimers, messageTimers;
+			std::array<std::string, Players::MaxPlayerCount> controllers;
+			std::array<int64_t, Players::MaxPlayerCount> controllerActorUIDs{};
+			std::vector<std::pair<int64_t, Controller::LocalInputState>> actorInputs;
+			std::string camera, gameActivity;
+		};
+		virtual void CaptureNetPlayerBindings(NetGamePlayerBindings& out) const;
+		virtual bool CaptureNetLocalPlayerState(NetLocalPlayerState& out) const;
+		virtual bool RestoreNetLocalPlayerState(const NetLocalPlayerState& state);
+		virtual bool ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings);
+		static bool RunNetLocalPlayerStateSelfTest();
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 
@@ -614,6 +634,9 @@ namespace RTE {
 #pragma endregion
 
 	protected:
+		static Actor* ResolveNetActor(int64_t uid);
+		static int64_t NetActorUID(const Actor* actor);
+		bool ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings);
 		std::string m_PendingRuntimeCheckpoint;
 		std::array<std::array<long, 3>, Players::MaxPlayerCount> m_CheckpointActorIDs{};
 		bool m_HasCheckpointActorIDs = false;

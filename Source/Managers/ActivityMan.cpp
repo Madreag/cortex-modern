@@ -730,6 +730,13 @@ void ActivityMan::SetStartActivity(Activity* newActivity) {
 	m_StartActivityResumed = false;
 }
 
+bool ActivityMan::SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after) {
+	if (!m_RestartRestoresSnapshot || !m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene) return false;
+	m_PendingCheckpoint.beforeRestore = std::move(before);
+	m_PendingCheckpoint.afterRestore = std::move(after);
+	return true;
+}
+
 void ActivityMan::SetStartTutorialActivity() {
 	SetStartActivity(dynamic_cast<Activity*>(g_PresetMan.GetEntityPreset("GATutorial", "Tutorial Mission")->Clone()));
 	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(GetStartActivity())) {
@@ -1177,6 +1184,16 @@ bool ActivityMan::RestartActivity() {
 	}
 	const std::string oldGlobals = CaptureRuntimeGlobals();
 	const std::string oldFrame = g_FrameMan.SaveCheckpoint();
+	try {
+		if (m_PendingCheckpoint.beforeRestore && !m_PendingCheckpoint.beforeRestore()) {
+			m_ActivityNeedsRestart = false;
+			return false;
+		}
+	} catch (const std::exception& exception) {
+		g_ConsoleMan.PrintString(std::string("ERROR: the saved game's local state could not be captured: ") + exception.what());
+		m_ActivityNeedsRestart = false;
+		return false;
+	}
 	std::unique_ptr<ContentFile::MemoryPNGScope> committedImages;
 	MovableMan::WorldSetAside originalWorld;
 	if (!g_MovableMan.SetAsideWorld(originalWorld, false)) { m_ActivityNeedsRestart = false; return false; }
@@ -1202,7 +1219,12 @@ bool ActivityMan::RestartActivity() {
 		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
 		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
 		if (restored && m_PendingCheckpoint.luaStateCursor >= 0) g_LuaMan.SetScriptStateCursor(m_PendingCheckpoint.luaStateCursor);
+		if (restored && m_PendingCheckpoint.afterRestore) {
+			g_MovableMan.SetRestoringSnapshot(true);
+			restored = m_Activity && m_PendingCheckpoint.afterRestore(*m_Activity);
+		}
 	} catch (const std::exception& exception) {
+		restored = false;
 		g_ConsoleMan.PrintString(std::string("ERROR: the saved game could not be constructed: ") + exception.what());
 	}
 	g_MovableMan.SetRestoringSnapshot(false);
