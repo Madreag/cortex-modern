@@ -2,6 +2,7 @@
 
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
 #include "NetReconnectUx.h"
@@ -11,14 +12,17 @@
 #include "ActivityMan.h"
 #include "AudioMan.h"
 #include "MovableMan.h"
+#include "MovableObject.h"
 #include "TimerMan.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -1054,7 +1058,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x13, 0x00,
+				0x14, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -2758,7 +2762,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x13, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x14, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -7558,6 +7562,576 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		NetValueObservation MakeValueObservation(uint8_t sender, uint64_t objectUID, uint64_t tick, uint32_t ordinal, const std::string& key, double number) {
+			NetValueObservation observation;
+			observation.senderPeerId = sender;
+			observation.objectUID = objectUID;
+			observation.tick = tick;
+			observation.ordinal = ordinal;
+			observation.mapKind = 0;
+			observation.key = key;
+			observation.op = 0;
+			observation.numberValue = number;
+			return observation;
+		}
+
+		bool TestValueObservationCodec(std::string* error) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 4;
+			frame.roundId = 0x14000000000000A0ULL;
+			frame.frames = {MakeFrame(100, 1)};
+			frame.valueObservations = {
+				MakeValueObservation(1, 1048653, 12, 1, "AI_StuckForTime", 3749.85),
+				MakeValueObservation(1, 1048653, 12, 2, "AI_StuckForTime", 0),
+			};
+			frame.valueObservations[1].op = 1;
+			frame.valueObservations[1].numberValue = 0;
+			NetValueObservation text;
+			text.senderPeerId = 1;
+			text.objectUID = 9;
+			text.tick = 3;
+			text.ordinal = 3;
+			text.mapKind = 1;
+			text.key = "name";
+			text.op = 0;
+			text.stringValue = "ok";
+			frame.valueObservations.push_back(text);
+			if (!RoundTrip({frame}, error)) {
+				return false;
+			}
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({frame}, bytes, error)) {
+				return false;
+			}
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			const NetLockstepFrame* got = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+			if (!got || got->valueObservations != frame.valueObservations) {
+				*error = "value observation codec lost a field";
+				return false;
+			}
+			NetLockstepFrame nanFrame = frame;
+			nanFrame.valueObservations = {MakeValueObservation(1, 1, 1, 1, "k", std::numeric_limits<double>::quiet_NaN())};
+			NetLockstepError encodeError;
+			if (NetLockstepCodec::Encode({nanFrame}, bytes, &encodeError) || encodeError.code != NetLockstepErrorCode::InvalidValue) {
+				*error = "a non-finite number value observation was not InvalidValue";
+				return false;
+			}
+			std::vector<uint8_t> truncated;
+			if (!EncodePacket({frame}, truncated, error)) {
+				return false;
+			}
+			truncated.pop_back();
+			const uint32_t payloadLength = static_cast<uint32_t>(truncated.size() - NetLockstepCodec::c_HeaderBytes);
+			for (int i = 0; i < 4; ++i) {
+				truncated[12 + i] = static_cast<uint8_t>(payloadLength >> (i * 8));
+			}
+			if (!ExpectDecodeError(truncated, NetLockstepErrorCode::TruncatedPayload, error)) {
+				return false;
+			}
+			NetLockstepFrame longKey = frame;
+			longKey.valueObservations = {MakeValueObservation(1, 1, 1, 1, std::string(NetLockstepCodec::c_MaxValueKeyBytes + 1, 'k'), 1)};
+			if (NetLockstepCodec::Encode({longKey}, bytes, &encodeError) || encodeError.code != NetLockstepErrorCode::StringTooLong) {
+				*error = "an oversized value key was not StringTooLong";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS value_observation_codec n=" << frame.valueObservations.size() << std::endl;
+			return true;
+		}
+
+		bool TestValueObservationV19StillDecodes(std::string* error) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 4;
+			frame.roundId = 0x14000000000000A0ULL;
+			frame.frames = {MakeFrame(100, 1)};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({frame}, bytes, error) || bytes.size() < 6) {
+				return false;
+			}
+			bytes[4] = static_cast<uint8_t>(NetLockstepCodec::c_HoldResolutionVersion);
+			bytes[5] = 0;
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			const NetLockstepFrame* got = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+			if (!got || !got->valueObservations.empty() || got->targetFrame != frame.targetFrame) {
+				*error = "a version-19 frame with no value section did not decode";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS value_observation_v19_still_decodes" << std::endl;
+			return true;
+		}
+
+		bool TestValueObservationRelay(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			const uint16_t delay = 3;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A1ULL, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A1ULL, delay, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A1ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43121, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			const uint64_t uid = 1048654;
+			const uint64_t produced = 5;
+			const uint64_t target = produced + delay;
+			const NetValueObservation write = MakeValueObservation(1, uid, produced, 1, "AI_StuckForTime", 12.5);
+			const uint64_t frameCount = 12;
+			for (uint64_t f = 0; f < frameCount; ++f) {
+				std::vector<NetValueObservation> values;
+				if (f == produced) {
+					values.push_back(write);
+				}
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, {}, values) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::map<uint64_t, std::vector<NetValueObservation>> hostByFrame;
+			std::map<uint64_t, std::vector<NetValueObservation>> clientByFrame;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&]() {
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) {
+					std::vector<NetValueObservation> all = ready.localValueObservations;
+					all.insert(all.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+					hostByFrame[ready.frame] = std::move(all);
+					++hostReady;
+				}
+				while (client.PopReadyFrame(ready)) {
+					std::vector<NetValueObservation> all = ready.localValueObservations;
+					all.insert(all.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+					clientByFrame[ready.frame] = std::move(all);
+					++clientReady;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect();
+					return hostReady >= frameCount && clientReady >= frameCount;
+				}, error, 16000)) {
+				return false;
+			}
+			std::map<std::string, double> hostMap;
+			std::map<std::string, double> clientMap;
+			auto apply = [](std::map<std::string, double>& numbers, const std::vector<NetValueObservation>& observations) {
+				for (const NetValueObservation& observation: observations) {
+					MovableObject::PendingValueOp op;
+					op.objectUID = observation.objectUID;
+					op.map = static_cast<MovableObject::ValueMapKind>(observation.mapKind);
+					op.op = static_cast<MovableObject::ValueMapOp>(observation.op);
+					op.key = observation.key;
+					op.number = observation.numberValue;
+					op.ordinal = observation.ordinal;
+					if (op.map != MovableObject::ValueMapKind::Number) {
+						continue;
+					}
+					if (op.op == MovableObject::ValueMapOp::Remove) {
+						numbers.erase(op.key);
+					} else {
+						numbers[op.key] = op.number;
+					}
+				}
+			};
+			for (uint64_t f = delay; f < target; ++f) {
+				if (!hostByFrame[f].empty() || !clientByFrame[f].empty()) {
+					*error = "a value observation landed before frame N+D";
+					return false;
+				}
+			}
+			if (hostByFrame[target] != clientByFrame[target] || hostByFrame[target].size() != 1 ||
+			    hostByFrame[target][0].key != write.key || hostByFrame[target][0].numberValue != write.numberValue) {
+				*error = "peers did not commit the same value observation at N+D";
+				return false;
+			}
+			apply(hostMap, hostByFrame[target]);
+			apply(clientMap, clientByFrame[target]);
+			if (hostMap != clientMap || hostMap.size() != 1 || hostMap["AI_StuckForTime"] != 12.5) {
+				*error = "settled number maps differed at N+D";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS value_observation_relay delay=" << delay << " target=" << target << std::endl;
+			return true;
+		}
+
+		bool TestValueObservationReplay(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			const uint16_t delay = 3;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A4ULL, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A4ULL, delay, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A4ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43124, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			const uint64_t uid = 1048654;
+			const uint64_t produced = 5;
+			const uint64_t target = produced + delay;
+			const NetValueObservation write = MakeValueObservation(1, uid, produced, 1, "AI_StuckForTime", 12.5);
+			const uint64_t frameCount = 12;
+			for (uint64_t f = 0; f < frameCount; ++f) {
+				std::vector<NetValueObservation> values;
+				if (f == produced) {
+					values.push_back(write);
+				}
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, {}, values) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::map<uint64_t, std::vector<NetValueObservation>> liveByFrame;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&]() {
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) {
+					std::vector<NetValueObservation> all = ready.localValueObservations;
+					all.insert(all.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+					liveByFrame[ready.frame] = std::move(all);
+					++hostReady;
+				}
+				while (client.PopReadyFrame(ready)) {
+					++clientReady;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect();
+					return hostReady >= frameCount && clientReady >= frameCount;
+				}, error, 16000)) {
+				return false;
+			}
+			std::map<std::string, double> liveMap;
+			for (const NetValueObservation& observation: liveByFrame[target]) {
+				if (observation.op == 0 && observation.mapKind == 0) {
+					liveMap[observation.key] = observation.numberValue;
+				}
+			}
+			if (liveMap.size() != 1 || liveMap["AI_StuckForTime"] != 12.5) {
+				*error = "the live settle frame did not hold peer A's NumberValue";
+				return false;
+			}
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-value-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			if (created) {
+				*error = "could not create value-replay test directory";
+				return false;
+			}
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			const NetMatchConfig replayConfig = NetMatchConfigUtil::MakeDefault(0x50484134564C5231ULL);
+			NetMatchReplayWriter writer;
+			if (!writer.Open(path.string(), replayConfig, error)) {
+				return false;
+			}
+			if (!writer.WriteFrame(target - 1, {MakeFrame(100, target)}, {}, {}, {}, error)) {
+				return false;
+			}
+			if (!writer.WriteFrame(target, {MakeFrame(100, target + 1)}, {}, {}, liveByFrame[target], error)) {
+				return false;
+			}
+			writer.Close();
+			NetMatchReplayReader reader;
+			if (!reader.Open(path.string(), error)) {
+				return false;
+			}
+			NetLockstepFrame recorded;
+			bool eof = false;
+			if (!reader.ReadFrame(recorded, eof, error) || !recorded.valueObservations.empty()) {
+				*error = "a recorded frame with no value observations did not stay empty";
+				return false;
+			}
+			if (!reader.ReadFrame(recorded, eof, error) || recorded.targetFrame != target ||
+			    recorded.valueObservations != liveByFrame[target] || recorded.valueObservations.size() != 1 ||
+			    recorded.valueObservations[0].senderPeerId != 1) {
+				*error = "replay lost the settled NumberValue";
+				return false;
+			}
+			std::map<std::string, double> replayedMap;
+			for (const NetValueObservation& observation: recorded.valueObservations) {
+				if (observation.op == 0 && observation.mapKind == 0) {
+					replayedMap[observation.key] = observation.numberValue;
+				}
+			}
+			if (replayedMap != liveMap) {
+				*error = "replayed number maps did not equal the live settle maps";
+				return false;
+			}
+			reader.Close();
+			std::cout << "[net-lockstep-selftest] PASS value_observation_replay target=" << target << std::endl;
+			return true;
+		}
+
+		bool TestReplayPlayerBindings(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A5ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A5ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A5ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43125, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			NetGamePlayerBindings hostBinding;
+			hostBinding.players[0].active = true;
+			hostBinding.players[0].team = 0;
+			hostBinding.players[0].controlledUID = 100;
+			NetGamePlayerBindings clientBinding;
+			clientBinding.players[0].active = true;
+			clientBinding.players[0].team = 1;
+			clientBinding.players[0].controlledUID = 200;
+			const std::vector<NetGameCommand> hostCommands{{1, hostBinding}};
+			const std::vector<NetGameCommand> clientCommands{{2, clientBinding}};
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, hostCommands, error) ||
+			    !client.QueueLocalInput(0, {MakeFrame(200, 1)}, clientCommands, error)) {
+				return false;
+			}
+			std::vector<NetGameCommand> liveCommands;
+			std::vector<ControllerFrame> liveFrames;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&]() {
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) {
+					if (ready.frame == 0) {
+						liveFrames = ready.localFrames;
+						liveFrames.insert(liveFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+						std::sort(liveFrames.begin(), liveFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
+							return lhs.actorUniqueID < rhs.actorUniqueID;
+						});
+						liveCommands = ready.localCommands;
+						liveCommands.insert(liveCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+					}
+					++hostReady;
+				}
+				while (client.PopReadyFrame(ready)) {
+					++clientReady;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect();
+					return hostReady >= 1 && clientReady >= 1;
+				}, error, 8000)) {
+				return false;
+			}
+			std::map<uint8_t, NetGamePlayerBindings> liveBindings;
+			for (const NetGameCommand& command: liveCommands) {
+				if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+					liveBindings[command.senderPeerId] = *bindings;
+				}
+			}
+			if (liveBindings.size() != 2 || liveBindings[1] != hostBinding || liveBindings[2] != clientBinding) {
+				*error = "the live ready frame did not keep both peers' bindings";
+				return false;
+			}
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-binding-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			if (created) {
+				*error = "could not create binding-replay test directory";
+				return false;
+			}
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			const NetMatchConfig replayConfig = NetMatchConfigUtil::MakeDefault(0x50484134424E4431ULL);
+			NetMatchReplayWriter writer;
+			if (!writer.Open(path.string(), replayConfig, error)) {
+				return false;
+			}
+			if (!writer.WriteFrame(0, liveFrames, liveCommands, {}, {}, error)) {
+				return false;
+			}
+			writer.Close();
+			NetMatchReplayReader reader;
+			if (!reader.Open(path.string(), error)) {
+				return false;
+			}
+			NetLockstepFrame recorded;
+			bool eof = false;
+			if (!reader.ReadFrame(recorded, eof, error) || recorded.targetFrame != 0) {
+				*error = "the two-binding record did not read back";
+				return false;
+			}
+			std::map<uint8_t, NetGamePlayerBindings> replayedBindings;
+			for (const NetGameCommand& command: recorded.commands) {
+				if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+					replayedBindings[command.senderPeerId] = *bindings;
+				}
+			}
+			if (replayedBindings != liveBindings) {
+				*error = "replayed bindings per sender did not equal the live ones";
+				return false;
+			}
+			reader.Close();
+			std::cout << "[net-lockstep-selftest] PASS replay_player_bindings senders=2" << std::endl;
+			return true;
+		}
+
+		bool TestValueObservationNonOwnerDropped(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A2ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A2ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A2ULL;
+			hostConfig.timeoutMs = 4000;
+			hostConfig.matchConfig.hostPeerId = 1;
+			clientConfig.timeoutMs = 4000;
+			clientConfig.matchConfig.hostPeerId = 1;
+			if (!StartCoordinatorPair(43122, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			struct CoordinatorGuard {
+				explicit CoordinatorGuard(NetLockstepCoordinator* coordinator) { ScenarioRunner::SetLockstepCoordinator(coordinator); }
+				~CoordinatorGuard() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+			} guard(&host);
+			const uint64_t evenUID = 1048654;
+			if (host.ResolveActorOwner(static_cast<int64_t>(evenUID), 0, true) != 1) {
+				*error = "unique-id-split did not give the even UID to peer 1";
+				return false;
+			}
+			if (g_MovableMan.ValueObservationAuthority(0) != 1 || g_MovableMan.ValueObservationAuthority(evenUID) != 1) {
+				*error = "a value observation without an actor root was not hosted";
+				return false;
+			}
+			const uint64_t rejectedBefore = g_MovableMan.GetValueObservationsRejected();
+			const NetValueObservation stranger = MakeValueObservation(2, evenUID, 1, 1, "AI_StuckForTime", 99);
+			g_MovableMan.CommitValueObservations(0, {}, {stranger});
+			if (g_MovableMan.GetValueObservationsRejected() != rejectedBefore + 1) {
+				*error = "a non-owner value observation was not dropped";
+				return false;
+			}
+			const NetValueObservation owned = MakeValueObservation(1, evenUID, 1, 1, "AI_StuckForTime", 3);
+			g_MovableMan.CommitValueObservations(0, {owned}, {});
+			if (g_MovableMan.GetValueObservationsRejected() != rejectedBefore + 1) {
+				*error = "the owner value observation was counted as rejected";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS value_observation_non_owner_dropped rejected=" << (rejectedBefore + 1) << std::endl;
+			return true;
+		}
+
+		bool TestValueObservationOverflowCarry(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x70000000000000A3ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x70000000000000A3ULL, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = 0x14000000000000A3ULL;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(43123, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 8000)) {
+				return false;
+			}
+			uint64_t nextObject = 40000000;
+			const auto flood = [&](size_t count, uint64_t tick) {
+				std::vector<NetValueObservation> observations;
+				for (size_t i = 0; i < count; ++i) {
+					observations.push_back(MakeValueObservation(1, nextObject++, tick, static_cast<uint32_t>(1 + i), std::string(80, 'k') + std::to_string(i), static_cast<double>(i)));
+				}
+				return observations;
+			};
+			const size_t burst = 2048;
+			const size_t frameCount = 10;
+			std::vector<NetValueObservation> sent;
+			for (uint64_t f = 0; f < frameCount; ++f) {
+				std::vector<NetValueObservation> observations = f < 2 ? flood(burst, 900 + f) : std::vector<NetValueObservation>{};
+				sent.insert(sent.end(), observations.begin(), observations.end());
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, {}, observations) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<NetValueObservation> hostSeen, clientSeen;
+			size_t hostReady = 0, clientReady = 0;
+			auto collect = [&](NetLockstepCoordinator& coordinator, std::vector<NetValueObservation>& into, size_t& count) {
+				NetLockstepReadyFrame ready;
+				while (coordinator.PopReadyFrame(ready)) {
+					into.insert(into.end(), ready.localValueObservations.begin(), ready.localValueObservations.end());
+					into.insert(into.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+					++count;
+				}
+			};
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect(host, hostSeen, hostReady);
+					collect(client, clientSeen, clientReady);
+					return hostReady >= frameCount && clientReady >= frameCount;
+				}, error, 16000)) {
+				return false;
+			}
+			if (host.GetStats().valueObservationsCarried == 0) {
+				*error = "a frame of new value writes did not carry anything over";
+				return false;
+			}
+			if (host.GetStats().valueObservationsDropped != 0) {
+				*error = "a burst the quiet frames could drain still dropped value writes";
+				return false;
+			}
+			if (hostSeen != clientSeen || hostSeen != sent) {
+				*error = "the carried value observations did not all arrive in their sampled order: " +
+				         std::to_string(hostSeen.size()) + " of " + std::to_string(sent.size());
+				return false;
+			}
+			const uint64_t carriedInBurst = host.GetStats().valueObservationsCarried;
+			for (uint64_t f = frameCount; f < frameCount + 8; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error, {}, flood(NetLockstepCodec::c_MaxObservationsPerPacket, 1000 + f)) ||
+				    !client.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					collect(host, hostSeen, hostReady);
+					collect(client, clientSeen, clientReady);
+					return hostReady >= frameCount + 8 && clientReady >= frameCount + 8;
+				}, error, 16000)) {
+				return false;
+			}
+			if (host.GetStats().valueObservationsDropped == 0) {
+				*error = "the held value-observation set was not bounded under a sustained flood";
+				return false;
+			}
+			const std::vector<NetValueObservation> handedBack = host.TakeDroppedValueObservations();
+			if (handedBack.size() != host.GetStats().valueObservationsDropped) {
+				*error = "the dropped value writes were not all handed back";
+				return false;
+			}
+			if (hostSeen != clientSeen) {
+				*error = "a bounded held set left the two peers with different value observations";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS value_observation_overflow_carry burst=" << burst << " carried=" << carriedInBurst
+			          << " sustained_dropped=" << host.GetStats().valueObservationsDropped << std::endl;
+			return true;
+		}
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -7638,6 +8212,13 @@ namespace RTE {
 		    !TestCoordinatorAdjudicatedPeerKeepsItsSeat(&error) ||
 		    !TestRelayHostFinishesWhatItOwes(&error) ||
 		    !TestObservationOverflowCarry(&error) ||
+		    !TestValueObservationCodec(&error) ||
+		    !TestValueObservationV19StillDecodes(&error) ||
+		    !TestValueObservationRelay(&error) ||
+		    !TestValueObservationReplay(&error) ||
+		    !TestReplayPlayerBindings(&error) ||
+		    !TestValueObservationNonOwnerDropped(&error) ||
+		    !TestValueObservationOverflowCarry(&error) ||
 		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||
 		    !TestObservationFaultsAreToldApart(&error) ||
 		    !TestStaleRoundFrameLeavesTheLiveTable(&error) ||

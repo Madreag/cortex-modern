@@ -14,7 +14,11 @@
 #include "Material.h"
 #include "MovableMan.h"
 
+#include <atomic>
+#include <cstdint>
+#include <map>
 #include <set>
+#include <vector>
 
 struct BITMAP;
 
@@ -1022,6 +1026,29 @@ namespace RTE {
 		/// @return Whether or not there is an associated value for this key.
 		bool ObjectValueExists(const std::string& key) const;
 
+		enum class ValueMapKind : uint8_t { Number = 0, String = 1 };
+		enum class ValueMapOp : uint8_t { Set = 0, Remove = 1 };
+
+		struct PendingValueOp {
+			uint64_t objectUID = 0;
+			ValueMapKind map = ValueMapKind::Number;
+			ValueMapOp op = ValueMapOp::Set;
+			std::string key;
+			double number = 0;
+			std::string text;
+			uint32_t ordinal = 0;
+			uint64_t tick = 0;
+		};
+
+		static bool InLocalAIValueDomain();
+		std::vector<PendingValueOp> TakePendingValueOps();
+		static std::vector<PendingValueOp> SamplePendingValueOps();
+		void ApplySharedValueOp(const PendingValueOp& op);
+		void CommitPendingValueOps();
+		void DropMatchingValueOverlay(const PendingValueOp& op);
+		void ClearValueOverlay();
+		static bool RunValueMapSelfTest();
+
 		/// Event listener to be run while this MovableObject's PieMenu is opened.
 		/// @param pieMenu The PieMenu this event listener needs to listen to. This will always be this' m_PieMenu and only exists for std::bind.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
@@ -1368,6 +1395,24 @@ namespace RTE {
 		std::unordered_map<std::string, std::string> m_StringValueMap; //<! Map to store any generic strings available from script
 		std::unordered_map<std::string, double> m_NumberValueMap; //<! Map to store any generic numbers available from script
 		std::unordered_map<std::string, Entity*> m_ObjectValueMap; //<! Map to store any generic object pointers available from script
+		// Local-AI value writes stay here until the settled observation commits.
+		struct ValueOverlayKey {
+			ValueMapKind map = ValueMapKind::Number;
+			std::string key;
+			bool operator<(const ValueOverlayKey& other) const {
+				return map != other.map ? static_cast<uint8_t>(map) < static_cast<uint8_t>(other.map) : key < other.key;
+			}
+		};
+		struct ValueOverlayEntry {
+			ValueMapOp op = ValueMapOp::Set;
+			double number = 0;
+			std::string text;
+			uint32_t ordinal = 0;
+		};
+		std::map<ValueOverlayKey, ValueOverlayEntry> m_ValueOverlay;
+		std::vector<PendingValueOp> m_PendingValueOps;
+		uint32_t m_ValueWriteOrdinal = 0;
+		std::atomic<bool> m_ValueWritesNoted{false};
 		static std::string ms_EmptyString;
 
 		// Special post processing flash effect file and Bitmap. Shuold be loaded from a 32bpp bitmap
@@ -1457,6 +1502,11 @@ namespace RTE {
 		/// Handles reading for custom values, dealing with the various types of custom values.
 		/// @param reader A Reader lined up to the custom value type to be read.
 		void ReadCustomValueProperty(Reader& reader);
+
+		void RecordLocalValueWrite(ValueMapKind map, ValueMapOp op, const std::string& key, double number, const std::string& text);
+		const ValueOverlayEntry* FindValueOverlay(ValueMapKind map, const std::string& key) const;
+		void NoteValueWrites();
+		void UnnoteValueWrites();
 
 		/// Returns the script state to use for a given script path.
 		/// This will be locked to our thread and safe to use - ensure that it'll be unlocked after use!
