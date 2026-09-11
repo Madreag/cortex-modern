@@ -529,6 +529,9 @@
     <ClInclude Include="Source\Network\NetResyncSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetResyncRuntimeSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetLockstep.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -878,6 +881,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetResyncSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetResyncRuntimeSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetLockstep.cpp">

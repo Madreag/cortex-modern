@@ -18,6 +18,7 @@
 #include <vector>
 
 namespace RTE {
+	struct NetResyncPendingCommand;
 
 	/// The live match's lockstep clock: monotonic milliseconds every caller that drives a coordinator
 	/// reads, so the missing-frame grace is wall time and never steps back between setup and play.
@@ -30,6 +31,8 @@ namespace RTE {
 		Ack = 3,
 		Stop = 4,
 		Checksum = 5,
+		SeatSnapshot = 6,
+		RecoveryChunk = 7,
 	};
 
 	enum class NetLockstepStopReason : uint16_t {
@@ -42,29 +45,43 @@ namespace RTE {
 		PeerLeft = 7, // A clean leave: the frame field is the FIRST frame without the leaver's data; survivors continue.
 		PeerDropped = 9, // The same, for a transport that died: the seat may still be reclaimed, so survivors hold a scripted outcome until the reclaim frame.
 		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
-		SeatReclaiming = 10,  // A held seat's own player is proving its ticket. §11's roster line, relayed so every peer says the same thing.
-		SeatReclaimed = 11,   // It proved it: the player who dropped has its seat back.
-		SeatSubstituted = 12, // The host gave the seat to the named applicant instead.
 	};
 
-	/// What a peer learned about someone else's seat. Filled from the relayed notice on every peer
-	/// alike - the host's is the notice it sent - so §11's roster line is derived, never asked for.
-	enum class NetSeatNoticeKind : uint8_t {
-		Left = 0,        //!< Announced a clean leave.
-		Dropped = 1,     //!< The transport died; the seat is held until holdUntilFrame.
-		Reclaiming = 2,  //!< The dropped holder is proving its ticket.
-		Reclaimed = 3,   //!< It proved it.
-		Substituted = 4, //!< The host handed the seat to someone else.
+	enum class NetSeatPresenceState : uint8_t {
+		Present = 0,
+		Disconnected = 1,
+		Reconnecting = 2,
+		Substituted = 3,
+		Left = 4,
 	};
 
-	struct NetLockstepSeatNotice {
+	/// Public admission state. It describes a seat and never grants simulation authority.
+	struct NetSeatPresenceEntry {
+		uint16_t stableSeat = 0;
 		uint8_t peerId = 0;
-		NetSeatNoticeKind kind = NetSeatNoticeKind::Left;
-		uint64_t frame = 0;          //!< Left/Dropped: the first frame without them; otherwise the frame it reached this peer at.
-		uint64_t holdUntilFrame = 0; //!< Dropped: the frame the reclaim hold runs to.
-		std::string name;            //!< Substituted: the new holder.
+		NetSeatPresenceState state = NetSeatPresenceState::Present;
+		uint32_t holderGeneration = 0;
+		uint32_t seatGeneration = 0;
+		uint32_t incarnation = 0;
+		bool holdActive = false;
+		uint64_t holdUntilMs = 0; //!< Host admission-clock deadline, independent of the simulation hold.
+		uint64_t holdUntilFrame = 0;
+		std::string holderName;
 
-		bool operator==(const NetLockstepSeatNotice&) const = default;
+		bool operator==(const NetSeatPresenceEntry&) const = default;
+	};
+
+	/// A full roster update, authored by the host rather than by any of its subject seats.
+	struct NetLockstepSeatSnapshot {
+		uint8_t senderPeerId = 0;
+		uint64_t sessionId = 0;
+		std::array<uint8_t, 16> epoch{};
+		uint64_t roundId = 0;
+		uint64_t revision = 0;
+		uint64_t observedAtMs = 0;
+		std::vector<NetSeatPresenceEntry> seats;
+
+		bool operator==(const NetLockstepSeatSnapshot&) const = default;
 	};
 
 	enum class NetLockstepErrorCode {
@@ -106,6 +123,7 @@ namespace RTE {
 		std::string scenario;
 		std::string ownershipPolicy;
 		uint64_t roundId = 0; //!< The host's tag for this lockstep round; a client adopts it from the host's start.
+		bool resumeFromSnapshot = false;
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -210,6 +228,18 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
+	struct NetLockstepRecoveryChunk {
+		uint8_t senderPeerId = 0;
+		uint64_t sessionId = 0;
+		uint64_t roundId = 0;
+		uint64_t targetFrame = 0;
+		uint32_t totalBytes = 0;
+		uint32_t offset = 0;
+		std::vector<uint8_t> bytes;
+
+		bool operator==(const NetLockstepRecoveryChunk&) const = default;
+	};
+
 	struct NetLockstepStop {
 		uint8_t senderPeerId = 0;
 		NetLockstepStopReason reason = NetLockstepStopReason::InternalError;
@@ -225,11 +255,12 @@ namespace RTE {
 		uint64_t frame = 0;
 		std::array<uint8_t, 32> hash{};
 		uint64_t roundId = 0;
+		std::map<uint8_t, uint64_t> appliedCommands;
 
 		bool operator==(const NetLockstepChecksum&) const = default;
 	};
 
-	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum>;
+	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepSeatSnapshot, NetLockstepRecoveryChunk>;
 
 	struct NetLockstepPacket {
 		NetLockstepPayload payload;
@@ -268,10 +299,14 @@ namespace RTE {
 		std::string ownershipPolicy = "unique-id-split";
 		NetMatchConfig matchConfig;
 		uint64_t roundId = 0; //!< Host: a fresh nonzero tag per round. Client: 0, adopted from the host's start.
+		std::array<uint8_t, 16> seatPresenceEpoch{}; //!< The epoch already established by admission; zero disables roster packets.
+		bool resumeFromSnapshot = false;
 	};
 
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
+		bool hasLocalInput = false;
+		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
 		std::vector<ControllerFrame> remoteFrames;
 		std::vector<NetGameCommand> localCommands;
@@ -361,7 +396,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 16;
+		static constexpr uint16_t c_Version = 18;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -369,6 +404,10 @@ namespace RTE {
 		// Version 15 says how many keys the sender had spelled out before the packet, so a receiver that
 		// missed one refuses instead of reading a reused slot as the key it held before.
 		// Version 16 distinguishes a dropped peer from a clean leave; admission hashes this version.
+		// Version 17 carries authenticated, complete seat-presence snapshots.
+		// Version 18 carries each peer's local player bindings with its applied inputs.
+		static constexpr uint16_t c_PlayerBindingsVersion = 18;
+		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
 		static constexpr uint16_t c_ObservationSlotVersion = 14;
@@ -382,6 +421,8 @@ namespace RTE {
 		static constexpr size_t c_MaxCarriedObservations = NetSoundObservationDictionary::c_MaxSlots;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
+		static constexpr size_t c_MaxRecoveryInputBytes = 512U * 1024U;
+		static constexpr size_t c_MaxRecoveryChunkBytes = c_MaxPayloadBytes - c_HeaderBytes - 36;
 		static constexpr size_t c_MaxScenarioBytes = 128;
 		static constexpr size_t c_MaxOwnershipPolicyBytes = 128;
 		static constexpr size_t c_MaxDiagnosticBytes = 512;
@@ -409,6 +450,8 @@ namespace RTE {
 		/// byte budget is encoded and outObservationsEncoded says how many, so the caller can carry the
 		/// rest; the dictionary is touched only once the packet is certain to encode.
 		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr);
+		static bool EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr);
+		static bool DecodeRecoveryInput(const std::vector<uint8_t>& bytes, NetLockstepFrame& outFrame, NetLockstepError* error = nullptr);
 		/// The frame version selects the ControllerFrame layout and semantics; a recording carries its own.
 		static NetLockstepDecodeResult Decode(const uint8_t* data, size_t size, uint16_t controllerFrameVersion = ControllerFrame::c_Version, NetSoundObservationTables* tables = nullptr);
 		static NetLockstepDecodeResult Decode(const std::vector<uint8_t>& bytes, uint16_t controllerFrameVersion = ControllerFrame::c_Version, NetSoundObservationTables* tables = nullptr);
@@ -439,7 +482,17 @@ namespace RTE {
 		/// fidelity gate re-runs a window). Replay mode only — there is no wire to rewind.
 		bool RewindReplay(uint64_t firstFrame, std::string* error = nullptr);
 		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr, const std::vector<NetSoundObservation>& observations = {});
-		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr);
+		bool PrimeResyncFrames(const std::vector<std::vector<NetGameCommand>>& batches, std::string* error = nullptr);
+		bool PrimeResyncInputs(const std::vector<NetLockstepFrame>& batches, std::string* error = nullptr);
+		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr);
+		bool QueueRecoveredInput(const NetLockstepFrame& frame, std::string* error = nullptr);
+		std::vector<NetLockstepFrame> CapturePendingInputs(uint64_t afterFrame) const;
+		std::vector<NetLockstepFrame> CaptureLocalInputHistory() const;
+		bool NeedsResyncPriming() const { return m_Config.resumeFromSnapshot && !m_ResyncPrimed; }
+		bool SubmitLocalChecksum(uint64_t frame, const std::array<uint8_t, 32>& hash, std::string* error = nullptr, const std::map<uint8_t, uint64_t>& appliedCommands = {});
+		const std::map<uint8_t, uint64_t>& GetAuthoritativeCommandAcks() const { return m_AuthoritativeCommandAcks; }
+		std::vector<NetResyncPendingCommand> CapturePendingCommands(uint64_t afterFrame) const;
+		std::vector<NetResyncPendingCommand> CapturePendingPlayerBindings(uint64_t afterFrame) const;
 		void Tick(uint64_t nowMs);
 		void Complete(const std::string& message = "complete");
 		/// Announces a clean local leave: peers keep our frames through the last produced one, then
@@ -502,18 +555,15 @@ namespace RTE {
 		/// the relayed leave notice alone, so every peer in the round answers identically at the same
 		/// tick - the question above is about a round with nobody left and is answered host-side.
 		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
-		/// The seat notices this peer has learned and not yet read. A resync builds a new round, so
-		/// these outlive one: the roster line has to survive the round that produced it.
-		std::vector<NetLockstepSeatNotice> TakeSeatNotices();
-		/// Host: tell every peer what became of a held seat. The host records its own notice too, so
-		/// what it shows is what it sent, derived the same way a client derives it.
-		void AnnounceSeatChange(uint8_t peerId, NetLockstepStopReason reason, const std::string& holderName);
+		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
+		bool PublishSeatSnapshot(std::vector<NetSeatPresenceEntry> seats, uint64_t observedAtMs);
+		std::optional<NetLockstepSeatSnapshot> TakeSeatSnapshot();
 		/// Whether the round has yet to commit a frame. A resync relaunch lands here: the ledgered
 		/// reseat rides the first committed frame, so nothing the round produced can be judged before it.
 		bool HasCommittedAFrame() const { return m_Stats.framesAccepted > 0; }
 		/// Whether this relay host still owes a peer a forward it has not managed to send. The star's
 		/// hub cannot leave while this is true: a client waiting on that frame loses the round.
-		bool HasPendingRelayWork() const { return m_RelayHost && !m_RelayBacklog.empty(); }
+		bool HasPendingRelayWork() const { return m_RelayHost && (!m_RelayBacklog.empty() || !m_RecoveryOutgoing.empty()); }
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
 		/// The peer's roster display name, or "peer N" when the roster has none.
@@ -523,12 +573,18 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 	private:
+		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations);
 		/// Sends to every remote, or to one when onlyPeerId names it.
 		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
-		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true);
+		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true, bool recovered = false);
+		void HandleRecoveryChunk(const NetLockstepRecoveryChunk& chunk, uint64_t nowMs, NetPeerId fromTransport);
+		bool RetainRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t> bytes, bool commitLocal, std::string* error);
+		void FlushRecoveryInputs(uint64_t nowMs = UINT64_MAX);
+		void RememberLocalInput(const NetLockstepFrame& frame);
+		bool FindLocalInput(uint64_t targetFrame, NetLockstepFrame& out) const;
 		uint8_t LockstepPeerOfTransport(NetPeerId transportPeerId) const;
 		bool SendStart(std::string* error, uint8_t onlyPeerId = 0);
 		/// Sends a peer that repeated its start what it needs to form the round.
@@ -547,6 +603,8 @@ namespace RTE {
 		/// Sends the production a followed round owes the host, in order, retrying a refused send.
 		void FlushResendFrames();
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
+		void HandleSeatSnapshot(const NetLockstepSeatSnapshot& snapshot, NetPeerId fromTransport);
+		void FlushSeatSnapshot();
 		void HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport);
 		/// Whether a packet's claimed sender owns the transport it arrived on. Only the relay host
 		/// receives each remote directly; clients get everything via the relay and trust the host.
@@ -554,7 +612,6 @@ namespace RTE {
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false);
-		void RecordSeatNotice(uint8_t peerId, NetSeatNoticeKind kind, uint64_t frame, uint64_t holdUntilFrame, std::string name);
 		/// The first frame this peer has no data for, walking up from the committed one.
 		uint64_t FirstFrameWithout(uint8_t peerId) const;
 		/// How long the host lets a required remote go quiet before calling it gone. Half the
@@ -612,7 +669,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Left peers whose transport died rather than announcing; carried by the leave notice, so every peer has it.
-		std::vector<NetLockstepSeatNotice> m_SeatNotices; //!< Unread seat notices, bounded; the round may end before its reader runs.
+		std::optional<NetLockstepSeatSnapshot> m_SeatSnapshot;
+		bool m_SeatSnapshotUnread = false;
+		std::set<uint8_t> m_PendingSeatSnapshotPeers;
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
 		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.
@@ -627,6 +686,7 @@ namespace RTE {
 		std::string m_LastLeaveMessage; //!< The message the round ends with once no left seat is held any more.
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		bool m_DeferStops = false;
+		bool m_ResyncPrimed = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
@@ -643,6 +703,23 @@ namespace RTE {
 		uint64_t m_LastStartSentMs = UINT64_MAX;
 		std::map<uint8_t, uint64_t> m_LastStartAnswerMs; //!< peerId -> when we last answered its repeated start.
 		std::map<uint64_t, NetLockstepFrame> m_ResendFrames; //!< The frames a followed round still owes the host, whole.
+		struct RecoveryOutgoing {
+			NetLockstepFrame frame;
+			std::vector<uint8_t> bytes;
+			std::map<uint8_t, size_t> nextOffsets;
+			bool commitLocal = false;
+		};
+		struct RecoveryIncoming {
+			uint64_t targetFrame = 0;
+			uint32_t totalBytes = 0;
+			std::vector<uint8_t> bytes;
+		};
+		std::deque<RecoveryOutgoing> m_RecoveryOutgoing;
+		std::map<uint8_t, RecoveryIncoming> m_RecoveryIncoming;
+		std::map<uint8_t, uint64_t> m_RecoveryBlockedSinceMs;
+		std::map<uint64_t, NetLockstepFrame> m_LocalInputHistory;
+		std::vector<std::vector<uint8_t>> m_ResyncPrimeInputs;
+		std::set<std::pair<uint64_t, uint8_t>> m_InstalledResyncTargets;
 		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.
 		// What this peer spells its own observations with, and what a relay host re-encodes each other
 		// sender's with. A relay table is fed by exactly the frames it forwards, which is exactly what its
@@ -654,6 +731,7 @@ namespace RTE {
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
 		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;
+		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 
