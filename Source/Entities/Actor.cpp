@@ -1474,7 +1474,8 @@ void Actor::UpdateMovePath() {
 
 				// We loaded the waypoint, no need to keep it. The queue is sim state, so under lockstep the owner drops it through the wire.
 				if (lockstep) {
-					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled()) &&
+					    ScenarioRunner::IsLockstepTeamCommandSender(m_Team, ScenarioRunner::GetLockstepLocalPeerId())) {
 						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
 					}
 					++m_WaypointCursor;
