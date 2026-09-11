@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <array>
 #include <string>
 #include <variant>
 #include <vector>
@@ -22,6 +24,7 @@ namespace RTE {
 		AIOrder = 10,
 		Reseat = 11,
 		SoundOp = 12,
+		PlayerBindings = 13,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -237,11 +240,31 @@ namespace RTE {
 		bool operator==(const NetGameReseat&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp>;
+	/// A peer's local player reference, observed alongside its delayed input.
+	struct NetPlayerBinding {
+		bool active = false, human = false, hadBrain = false, brainEvacuated = false;
+		int8_t team = -1;
+		uint8_t viewState = 0;
+		int64_t controlledUID = 0, brainUID = 0;
+		float cameraX = 0, cameraY = 0;
+		std::array<float, 8> viewTargets{};
+
+		bool operator==(const NetPlayerBinding&) const = default;
+	};
+
+	/// Complete local slots; an empty slot clears the previous binding without changing the world.
+	struct NetGamePlayerBindings {
+		std::array<NetPlayerBinding, 4> players{};
+		std::map<uint8_t, uint64_t> appliedCommands;
+		bool operator==(const NetGamePlayerBindings&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
 		NetGameCommandPayload payload;
+		uint64_t sequence = 0; //!< Sender-local identity retained when a pending command crosses a resync.
 
 		bool operator==(const NetGameCommand&) const = default;
 	};
