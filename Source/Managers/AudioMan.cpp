@@ -29,10 +29,13 @@
 #include "SceneObject.h"
 #include "Writer.h"
 
+#include "backward/backward.hpp"
+
 #include <iostream>
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <chrono>
 #include <cstring>
 #include <functional>
@@ -42,6 +45,25 @@
 #include <unordered_set>
 
 using namespace RTE;
+
+namespace {
+	thread_local const char* s_RestorePlayPhase = "";
+
+	void PrintRestorePlayBacktrace() {
+		backward::StackTrace stack;
+		stack.load_here(10);
+		backward::TraceResolver resolver;
+		resolver.load_stacktrace(stack);
+		const size_t frames = stack.size() < 8 ? stack.size() : 8;
+		for (size_t index = 0; index < frames; ++index) {
+			const backward::ResolvedTrace trace = resolver.resolve(stack[index]);
+			std::cout << "[audio-checkpoint]   #" << index << " " << (trace.object_function.empty() ? "?" : trace.object_function);
+			if (!trace.source.filename.empty()) std::cout << " " << trace.source.filename << ":" << trace.source.line;
+			else if (!trace.object_filename.empty()) std::cout << " " << trace.object_filename;
+			std::cout << std::endl;
+		}
+	}
+}
 
 thread_local SoundSimulationScope* SoundSimulationScope::s_Current = nullptr;
 
@@ -498,6 +520,13 @@ void AudioMan::ClearSoundEvents(int player) {
 
 bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	if (!soundContainer) return false;
+	const bool restoring = g_MovableMan.IsRestoringSnapshot();
+	const char* phase = RestorePlayPhaseScope::Name();
+	if (restoring || (phase && std::strcmp(phase, "staging") == 0)) {
+		std::cout << "[audio-checkpoint] play during restore: preset \"" << soundContainer->GetPresetName() << "\" identity " << soundContainer->GetCheckpointIdentity()
+		          << " owner-class " << soundContainer->GetClassName() << " phase " << (phase && phase[0] ? phase : "none") << " restoring=" << (restoring ? 1 : 0) << std::endl;
+		PrintRestorePlayBacktrace();
+	}
 	const bool logical = soundContainer->UsesLogicalPlayback();
 	const bool physical = !s_PlaybackSuppressed && m_AudioEnabled;
 	if (!logical && !physical) return false;
@@ -1259,6 +1288,35 @@ AudioMan::RestoredSoundRegistryScope::~RestoredSoundRegistryScope() {
 	g_AudioMan.m_RestoredManagerIdentities.clear();
 }
 
+namespace {
+	std::string NearbyRegisteredIdentities(const CheckpointSoundRegistry& registry, uint64_t owner) {
+		std::vector<uint64_t> nearby;
+		for (const auto& [identity, owners]: registry) {
+			if (!owners.empty() && identity + 20 >= owner && owner + 20 >= identity) nearby.push_back(identity);
+		}
+		std::sort(nearby.begin(), nearby.end());
+		nearby.erase(std::unique(nearby.begin(), nearby.end()), nearby.end());
+		std::ostringstream text;
+		for (size_t index = 0; index < nearby.size(); ++index) {
+			if (index) text << ",";
+			text << nearby[index];
+		}
+		return text.str();
+	}
+}
+
+AudioMan::RestorePlayPhaseScope::RestorePlayPhaseScope(const char* name) : m_Previous(s_RestorePlayPhase) {
+	s_RestorePlayPhase = name && name[0] ? name : "";
+}
+
+AudioMan::RestorePlayPhaseScope::~RestorePlayPhaseScope() {
+	s_RestorePlayPhase = m_Previous;
+}
+
+const char* AudioMan::RestorePlayPhaseScope::Name() {
+	return s_RestorePlayPhase ? s_RestorePlayPhase : "";
+}
+
 void AudioMan::StopRecordingRestoredSoundRegistry() {
 	m_RestoredSoundRegistryRecording = false;
 }
@@ -1706,6 +1764,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 	AudioRuntime state;
 	if (!state.Load(text, refusal)) return false;
 	if (validateOnly) return true;
+	RestorePlayPhaseScope applyPhase("apply");
 	try {
 		if (!m_AudioEnabled && !state.voices.empty()) throw std::runtime_error("checkpoint contains voices but the audio system is disabled");
 		std::map<std::string, FMOD::Sound*> sounds;
@@ -1746,8 +1805,16 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			SoundContainer* owner = voice.owner ? ResolveCheckpointVoiceOwner(voice.owner) : nullptr;
 			if (voice.owner && !owner) {
 				SoundContainer* named = FindCheckpointSoundContainer(voice.owner);
+				if (!named) named = FindRestoredCheckpointSoundContainer(voice.owner);
 				const std::string preset = named ? named->GetPresetName() : std::string();
-				throw std::runtime_error("voice " + std::to_string(voice.identity) + " has no registered owner " + std::to_string(voice.owner) + (preset.empty() ? "" : " (" + preset + ")"));
+				std::string nearby = NearbyRegisteredIdentities(m_RestoredSoundRegistryActive ? m_RestoredSoundContainers : m_CheckpointSoundContainers, voice.owner);
+				if (m_RestoredSoundRegistryActive) {
+					const std::string liveNearby = NearbyRegisteredIdentities(m_CheckpointSoundContainers, voice.owner);
+					if (!liveNearby.empty()) nearby = nearby.empty() ? "live:" + liveNearby : nearby + " live:" + liveNearby;
+				}
+				std::cout << "[audio-checkpoint] voice " << voice.identity << " has no registered owner " << voice.owner
+				          << (preset.empty() ? "" : " (" + preset + ")") << " nearby " << (nearby.empty() ? "none" : nearby) << std::endl;
+				throw std::runtime_error("voice " + std::to_string(voice.identity) + " has no registered owner " + std::to_string(voice.owner) + (preset.empty() ? "" : " (" + preset + ")") + " nearby " + (nearby.empty() ? "none" : nearby));
 			}
 			if (owner) ownerChannels[owner].insert(voice.identity);
 			if (voice.playing && !sounds.contains(voice.path)) throw std::runtime_error("voice sample is absent: " + voice.path);
