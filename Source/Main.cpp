@@ -2240,7 +2240,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
 				if (s_netMatchServiceE2E) {
-					s_netMatchE2ETicks.OnResyncRelaunch();
+					s_netMatchE2ETicks.OnResyncRelaunch(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 				}
 			} else if (resyncError == "match over") {
 				g_ActivityMan.EndActivity();
