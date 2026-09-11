@@ -1,0 +1,14 @@
+source
+build_manifest
+exe_sha256
+source_head
+started
+complete
+passed
+execution_pass
+expected_jobs
+steps
+stop_reason
+missing_jobs
+finished
+validation_errors

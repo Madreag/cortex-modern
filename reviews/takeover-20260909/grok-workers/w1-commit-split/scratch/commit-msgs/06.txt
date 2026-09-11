@@ -1,0 +1,3 @@
+Keep ACraft exit selection and AHuman inventory across checkpoint load
+
+Checkpoint construction applies the persisted exit and skips empty-hand startup equip.

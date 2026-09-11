@@ -1,0 +1,1901 @@
+[
+  {
+    "id": "semantic_fire_reload",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j01",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j01",
+      "-PortBase",
+      "45700",
+      "-Only",
+      "fire_reload"
+    ],
+    "env": {},
+    "meta": {
+      "case": "fire_reload"
+    }
+  },
+  {
+    "id": "semantic_weapon_switch",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j02",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j02",
+      "-PortBase",
+      "45710",
+      "-Only",
+      "weapon_switch"
+    ],
+    "env": {},
+    "meta": {
+      "case": "weapon_switch"
+    }
+  },
+  {
+    "id": "semantic_jetpack",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j03",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j03",
+      "-PortBase",
+      "45720",
+      "-Only",
+      "jetpack"
+    ],
+    "env": {},
+    "meta": {
+      "case": "jetpack"
+    }
+  },
+  {
+    "id": "semantic_terrain_fire",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j04",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j04",
+      "-PortBase",
+      "45730",
+      "-Only",
+      "terrain_fire"
+    ],
+    "env": {},
+    "meta": {
+      "case": "terrain_fire"
+    }
+  },
+  {
+    "id": "semantic_pie_reload",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j05",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j05",
+      "-PortBase",
+      "45740",
+      "-Only",
+      "pie_reload"
+    ],
+    "env": {},
+    "meta": {
+      "case": "pie_reload"
+    }
+  },
+  {
+    "id": "semantic_ai_orders",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j06",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j06",
+      "-PortBase",
+      "45750",
+      "-Only",
+      "ai_orders"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ai_orders"
+    }
+  },
+  {
+    "id": "semantic_death_brainkill",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j07",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j07",
+      "-PortBase",
+      "45760",
+      "-Only",
+      "death_brainkill"
+    ],
+    "env": {},
+    "meta": {
+      "case": "death_brainkill"
+    }
+  },
+  {
+    "id": "semantic_cargo_deliver",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j08",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j08",
+      "-PortBase",
+      "45770",
+      "-Only",
+      "cargo_deliver"
+    ],
+    "env": {},
+    "meta": {
+      "case": "cargo_deliver"
+    }
+  },
+  {
+    "id": "semantic_buy_order",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j09",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j09",
+      "-PortBase",
+      "45780",
+      "-Only",
+      "buy_order"
+    ],
+    "env": {},
+    "meta": {
+      "case": "buy_order"
+    }
+  },
+  {
+    "id": "semantic_pause",
+    "family": "semantic",
+    "out": "D:\\mx\\s41b3\\j10",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j10",
+      "-PortBase",
+      "45790",
+      "-Only",
+      "pause"
+    ],
+    "env": {},
+    "meta": {
+      "case": "pause"
+    }
+  },
+  {
+    "id": "interp_baseline",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j11",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j11",
+      "-Port",
+      "46110"
+    ],
+    "env": {},
+    "meta": {
+      "case": "baseline"
+    }
+  },
+  {
+    "id": "interp_funds",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j12",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j12",
+      "-Port",
+      "46120",
+      "-FundsCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "funds"
+    }
+  },
+  {
+    "id": "interp_spawn",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j13",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j13",
+      "-Port",
+      "46130",
+      "-SpawnCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "spawn"
+    }
+  },
+  {
+    "id": "interp_deliver",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j14",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j14",
+      "-Port",
+      "46140",
+      "-DeliverCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "deliver"
+    }
+  },
+  {
+    "id": "interp_scuttle",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j15",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j15",
+      "-Port",
+      "46150",
+      "-ScuttleCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "scuttle"
+    }
+  },
+  {
+    "id": "interp_brainkill",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j16",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j16",
+      "-Port",
+      "46160",
+      "-BrainKillCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "brainkill"
+    }
+  },
+  {
+    "id": "interp_stall",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j17",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j17",
+      "-Port",
+      "46170",
+      "-StallTest"
+    ],
+    "env": {},
+    "meta": {
+      "case": "stall"
+    }
+  },
+  {
+    "id": "interp_mismatch",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j18",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j18",
+      "-Port",
+      "46180",
+      "-MismatchSmoke"
+    ],
+    "env": {},
+    "meta": {
+      "case": "mismatch"
+    }
+  },
+  {
+    "id": "interp_perturb",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j19",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j19",
+      "-Port",
+      "46190",
+      "-PerturbHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "perturb"
+    }
+  },
+  {
+    "id": "interp_rematch",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j20",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j20",
+      "-Port",
+      "46200",
+      "-RematchTest"
+    ],
+    "env": {},
+    "meta": {
+      "case": "rematch"
+    }
+  },
+  {
+    "id": "interp_inventory",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j21",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j21",
+      "-Port",
+      "46210",
+      "-InventoryCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "inventory"
+    }
+  },
+  {
+    "id": "interp_buy",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j22",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j22",
+      "-Port",
+      "46220",
+      "-BuyCommandHost"
+    ],
+    "env": {},
+    "meta": {
+      "case": "buy"
+    }
+  },
+  {
+    "id": "interp_brainspawn",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j23",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j23",
+      "-Port",
+      "46230",
+      "-BrainSpawnTest"
+    ],
+    "env": {},
+    "meta": {
+      "case": "brainspawn"
+    }
+  },
+  {
+    "id": "interp_pause",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j24",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j24",
+      "-Port",
+      "46240",
+      "-PauseTest"
+    ],
+    "env": {},
+    "meta": {
+      "case": "pause"
+    }
+  },
+  {
+    "id": "interp_fullloop",
+    "family": "interp",
+    "out": "D:\\mx\\s41b3\\j25",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j25",
+      "-Port",
+      "46250",
+      "-FullLoopTest"
+    ],
+    "env": {},
+    "meta": {
+      "case": "fullloop"
+    }
+  },
+  {
+    "id": "interp_rtdesync",
+    "family": "rtdesync",
+    "out": "D:\\mx\\s41b3\\j26",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_interp_desync.ps1",
+      "-Port",
+      "46260"
+    ],
+    "env": {
+      "CC_LANE_RUN_ROOT": "D:\\mx\\s41b3\\j26"
+    },
+    "meta": {}
+  },
+  {
+    "id": "fl100",
+    "family": "fakelag",
+    "out": "D:\\mx\\s41b3\\j27",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_fakelag.py",
+      "fl100"
+    ],
+    "env": {
+      "CC_LANE_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_LANE_RUN_ROOT": "D:\\mx\\s41b3\\j27"
+    },
+    "meta": {
+      "case": "fl100"
+    }
+  },
+  {
+    "id": "fl200",
+    "family": "fakelag",
+    "out": "D:\\mx\\s41b3\\j28",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_fakelag.py",
+      "fl200"
+    ],
+    "env": {
+      "CC_LANE_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_LANE_RUN_ROOT": "D:\\mx\\s41b3\\j28"
+    },
+    "meta": {
+      "case": "fl200"
+    }
+  },
+  {
+    "id": "invariance_300",
+    "family": "invariance",
+    "out": "D:\\mx\\s41b3\\j29",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\takeover-20260909\\run_breadth.py",
+      "--source",
+      "41",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--out",
+      "D:\\mx\\s41b3\\j29",
+      "--child",
+      "invariance"
+    ],
+    "env": {},
+    "meta": {}
+  },
+  {
+    "id": "discovery",
+    "family": "discovery",
+    "out": "D:\\mx\\s41b3\\j30",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\run_sim_test.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j30",
+      "--timeout",
+      "300",
+      "--",
+      "-net-discovery-selftest"
+    ],
+    "env": {},
+    "meta": {}
+  },
+  {
+    "id": "h4_gns_provider_smoke_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j31",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\gns_provider_smoke.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j31"
+    },
+    "meta": {
+      "case": "gns_provider_smoke",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_old_wire_fixture_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j32",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\old_wire_fixture.py",
+      "--inprocess"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j32"
+    },
+    "meta": {
+      "case": "old_wire_fixture",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_clean_leave_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j33",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\clean_leave.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j33"
+    },
+    "meta": {
+      "case": "clean_leave",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_reclaim_socket_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j34",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\reclaim_socket.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j34"
+    },
+    "meta": {
+      "case": "reclaim_socket",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_crash_relaunch_provisional_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j35",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\crash_relaunch_provisional.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j35"
+    },
+    "meta": {
+      "case": "crash_relaunch_provisional",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_fencing_two_transports_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j36",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\fencing_two_transports.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j36"
+    },
+    "meta": {
+      "case": "fencing_two_transports",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_rejoin_after_resync_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j37",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\rejoin_after_resync.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j37"
+    },
+    "meta": {
+      "case": "rejoin_after_resync",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_peers_3_4_regression_1",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j38",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j38"
+    },
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 1
+    }
+  },
+  {
+    "id": "h4_peers_3_4_regression_2",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j39",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j39"
+    },
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 2
+    }
+  },
+  {
+    "id": "h4_peers_3_4_regression_3",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j40",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j40"
+    },
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 3
+    }
+  },
+  {
+    "id": "h4_peers_3_4_regression_4",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j41",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j41"
+    },
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 4
+    }
+  },
+  {
+    "id": "h4_peers_3_4_regression_5",
+    "family": "h4",
+    "out": "D:\\mx\\s41b3\\j42",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "env": {
+      "CC_H4_BUILD_MANIFEST": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "CC_H4_RUN_ROOT": "D:\\mx\\s41b3\\j42"
+    },
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 5
+    }
+  },
+  {
+    "id": "b1_substitute_commit",
+    "family": "b1",
+    "out": "D:\\mx\\s41b3\\j43",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_commit",
+      "--out",
+      "D:\\mx\\s41b3\\j43",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "env": {},
+    "meta": {
+      "case": "substitute_commit"
+    }
+  },
+  {
+    "id": "b1_substitute_returner_wins",
+    "family": "b1",
+    "out": "D:\\mx\\s41b3\\j44",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_returner_wins",
+      "--out",
+      "D:\\mx\\s41b3\\j44",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "env": {},
+    "meta": {
+      "case": "substitute_returner_wins"
+    }
+  },
+  {
+    "id": "b1_substitute_host_cancel",
+    "family": "b1",
+    "out": "D:\\mx\\s41b3\\j45",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_host_cancel",
+      "--out",
+      "D:\\mx\\s41b3\\j45",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "env": {},
+    "meta": {
+      "case": "substitute_host_cancel"
+    }
+  },
+  {
+    "id": "b1_substitute_bounds",
+    "family": "b1",
+    "out": "D:\\mx\\s41b3\\j46",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_bounds",
+      "--out",
+      "D:\\mx\\s41b3\\j46",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "env": {},
+    "meta": {
+      "case": "substitute_bounds"
+    }
+  },
+  {
+    "id": "lobby_rejoin_4_200_1",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j47",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j47",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44160"
+    ],
+    "env": {},
+    "meta": {
+      "case": "rejoin_4_200",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 1
+    }
+  },
+  {
+    "id": "lobby_rejoin_4_200_2",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j48",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j48",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44161"
+    ],
+    "env": {},
+    "meta": {
+      "case": "rejoin_4_200",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 2
+    }
+  },
+  {
+    "id": "lobby_rejoin_4_200_3",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j49",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j49",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44162"
+    ],
+    "env": {},
+    "meta": {
+      "case": "rejoin_4_200",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 3
+    }
+  },
+  {
+    "id": "lobby_drop_4_200_1",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j50",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j50",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44170"
+    ],
+    "env": {},
+    "meta": {
+      "case": "drop_4_200",
+      "players": 4,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 1
+    }
+  },
+  {
+    "id": "lobby_drop_4_200_2",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j51",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j51",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44171"
+    ],
+    "env": {},
+    "meta": {
+      "case": "drop_4_200",
+      "players": 4,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 2
+    }
+  },
+  {
+    "id": "lobby_drop_4_200_3",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j52",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j52",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44172"
+    ],
+    "env": {},
+    "meta": {
+      "case": "drop_4_200",
+      "players": 4,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 3
+    }
+  },
+  {
+    "id": "lobby_ctl_rejoin_4_100_1",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j53",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j53",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "100",
+      "--port",
+      "44200"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_rejoin_4_100",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 1
+    }
+  },
+  {
+    "id": "lobby_ctl_rejoin_4_100_2",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j54",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j54",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "100",
+      "--port",
+      "44201"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_rejoin_4_100",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 2
+    }
+  },
+  {
+    "id": "lobby_ctl_rejoin_4_100_3",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j55",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j55",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "100",
+      "--port",
+      "44202"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_rejoin_4_100",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 3
+    }
+  },
+  {
+    "id": "lobby_ctl_rejoin_3_200_1",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j56",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j56",
+      "--players",
+      "3",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44180"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_rejoin_3_200",
+      "players": 3,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 1
+    }
+  },
+  {
+    "id": "lobby_ctl_rejoin_3_200_2",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j57",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j57",
+      "--players",
+      "3",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44181"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_rejoin_3_200",
+      "players": 3,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 2
+    }
+  },
+  {
+    "id": "lobby_ctl_rejoin_3_200_3",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j58",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j58",
+      "--players",
+      "3",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44182"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_rejoin_3_200",
+      "players": 3,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 3
+    }
+  },
+  {
+    "id": "lobby_ctl_drop_3_200_1",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j59",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j59",
+      "--players",
+      "3",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44190"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_drop_3_200",
+      "players": 3,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 1
+    }
+  },
+  {
+    "id": "lobby_ctl_drop_3_200_2",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j60",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j60",
+      "--players",
+      "3",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44191"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_drop_3_200",
+      "players": 3,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 2
+    }
+  },
+  {
+    "id": "lobby_ctl_drop_3_200_3",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j61",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j61",
+      "--players",
+      "3",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44192"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ctl_drop_3_200",
+      "players": 3,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 3
+    }
+  },
+  {
+    "id": "lobby_drop_4_200_early_1",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j62",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j62",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44210",
+      "--leave-at-frame",
+      "40"
+    ],
+    "env": {},
+    "meta": {
+      "case": "drop_4_200_early",
+      "players": 4,
+      "action": "drop",
+      "frame": 40,
+      "repeat": 1
+    }
+  },
+  {
+    "id": "lobby_drop_4_200_early_2",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j63",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j63",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44211",
+      "--leave-at-frame",
+      "40"
+    ],
+    "env": {},
+    "meta": {
+      "case": "drop_4_200_early",
+      "players": 4,
+      "action": "drop",
+      "frame": 40,
+      "repeat": 2
+    }
+  },
+  {
+    "id": "lobby_drop_4_200_early_3",
+    "family": "lobby",
+    "out": "D:\\mx\\s41b3\\j64",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j64",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44212",
+      "--leave-at-frame",
+      "40"
+    ],
+    "env": {},
+    "meta": {
+      "case": "drop_4_200_early",
+      "players": 4,
+      "action": "drop",
+      "frame": 40,
+      "repeat": 3
+    }
+  },
+  {
+    "id": "sound_auth-match",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j65",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_volume_authority.py",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j65",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "env": {},
+    "meta": {
+      "case": "auth-match",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_auth-fault",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j66",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_volume_authority.py",
+      "diverge",
+      "--out",
+      "D:\\mx\\s41b3\\j66",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--env",
+      "CC_FAULT_INJECT=local_audibility"
+    ],
+    "env": {},
+    "meta": {
+      "case": "auth-fault",
+      "expected": "diverge",
+      "changed_ticks": 72,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_wounds",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j67",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "wounds",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j67",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "env": {},
+    "meta": {
+      "case": "wounds",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_rng_particles",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j68",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "rng_particles",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j68",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "env": {},
+    "meta": {
+      "case": "rng_particles",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_ui_bus",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j69",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "ui_bus",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j69",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ui_bus",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_ai_defer",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j70",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "ai_defer",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j70",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ai_defer",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_ai_defer_alias",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j71",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "ai_defer_alias",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j71",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "env": {},
+    "meta": {
+      "case": "ai_defer_alias",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "sound_per_machine",
+    "family": "sound",
+    "out": "D:\\mx\\s41b3\\j72",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "per_machine",
+      "diverge",
+      "--out",
+      "D:\\mx\\s41b3\\j72",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--env",
+      "CC_FAULT_INJECT=local_audibility"
+    ],
+    "env": {},
+    "meta": {
+      "case": "per_machine",
+      "expected": "diverge",
+      "changed_ticks": 141,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    }
+  },
+  {
+    "id": "heal",
+    "family": "heal",
+    "out": "D:\\mx\\s41b3\\j73",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\takeover-20260909\\run_breadth.py",
+      "--source",
+      "41",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--out",
+      "D:\\mx\\s41b3\\j73",
+      "--child",
+      "heal"
+    ],
+    "env": {},
+    "meta": {}
+  },
+  {
+    "id": "compat_deferral_source22",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j74",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_deferral_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j74"
+    ],
+    "env": {},
+    "meta": {
+      "case": "deferral",
+      "rung": "source22"
+    }
+  },
+  {
+    "id": "compat_deferral_approved",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j75",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_deferral_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j75"
+    ],
+    "env": {},
+    "meta": {
+      "case": "deferral",
+      "rung": "approved"
+    }
+  },
+  {
+    "id": "compat_alias_source22",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j76",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j76",
+      "--fixture",
+      "compat_review_alias.lua"
+    ],
+    "env": {},
+    "meta": {
+      "case": "alias",
+      "rung": "source22"
+    }
+  },
+  {
+    "id": "compat_alias_approved",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j77",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j77",
+      "--fixture",
+      "compat_review_alias.lua"
+    ],
+    "env": {},
+    "meta": {
+      "case": "alias",
+      "rung": "approved"
+    }
+  },
+  {
+    "id": "compat_alias2_source22",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j78",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j78",
+      "--fixture",
+      "compat_review_alias2.lua"
+    ],
+    "env": {},
+    "meta": {
+      "case": "alias2",
+      "rung": "source22"
+    }
+  },
+  {
+    "id": "compat_alias2_approved",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j79",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j79",
+      "--fixture",
+      "compat_review_alias2.lua"
+    ],
+    "env": {},
+    "meta": {
+      "case": "alias2",
+      "rung": "approved"
+    }
+  },
+  {
+    "id": "compat_extra_source22",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j80",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_extra_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j80"
+    ],
+    "env": {},
+    "meta": {
+      "case": "extra",
+      "rung": "source22"
+    }
+  },
+  {
+    "id": "compat_extra_approved",
+    "family": "compat",
+    "out": "D:\\mx\\s41b3\\j81",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_extra_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j81"
+    ],
+    "env": {},
+    "meta": {
+      "case": "extra",
+      "rung": "approved"
+    }
+  }
+]

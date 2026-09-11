@@ -1,0 +1,641 @@
+{
+  "s41b3": {
+    "root": "D:\\mx\\s41b3",
+    "present": true,
+    "scanned": 2550,
+    "skipped_large": 6,
+    "errors": 0,
+    "hit_count": 14,
+    "hits": [
+      {
+        "file": "D:\\mx\\s41b3\\breadth.json",
+        "line": 9108,
+        "needle": "has no registered owner",
+        "text": "        \"D:\\\\mx\\\\s41b3\\\\j40\\\\peers_3_4_regression_20260910_022527\\\\drop3_returner\\\\stdout.log:9: [audio-checkpoint] voice 36 has no registered owner 9310\",",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\breadth.json",
+        "line": 9111,
+        "needle": "past the sound container cursor",
+        "text": "        \"D:\\\\mx\\\\s41b3\\\\j40\\\\peers_3_4_regression_20260910_022527\\\\drop3_returner\\\\stdout.log:13: [runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\",",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\breadth.json",
+        "line": 9112,
+        "needle": "past the sound container cursor",
+        "text": "        \"D:\\\\mx\\\\s41b3\\\\j40\\\\peers_3_4_regression_20260910_022527\\\\drop3_returner\\\\stdout.log:15: [runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\",",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\breadth.json",
+        "line": 9113,
+        "needle": "has no registered owner",
+        "text": "        \"D:\\\\mx\\\\s41b3\\\\j40\\\\peers_3_4_regression_20260910_022527\\\\drop3_returner\\\\runtime\\\\LogConsole.txt:10: ERROR: Could not restore audio checkpoint: voice 36 has no registered owner 9310\",",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json",
+        "line": 940,
+        "needle": "past the sound container cursor",
+        "text": "          \"[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\",",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json",
+        "line": 942,
+        "needle": "past the sound container cursor",
+        "text": "          \"[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\"",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json",
+        "line": 945,
+        "needle": "past the sound container cursor",
+        "text": "        \"last_verdict\": \"[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\",",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\launch.json",
+        "line": 89,
+        "needle": "past the sound container cursor",
+        "text": "    \"[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\",",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\launch.json",
+        "line": 91,
+        "needle": "past the sound container cursor",
+        "text": "    \"[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\"",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\launch.json",
+        "line": 94,
+        "needle": "past the sound container cursor",
+        "text": "  \"last_verdict\": \"[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067\",",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log",
+        "line": 9,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 36 has no registered owner 9310",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log",
+        "line": 13,
+        "needle": "past the sound container cursor",
+        "text": "[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log",
+        "line": 15,
+        "needle": "past the sound container cursor",
+        "text": "[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      },
+      {
+        "file": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt",
+        "line": 10,
+        "needle": "has no registered owner",
+        "text": "ERROR: Could not restore audio checkpoint: voice 36 has no registered owner 9310",
+        "job": "peers_3_4_regression_20260910_022527",
+        "gate": "peers_3_4_regression",
+        "arm": "j40",
+        "peer": "drop3_returner",
+        "root": "s41b3"
+      }
+    ]
+  },
+  "s41": {
+    "root": "D:\\mx\\s41",
+    "present": true,
+    "scanned": 8440,
+    "skipped_large": 0,
+    "errors": 0,
+    "hit_count": 4,
+    "hits": [
+      {
+        "file": "D:\\mx\\s41\\shutdown\\graph\\stdout.log",
+        "line": 141,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 1 has no registered owner 9156",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "graph",
+        "root": "s41"
+      },
+      {
+        "file": "D:\\mx\\s41\\shutdown\\graph\\runtime\\LogConsole.txt",
+        "line": 7,
+        "needle": "has no registered owner",
+        "text": "ERROR: Could not restore audio checkpoint: voice 1 has no registered owner 9156",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "graph",
+        "root": "s41"
+      },
+      {
+        "file": "D:\\mx\\s41\\native_graph\\stdout.log",
+        "line": 141,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 1 has no registered owner 9156",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "native_graph",
+        "root": "s41"
+      },
+      {
+        "file": "D:\\mx\\s41\\native_graph\\runtime\\LogConsole.txt",
+        "line": 7,
+        "needle": "has no registered owner",
+        "text": "ERROR: Could not restore audio checkpoint: voice 1 has no registered owner 9156",
+        "job": "",
+        "gate": "",
+        "arm": "",
+        "peer": "native_graph",
+        "root": "s41"
+      }
+    ]
+  },
+  "s40lanes": {
+    "root": "D:\\mx\\s40lanes",
+    "present": true,
+    "scanned": 2339,
+    "skipped_large": 6,
+    "errors": 0,
+    "hit_count": 0,
+    "hits": []
+  },
+  "reviews_md": {
+    "hit_count": 37,
+    "hits": [
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\LEAD_VERDICTS.md",
+        "line": 9,
+        "needle": "has no registered owner",
+        "text": "| h4_peers_3_4_regression_3 | OPEN ENGINE RESIDUAL, intermittent (1/5) | Gate passed on protocol checks, but the returner could not relaunch: `invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067` after `voice 36 has no registered owner 9310`. A restored peer that cannot launch is not a pass. Not the S40 census residue (census_refusals=0). Evidence package: W5. ",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\LEAD_VERDICTS.md",
+        "line": 9,
+        "needle": "past the sound container cursor",
+        "text": "| h4_peers_3_4_regression_3 | OPEN ENGINE RESIDUAL, intermittent (1/5) | Gate passed on protocol checks, but the returner could not relaunch: `invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067` after `voice 36 has no registered owner 9310`. A restored peer that cannot launch is not a pass. Not the S40 census residue (census_refusals=0). Evidence package: W5. ",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\TRIAGE.md",
+        "line": 257,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 36 has no registered owner 9310",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\TRIAGE.md",
+        "line": 261,
+        "needle": "past the sound container cursor",
+        "text": "[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\TRIAGE.md",
+        "line": 263,
+        "needle": "past the sound container cursor",
+        "text": "[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\TRIAGE.md",
+        "line": 266,
+        "needle": "has no registered owner",
+        "text": "ERROR: Could not restore audio checkpoint: voice 36 has no registered owner 9310",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w2-breadth-triage\\TRIAGE.md",
+        "line": 283,
+        "needle": "has no registered owner",
+        "text": "4. Proposed: `KNOWN_RESIDUE_CHANGED`. Versus Source40 this repeat is not the census-refusal residue (that counter is 0; gate passed). Versus Source38/39 it is a fail of the audio-checkpoint flake class. The breadth miss is produced by `run_breadth.py:1466-1470` `scan_log` + `ERRORS` matching `ERROR:` / `has no registered owner`.",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\report.md",
+        "line": 2231,
+        "needle": "has no registered owner",
+        "text": "| `has no registered owner` | **0** |",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\prompt.md",
+        "line": 1,
+        "needle": "has no registered owner",
+        "text": "# Lane: in-memory rollback restore fails at capture 338 of the buy fuzz \u2014 \"voice 40 has no registered owner 9293\" (isolated worktree)",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\report.md",
+        "line": 1,
+        "needle": "has no registered owner",
+        "text": "# Lane: rollback-audio-owner \u2014 `[audio-checkpoint] voice 40 has no registered owner 9293`",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\report.md",
+        "line": 42,
+        "needle": "has no registered owner",
+        "text": "(`[audio-checkpoint] voice 1 has no registered owner 9081`, present in every run, fixed and control",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\report.md",
+        "line": 87,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 40 has no registered owner 9293",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\report.md",
+        "line": 134,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 40 has no registered owner 9293",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\report.md",
+        "line": 352,
+        "needle": "has no registered owner",
+        "text": "| `CC_CONTROL_NO_SETTLE=1` | `[script-graph-selftest] FAIL checkpoint_settles_script_owned_sound` with `[audio-checkpoint] voice 1 has no registered owner 9098` (`runs/control_native_nosettle`) | `[audio-checkpoint] voice 40 has no registered owner 9293` \u2192 `FIDELITY FAIL` (`runs/control_probe_338_nosettle`) |",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\rollback-audio-owner\\report.md",
+        "line": 356,
+        "needle": "has no registered owner",
+        "text": "index`, `voice 1 has no registered owner 9081`, `music sample is absent \u2026`) appear identically in",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\followup-1.md",
+        "line": 10,
+        "needle": "has no registered owner",
+        "text": "   - `Could not restore audio checkpoint: voice ` together with `has no registered owner`",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\followup-2.md",
+        "line": 7,
+        "needle": "has no registered owner",
+        "text": "Your residual-risk note is right: a genuine `insert DSP at checkpoint index` or `voice N has no registered owner M` failure in a `roundtrip`/`scenarios`/gameplay run would now be masked. Tighten `run_mac_cases_roundtrip.py` so the three allowlisted lines count as expected negative controls only when the same log carries the selftest that provokes them: require `[audio-checkpoint-selftest]` for the",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\prompt.md",
+        "line": 12,
+        "needle": "has no registered owner",
+        "text": "   - `ERROR: Could not restore audio checkpoint: voice 1 has no registered owner 9069`",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\prompt.md",
+        "line": 13,
+        "needle": "has no registered owner",
+        "text": "   Trace them to the engine source (`D:\\Projects\\p4b-interp-validation\\Source\\Managers\\AudioMan.cpp`, search for \"insert DSP at checkpoint index\" and \"has no registered owner\"; the restore path is the AudioRuntime checkpoint load, and the Mac runs on the FMOD NOSOUND output selected by `CC_TEST_AUDIO_NOSOUND=1`, whose console guard line is `[audio-test-output] requested=NOSOUND verified=1 output=2",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 73,
+        "needle": "has no registered owner",
+        "text": "### (b) `voice 1 has no registered owner 9069` \u2014 emitted by `[music-checkpoint-selftest]`",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 77,
+        "needle": "has no registered owner",
+        "text": "if (voice.owner && !owner) throw std::runtime_error(\"voice \" + std::to_string(voice.identity) + \" has no registered owner \" + std::to_string(voice.owner));",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 87,
+        "needle": "has no registered owner",
+        "text": "native-graph-source28/stdout.log:109 [audio-checkpoint] voice 1 has no registered owner 9069",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 112,
+        "needle": "has no registered owner",
+        "text": "  ERROR: Could not restore audio checkpoint: voice 1 has no registered owner 9081",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 223,
+        "needle": "has no registered owner",
+        "text": "grep -rn \"insert DSP at checkpoint index|has no registered owner\" D:/Projects/p4b-interp-validation/Source/",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 281,
+        "needle": "has no registered owner",
+        "text": "+EXPECTED_NEGATIVE_CONTROLS=(('Could not restore audio checkpoint: audio checkpoint: insert DSP at checkpoint index',),('Could not restore audio checkpoint: voice ','has no registered owner'),('music sample is absent from audio checkpoint: __missing_gui_checkpoint_sample__',))",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 426,
+        "needle": "has no registered owner",
+        "text": "   `voice N has no registered owner M`. A genuine audio-restore failure with one of those messages during a",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 463,
+        "needle": "has no registered owner",
+        "text": "-EXPECTED_NEGATIVE_CONTROLS=(('Could not restore audio checkpoint: audio checkpoint: insert DSP at checkpoint index',),('Could not restore audio checkpoint: voice ','has no registered owner'),('music sample is absent from audio checkpoint: __missing_gui_checkpoint_sample__',))",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\mac-native-triage\\report.md",
+        "line": 467,
+        "needle": "has no registered owner",
+        "text": "+EXPECTED_NEGATIVE_CONTROLS=((('Could not restore audio checkpoint: audio checkpoint: insert DSP at checkpoint index',),'[audio-checkpoint-selftest]'),(('Could not restore audio checkpoint: voice ','has no registered owner'),'[music-checkpoint-selftest]'),(('music sample is absent from audio checkpoint: __missing_gui_checkpoint_sample__',),'[gui-sound-checkpoint-selftest]'))",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\report.md",
+        "line": 156,
+        "needle": "has no registered owner",
+        "text": "| `fuzz_buy` (`1:17:30`, 900 ticks) | `[rbfuzz] PASS 17/17 probes byte-identical` | **RED.** 7 passes (107, 140, 173, 206, 239, 272, 305); capture **338** \u2192 `[audio-checkpoint] voice 40 has no registered owner 9293` \u2192 `[runtime-globals] apply failed` \u2192 `FIDELITY FAIL`; capture **371** \u2192 same plus `[music-checkpoint] music audio restoration failed` \u2192 `FAIL: world restore refused`; `playback FAILED ",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\report.md",
+        "line": 181,
+        "needle": "has no registered owner",
+        "text": "09-07 18:13  source19 \u2026 09-07 22:51 source22 (pre-logical-audio)     FAIL   voice 40 has no registered owner 9293",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\report.md",
+        "line": 183,
+        "needle": "has no registered owner",
+        "text": "09-07 23:31  source24 \u2026 09-08 01:10 source32                         FAIL   voice 40 has no registered owner 9293",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\report.md",
+        "line": 337,
+        "needle": "has no registered owner",
+        "text": "   338 with `[audio-checkpoint] voice 40 has no registered owner 9293`; probes 10-17 never ran and",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\evidence\\fuzz-buy-audio-checkpoint-red.md",
+        "line": 24,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 40 has no registered owner 9293",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\evidence\\fuzz-buy-audio-checkpoint-red.md",
+        "line": 28,
+        "needle": "has no registered owner",
+        "text": "[audio-checkpoint] voice 40 has no registered owner 9293",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\evidence\\fuzz-buy-audio-checkpoint-red.md",
+        "line": 48,
+        "needle": "has no registered owner",
+        "text": "if (voice.owner && !owner) throw std::runtime_error(\"voice \" + ... + \" has no registered owner \" + ...);",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\evidence\\fuzz-buy-audio-checkpoint-red.md",
+        "line": 74,
+        "needle": "has no registered owner",
+        "text": "| 09-07 18:13 | source19 | `eaf42d48` | FAIL | `voice 40 has no registered owner 9293` |",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      },
+      {
+        "file": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\breadth-debt\\evidence\\fuzz-buy-audio-checkpoint-red.md",
+        "line": 98,
+        "needle": "has no registered owner",
+        "text": "   from owner 9135` on Source16, `voice 40 has no registered owner 9293` from Source19 on. The",
+        "job": "",
+        "gate": "review-doc",
+        "arm": "",
+        "peer": "",
+        "root": "reviews"
+      }
+    ]
+  }
+}

@@ -1,0 +1,1355 @@
+===== W6_MAC_GIT_STATE =====
+===== REV_PARSE_HEAD =====
+316e96375702eff5b0118714dc4762a0ee6eebd7
+===== STATUS_PORCELAIN =====
+ M Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini
+ M Data/Tests.rte/Activities.ini
+ M RTEA.sln
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Activities/GAScripted.cpp
+ M Source/Activities/GAScripted.h
+ M Source/Activities/GameActivity.cpp
+ M Source/Activities/GameActivity.h
+ M Source/CI/meson.build
+ M Source/CLI/cccp-ctl.cpp
+ M Source/Entities/ACDropShip.cpp
+ M Source/Entities/ACDropShip.h
+ M Source/Entities/ACRocket.cpp
+ M Source/Entities/ACRocket.h
+ M Source/Entities/ACrab.cpp
+ M Source/Entities/ACrab.h
+ M Source/Entities/ACraft.cpp
+ M Source/Entities/ACraft.h
+ M Source/Entities/ADoor.cpp
+ M Source/Entities/ADoor.h
+ M Source/Entities/AEJetpack.cpp
+ M Source/Entities/AEJetpack.h
+ M Source/Entities/AEmitter.cpp
+ M Source/Entities/AEmitter.h
+ M Source/Entities/AHuman.cpp
+ M Source/Entities/AHuman.h
+ M Source/Entities/Activity.cpp
+ M Source/Entities/Activity.h
+ M Source/Entities/Actor.cpp
+ M Source/Entities/Actor.h
+ M Source/Entities/Arm.cpp
+ M Source/Entities/Arm.h
+ M Source/Entities/AtomGroup.cpp
+ M Source/Entities/AtomGroup.h
+ M Source/Entities/Attachable.cpp
+ M Source/Entities/Attachable.h
+ M Source/Entities/DynamicSong.cpp
+ M Source/Entities/DynamicSong.h
+ M Source/Entities/Emission.cpp
+ M Source/Entities/Emission.h
+ M Source/Entities/Gib.cpp
+ M Source/Entities/GlobalScript.cpp
+ M Source/Entities/GlobalScript.h
+ M Source/Entities/HDFirearm.cpp
+ M Source/Entities/HDFirearm.h
+ M Source/Entities/HeldDevice.cpp
+ M Source/Entities/HeldDevice.h
+ M Source/Entities/Icon.cpp
+ M Source/Entities/Icon.h
+ M Source/Entities/Leg.cpp
+ M Source/Entities/Leg.h
+ M Source/Entities/LimbPath.cpp
+ M Source/Entities/LimbPath.h
+ M Source/Entities/Loadout.h
+ M Source/Entities/MOPixel.cpp
+ M Source/Entities/MOPixel.h
+ M Source/Entities/MOSParticle.cpp
+ M Source/Entities/MOSParticle.h
+ M Source/Entities/MOSRotating.cpp
+ M Source/Entities/MOSRotating.h
+ M Source/Entities/MOSprite.cpp
+ M Source/Entities/MOSprite.h
+ M Source/Entities/Magazine.cpp
+ M Source/Entities/Magazine.h
+ M Source/Entities/Material.cpp
+ M Source/Entities/Material.h
+ M Source/Entities/MovableObject.cpp
+ M Source/Entities/MovableObject.h
+ M Source/Entities/PEmitter.cpp
+ M Source/Entities/PEmitter.h
+ M Source/Entities/PieMenu.cpp
+ M Source/Entities/PieMenu.h
+ M Source/Entities/PieSlice.cpp
+ M Source/Entities/SLBackground.cpp
+ M Source/Entities/SLBackground.h
+ M Source/Entities/SLTerrain.h
+ M Source/Entities/Scene.cpp
+ M Source/Entities/Scene.h
+ M Source/Entities/SceneLayer.cpp
+ M Source/Entities/SceneLayer.h
+ M Source/Entities/SceneObject.cpp
+ M Source/Entities/SoundContainer.cpp
+ M Source/Entities/SoundContainer.h
+ M Source/Entities/SoundSet.cpp
+ M Source/Entities/SoundSet.h
+ M Source/Entities/TDExplosive.cpp
+ M Source/Entities/TDExplosive.h
+ M Source/Entities/ThrownDevice.cpp
+ M Source/Entities/ThrownDevice.h
+ M Source/Entities/Turret.cpp
+ M Source/Entities/Turret.h
+ M Source/GUI/GUIBanner.cpp
+ M Source/GUI/GUIBanner.h
+ M Source/GUI/GUIButton.h
+ M Source/GUI/GUICheckbox.cpp
+ M Source/GUI/GUICheckbox.h
+ M Source/GUI/GUICollectionBox.h
+ M Source/GUI/GUIComboBox.h
+ M Source/GUI/GUIControl.cpp
+ M Source/GUI/GUIControl.h
+ M Source/GUI/GUIControlManager.cpp
+ M Source/GUI/GUIControlManager.h
+ M Source/GUI/GUIEvent.h
+ M Source/GUI/GUIFont.cpp
+ M Source/GUI/GUIFont.h
+ M Source/GUI/GUIInput.cpp
+ M Source/GUI/GUIInput.h
+ M Source/GUI/GUILabel.h
+ M Source/GUI/GUIListPanel.cpp
+ M Source/GUI/GUIListPanel.h
+ M Source/GUI/GUIManager.cpp
+ M Source/GUI/GUIManager.h
+ M Source/GUI/GUIPanel.cpp
+ M Source/GUI/GUIPanel.h
+ M Source/GUI/GUIProgressBar.h
+ M Source/GUI/GUIProperties.h
+ M Source/GUI/GUIPropertyPage.cpp
+ M Source/GUI/GUIPropertyPage.h
+ M Source/GUI/GUIRadioButton.cpp
+ M Source/GUI/GUIRadioButton.h
+ M Source/GUI/GUIScrollPanel.cpp
+ M Source/GUI/GUIScrollPanel.h
+ M Source/GUI/GUISkin.h
+ M Source/GUI/GUISlider.h
+ M Source/GUI/GUISound.cpp
+ M Source/GUI/GUISound.h
+ M Source/GUI/GUITab.cpp
+ M Source/GUI/GUITab.h
+ M Source/GUI/GUITextBox.h
+ M Source/GUI/GUITextPanel.cpp
+ M Source/GUI/GUITextPanel.h
+ M Source/GUI/Wrappers/AllegroBitmap.h
+ M Source/GUI/Wrappers/GUIInputWrapper.cpp
+ M Source/GUI/Wrappers/GUIInputWrapper.h
+ M Source/Lua/LuaAdapters.cpp
+ M Source/Lua/LuaBindingsActivities.cpp
+ M Source/Lua/LuaBindingsEntities.cpp
+ M Source/Lua/LuaBindingsGUI.cpp
+ M Source/Lua/LuaBindingsManagers.cpp
+ M Source/Main.cpp
+ M Source/Managers/ActivityMan.cpp
+ M Source/Managers/ActivityMan.h
+ M Source/Managers/AudioMan.cpp
+ M Source/Managers/AudioMan.h
+ M Source/Managers/CameraMan.cpp
+ M Source/Managers/CameraMan.h
+ M Source/Managers/FrameMan.cpp
+ M Source/Managers/FrameMan.h
+ M Source/Managers/LuaMan.cpp
+ M Source/Managers/LuaMan.h
+ M Source/Managers/LuaThreadCodec.cpp
+ M Source/Managers/MenuMan.cpp
+ M Source/Managers/MenuMan.h
+ M Source/Managers/MovableMan.cpp
+ M Source/Managers/MovableMan.h
+ M Source/Managers/MusicMan.cpp
+ M Source/Managers/MusicMan.h
+ M Source/Managers/PostProcessMan.cpp
+ M Source/Managers/PostProcessMan.h
+ M Source/Managers/PresetMan.cpp
+ M Source/Managers/PrimitiveMan.cpp
+ M Source/Managers/PrimitiveMan.h
+ M Source/Managers/SceneMan.cpp
+ M Source/Managers/SceneMan.h
+ M Source/Managers/SettingsMan.cpp
+ M Source/Managers/SettingsMan.h
+ M Source/Managers/TerrainLayerSnapshot.cpp
+ M Source/Managers/TerrainLayerSnapshot.h
+ M Source/Managers/TimerMan.cpp
+ M Source/Managers/TimerMan.h
+ M Source/Managers/UInputMan.cpp
+ M Source/Managers/UInputMan.h
+ M Source/Menus/BuyMenuGUI.cpp
+ M Source/Menus/BuyMenuGUI.h
+ M Source/Menus/InventoryMenuGUI.cpp
+ M Source/Menus/InventoryMenuGUI.h
+ M Source/Menus/MainMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.h
+ M Source/Menus/ObjectPickerGUI.cpp
+ M Source/Menus/ObjectPickerGUI.h
+ M Source/Menus/SaveLoadMenuGUI.cpp
+ M Source/Menus/SceneEditorGUI.cpp
+ M Source/Menus/SceneEditorGUI.h
+ M Source/Menus/meson.build
+ M Source/Network/GnsTransport.cpp
+ M Source/Network/GnsTransport.h
+ M Source/Network/LoopbackTransport.cpp
+ M Source/Network/LoopbackTransport.h
+ M Source/Network/NetAdmissionSelfTest.cpp
+ M Source/Network/NetGameCommand.cpp
+ M Source/Network/NetGameCommand.h
+ M Source/Network/NetIdentity.cpp
+ M Source/Network/NetIdentity.h
+ M Source/Network/NetLobbyProtocol.cpp
+ M Source/Network/NetLobbyProtocol.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLobbySession.h
+ M Source/Network/NetLobbySnapshot.h
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetLockstep.h
+ M Source/Network/NetLockstepSelfTest.cpp
+ M Source/Network/NetMatchReplay.cpp
+ M Source/Network/NetMatchReplay.h
+ M Source/Network/NetMatchRunner.cpp
+ M Source/Network/NetMatchRunner.h
+ M Source/Network/NetMatchSelfTest.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetMatchService.h
+ M Source/Network/NetProtocol.cpp
+ M Source/Network/NetProtocol.h
+ M Source/Network/NetProtocolSelfTest.cpp
+ M Source/Network/NetSeatAuth.cpp
+ M Source/Network/NetSeatAuth.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/NetSessionSelfTest.cpp
+ M Source/Network/NetTransport.h
+ M Source/Network/meson.build
+ M Source/Renderer/GraphicalPrimitive.cpp
+ M Source/Renderer/GraphicalPrimitive.h
+ M Source/System/Atom.cpp
+ M Source/System/Atom.h
+ M Source/System/CheckpointArchive.h
+ M Source/System/Color.cpp
+ M Source/System/Color.h
+ M Source/System/ContentFile.cpp
+ M Source/System/ContentFile.h
+ M Source/System/ContractAudit.h
+ M Source/System/Controller.cpp
+ M Source/System/Controller.h
+ M Source/System/Entity.cpp
+ M Source/System/Entity.h
+ M Source/System/Gamepad.h
+ M Source/System/InputMapping.cpp
+ M Source/System/InputMapping.h
+ M Source/System/InputScheme.cpp
+ M Source/System/InputScheme.h
+ M Source/System/Matrix.cpp
+ M Source/System/Matrix.h
+ M Source/System/PathFinder.cpp
+ M Source/System/PathFinder.h
+ M Source/System/Reader.cpp
+ M Source/System/Reader.h
+ M Source/System/ScenarioRunner.cpp
+ M Source/System/ScenarioRunner.h
+ M Source/System/Serializable.cpp
+ M Source/System/SpatialPartitionGrid.h
+ M Source/System/System.cpp
+ M Source/System/System.h
+ M external/sources/RakNet/src/HTTPConnection2.cpp
+ M external/sources/RakNet/src/Rackspace.cpp
+ M external/sources/luabind-0.7.1/luabind/detail/object_rep.hpp
+ M tools/check_state_inventory.py
+ M tools/compare_snapshots.py
+ M tools/contracts/AUDIT.md
+ M tools/contracts/mod_native_contracts.lua
+ M tools/contracts/mod_reference_contracts.lua
+ M tools/contracts/run_audit.py
+ M tools/fixtures/mod_checkpoint.lua
+ M tools/fixtures/mod_save_callbacks.lua
+ M tools/run_restoration_tests.py
+ M tools/test_compare_snapshots.py
+ M tools/test_game_loads.py
+ M tools/test_lobby_lifecycle.py
+ M tools/test_menu_lifecycle.py
+ M tools/test_save_callbacks.py
+ M tools/win32_test_runner.py
+?? AbortCode.txt
+?? Data/Tests.rte/Activities/NetLifecycleTest.lua
+?? Source/CI/NetModerationGUIProbe.cpp
+?? Source/CI/NetModerationGUIProbe.h
+?? Source/GUI/GUICheckpoint.h
+?? Source/Menus/NetModerationGUI.cpp
+?? Source/Menus/NetModerationGUI.h
+?? Source/Network/NetA7Journal.cpp
+?? Source/Network/NetA7Journal.h
+?? Source/Network/NetReconnectAdmission.cpp
+?? Source/Network/NetReconnectAdmission.h
+?? Source/Network/NetReconnectLedger.cpp
+?? Source/Network/NetReconnectLedger.h
+?? Source/Network/NetReconnectSelfTest.cpp
+?? Source/Network/NetReconnectSelfTest.h
+?? Source/Network/NetReconnectSession.cpp
+?? Source/Network/NetReconnectSession.h
+?? Source/Network/NetReconnectSessionSelfTest.cpp
+?? Source/Network/NetReconnectSessionSelfTest.h
+?? Source/Network/NetReconnectTicketStore.cpp
+?? Source/Network/NetReconnectTicketStore.h
+?? Source/Network/NetReconnectTranscript.cpp
+?? Source/Network/NetReconnectTranscript.h
+?? Source/Network/NetReconnectTxCache.cpp
+?? Source/Network/NetReconnectTxCache.h
+?? Source/Network/NetReconnectUx.cpp
+?? Source/Network/NetReconnectUx.h
+?? Source/Network/NetResyncRuntimeSelfTest.cpp
+?? Source/Network/NetResyncRuntimeSelfTest.h
+?? Source/Network/NetResyncSelfTest.cpp
+?? Source/Network/NetResyncSelfTest.h
+?? Source/Network/NetResyncState.cpp
+?? Source/Network/NetResyncState.h
+?? Source/System/AudioCheckpoint.h
+?? Source/System/BitmapCheckpoint.h
+?? Source/System/LogicalSound.h
+?? Source/System/MovableObjectReference.h
+?? Source/System/NativeCheckpoint.h
+?? Source/System/OwnedMovableObjects.h
+?? Source/System/SoundContainerRegistry.h
+?? Source/System/SoundSimulation.h
+?? tools/contracts/annotate_txc_manifest.py
+?? tools/contracts/classify_txc_refusals.py
+?? tools/contracts/gui_checkpoint_selftest.cpp.txt
+?? tools/contracts/inspect_iterator_control.py
+?? tools/contracts/make_txc_manifest.py
+?? tools/contracts/mod_failure_continuation.lua
+?? tools/contracts/mod_primitive_batch_diagnostic.lua
+?? tools/contracts/mod_primitive_cast_diagnostic.lua
+?? tools/contracts/mod_primitive_cast_diagnostic_v2.lua
+?? tools/contracts/mod_primitive_contracts.lua
+?? tools/contracts/mod_ui_contracts.lua
+?? tools/contracts/mod_ui_perturb_contracts.lua
+?? tools/contracts/primitive_checkpoint_pending.patch
+?? tools/contracts/primitive_pending/
+?? tools/contracts/run_txc_job.py
+?? tools/contracts/verify_txc_controls.py
+?? tools/cross_process_state.py
+?? tools/fixtures/mod_path_queue.lua
+?? tools/fixtures/mod_setaside_park.lua
+?? tools/h4_gate_evidence.py
+?? tools/h4_substitution_gates.py
+?? tools/isolated_launch.py
+?? tools/snapshot_runtime.py
+?? tools/state_document.py
+?? tools/test_cross_process_state.py
+?? tools/test_h4_gate_evidence.py
+?? tools/test_run_audit.py
+?? tools/test_snapshot_inventory_roles.py
+?? tools/test_snapshot_roundtrip.py
+?? tools/test_state_document.py
+===== LOG_ONELINE_5 =====
+316e96375 feat(snapshot): encode portable runtime values and full controller state
+d435c66d3 fix(snapshot): retain configuration of derived native object classes
+99e4cc0b9 fix(snapshot): preserve nested native identities during writes
+8b10e7ee3 fix(craft): set the lateral control speed field
+b667f492e fix(turret): handle empty mounts and release owned devices
+===== REMOTE_V =====
+origin	git@github.com:Madreag/cortex-modern.git (fetch)
+origin	git@github.com:Madreag/cortex-modern.git (push)
+===== CONFIG_AUTOCRLF =====
+CONFIG_AUTOCRLF_EXIT:1
+===== DIFF_STAT =====
+ Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini          |  316 +-
+ Data/Tests.rte/Activities.ini                      |   12 +
+ RTEA.sln                                           |   12 +
+ RTEA.vcxproj                                       |   37 +
+ RTEA.vcxproj.filters                               |   90 +
+ Source/Activities/GAScripted.cpp                   |    7 +-
+ Source/Activities/GAScripted.h                     |  352 +-
+ Source/Activities/GameActivity.cpp                 |  705 ++-
+ Source/Activities/GameActivity.h                   |   45 +-
+ Source/CI/meson.build                              |    1 +
+ Source/CLI/cccp-ctl.cpp                            |    2 +-
+ Source/Entities/ACDropShip.cpp                     |   55 +-
+ Source/Entities/ACDropShip.h                       |    8 +
+ Source/Entities/ACRocket.cpp                       |   44 +
+ Source/Entities/ACRocket.h                         |    5 +
+ Source/Entities/ACrab.cpp                          |   66 +-
+ Source/Entities/ACrab.h                            |    5 +
+ Source/Entities/ACraft.cpp                         |   71 +
+ Source/Entities/ACraft.h                           |    8 +
+ Source/Entities/ADoor.cpp                          |   44 +
+ Source/Entities/ADoor.h                            |    6 +
+ Source/Entities/AEJetpack.cpp                      |   40 +
+ Source/Entities/AEJetpack.h                        |    6 +
+ Source/Entities/AEmitter.cpp                       |   38 +-
+ Source/Entities/AEmitter.h                         |    4 +
+ Source/Entities/AHuman.cpp                         |   84 +-
+ Source/Entities/AHuman.h                           |    5 +
+ Source/Entities/Activity.cpp                       |  287 +-
+ Source/Entities/Activity.h                         |   48 +
+ Source/Entities/Actor.cpp                          | 4387 +++++++-------
+ Source/Entities/Actor.h                            | 2388 ++++----
+ Source/Entities/Arm.cpp                            |   56 +
+ Source/Entities/Arm.h                              |    4 +
+ Source/Entities/AtomGroup.cpp                      |  115 +-
+ Source/Entities/AtomGroup.h                        |   16 +
+ Source/Entities/Attachable.cpp                     |   91 +
+ Source/Entities/Attachable.h                       |   15 +
+ Source/Entities/DynamicSong.cpp                    |  560 +-
+ Source/Entities/DynamicSong.h                      |  430 +-
+ Source/Entities/Emission.cpp                       |   29 +
+ Source/Entities/Emission.h                         |    3 +
+ Source/Entities/Gib.cpp                            |  164 +-
+ Source/Entities/GlobalScript.cpp                   |  360 +-
+ Source/Entities/GlobalScript.h                     |  236 +-
+ Source/Entities/HDFirearm.cpp                      |   40 +
+ Source/Entities/HDFirearm.h                        |    4 +
+ Source/Entities/HeldDevice.cpp                     |   36 +
+ Source/Entities/HeldDevice.h                       |    4 +
+ Source/Entities/Icon.cpp                           |  156 +
+ Source/Entities/Icon.h                             |   11 +
+ Source/Entities/Leg.cpp                            |   40 +
+ Source/Entities/Leg.h                              |    6 +
+ Source/Entities/LimbPath.cpp                       |   31 +
+ Source/Entities/LimbPath.h                         |    2 +
+ Source/Entities/Loadout.h                          |  261 +-
+ Source/Entities/MOPixel.cpp                        |   12 +
+ Source/Entities/MOPixel.h                          |  416 +-
+ Source/Entities/MOSParticle.cpp                    |   16 +
+ Source/Entities/MOSParticle.h                      |    3 +
+ Source/Entities/MOSRotating.cpp                    |   80 +-
+ Source/Entities/MOSRotating.h                      |    7 +
+ Source/Entities/MOSprite.cpp                       |  179 +-
+ Source/Entities/MOSprite.h                         |   11 +-
+ Source/Entities/Magazine.cpp                       |   40 +
+ Source/Entities/Magazine.h                         |    6 +
+ Source/Entities/Material.cpp                       |   79 +
+ Source/Entities/Material.h                         |   10 +
+ Source/Entities/MovableObject.cpp                  |  308 +-
+ Source/Entities/MovableObject.h                    |   45 +-
+ Source/Entities/PEmitter.cpp                       |   38 +-
+ Source/Entities/PEmitter.h                         |    4 +
+ Source/Entities/PieMenu.cpp                        |   88 +-
+ Source/Entities/PieMenu.h                          |    4 +
+ Source/Entities/PieSlice.cpp                       |   10 +-
+ Source/Entities/SLBackground.cpp                   |  570 +-
+ Source/Entities/SLBackground.h                     |  383 +-
+ Source/Entities/SLTerrain.h                        |    1 +
+ Source/Entities/Scene.cpp                          |  223 +-
+ Source/Entities/Scene.h                            |   24 +-
+ Source/Entities/SceneLayer.cpp                     |    1 +
+ Source/Entities/SceneLayer.h                       |    1 +
+ Source/Entities/SceneObject.cpp                    |   23 +-
+ Source/Entities/SoundContainer.cpp                 |  658 ++-
+ Source/Entities/SoundContainer.h                   |  299 +-
+ Source/Entities/SoundSet.cpp                       |  239 +-
+ Source/Entities/SoundSet.h                         |   65 +-
+ Source/Entities/TDExplosive.cpp                    |  176 +-
+ Source/Entities/TDExplosive.h                      |  174 +-
+ Source/Entities/ThrownDevice.cpp                   |  284 +-
+ Source/Entities/ThrownDevice.h                     |  264 +-
+ Source/Entities/Turret.cpp                         |  306 +-
+ Source/Entities/Turret.h                           |  226 +-
+ Source/GUI/GUIBanner.cpp                           |  822 +--
+ Source/GUI/GUIBanner.h                             |  444 +-
+ Source/GUI/GUIButton.h                             |  307 +-
+ Source/GUI/GUICheckbox.cpp                         |  538 +-
+ Source/GUI/GUICheckbox.h                           |  229 +-
+ Source/GUI/GUICollectionBox.h                      |  247 +-
+ Source/GUI/GUIComboBox.h                           |  466 +-
+ Source/GUI/GUIControl.cpp                          |  580 +-
+ Source/GUI/GUIControl.h                            |  299 +-
+ Source/GUI/GUIControlManager.cpp                   | 1540 ++++-
+ Source/GUI/GUIControlManager.h                     |  320 +-
+ Source/GUI/GUIEvent.h                              |   85 +-
+ Source/GUI/GUIFont.cpp                             |  845 +--
+ Source/GUI/GUIFont.h                               |  220 +-
+ Source/GUI/GUIInput.cpp                            |  372 +-
+ Source/GUI/GUIInput.h                              |  368 +-
+ Source/GUI/GUILabel.h                              |  307 +-
+ Source/GUI/GUIListPanel.cpp                        | 2372 ++++----
+ Source/GUI/GUIListPanel.h                          |  681 +--
+ Source/GUI/GUIManager.cpp                          |  736 +--
+ Source/GUI/GUIManager.h                            |  199 +-
+ Source/GUI/GUIPanel.cpp                            | 1105 ++--
+ Source/GUI/GUIPanel.h                              |  635 +-
+ Source/GUI/GUIProgressBar.h                        |  221 +-
+ Source/GUI/GUIProperties.h                         |  223 +-
+ Source/GUI/GUIPropertyPage.cpp                     |  728 +--
+ Source/GUI/GUIPropertyPage.h                       |  233 +-
+ Source/GUI/GUIRadioButton.cpp                      |  570 +-
+ Source/GUI/GUIRadioButton.h                        |  209 +-
+ Source/GUI/GUIScrollPanel.cpp                      | 1392 ++---
+ Source/GUI/GUIScrollPanel.h                        |  349 +-
+ Source/GUI/GUISkin.h                               |  171 +-
+ Source/GUI/GUISlider.h                             |  331 +-
+ Source/GUI/GUISound.cpp                            |  242 +
+ Source/GUI/GUISound.h                              |    8 +
+ Source/GUI/GUITab.cpp                              |  574 +-
+ Source/GUI/GUITab.h                                |  211 +-
+ Source/GUI/GUITextBox.h                            |  149 +-
+ Source/GUI/GUITextPanel.cpp                        | 1250 ++--
+ Source/GUI/GUITextPanel.h                          |  357 +-
+ Source/GUI/Wrappers/AllegroBitmap.h                |  303 +-
+ Source/GUI/Wrappers/GUIInputWrapper.cpp            |   21 +
+ Source/GUI/Wrappers/GUIInputWrapper.h              |    2 +
+ Source/Lua/LuaAdapters.cpp                         |   86 +-
+ Source/Lua/LuaBindingsActivities.cpp               |  355 +-
+ Source/Lua/LuaBindingsEntities.cpp                 |    4 +-
+ Source/Lua/LuaBindingsGUI.cpp                      |  187 +-
+ Source/Lua/LuaBindingsManagers.cpp                 | 1016 ++--
+ Source/Main.cpp                                    |  775 ++-
+ Source/Managers/ActivityMan.cpp                    |  530 +-
+ Source/Managers/ActivityMan.h                      |   74 +-
+ Source/Managers/AudioMan.cpp                       | 1719 +++++-
+ Source/Managers/AudioMan.h                         |  129 +-
+ Source/Managers/CameraMan.cpp                      |   44 +-
+ Source/Managers/CameraMan.h                        |  455 +-
+ Source/Managers/FrameMan.cpp                       |  245 +-
+ Source/Managers/FrameMan.h                         |   13 +
+ Source/Managers/LuaMan.cpp                         | 5326 ++++++++++++++++-
+ Source/Managers/LuaMan.h                           |  148 +-
+ Source/Managers/LuaThreadCodec.cpp                 |  191 +-
+ Source/Managers/MenuMan.cpp                        |    8 +
+ Source/Managers/MenuMan.h                          |    7 +
+ Source/Managers/MovableMan.cpp                     |  928 ++-
+ Source/Managers/MovableMan.h                       |  145 +-
+ Source/Managers/MusicMan.cpp                       |  389 ++
+ Source/Managers/MusicMan.h                         |    9 +
+ Source/Managers/PostProcessMan.cpp                 | 1038 ++--
+ Source/Managers/PostProcessMan.h                   |  499 +-
+ Source/Managers/PresetMan.cpp                      |   24 +-
+ Source/Managers/PrimitiveMan.cpp                   |  325 +-
+ Source/Managers/PrimitiveMan.h                     |   16 +-
+ Source/Managers/SceneMan.cpp                       |  289 +-
+ Source/Managers/SceneMan.h                         |   40 +
+ Source/Managers/SettingsMan.cpp                    |  842 +--
+ Source/Managers/SettingsMan.h                      |  926 +--
+ Source/Managers/TerrainLayerSnapshot.cpp           |  131 +-
+ Source/Managers/TerrainLayerSnapshot.h             |   35 +-
+ Source/Managers/TimerMan.cpp                       |  297 +-
+ Source/Managers/TimerMan.h                         |  557 +-
+ Source/Managers/UInputMan.cpp                      |  180 +-
+ Source/Managers/UInputMan.h                        |   13 +-
+ Source/Menus/BuyMenuGUI.cpp                        |   92 +
+ Source/Menus/BuyMenuGUI.h                          | 1080 ++--
+ Source/Menus/InventoryMenuGUI.cpp                  |  139 +
+ Source/Menus/InventoryMenuGUI.h                    |  826 +--
+ Source/Menus/MainMenuGUI.cpp                       |  190 +-
+ Source/Menus/MainMenuGUI.h                         |   35 +-
+ Source/Menus/ObjectPickerGUI.cpp                   |   58 +-
+ Source/Menus/ObjectPickerGUI.h                     |   17 +
+ Source/Menus/SaveLoadMenuGUI.cpp                   |  794 +--
+ Source/Menus/SceneEditorGUI.cpp                    |  181 +-
+ Source/Menus/SceneEditorGUI.h                      |   30 +
+ Source/Menus/meson.build                           |    1 +
+ Source/Network/GnsTransport.cpp                    |   69 +-
+ Source/Network/GnsTransport.h                      |    2 +-
+ Source/Network/LoopbackTransport.cpp               |   44 +-
+ Source/Network/LoopbackTransport.h                 |   25 +-
+ Source/Network/NetAdmissionSelfTest.cpp            |    2 +-
+ Source/Network/NetGameCommand.cpp                  |   15 +-
+ Source/Network/NetGameCommand.h                    |   73 +-
+ Source/Network/NetIdentity.cpp                     |    6 +-
+ Source/Network/NetIdentity.h                       |    1 +
+ Source/Network/NetLobbyProtocol.cpp                |   21 +-
+ Source/Network/NetLobbyProtocol.h                  |   11 +-
+ Source/Network/NetLobbySession.cpp                 |  159 +-
+ Source/Network/NetLobbySession.h                   |   23 +-
+ Source/Network/NetLobbySnapshot.h                  |    3 +
+ Source/Network/NetLockstep.cpp                     | 6091 +++++++++++++------
+ Source/Network/NetLockstep.h                       | 1042 +++-
+ Source/Network/NetLockstepSelfTest.cpp             | 6117 +++++++++++++++++++-
+ Source/Network/NetMatchReplay.cpp                  |   36 +-
+ Source/Network/NetMatchReplay.h                    |    2 +
+ Source/Network/NetMatchRunner.cpp                  |   46 +-
+ Source/Network/NetMatchRunner.h                    |   16 +
+ Source/Network/NetMatchSelfTest.cpp                |  521 +-
+ Source/Network/NetMatchService.cpp                 |  773 ++-
+ Source/Network/NetMatchService.h                   |  106 +-
+ Source/Network/NetProtocol.cpp                     |  520 +-
+ Source/Network/NetProtocol.h                       |  224 +-
+ Source/Network/NetProtocolSelfTest.cpp             |  345 ++
+ Source/Network/NetSeatAuth.cpp                     |   68 +
+ Source/Network/NetSeatAuth.h                       |   33 +
+ Source/Network/NetSession.cpp                      |  435 +-
+ Source/Network/NetSession.h                        |   70 +-
+ Source/Network/NetSessionSelfTest.cpp              |  162 +-
+ Source/Network/NetTransport.h                      |    4 +-
+ Source/Network/meson.build                         |   13 +
+ Source/Renderer/GraphicalPrimitive.cpp             |   31 +-
+ Source/Renderer/GraphicalPrimitive.h               |   20 +
+ Source/System/Atom.cpp                             |   96 +-
+ Source/System/Atom.h                               |   32 +
+ Source/System/CheckpointArchive.h                  |   29 +-
+ Source/System/Color.cpp                            |   16 +
+ Source/System/Color.h                              |    6 +
+ Source/System/ContentFile.cpp                      |  118 +-
+ Source/System/ContentFile.h                        |   18 +
+ Source/System/ContractAudit.h                      | 3584 +++++++-----
+ Source/System/Controller.cpp                       |   42 +-
+ Source/System/Controller.h                         |   11 +
+ Source/System/Entity.cpp                           |   26 +-
+ Source/System/Entity.h                             |   24 +-
+ Source/System/Gamepad.h                            |   99 +-
+ Source/System/InputMapping.cpp                     |  148 +-
+ Source/System/InputMapping.h                       |  220 +-
+ Source/System/InputScheme.cpp                      | 1133 ++--
+ Source/System/InputScheme.h                        |  350 +-
+ Source/System/Matrix.cpp                           |   16 +
+ Source/System/Matrix.h                             |    2 +
+ Source/System/PathFinder.cpp                       |   61 +-
+ Source/System/PathFinder.h                         |    6 +
+ Source/System/Reader.cpp                           |   67 +-
+ Source/System/Reader.h                             |   18 +-
+ Source/System/ScenarioRunner.cpp                   |  587 +-
+ Source/System/ScenarioRunner.h                     |   49 +-
+ Source/System/Serializable.cpp                     |    2 +-
+ Source/System/SpatialPartitionGrid.h               |    7 +
+ Source/System/System.cpp                           |  144 +-
+ Source/System/System.h                             |    7 +
+ external/sources/RakNet/src/HTTPConnection2.cpp    |    1 +
+ external/sources/RakNet/src/Rackspace.cpp          |    1 +
+ .../luabind-0.7.1/luabind/detail/object_rep.hpp    |    2 +-
+ tools/check_state_inventory.py                     |  432 +-
+ tools/compare_snapshots.py                         |  708 ++-
+ tools/contracts/AUDIT.md                           |    4 +-
+ tools/contracts/mod_native_contracts.lua           |  384 +-
+ tools/contracts/mod_reference_contracts.lua        |   22 +
+ tools/contracts/run_audit.py                       |  328 +-
+ tools/fixtures/mod_checkpoint.lua                  |  894 +--
+ tools/fixtures/mod_save_callbacks.lua              |   50 +-
+ tools/run_restoration_tests.py                     |  301 +-
+ tools/test_compare_snapshots.py                    |  667 ++-
+ tools/test_game_loads.py                           |   24 +
+ tools/test_lobby_lifecycle.py                      |  124 +-
+ tools/test_menu_lifecycle.py                       |    4 +
+ tools/test_save_callbacks.py                       |  100 +-
+ tools/win32_test_runner.py                         | 1173 ++--
+ 268 files changed, 61678 insertions(+), 27408 deletions(-)
+===== DIFF_STAT_CACHED =====
+===== BRANCH =====
+HEAD
+===== STATUS_SHORT_B =====
+## HEAD (no branch)
+ M Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini
+ M Data/Tests.rte/Activities.ini
+ M RTEA.sln
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Activities/GAScripted.cpp
+ M Source/Activities/GAScripted.h
+ M Source/Activities/GameActivity.cpp
+ M Source/Activities/GameActivity.h
+ M Source/CI/meson.build
+ M Source/CLI/cccp-ctl.cpp
+ M Source/Entities/ACDropShip.cpp
+ M Source/Entities/ACDropShip.h
+ M Source/Entities/ACRocket.cpp
+ M Source/Entities/ACRocket.h
+ M Source/Entities/ACrab.cpp
+ M Source/Entities/ACrab.h
+ M Source/Entities/ACraft.cpp
+ M Source/Entities/ACraft.h
+ M Source/Entities/ADoor.cpp
+ M Source/Entities/ADoor.h
+ M Source/Entities/AEJetpack.cpp
+ M Source/Entities/AEJetpack.h
+ M Source/Entities/AEmitter.cpp
+ M Source/Entities/AEmitter.h
+ M Source/Entities/AHuman.cpp
+ M Source/Entities/AHuman.h
+ M Source/Entities/Activity.cpp
+ M Source/Entities/Activity.h
+ M Source/Entities/Actor.cpp
+ M Source/Entities/Actor.h
+ M Source/Entities/Arm.cpp
+ M Source/Entities/Arm.h
+ M Source/Entities/AtomGroup.cpp
+ M Source/Entities/AtomGroup.h
+ M Source/Entities/Attachable.cpp
+ M Source/Entities/Attachable.h
+ M Source/Entities/DynamicSong.cpp
+ M Source/Entities/DynamicSong.h
+ M Source/Entities/Emission.cpp
+ M Source/Entities/Emission.h
+ M Source/Entities/Gib.cpp
+ M Source/Entities/GlobalScript.cpp
+ M Source/Entities/GlobalScript.h
+ M Source/Entities/HDFirearm.cpp
+ M Source/Entities/HDFirearm.h
+ M Source/Entities/HeldDevice.cpp
+ M Source/Entities/HeldDevice.h
+ M Source/Entities/Icon.cpp
+ M Source/Entities/Icon.h
+ M Source/Entities/Leg.cpp
+ M Source/Entities/Leg.h
+ M Source/Entities/LimbPath.cpp
+ M Source/Entities/LimbPath.h
+ M Source/Entities/Loadout.h
+ M Source/Entities/MOPixel.cpp
+ M Source/Entities/MOPixel.h
+ M Source/Entities/MOSParticle.cpp
+ M Source/Entities/MOSParticle.h
+ M Source/Entities/MOSRotating.cpp
+ M Source/Entities/MOSRotating.h
+ M Source/Entities/MOSprite.cpp
+ M Source/Entities/MOSprite.h
+ M Source/Entities/Magazine.cpp
+ M Source/Entities/Magazine.h
+ M Source/Entities/Material.cpp
+ M Source/Entities/Material.h
+ M Source/Entities/MovableObject.cpp
+ M Source/Entities/MovableObject.h
+ M Source/Entities/PEmitter.cpp
+ M Source/Entities/PEmitter.h
+ M Source/Entities/PieMenu.cpp
+ M Source/Entities/PieMenu.h
+ M Source/Entities/PieSlice.cpp
+ M Source/Entities/SLBackground.cpp
+ M Source/Entities/SLBackground.h
+ M Source/Entities/SLTerrain.h
+ M Source/Entities/Scene.cpp
+ M Source/Entities/Scene.h
+ M Source/Entities/SceneLayer.cpp
+ M Source/Entities/SceneLayer.h
+ M Source/Entities/SceneObject.cpp
+ M Source/Entities/SoundContainer.cpp
+ M Source/Entities/SoundContainer.h
+ M Source/Entities/SoundSet.cpp
+ M Source/Entities/SoundSet.h
+ M Source/Entities/TDExplosive.cpp
+ M Source/Entities/TDExplosive.h
+ M Source/Entities/ThrownDevice.cpp
+ M Source/Entities/ThrownDevice.h
+ M Source/Entities/Turret.cpp
+ M Source/Entities/Turret.h
+ M Source/GUI/GUIBanner.cpp
+ M Source/GUI/GUIBanner.h
+ M Source/GUI/GUIButton.h
+ M Source/GUI/GUICheckbox.cpp
+ M Source/GUI/GUICheckbox.h
+ M Source/GUI/GUICollectionBox.h
+ M Source/GUI/GUIComboBox.h
+ M Source/GUI/GUIControl.cpp
+ M Source/GUI/GUIControl.h
+ M Source/GUI/GUIControlManager.cpp
+ M Source/GUI/GUIControlManager.h
+ M Source/GUI/GUIEvent.h
+ M Source/GUI/GUIFont.cpp
+ M Source/GUI/GUIFont.h
+ M Source/GUI/GUIInput.cpp
+ M Source/GUI/GUIInput.h
+ M Source/GUI/GUILabel.h
+ M Source/GUI/GUIListPanel.cpp
+ M Source/GUI/GUIListPanel.h
+ M Source/GUI/GUIManager.cpp
+ M Source/GUI/GUIManager.h
+ M Source/GUI/GUIPanel.cpp
+ M Source/GUI/GUIPanel.h
+ M Source/GUI/GUIProgressBar.h
+ M Source/GUI/GUIProperties.h
+ M Source/GUI/GUIPropertyPage.cpp
+ M Source/GUI/GUIPropertyPage.h
+ M Source/GUI/GUIRadioButton.cpp
+ M Source/GUI/GUIRadioButton.h
+ M Source/GUI/GUIScrollPanel.cpp
+ M Source/GUI/GUIScrollPanel.h
+ M Source/GUI/GUISkin.h
+ M Source/GUI/GUISlider.h
+ M Source/GUI/GUISound.cpp
+ M Source/GUI/GUISound.h
+ M Source/GUI/GUITab.cpp
+ M Source/GUI/GUITab.h
+ M Source/GUI/GUITextBox.h
+ M Source/GUI/GUITextPanel.cpp
+ M Source/GUI/GUITextPanel.h
+ M Source/GUI/Wrappers/AllegroBitmap.h
+ M Source/GUI/Wrappers/GUIInputWrapper.cpp
+ M Source/GUI/Wrappers/GUIInputWrapper.h
+ M Source/Lua/LuaAdapters.cpp
+ M Source/Lua/LuaBindingsActivities.cpp
+ M Source/Lua/LuaBindingsEntities.cpp
+ M Source/Lua/LuaBindingsGUI.cpp
+ M Source/Lua/LuaBindingsManagers.cpp
+ M Source/Main.cpp
+ M Source/Managers/ActivityMan.cpp
+ M Source/Managers/ActivityMan.h
+ M Source/Managers/AudioMan.cpp
+ M Source/Managers/AudioMan.h
+ M Source/Managers/CameraMan.cpp
+ M Source/Managers/CameraMan.h
+ M Source/Managers/FrameMan.cpp
+ M Source/Managers/FrameMan.h
+ M Source/Managers/LuaMan.cpp
+ M Source/Managers/LuaMan.h
+ M Source/Managers/LuaThreadCodec.cpp
+ M Source/Managers/MenuMan.cpp
+ M Source/Managers/MenuMan.h
+ M Source/Managers/MovableMan.cpp
+ M Source/Managers/MovableMan.h
+ M Source/Managers/MusicMan.cpp
+ M Source/Managers/MusicMan.h
+ M Source/Managers/PostProcessMan.cpp
+ M Source/Managers/PostProcessMan.h
+ M Source/Managers/PresetMan.cpp
+ M Source/Managers/PrimitiveMan.cpp
+ M Source/Managers/PrimitiveMan.h
+ M Source/Managers/SceneMan.cpp
+ M Source/Managers/SceneMan.h
+ M Source/Managers/SettingsMan.cpp
+ M Source/Managers/SettingsMan.h
+ M Source/Managers/TerrainLayerSnapshot.cpp
+ M Source/Managers/TerrainLayerSnapshot.h
+ M Source/Managers/TimerMan.cpp
+ M Source/Managers/TimerMan.h
+ M Source/Managers/UInputMan.cpp
+ M Source/Managers/UInputMan.h
+ M Source/Menus/BuyMenuGUI.cpp
+ M Source/Menus/BuyMenuGUI.h
+ M Source/Menus/InventoryMenuGUI.cpp
+ M Source/Menus/InventoryMenuGUI.h
+ M Source/Menus/MainMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.h
+ M Source/Menus/ObjectPickerGUI.cpp
+ M Source/Menus/ObjectPickerGUI.h
+ M Source/Menus/SaveLoadMenuGUI.cpp
+ M Source/Menus/SceneEditorGUI.cpp
+ M Source/Menus/SceneEditorGUI.h
+ M Source/Menus/meson.build
+ M Source/Network/GnsTransport.cpp
+ M Source/Network/GnsTransport.h
+ M Source/Network/LoopbackTransport.cpp
+ M Source/Network/LoopbackTransport.h
+ M Source/Network/NetAdmissionSelfTest.cpp
+ M Source/Network/NetGameCommand.cpp
+ M Source/Network/NetGameCommand.h
+ M Source/Network/NetIdentity.cpp
+ M Source/Network/NetIdentity.h
+ M Source/Network/NetLobbyProtocol.cpp
+ M Source/Network/NetLobbyProtocol.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLobbySession.h
+ M Source/Network/NetLobbySnapshot.h
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetLockstep.h
+ M Source/Network/NetLockstepSelfTest.cpp
+ M Source/Network/NetMatchReplay.cpp
+ M Source/Network/NetMatchReplay.h
+ M Source/Network/NetMatchRunner.cpp
+ M Source/Network/NetMatchRunner.h
+ M Source/Network/NetMatchSelfTest.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetMatchService.h
+ M Source/Network/NetProtocol.cpp
+ M Source/Network/NetProtocol.h
+ M Source/Network/NetProtocolSelfTest.cpp
+ M Source/Network/NetSeatAuth.cpp
+ M Source/Network/NetSeatAuth.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/NetSessionSelfTest.cpp
+ M Source/Network/NetTransport.h
+ M Source/Network/meson.build
+ M Source/Renderer/GraphicalPrimitive.cpp
+ M Source/Renderer/GraphicalPrimitive.h
+ M Source/System/Atom.cpp
+ M Source/System/Atom.h
+ M Source/System/CheckpointArchive.h
+ M Source/System/Color.cpp
+ M Source/System/Color.h
+ M Source/System/ContentFile.cpp
+ M Source/System/ContentFile.h
+ M Source/System/ContractAudit.h
+ M Source/System/Controller.cpp
+ M Source/System/Controller.h
+ M Source/System/Entity.cpp
+ M Source/System/Entity.h
+ M Source/System/Gamepad.h
+ M Source/System/InputMapping.cpp
+ M Source/System/InputMapping.h
+ M Source/System/InputScheme.cpp
+ M Source/System/InputScheme.h
+ M Source/System/Matrix.cpp
+ M Source/System/Matrix.h
+ M Source/System/PathFinder.cpp
+ M Source/System/PathFinder.h
+ M Source/System/Reader.cpp
+ M Source/System/Reader.h
+ M Source/System/ScenarioRunner.cpp
+ M Source/System/ScenarioRunner.h
+ M Source/System/Serializable.cpp
+ M Source/System/SpatialPartitionGrid.h
+ M Source/System/System.cpp
+ M Source/System/System.h
+ M external/sources/RakNet/src/HTTPConnection2.cpp
+ M external/sources/RakNet/src/Rackspace.cpp
+ M external/sources/luabind-0.7.1/luabind/detail/object_rep.hpp
+ M tools/check_state_inventory.py
+ M tools/compare_snapshots.py
+ M tools/contracts/AUDIT.md
+ M tools/contracts/mod_native_contracts.lua
+ M tools/contracts/mod_reference_contracts.lua
+ M tools/contracts/run_audit.py
+ M tools/fixtures/mod_checkpoint.lua
+ M tools/fixtures/mod_save_callbacks.lua
+ M tools/run_restoration_tests.py
+ M tools/test_compare_snapshots.py
+ M tools/test_game_loads.py
+ M tools/test_lobby_lifecycle.py
+ M tools/test_menu_lifecycle.py
+ M tools/test_save_callbacks.py
+ M tools/win32_test_runner.py
+?? AbortCode.txt
+?? Data/Tests.rte/Activities/NetLifecycleTest.lua
+?? Source/CI/NetModerationGUIProbe.cpp
+?? Source/CI/NetModerationGUIProbe.h
+?? Source/GUI/GUICheckpoint.h
+?? Source/Menus/NetModerationGUI.cpp
+?? Source/Menus/NetModerationGUI.h
+?? Source/Network/NetA7Journal.cpp
+?? Source/Network/NetA7Journal.h
+?? Source/Network/NetReconnectAdmission.cpp
+?? Source/Network/NetReconnectAdmission.h
+?? Source/Network/NetReconnectLedger.cpp
+?? Source/Network/NetReconnectLedger.h
+?? Source/Network/NetReconnectSelfTest.cpp
+?? Source/Network/NetReconnectSelfTest.h
+?? Source/Network/NetReconnectSession.cpp
+?? Source/Network/NetReconnectSession.h
+?? Source/Network/NetReconnectSessionSelfTest.cpp
+?? Source/Network/NetReconnectSessionSelfTest.h
+?? Source/Network/NetReconnectTicketStore.cpp
+?? Source/Network/NetReconnectTicketStore.h
+?? Source/Network/NetReconnectTranscript.cpp
+?? Source/Network/NetReconnectTranscript.h
+?? Source/Network/NetReconnectTxCache.cpp
+?? Source/Network/NetReconnectTxCache.h
+?? Source/Network/NetReconnectUx.cpp
+?? Source/Network/NetReconnectUx.h
+?? Source/Network/NetResyncRuntimeSelfTest.cpp
+?? Source/Network/NetResyncRuntimeSelfTest.h
+?? Source/Network/NetResyncSelfTest.cpp
+?? Source/Network/NetResyncSelfTest.h
+?? Source/Network/NetResyncState.cpp
+?? Source/Network/NetResyncState.h
+?? Source/System/AudioCheckpoint.h
+?? Source/System/BitmapCheckpoint.h
+?? Source/System/LogicalSound.h
+?? Source/System/MovableObjectReference.h
+?? Source/System/NativeCheckpoint.h
+?? Source/System/OwnedMovableObjects.h
+?? Source/System/SoundContainerRegistry.h
+?? Source/System/SoundSimulation.h
+?? tools/contracts/annotate_txc_manifest.py
+?? tools/contracts/classify_txc_refusals.py
+?? tools/contracts/gui_checkpoint_selftest.cpp.txt
+?? tools/contracts/inspect_iterator_control.py
+?? tools/contracts/make_txc_manifest.py
+?? tools/contracts/mod_failure_continuation.lua
+?? tools/contracts/mod_primitive_batch_diagnostic.lua
+?? tools/contracts/mod_primitive_cast_diagnostic.lua
+?? tools/contracts/mod_primitive_cast_diagnostic_v2.lua
+?? tools/contracts/mod_primitive_contracts.lua
+?? tools/contracts/mod_ui_contracts.lua
+?? tools/contracts/mod_ui_perturb_contracts.lua
+?? tools/contracts/primitive_checkpoint_pending.patch
+?? tools/contracts/primitive_pending/
+?? tools/contracts/run_txc_job.py
+?? tools/contracts/verify_txc_controls.py
+?? tools/cross_process_state.py
+?? tools/fixtures/mod_path_queue.lua
+?? tools/fixtures/mod_setaside_park.lua
+?? tools/h4_gate_evidence.py
+?? tools/h4_substitution_gates.py
+?? tools/isolated_launch.py
+?? tools/snapshot_runtime.py
+?? tools/state_document.py
+?? tools/test_cross_process_state.py
+?? tools/test_h4_gate_evidence.py
+?? tools/test_run_audit.py
+?? tools/test_snapshot_inventory_roles.py
+?? tools/test_snapshot_roundtrip.py
+?? tools/test_state_document.py
+===== CODEX_LS =====
+total 0
+drwxr-xr-x@  10 erol  staff   320 Sep  9 15:48 .
+drwx------+   6 erol  staff   192 Apr 24 13:30 ..
+drwxr-xr-x@   3 erol  staff    96 May  1 21:23 2026-05-01
+drwxr-xr-x@   3 erol  staff    96 Aug 23 11:26 2026-08-23
+drwxr-xr-x@   3 erol  staff    96 Aug 26 20:22 2026-08-26
+drwxr-xr-x@   4 erol  staff   128 Sep  5 10:37 2026-09-05
+drwxr-xr-x@   3 erol  staff    96 Sep  7 13:50 2026-09-07
+drwxr-xr-x@  14 erol  staff   448 Sep  8 00:00 claude-ssh-smoke-646592fa
+drwxr-xr-x@ 149 erol  staff  4768 Sep 10 16:48 cortex-b2-review-20260909
+drwxr-xr-x@   7 erol  staff   224 Sep  9 14:06 mac-family-lifetime-20260909-2106
+===== CODEX_REPOS =====
+----- ENTRY: /Users/erol/Documents/Codex/2026-05-01 -----
+IS_GIT=0
+SUBENTRIES:
+total 0
+drwxr-xr-x@  3 erol  staff   96 May  1 21:23 .
+drwxr-xr-x@ 10 erol  staff  320 Sep  9 15:48 ..
+drwxr-xr-x@  2 erol  staff   64 May  1 21:23 how-do-i-pick-5-5
+----- ENTRY: /Users/erol/Documents/Codex/2026-08-23 -----
+IS_GIT=0
+SUBENTRIES:
+total 0
+drwxr-xr-x@  3 erol  staff   96 Aug 23 11:26 .
+drwxr-xr-x@ 10 erol  staff  320 Sep  9 15:48 ..
+drwxr-xr-x@  4 erol  staff  128 Aug 23 11:26 why-is-x20
+----- ENTRY: /Users/erol/Documents/Codex/2026-08-26 -----
+IS_GIT=0
+SUBENTRIES:
+total 0
+drwxr-xr-x@  3 erol  staff   96 Aug 26 20:22 .
+drwxr-xr-x@ 10 erol  staff  320 Sep  9 15:48 ..
+drwxr-xr-x@  4 erol  staff  128 Aug 26 20:22 give-me-a-fun-recap-of
+----- ENTRY: /Users/erol/Documents/Codex/2026-09-05 -----
+IS_GIT=0
+SUBENTRIES:
+total 0
+drwxr-xr-x@  4 erol  staff  128 Sep  5 10:37 .
+drwxr-xr-x@ 10 erol  staff  320 Sep  9 15:48 ..
+drwxr-xr-x@  4 erol  staff  128 Sep  5 08:45 io-fo
+drwxr-xr-x@  4 erol  staff  128 Sep  5 10:37 wha
+----- ENTRY: /Users/erol/Documents/Codex/2026-09-07 -----
+IS_GIT=0
+SUBENTRIES:
+total 0
+drwxr-xr-x@  3 erol  staff   96 Sep  7 13:50 .
+drwxr-xr-x@ 10 erol  staff  320 Sep  9 15:48 ..
+drwxr-xr-x@  4 erol  staff  128 Sep  7 13:50 is-x20
+----- ENTRY: /Users/erol/Documents/Codex/claude-ssh-smoke-646592fa -----
+IS_GIT=0
+SUBENTRIES:
+total 88
+drwxr-xr-x@ 14 erol  staff   448 Sep  8 00:00 .
+drwxr-xr-x@ 10 erol  staff   320 Sep  9 15:48 ..
+-rw-r--r--   1 erol  staff    18 Sep  7 23:59 empty-mcp.json
+-rw-r--r--   1 erol  staff     2 Sep  7 23:56 exit-code.txt
+-rw-r--r--@  1 erol  staff   353 Sep  7 23:59 gui-launch-stderr.log
+-rw-r--r--@  1 erol  staff     0 Sep  7 23:59 gui-launch-stdout.log
+-rw-r--r--   1 erol  staff   267 Sep  7 23:59 gui-manifest.json
+-rw-r--r--   1 erol  staff   835 Sep  7 23:59 gui-smoke.plist
+-rw-r--r--   1 erol  staff   440 Sep  8 00:00 gui-verification.json
+-rw-r--r--   1 erol  staff   354 Sep  7 23:56 prompt.txt
+-rw-r--r--   1 erol  staff  7031 Sep  7 23:56 result.json
+-rw-r--r--   1 erol  staff   475 Sep  7 23:59 run-gui-smoke.zsh
+-rw-r--r--   1 erol  staff   669 Sep  7 23:56 run-smoke.zsh
+-rw-r--r--   1 erol  staff     0 Sep  7 23:56 stderr.log
+----- ENTRY: /Users/erol/Documents/Codex/cortex-b2-review-20260909 -----
+IS_GIT=0
+SUBENTRIES:
+total 120648
+drwxr-xr-x@ 149 erol  staff      4768 Sep 10 16:48 .
+drwxr-xr-x@  10 erol  staff       320 Sep  9 15:48 ..
+-rw-r--r--    1 erol  staff      4596 Sep  9 16:00 Settings.input.ini
+drwxr-xr-x@   9 erol  staff       288 Sep  9 19:27 __pycache__
+-rw-r--r--    1 erol  staff       985 Sep  9 17:41 a7-capabilities.proposed.json
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:12 a7-coop-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:30 a7-coop-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:43 a7-coop-attempt3
+drwxr-xr-x   14 erol  staff       448 Sep  9 19:25 a7-coop-attempt4
+drwxr-xr-x@  14 erol  staff       448 Sep  9 19:31 a7-coop-attempt5
+drwxr-xr-x@  18 erol  staff       576 Sep  9 19:56 a7-group-positive20
+drwxr-xr-x@  14 erol  staff       448 Sep  9 16:53 a7-leave-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:02 a7-leave-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:03 a7-leave-attempt3
+-rw-r--r--@   1 erol  staff     48195 Sep  9 18:19 a7-positive10-postreboot.json
+-rw-r--r--@   1 erol  staff  20693474 Sep  9 18:19 a7-positive10-postreboot.tar.gz
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:07 a7-silent-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:34 a7-silent-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 18:18 a7-silent-attempt3
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:09 a7-slow-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:31 a7-slow-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:49 a7-slow-attempt3
+drwxr-xr-x@  14 erol  staff       448 Sep  9 18:13 a7-slow-attempt4
+drwxr-xr-x@  14 erol  staff       448 Sep  9 16:52 a7-stagger-attempt1
+-rw-r--r--    1 erol  staff     36785 Sep  9 17:41 a7_driver.py
+-rw-r--r--    1 erol  staff     12210 Sep  9 16:51 a7_mac_runtime.py
+-rw-r--r--    1 erol  staff     28573 Sep  9 18:09 a7_support.py
+-rw-r--r--    1 erol  staff       879 Sep  9 15:58 apply_b2_control_headerfix.py
+-rw-r--r--    1 erol  staff      1709 Sep  9 16:05 apply_b2_mac_revision.py
+-rw-r--r--    1 erol  staff      1796 Sep  9 17:25 b2_ui_oracle.py
+-rw-r--r--    1 erol  staff      7759 Sep  9 16:33 b2_ui_runtime.py
+-rw-r--r--    1 erol  staff   1641447 Sep  9 15:48 base.manifest.json
+-rw-r--r--    1 erol  staff      3943 Sep  9 15:48 build_b2_mac_control.py
+-rw-r--r--    1 erol  staff      4026 Sep  9 16:10 build_b2_mac_existing.py
+-rw-r--r--    1 erol  staff      1705 Sep  9 16:01 clone_b2_mac_positive.py
+drwxr-xr-x   32 erol  staff      1024 Sep  9 15:53 control
+drwxr-xr-x    5 erol  staff       160 Sep  9 15:49 control-evidence
+drwxr-xr-x    5 erol  staff       160 Sep  9 15:51 control-gcc-attempt2
+drwxr-xr-x    3 erol  staff        96 Sep  9 15:52 control-gcc-attempt3
+drwxr-xr-x    7 erol  staff       224 Sep  9 15:54 control-gcc-attempt4
+drwxr-xr-x@  14 erol  staff       448 Sep  9 16:00 control-gcc-attempt5
+-rw-r--r--    1 erol  staff     15593 Sep  9 15:58 control-headerfix-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1641907 Sep  9 15:58 control-headerfix.manifest.json
+-rw-r--r--    1 erol  staff    275109 Sep  9 15:48 control-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1641686 Sep  9 15:48 control.manifest.json
+-rw-r--r--    1 erol  staff      2437 Sep  9 17:14 inspect_a7_result.py
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:51 mac-lifetime-2351
+-rw-r--r--    1 erol  staff     13832 Sep  9 15:48 mac_evidence.py
+-rw-r--r--    1 erol  staff      4986 Sep  9 15:48 overlay.json
+-rw-r--r--    1 erol  staff      1240 Sep  9 16:11 pack_b2_mac_evidence.py
+drwxr-xr-x@  31 erol  staff       992 Sep  9 16:10 positive
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:03 positive-gcc-attempt1
+drwxr-xr-x@  23 erol  staff       736 Sep  9 17:42 positive-gcc-attempt10
+drwxr-xr-x    6 erol  staff       192 Sep  9 18:44 positive-gcc-attempt11
+drwxr-xr-x   27 erol  staff       864 Sep  9 18:51 positive-gcc-attempt12
+drwxr-xr-x@   5 erol  staff       160 Sep  9 18:56 positive-gcc-attempt13
+drwxr-xr-x@  27 erol  staff       864 Sep  9 18:59 positive-gcc-attempt13b
+drwxr-xr-x@  27 erol  staff       864 Sep  9 19:01 positive-gcc-attempt14
+drwxr-xr-x@  18 erol  staff       576 Sep  9 19:06 positive-gcc-attempt15
+drwxr-xr-x   18 erol  staff       576 Sep  9 19:21 positive-gcc-attempt16
+drwxr-xr-x    6 erol  staff       192 Sep  9 19:23 positive-gcc-attempt17
+drwxr-xr-x   27 erol  staff       864 Sep  9 19:24 positive-gcc-attempt18
+drwxr-xr-x@  27 erol  staff       864 Sep  9 19:33 positive-gcc-attempt19
+drwxr-xr-x@  23 erol  staff       736 Sep  9 16:06 positive-gcc-attempt2
+drwxr-xr-x@  30 erol  staff       960 Sep  9 19:40 positive-gcc-attempt20
+drwxr-xr-x@  27 erol  staff       864 Sep  9 16:09 positive-gcc-attempt3
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:30 positive-gcc-attempt4
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:36 positive-gcc-attempt5
+drwxr-xr-x@  23 erol  staff       736 Sep  9 16:47 positive-gcc-attempt6
+drwxr-xr-x@  23 erol  staff       736 Sep  9 17:03 positive-gcc-attempt7
+drwxr-xr-x@   6 erol  staff       192 Sep  9 17:24 positive-gcc-attempt8
+drwxr-xr-x@  23 erol  staff       736 Sep  9 17:26 positive-gcc-attempt9
+drwxr-xr-x@  28 erol  staff       896 Sep  9 16:14 positive-nogns-attempt1
+drwxr-xr-x@  27 erol  staff       864 Sep  9 19:42 positive-nogns-attempt2
+-rw-r--r--    1 erol  staff      7643 Sep  9 16:01 positive-overlay.json
+-rw-r--r--    1 erol  staff    365671 Sep  9 16:01 positive-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642032 Sep  9 16:01 positive.manifest.json
+-rw-r--r--    1 erol  staff      1909 Sep  9 17:41 positive10-overlay.json
+-rw-r--r--    1 erol  staff    122633 Sep  9 17:41 positive10-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642985 Sep  9 17:41 positive10.manifest.json
+-rw-r--r--    1 erol  staff      9038 Sep  9 18:44 positive11-overlay.json
+-rw-r--r--    1 erol  staff    492718 Sep  9 18:44 positive11-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643949 Sep  9 18:44 positive11.manifest.json
+-rw-r--r--    1 erol  staff       243 Sep  9 18:47 positive12-overlay.json
+-rw-r--r--    1 erol  staff     30035 Sep  9 18:47 positive12-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 18:47 positive12.manifest.json
+-rw-r--r--    1 erol  staff       487 Sep  9 18:56 positive13-overlay.json
+-rw-r--r--    1 erol  staff     86690 Sep  9 18:56 positive13-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 18:56 positive13.manifest.json
+-rw-r--r--    1 erol  staff       487 Sep  9 19:00 positive14-overlay.json
+-rw-r--r--    1 erol  staff     86710 Sep  9 19:00 positive14-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 19:00 positive14.manifest.json
+-rw-r--r--    1 erol  staff       243 Sep  9 19:06 positive15-overlay.json
+-rw-r--r--    1 erol  staff     30602 Sep  9 19:06 positive15-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 19:06 positive15.manifest.json
+-rw-r--r--    1 erol  staff       235 Sep  9 19:20 positive16-overlay.json
+-rw-r--r--    1 erol  staff     65990 Sep  9 19:20 positive16-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643993 Sep  9 19:20 positive16.manifest.json
+-rw-r--r--    1 erol  staff      5152 Sep  9 19:21 positive17-overlay.json
+-rw-r--r--    1 erol  staff    319206 Sep  9 19:21 positive17-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:21 positive17.manifest.json
+-rw-r--r--    1 erol  staff       243 Sep  9 19:23 positive18-overlay.json
+-rw-r--r--    1 erol  staff     12360 Sep  9 19:23 positive18-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:23 positive18.manifest.json
+-rw-r--r--    1 erol  staff      1433 Sep  9 19:32 positive19-overlay.json
+-rw-r--r--    1 erol  staff    148239 Sep  9 19:32 positive19-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:32 positive19.manifest.json
+-rw-r--r--    1 erol  staff       247 Sep  9 16:05 positive2-overlay.json
+-rw-r--r--    1 erol  staff     56288 Sep  9 16:05 positive2-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642189 Sep  9 16:05 positive2.manifest.json
+-rw-r--r--    1 erol  staff       235 Sep  9 19:38 positive20-overlay.json
+-rw-r--r--    1 erol  staff     67090 Sep  9 19:38 positive20-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:38 positive20.manifest.json
+-rw-r--r--    1 erol  staff       491 Sep  9 16:07 positive3-overlay.json
+-rw-r--r--    1 erol  staff     85448 Sep  9 16:07 positive3-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642189 Sep  9 16:07 positive3.manifest.json
+-rw-r--r--    1 erol  staff      1242 Sep  9 16:30 positive4-overlay.json
+-rw-r--r--    1 erol  staff     63599 Sep  9 16:30 positive4-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642505 Sep  9 16:30 positive4.manifest.json
+-rw-r--r--    1 erol  staff       702 Sep  9 16:36 positive5-overlay.json
+-rw-r--r--    1 erol  staff     53836 Sep  9 16:36 positive5-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642505 Sep  9 16:36 positive5.manifest.json
+-rw-r--r--    1 erol  staff      4098 Sep  9 16:45 positive6-overlay.json
+-rw-r--r--    1 erol  staff    198449 Sep  9 16:45 positive6-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642814 Sep  9 16:45 positive6.manifest.json
+-rw-r--r--    1 erol  staff       737 Sep  9 17:02 positive7-overlay.json
+-rw-r--r--    1 erol  staff     82880 Sep  9 17:02 positive7-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642814 Sep  9 17:02 positive7.manifest.json
+-rw-r--r--    1 erol  staff      1380 Sep  9 17:24 positive8-overlay.json
+-rw-r--r--    1 erol  staff    117385 Sep  9 17:24 positive8-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642984 Sep  9 17:24 positive8.manifest.json
+-rw-r--r--    1 erol  staff       247 Sep  9 17:25 positive9-overlay.json
+-rw-r--r--    1 erol  staff     56626 Sep  9 17:25 positive9-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642984 Sep  9 17:25 positive9.manifest.json
+drwx---rwx   11 erol  staff       352 Sep  9 18:36 resync-syntax-0138
+drwx---rwx   39 erol  staff      1248 Sep  9 18:39 resync-syntax-0144
+-rw-r--r--    1 erol  staff      3210 Sep  9 16:51 run_a7_mac.py
+-rw-r--r--    1 erol  staff      2350 Sep  9 16:09 run_b2_mac_game_checks.py
+-rw-r--r--    1 erol  staff      1835 Sep  9 19:40 run_b2_mac_native_control.py
+-rw-r--r--    1 erol  staff      3127 Sep  9 16:00 run_b2_mac_selftests.py
+-rw-r--r--    1 erol  staff      7737 Sep  9 17:25 run_b2_mac_ui.py
+-rw-r--r--    1 erol  staff      7593 Sep  9 16:00 run_mac_cases_roundtrip.py
+-rw-r--r--    1 erol  staff      2412 Sep  9 16:51 test_a7_mac_lifetime.py
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:33 ui-basic-attempt1
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:34 ui-basic-attempt2
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:37 ui-basic-attempt3
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:41 ui-basic-attempt4
+drwxr-xr-x@  12 erol  staff       384 Sep  9 17:04 ui-basic-attempt5
+drwxr-xr-x@  13 erol  staff       416 Sep  9 17:39 ui-basic-attempt6
+----- ENTRY: /Users/erol/Documents/Codex/mac-family-lifetime-20260909-2106 -----
+IS_GIT=0
+SUBENTRIES:
+total 72
+drwxr-xr-x@  7 erol  staff    224 Sep  9 14:06 .
+drwxr-xr-x@ 10 erol  staff    320 Sep  9 15:48 ..
+-rw-r--r--   1 erol  staff   6415 Sep  9 14:06 control_runner.py
+-rw-r--r--   1 erol  staff  12229 Sep  9 14:06 mac_evidence.py
+-rw-r--r--   1 erol  staff   6269 Sep  9 14:06 probe_mac_lifetime.py
+drwxr-xr-x  11 erol  staff    352 Sep  9 14:06 run1
+-rw-r--r--   1 erol  staff   7166 Sep  9 14:06 run_mac_cases_roundtrip.py
+===== ALSO_NESTED_POSITIVE_PARENT =====
+----- ENTRY: /Users/erol/Documents/Codex/cortex-b2-review-20260909 -----
+total 120648
+drwxr-xr-x@ 149 erol  staff      4768 Sep 10 16:48 .
+drwxr-xr-x@  10 erol  staff       320 Sep  9 15:48 ..
+-rw-r--r--    1 erol  staff      4596 Sep  9 16:00 Settings.input.ini
+drwxr-xr-x@   9 erol  staff       288 Sep  9 19:27 __pycache__
+-rw-r--r--    1 erol  staff       985 Sep  9 17:41 a7-capabilities.proposed.json
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:12 a7-coop-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:30 a7-coop-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:43 a7-coop-attempt3
+drwxr-xr-x   14 erol  staff       448 Sep  9 19:25 a7-coop-attempt4
+drwxr-xr-x@  14 erol  staff       448 Sep  9 19:31 a7-coop-attempt5
+drwxr-xr-x@  18 erol  staff       576 Sep  9 19:56 a7-group-positive20
+drwxr-xr-x@  14 erol  staff       448 Sep  9 16:53 a7-leave-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:02 a7-leave-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:03 a7-leave-attempt3
+-rw-r--r--@   1 erol  staff     48195 Sep  9 18:19 a7-positive10-postreboot.json
+-rw-r--r--@   1 erol  staff  20693474 Sep  9 18:19 a7-positive10-postreboot.tar.gz
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:07 a7-silent-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:34 a7-silent-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 18:18 a7-silent-attempt3
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:09 a7-slow-attempt1
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:31 a7-slow-attempt2
+drwxr-xr-x@  14 erol  staff       448 Sep  9 17:49 a7-slow-attempt3
+drwxr-xr-x@  14 erol  staff       448 Sep  9 18:13 a7-slow-attempt4
+drwxr-xr-x@  14 erol  staff       448 Sep  9 16:52 a7-stagger-attempt1
+-rw-r--r--    1 erol  staff     36785 Sep  9 17:41 a7_driver.py
+-rw-r--r--    1 erol  staff     12210 Sep  9 16:51 a7_mac_runtime.py
+-rw-r--r--    1 erol  staff     28573 Sep  9 18:09 a7_support.py
+-rw-r--r--    1 erol  staff       879 Sep  9 15:58 apply_b2_control_headerfix.py
+-rw-r--r--    1 erol  staff      1709 Sep  9 16:05 apply_b2_mac_revision.py
+-rw-r--r--    1 erol  staff      1796 Sep  9 17:25 b2_ui_oracle.py
+-rw-r--r--    1 erol  staff      7759 Sep  9 16:33 b2_ui_runtime.py
+-rw-r--r--    1 erol  staff   1641447 Sep  9 15:48 base.manifest.json
+-rw-r--r--    1 erol  staff      3943 Sep  9 15:48 build_b2_mac_control.py
+-rw-r--r--    1 erol  staff      4026 Sep  9 16:10 build_b2_mac_existing.py
+-rw-r--r--    1 erol  staff      1705 Sep  9 16:01 clone_b2_mac_positive.py
+drwxr-xr-x   32 erol  staff      1024 Sep  9 15:53 control
+drwxr-xr-x    5 erol  staff       160 Sep  9 15:49 control-evidence
+drwxr-xr-x    5 erol  staff       160 Sep  9 15:51 control-gcc-attempt2
+drwxr-xr-x    3 erol  staff        96 Sep  9 15:52 control-gcc-attempt3
+drwxr-xr-x    7 erol  staff       224 Sep  9 15:54 control-gcc-attempt4
+drwxr-xr-x@  14 erol  staff       448 Sep  9 16:00 control-gcc-attempt5
+-rw-r--r--    1 erol  staff     15593 Sep  9 15:58 control-headerfix-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1641907 Sep  9 15:58 control-headerfix.manifest.json
+-rw-r--r--    1 erol  staff    275109 Sep  9 15:48 control-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1641686 Sep  9 15:48 control.manifest.json
+-rw-r--r--    1 erol  staff      2437 Sep  9 17:14 inspect_a7_result.py
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:51 mac-lifetime-2351
+-rw-r--r--    1 erol  staff     13832 Sep  9 15:48 mac_evidence.py
+-rw-r--r--    1 erol  staff      4986 Sep  9 15:48 overlay.json
+-rw-r--r--    1 erol  staff      1240 Sep  9 16:11 pack_b2_mac_evidence.py
+drwxr-xr-x@  31 erol  staff       992 Sep  9 16:10 positive
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:03 positive-gcc-attempt1
+drwxr-xr-x@  23 erol  staff       736 Sep  9 17:42 positive-gcc-attempt10
+drwxr-xr-x    6 erol  staff       192 Sep  9 18:44 positive-gcc-attempt11
+drwxr-xr-x   27 erol  staff       864 Sep  9 18:51 positive-gcc-attempt12
+drwxr-xr-x@   5 erol  staff       160 Sep  9 18:56 positive-gcc-attempt13
+drwxr-xr-x@  27 erol  staff       864 Sep  9 18:59 positive-gcc-attempt13b
+drwxr-xr-x@  27 erol  staff       864 Sep  9 19:01 positive-gcc-attempt14
+drwxr-xr-x@  18 erol  staff       576 Sep  9 19:06 positive-gcc-attempt15
+drwxr-xr-x   18 erol  staff       576 Sep  9 19:21 positive-gcc-attempt16
+drwxr-xr-x    6 erol  staff       192 Sep  9 19:23 positive-gcc-attempt17
+drwxr-xr-x   27 erol  staff       864 Sep  9 19:24 positive-gcc-attempt18
+drwxr-xr-x@  27 erol  staff       864 Sep  9 19:33 positive-gcc-attempt19
+drwxr-xr-x@  23 erol  staff       736 Sep  9 16:06 positive-gcc-attempt2
+drwxr-xr-x@  30 erol  staff       960 Sep  9 19:40 positive-gcc-attempt20
+drwxr-xr-x@  27 erol  staff       864 Sep  9 16:09 positive-gcc-attempt3
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:30 positive-gcc-attempt4
+drwxr-xr-x@   7 erol  staff       224 Sep  9 16:36 positive-gcc-attempt5
+drwxr-xr-x@  23 erol  staff       736 Sep  9 16:47 positive-gcc-attempt6
+drwxr-xr-x@  23 erol  staff       736 Sep  9 17:03 positive-gcc-attempt7
+drwxr-xr-x@   6 erol  staff       192 Sep  9 17:24 positive-gcc-attempt8
+drwxr-xr-x@  23 erol  staff       736 Sep  9 17:26 positive-gcc-attempt9
+drwxr-xr-x@  28 erol  staff       896 Sep  9 16:14 positive-nogns-attempt1
+drwxr-xr-x@  27 erol  staff       864 Sep  9 19:42 positive-nogns-attempt2
+-rw-r--r--    1 erol  staff      7643 Sep  9 16:01 positive-overlay.json
+-rw-r--r--    1 erol  staff    365671 Sep  9 16:01 positive-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642032 Sep  9 16:01 positive.manifest.json
+-rw-r--r--    1 erol  staff      1909 Sep  9 17:41 positive10-overlay.json
+-rw-r--r--    1 erol  staff    122633 Sep  9 17:41 positive10-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642985 Sep  9 17:41 positive10.manifest.json
+-rw-r--r--    1 erol  staff      9038 Sep  9 18:44 positive11-overlay.json
+-rw-r--r--    1 erol  staff    492718 Sep  9 18:44 positive11-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643949 Sep  9 18:44 positive11.manifest.json
+-rw-r--r--    1 erol  staff       243 Sep  9 18:47 positive12-overlay.json
+-rw-r--r--    1 erol  staff     30035 Sep  9 18:47 positive12-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 18:47 positive12.manifest.json
+-rw-r--r--    1 erol  staff       487 Sep  9 18:56 positive13-overlay.json
+-rw-r--r--    1 erol  staff     86690 Sep  9 18:56 positive13-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 18:56 positive13.manifest.json
+-rw-r--r--    1 erol  staff       487 Sep  9 19:00 positive14-overlay.json
+-rw-r--r--    1 erol  staff     86710 Sep  9 19:00 positive14-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 19:00 positive14.manifest.json
+-rw-r--r--    1 erol  staff       243 Sep  9 19:06 positive15-overlay.json
+-rw-r--r--    1 erol  staff     30602 Sep  9 19:06 positive15-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643948 Sep  9 19:06 positive15.manifest.json
+-rw-r--r--    1 erol  staff       235 Sep  9 19:20 positive16-overlay.json
+-rw-r--r--    1 erol  staff     65990 Sep  9 19:20 positive16-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1643993 Sep  9 19:20 positive16.manifest.json
+-rw-r--r--    1 erol  staff      5152 Sep  9 19:21 positive17-overlay.json
+-rw-r--r--    1 erol  staff    319206 Sep  9 19:21 positive17-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:21 positive17.manifest.json
+-rw-r--r--    1 erol  staff       243 Sep  9 19:23 positive18-overlay.json
+-rw-r--r--    1 erol  staff     12360 Sep  9 19:23 positive18-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:23 positive18.manifest.json
+-rw-r--r--    1 erol  staff      1433 Sep  9 19:32 positive19-overlay.json
+-rw-r--r--    1 erol  staff    148239 Sep  9 19:32 positive19-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:32 positive19.manifest.json
+-rw-r--r--    1 erol  staff       247 Sep  9 16:05 positive2-overlay.json
+-rw-r--r--    1 erol  staff     56288 Sep  9 16:05 positive2-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642189 Sep  9 16:05 positive2.manifest.json
+-rw-r--r--    1 erol  staff       235 Sep  9 19:38 positive20-overlay.json
+-rw-r--r--    1 erol  staff     67090 Sep  9 19:38 positive20-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1644111 Sep  9 19:38 positive20.manifest.json
+-rw-r--r--    1 erol  staff       491 Sep  9 16:07 positive3-overlay.json
+-rw-r--r--    1 erol  staff     85448 Sep  9 16:07 positive3-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642189 Sep  9 16:07 positive3.manifest.json
+-rw-r--r--    1 erol  staff      1242 Sep  9 16:30 positive4-overlay.json
+-rw-r--r--    1 erol  staff     63599 Sep  9 16:30 positive4-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642505 Sep  9 16:30 positive4.manifest.json
+-rw-r--r--    1 erol  staff       702 Sep  9 16:36 positive5-overlay.json
+-rw-r--r--    1 erol  staff     53836 Sep  9 16:36 positive5-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642505 Sep  9 16:36 positive5.manifest.json
+-rw-r--r--    1 erol  staff      4098 Sep  9 16:45 positive6-overlay.json
+-rw-r--r--    1 erol  staff    198449 Sep  9 16:45 positive6-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642814 Sep  9 16:45 positive6.manifest.json
+-rw-r--r--    1 erol  staff       737 Sep  9 17:02 positive7-overlay.json
+-rw-r--r--    1 erol  staff     82880 Sep  9 17:02 positive7-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642814 Sep  9 17:02 positive7.manifest.json
+-rw-r--r--    1 erol  staff      1380 Sep  9 17:24 positive8-overlay.json
+-rw-r--r--    1 erol  staff    117385 Sep  9 17:24 positive8-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642984 Sep  9 17:24 positive8.manifest.json
+-rw-r--r--    1 erol  staff       247 Sep  9 17:25 positive9-overlay.json
+-rw-r--r--    1 erol  staff     56626 Sep  9 17:25 positive9-overlay.tar.gz
+-rw-r--r--    1 erol  staff   1642984 Sep  9 17:25 positive9.manifest.json
+drwx---rwx   11 erol  staff       352 Sep  9 18:36 resync-syntax-0138
+drwx---rwx   39 erol  staff      1248 Sep  9 18:39 resync-syntax-0144
+-rw-r--r--    1 erol  staff      3210 Sep  9 16:51 run_a7_mac.py
+-rw-r--r--    1 erol  staff      2350 Sep  9 16:09 run_b2_mac_game_checks.py
+-rw-r--r--    1 erol  staff      1835 Sep  9 19:40 run_b2_mac_native_control.py
+-rw-r--r--    1 erol  staff      3127 Sep  9 16:00 run_b2_mac_selftests.py
+-rw-r--r--    1 erol  staff      7737 Sep  9 17:25 run_b2_mac_ui.py
+-rw-r--r--    1 erol  staff      7593 Sep  9 16:00 run_mac_cases_roundtrip.py
+-rw-r--r--    1 erol  staff      2412 Sep  9 16:51 test_a7_mac_lifetime.py
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:33 ui-basic-attempt1
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:34 ui-basic-attempt2
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:37 ui-basic-attempt3
+drwxr-xr-x@  12 erol  staff       384 Sep  9 16:41 ui-basic-attempt4
+drwxr-xr-x@  12 erol  staff       384 Sep  9 17:04 ui-basic-attempt5
+drwxr-xr-x@  13 erol  staff       416 Sep  9 17:39 ui-basic-attempt6
+===== NESTED_GIT_UNDER_CODEX =====
+/Users/erol/Documents/Codex/cortex-b2-review-20260909/positive/.git
+/Users/erol/Documents/Codex/cortex-b2-review-20260909/control/.git
+===== END =====

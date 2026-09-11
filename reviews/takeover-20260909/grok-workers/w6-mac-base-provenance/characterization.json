@@ -1,0 +1,308 @@
+[
+  {
+    "path": "Source/Activities/GAScripted.h",
+    "mac_vs_head_added_lines": 176,
+    "mac_vs_head_keywords": [
+      "GlobalScript",
+      "GAScripted",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Entities/Actor.cpp",
+    "mac_vs_head_added_lines": 2285,
+    "mac_vs_head_keywords": [
+      "LoadCheckpoint",
+      "NativeCheckpoint",
+      "PostProcess",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Entities/Actor.h",
+    "mac_vs_head_added_lines": 1199,
+    "mac_vs_head_keywords": [
+      "ContractAudit",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Entities/Gib.cpp",
+    "mac_vs_head_added_lines": 82,
+    "mac_vs_head_keywords": [],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Entities/GlobalScript.cpp",
+    "mac_vs_head_added_lines": 180,
+    "mac_vs_head_keywords": [
+      "GlobalScript"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Entities/GlobalScript.h",
+    "mac_vs_head_added_lines": 118,
+    "mac_vs_head_keywords": [
+      "GlobalScript",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/GUI/GUIBanner.cpp",
+    "mac_vs_head_added_lines": 444,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "GUICheckpoint",
+      "GUIBanner"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/GUI/GUIBanner.h",
+    "mac_vs_head_added_lines": 233,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "GUICheckpoint",
+      "GUIBanner"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/GUI/GUIFont.h",
+    "mac_vs_head_added_lines": 111,
+    "mac_vs_head_keywords": [
+      "GUICheckpoint"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/GUI/GUIInput.cpp",
+    "mac_vs_head_added_lines": 214,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.cpp",
+    "mac_vs_head_added_lines": 600,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "RunCheckpointSelfTest",
+      "GUICheckpoint",
+      "PostProcess"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.h",
+    "mac_vs_head_added_lines": 252,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "RunCheckpointSelfTest",
+      "ContractAudit",
+      "PostProcess"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Managers/PrimitiveMan.h",
+    "mac_vs_head_added_lines": 14,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "ResolveCheckpoint",
+      "RunCheckpointSelfTest",
+      "SetAsideQueues",
+      "ReinstateQueues",
+      "PrimitiveQueuesSetAside",
+      "QueuesSetAside",
+      "GetCheckpointPrimitive",
+      "FindCheckpoint"
+    ],
+    "parked_vs_mac_head": "PARTIAL",
+    "parked_vs_mac_head_note": "parked_added_lines=13 overlap=12 mac_only_added_lines=2",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Menus/BuyMenuGUI.h",
+    "mac_vs_head_added_lines": 552,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "GUICheckpoint",
+      "BuyMenu"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Menus/InventoryMenuGUI.h",
+    "mac_vs_head_added_lines": 423,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "GUICheckpoint",
+      "InventoryMenu",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.cpp",
+    "mac_vs_head_added_lines": 27,
+    "mac_vs_head_keywords": [
+      "OwnBitmap",
+      "OwnVertices",
+      "m_ImageOwners"
+    ],
+    "parked_vs_mac_head": "EXPLAINED_BY_PARKED_PATCH",
+    "parked_vs_mac_head_note": "parked_added_lines=25 overlap=25 mac_only_added_lines=0",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.h",
+    "mac_vs_head_added_lines": 20,
+    "mac_vs_head_keywords": [
+      "SaveCheckpoint",
+      "LoadCheckpoint",
+      "ResolveCheckpoint",
+      "OwnBitmap",
+      "OwnVertices",
+      "m_ImageOwners",
+      "m_VertexOwners",
+      "m_SpriteOwner"
+    ],
+    "parked_vs_mac_head": "PARTIAL",
+    "parked_vs_mac_head_note": "parked_added_lines=15 overlap=14 mac_only_added_lines=3",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "Source/System/ContractAudit.h",
+    "mac_vs_head_added_lines": 1997,
+    "mac_vs_head_keywords": [
+      "ContractAudit",
+      "m_ImageOwners",
+      "m_VertexOwners",
+      "m_SpriteOwner",
+      "GetCheckpointPrimitive",
+      "PostProcess",
+      "BuyMenu",
+      "InventoryMenu",
+      "GlobalScript",
+      "GAScripted",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "tools/contracts/AUDIT.md",
+    "mac_vs_head_added_lines": 2,
+    "mac_vs_head_keywords": [],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "tools/fixtures/mod_checkpoint.lua",
+    "mac_vs_head_added_lines": 447,
+    "mac_vs_head_keywords": [
+      "mod_checkpoint",
+      "Actor"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  },
+  {
+    "path": "tools/run_restoration_tests.py",
+    "mac_vs_head_added_lines": 160,
+    "mac_vs_head_keywords": [
+      "GlobalScript"
+    ],
+    "parked_vs_mac_head": "UNEXPLAINED",
+    "parked_vs_mac_head_note": "parked patch does not touch this path",
+    "parked_vs_60cb": "UNEXPLAINED",
+    "parked_vs_60cb_note": "win-vs-mac unified diff empty after strip-trailing-cr; parked hunks do not account for a content delta that is not present",
+    "win_vs_mac_diff_bytes": 0
+  }
+]

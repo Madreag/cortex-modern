@@ -1,0 +1,30 @@
+command: python grok-workers/w4-breadth-harness/run_pin_verify.py
+run_breadth.py: D:\Projects\reviews\takeover-20260909\run_breadth.py
+build_manifest: D:\Projects\reviews\recovery-2026-09-07\contract-audit\grouped-build-bb3cf264\build.json
+Pin.verify(artifacts=True)
+
+# 1. before D:\mx\s41b4 launch
+result: pass
+{
+  "head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "source_files": 9043,
+  "verified_utc": "2026-09-11T05:11:03Z"
+}
+
+# 2. before D:\mx\s41b4-extra2 launch (same script; overwrote this file at the time)
+result: pass
+{
+  "head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "source_files": 9043,
+  "unchanged_vendor_font_samples": {
+    "Source/GUI/imgui/misc/fonts/Cousine-Regular.ttf": "0d5d5eeb6a342432bd63a3c0d16e8470160e019933ee5af3e159d06d665dacce",
+    "Source/GUI/imgui/misc/fonts/DroidSans.ttf": "4e2371bc0e4cf6983342e150412f140da79d674c9be0b56458401f581072ecd3",
+    "Source/GUI/imgui/misc/fonts/Karla-Regular.ttf": "907c55a993e35b3ae4f3b8b8c28367f4b6d431df8e9ca6fbd382d8317dd3684e",
+    "Source/GUI/imgui/misc/fonts/ProggyClean.ttf": "527d2a443ce051f93f7e77b855609722b8cb220a9f104b4aa037be5c90b71324",
+    "Source/GUI/imgui/misc/fonts/ProggyTiny.ttf": "79bf8d3896ba83ae2f9c4fa214dce8fc689eae47950474947a4cc5c6e14a9bfc",
+    "Source/GUI/imgui/misc/fonts/Roboto-Medium.ttf": "8559132c89ad51d8a2ba5b171887a44a7ba93776e205f553573de228e64b45f8"
+  },
+  "verified_utc": "2026-09-11T05:15:54Z"
+}

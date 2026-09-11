@@ -1,0 +1,149 @@
+[
+  {
+    "path": "Source/Activities/GAScripted.h",
+    "mac_size": 8658,
+    "head_blob_size": 8482,
+    "delta": 176,
+    "mac_sha256": "07c9855e8c75784e4ae75f990bc4953125db44b81f7ab4f27b4f52eedcfa3703"
+  },
+  {
+    "path": "Source/Entities/Actor.cpp",
+    "mac_size": 96437,
+    "head_blob_size": 94175,
+    "delta": 2262,
+    "mac_sha256": "5d37ba4913c55b224ca49206e388dbf68390bce66fea430d82155b43aa7237e5"
+  },
+  {
+    "path": "Source/Entities/Actor.h",
+    "mac_size": 57077,
+    "head_blob_size": 55881,
+    "delta": 1196,
+    "mac_sha256": "7ca9a5d06d575dee5af9106c5a8d2085a4983907d4007c0e07a6f24e7a14e79d"
+  },
+  {
+    "path": "Source/Entities/Gib.cpp",
+    "mac_size": 4296,
+    "head_blob_size": 4214,
+    "delta": 82,
+    "mac_sha256": "ab5dbc97c229ed52b55b0b7b7bf30d22c0b0390456aae8c6f1bd87d62c59eff6"
+  },
+  {
+    "path": "Source/Entities/GlobalScript.cpp",
+    "mac_size": 5580,
+    "head_blob_size": 5400,
+    "delta": 180,
+    "mac_sha256": "bc4bda01e4905b3f444e478704ca02b35745c5d3122af1bd0c335382a6b13cc2"
+  },
+  {
+    "path": "Source/Entities/GlobalScript.h",
+    "mac_size": 5680,
+    "head_blob_size": 5562,
+    "delta": 118,
+    "mac_sha256": "48557ff894add482ba6df31903f2bc8c94d15f0082b7eaabd68effd061dd5e80"
+  },
+  {
+    "path": "Source/GUI/GUIBanner.cpp",
+    "mac_size": 16625,
+    "head_blob_size": 16208,
+    "delta": 417,
+    "mac_sha256": "254e0bc3327dd841f30dce292abed82db59f9cf7de5f8d7cce2fef13231c2328"
+  },
+  {
+    "path": "Source/GUI/GUIBanner.h",
+    "mac_size": 8755,
+    "head_blob_size": 8527,
+    "delta": 228,
+    "mac_sha256": "13aec953102e5d4d1d87060fd4fc339ebec039ada215ee17aab537af59aa2e37"
+  },
+  {
+    "path": "Source/GUI/GUIFont.h",
+    "mac_size": 3097,
+    "head_blob_size": 2988,
+    "delta": 109,
+    "mac_sha256": "f64497163a7a9b81d8f046d3de72e8321f305b6b07aa991cdcfa1cdb5c3fb5a5"
+  },
+  {
+    "path": "Source/GUI/GUIInput.cpp",
+    "mac_size": 6557,
+    "head_blob_size": 6371,
+    "delta": 186,
+    "mac_sha256": "be452b616f4a1900a4dcc68b60fcd43281245271e910336d51accf3113a1601a"
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.cpp",
+    "mac_size": 29696,
+    "head_blob_size": 29253,
+    "delta": 443,
+    "mac_sha256": "5abd1b549b00367116e11563373f4cf9b832655ce5dabea78d219f33fe988333"
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.h",
+    "mac_size": 15013,
+    "head_blob_size": 14768,
+    "delta": 245,
+    "mac_sha256": "45196f1897b36fa6206126357376e63091045602f6188f142e54ce2b8901695d"
+  },
+  {
+    "path": "Source/Managers/PrimitiveMan.h",
+    "mac_size": 31628,
+    "head_blob_size": 31616,
+    "delta": 12,
+    "mac_sha256": "676793d17c3d85995c1c4a2f610e578d8dea987fee613f37ca78baf0a056d551"
+  },
+  {
+    "path": "Source/Menus/BuyMenuGUI.h",
+    "mac_size": 24952,
+    "head_blob_size": 24401,
+    "delta": 551,
+    "mac_sha256": "ec82fb644f8ff422e3177558addb1dc7044b9401b05affc758cdd9a00eb9526a"
+  },
+  {
+    "path": "Source/Menus/InventoryMenuGUI.h",
+    "mac_size": 26990,
+    "head_blob_size": 26568,
+    "delta": 422,
+    "mac_sha256": "15c2bdc076d2d47a7e91fe978bc1f1b18965349fa4d7725d863eec8e193a5c93"
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.cpp",
+    "mac_size": 14385,
+    "head_blob_size": 14358,
+    "delta": 27,
+    "mac_sha256": "d5f25ba07e8357afbe71684287c659a3743205a6acd9d15751d5b998180182a9"
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.h",
+    "mac_size": 28495,
+    "head_blob_size": 28481,
+    "delta": 14,
+    "mac_sha256": "5f50a1092e1e21a2c9b0916ca930a470b9b60a502ced1ca04deec5f202e21158"
+  },
+  {
+    "path": "Source/System/ContractAudit.h",
+    "mac_size": 130221,
+    "head_blob_size": 128604,
+    "delta": 1617,
+    "mac_sha256": "9e30d6c451c3f836f16cf4780e08429d93e993d94a43bb895d306b14e0c73a40"
+  },
+  {
+    "path": "tools/contracts/AUDIT.md",
+    "mac_size": 24445,
+    "head_blob_size": 24443,
+    "delta": 2,
+    "mac_sha256": "4c112c3278362e765dcd7c7ae85142de719377fdb3ec2d5a85872e852b3db9e3"
+  },
+  {
+    "path": "tools/fixtures/mod_checkpoint.lua",
+    "mac_size": 34814,
+    "head_blob_size": 34367,
+    "delta": 447,
+    "mac_sha256": "93efdfbdad4b4cd81634c1e5a3069b3808c8a1858ea73b558b91a3700d418264"
+  },
+  {
+    "path": "tools/run_restoration_tests.py",
+    "mac_size": 10652,
+    "head_blob_size": 10518,
+    "delta": 134,
+    "mac_sha256": "8352b428aaeedc59f926c58c2ab7c954dabbd638aafd15a0f87f90beba1886cc"
+  }
+]

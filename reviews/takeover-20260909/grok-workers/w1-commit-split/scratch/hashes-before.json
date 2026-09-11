@@ -1,0 +1,452 @@
+{
+  "Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini": {
+    "sha256": "62eb3a432850771d8a43c865f9682c8f2e2d719cc6e13be0e99f82bc776bd33e",
+    "size": 20085,
+    "status": "committed-or-absent"
+  },
+  "Data/Tests.rte/Activities.ini": {
+    "sha256": "f3f60a2b72bd94a6a84cecaf020a030045636733dae599b073820571e03538e3",
+    "size": 6451,
+    "status": " M"
+  },
+  "Data/Tests.rte/Activities/NetLifecycleTest.lua": {
+    "sha256": "3f51c496803c3b94c4351c55bac82cc380674d6b6e8c587b2d9accc52d1d4705",
+    "size": 1561,
+    "status": "??"
+  },
+  "RTEA.vcxproj": {
+    "sha256": "ca0a75d9326b79d003132730d7fb4a34eb64be330f2b315afb3213b1c7134f53",
+    "size": 120513,
+    "status": " M"
+  },
+  "RTEA.vcxproj.filters": {
+    "sha256": "929abc7898c5bd20e4510c1062df276d65704fbac8c24d6e7affc93d57654681",
+    "size": 55120,
+    "status": " M"
+  },
+  "Source/Activities/GameActivity.cpp": {
+    "sha256": "cb0e5df7909f3169ba7c3fe76397986272791014954211ebf21879f56bf25af3",
+    "size": 151214,
+    "status": " M"
+  },
+  "Source/Activities/GameActivity.h": {
+    "sha256": "c3c1a050525bbfcc8553c3b02aa911fd6be05e7f044c1b62395ed4aef772a954",
+    "size": 33523,
+    "status": " M"
+  },
+  "Source/CI/NetModerationGUIProbe.cpp": {
+    "sha256": "53893edce6793d3249e16eb95a64f26adf5a39bdffa1e954f3d81b7a021bafee",
+    "size": 11223,
+    "status": "??"
+  },
+  "Source/CI/NetModerationGUIProbe.h": {
+    "sha256": "5730b0a0d2ae2130b9790428eaf228a330db94f6b2003b860efa0d1fd3316973",
+    "size": 227,
+    "status": "??"
+  },
+  "Source/CI/meson.build": {
+    "sha256": "9749e549993d41ce056222f84a6d0e5a7db11b5dd694563608d7506dbe8c9d25",
+    "size": 73,
+    "status": " M"
+  },
+  "Source/Entities/ACraft.cpp": {
+    "sha256": "3d4e7b6c4d29c7366fd80885f94a020291aa8031e9c35059b9fbca35c22b8d68",
+    "size": 38995,
+    "status": " M"
+  },
+  "Source/Entities/ACraft.h": {
+    "sha256": "29874bdc95d330acfcb4b17effa277f88c64c90daeb6289586c05bc25328d002",
+    "size": 20837,
+    "status": " M"
+  },
+  "Source/Entities/AHuman.cpp": {
+    "sha256": "c844e604687d03b4d5e9dc21125149b4b9cf18b689e60bc38cbc2ee355a9769b",
+    "size": 151055,
+    "status": " M"
+  },
+  "Source/Entities/Activity.cpp": {
+    "sha256": "59cc273d4d2d27f0e5265ac5edd5cfd26c7d7fcdb639f2a8c655221791adf272",
+    "size": 48312,
+    "status": " M"
+  },
+  "Source/Entities/Activity.h": {
+    "sha256": "93b9802313bb7fcbce2b9707ed1f648e26667b6fc9105d55821c2539d5d3597b",
+    "size": 36884,
+    "status": " M"
+  },
+  "Source/Entities/MovableObject.cpp": {
+    "sha256": "2becb5807d5321a34a2ef718d30d0fe5bc1df4e08855d04a67986ab3f00fab4f",
+    "size": 67897,
+    "status": " M"
+  },
+  "Source/Entities/MovableObject.h": {
+    "sha256": "66cc773b87431ff23875f81f088f09df93b6c86c93519f1db0fc61b86a445d5c",
+    "size": 78058,
+    "status": " M"
+  },
+  "Source/GUI/GUICheckpoint.h": {
+    "sha256": "9ea15309535501e99b57a30fd3c22ff3c6b27f6cfb3d00d1b6d32349080d9edb",
+    "size": 4430,
+    "status": " M"
+  },
+  "Source/GUI/GUIControlManager.cpp": {
+    "sha256": "5ac44c490bb4b85d93d4ac41adc38e5e38fb3911a339c8e690290ee216ef2c00",
+    "size": 102076,
+    "status": " M"
+  },
+  "Source/Main.cpp": {
+    "sha256": "de4a7b4ddf75bc0358240a48651874cffbdfad48945904dd9bab03f37f1927b3",
+    "size": 191777,
+    "status": " M"
+  },
+  "Source/Managers/ActivityMan.cpp": {
+    "sha256": "f062df1ee7647d3406f2a0733ff6b956a0979422af7b74e325656d0547284f39",
+    "size": 62139,
+    "status": " M"
+  },
+  "Source/Managers/ActivityMan.h": {
+    "sha256": "e7fdaa94d8178771bc4652661ed831c73578a26206424648603d3925b2492588",
+    "size": 16200,
+    "status": " M"
+  },
+  "Source/Managers/FrameMan.cpp": {
+    "sha256": "dc93f401a56a7989a002b050e05f708c7291d2e01234b67253f99dc69cc1b07f",
+    "size": 63142,
+    "status": " M"
+  },
+  "Source/Managers/FrameMan.h": {
+    "sha256": "20dbce862df349a74862fb4f7fa58176febafaea53a604da54a1f4569565bb13",
+    "size": 27527,
+    "status": " M"
+  },
+  "Source/Managers/LuaMan.cpp": {
+    "sha256": "8cbc1fc0f24c24d32e68eaf50b0c213ef02d181c412ca1d28e9a3e202ec9b8c3",
+    "size": 310094,
+    "status": " M"
+  },
+  "Source/Managers/LuaMan.h": {
+    "sha256": "6288ed7b63f79355d12da4438591fa2f4672a892dbf9e5957aad07cbfe219a8e",
+    "size": 35495,
+    "status": " M"
+  },
+  "Source/Managers/MenuMan.cpp": {
+    "sha256": "d8cb7bd4a46c74a7e0318c0440313aa04bb1aebc79dcdc57e630b7bdb65d4f7f",
+    "size": 11175,
+    "status": " M"
+  },
+  "Source/Managers/MenuMan.h": {
+    "sha256": "6dfd7b11dbf413e31af1b0d28c7d32c99a89af38c8a03d21111131faf0fa1a9f",
+    "size": 4675,
+    "status": " M"
+  },
+  "Source/Managers/MovableMan.cpp": {
+    "sha256": "fe7d749a248d5e089b1bc5ca2283e7e43dcdf81b9bc5fd5944da08a0e3f59636",
+    "size": 199466,
+    "status": " M"
+  },
+  "Source/Managers/MovableMan.h": {
+    "sha256": "74287d8fe148bd386690716797982ff803e761577377f65d6a61d9a33d9cfc92",
+    "size": 53248,
+    "status": " M"
+  },
+  "Source/Managers/PresetMan.cpp": {
+    "sha256": "4ddf0bdb2d127ca78f50b6d0832a28d7b86135a8e3cb9ffbe21877d4214323e5",
+    "size": 37551,
+    "status": " M"
+  },
+  "Source/Managers/UInputMan.cpp": {
+    "sha256": "be3f12c9fbe1bdc893410b2e6ad783e4e38aee31d62c3e7dbd739d4969d35b61",
+    "size": 68970,
+    "status": " M"
+  },
+  "Source/Managers/UInputMan.h": {
+    "sha256": "803767fc1ad561c6d83ff2a1db37cd5b8e93c0f0cb2ca1dcd2d2c411802e91ad",
+    "size": 37980,
+    "status": " M"
+  },
+  "Source/Menus/InventoryMenuGUI.cpp": {
+    "sha256": "dd074d8ec0933750851b6d02c0d967bcebc3dc1c1390fa1515cbc38b01f74681",
+    "size": 82391,
+    "status": " M"
+  },
+  "Source/Menus/MainMenuGUI.cpp": {
+    "sha256": "de17b7faf8535b33a380032b65b1d1019ef9ab0fa98afebbc90b604733fd50a6",
+    "size": 62570,
+    "status": " M"
+  },
+  "Source/Menus/MainMenuGUI.h": {
+    "sha256": "d33cddf3b39feb548b5f1280f77b1571d57b9c9b9ee296b257f3e3eebcb418db",
+    "size": 15965,
+    "status": " M"
+  },
+  "Source/Menus/NetModerationGUI.cpp": {
+    "sha256": "664356ddacd3f70cf80eda62bfe9b8fd89e154eafdbd95ac5af5194b63432b6c",
+    "size": 10481,
+    "status": "??"
+  },
+  "Source/Menus/NetModerationGUI.h": {
+    "sha256": "679f9151c6b40b85441c4d147c3bf2441df9fb3884e46973dea7c504f19069ae",
+    "size": 1588,
+    "status": "??"
+  },
+  "Source/Menus/SceneEditorGUI.cpp": {
+    "sha256": "b4a5f948fbff0df88041a911f29f702b1bfd8202c8d793a9983726b19ee550aa",
+    "size": 67620,
+    "status": " M"
+  },
+  "Source/Menus/SceneEditorGUI.h": {
+    "sha256": "981674af5a64ad553a4a93cd8f7858bf3e997a66d811047e1eef7ecd72d3d4b1",
+    "size": 12324,
+    "status": " M"
+  },
+  "Source/Menus/meson.build": {
+    "sha256": "7875ca5ca935eff5521be5a8682dded1cd2cb9ffecc2f3aa1b903a890d612f07",
+    "size": 621,
+    "status": " M"
+  },
+  "Source/Network/LoopbackTransport.cpp": {
+    "sha256": "4034439b4c881d3c0fe8185f05eef6d7b45eea4fb6d1cabbd9cce56bba384d8e",
+    "size": 9725,
+    "status": "committed-or-absent"
+  },
+  "Source/Network/LoopbackTransport.h": {
+    "sha256": "bd76164b4c2f37e3fcd99e70ca5164f19af87d58d12cdaa535488ccabcff0f09",
+    "size": 4024,
+    "status": "committed-or-absent"
+  },
+  "Source/Network/NetA7Journal.cpp": {
+    "sha256": "943e3b048ef31db088d2946a5b4afead453535efe76081a1b10ceecf0f08787d",
+    "size": 24907,
+    "status": "??"
+  },
+  "Source/Network/NetA7Journal.h": {
+    "sha256": "a2d322779cb9441ce521a9e1802e728969111df87ea9073d8d996e5690957f8b",
+    "size": 2354,
+    "status": "??"
+  },
+  "Source/Network/NetGameCommand.cpp": {
+    "sha256": "b7c65f81880c9f08b9985048a9c9654abf637c9d3b7045bf059b013e64941c08",
+    "size": 2944,
+    "status": " M"
+  },
+  "Source/Network/NetGameCommand.h": {
+    "sha256": "13657fcba0d07f08058cdc18797f767b81557994670b995472d373f9cb8143a8",
+    "size": 8806,
+    "status": " M"
+  },
+  "Source/Network/NetLobbyProtocol.cpp": {
+    "sha256": "56d62f8795765293b80edda9e5e324ef433cd8bce6b9e51ecbcf46171a6406ff",
+    "size": 29400,
+    "status": " M"
+  },
+  "Source/Network/NetLobbyProtocol.h": {
+    "sha256": "c81883774e6bfc68a44b6ca1359808e3c4538e4793a7f4a9036f98e28d9e46bd",
+    "size": 4223,
+    "status": " M"
+  },
+  "Source/Network/NetLobbySession.cpp": {
+    "sha256": "a4b461fc8a1b9871656ab828897d60757d52679bf1885a6f72d48133bbf82559",
+    "size": 31010,
+    "status": " M"
+  },
+  "Source/Network/NetLobbySession.h": {
+    "sha256": "8d59e93cba19d1dd5f71b923eef1cdb0e4a9be8b7c952ba2c4211005cdd5514c",
+    "size": 7794,
+    "status": " M"
+  },
+  "Source/Network/NetLobbySnapshot.h": {
+    "sha256": "57ba5b9eded9d33da7232e55c90c4bccdccb006c415e3ea9cfe0af35f8ca6677",
+    "size": 1381,
+    "status": "committed-or-absent"
+  },
+  "Source/Network/NetLockstep.cpp": {
+    "sha256": "27b62d7de8708f7e025bb2ea5e87fde5bd36f3587414421c92aebe374a620a70",
+    "size": 214218,
+    "status": " M"
+  },
+  "Source/Network/NetLockstep.h": {
+    "sha256": "cfd57c26a393ac37debc3ca552f1fc26a9503e70d2663d12fabe5c70d367767c",
+    "size": 43404,
+    "status": " M"
+  },
+  "Source/Network/NetLockstepSelfTest.cpp": {
+    "sha256": "28c0928b88cacd6ab12d82fbfcd83af5464c981ef3ede2e750208cd55672bb06",
+    "size": 335180,
+    "status": " M"
+  },
+  "Source/Network/NetMatchRunner.cpp": {
+    "sha256": "0515def28163a752c1d3bcccf90dd4fb046ab35f31f705cdf572dafad4cf3320",
+    "size": 19455,
+    "status": " M"
+  },
+  "Source/Network/NetMatchRunner.h": {
+    "sha256": "f6dea48d592883756e7f11497f5eccad08ed2358d8c1d2de13e99498346c4222",
+    "size": 5242,
+    "status": " M"
+  },
+  "Source/Network/NetMatchSelfTest.cpp": {
+    "sha256": "86279d16d239bfa1c33ab4d210134cea7d5fc86a1b3b348253785094296530a7",
+    "size": 59360,
+    "status": " M"
+  },
+  "Source/Network/NetMatchService.cpp": {
+    "sha256": "0b7b9ec0d84cf4e7e39caa70b1974f71df0e21da76c0b0d1ed29d196825e0aef",
+    "size": 62947,
+    "status": " M"
+  },
+  "Source/Network/NetMatchService.h": {
+    "sha256": "762829ee45bf96a2d4898e1982449f000b3722a6baf969d0d1c20986568b1865",
+    "size": 12479,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectSession.cpp": {
+    "sha256": "082d77c0b9c17fdecd9d4fc44c9d11702986c2d9cc323a1220a08f066e31f121",
+    "size": 94863,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectSession.h": {
+    "sha256": "0f1ac9367445c1b9d475fa1d344b206bd06a33d55d52b5c627da6092327322a6",
+    "size": 31399,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectSessionSelfTest.cpp": {
+    "sha256": "7dbd58df0973d07fbc1addde7cd10d44ca157a5aaedf76d3f508612098c8c46b",
+    "size": 265295,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectTicketStore.cpp": {
+    "sha256": "a09d9e6c11ddee7e11a974f9e3a10626a4c2d7126b95b6994ccd4c112c067c16",
+    "size": 9549,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectTicketStore.h": {
+    "sha256": "e40d84a8c79ae4ed46052e113b1c6ab25d3e338622619ac8c8e499c1dc580812",
+    "size": 3388,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectTxCache.cpp": {
+    "sha256": "b1774b06b4fe6a079f75841585bde7646e7a0070da0fc6048934b120243777ae",
+    "size": 2418,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectTxCache.h": {
+    "sha256": "0c220de2a78de3643455e338fe7b54ce5ba9ecac6c43d306876c92e0a2124599",
+    "size": 3153,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectUx.cpp": {
+    "sha256": "01571bf938d5e66110000a64ef459318287e483e25b24454e35901f0f9e3871a",
+    "size": 14422,
+    "status": " M"
+  },
+  "Source/Network/NetReconnectUx.h": {
+    "sha256": "1037fdd47e2ef4b6ba04417205b62be03f7537efbb0e3cec1f316ac161c36b62",
+    "size": 8214,
+    "status": " M"
+  },
+  "Source/Network/NetRecoveryJournal.cpp": {
+    "sha256": "8696f61952b96052bdade32af2a31ce8165221352c85ee61ac368589045940aa",
+    "size": 9348,
+    "status": "??"
+  },
+  "Source/Network/NetRecoveryJournal.h": {
+    "sha256": "25c47408aa1478c189594bb0e5f531f3cf2fbe1fd8e426e664e5bd207c9156fa",
+    "size": 988,
+    "status": "??"
+  },
+  "Source/Network/NetResyncRuntimeSelfTest.cpp": {
+    "sha256": "8e661f4f58f394f34ff6c658a2269552b5382e49b3cd76f6f58fa9170f20aa72",
+    "size": 77956,
+    "status": "??"
+  },
+  "Source/Network/NetResyncRuntimeSelfTest.h": {
+    "sha256": "00d90d079b7197e04d48bf77b88a325a7ace7be3d8187238a032e44b50e14da7",
+    "size": 118,
+    "status": "??"
+  },
+  "Source/Network/NetResyncSelfTest.cpp": {
+    "sha256": "fbba9f9b98fdf9bc6cb73c3a6d201d31921ba073c7037368839ce9bf8cf7e7b2",
+    "size": 35196,
+    "status": "??"
+  },
+  "Source/Network/NetResyncSelfTest.h": {
+    "sha256": "2d2c63d3dfcf95087c3a5d364f9f7e1e75bdb6e3baac9da338d852cdf50f569f",
+    "size": 111,
+    "status": "??"
+  },
+  "Source/Network/NetResyncState.cpp": {
+    "sha256": "79344a583dba96d3f515f717e6c6a32d2f0f230a772c5685105aa6e90c09fefb",
+    "size": 16890,
+    "status": "??"
+  },
+  "Source/Network/NetResyncState.h": {
+    "sha256": "fdd0fda3da91c9ab789c20f29404bb685c3f8919ca77da1fd97918c7bc4f7fda",
+    "size": 1919,
+    "status": "??"
+  },
+  "Source/Network/NetSession.cpp": {
+    "sha256": "43b5f426dfde8a1c45152dad82395cd1909df9d5fde6bd9c5c510558d4d15861",
+    "size": 61658,
+    "status": " M"
+  },
+  "Source/Network/NetSession.h": {
+    "sha256": "da0f8c57a7dece80a9cde039977ba68008590e76a2b31c942a002da986325621",
+    "size": 12852,
+    "status": " M"
+  },
+  "Source/Network/meson.build": {
+    "sha256": "ef35033188de64dcf1b355b5b81239d605970e5f8ffb2fae08df5d10df9c9243",
+    "size": 1011,
+    "status": " M"
+  },
+  "Source/System/Controller.cpp": {
+    "sha256": "e0257357c2c33a1669dfbab2b129a1df012f5c4412c5e6cfc31feadfc02f55c9",
+    "size": 28385,
+    "status": " M"
+  },
+  "Source/System/Controller.h": {
+    "sha256": "a8509be89fa264938fab9684997d295dbb3e6f60b0eed955b4ea42724e09a047",
+    "size": 21435,
+    "status": " M"
+  },
+  "Source/System/ScenarioRunner.cpp": {
+    "sha256": "8520d8a2f854a7843b235e212cb8d8221dc26ed1867fa7e24239a96b0a8c8904",
+    "size": 72619,
+    "status": " M"
+  },
+  "Source/System/ScenarioRunner.h": {
+    "sha256": "d85f6f0e377796cfba451cee2768648ef0980f84791079ba3813d9238afeb7b4",
+    "size": 17249,
+    "status": " M"
+  },
+  "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib": {
+    "sha256": "879882eabd6a1ba2062ee805994b07150dd03b29857faaedf2f5cbb838c9ecfd",
+    "size": 2312380,
+    "status": " M"
+  },
+  "external/sources/luabind-0.7.1/_Bin/luabind-release.lib": {
+    "sha256": "74dc96e24523b5c43f29974d1070492cc33f679f25adcbe25aedd50829f93090",
+    "size": 953448,
+    "status": " M"
+  },
+  "tools/compare_snapshots.py": {
+    "sha256": "5843330c5d4be7585c99c0d713be990ff92653bc6249b9633534baabba676fb6",
+    "size": 39781,
+    "status": " M"
+  },
+  "tools/h4_substitution_gates.py": {
+    "sha256": "e2511c3c5730708dfe28c3e07aa4a7699fbb174a941b6b960792bb21a16fd0f8",
+    "size": 28644,
+    "status": "committed-or-absent"
+  },
+  "tools/test_menu_lifecycle.py": {
+    "sha256": "e4ed379ffbc0eb0edb2e487c335986358ad24c2572fe5146977738bd5608674b",
+    "size": 4287,
+    "status": "committed-or-absent"
+  },
+  "tools/test_snapshot_inventory_roles.py": {
+    "sha256": "80ac96f9843a3e7368957e5f97d914b6780be04f795fd98c89f0e102bc8c1d82",
+    "size": 8201,
+    "status": "??"
+  }
+}

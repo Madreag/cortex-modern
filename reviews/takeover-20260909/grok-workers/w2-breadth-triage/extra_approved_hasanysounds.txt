@@ -1,0 +1,8 @@
+12|ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+14|SoundSet:HasAnySounds(boolean) const
+38|ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+40|SoundSet:HasAnySounds(boolean) const
+43|ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+45|SoundSet:HasAnySounds(boolean) const
+48|ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+50|SoundSet:HasAnySounds(boolean) const

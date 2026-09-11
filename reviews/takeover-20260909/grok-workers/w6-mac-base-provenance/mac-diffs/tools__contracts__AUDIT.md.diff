@@ -1,0 +1,15 @@
+diff --git a/tools/contracts/AUDIT.md b/tools/contracts/AUDIT.md
+index 7faf3e7ad..4199c8f58 100644
+--- a/tools/contracts/AUDIT.md
++++ b/tools/contracts/AUDIT.md
+@@ -158,8 +158,8 @@ instrumentation changes only. No production repair has been made during the audi
+ 5. Gate full per-peer restoration separately from strict shared simulation equality, then
+    run the declared restoration, failure, prediction and normal multiplayer matrix on one
+    unchanged build. Fresh H4/cross-platform work and the full roadmap remain open.
+-
+-
++
++
+ 18:26 UTC: `native-check-control-2` is valid: before/capture/save checks pass all 1,465 getter values on 24 native owners; memory and file restore each fail exactly 62 checks. Full mismatch lists are retained in each console/result. `activity-check-control-2` has no errors, zero direct deltas and 28/28 getter checks before/after. `direct-activity-1` is running its six transitions. The observer-8 executable and symbols are retained in `observer-65c51ea6`.
+ 
+ ## Collected repair baseline — 18:39 UTC

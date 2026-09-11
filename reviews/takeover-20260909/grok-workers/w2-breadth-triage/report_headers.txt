@@ -1,0 +1,64 @@
+25|## 0. A provenance change that landed mid-lane, and what it does to the PowerShell gates
+54|## 1. Semantic gameplay battery — 10/10 lanes, all six semantic lines identical to Source32
+97|## 2. Interp matrix — 16/16 substantive, including the `mismatch` case that was Source32's only red
+157|## 3. Fake-lag duel at 200 ms with the 100 ms control — both PASS
+192|## 4. Prediction invariance at tick 300 — PASS, control fires on all eight
+226|## 5. H4 Phase A §9a two-peer gates — 3 PASS / 5 FAIL, after four driver defects
+240|### 5.1 The four driver fixes (all in this lane's copies; diffs in `evidence/h4gates_*.lane.diff`)
+252|### 5.2 Results
+267|### 5.3 Engine findings behind the five reds
+337|## 6. Discovery selftest — PASS
+350|## 7. What remains untested
+373|## 8. Files
+397|## Summary
+407|## Source35
+436|### Per-gate results
+639|### What is new on Source35, and what still is not tested
+654|### Summary
+664|## Source36
+700|### Per-gate results
+791|### 5. H4 §9a gates — 4 PASS / 4 FAIL, with the old causes gone
+877|### 7. The 4-peer 200 ms lobby lanes — 0/6, failing EARLIER than predicted, and both controls fail too
+937|### 4. Two-peer sound deferral modes — `ai_defer` PASS, `per_machine` control did NOT fire
+974|### 5b. The 26-case deferral fixture on the integrated build — 26/26, 0 failures
+1005|### What is new on Source36, and what still is not tested
+1020|### Summary
+1030|## Source37
+1066|### Per-gate results
+1105|### 2. H4 §9a gates — 4 PASS / 4 FAIL; A5 fixed the save, a new residue is one step later
+1168|### 3. Lobby lanes through the stock driver — the 3-peer control is green and the 4-peer counters are on record
+1212|### 4. Two-peer sound modes — `ai_defer` PASS; the `per_machine` control still does not fire, and here is exactly why
+1263|### 5. Compatibility ladder against the Source22 reference — zero differences on four fixtures
+1287|### What is new on Source37, and what still is not tested
+1304|### Summary
+1314|## Source38
+1335|### Per-gate results
+1388|### 2. H4 §9a gates — the Source37 verdicts, repeated exactly
+1418|### 3. Lobby lanes — the Source37 shape, counters recorded
+1462|### 4. Two-peer sound modes — the new alias arm passes, non-vacuously
+1518|### 5. Compatibility ladder against the Source22 reference — clean
+1546|### What is new on Source38, and what still is not tested
+1568|### Summary
+1578|## Source39
+1603|### Per-gate results
+1621|### 1. Gates 1–4 and 6 — green, with one number to report precisely
+1661|### 2. H4 §9a gates — A6's leave work landed; A6's ownership fallback is fatal
+1732|### 3. H4 Phase B slice B1 — 1 PASS / 3 FAIL, and a second distinct host-fatal
+1775|### 4. The five lobby lanes — the controls are fixed; the 4-peer 200 ms limit is not
+1844|### 5. Two-peer sound modes — all eight arms agree with the chain
+1865|### 6. Two-peer heal gate — PASS, with one counter short of expectation
+1887|### 7. Compatibility ladder — zero differences
+1905|### What is new on Source39, and what is still open
+1928|### Summary
+1938|## Source40
+1963|### Per-gate results
+1982|### 1. Gates 1–4 and 6 — green, and the Start-answer storm is measurably gone
+2006|### 2. H4 §9a gates — both Source39 crashes fixed, but three checks regressed
+2099|### 3. B1 substitution gates — 2 PASS / 2 FAIL, and the Source39 crash is fixed
+2121|### 4. Lobby lanes — 15/15, and EResult 25 is gone WITHOUT the pacing branch
+2173|### 5. Two-peer sound modes — all eight arms agree with the chain
+2190|### 6. Two-peer heal gate — PASS
+2208|### 7. Compatibility ladder — zero differences
+2221|### 8. Checkpoint and AudioMan grep — zero hits
+2240|### What is new on Source40, and what is still open
+2258|### Summary

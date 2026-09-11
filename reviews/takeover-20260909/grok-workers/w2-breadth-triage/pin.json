@@ -1,0 +1,7 @@
+{
+  "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+  "build_manifest_sha256": "15abd14041d5c87bd75987829af7d219e574fac67edd71b397ace00aa6eb8bf1",
+  "source": 41,
+  "source_head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+}

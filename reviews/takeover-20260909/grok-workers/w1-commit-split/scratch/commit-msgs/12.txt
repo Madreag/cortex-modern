@@ -1,0 +1,3 @@
+Compare snapshots by the controlled actor's inventory role
+
+The comparator was selecting Activity1's brain; use the controlled actor so the retained pair matches.

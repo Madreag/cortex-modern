@@ -1,0 +1,68 @@
+test_aggregate_pass_cannot_hide_missing_or_duplicate_cases (test_run_breadth.AggregateTests.test_aggregate_pass_cannot_hide_missing_or_duplicate_cases) ... ok
+test_claimed_success_cannot_hide_a_case_failure (test_run_breadth.AggregateTests.test_claimed_success_cannot_hide_a_case_failure) ... ok
+test_complete_evidence_passes_pure_validation (test_run_breadth.AggregateTests.test_complete_evidence_passes_pure_validation) ... ok
+test_incomplete_result_is_not_a_success (test_run_breadth.AggregateTests.test_incomplete_result_is_not_a_success) ... ok
+test_per_case_pin_and_family_source_are_required (test_run_breadth.AggregateTests.test_per_case_pin_and_family_source_are_required) ... ok
+test_complete_81_job_inventory (test_run_breadth.InventoryTests.test_complete_81_job_inventory) ... ok
+test_plan_never_dispatches_a_model_or_build (test_run_breadth.InventoryTests.test_plan_never_dispatches_a_model_or_build) ... ok
+test_complete_frozen_full_inventory_can_pass (test_run_breadth.OrchestrationTests.test_complete_frozen_full_inventory_can_pass) ... ok
+test_empty_job_collection_cannot_pass (test_run_breadth.OrchestrationTests.test_empty_job_collection_cannot_pass) ... ok
+[2026-09-11T05:04:08Z] 1/1 one
+test_existing_output_is_not_overwritten (test_run_breadth.OrchestrationTests.test_existing_output_is_not_overwritten) ... ok
+[2026-09-11T05:04:08Z] 1/3 0
+[2026-09-11T05:04:08Z] 2/3 1
+[2026-09-11T05:04:08Z] 3/3 2
+test_failures_do_not_skip_remaining_jobs_and_execution_is_sequential (test_run_breadth.OrchestrationTests.test_failures_do_not_skip_remaining_jobs_and_execution_is_sequential) ... ok
+[2026-09-11T05:04:08Z] 1/3 0
+test_pin_drift_stops_launches_and_records_missing_coverage (test_run_breadth.OrchestrationTests.test_pin_drift_stops_launches_and_records_missing_coverage) ... ok
+[2026-09-11T05:04:08Z] 1/1 one
+test_surviving_engine_prevents_next_group (test_run_breadth.OrchestrationTests.test_surviving_engine_prevents_next_group) ... ok
+[2026-09-11T05:04:08Z] 1/1 one
+test_validator_exception_is_a_retained_failure (test_run_breadth.OrchestrationTests.test_validator_exception_is_a_retained_failure) ... ok
+test_export_and_build_heads_must_agree (test_run_breadth.PinTests.test_export_and_build_heads_must_agree) ... ok
+test_only_unchanged_committed_font_samples_are_outside_the_source_export (test_run_breadth.PinTests.test_only_unchanged_committed_font_samples_are_outside_the_source_export) ... ok
+test_source_file_or_executable_drift_cannot_pass (test_run_breadth.PinTests.test_source_file_or_executable_drift_cannot_pass) ... ok
+test_compatibility_requires_all_retained_lines_and_the_short_cap (test_run_breadth.ResultTests.test_compatibility_requires_all_retained_lines_and_the_short_cap) ... ok
+test_complete_discovery_and_false_wrapper_exit (test_run_breadth.ResultTests.test_complete_discovery_and_false_wrapper_exit) ... ok
+test_duplicate_gate_results_are_not_accepted (test_run_breadth.ResultTests.test_duplicate_gate_results_are_not_accepted) ... ok
+test_early_drop_observed_frame_must_be_40 (test_run_breadth.ResultTests.test_early_drop_observed_frame_must_be_40) ... ok
+test_early_drop_requires_both_barriers_and_actual_departing_identity (test_run_breadth.ResultTests.test_early_drop_requires_both_barriers_and_actual_departing_identity) ... ok
+test_forbidden_error_lines_and_abort_artifacts_are_retained (test_run_breadth.ResultTests.test_forbidden_error_lines_and_abort_artifacts_are_retained) ... ok
+test_h4_coverage_and_all_required_peer_clock_reports (test_run_breadth.ResultTests.test_h4_coverage_and_all_required_peer_clock_reports) ... ok
+test_ignored_stop_counter_may_be_nonzero (test_run_breadth.ResultTests.test_ignored_stop_counter_may_be_nonzero) ... ok
+test_invariance_missing_fault_arm_is_not_complete (test_run_breadth.ResultTests.test_invariance_missing_fault_arm_is_not_complete) ... ok
+test_junction_walker_skips_reparse_directories (test_run_breadth.ResultTests.test_junction_walker_skips_reparse_directories) ... ok
+test_lobby_full_traces_and_zero_counters_required (test_run_breadth.ResultTests.test_lobby_full_traces_and_zero_counters_required) ... ok
+test_missing_and_nonzero_clock_samples_fail (test_run_breadth.ResultTests.test_missing_and_nonzero_clock_samples_fail) ... ok
+test_named_checks_cannot_pass_empty_or_omitted (test_run_breadth.ResultTests.test_named_checks_cannot_pass_empty_or_omitted) ... ok
+test_only_named_prediction_na_is_allowed (test_run_breadth.ResultTests.test_only_named_prediction_na_is_allowed) ... ok
+test_required_duplicate_controller_checks_are_preserved (test_run_breadth.ResultTests.test_required_duplicate_controller_checks_are_preserved) ... ok
+test_restarted_peer_must_suppress_answers_and_have_empty_leaves (test_run_breadth.ResultTests.test_restarted_peer_must_suppress_answers_and_have_empty_leaves) ... ok
+test_same_build_chain_must_contain_the_named_sound_step (test_run_breadth.ResultTests.test_same_build_chain_must_contain_the_named_sound_step) ... ok
+test_sound_negative_requires_full_traces_and_armed_fault (test_run_breadth.ResultTests.test_sound_negative_requires_full_traces_and_armed_fault) ... ok
+test_unrelated_negative_desync_and_preview_controls_are_not_grep_failures (test_run_breadth.ResultTests.test_unrelated_negative_desync_and_preview_controls_are_not_grep_failures) ... ok
+test_wrapper_exit_zero_without_evidence_is_failure (test_run_breadth.ResultTests.test_wrapper_exit_zero_without_evidence_is_failure) ... ok
+test_wrong_executable_path_is_rejected_even_with_matching_hash (test_run_breadth.ResultTests.test_wrong_executable_path_is_rejected_even_with_matching_hash) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-1pb_6ynj\\breadth\\breadth.json", "validation_errors": ["build manifest changed during breadth"]}
+test_changed_manifest_is_refused (test_family_breadth.FamilyBreadthTests.test_changed_manifest_is_refused) ... ok
+[22:04:08] breadth_lane: exit 0 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-0a4i5owu\\breadth\\breadth.json", "validation_errors": []}
+test_complete_pinned_inventory_passes (test_family_breadth.FamilyBreadthTests.test_complete_pinned_inventory_passes) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-xvar2j9e\\breadth\\breadth.json", "validation_errors": ["breadth source HEAD differs from the pinned build"]}
+test_consistent_wrong_head_is_refused (test_family_breadth.FamilyBreadthTests.test_consistent_wrong_head_is_refused) ... ok
+[22:04:08] breadth_lane: exit 1 {"out": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-nip3qly6\\breadth", "error": "breadth output already exists; retain it and select a new --breadth-out"}
+test_existing_evidence_is_never_reused_or_overwritten (test_family_breadth.FamilyBreadthTests.test_existing_evidence_is_never_reused_or_overwritten) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-hfoy8lq4\\breadth\\breadth.json", "validation_errors": ["breadth result is not an object", "breadth result verification failed: AttributeError: 'list' object has no attribute 'get'"]}
+test_malformed_report_is_recorded_as_failure (test_family_breadth.FamilyBreadthTests.test_malformed_report_is_recorded_as_failure) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 1, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-58paq90n\\breadth\\breadth.json", "validation_errors": []}
+test_nonzero_driver_exit_is_refused (test_family_breadth.FamilyBreadthTests.test_nonzero_driver_exit_is_refused) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-5ojtm0oe\\breadth\\breadth.json", "validation_errors": ["semantic_fire_reload: failed or incomplete case verdict"]}
+test_overall_pass_cannot_hide_failed_case (test_family_breadth.FamilyBreadthTests.test_overall_pass_cannot_hide_failed_case) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-uqzh5442\\breadth\\breadth.json", "validation_errors": ["breadth step coverage/order differs; missing, duplicate, or unexpected case"]}
+test_overall_pass_cannot_hide_missing_case (test_family_breadth.FamilyBreadthTests.test_overall_pass_cannot_hide_missing_case) ... ok
+[22:04:08] breadth_lane: exit 1 {"driver_exit": 0, "report": "D:\\Projects\\reviews\\takeover-20260909\\family-breadth-test-lqqr5fyf\\breadth\\breadth.json", "validation_errors": ["breadth executable pin differs"]}
+test_wrong_binary_is_refused (test_family_breadth.FamilyBreadthTests.test_wrong_binary_is_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 47 tests in 0.294s
+
+OK

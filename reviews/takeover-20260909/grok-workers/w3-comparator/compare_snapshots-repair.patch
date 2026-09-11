@@ -1,0 +1,197 @@
+From 08aea609dd45e31c5c3ce99cfe4d2de79f87c1c0 Mon Sep 17 00:00:00 2001
+From: Erol Germain-Gomuc <egermain.ua@gmail.com>
+Date: Thu, 10 Sep 2026 21:47:48 -0700
+Subject: [PATCH] Compare controlled actors across every activity in snapshot
+ diffs
+
+The snapshot comparator only accepted Activity1 player bindings and then
+selected the brain UID instead of the controlled actor. Shared inventory
+comparison therefore skipped Activity2 and Activity3 and could treat the
+wrong actor as local. The detecting tests fail on the previous file and
+pass on this one.
+---
+ tools/compare_snapshots.py             |  10 +-
+ tools/test_snapshot_inventory_roles.py | 149 +++++++++++++++++++++++++
+ 2 files changed, 157 insertions(+), 2 deletions(-)
+ create mode 100644 tools/test_snapshot_inventory_roles.py
+
+diff --git a/tools/compare_snapshots.py b/tools/compare_snapshots.py
+index 2a446af..aa0deef 100644
+--- a/tools/compare_snapshots.py
++++ b/tools/compare_snapshots.py
+@@ -550,9 +550,15 @@ def inventory_reference_roles(text, state):
+     """
+     while isinstance(state, dict) and state.get("version") in ("GameActivity1", "GameActivity2"):
+         state = state["base" if state["version"] == "GameActivity1" else "values"]
+-    if not isinstance(state, dict) or state.get("version") != "Activity1":
++    if not isinstance(state, dict) or state.get("version") not in ("Activity1", "Activity2", "Activity3"):
+         return {}
+-    local_actor = state["actor_links"][0][0]
++    links = state.get("actor_links")
++    if not isinstance(links, list) or len(links) != 4 or any(
++        not isinstance(slot, list) or len(slot) != 3 or any(type(uid) is not int or uid < 0 for uid in slot)
++        for slot in links
++    ):
++        raise ValueError("invalid activity actor-link layout")
++    local_actor = links[0][1]
+     if not local_actor:
+         return {}
+     root = {"children": {}, "path": (), "actor": None}
+diff --git a/tools/test_snapshot_inventory_roles.py b/tools/test_snapshot_inventory_roles.py
+new file mode 100644
+index 0000000..4b1e289
+--- /dev/null
++++ b/tools/test_snapshot_inventory_roles.py
+@@ -0,0 +1,149 @@
++"""Controls for versioned Activity player bindings in shared inventory comparison."""
++
++import copy
++import unittest
++
++if __package__:
++    from . import compare_snapshots as checker
++else:
++    import compare_snapshots as checker
++
++runtime = checker.snapshot_runtime
++VERSIONS = ("Activity1", "Activity2", "Activity3")
++LOCAL_INVENTORY = ("values", "player_ui", 0, "inventory")
++
++
++def sized(value):
++    return str(len(value)).encode() + b" " + value + b" "
++
++
++def activity_record(version, brain=100, controlled=10):
++    # Activity::VisitCheckpoint, then four [brain, controlled, GUI actor] triples.
++    body = b"0 " * 4 + sized(b"fixture") + sized(b"scene") + b"0 " * 6
++    body += b"0 " * 16 + b"0 " * 16 + sized(b"") * 4 + b"0 "
++    body += b"0 " * 40 + sized(b"") * 4 + b"0 " * 16 + b"0 " * 3
++    body += b"".join(str(uid).encode() + b" " for uid in (brain, controlled, 900, *([0] * 9)))
++    if version == "Activity2":
++        icon = sized(b"Icon1") + sized(b"") * 2 + b"0 " * 4
++        body += sized(icon) * 4
++    elif version == "Activity3":
++        icon = sized(b"IconValues1") + sized(b"") * 2 + b"0 " * 3
++        body += sized(sized(b"IconSet1") + b"0 4 " + sized(icon) * 4)
++    return sized(version.encode()) + body
++
++
++def world():
++    text = "Scene = Scene\n"
++    for actor, gun, spare in ((10, 11, 12), (20, 21, 22), (100, 101, 102), (900, 901, 902)):
++        text += (f"\tPlaceSceneObject = AHuman\n\t\tUniqueID = {actor}\n"
++                 f"\t\tFGArm = Arm\n\t\t\tUniqueID = {actor + 1000}\n"
++                 f"\t\t\tHeldDevice = HDFirearm\n\t\t\t\tUniqueID = {gun}\n"
++                 f"\t\tAddInventory = HDFirearm\n\t\t\tUniqueID = {spare}\n")
++    text += "\tPlaceSceneObject = MOPixel\n\t\tUniqueID = 777\n"
++    return text
++
++
++def reference(uid, kind=b"HDFirearm"):
++    return dict(version="GUIEntity2", value=dict(kind=1, uid=uid, placed_set=-1, placed_index=0,
++                                                **{"class": kind, "preset": b"same", "module": b"Base.rte"}))
++
++
++def inventory(actor, gun):
++    return dict(version="InventoryMenuGUI2", center=[1, 2], actor=reference(actor, b"AHuman"),
++                equipment=[[reference(gun), reference(gun)]], controls=b"exact controls", carousel_bitmap=b"exact pixels")
++
++
++class SnapshotInventoryRoleTests(unittest.TestCase):
++    def roles(self, version, actor):
++        return checker.inventory_reference_roles(world(), runtime.decode(activity_record(version, controlled=actor)))
++
++    def test_supported_versions_map_controlled_actor_and_exact_owned_path(self):
++        for version in VERSIONS:
++            with self.subTest(version=version):
++                state = runtime.decode(activity_record(version))
++                self.assertEqual(state["actor_links"][0], [100, 10, 900])
++                roles = checker.inventory_reference_roles(world(), state)
++                self.assertEqual(roles[10], ("LOCAL_ACTOR",))
++                self.assertEqual(roles[11], ("LOCAL_ACTOR", ("FGArm", "Arm", 0), ("HeldDevice", "HDFirearm", 0)))
++                self.assertEqual(roles[12], ("LOCAL_ACTOR", ("AddInventory", "HDFirearm", 0)))
++                self.assertEqual(set(roles), {10, 11, 12, 1010})
++                for excluded in (20, 21, 100, 101, 900, 901, 777):
++                    self.assertNotIn(excluded, roles)
++
++    def test_game_activity_wrappers_keep_versioned_bindings(self):
++        for version in VERSIONS:
++            base = runtime.decode(activity_record(version))
++            values = dict(version="GameActivity1", base=base)
++            whole = dict(version="GameActivity2", values=values)
++            for state in (base, values, whole):
++                with self.subTest(version=version, wrapper=state["version"]):
++                    self.assertEqual(checker.inventory_reference_roles(world(), state), self.roles(version, 10))
++
++    def test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not(self):
++        for version in VERSIONS:
++            roles_a, roles_b = self.roles(version, 10), self.roles(version, 20)
++            left, right = inventory(10, 11), inventory(20, 21)
++            projected = runtime.project(left, True, path=LOCAL_INVENTORY, local_roles=roles_a)
++            with self.subTest(version=version, case="correct_pair"):
++                self.assertEqual(projected, runtime.project(right, True, path=LOCAL_INVENTORY, local_roles=roles_b))
++            for uid in (10, 11, 20, 22, 100, 101, 777, 999):
++                changed = copy.deepcopy(right)
++                changed["equipment"][0][0]["value"]["uid"] = uid
++                with self.subTest(version=version, wrong_item=uid):
++                    self.assertNotEqual(projected, runtime.project(changed, True, path=LOCAL_INVENTORY, local_roles=roles_b))
++            changed = copy.deepcopy(right)
++            changed["actor"]["value"]["uid"] = 100
++            with self.subTest(version=version, case="brain_instead_of_controlled"):
++                self.assertNotEqual(projected, runtime.project(changed, True, path=LOCAL_INVENTORY, local_roles=roles_b))
++
++    def test_projection_stays_local_and_preserves_other_fields(self):
++        left, right = inventory(10, 11), inventory(20, 21)
++        roles_a, roles_b = self.roles("Activity3", 10), self.roles("Activity3", 20)
++        for shared, path in ((False, LOCAL_INVENTORY), (True, ("values", "player_ui", 1, "inventory")), (True, ("global_inventory",))):
++            with self.subTest(shared=shared, path=path):
++                self.assertNotEqual(runtime.project(left, shared, path=path, local_roles=roles_a),
++                                    runtime.project(right, shared, path=path, local_roles=roles_b))
++        for field in ("controls", "carousel_bitmap"):
++            changed = copy.deepcopy(right)
++            changed[field] = b"changed"
++            with self.subTest(field=field):
++                self.assertNotEqual(runtime.project(left, True, path=LOCAL_INVENTORY, local_roles=roles_a),
++                                    runtime.project(changed, True, path=LOCAL_INVENTORY, local_roles=roles_b))
++
++    def test_no_controlled_actor_does_not_fall_back_to_brain(self):
++        for version in VERSIONS:
++            with self.subTest(version=version):
++                self.assertEqual(checker.inventory_reference_roles(world(), runtime.decode(activity_record(version, controlled=0))), {})
++                with self.assertRaisesRegex(ValueError, "controlled actor is missing"):
++                    self.roles(version, 999)
++
++    def test_unsupported_versions_are_not_projected(self):
++        for version in ("Activity", "Activity0", "Activity4", "Activity31", "Unknown1"):
++            state = dict(version=version, actor_links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
++            with self.subTest(version=version):
++                self.assertEqual(checker.inventory_reference_roles(world(), state), {})
++
++    def test_malformed_actor_link_layout_is_rejected(self):
++        slots = [[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
++        for version in VERSIONS:
++            malformed = [None, slots[:3], slots + [[0, 0, 0]], [[100, 10], *slots[1:]], [[100, 10, 900, 0], *slots[1:]]]
++            malformed += [[[100, bad, 900], *slots[1:]] for bad in (-1, "10", 10.0, True)]
++            for links in malformed:
++                with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
++                    checker.inventory_reference_roles(world(), dict(version=version, actor_links=links))
++
++    def test_truncated_or_mislabeled_native_records_are_rejected(self):
++        for version in VERSIONS:
++            record = activity_record(version)
++            self.assertEqual(runtime.decode(record)["version"], version)
++            malformed = [record[:-1], record[:-4], record + b"0 "]
++            for other in VERSIONS:
++                if other != version:
++                    malformed.append(sized(version.encode()) + activity_record(other)[len(sized(other.encode())):])
++            for data in malformed:
++                with self.subTest(version=version, bytes=len(data)), self.assertRaises(ValueError):
++                    checker.inventory_reference_roles(world(), runtime.decode(data))
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.52.0.windows.1
+

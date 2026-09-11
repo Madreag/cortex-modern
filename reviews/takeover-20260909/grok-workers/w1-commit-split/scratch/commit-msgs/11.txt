@@ -1,0 +1,3 @@
+Record A7 recovery events on session, tickets and ownership
+
+Session heartbeats, loaded-ticket hashes and local unit ownership feed the existing A7 journal.

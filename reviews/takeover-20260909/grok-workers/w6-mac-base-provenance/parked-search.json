@@ -1,0 +1,36 @@
+{
+  "scanned_dirs": 9781,
+  "file_hits": [
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_081448_invariance_feac445d\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_081424_heal_e84c3d2f\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_065147_heal_7d27f107\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_063845_heal_2cdd2b64\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_063436_heal_649d33a3\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_063424_heal_4291f577\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_063411_heal_555e0791\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_063359_heal_6542ff12\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_062940_heal_8b3eaa75\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\recovery-2026-09-06\\expanded-mod-gates\\20260908_062824_invariance_2e1d360c\\source_files\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\work\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S32\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S31\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S30\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S29\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S28\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S27\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S26\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S25\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S24\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S23\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\gen\\S22\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\commit-plan\\scratch\\final\\tools\\contracts\\primitive_checkpoint_pending.patch",
+    "D:\\Projects\\native-fidelity-work\\parked-20260908-tools-contracts\\tools\\contracts\\primitive_checkpoint_pending.patch"
+  ],
+  "dir_hits": [
+    "D:\\Projects\\native-fidelity-work\\parked-20260908-tools-contracts"
+  ],
+  "error_count": 1,
+  "errors_head": [
+    "D:\\Projects\\cccp\\Mods\\Cordyc.rte: [WinError 3] The system cannot find the path specified: 'D:\\\\Projects\\\\cccp\\\\Mods\\\\Cordyc.rte'"
+  ]
+}

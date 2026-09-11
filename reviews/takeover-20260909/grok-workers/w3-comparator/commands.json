@@ -1,0 +1,74 @@
+{
+  "python": "C:\\Program Files\\Python314\\python.exe",
+  "commands": [
+    {
+      "label": "repaired-tests",
+      "argv": [
+        "C:\\Program Files\\Python314\\python.exe",
+        "-B",
+        "-m",
+        "unittest",
+        "test_snapshot_inventory_roles",
+        "test_compare_snapshots",
+        "-v"
+      ],
+      "cwd": "D:\\Projects\\reviews\\takeover-20260909\\source41-matrix-review\\snapshot-inventory-roles-20260910\\repaired",
+      "log": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w3-comparator\\tests-repaired.txt",
+      "returncode": 0
+    },
+    {
+      "label": "control-tests",
+      "argv": [
+        "C:\\Program Files\\Python314\\python.exe",
+        "-B",
+        "-m",
+        "unittest",
+        "test_snapshot_inventory_roles",
+        "test_compare_snapshots",
+        "-v"
+      ],
+      "cwd": "D:\\Projects\\reviews\\takeover-20260909\\source41-matrix-review\\snapshot-inventory-roles-20260910\\control",
+      "log": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w3-comparator\\tests-control.txt",
+      "returncode": 1
+    },
+    {
+      "label": "control-pair",
+      "argv": [
+        "C:\\Program Files\\Python314\\python.exe",
+        "-B",
+        "D:\\Projects\\reviews\\takeover-20260909\\source41-matrix-review\\snapshot-inventory-roles-20260910\\control\\compare_snapshots.py",
+        "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p1.ccsave",
+        "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p2.ccsave",
+        "--report",
+        "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w3-comparator\\retained-control.json"
+      ],
+      "cwd": "D:\\Projects\\reviews\\takeover-20260909\\source41-matrix-review\\snapshot-inventory-roles-20260910\\control",
+      "log": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w3-comparator\\retained-control.log",
+      "returncode": 1
+    },
+    {
+      "label": "repaired-pair",
+      "argv": [
+        "C:\\Program Files\\Python314\\python.exe",
+        "-B",
+        "D:\\Projects\\reviews\\takeover-20260909\\source41-matrix-review\\snapshot-inventory-roles-20260910\\repaired\\compare_snapshots.py",
+        "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p1.ccsave",
+        "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p2.ccsave",
+        "--report",
+        "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w3-comparator\\retained-repaired.json"
+      ],
+      "cwd": "D:\\Projects\\reviews\\takeover-20260909\\source41-matrix-review\\snapshot-inventory-roles-20260910\\repaired",
+      "log": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w3-comparator\\retained-repaired.log",
+      "returncode": 0
+    }
+  ],
+  "pair_hashes_before": {
+    "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p1.ccsave": "d0513a568a0e22870336a84d6d4a4d1dce06119aa67d40a0de5e06b72716ba4a",
+    "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p2.ccsave": "05dca2684c355ac9d7208a8594f41bbfbd2bc7022411f6ae5bb91c1270b2f004"
+  },
+  "pair_hashes_after": {
+    "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p1.ccsave": "d0513a568a0e22870336a84d6d4a4d1dce06119aa67d40a0de5e06b72716ba4a",
+    "D:\\mx\\s41r2\\mp_snapshot_p5\\fresh\\e2e\\snapshot_p5\\p5snap_p2.ccsave": "05dca2684c355ac9d7208a8594f41bbfbd2bc7022411f6ae5bb91c1270b2f004"
+  },
+  "pair_unchanged": true
+}

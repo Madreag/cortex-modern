@@ -1,0 +1,235 @@
+{
+  "breadth": {
+    "path": "D:\\mx\\s41b4\\breadth.json",
+    "execution_pass": false,
+    "complete": true,
+    "stop_reason": null,
+    "missing_jobs": [],
+    "validation_errors": [
+      "breadth is not complete and passing",
+      "declared breadth inventory differs",
+      "breadth step coverage/order differs; missing, duplicate, or unexpected case",
+      "heal: failed or incomplete case verdict",
+      "compat_extra_source22: failed or incomplete case verdict",
+      "compat_extra_approved: failed or incomplete case verdict"
+    ],
+    "expected_jobs": [
+      "fl100",
+      "fl200",
+      "heal",
+      "compat_deferral_source22",
+      "compat_deferral_approved",
+      "compat_extra_source22",
+      "compat_extra_approved"
+    ],
+    "source_head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+  },
+  "steps": [
+    {
+      "id": "fl100",
+      "family": "fakelag",
+      "passed": true,
+      "exit": 0,
+      "failures": [],
+      "log": "D:\\mx\\s41b4\\logs\\fl100.log",
+      "out": "D:\\mx\\s41b4\\j27"
+    },
+    {
+      "id": "fl200",
+      "family": "fakelag",
+      "passed": true,
+      "exit": 0,
+      "failures": [],
+      "log": "D:\\mx\\s41b4\\logs\\fl200.log",
+      "out": "D:\\mx\\s41b4\\j28"
+    },
+    {
+      "id": "heal",
+      "family": "heal",
+      "passed": false,
+      "exit": 0,
+      "failures": [
+        "missing required check prediction_executed x1"
+      ],
+      "log": "D:\\mx\\s41b4\\logs\\heal.log",
+      "out": "D:\\mx\\s41b4\\j73"
+    },
+    {
+      "id": "compat_deferral_source22",
+      "family": "compat",
+      "passed": true,
+      "exit": 0,
+      "failures": [],
+      "log": "D:\\mx\\s41b4\\logs\\compat_deferral_source22.log",
+      "out": "D:\\mx\\s41b4\\j74"
+    },
+    {
+      "id": "compat_deferral_approved",
+      "family": "compat",
+      "passed": true,
+      "exit": 0,
+      "failures": [],
+      "log": "D:\\mx\\s41b4\\logs\\compat_deferral_approved.log",
+      "out": "D:\\mx\\s41b4\\j75"
+    },
+    {
+      "id": "compat_extra_source22",
+      "family": "compat",
+      "passed": false,
+      "exit": 0,
+      "failures": [
+        "compat fixture changed",
+        "compat named case results differ from Source22",
+        "compat output differs from Source22 (spawn_child uid value excluded, run-to-run counter)"
+      ],
+      "log": "D:\\mx\\s41b4\\logs\\compat_extra_source22.log",
+      "out": "D:\\mx\\s41b4\\j80"
+    },
+    {
+      "id": "compat_extra_approved",
+      "family": "compat",
+      "passed": false,
+      "exit": 0,
+      "failures": [
+        "compat fixture changed",
+        "compat named case results differ from Source22",
+        "compat output differs from Source22 (spawn_child uid value excluded, run-to-run counter)"
+      ],
+      "log": "D:\\mx\\s41b4\\logs\\compat_extra_approved.log",
+      "out": "D:\\mx\\s41b4\\j81"
+    }
+  ],
+  "fl": {
+    "fl100": {
+      "host_line": "[net-match] auto input delay: peer 2 rtt 202ms -> 8 frames",
+      "client_line": null,
+      "host_peer_input_delays": {
+        "1": 1,
+        "2": 8
+      },
+      "client_peer_input_delays": {
+        "1": 1,
+        "2": 8
+      },
+      "result_pass": true,
+      "host_stdout": "D:\\mx\\s41b4\\j27\\fl\\fl100\\host\\stdout.log",
+      "client_stdout": "D:\\mx\\s41b4\\j27\\fl\\fl100\\client\\stdout.log"
+    },
+    "fl200": {
+      "host_line": "[net-match] auto input delay: peer 2 rtt 400ms -> 13 frames",
+      "client_line": null,
+      "host_peer_input_delays": {
+        "1": 1,
+        "2": 13
+      },
+      "client_peer_input_delays": {
+        "1": 1,
+        "2": 13
+      },
+      "result_pass": true,
+      "host_stdout": "D:\\mx\\s41b4\\j28\\fl\\fl200\\host\\stdout.log",
+      "client_stdout": "D:\\mx\\s41b4\\j28\\fl\\fl200\\client\\stdout.log"
+    }
+  },
+  "extra": {
+    "compat_extra_source22": {
+      "out": "D:\\mx\\s41b4\\j80",
+      "fixture_sha256": "e92fa5fb5095b4cec374a6f7ef69c3559edb7028e6ed2fbc00a2fe214eccfaaf",
+      "lines": [
+        "PRINT: [extra] claim actor=1048607",
+        "PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2",
+        "PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5",
+        "PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0",
+        "PRINT: [extra] case=shared_soundset_structural before=1 removed=0 any=1",
+        "PRINT: [extra] case=shared_soundset_cyclemode mode=2",
+        "PRINT: [extra] case=shared_stopall_setup played=1 playing=1",
+        "PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6",
+        "PRINT: [extra] case=ai_soundset_addsound ai_ok=1 ai_any=1 upd_any=1",
+        "PRINT: [extra] case=ai_soundset_cyclemode ai_mode=1 upd_mode=1",
+        "PRINT: [extra] case=ai_set_top_level_sound_set ai_ok=1 ai_any=1 upd_any=1",
+        "PRINT: [extra] case=ai_property_next_pass ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375",
+        "PRINT: [extra] case=ai_pos_retained_alias_method ai_x=7 upd_x=7 upd_y=8",
+        "PRINT: [extra] case=ai_audioman_stopall ai_playing_after=0 upd_playing=0",
+        "PRINT: [extra] case=two_actor_shared_container volume=0.125 writers=2 primary=40 secondary=40",
+        "PRINT: [extra] case=done step=140 ai_runs=70",
+        "PRINT: [extra] claim actor=1050807",
+        "PRINT: [extra] claim actor=1050793",
+        "PRINT: [extra] claim actor=1050821"
+      ],
+      "cases": {
+        "shared_pos_setxy": "call_ok=0 x=1 y=2",
+        "shared_pos_methods": "setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5",
+        "shared_pos_absradangle": "call_ok=1 x=10 y=0",
+        "shared_soundset_structural": "before=1 removed=0 any=1",
+        "shared_soundset_cyclemode": "mode=2",
+        "shared_stopall_setup": "played=1 playing=1",
+        "ai_pos_setxy": "ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6",
+        "ai_soundset_addsound": "ai_ok=1 ai_any=1 upd_any=1",
+        "ai_soundset_cyclemode": "ai_mode=1 upd_mode=1",
+        "ai_set_top_level_sound_set": "ai_ok=1 ai_any=1 upd_any=1",
+        "ai_property_next_pass": "ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375",
+        "ai_pos_retained_alias_method": "ai_x=7 upd_x=7 upd_y=8",
+        "ai_audioman_stopall": "ai_playing_after=0 upd_playing=0",
+        "two_actor_shared_container": "volume=0.125 writers=2 primary=40 secondary=40",
+        "done": "step=140 ai_runs=70"
+      },
+      "exit_code": 1,
+      "errors": [],
+      "summary": "D:\\mx\\s41b4\\j80\\summary.json"
+    },
+    "compat_extra_approved": {
+      "out": "D:\\mx\\s41b4\\j81",
+      "fixture_sha256": "e92fa5fb5095b4cec374a6f7ef69c3559edb7028e6ed2fbc00a2fe214eccfaaf",
+      "lines": [
+        "PRINT: [extra] claim actor=1048607",
+        "PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2",
+        "PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5",
+        "PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0",
+        "PRINT: [extra] case=shared_soundset_structural before=1 removed=0 any=1",
+        "PRINT: [extra] case=shared_soundset_cyclemode mode=2",
+        "PRINT: [extra] case=shared_stopall_setup played=1 playing=1",
+        "PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6",
+        "PRINT: [extra] case=ai_soundset_addsound ai_ok=1 ai_any=1 upd_any=1",
+        "PRINT: [extra] case=ai_soundset_cyclemode ai_mode=1 upd_mode=1",
+        "PRINT: [extra] case=ai_set_top_level_sound_set ai_ok=1 ai_any=1 upd_any=1",
+        "PRINT: [extra] case=ai_property_next_pass ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375",
+        "PRINT: [extra] case=ai_pos_retained_alias_method ai_x=7 upd_x=7 upd_y=8",
+        "PRINT: [extra] case=ai_audioman_stopall ai_playing_after=0 upd_playing=0",
+        "PRINT: [extra] case=two_actor_shared_container volume=0.125 writers=2 primary=40 secondary=40",
+        "PRINT: [extra] case=done step=140 ai_runs=70",
+        "PRINT: [extra] claim actor=1050807",
+        "PRINT: [extra] claim actor=1050793",
+        "PRINT: [extra] claim actor=1050821"
+      ],
+      "cases": {
+        "shared_pos_setxy": "call_ok=0 x=1 y=2",
+        "shared_pos_methods": "setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5",
+        "shared_pos_absradangle": "call_ok=1 x=10 y=0",
+        "shared_soundset_structural": "before=1 removed=0 any=1",
+        "shared_soundset_cyclemode": "mode=2",
+        "shared_stopall_setup": "played=1 playing=1",
+        "ai_pos_setxy": "ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6",
+        "ai_soundset_addsound": "ai_ok=1 ai_any=1 upd_any=1",
+        "ai_soundset_cyclemode": "ai_mode=1 upd_mode=1",
+        "ai_set_top_level_sound_set": "ai_ok=1 ai_any=1 upd_any=1",
+        "ai_property_next_pass": "ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375",
+        "ai_pos_retained_alias_method": "ai_x=7 upd_x=7 upd_y=8",
+        "ai_audioman_stopall": "ai_playing_after=0 upd_playing=0",
+        "two_actor_shared_container": "volume=0.125 writers=2 primary=40 secondary=40",
+        "done": "step=140 ai_runs=70"
+      },
+      "exit_code": 1,
+      "errors": [],
+      "summary": "D:\\mx\\s41b4\\j81\\summary.json"
+    }
+  },
+  "extra_compare": {
+    "lines_identical": true,
+    "neither_has_ERROR": true,
+    "diffs": [],
+    "source22_line_count": 19,
+    "approved_line_count": 19,
+    "may_update_pin": true
+  }
+}

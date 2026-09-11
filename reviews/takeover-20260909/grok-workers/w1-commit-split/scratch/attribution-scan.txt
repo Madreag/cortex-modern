@@ -1,0 +1,3 @@
+attribution scan 60cb698146..HEAD (attempt 2)
+pattern: co-authored|claude|codex|grok|chatgpt|openai|anthropic|cursor|generated
+no matching lines

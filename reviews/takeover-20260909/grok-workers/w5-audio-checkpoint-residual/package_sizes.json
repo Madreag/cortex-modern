@@ -1,0 +1,112 @@
+[
+  {
+    "path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+    "exists": true,
+    "size": 18177536
+  },
+  {
+    "path": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\Cortex Command.exe",
+    "exists": true,
+    "size": 18177536
+  },
+  {
+    "path": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\Cortex Command.pdb",
+    "exists": true,
+    "size": 153251840
+  },
+  {
+    "path": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+    "exists": true,
+    "size": 1542
+  },
+  {
+    "path": "D:\\mx\\s41b3\\pin.json",
+    "exists": true,
+    "size": 384
+  },
+  {
+    "path": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py",
+    "exists": true,
+    "size": 9725
+  },
+  {
+    "path": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\common.py",
+    "exists": true,
+    "size": 8900
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json",
+    "exists": true,
+    "size": 46100
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log",
+    "exists": true,
+    "size": 1316
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt",
+    "exists": true,
+    "size": 673
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\stdout.log",
+    "exists": true,
+    "size": 1430
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\LogConsole.txt",
+    "exists": true,
+    "size": 685
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\stdout.log",
+    "exists": true,
+    "size": 1331
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\stdout.log",
+    "exists": true,
+    "size": 460
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json",
+    "exists": true,
+    "size": 2103
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_report.json",
+    "exists": true,
+    "size": 13863
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_report.json",
+    "exists": true,
+    "size": 7971
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_trace.json",
+    "exists": true,
+    "size": 813556
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_trace.json",
+    "exists": true,
+    "size": 813580
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\launch.json",
+    "exists": true,
+    "size": 3836
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\launch.json",
+    "exists": true,
+    "size": 3228
+  },
+  {
+    "path": "D:\\mx\\s41b3\\plan.json",
+    "exists": true,
+    "size": 48452
+  }
+]

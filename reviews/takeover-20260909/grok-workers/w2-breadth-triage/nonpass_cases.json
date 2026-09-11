@@ -1,0 +1,526 @@
+[
+  {
+    "i": 27,
+    "id": "fl200",
+    "family": "fakelag",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\fl200.log",
+    "out": "D:\\mx\\s41b3\\j28",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_fakelag.py",
+      "fl200"
+    ],
+    "meta": {
+      "case": "fl200"
+    },
+    "n_failures": 2,
+    "n_evidence": 7,
+    "failures": [
+      "host: auto delay differs from 14",
+      "client: auto delay differs from 14"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_report.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_report.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\replay_playback\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\result.json"
+    ]
+  },
+  {
+    "i": 32,
+    "id": "h4_clean_leave_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_clean_leave_1.log",
+    "out": "D:\\mx\\s41b3\\j33",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\clean_leave.py"
+    ],
+    "meta": {
+      "case": "clean_leave",
+      "repeat": 1
+    },
+    "n_failures": 5,
+    "n_evidence": 14,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check clean_old_ticket_refused: fail used_stored_ticket=True commits=1",
+      "check hosts_survived: fail exits=[0, 0, 1] fatal=False",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host\\runtime\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_client1\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_client2\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_client2_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_client\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_client_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host2\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host2_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_stale\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_stale_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\verdict.json"
+    ]
+  },
+  {
+    "i": 33,
+    "id": "h4_reclaim_socket_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_reclaim_socket_1.log",
+    "out": "D:\\mx\\s41b3\\j34",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\reclaim_socket.py"
+    ],
+    "meta": {
+      "case": "reclaim_socket",
+      "repeat": 1
+    },
+    "n_failures": 5,
+    "n_evidence": 6,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check host_saw_seat_drop_and_return: fail 0 committed seats",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\launch.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client2_report.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\launch.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host_report.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\launch.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\verdict.json"
+    ]
+  },
+  {
+    "i": 35,
+    "id": "h4_fencing_two_transports_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_fencing_two_transports_1.log",
+    "out": "D:\\mx\\s41b3\\j36",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\fencing_two_transports.py"
+    ],
+    "meta": {
+      "case": "fencing_two_transports",
+      "repeat": 1
+    },
+    "n_failures": 10,
+    "n_evidence": 7,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_bound_second_incarnation: fail None",
+      "check host_fenced_the_old_transport: fail fenced_disconnects+fenced_packets=0",
+      "check seat_not_dropped_by_stale_timeout: fail []",
+      "check host_survived: fail 1",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\stdout.log:4: [net-match-service-e2e] setup failed: SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:   0.0 pkts/sec   0.0 K/sec         Ping:0ms    Max latency variance: ???ms         Est avail bandwidth: 8554.7KB/s           Bytes buffered: 0     Lifetime stats:         Totals             Sent:          7 pkts           1,583 bytes             Recv:          6 pkts           1,268 bytes             Recv w seq:          3 pkts             Dropped   :          0 pkts   0.00%             OutOfOrder:          0 pkts   0.00%             OOOFixed  :          0 pkts   0.00%             Duplicate :          0 pkts   0.00%             SeqLurch  :          0 pkts   0.00%         Ping histogram: (5 total samples)                  0-25    25-50    50-75   75-100  100-125  125-150  150-200  200-300     300+                     5        0        0        0        0        0        0        0        0                100.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%         Ping distribution:            50th   75th             0ms    0ms         No connection quality distribution available.  (0 measurement intervals)         Latency variance histogram not available     No rate stats received from remote host     No lifetime stats received from remote host )",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\stdout.log:9: [net-match] resync failed: resync snapshot save failed",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\LogConsole.txt:11: ERROR: Cannot save when there's no game running, or the game is finished!",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\LogConsole.txt:12: NETWORK: Resync failed: resync snapshot save failed"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\launch.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1_report.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\launch.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2_report.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\launch.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host_report.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\verdict.json"
+    ]
+  },
+  {
+    "i": 36,
+    "id": "h4_rejoin_after_resync_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_rejoin_after_resync_1.log",
+    "out": "D:\\mx\\s41b3\\j37",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\rejoin_after_resync.py"
+    ],
+    "meta": {
+      "case": "rejoin_after_resync",
+      "repeat": 1
+    },
+    "n_failures": 6,
+    "n_evidence": 10,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check resync_match_continued: fail 1",
+      "passed is missing or false",
+      "check resync_match_continued: fail 1",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_client\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_client_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_host\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_host_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_client1\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_client2\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_client2_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\verdict.json"
+    ]
+  },
+  {
+    "i": 39,
+    "id": "h4_peers_3_4_regression_3",
+    "family": "h4",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_peers_3_4_regression_3.log",
+    "out": "D:\\mx\\s41b3\\j40",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 3
+    },
+    "n_failures": 9,
+    "n_evidence": 22,
+    "failures": [
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:9: [audio-checkpoint] voice 36 has no registered owner 9310",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:10: [music-checkpoint] music audio restoration failed",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:11: [gui-sound-checkpoint] GUI audio restoration failed",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:13: [runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:15: [runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:10: ERROR: Could not restore audio checkpoint: voice 36 has no registered owner 9310",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:11: ERROR: the prior game's Lua state could not be reinstated",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:12: ERROR: could not launch the activity",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:13: ERROR: No Activity to end!"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json"
+    ]
+  },
+  {
+    "i": 42,
+    "id": "b1_substitute_commit",
+    "family": "b1",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\b1_substitute_commit.log",
+    "out": "D:\\mx\\s41b3\\j43",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_commit",
+      "--out",
+      "D:\\mx\\s41b3\\j43",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "meta": {
+      "case": "substitute_commit"
+    },
+    "n_failures": 10,
+    "n_evidence": 8,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check stayer_exit_zero: fail 1",
+      "check seat_dropped: fail None",
+      "check applicant_registered: fail None",
+      "check substitution_committed: fail None",
+      "B1 running activity is not evidenced",
+      "B1 did not adjudicate exactly one dropped seat",
+      "B1 substitutions_committed is not exactly one"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\host\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\host_report.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\leaver\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\stayer\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\stayer_report.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\substitute\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\substitute_report.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\verdict.json"
+    ]
+  },
+  {
+    "i": 43,
+    "id": "b1_substitute_returner_wins",
+    "family": "b1",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\b1_substitute_returner_wins.log",
+    "out": "D:\\mx\\s41b3\\j44",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_returner_wins",
+      "--out",
+      "D:\\mx\\s41b3\\j44",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "meta": {
+      "case": "substitute_returner_wins"
+    },
+    "n_failures": 16,
+    "n_evidence": 10,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check stayer_exit_zero: fail 1",
+      "check seat_dropped: fail None",
+      "check returner_reclaimed: fail None",
+      "check seat_has_one_holder: fail None",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check stayer_exit_zero: fail 1",
+      "check seat_dropped: fail None",
+      "check returner_reclaimed: fail None",
+      "check seat_has_one_holder: fail None",
+      "B1 running activity is not evidenced",
+      "B1 did not adjudicate exactly one dropped seat",
+      "B1 reclaims_accepted is not exactly one"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\host\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\host_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\leaver\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\returner\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\returner_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\stayer\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\stayer_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\substitute\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\substitute_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\verdict.json"
+    ]
+  },
+  {
+    "i": 72,
+    "id": "heal",
+    "family": "heal",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\heal.log",
+    "out": "D:\\mx\\s41b3\\j73",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\takeover-20260909\\run_breadth.py",
+      "--source",
+      "41",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--out",
+      "D:\\mx\\s41b3\\j73",
+      "--child",
+      "heal"
+    ],
+    "meta": {},
+    "n_failures": 5,
+    "n_evidence": 1,
+    "failures": [
+      "driver exit 1",
+      "missing/invalid result: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\\\mx\\\\s41b3\\\\j73\\\\result.json'",
+      "no runtime logs retained",
+      "D:\\mx\\s41b3\\logs\\heal.log:12: ModuleNotFoundError: No module named 'recovery_e2e'",
+      "no guarded launch records"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j73\\result.json"
+    ]
+  },
+  {
+    "i": 73,
+    "id": "compat_deferral_source22",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_deferral_source22.log",
+    "out": "D:\\mx\\s41b3\\j74",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_deferral_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j74"
+    ],
+    "meta": {
+      "case": "deferral",
+      "rung": "source22"
+    },
+    "n_failures": 1,
+    "n_evidence": 3,
+    "failures": [
+      "compat output differs from Source22; no UID exclusions"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j74\\source22\\launch.json",
+      "D:\\mx\\s41b3\\j74\\source22\\trace.json",
+      "D:\\mx\\s41b3\\j74\\summary.json"
+    ]
+  },
+  {
+    "i": 74,
+    "id": "compat_deferral_approved",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_deferral_approved.log",
+    "out": "D:\\mx\\s41b3\\j75",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_deferral_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j75"
+    ],
+    "meta": {
+      "case": "deferral",
+      "rung": "approved"
+    },
+    "n_failures": 1,
+    "n_evidence": 3,
+    "failures": [
+      "compat output differs from Source22; no UID exclusions"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j75\\approved\\launch.json",
+      "D:\\mx\\s41b3\\j75\\approved\\trace.json",
+      "D:\\mx\\s41b3\\j75\\summary.json"
+    ]
+  },
+  {
+    "i": 79,
+    "id": "compat_extra_source22",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_extra_source22.log",
+    "out": "D:\\mx\\s41b3\\j80",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_extra_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j80"
+    ],
+    "meta": {
+      "case": "extra",
+      "rung": "source22"
+    },
+    "n_failures": 8,
+    "n_evidence": 3,
+    "failures": [
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j80\\source22\\launch.json",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json",
+      "D:\\mx\\s41b3\\j80\\summary.json"
+    ]
+  },
+  {
+    "i": 80,
+    "id": "compat_extra_approved",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_extra_approved.log",
+    "out": "D:\\mx\\s41b3\\j81",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_extra_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j81"
+    ],
+    "meta": {
+      "case": "extra",
+      "rung": "approved"
+    },
+    "n_failures": 8,
+    "n_evidence": 3,
+    "failures": [
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j81\\approved\\launch.json",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json",
+      "D:\\mx\\s41b3\\j81\\summary.json"
+    ]
+  }
+]

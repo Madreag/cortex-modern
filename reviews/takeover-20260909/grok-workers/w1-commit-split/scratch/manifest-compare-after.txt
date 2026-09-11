@@ -1,0 +1,7 @@
+manifest-compare-after
+head_now=0e2aa3812f0f015b1c6734649dcb4360b80650e5
+manifest_head=60cb6981462d30400d372ca778d440c82a5bcbe3
+mismatch_count=0
+missing_count=0
+extra_count=0
+all manifest files match the working tree; no extra non-lib dirty files

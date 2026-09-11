@@ -1,0 +1,113 @@
+1317|gates repeat the Source37 verdicts check for check with `peers_3_4_regression` 5/5; the lobby lanes
+1318|repeat their Source37 shape with the counters recorded; the compatibility ladder is clean against the
+1341|| 3 | Fake-lag 100/200 ms | **PASS / PASS** (plus two extra fl200 repeats) | same |
+1344|| 2 | H4 §9a gates | **4 PASS / 4 FAIL**, `peers_3_4` **5/5** | identical, check for check |
+1347|| 5 | Compatibility ladder | **0 real differences** vs Source22 across four fixtures | same |
+1368|identical, 601 ticks, **0 resyncs**, auto delays `{1:1, 2:8}` and `{1:1, 2:14}`. The **first** fl200
+1372|and the deferral lane recorded that cost as unmeasured, I repeated fl200 twice rather than attribute
+1375|| fl200 | wall_tps | out_of_order | start_sent/retransmits | verdict |
+1396|| 3 | `clean_leave` | **FAIL** — FAIL `clean_leave_acked 0`, `clean_leave_cleared_ticket`, `host_closed_the_seat None`, `clean_old_ticket_refused used_stored_ticket=True commits=1`, `hosts_survived exits=[1,0,1]`; PASS `ambiguous_kept_ticket`, `ambiguous_reclaim_worked used_stored_ticket=True commits=1` |
+1397|| 4 | `reclaim_socket` | **FAIL** — FAIL `host_exit_zero 1`, `host_saw_seat_drop_and_return 0 committed seats`, `host_reseat_issued`; PASS `first_client_dropped_midmatch`, `returner_reclaimed_stored_ticket`, `returner_committed`, `returner_on_same_stable_seat`, `host_census_clean 0`, `resync_round_survived`, `funds_unchanged`, `no_authority_error` |
+1399|| 6 | `fencing_two_transports` | **FAIL** — FAIL `host_bound_second_incarnation None`, `host_fenced_the_old_transport fenced_disconnects+fenced_packets=0`, `seat_not_dropped_by_stale_timeout []`, `host_survived 1`; PASS `second_client_committed`, `first_client_superseded` |
+1400|| 7 | `rejoin_after_resync` | **FAIL** — FAIL `resync_match_continued 1` only; PASS `resync_returner_reclaimed`, `resync_round_ran`, `resync_census_clean 0`, `rematch_completed 0`, `rematch_ticket_survived`, `rematch_seat_still_protected`, `rematch_no_host_fatal`, `no_stale_epoch_denials stale_epoch_drops=0` |
+1401|| 8 | `peers_3_4_regression` | **PASS ×5/5** — every check green in all five runs (`peers3_sim_gated_identical 3 traces identical`, `peers4_sim_gated_identical 4 traces identical`, `drop3_returner_reclaimed`, `drop3_survivors_identical`, `drop3_distinct_seats []`, `no_census_refusals 0`) |
+1407|`reclaim_socket`, `rejoin_after_resync/resync_host` and `clean_leave/ambiguous_host`.
+1408|`fencing_two_transports` fails at `tick 566 lockstep queue: GNS peer was not found` (589 on
+1409|Source37 — the tick moves run to run, the failure does not), and `clean_leave/clean_host` still ends
+1518|### 5. Compatibility ladder against the Source22 reference — clean
+1526|| `compat_review_alias.lua` | 5 | **0** | 0 | **0** | symmetric (5 / 5, format not `ok=N`) |
+1527|| `compat_review_alias2.lua` | 3 | **0** | 0 | **0** | symmetric (3 / 3) |
+1528|| `compat_review_extra.lua` | 18 | **0** | 0 | **0** | symmetric (14 / 14) |
+1531|differing detail string — the `spawn_child` UniqueID counter, `uid=1049494` (reference) against
+1551|* **New, and a correction to the brief's expectation:** the ladder's `spawn_child` UniqueID counter
+1555|  H4 reds; `fencing_two_transports`' `GNS peer was not found`; `clean_leave`'s unacked clean arm; the
+1561|  Mac chain, the full matrix and the native/restore/heal/transaction gates (the lead's, not this
+1572|3. The eight H4 gates repeat the Source37 verdicts check for check with `peers_3_4_regression` 5/5, and the residues are message-for-message identical: the resync completes (`saved=1` → `relaunched from the snapshot`) and the hosts then report `activity ended in state Over` with zero ticks; `fencing_two_transports` still fails on `GNS peer was not found`; `clean_leave`'s clean arm is still unacked. Slice A6 addresses all three and is not in this build.
+1574|5. The compatibility ladder is clean: four unchanged-Lua fixtures, 28/28 deferral cases `ok=1` on both rungs, and **zero real differences** against the Source22 reference — the only line that ever differed was the `spawn_child` UniqueID counter, which a repeat showed varies run to run on the reference executable itself (1049494 then 1049517), leaving the second run with no differing lines at all.
+1589|`reclaim_socket` and `rejoin_after_resync` BACKWARDS from Source38 and fail two of the four B1
+1590|substitution gates. A6's three `clean_leave` target checks did flip green, so A6's leave work
+1612|| 2 | H4 §9a gates | **4 PASS / 4 FAIL**, `peers_3_4` 5/5 — but two gates **regressed** | 4 PASS / 4 FAIL |
+1616|| 6 | Two-peer heal | **PASS**; `unresolved_observation_packets` 0 both peers | not run |
+1617|| 7 | Compatibility ladder | **0 differences** vs Source22 | same |
+1645|fl200: auto input delay: peer 2 rtt 401ms -> 14 frames  (unchanged)
+1652|attributable to A6's capped stop or the lobby session-close change; fl200 at 401 ms still gives 14,
+1653|and the fl200 Start-echo chatter is unchanged at 39 sent / 38 retransmitted.
+1669|| 3 | `clean_leave` | **FAIL** — **PASS `clean_leave_acked 1`**, **PASS `clean_leave_cleared_ticket`**, **PASS `host_closed_the_seat 1`**, PASS `ambiguous_kept_ticket`; FAIL `clean_old_ticket_refused used_stored_ticket=True commits=1`, `ambiguous_reclaim_worked used_stored_ticket=False commits=0`, `hosts_survived exits=[0,0,3] fatal=True` |
+1670|| 4 | `reclaim_socket` | **FAIL** — PASS `first_client_dropped_midmatch`, `returner_on_same_stable_seat`, `host_census_clean None`, `funds_unchanged`, `no_authority_error`; FAIL `host_exit_zero 3`, `returner_reclaimed_stored_ticket`, `returner_committed`, `host_saw_seat_drop_and_return 0 committed seats`, `host_reseat_issued`, `resync_round_survived` |
+1672|| 6 | `fencing_two_transports` | **FAIL** — PASS `second_client_committed`, `first_client_superseded`; FAIL `host_bound_second_incarnation None`, `host_fenced_the_old_transport 0`, `seat_not_dropped_by_stale_timeout []`, `host_survived 1` |
+1673|| 7 | `rejoin_after_resync` | **FAIL** — PASS `resync_census_clean None`, `rematch_ticket_survived`, `rematch_no_host_fatal`, `no_stale_epoch_denials 0`; FAIL `resync_returner_reclaimed`, `resync_round_ran`, `resync_match_continued 3`, `rematch_completed 124`, `rematch_seat_still_protected []` |
+1674|| 8 | `peers_3_4_regression` | **PASS ×5/5**, every check green in all five runs |
+1676|**What A6 fixed.** `clean_leave`'s three A6.5 target checks all flipped: `clean_leave_acked` went
+1684|`reclaim_socket/host`, `rejoin_after_resync/resync_host`, `clean_leave/ambiguous_host`. All three
+1707|`survivor == 0` branch only, which is exactly why **`peers_3_4_regression` stays 5/5**: its `drop3`
+1721|**Regression against Source38, stated plainly.** On Source38 `reclaim_socket` reached
+1724|Source39 they are red and the host is dead. `rejoin_after_resync`'s rematch arm also went from fully
+1727|`fencing_two_transports` did **not** crash — no `AbortLog.txt` — and keeps the older
+1741|| `substitute_commit` | **FAIL** | PASS `leaver_dropped_midmatch`, `no_authority_error`, `host_approved`, `substitute_offered_a_ticket`, `substitute_joined Joined`, `substitute_stored_its_ticket`, `no_reclaim_happened`; FAIL `host_exit_zero 3`, `stayer_exit_zero 1`, `host_census_clean None`, `seat_dropped None`, `applicant_registered None`, `substitution_committed None`, `reseat_issued` |
+1742|| `substitute_returner_wins` | **FAIL** | PASS `leaver_dropped_midmatch`, `no_authority_error`, `returner_joined Joined`, `substitution_did_not_commit`, `substitute_not_joined Applied`; FAIL `host_exit_zero 3`, `stayer_exit_zero 1`, `host_census_clean None`, `seat_dropped None`, `returner_reclaimed None`, `seat_has_one_holder None` |
+1743|| `substitute_host_cancel` | **PASS** | all 12, incl. `host_approved`, `host_cancelled`, `substitution_cancelled 1`, `substitution_did_not_commit 0`, `substitute_not_joined Substituting`, `seat_stayed_reassignable` |
+1744|| `substitute_bounds` | **FAIL** | PASS `host_exit_zero 0`, `stayer_exit_zero 0`, `seat_dropped 1`, `bound_respected 0`, `nothing_committed 0`, all three `applicant*_inert Idle`; FAIL `two_applicants_registered 0`, `third_applicant_refused 0` |
+1748|`substitute_commit/host` and `substitute_returner_wins/host` also die `0xE06D7363` / exit 3, but with
+1764|checkpoint work. The two B1 gates that never reach a resync (`substitute_host_cancel`,
+1765|`substitute_bounds`) have `host_exit_zero 0` and do not crash, which localises it to the
+1768|`substitute_bounds`' own failure is independent of both crashes: with a clean host and a dropped seat,
+1865|### 6. Two-peer heal gate — PASS, with one counter short of expectation
+1868|python D:/Projects/stage2_p4/recovery_expanded_mod.py heal --input-delay 3
+1871|`resync_heal PASS []`, `heal_mod_semantics pass: true, failed: []`. Evidence
+1872|`reviews/recovery-2026-09-06/expanded-mod-gates/20260909_041847_heal_bc723df9`.
+1887|### 7. Compatibility ladder — zero differences
+1895|| `compat_review_alias.lua` | 5 | **0** | 0 | **0** | 5 / 5 symmetric |
+1896|| `compat_review_alias2.lua` | 3 | **0** | 0 | **0** | 3 / 3 symmetric |
+1897|| `compat_review_extra.lua` | 18 | **0** | 0 | **0** | 14 / 14 symmetric |
+1900|`spawn_child` UniqueID counter, which this time matched (on Source38 it differed on one of two runs
+1909|  path; kills three H4 hosts; regresses `reclaim_socket` and `rejoin_after_resync` from Source38.
+1914|* **New GREEN:** `clean_leave`'s three A6 target checks; all three lobby controls including
+1921|  `fencing_two_transports`' `GNS peer was not found`; `substitute_bounds`' applicants never
+1922|  registering; the missing `relay drained in Nms` line; the heal gate's `stale_round_packets`;
+1931|2. Gates 1–4 and 6 are green and match Source38 — battery 10/10 with all six lines identical, matrix 16/16 `FAILURES: 0` including `mismatch`, invariance 8/8 with its control, discovery PASS; the only moved number is fake-lag's fl100 auto-delay, 8 → **7**, which is §4a's formula crossing a frame boundary because the measured RTT came in at 200 ms rather than 201 ms, not a code change.
+1932|3. **Two new host-fatal regressions, both `0xE06D7363` / exit 3 and mutually exclusive:** a re-entrant `std::mutex` (`PumpSessionEvents` holds `m_Mutex` → A6's `ResolveActorOwner` → `QuerySeatState` locks it again) kills three H4 hosts and takes `reclaim_socket` and `rejoin_after_resync` **backwards** from Source38; and `a GUI entity reference has no persistent owner` thrown from `InventoryMenuGUI::SaveCheckpoint` during the resync snapshot save kills two B1 hosts. `peers_3_4_regression` stays 5/5 precisely because its drop arm has survivors and never takes the faulty branch — the control corroborates the diagnosis.
+1933|4. A6's leave work **did** land — `clean_leave_acked 1`, ticket cleared, `host_closed_the_seat 1`, all three of A6.5's target checks — and the lobby work is a clear success: all three §7 controls are 3/3 including `ctl_rejoin_4_100` (0/3 on Source37/38), the new 3-peer drop control is 3/3, and `drop_4_200` now admits its replacement and runs a match.
+1934|5. The compact sound wire is confirmed on the counters — `largest_relay_packet_bytes` ~247 B against §7's predicted 20–23 KB, `unresolved_observation_packets` 0 on every peer of every lane and both heal peers — but **EResult 25 is not gone**: the host still loses all three remotes at frame 151 with `pending reliable` ≈ the 8 MB budget while relaying only 191 KB at 247 B/packet, which puts it on §7's pacing row, not its payload row; all eight sound arms and the heal gate pass, and the compatibility ladder shows zero differences against Source22.
+1942|pacing branch. The round-start repair is measured working: the fl200 Start chatter collapsed from
+1944|anywhere in this family. Against that, three things regressed: `peers_3_4_regression` fell to 0/5 on
+1945|a new deterministic `census_refusals=1`, `clean_leave`'s announced leave is now adjudicated as a
+1972|| 2 | H4 §9a gates | **3 PASS / 5 FAIL** — no crashes; `peers_3_4` **0/5** | 4 PASS / 4 FAIL, 3 crashes, `peers_3_4` 5/5 |
+1976|| 6 | Two-peer heal | **PASS** | PASS |
+1977|| 7 | Compatibility ladder | **0 differences** | same |
+1992|**resyncs 0**, auto delays back to **8 and 14** (Source39 read 7 at fl100 because its measured RTT
+1998|| fl200 | host | **2** | **1** | 0 | **39 / 38** |
+1999|| fl200 | client | **2** | **1** | 1 | **39 / 38** |
+2014|| 3 | `clean_leave` | **FAIL** — PASS `ambiguous_kept_ticket`, **PASS `ambiguous_reclaim_worked used_stored_ticket=True commits=1`**; FAIL `clean_leave_acked 0`, `clean_leave_cleared_ticket`, `host_closed_the_seat 0`, `clean_old_ticket_refused used_stored_ticket=True commits=1`, `hosts_survived exits=[0,0,1] fatal=False` |
+2015|| 4 | `reclaim_socket` | **FAIL** — PASS `first_client_dropped_midmatch`, **`returner_reclaimed_stored_ticket`**, **`returner_committed`**, `returner_on_same_stable_seat`, **`host_census_clean 0`**, **`resync_round_survived`**, `funds_unchanged`, `no_authority_error`; FAIL `host_exit_zero 1`, `host_saw_seat_drop_and_return 0 committed seats`, `host_reseat_issued` |
+2017|| 6 | `fencing_two_transports` | **FAIL** — PASS `second_client_committed`, `first_client_superseded`; FAIL `host_bound_second_incarnation None`, `host_fenced_the_old_transport 0`, `seat_not_dropped_by_stale_timeout []`, `host_survived 1` |
+2018|| 7 | `rejoin_after_resync` | **FAIL** — PASS **`resync_returner_reclaimed`**, **`resync_round_ran`**, `resync_census_clean 0`, `rematch_ticket_survived`, `rematch_no_host_fatal`, `no_stale_epoch_denials 0`; FAIL `resync_match_continued 1`, `rematch_completed 124`, `rematch_seat_still_protected []` |
+2019|| 8 | `peers_3_4_regression` | **FAIL ×5/5** — every other check green in all five; **`no_census_refusals census_refusals=1`** every run |
+2023|exit 1 rather than 3, and on `reclaim_socket` the checks it had taken down are green again —
+2026|snapshot`). `reclaim_socket` and `rejoin_after_resync` are therefore back to the **Source38** residue:
+2036|`clean_leave`'s three checks that went green on Source39 are red again, and the logs name the change
+2039|| | host log | client log | `clean_leave_acked` |
+2049|#### 2.2 REGRESSION — `peers_3_4_regression` 0/5 on a new deterministic census refusal
+2069|Measurable only on `crash_relaunch_provisional` — on `reclaim_socket` and `rejoin_after_resync` every
+2091|| `reclaim_socket` host | absent (activity ended) | 14 509 | n/a |
+2106|| `substitute_bounds` | **PASS** (was FAIL) | `two_applicants_registered 2`, `third_applicant_refused 5`, `bound_respected 0`, `nothing_committed 0`, `host_adjudicated_the_drop`, `seat_dropped 1`, all three applicants inert — exactly section 7 |
+2107|| `substitute_host_cancel` | **PASS** all 13 | `substitution_cancelled 1`, `seat_stayed_reassignable` |
+2108|| `substitute_commit` | **FAIL** | PASS `host_adjudicated_the_drop`, `host_census_clean 0`, `host_approved`, `substitute_offered_a_ticket`, `substitute_joined Joined`, `substitute_stored_its_ticket`, `no_reclaim_happened`; FAIL `host_exit_zero 1`, `stayer_exit_zero 1`, `seat_dropped None`, `applicant_registered None`, `substitution_committed None`, `reseat_issued` |
+2109|| `substitute_returner_wins` | **FAIL** | PASS `host_adjudicated_the_drop`, `host_census_clean 0`, `returner_joined Joined`, `substitution_did_not_commit`, `substitute_not_joined Idle`; FAIL `host_exit_zero 1`, `stayer_exit_zero 1`, `seat_dropped None`, `returner_reclaimed None`, `seat_has_one_holder None` |
+2114|failure — `substitute_commit`'s host ends `exit 1, ticks 1325, activity Over,
+2190|### 6. Two-peer heal gate — PASS
+2192|`resync_heal PASS []`, `heal_mod_semantics pass: true`. Evidence
+2193|`expanded-mod-gates/20260909_112620_heal_26d39dc2`.
+2208|### 7. Compatibility ladder — zero differences
+2213|| `compat_review_alias.lua` | 5 | **0** | 0 | **0** | 5 / 5 symmetric |
+2214|| `compat_review_alias2.lua` | 3 | **0** | 0 | **0** | 3 / 3 symmetric |
+2215|| `compat_review_extra.lua` | 18 | **0** | 0 | **0** | 14 / 14 symmetric |
+2223|Across every Source40 run directory and the heal evidence:
+2243|  start-answer storm; `substitute_bounds`; the 4-peer 200 ms lobby refusals.
+2244|* **New regressions:** `peers_3_4_regression` 0/5 on `census_refusals=1` with
+2245|  `resync failed: timed out waiting for the resync round`; `clean_leave`'s announced leave now
+2247|* **Unchanged from Source38/39:** the `activity ended in state Over` residue behind `reclaim_socket`
+2248|  and `rejoin_after_resync`; `fencing_two_transports`' four checks; the heal gate's
+2260|1. Gates 1–4 and 6 are green on Source40 (exe `ec9db6d0…`, hash-verified before every driver) and match Source39 — battery 10/10 with all six lines identical, matrix 16/16 `FAILURES: 0`, invariance 8/8 with its control, discovery PASS — and the **round-start repair is measured working**: the fl200 Start chatter fell from 39 sent / 38 retransmits to **2 / 1**, with resyncs 0 and the auto delays back at 8 and 14.
+2262|3. **Both Source39 host-fatals are fixed and the family has zero crashes**: the re-entrant mutex is gone (so `reclaim_socket` regains `returner_reclaimed`, `returner_committed`, `resync_round_survived` and `host_census_clean 0`, back to the Source38 `activity ended in state Over` residue), and B1's two hosts survive the resync snapshot save — `substitute_bounds` now passes outright and B1 is 2/4. The item-8 grep is zero across all seven patterns.
+2263|4. **Two regressions, both precise.** `peers_3_4_regression` — the control A6.5 says must stay green — is **0/5**, every run on `census_refusals=1` with the new `resync failed: timed out waiting for the resync round` on `drop3_host`; and `clean_leave`'s announced leave is now adjudicated as `connection lost` where Source39 logged `Match left`, so `clean_leave_acked` fell 1 → 0 and the ticket is kept again. A6.5's "all four green" is not met and `host_reseat_issued` stays red on both reclaim drivers.
+2264|5. The two-peer sound arms (all eight), the heal gate and the compatibility ladder are unchanged and green — every sound verdict matches `chain-source40-1.json` exactly, heal passes with `unresolved_observation_packets` 0 and `round_readoptions` 0 on both peers, and the ladder shows zero differences against Source22 across four fixtures with 28/28 deferral cases.

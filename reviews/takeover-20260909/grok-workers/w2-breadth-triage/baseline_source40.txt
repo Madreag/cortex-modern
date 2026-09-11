@@ -1,0 +1,327 @@
+1938|## Source40
+1939|
+1940|**Verdict: the biggest result is one the brief did not expect — all five lobby lanes are 15/15 green,
+1941|including `rejoin_4_200` and `drop_4_200`, and the EResult 25 refusal is GONE without the lobby
+1942|pacing branch. The round-start repair is measured working: the fl200 Start chatter collapsed from
+1943|39 sent / 38 retransmits to 2 / 1, and both Source39 host-fatal crashes are fixed — zero aborts
+1944|anywhere in this family. Against that, three things regressed: `peers_3_4_regression` fell to 0/5 on
+1945|a new deterministic `census_refusals=1`, `clean_leave`'s announced leave is now adjudicated as a
+1946|connection loss so its three Source39-green checks went red, and B1's two resync gates still fail
+1947|(gracefully now, no longer by crashing). A6.5's "all four H4 gates green" is NOT met.**
+1948|
+1949|**Pinned executable:** `ec9db6d0dcf1d55deefb25b79004a0118350e0239f1448559702dfc505ad92e1`, verified
+1950|against `grouped-build-ec9db6d0/build.json` (the `manifest` of `chain-source40-1.json`) **before every
+1951|driver** and again after the last one. Unchanged throughout. Run root `D:\mx\s40lanes\`; matrix HEAD
+1952|`269d2ee7184b58313c1ddfd84bd7c3fbd84553eb`. One engine pair at a time. Nothing moved, copied or
+1953|removed under `D:\mx`. `stage2_p4/` unchanged. Every guarded launch recorded a private desktop; no
+1954|launch record carried `waited_for_user_fullscreen_seconds` (the user was not in a fullscreen app).
+1955|
+1956|**Driver note:** the launcher shim landed before this run — the stock `run_interp_e2e.ps1`, the
+1957|battery's harness copy **and this lane's `driver/run_interp_desync.ps1`** all call
+1958|`tools/isolated_launch.py` already (the lead patched my copy; my lane edits — env-driven root, foreign
+1959|engines untouched, private runtimes — survived it), so no copy needed regenerating. The H4 gate
+1960|drivers keep their own pinned ports 46400–46472 rather than the 44500–44530 the brief names; both
+1961|bands are outside 43300–44300 and 44500–44530 is B1's, which ran there as specified.
+1962|
+1963|### Per-gate results
+1964|
+1965|| # | Gate | Source40 | Source39 |
+1966||---|---|---|---|
+1967|| 1 | Semantic battery | **10/10, 0 failures**, six lines identical | same |
+1968|| 2 | Interp matrix | **16/16, `FAILURES: 0`** | same |
+1969|| 3 | Fake-lag | **PASS / PASS**, Start chatter **2/1** at 200 ms | PASS, chatter 39/38 |
+1970|| 4 | Tick-300 invariance | **PASS**, 8/8, control 8/8 | same |
+1971|| 6 | Discovery | **PASS** | same |
+1972|| 2 | H4 §9a gates | **3 PASS / 5 FAIL** — no crashes; `peers_3_4` **0/5** | 4 PASS / 4 FAIL, 3 crashes, `peers_3_4` 5/5 |
+1973|| 3 | B1 substitution | **2 PASS / 2 FAIL**, no crashes | 1 PASS / 3 FAIL, 2 crashes |
+1974|| 4 | Lobby lanes | **15/15 PASS, EResult 25 gone** | 9/15, refusals present |
+1975|| 5 | Sound two-peer | all 8 arms agree with the chain | same |
+1976|| 6 | Two-peer heal | **PASS** | PASS |
+1977|| 7 | Compatibility ladder | **0 differences** | same |
+1978|| 8 | Checkpoint/AudioMan grep | **0 hits, 7 patterns** | n/a |
+1979|
+1980|---
+1981|
+1982|### 1. Gates 1–4 and 6 — green, and the Start-answer storm is measurably gone
+1983|
+1984|Semantic battery: every case `pass: true`, the set of failing check names across all ten **empty**,
+1985|and all six semantic detail lines character-identical to Source39 and back to Source32.
+1986|
+1987|Interp matrix: all 16 PASS, `FAILURES: 0`. `mismatch` green; `perturb` → `POSITIVE CONTROL PASS`;
+1988|`rtdesync` → `clean_no_false_positive: True`, `perturb_desync_detected: True`,
+1989|`RUNTIME DESYNC DETECTION: PASS`. Tick-300 invariance 8/8 with its control firing 8/8. Discovery PASS.
+1990|
+1991|**Fake-lag — the headline number.** Both lanes PASS, 600/600 identical, 601 frames accepted,
+1992|**resyncs 0**, auto delays back to **8 and 14** (Source39 read 7 at fl100 because its measured RTT
+1993|landed at 200 ms rather than 201; this run measured the usual value):
+1994|
+1995|| lane | peer | `start_packets_sent` | `start_retransmits` | `start_answers` | Source33–39 |
+1996||---|---|---|---|---|---|
+1997|| fl100 | host / client | 1 / 1 | 0 / 0 | 0 / 0 | 1 / 0 |
+1998|| fl200 | host | **2** | **1** | 0 | **39 / 38** |
+1999|| fl200 | client | **2** | **1** | 1 | **39 / 38** |
+2000|
+2001|The brief asked for "tens, not hundreds". The answer is **single digits** — 39 sent / 38 retransmits
+2002|became 2 / 1. The start-answer storm that had reproduced on every family since Source33 is gone.
+2003|
+2004|---
+2005|
+2006|### 2. H4 §9a gates — both Source39 crashes fixed, but three checks regressed
+2007|
+2008|Run root `D:\mx\s40lanes\h4\`. **Zero `AbortLog.txt` anywhere** (Source39 had three).
+2009|
+2010|| # | Gate | Verdict lines |
+2011||---|---|---|
+2012|| 1 | `gns_provider_smoke` | **PASS** 8/8 |
+2013|| 2 | `old_wire_fixture` | **PASS** 4/4 |
+2014|| 3 | `clean_leave` | **FAIL** — PASS `ambiguous_kept_ticket`, **PASS `ambiguous_reclaim_worked used_stored_ticket=True commits=1`**; FAIL `clean_leave_acked 0`, `clean_leave_cleared_ticket`, `host_closed_the_seat 0`, `clean_old_ticket_refused used_stored_ticket=True commits=1`, `hosts_survived exits=[0,0,1] fatal=False` |
+2015|| 4 | `reclaim_socket` | **FAIL** — PASS `first_client_dropped_midmatch`, **`returner_reclaimed_stored_ticket`**, **`returner_committed`**, `returner_on_same_stable_seat`, **`host_census_clean 0`**, **`resync_round_survived`**, `funds_unchanged`, `no_authority_error`; FAIL `host_exit_zero 1`, `host_saw_seat_drop_and_return 0 committed seats`, `host_reseat_issued` |
+2016|| 5 | `crash_relaunch_provisional` | **PASS** 10/10, incl. **`arm_b_provisional_expired relaunched after 26s, P2 is 20s`** — full margin, no inflation |
+2017|| 6 | `fencing_two_transports` | **FAIL** — PASS `second_client_committed`, `first_client_superseded`; FAIL `host_bound_second_incarnation None`, `host_fenced_the_old_transport 0`, `seat_not_dropped_by_stale_timeout []`, `host_survived 1` |
+2018|| 7 | `rejoin_after_resync` | **FAIL** — PASS **`resync_returner_reclaimed`**, **`resync_round_ran`**, `resync_census_clean 0`, `rematch_ticket_survived`, `rematch_no_host_fatal`, `no_stale_epoch_denials 0`; FAIL `resync_match_continued 1`, `rematch_completed 124`, `rematch_seat_still_protected []` |
+2019|| 8 | `peers_3_4_regression` | **FAIL ×5/5** — every other check green in all five; **`no_census_refusals census_refusals=1`** every run |
+2020|
+2021|**What the lock-order fix bought.** Source39's re-entrant `std::mutex` abort
+2022|(`ResolveActorOwner` → `QuerySeatState` under `PumpSessionEvents`) is gone: no gate crashes, hosts
+2023|exit 1 rather than 3, and on `reclaim_socket` the checks it had taken down are green again —
+2024|`returner_reclaimed_stored_ticket`, `returner_committed`, `resync_round_survived`, `host_census_clean 0`.
+2025|The resync completes end to end (`save … saved=1` → `read` → `resync: match relaunched from the
+2026|snapshot`). `reclaim_socket` and `rejoin_after_resync` are therefore back to the **Source38** residue:
+2027|`exit 1, running_ticks 0, activity Over, "activity ended in state Over"`.
+2028|
+2029|**A6.5 is not met.** Of the four gates it says must flip, none is green. `host_census_clean 0` is
+2030|green on both reclaim drivers as A6.5 asks, but **`host_reseat_issued` is not**.
+2031|`crash_relaunch_provisional`'s `arm_b_provisional_expired` holds its full margin, so the inflation has
+2032|not returned.
+2033|
+2034|#### 2.1 REGRESSION — the announced leave is now adjudicated as a connection loss
+2035|
+2036|`clean_leave`'s three checks that went green on Source39 are red again, and the logs name the change
+2037|exactly:
+2038|
+2039|| | host log | client log | `clean_leave_acked` |
+2040||---|---|---|---|
+2041|| **Source39** | `Client left the match at frame 301 (Match left)` | `[net-reconnect] leave: Left (ticket cleared)` | **1** |
+2042|| **Source40** | `Client left the match at frame 301 (connection lost)` | `[net-reconnect] leave: Leaving (ticket kept)` | **0** |
+2043|
+2044|Same frame, different adjudication. The §7 exchange still starts (the client reaches `Leaving`) but
+2045|the host treats the departure as a lost connection rather than an announced leave, so no `LeaveAck`
+2046|comes back and the ticket is kept. `ambiguous_reclaim_worked` went the other way — red on Source39,
+2047|green here.
+2048|
+2049|#### 2.2 REGRESSION — `peers_3_4_regression` 0/5 on a new deterministic census refusal
+2050|
+2051|The control A6.5 names as "must stay green" now fails **all five runs**, always on
+2052|`no_census_refusals census_refusals=1`, always on `drop3_host`. Everything else in the gate stays
+2053|green (3- and 4-peer traces identical, `drop3_returner_reclaimed`, `drop3_survivors_identical`,
+2054|`drop3_distinct_seats`). The host's log ends:
+2055|
+2056|```
+2057|[net-match] rejoin: Client reconnected - resyncing the match
+2058|[net-match] resync: requested, reloading from the host snapshot
+2059|[snapbench] save main_ms=141 zip_io_ms=78 saved=1
+2060|[net-match] resync failed: timed out waiting for the resync round
+2061|```
+2062|
+2063|**`timed out waiting for the resync round` is new** — the snapshot saves cleanly, then the host waits
+2064|for a resync round that never arrives. That is in the area the round-start and re-adoption work
+2065|touched, and it is deterministic across five runs.
+2066|
+2067|#### 2.3 Round-start counters and the A7 clocks
+2068|
+2069|Measurable only on `crash_relaunch_provisional` — on `reclaim_socket` and `rejoin_after_resync` every
+2070|process ends `exit 1, ticks 0, activity Over` with **no `runner.lockstep` block at all**, so the
+2071|brief's round-start assertions (returner in `Running` with `stale_round_packets` climbing while the
+2072|host shows `WaitingForStart`) **cannot be evaluated there**; that is downstream of the `activity Over`
+2073|residue, not of the round-start work.
+2074|
+2075|| gate / peer | `start_packets_sent` | `start_retransmits` | `start_answers` | `start_answers_suppressed` | `round_readoptions` | `stale_round_packets` | `peers_left` | `peer_leave_frames` |
+2076||---|---|---|---|---|---|---|---|---|
+2077|| `crash_relaunch` arm_a host / client2 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 | **0** | 0 | 0 | **{}** |
+2078|| `crash_relaunch` arm_b host / client2 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 | **0** | 0 | 0 | **{}** |
+2079|
+2080|Within every bound the brief sets: `round_readoptions` 0 where the restarts do not stagger, never
+2081|more than 1; `peer_leave_frames` empty; the retransmit ladder
+2082|(`start_retransmits − start_answers − round_readoptions`) is 0.
+2083|
+2084|**A7 clocks, recorded not asserted** (F1.5 — the report is built after the loop stops feeding the
+2085|session, so the difference reads teardown):
+2086|
+2087|| host | `session.clock_ms` | `admission_clock_ms` | difference |
+2088||---|---|---|---|
+2089|| `crash_relaunch` arm_a | 19 079 | 20 582 | **−1 503 ms** |
+2090|| `crash_relaunch` arm_b | 44 163 | 44 176 | **−13 ms** |
+2091|| `reclaim_socket` host | absent (activity ended) | 14 509 | n/a |
+2092|
+2093|arm_b's −13 ms is the teardown; arm_a's −1 503 ms is the longer teardown of a run that relaunched.
+2094|**A mid-match sample was not obtainable**: the host's per-tick log carries no clock line on this
+2095|build, so there is nothing to sample between ticks — only the end-of-run report values above.
+2096|
+2097|---
+2098|
+2099|### 3. B1 substitution gates — 2 PASS / 2 FAIL, and the Source39 crash is fixed
+2100|
+2101|`python tools/h4_substitution_gates.py all --out D:/mx/s40lanes/b1gates --expect-sha256 ec9db6d0… --repo …`
+2102|Ports 44500–44530. **Zero `AbortLog.txt`** (Source39 had two).
+2103|
+2104|| Gate | Verdict | Notes |
+2105||---|---|---|
+2106|| `substitute_bounds` | **PASS** (was FAIL) | `two_applicants_registered 2`, `third_applicant_refused 5`, `bound_respected 0`, `nothing_committed 0`, `host_adjudicated_the_drop`, `seat_dropped 1`, all three applicants inert — exactly section 7 |
+2107|| `substitute_host_cancel` | **PASS** all 13 | `substitution_cancelled 1`, `seat_stayed_reassignable` |
+2108|| `substitute_commit` | **FAIL** | PASS `host_adjudicated_the_drop`, `host_census_clean 0`, `host_approved`, `substitute_offered_a_ticket`, `substitute_joined Joined`, `substitute_stored_its_ticket`, `no_reclaim_happened`; FAIL `host_exit_zero 1`, `stayer_exit_zero 1`, `seat_dropped None`, `applicant_registered None`, `substitution_committed None`, `reseat_issued` |
+2109|| `substitute_returner_wins` | **FAIL** | PASS `host_adjudicated_the_drop`, `host_census_clean 0`, `returner_joined Joined`, `substitution_did_not_commit`, `substitute_not_joined Idle`; FAIL `host_exit_zero 1`, `stayer_exit_zero 1`, `seat_dropped None`, `returner_reclaimed None`, `seat_has_one_holder None` |
+2110|
+2111|**The Source39 fatal is fixed.** Those two hosts died in `GUICheckpoint::SaveEntityReference`
+2112|("a GUI entity reference has no persistent owner") during the resync snapshot save; here they survive
+2113|and `host_census_clean 0` reads a real value instead of `None`. What replaces it is a graceful
+2114|failure — `substitute_commit`'s host ends `exit 1, ticks 1325, activity Over,
+2115|runtime_error "resync failed: resync snapshot save failed"` — so B1's resync-snapshot fix turned a
+2116|crash into a refusal but the save still fails in this scenario. The `None` values on `seat_dropped`,
+2117|`applicant_registered` and `substitution_committed` are the ended-activity report shape, not zeroes.
+2118|
+2119|---
+2120|
+2121|### 4. Lobby lanes — 15/15, and EResult 25 is gone WITHOUT the pacing branch
+2122|
+2123|Stock `tools/test_lobby_lifecycle.py`, run root `D:\mx\s40lanes\lobby\`, ports 44160–44202, three
+2124|runs each. **This is the finding the brief asked me to flag: it differs from Source39, and not by
+2125|jitter.**
+2126|
+2127|| lane | runs | pass | Source39 |
+2128||---|---|---|---|
+2129|| `rejoin_4_200` | 3 | **3** | 0/3 |
+2130|| `drop_4_200` | 3 | **3** | 0/3 |
+2131|| `ctl_rejoin_4_100` | 3 | **3** | 3/3 |
+2132|| `ctl_rejoin_3_200` | 3 | **3** | 3/3 |
+2133|| `ctl_drop_3_200` | 3 | **3** | 3/3 |
+2134|
+2135|Per-peer counters (run 1 of each; runs 2–3 within jitter):
+2136|
+2137|| lane | peer | fa | stalls | ooo | relay_fail | resends | maxpkt | relay_bytes | unres | stale | readopt | start_sent/retx | longest_stall |
+2138||---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+2139|| `rejoin_4_200` | host | 177 | 167 | 2 | **0** | **0** | **247** | 209 622 | **0** | 0 | 0 | 5 / 4 | **336** |
+2140|| | 3 clients | 177 | 177 | 162 | 0 | 0 | 0 | 0 | **0** | 0 | 0 | 3 / 2 | **339** |
+2141|| `drop_4_200` | host | 177 | 167 | 10 | **0** | **0** | **247** | 209 622 | **0** | 0 | 0 | 5 / 4 | **340** |
+2142|| | 3 clients | 177 | 177 | 163–172 | 0 | 0 | 0 | 0 | **0** | 0 | 0 | 3 / 2 | **334** |
+2143|| `ctl_rejoin_4_100` | host | 177 | 173 | 0 | 0 | 0 | 262 | 217 110 | 0 | 0 | 0 | 1 / 0 | 204 |
+2144|| `ctl_rejoin_3_200` | host | 177 | 167 | 2 | 0 | 0 | 246 | 69 456 | 0 | 0 | 0 | 4 / 3 | 327 |
+2145|| `ctl_drop_3_200` | host | 177 | 167 | 1 | 0 | 0 | 246 | 69 456 | 0 | 0 | 0 | 4 / 3 | 329 |
+2146|
+2147|Across **all six** 4-peer 200 ms runs: `relay_send_failures` **0**, `relay_resends` **0**,
+2148|`last_relay_error` empty, every peer at **177** frames, max client stall **332–347 ms**.
+2149|
+2150|**Against Source39 on the same two lanes:** 22–34 refusals with
+2151|`SendMessageToConnection failed with EResult 25 (… pending reliable 8388583 … buffer budget 8388608)`,
+2152|231–262 resends, all three remotes declared `unreachable` and lost at **frame 151**, clients stranded
+2153|at **146** of 180, longest stalls **5 874–6 397 ms**. None of that appears now. The stall figure alone
+2154|is a ~17× improvement, and the refusal is absent rather than reduced.
+2155|
+2156|`largest_relay_packet_bytes` stays ~247 and `relay_bytes_sent` is unchanged in kind (209 622 against
+2157|Source39's 191 010 — slightly more because the match now runs to completion rather than collapsing at
+2158|frame 151). `unresolved_observation_packets` is 0 on every peer of every lane;
+2159|`stale_round_packets` and `round_readoptions` are 0 throughout, consistent with no round restarting in
+2160|these lanes. `drop_4_200`'s replacement joins and contributes a full 177 frames, so `client_state:
+2161|Joined` is met.
+2162|
+2163|**Reading, stated as correlation not proof.** The lobby pacing branch is explicitly *not* in this
+2164|build, so the refusals were not fixed by it. What did change on the same wire is the round-start
+2165|repair, and the fake-lag duel measures its effect directly: 39 start packets / 38 retransmits became
+2166|2 / 1. A start-answer storm at four relayed peers is the obvious candidate for what was filling the
+2167|8 MB reliable queue that produced `pending reliable 8388583`. **I did not bisect this**, and the
+2168|pacing branch's own review should weigh whether its premise still holds now that the refusal is gone
+2169|without it.
+2170|
+2171|---
+2172|
+2173|### 5. Two-peer sound modes — all eight arms agree with the chain
+2174|
+2175|| arm | expected | this run | `chain-source40-1.json` |
+2176||---|---|---|---|
+2177|| authority `match` | match | changed 0 | 0 |
+2178|| authority fault (`CC_FAULT_INJECT=local_audibility`) | diverge | changed 72 | 72 |
+2179|| `wounds` | match | 0, effects 4/4 | 0 |
+2180|| `rng_particles` | match | 0, effects 1566/1566 | 0 |
+2181|| `ui_bus` | match | 0, effects 192/192 | 0 |
+2182|| `ai_defer` | match | 0, effects 2404/2404 | 0 |
+2183|| `ai_defer_alias` | match | 0, effects 4808/4808 | 0 |
+2184|| `per_machine` (fault-armed) | diverge | changed 141 | 141 |
+2185|
+2186|Identical to Source39 and to the chain, arm for arm.
+2187|
+2188|---
+2189|
+2190|### 6. Two-peer heal gate — PASS
+2191|
+2192|`resync_heal PASS []`, `heal_mod_semantics pass: true`. Evidence
+2193|`expanded-mod-gates/20260909_112620_heal_26d39dc2`.
+2194|
+2195|| peer | `unresolved_observation_packets` | `stale_round_packets` | `round_readoptions` | `peer_leave_frames` | resyncs | frames |
+2196||---|---|---|---|---|---|---|
+2197|| host | **0** | 0 | **0** | **{}** | 1 | 602 |
+2198|| client | **0** | 0 | **0** | **{}** | 1 | 599 |
+2199|
+2200|`unresolved_observation_packets` 0 on both ✓; `round_readoptions` ≤ 1 ✓; `peer_leave_frames` empty ✓;
+2201|the restarted side ran (599 frames) and ended `Stopped`. `stale_round_packets` is **0 on both**, where
+2202|the brief expected non-zero on the restarted side — **but that is unchanged from Source39**, which
+2203|also read 0/0 through a real resync, so it is a standing question about that counter rather than a
+2204|Source40 difference.
+2205|
+2206|---
+2207|
+2208|### 7. Compatibility ladder — zero differences
+2209|
+2210|| fixture | lines | differing | UniqueID-only | **real** | cases (ref / app failures) |
+2211||---|---|---|---|---|---|
+2212|| `sound_ai_deferral.lua` | 29 | **0** | 0 | **0** | 28 (0 / 0) |
+2213|| `compat_review_alias.lua` | 5 | **0** | 0 | **0** | 5 / 5 symmetric |
+2214|| `compat_review_alias2.lua` | 3 | **0** | 0 | **0** | 3 / 3 symmetric |
+2215|| `compat_review_extra.lua` | 18 | **0** | 0 | **0** | 14 / 14 symmetric |
+2216|
+2217|28/28 deferral cases `ok=1` on both rungs, not one differing line — identical to Source38 and Source39.
+2218|
+2219|---
+2220|
+2221|### 8. Checkpoint and AudioMan grep — zero hits
+2222|
+2223|Across every Source40 run directory and the heal evidence:
+2224|
+2225|| pattern | files |
+2226||---|---|
+2227|| `invalid AudioMan checkpoint` | **0** |
+2228|| `checkpoint refused` | **0** |
+2229|| `cannot be carried` | **0** |
+2230|| `no persistent owner` | **0** |
+2231|| `has no registered owner` | **0** |
+2232|| `could not apply MovableMan checkpoint` | **0** |
+2233|| `unresolved native references` | **0** |
+2234|
+2235|**Zero `AbortLog.txt` anywhere in the family** (Source39 had five across H4 and B1). The audio
+2236|checkpoint flake and both Source39 fatals are absent.
+2237|
+2238|---
+2239|
+2240|### What is new on Source40, and what is still open
+2241|
+2242|* **Fixed:** both Source39 host-fatals (the re-entrant mutex and the GUI-checkpoint throw); the
+2243|  start-answer storm; `substitute_bounds`; the 4-peer 200 ms lobby refusals.
+2244|* **New regressions:** `peers_3_4_regression` 0/5 on `census_refusals=1` with
+2245|  `resync failed: timed out waiting for the resync round`; `clean_leave`'s announced leave now
+2246|  adjudicated as `connection lost`.
+2247|* **Unchanged from Source38/39:** the `activity ended in state Over` residue behind `reclaim_socket`
+2248|  and `rejoin_after_resync`; `fencing_two_transports`' four checks; the heal gate's
+2249|  `stale_round_packets` reading 0 through a real resync.
+2250|* **Not measurable here:** the round-start assertions on the two resync gates (no lockstep block at
+2251|  0 ticks); a mid-match A7 clock sample (the per-tick log carries no clock line).
+2252|* **Not attempted:** any bisect of the two regressions or of why the lobby refusals cleared; the
+2253|  headed §11 review; the full matrix, the Mac chain, restoration, the transaction gate and the
+2254|  rollback fuzzes.
+2255|
+2256|---
+2257|
+2258|### Summary
+2259|
+2260|1. Gates 1–4 and 6 are green on Source40 (exe `ec9db6d0…`, hash-verified before every driver) and match Source39 — battery 10/10 with all six lines identical, matrix 16/16 `FAILURES: 0`, invariance 8/8 with its control, discovery PASS — and the **round-start repair is measured working**: the fl200 Start chatter fell from 39 sent / 38 retransmits to **2 / 1**, with resyncs 0 and the auto delays back at 8 and 14.
+2261|2. **All five lobby lanes are 15/15 green and EResult 25 is gone — without the pacing branch.** Across all six 4-peer 200 ms runs `relay_send_failures` and `relay_resends` are **0**, every peer reaches 177 frames and the longest client stall is 332–347 ms, against Source39's 22–34 refusals, remotes lost at frame 151, clients stranded at 146 and stalls near 6 000 ms. I did not bisect it, but the only thing that changed on that wire is the start repair, so the pacing branch's premise deserves re-weighing.
+2262|3. **Both Source39 host-fatals are fixed and the family has zero crashes**: the re-entrant mutex is gone (so `reclaim_socket` regains `returner_reclaimed`, `returner_committed`, `resync_round_survived` and `host_census_clean 0`, back to the Source38 `activity ended in state Over` residue), and B1's two hosts survive the resync snapshot save — `substitute_bounds` now passes outright and B1 is 2/4. The item-8 grep is zero across all seven patterns.
+2263|4. **Two regressions, both precise.** `peers_3_4_regression` — the control A6.5 says must stay green — is **0/5**, every run on `census_refusals=1` with the new `resync failed: timed out waiting for the resync round` on `drop3_host`; and `clean_leave`'s announced leave is now adjudicated as `connection lost` where Source39 logged `Match left`, so `clean_leave_acked` fell 1 → 0 and the ticket is kept again. A6.5's "all four green" is not met and `host_reseat_issued` stays red on both reclaim drivers.
+2264|5. The two-peer sound arms (all eight), the heal gate and the compatibility ladder are unchanged and green — every sound verdict matches `chain-source40-1.json` exactly, heal passes with `unresolved_observation_packets` 0 and `round_readoptions` 0 on both peers, and the ladder shows zero differences against Source22 across four fixtures with 28/28 deferral cases.

@@ -1,0 +1,3 @@
+Skip registry mutation when privately adopting a persisted UniqueID
+
+A non-registering faithful clone takes the saved id without unregistering the canonical object.

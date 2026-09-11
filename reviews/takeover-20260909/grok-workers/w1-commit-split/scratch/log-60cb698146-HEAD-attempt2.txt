@@ -1,0 +1,48 @@
+Compare snapshots by the controlled actor's inventory role
+
+The comparator was selecting Activity1's brain; use the controlled actor so the retained pair matches.
+
+Record A7 recovery events on session, tickets and ownership
+
+Session heartbeats, loaded-ticket hashes and local unit ownership feed the existing A7 journal.
+
+Initialize saved-game modules and use the lobby shared clock
+
+Selected modules get writable save storage, and lobby waits use the session clock plus transfer progress instead of a flat timeout.
+
+Restore peer-local player, UI and aliases after a restore
+
+Capture and reload local bindings, camera, input and GUI-owned graphs without copying the host presentation onto a returning peer.
+
+Give the host a live F6 panel and codec-17 seat snapshots
+
+Replace stop-message notices with authenticated seat snapshots, keep seat metadata, and show a persistent roster.
+
+Add A7 journal helpers for recovery-arm traces
+
+Emit bounded JSON events the Mac A7 driver already reads.
+
+Keep ACraft exit selection and AHuman inventory across checkpoint load
+
+Checkpoint construction applies the persisted exit and skips empty-hand startup equip.
+
+Skip registry mutation when privately adopting a persisted UniqueID
+
+A non-registering faithful clone takes the saved id without unregistering the canonical object.
+
+Restore typed native aliases and isolate craft-fixture clones
+
+Borrowed owners keep their Lua class, and craft-fixture clones leave the source graph registered.
+
+Restore complete input, drop-map ownership and exact-target priming
+
+Replay acknowledged commands and delayed inputs after a heal, keep the drop map, and prime the resync at the exact saved target.
+
+Bound a resync envelope around archive, acks and pending commands
+
+Encode ownership maps, acknowledged command sequences and pending inputs in a size-capped envelope. Raise the lobby state-chunk ceiling so a complete-input archive fits.
+
+Carry player-binding observations on the command wire
+
+A peer's local slots travel as codec-18 PlayerBindings with a sender-local sequence so a pending command can cross a resync.
+

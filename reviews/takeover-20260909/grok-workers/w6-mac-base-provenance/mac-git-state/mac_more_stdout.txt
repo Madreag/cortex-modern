@@ -1,0 +1,148 @@
+===== CAT_FILE_60cb698146 =====
+fatal: Not a valid object name 60cb698146
+EXIT:128
+===== LOG_1_60cb698146 =====
+fatal: ambiguous argument '60cb698146': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+EXIT:128
+===== MERGE_BASE =====
+fatal: Not a valid object name 60cb698146
+EXIT:128
+===== LOG_60cb_TO_HEAD =====
+fatal: ambiguous argument '60cb698146..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+EXIT:128
+===== LOG_HEAD_TO_60cb =====
+fatal: ambiguous argument 'HEAD..60cb698146': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+EXIT:128
+===== SHOW_HEAD =====
+commit 316e96375702eff5b0118714dc4762a0ee6eebd7
+Author:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+AuthorDate: Mon Sep 7 13:27:27 2026 -0700
+Commit:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+CommitDate: Mon Sep 7 13:27:27 2026 -0700
+
+    feat(snapshot): encode portable runtime values and full controller state
+===== STATUS_COUNT =====
+     339
+===== CONTROL_REPO =====
+CONTROL_HEAD=316e96375702eff5b0118714dc4762a0ee6eebd7
+CONTROL_BRANCH=HEAD
+CONTROL_STATUS_COUNT=     316
+CONTROL_LOG_5=
+316e96375 feat(snapshot): encode portable runtime values and full controller state
+d435c66d3 fix(snapshot): retain configuration of derived native object classes
+99e4cc0b9 fix(snapshot): preserve nested native identities during writes
+8b10e7ee3 fix(craft): set the lateral control speed field
+b667f492e fix(turret): handle empty mounts and release owned devices
+===== STATUS_21 =====
+----- STATUS Source/Activities/GAScripted.h -----
+ M Source/Activities/GAScripted.h
+WT_SHA256=07c9855e8c75784e4ae75f990bc4953125db44b81f7ab4f27b4f52eedcfa3703
+HEAD_BLOB=691faab90ab66aff3dc4017c84ecbd8bef13aead
+INDEX_BLOB=691faab90ab66aff3dc4017c84ecbd8bef13aead
+----- STATUS Source/Entities/Actor.cpp -----
+ M Source/Entities/Actor.cpp
+WT_SHA256=5d37ba4913c55b224ca49206e388dbf68390bce66fea430d82155b43aa7237e5
+HEAD_BLOB=d96e5ef8505e940dfd056d6d7c9ea19e0d8ccaf0
+INDEX_BLOB=d96e5ef8505e940dfd056d6d7c9ea19e0d8ccaf0
+----- STATUS Source/Entities/Actor.h -----
+ M Source/Entities/Actor.h
+WT_SHA256=7ca9a5d06d575dee5af9106c5a8d2085a4983907d4007c0e07a6f24e7a14e79d
+HEAD_BLOB=14286442643f797d2682e32224abfc866458288a
+INDEX_BLOB=14286442643f797d2682e32224abfc866458288a
+----- STATUS Source/Entities/Gib.cpp -----
+ M Source/Entities/Gib.cpp
+WT_SHA256=ab5dbc97c229ed52b55b0b7b7bf30d22c0b0390456aae8c6f1bd87d62c59eff6
+HEAD_BLOB=2a3f7bda3f6b47780cbb8c66f404981ef3894913
+INDEX_BLOB=2a3f7bda3f6b47780cbb8c66f404981ef3894913
+----- STATUS Source/Entities/GlobalScript.cpp -----
+ M Source/Entities/GlobalScript.cpp
+WT_SHA256=bc4bda01e4905b3f444e478704ca02b35745c5d3122af1bd0c335382a6b13cc2
+HEAD_BLOB=a205cb7e06704f798a6c8e0ff9ef6ae7bfdd02cf
+INDEX_BLOB=a205cb7e06704f798a6c8e0ff9ef6ae7bfdd02cf
+----- STATUS Source/Entities/GlobalScript.h -----
+ M Source/Entities/GlobalScript.h
+WT_SHA256=48557ff894add482ba6df31903f2bc8c94d15f0082b7eaabd68effd061dd5e80
+HEAD_BLOB=dd547b04631046e6540c1249f3443590fd0a17ac
+INDEX_BLOB=dd547b04631046e6540c1249f3443590fd0a17ac
+----- STATUS Source/GUI/GUIBanner.cpp -----
+ M Source/GUI/GUIBanner.cpp
+WT_SHA256=254e0bc3327dd841f30dce292abed82db59f9cf7de5f8d7cce2fef13231c2328
+HEAD_BLOB=eefb7fbbbf7ea2ec4f093b0015cd0ca22b900806
+INDEX_BLOB=eefb7fbbbf7ea2ec4f093b0015cd0ca22b900806
+----- STATUS Source/GUI/GUIBanner.h -----
+ M Source/GUI/GUIBanner.h
+WT_SHA256=13aec953102e5d4d1d87060fd4fc339ebec039ada215ee17aab537af59aa2e37
+HEAD_BLOB=1d4144c2d7de7e337b1c9748dbc93da9179d76cb
+INDEX_BLOB=1d4144c2d7de7e337b1c9748dbc93da9179d76cb
+----- STATUS Source/GUI/GUIFont.h -----
+ M Source/GUI/GUIFont.h
+WT_SHA256=f64497163a7a9b81d8f046d3de72e8321f305b6b07aa991cdcfa1cdb5c3fb5a5
+HEAD_BLOB=53cb07ed848d300a2197b009a3eb62d786b84a2c
+INDEX_BLOB=53cb07ed848d300a2197b009a3eb62d786b84a2c
+----- STATUS Source/GUI/GUIInput.cpp -----
+ M Source/GUI/GUIInput.cpp
+WT_SHA256=be452b616f4a1900a4dcc68b60fcd43281245271e910336d51accf3113a1601a
+HEAD_BLOB=fb068ddd6f6d6b1358c0dfeda1e45660b105c4c9
+INDEX_BLOB=fb068ddd6f6d6b1358c0dfeda1e45660b105c4c9
+----- STATUS Source/Managers/PostProcessMan.cpp -----
+ M Source/Managers/PostProcessMan.cpp
+WT_SHA256=5abd1b549b00367116e11563373f4cf9b832655ce5dabea78d219f33fe988333
+HEAD_BLOB=2992c2e662bae6bdb9e0077b8f5c21b15b81e644
+INDEX_BLOB=2992c2e662bae6bdb9e0077b8f5c21b15b81e644
+----- STATUS Source/Managers/PostProcessMan.h -----
+ M Source/Managers/PostProcessMan.h
+WT_SHA256=45196f1897b36fa6206126357376e63091045602f6188f142e54ce2b8901695d
+HEAD_BLOB=1bae2922eb7705261b2e9c3424c7481a97c87268
+INDEX_BLOB=1bae2922eb7705261b2e9c3424c7481a97c87268
+----- STATUS Source/Managers/PrimitiveMan.h -----
+ M Source/Managers/PrimitiveMan.h
+WT_SHA256=676793d17c3d85995c1c4a2f610e578d8dea987fee613f37ca78baf0a056d551
+HEAD_BLOB=3bfa9dc48d2b332f8b4ee4d991bbda825796cb3a
+INDEX_BLOB=3bfa9dc48d2b332f8b4ee4d991bbda825796cb3a
+----- STATUS Source/Menus/BuyMenuGUI.h -----
+ M Source/Menus/BuyMenuGUI.h
+WT_SHA256=ec82fb644f8ff422e3177558addb1dc7044b9401b05affc758cdd9a00eb9526a
+HEAD_BLOB=955da7afc3b9968bdf2e41a1b1df0e7ce2ee368b
+INDEX_BLOB=955da7afc3b9968bdf2e41a1b1df0e7ce2ee368b
+----- STATUS Source/Menus/InventoryMenuGUI.h -----
+ M Source/Menus/InventoryMenuGUI.h
+WT_SHA256=15c2bdc076d2d47a7e91fe978bc1f1b18965349fa4d7725d863eec8e193a5c93
+HEAD_BLOB=8090877789d86a13b82c6523667a19c4d734de11
+INDEX_BLOB=8090877789d86a13b82c6523667a19c4d734de11
+----- STATUS Source/Renderer/GraphicalPrimitive.cpp -----
+ M Source/Renderer/GraphicalPrimitive.cpp
+WT_SHA256=d5f25ba07e8357afbe71684287c659a3743205a6acd9d15751d5b998180182a9
+HEAD_BLOB=9b9797c78d0b18024dc09ae270ce82dc79375abb
+INDEX_BLOB=9b9797c78d0b18024dc09ae270ce82dc79375abb
+----- STATUS Source/Renderer/GraphicalPrimitive.h -----
+ M Source/Renderer/GraphicalPrimitive.h
+WT_SHA256=5f50a1092e1e21a2c9b0916ca930a470b9b60a502ced1ca04deec5f202e21158
+HEAD_BLOB=4d366a90268047cb3111ea55b785fc57131edc74
+INDEX_BLOB=4d366a90268047cb3111ea55b785fc57131edc74
+----- STATUS Source/System/ContractAudit.h -----
+ M Source/System/ContractAudit.h
+WT_SHA256=9e30d6c451c3f836f16cf4780e08429d93e993d94a43bb895d306b14e0c73a40
+HEAD_BLOB=207c3413245b7241d33eaee7aef9989ae576cc7d
+INDEX_BLOB=207c3413245b7241d33eaee7aef9989ae576cc7d
+----- STATUS tools/contracts/AUDIT.md -----
+ M tools/contracts/AUDIT.md
+WT_SHA256=4c112c3278362e765dcd7c7ae85142de719377fdb3ec2d5a85872e852b3db9e3
+HEAD_BLOB=7faf3e7ad743d29ae2aa61ddc9f0e831a8614d8f
+INDEX_BLOB=7faf3e7ad743d29ae2aa61ddc9f0e831a8614d8f
+----- STATUS tools/fixtures/mod_checkpoint.lua -----
+ M tools/fixtures/mod_checkpoint.lua
+WT_SHA256=93efdfbdad4b4cd81634c1e5a3069b3808c8a1858ea73b558b91a3700d418264
+HEAD_BLOB=895e52e901ed303bddb5a3c74a18691a94fd8bcf
+INDEX_BLOB=895e52e901ed303bddb5a3c74a18691a94fd8bcf
+----- STATUS tools/run_restoration_tests.py -----
+ M tools/run_restoration_tests.py
+WT_SHA256=8352b428aaeedc59f926c58c2ab7c954dabbd638aafd15a0f87f90beba1886cc
+HEAD_BLOB=027951e047c11e8168f2a9e2b16488a22ddb8951
+INDEX_BLOB=027951e047c11e8168f2a9e2b16488a22ddb8951
+===== END =====

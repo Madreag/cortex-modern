@@ -1,0 +1,9 @@
+  PASS executable_matches_manifest bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+  PASS clean_leave_acked 1
+  PASS clean_leave_cleared_ticket D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_client.ticket
+  PASS host_closed_the_seat 1
+  FAIL clean_old_ticket_refused used_stored_ticket=True commits=1
+  PASS ambiguous_kept_ticket D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client.ticket
+  PASS ambiguous_reclaim_worked used_stored_ticket=True commits=1
+  FAIL hosts_survived exits=[0, 0, 1] fatal=False
+GATE clean_leave FAIL -> D:\mx\s41b3\j33\clean_leave_20260910_021812

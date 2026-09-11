@@ -1,0 +1,6 @@
+main_compare size=39460 crlf=0 lf=829 cr=0
+control_compare size=39460 crlf=0 lf=829 cr=0
+repaired_compare size=39781 crlf=0 lf=835 cr=0
+main_test_compare size=39417 crlf=615 lf=0 cr=0
+frozen_test_compare size=38802 crlf=0 lf=615 cr=0
+roles_test size=8201 crlf=0 lf=149 cr=0

@@ -1,0 +1,443 @@
+{
+  "lane": "fl200",
+  "what": "both peers add 200 ms fake lag; the host auto-picks the input delay from the measured RTT",
+  "mode": "normal",
+  "evidence_kind": "fresh-recovery",
+  "exe": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+  "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "started_utc": "2026-09-10T02:15:46.253097+00:00",
+  "port": 45520,
+  "input_delay": 0,
+  "ticks": 600,
+  "traced": true,
+  "argv": {
+    "host": [
+      "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "-net-match-service-e2e",
+      "-net-port",
+      "45520",
+      "-net-match-ticks",
+      "600",
+      "-tick-hashes",
+      "-max-ticks",
+      "600",
+      "-net-host",
+      "-net-match-report",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_report.json",
+      "-out",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_trace.json",
+      "-net-replay-out",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\match.ccreplay",
+      "-net-fake-lag",
+      "200",
+      "-net-match-auto-delay"
+    ],
+    "client": [
+      "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "-net-match-service-e2e",
+      "-net-port",
+      "45520",
+      "-net-match-ticks",
+      "600",
+      "-tick-hashes",
+      "-max-ticks",
+      "600",
+      "-net-join",
+      "127.0.0.1",
+      "-net-match-report",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_report.json",
+      "-out",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_trace.json",
+      "-net-fake-lag",
+      "200"
+    ]
+  },
+  "launch": {
+    "host": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 4004,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "45520",
+        "-net-match-ticks",
+        "600",
+        "-tick-hashes",
+        "-max-ticks",
+        "600",
+        "-net-host",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_report.json",
+        "-out",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_trace.json",
+        "-net-replay-out",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\match.ccreplay",
+        "-net-fake-lag",
+        "200",
+        "-net-match-auto-delay"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\runtime",
+      "timeout_seconds": 400,
+      "private_desktop": "CortexTest_876d1d182a014104b6508f2e53d3bc92",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:15:46.391436+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\host"
+        }
+      ],
+      "evidence_expected": [
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_report.json",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_trace.json"
+      ],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 8476,
+      "started_utc": "2026-09-10T02:15:46.539005+00:00",
+      "exit_code": 0,
+      "elapsed_seconds": 27.636,
+      "ended_utc": "2026-09-10T02:16:14.175481+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 923,
+      "verdict_lines": [],
+      "verdict_count": 0,
+      "last_verdict": null,
+      "verdict_present": false,
+      "evidence_present": [
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_report.json",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_trace.json"
+      ],
+      "evidence_missing": [],
+      "evidence_complete": true
+    },
+    "client": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 4004,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "45520",
+        "-net-match-ticks",
+        "600",
+        "-tick-hashes",
+        "-max-ticks",
+        "600",
+        "-net-join",
+        "127.0.0.1",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_report.json",
+        "-out",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_trace.json",
+        "-net-fake-lag",
+        "200"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\runtime",
+      "timeout_seconds": 400,
+      "private_desktop": "CortexTest_548b65fa06d642858c006bae4e6833f5",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:15:46.522846+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j28\\fl\\fl200\\client"
+        }
+      ],
+      "evidence_expected": [
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_report.json",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_trace.json"
+      ],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 12256,
+      "started_utc": "2026-09-10T02:15:48.039706+00:00",
+      "exit_code": 0,
+      "elapsed_seconds": 28.336,
+      "ended_utc": "2026-09-10T02:16:16.375840+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 737,
+      "verdict_lines": [],
+      "verdict_count": 0,
+      "last_verdict": null,
+      "verdict_present": false,
+      "evidence_present": [
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_report.json",
+        "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_trace.json"
+      ],
+      "evidence_missing": [],
+      "evidence_complete": true
+    }
+  },
+  "checks": [
+    {
+      "name": "host_process_exit",
+      "status": "pass",
+      "detail": "exit_code=0 timed_out=False elapsed=27.636",
+      "evidence": [
+        "fl200\\host\\launch.json",
+        "fl200\\host\\stdout.log"
+      ]
+    },
+    {
+      "name": "host_report_present",
+      "status": "pass",
+      "detail": "host_report.json",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "client_process_exit",
+      "status": "pass",
+      "detail": "exit_code=0 timed_out=False elapsed=28.336",
+      "evidence": [
+        "fl200\\client\\launch.json",
+        "fl200\\client\\stdout.log"
+      ]
+    },
+    {
+      "name": "client_report_present",
+      "status": "pass",
+      "detail": "client_report.json",
+      "evidence": [
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "host_liveness",
+      "status": "pass",
+      "detail": "running_ticks=601 runtime_error='' setup_error='' activity_state=Over winner_team=-1",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "host_lockstep_completed",
+      "status": "pass",
+      "detail": "service=Running runner=Running timeout_reason='Complete:e2e complete' input_delay=None",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "host_no_editor",
+      "status": "pass",
+      "detail": "entered_editor=False",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "host_pace_recorded",
+      "status": "pass",
+      "detail": "wall_tps=37.3348 sim_ms_per_tick=21.3136 (recorded, not asserted: two peers share one CPU here)",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "client_liveness",
+      "status": "pass",
+      "detail": "running_ticks=601 runtime_error='' setup_error='' activity_state=Over winner_team=-1",
+      "evidence": [
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "client_lockstep_completed",
+      "status": "pass",
+      "detail": "service=Running runner=Running timeout_reason='Complete:e2e complete' input_delay=None",
+      "evidence": [
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "client_no_editor",
+      "status": "pass",
+      "detail": "entered_editor=False",
+      "evidence": [
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "client_pace_recorded",
+      "status": "pass",
+      "detail": "wall_tps=37.3107 sim_ms_per_tick=27.105 (recorded, not asserted: two peers share one CPU here)",
+      "evidence": [
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "config_agreement",
+      "status": "pass",
+      "detail": "host=aba57a567d25d1295292d2a4f5bb1657295ee113d9de53cd276e29c9705399da client=aba57a567d25d1295292d2a4f5bb1657295ee113d9de53cd276e29c9705399da",
+      "evidence": [
+        "fl200\\host_report.json",
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "census_agreement",
+      "status": "pass",
+      "detail": "host actors=4 client actors=4 (peak host=4 client=4); a matching count says the rosters agree, not what the actors did",
+      "evidence": [
+        "fl200\\host_report.json",
+        "fl200\\client_report.json"
+      ]
+    },
+    {
+      "name": "scenario_identity_recorded",
+      "status": "pass",
+      "detail": "activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish input_delay=0 peers=2 players=[{'cpu': False, 'display_name': 'Host', 'peer_id': 1, 'team': 0}, {'cpu': False, 'display_name': 'Client', 'peer_id': 2, 'team': 1}]",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "prediction_counters_recorded",
+      "status": "pass",
+      "detail": "enabled=True previews=589 actor_ticks=589 taken=0 violations=0",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "prediction_executed",
+      "status": "pass",
+      "detail": "previews=589 violations=0",
+      "evidence": [
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "simgated_strict",
+      "status": "pass",
+      "detail": "compared_ticks=600 first_divergence=None reasons=[] subsystems=[['actors', 'carve_math', 'controller', 'funds', 'lua_state', 'particles', 'rot_angle', 'rot_angvel', 'scene', 'sim_rng', 'terrain', 'tick'], ['actors', 'controller', 'funds', 'lua_state', 'rot_angle', 'rot_angvel', 'scene', 'sim_rng', 'terrain', 'tick']]",
+      "evidence": [
+        "fl200\\strict_compare.json",
+        "fl200\\host_trace.json",
+        "fl200\\client_trace.json"
+      ]
+    },
+    {
+      "name": "replay_recording_closed",
+      "status": "pass",
+      "detail": "exists=True frames=601 closed=True bytes=232297",
+      "evidence": [
+        "fl200\\match.ccreplay",
+        "fl200\\host_report.json"
+      ]
+    },
+    {
+      "name": "replay_verify",
+      "status": "pass",
+      "detail": "exit=0 verify={\"ok\": true, \"version\": 5, \"controller_frame_version\": 6, \"frames\": 601, \"first_frame\": 2, \"last_frame\": 602, \"gaps\": 0, \"end_marker\": true, \"truncated\": false, \"corrupt\": false, \"error\": \"\"}",
+      "evidence": [
+        "fl200\\replay_verify\\stdout.log"
+      ]
+    },
+    {
+      "name": "replay_playback_completed",
+      "status": "pass",
+      "detail": "exit=0 [net-replay] playback finished in 3296ms, ticks=600 outcome=tick_cap frames=599 last_tick=600 end_marker=0 exit=0",
+      "evidence": [
+        "fl200\\replay_playback\\stdout.log"
+      ]
+    },
+    {
+      "name": "replay_playback_matches_host",
+      "status": "pass",
+      "detail": "compared_ticks=600 first_divergence=None reasons=[]",
+      "evidence": [
+        "fl200\\playback_compare.json"
+      ]
+    }
+  ],
+  "pass": true
+}

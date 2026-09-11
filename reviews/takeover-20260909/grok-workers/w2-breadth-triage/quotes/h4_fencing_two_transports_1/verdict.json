@@ -1,0 +1,338 @@
+{
+  "gate": "fencing_two_transports",
+  "passed": false,
+  "executable_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "configuration": null,
+  "finished_utc": "2026-09-10T02:21:27.017055+00:00",
+  "checks": [
+    {
+      "name": "executable_matches_manifest",
+      "status": "pass",
+      "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "evidence": []
+    },
+    {
+      "name": "second_client_committed",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2_report.json"
+      ]
+    },
+    {
+      "name": "host_bound_second_incarnation",
+      "status": "fail",
+      "detail": "None",
+      "evidence": [
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host_report.json"
+      ]
+    },
+    {
+      "name": "host_fenced_the_old_transport",
+      "status": "fail",
+      "detail": "fenced_disconnects+fenced_packets=0",
+      "evidence": [
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host_report.json"
+      ]
+    },
+    {
+      "name": "seat_not_dropped_by_stale_timeout",
+      "status": "fail",
+      "detail": "[]",
+      "evidence": [
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host_report.json"
+      ]
+    },
+    {
+      "name": "first_client_superseded",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\stdout.log"
+      ]
+    },
+    {
+      "name": "host_survived",
+      "status": "fail",
+      "detail": "1",
+      "evidence": [
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host"
+      ]
+    }
+  ],
+  "records": {
+    "client2": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 4304,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "46420",
+        "-net-match-ticks",
+        "1200",
+        "-net-reconnect-ticket",
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client.ticket",
+        "-net-join",
+        "127.0.0.1",
+        "-net-match-e2e-resync",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2_report.json"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\runtime",
+      "timeout_seconds": 480.0,
+      "private_desktop": "CortexTest_77319244c213417da75a11df82319961",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:21:08.032071+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2"
+        }
+      ],
+      "evidence_expected": [],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 28640,
+      "started_utc": "2026-09-10T02:21:19.103631+00:00",
+      "exit_code": 1,
+      "elapsed_seconds": 7.91,
+      "ended_utc": "2026-09-10T02:21:27.013457+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 1898,
+      "verdict_lines": [
+        "[net-match-service-e2e] setup failed: SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:"
+      ],
+      "verdict_count": 1,
+      "last_verdict": "[net-match-service-e2e] setup failed: SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:",
+      "verdict_present": true,
+      "evidence_present": [],
+      "evidence_missing": [],
+      "evidence_complete": true
+    },
+    "client1": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 4304,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "46420",
+        "-net-match-ticks",
+        "1200",
+        "-net-reconnect-ticket",
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client.ticket",
+        "-net-join",
+        "127.0.0.1",
+        "-net-match-e2e-resync",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1_report.json"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\runtime",
+      "timeout_seconds": 480.0,
+      "private_desktop": "CortexTest_33cc6402cadb42ca84f4099f3d41c0f2",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:21:07.901591+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1"
+        }
+      ],
+      "evidence_expected": [],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 2856,
+      "started_utc": "2026-09-10T02:21:09.563882+00:00",
+      "exit_code": 1,
+      "elapsed_seconds": 17.451,
+      "ended_utc": "2026-09-10T02:21:27.014409+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 665,
+      "verdict_lines": [
+        "[net-match] controller sync failed: tick 566 lockstep wait: PeerDisconnected:Host disconnected: seat reclaimed by a newer connection"
+      ],
+      "verdict_count": 1,
+      "last_verdict": "[net-match] controller sync failed: tick 566 lockstep wait: PeerDisconnected:Host disconnected: seat reclaimed by a newer connection",
+      "verdict_present": true,
+      "evidence_present": [],
+      "evidence_missing": [],
+      "evidence_complete": true
+    },
+    "host": {
+      "runner": "win32_test_runner.py",
+      "runner_pid": 4304,
+      "argv": [
+        "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "-headless",
+        "-net-match-service-e2e",
+        "-net-port",
+        "46420",
+        "-net-match-ticks",
+        "1200",
+        "-net-reconnect-ticket",
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host.ticket",
+        "-net-host",
+        "-net-match-e2e-resync",
+        "-net-match-report",
+        "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host_report.json"
+      ],
+      "cwd": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime",
+      "timeout_seconds": 480.0,
+      "private_desktop": "CortexTest_c4700f3a46a74a2b8a11b757b82b3427",
+      "input_desktop_before": "Default",
+      "created_utc": "2026-09-10T02:21:07.762500+00:00",
+      "headless_env": "1",
+      "env_set": {
+        "TEMP": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\Temp",
+        "TMP": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\Temp",
+        "CCCP_HEADLESS": "1"
+      },
+      "desktop_switch_restricted": true,
+      "job_kill_on_close": true,
+      "started": true,
+      "startup_checks": [
+        {
+          "check": "exe_exists",
+          "ok": true,
+          "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+        },
+        {
+          "check": "exe_sha256_recorded",
+          "ok": true,
+          "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+        },
+        {
+          "check": "cwd_exists",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime"
+        },
+        {
+          "check": "data_junction_resolves",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+        },
+        {
+          "check": "userdata_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\Userdata"
+        },
+        {
+          "check": "out_dir_private_writable",
+          "ok": true,
+          "detail": "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host"
+        }
+      ],
+      "evidence_expected": [],
+      "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+      "exe_bytes": 18177536,
+      "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+      "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "game_runtime_checks": true,
+      "job_memory_limit_bytes": 8589934592,
+      "pid": 16864,
+      "started_utc": "2026-09-10T02:21:08.047510+00:00",
+      "exit_code": 1,
+      "elapsed_seconds": 18.968,
+      "ended_utc": "2026-09-10T02:21:27.015318+00:00",
+      "input_desktop_after": "Default",
+      "timed_out": false,
+      "job_closed": true,
+      "stdout_bytes": 750,
+      "verdict_lines": [
+        "[net-match] resync failed: resync snapshot save failed"
+      ],
+      "verdict_count": 1,
+      "last_verdict": "[net-match] resync failed: resync snapshot save failed",
+      "verdict_present": true,
+      "evidence_present": [],
+      "evidence_missing": [],
+      "evidence_complete": true
+    }
+  }
+}

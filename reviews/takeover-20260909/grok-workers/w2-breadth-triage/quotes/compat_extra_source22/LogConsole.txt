@@ -1,0 +1,74 @@
+- RTE Lua Console -
+See the Data Realms Wiki for commands: http://www.datarealms.com/wiki/
+Press F1 for a list of helpful shortcuts
+-------------------------------------
+Sound loading completed: 984 pending samples, 1266ms
+SYSTEM: Scene "Grasslands" was loaded
+SYSTEM: Activity "Determinism ActorStress" was successfully started
+PRINT: [extra] claim actor=1048607
+PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2
+PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5
+PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0
+ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+candidates are:
+SoundSet:HasAnySounds(boolean) const
+
+PRINT: [extra] case=shared_soundset_cyclemode mode=2
+PRINT: [extra] case=shared_stopall_setup played=1 playing=1
+PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6
+PRINT: [extra] case=ai_soundset_addsound ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_soundset_cyclemode ai_mode=1 upd_mode=1
+PRINT: [extra] case=ai_set_top_level_sound_set ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_property_next_pass ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375
+PRINT: [extra] case=ai_pos_retained_alias_method ai_x=7 upd_x=7 upd_y=8
+PRINT: [extra] case=ai_audioman_stopall ai_playing_after=0 upd_playing=0
+PRINT: [extra] case=two_actor_shared_container volume=0.125 writers=2 primary=40 secondary=40
+PRINT: [extra] case=done step=140 ai_runs=70
+PRINT: [extra] claim actor=1050807
+PRINT: [extra] claim actor=1050793
+PRINT: [extra] claim actor=1050821
+PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2
+PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2
+PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5
+PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2
+PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5
+PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0
+PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5
+PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0
+ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+candidates are:
+SoundSet:HasAnySounds(boolean) const
+
+PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0
+ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+candidates are:
+SoundSet:HasAnySounds(boolean) const
+
+PRINT: [extra] case=shared_soundset_cyclemode mode=2
+ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)
+candidates are:
+SoundSet:HasAnySounds(boolean) const
+
+PRINT: [extra] case=shared_soundset_cyclemode mode=2
+PRINT: [extra] case=shared_soundset_cyclemode mode=2
+PRINT: [extra] case=shared_stopall_setup played=1 playing=1
+PRINT: [extra] case=shared_stopall_setup played=1 playing=1
+PRINT: [extra] case=shared_stopall_setup played=1 playing=1
+PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6
+PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6
+PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6
+PRINT: [extra] case=ai_soundset_addsound ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_soundset_addsound ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_soundset_addsound ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_soundset_cyclemode ai_mode=1 upd_mode=1
+PRINT: [extra] case=ai_soundset_cyclemode ai_mode=1 upd_mode=1
+PRINT: [extra] case=ai_soundset_cyclemode ai_mode=1 upd_mode=1
+PRINT: [extra] case=ai_set_top_level_sound_set ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_set_top_level_sound_set ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_set_top_level_sound_set ai_ok=1 ai_any=1 upd_any=1
+PRINT: [extra] case=ai_property_next_pass ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375
+PRINT: [extra] case=ai_property_next_pass ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375
+PRINT: [extra] case=ai_property_next_pass ai_same_pass=0.375 ai_next_pass=0.375 upd=0.375
+PRINT: [extra] case=ai_pos_retained_alias_method ai_x=7 upd_x=7 upd_y=8
+PRINT: [extra] case=ai_pos_retained_alias_method ai_x=7 upd_x=7 upd_y=8
+SYSTEM: Activity "Determinism ActorStress" was ended

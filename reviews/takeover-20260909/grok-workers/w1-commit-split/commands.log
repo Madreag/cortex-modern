@@ -1,0 +1,906 @@
+2026-09-11T04:43:29.475025+00:00 cwd=D:\Projects\takeover-fixes
+git stash list
+exit=0
+--- stdout ---
+stash@{0}: WIP on experiment/cross-arch-combat: 845f50c1a Route ExpDecay through the deterministic exp poly
+
+2026-09-11T04:44:22.269740+00:00 cwd=D:\Projects\takeover-fixes
+git stash list
+exit=0
+--- stdout ---
+stash@{0}: WIP on experiment/cross-arch-combat: 845f50c1a Route ExpDecay through the deterministic exp poly
+
+2026-09-11T04:44:22.360967+00:00 cwd=D:\Projects\takeover-fixes
+git status --porcelain
+exit=0
+--- stdout ---
+ M Data/Tests.rte/Activities.ini
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Activities/GameActivity.cpp
+ M Source/Activities/GameActivity.h
+ M Source/CI/meson.build
+ M Source/Entities/ACraft.cpp
+ M Source/Entities/ACraft.h
+ M Source/Entities/AHuman.cpp
+ M Source/Entities/Activity.cpp
+ M Source/Entities/Activity.h
+ M Source/Entities/MovableObject.cpp
+ M Source/Entities/MovableObject.h
+ M Source/GUI/GUICheckpoint.h
+ M Source/GUI/GUIControlManager.cpp
+ M Source/Main.cpp
+ M Source/Managers/ActivityMan.cpp
+ M Source/Managers/ActivityMan.h
+ M Source/Managers/FrameMan.cpp
+ M Source/Managers/FrameMan.h
+ M Source/Managers/LuaMan.cpp
+ M Source/Managers/LuaMan.h
+ M Source/Managers/MenuMan.cpp
+ M Source/Managers/MenuMan.h
+ M Source/Managers/MovableMan.cpp
+ M Source/Managers/MovableMan.h
+ M Source/Managers/PresetMan.cpp
+ M Source/Managers/UInputMan.cpp
+ M Source/Managers/UInputMan.h
+ M Source/Menus/InventoryMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.h
+ M Source/Menus/SceneEditorGUI.cpp
+ M Source/Menus/SceneEditorGUI.h
+ M Source/Menus/meson.build
+ M Source/Network/NetGameCommand.cpp
+ M Source/Network/NetGameCommand.h
+ M Source/Network/NetLobbyProtocol.cpp
+ M Source/Network/NetLobbyProtocol.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLobbySession.h
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetLockstep.h
+ M Source/Network/NetLockstepSelfTest.cpp
+ M Source/Network/NetMatchRunner.cpp
+ M Source/Network/NetMatchRunner.h
+ M Source/Network/NetMatchSelfTest.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetMatchService.h
+ M Source/Network/NetReconnectSession.cpp
+ M Source/Network/NetReconnectSession.h
+ M Source/Network/NetReconnectSessionSelfTest.cpp
+ M Source/Network/NetReconnectTicketStore.cpp
+ M Source/Network/NetReconnectTicketStore.h
+ M Source/Network/NetReconnectTxCache.cpp
+ M Source/Network/NetReconnectTxCache.h
+ M Source/Network/NetReconnectUx.cpp
+ M Source/Network/NetReconnectUx.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/meson.build
+ M Source/System/Controller.cpp
+ M Source/System/Controller.h
+ M Source/System/ScenarioRunner.cpp
+ M Source/System/ScenarioRunner.h
+ M "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib"
+ M external/sources/luabind-0.7.1/_Bin/luabind-release.lib
+ M tools/compare_snapshots.py
+?? Data/Tests.rte/Activities/NetLifecycleTest.lua
+?? Source/CI/NetModerationGUIProbe.cpp
+?? Source/CI/NetModerationGUIProbe.h
+?? Source/Menus/NetModerationGUI.cpp
+?? Source/Menus/NetModerationGUI.h
+?? Source/Network/NetA7Journal.cpp
+?? Source/Network/NetA7Journal.h
+?? Source/Network/NetRecoveryJournal.cpp
+?? Source/Network/NetRecoveryJournal.h
+?? Source/Network/NetResyncRuntimeSelfTest.cpp
+?? Source/Network/NetResyncRuntimeSelfTest.h
+?? Source/Network/NetResyncSelfTest.cpp
+?? Source/Network/NetResyncSelfTest.h
+?? Source/Network/NetResyncState.cpp
+?? Source/Network/NetResyncState.h
+?? tools/test_snapshot_inventory_roles.py
+
+2026-09-11T04:44:22.794075+00:00 cwd=D:\Projects\takeover-fixes
+git diff --binary
+exit=0
+bytes=2155081
+
+2026-09-11T04:44:23.056387+00:00 cwd=D:\Projects\takeover-fixes
+git ls-files --others --exclude-standard
+exit=0
+--- stdout ---
+Data/Tests.rte/Activities/NetLifecycleTest.lua
+Source/CI/NetModerationGUIProbe.cpp
+Source/CI/NetModerationGUIProbe.h
+Source/Menus/NetModerationGUI.cpp
+Source/Menus/NetModerationGUI.h
+Source/Network/NetA7Journal.cpp
+Source/Network/NetA7Journal.h
+Source/Network/NetRecoveryJournal.cpp
+Source/Network/NetRecoveryJournal.h
+Source/Network/NetResyncRuntimeSelfTest.cpp
+Source/Network/NetResyncRuntimeSelfTest.h
+Source/Network/NetResyncSelfTest.cpp
+Source/Network/NetResyncSelfTest.h
+Source/Network/NetResyncState.cpp
+Source/Network/NetResyncState.h
+tools/test_snapshot_inventory_roles.py
+
+2026-09-11T04:44:23.585796+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+60cb6981462d30400d372ca778d440c82a5bcbe3
+
+2026-09-11T04:45:33.9152261Z cwd=D:\Projects\takeover-fixes
+git apply -R --check D:\Projects\reviews\takeover-20260909\handoff-20260910\post-positive20.patch
+exit=0
+
+2026-09-11T04:45:33.9538311Z cwd=D:\Projects\takeover-fixes
+git apply -R D:\Projects\reviews\takeover-20260909\handoff-20260910\post-positive20.patch
+exit=0
+
+2026-09-11T04:52:11.161492+00:00 cwd=D:\Projects\takeover-fixes
+git status --porcelain
+exit=0
+--- stdout ---
+ M Data/Tests.rte/Activities.ini
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Activities/GameActivity.cpp
+ M Source/Activities/GameActivity.h
+ M Source/CI/meson.build
+ M Source/Entities/ACraft.cpp
+ M Source/Entities/ACraft.h
+ M Source/Entities/AHuman.cpp
+ M Source/Entities/Activity.cpp
+ M Source/Entities/Activity.h
+ M Source/Entities/MovableObject.cpp
+ M Source/Entities/MovableObject.h
+ M Source/GUI/GUICheckpoint.h
+ M Source/GUI/GUIControlManager.cpp
+ M Source/Main.cpp
+ M Source/Managers/ActivityMan.cpp
+ M Source/Managers/ActivityMan.h
+ M Source/Managers/FrameMan.cpp
+ M Source/Managers/FrameMan.h
+ M Source/Managers/LuaMan.cpp
+ M Source/Managers/LuaMan.h
+ M Source/Managers/MenuMan.cpp
+ M Source/Managers/MenuMan.h
+ M Source/Managers/MovableMan.cpp
+ M Source/Managers/MovableMan.h
+ M Source/Managers/PresetMan.cpp
+ M Source/Managers/UInputMan.cpp
+ M Source/Managers/UInputMan.h
+ M Source/Menus/InventoryMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.h
+ M Source/Menus/SceneEditorGUI.cpp
+ M Source/Menus/SceneEditorGUI.h
+ M Source/Menus/meson.build
+ M Source/Network/NetGameCommand.cpp
+ M Source/Network/NetGameCommand.h
+ M Source/Network/NetLobbyProtocol.cpp
+ M Source/Network/NetLobbyProtocol.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLobbySession.h
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetLockstep.h
+ M Source/Network/NetLockstepSelfTest.cpp
+ M Source/Network/NetMatchRunner.cpp
+ M Source/Network/NetMatchRunner.h
+ M Source/Network/NetMatchSelfTest.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetMatchService.h
+ M Source/Network/NetReconnectSession.cpp
+ M Source/Network/NetReconnectSession.h
+ M Source/Network/NetReconnectSessionSelfTest.cpp
+ M Source/Network/NetReconnectTicketStore.cpp
+ M Source/Network/NetReconnectTicketStore.h
+ M Source/Network/NetReconnectUx.cpp
+ M Source/Network/NetReconnectUx.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/meson.build
+ M Source/System/Controller.cpp
+ M Source/System/Controller.h
+ M Source/System/ScenarioRunner.cpp
+ M Source/System/ScenarioRunner.h
+ M "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib"
+ M external/sources/luabind-0.7.1/_Bin/luabind-release.lib
+ M tools/compare_snapshots.py
+?? Data/Tests.rte/Activities/NetLifecycleTest.lua
+?? Source/CI/NetModerationGUIProbe.cpp
+?? Source/CI/NetModerationGUIProbe.h
+?? Source/Menus/NetModerationGUI.cpp
+?? Source/Menus/NetModerationGUI.h
+?? Source/Network/NetA7Journal.cpp
+?? Source/Network/NetA7Journal.h
+?? Source/Network/NetResyncRuntimeSelfTest.cpp
+?? Source/Network/NetResyncRuntimeSelfTest.h
+?? Source/Network/NetResyncSelfTest.cpp
+?? Source/Network/NetResyncSelfTest.h
+?? Source/Network/NetResyncState.cpp
+?? Source/Network/NetResyncState.h
+?? tools/test_snapshot_inventory_roles.py
+
+2026-09-11T04:52:11.203908+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Network/NetGameCommand.h Source/Network/NetGameCommand.cpp
+exit=0
+
+2026-09-11T04:52:11.227590+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Network/NetGameCommand.cpp
+Source/Network/NetGameCommand.h
+
+2026-09-11T04:52:11.305188+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\01.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 55435673b8] Carry player-binding observations on the command wire
+ 2 files changed, 30 insertions(+), 2 deletions(-)
+
+2026-09-11T04:52:11.325695+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+55435673b835303ff28240a8c40c6fb7d3e7e637
+
+2026-09-11T04:52:11.348031+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Carry player-binding observations on the command wire
+
+2026-09-11T04:52:11.398957+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Network/NetLobbyProtocol.h Source/Network/NetLobbyProtocol.cpp Source/Network/NetResyncState.h Source/Network/NetResyncState.cpp Source/Network/NetResyncSelfTest.h Source/Network/NetResyncSelfTest.cpp
+exit=0
+
+2026-09-11T04:52:11.422184+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Network/NetLobbyProtocol.cpp
+Source/Network/NetLobbyProtocol.h
+Source/Network/NetResyncSelfTest.cpp
+Source/Network/NetResyncSelfTest.h
+Source/Network/NetResyncState.cpp
+Source/Network/NetResyncState.h
+
+2026-09-11T04:52:11.497123+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\02.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next c5292b097e] Bound a resync envelope around archive, acks and pending commands
+ 6 files changed, 1075 insertions(+), 9 deletions(-)
+ create mode 100644 Source/Network/NetResyncSelfTest.cpp
+ create mode 100644 Source/Network/NetResyncSelfTest.h
+ create mode 100644 Source/Network/NetResyncState.cpp
+ create mode 100644 Source/Network/NetResyncState.h
+
+2026-09-11T04:52:11.516836+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+c5292b097ec7327e0ff14922b01220cb18c3eacd
+
+2026-09-11T04:52:11.538518+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Bound a resync envelope around archive, acks and pending commands
+
+2026-09-11T04:52:11.597618+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Network/NetLockstep.h Source/Network/NetLockstep.cpp Source/Network/NetLockstepSelfTest.cpp Source/System/ScenarioRunner.h Source/System/ScenarioRunner.cpp Source/Network/NetResyncRuntimeSelfTest.h Source/Network/NetResyncRuntimeSelfTest.cpp
+exit=0
+--- stderr ---
+warning: in the working copy of 'Source/Network/NetLockstep.cpp', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'Source/Network/NetLockstep.h', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'Source/Network/NetLockstepSelfTest.cpp', CRLF will be replaced by LF the next time Git touches it
+
+2026-09-11T04:52:11.620971+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Network/NetLockstep.cpp
+Source/Network/NetLockstep.h
+Source/Network/NetLockstepSelfTest.cpp
+Source/Network/NetResyncRuntimeSelfTest.cpp
+Source/Network/NetResyncRuntimeSelfTest.h
+Source/System/ScenarioRunner.cpp
+Source/System/ScenarioRunner.h
+
+2026-09-11T04:52:11.741249+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\03.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 2b8abb701a] Restore complete input, drop-map ownership and exact-target priming
+ 7 files changed, 4283 insertions(+), 271 deletions(-)
+ create mode 100644 Source/Network/NetResyncRuntimeSelfTest.cpp
+ create mode 100644 Source/Network/NetResyncRuntimeSelfTest.h
+
+2026-09-11T04:52:11.761884+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+2b8abb701a943f59a709447b0fe4e308c01474ef
+
+2026-09-11T04:52:11.783540+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Restore complete input, drop-map ownership and exact-target priming
+
+2026-09-11T04:52:11.825767+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Managers/LuaMan.h Source/Managers/LuaMan.cpp
+exit=0
+
+2026-09-11T04:52:11.848713+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Managers/LuaMan.cpp
+Source/Managers/LuaMan.h
+
+2026-09-11T04:52:11.934951+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\04.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 983efb1381] Restore typed native aliases and isolate craft-fixture clones
+ 2 files changed, 262 insertions(+), 19 deletions(-)
+
+2026-09-11T04:52:11.954681+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+983efb1381f7ae12a3d067d78919fc578b5bdb8c
+
+2026-09-11T04:52:11.976022+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Restore typed native aliases and isolate craft-fixture clones
+
+2026-09-11T04:52:12.016561+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Entities/MovableObject.h Source/Entities/MovableObject.cpp
+exit=0
+
+2026-09-11T04:52:12.039977+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Entities/MovableObject.cpp
+Source/Entities/MovableObject.h
+
+2026-09-11T04:52:12.117111+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\05.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 3fec09209e] Skip registry mutation when privately adopting a persisted UniqueID
+ 2 files changed, 61 insertions(+)
+
+2026-09-11T04:52:12.136586+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+3fec09209efadaed6e220da99c1cc14264de2a62
+
+2026-09-11T04:52:12.157593+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Skip registry mutation when privately adopting a persisted UniqueID
+
+2026-09-11T04:52:12.201590+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Entities/ACraft.h Source/Entities/ACraft.cpp Source/Entities/AHuman.cpp
+exit=0
+
+2026-09-11T04:52:12.225083+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Entities/ACraft.cpp
+Source/Entities/ACraft.h
+Source/Entities/AHuman.cpp
+
+2026-09-11T04:52:12.302507+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\06.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next c25f690860] Keep ACraft exit selection and AHuman inventory across checkpoint load
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+2026-09-11T04:52:12.322300+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+c25f690860fb5e8e32c56e7227a9e42db63c9761
+
+2026-09-11T04:52:12.343607+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Keep ACraft exit selection and AHuman inventory across checkpoint load
+
+2026-09-11T04:52:12.375022+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Network/NetA7Journal.h Source/Network/NetA7Journal.cpp
+exit=0
+
+2026-09-11T04:52:12.398227+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Network/NetA7Journal.cpp
+Source/Network/NetA7Journal.h
+
+2026-09-11T04:52:12.473170+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\07.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 30713812dc] Add A7 journal helpers for recovery-arm traces
+ 2 files changed, 423 insertions(+)
+ create mode 100644 Source/Network/NetA7Journal.cpp
+ create mode 100644 Source/Network/NetA7Journal.h
+
+2026-09-11T04:52:12.493470+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+30713812dcda02b34109e8f3986e65a9dd25fe4a
+
+2026-09-11T04:52:12.514357+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Add A7 journal helpers for recovery-arm traces
+
+2026-09-11T04:52:12.615796+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Menus/NetModerationGUI.h Source/Menus/NetModerationGUI.cpp Source/CI/NetModerationGUIProbe.h Source/CI/NetModerationGUIProbe.cpp Source/Menus/MainMenuGUI.h Source/Menus/MainMenuGUI.cpp Source/Managers/MenuMan.h Source/Managers/MenuMan.cpp Source/Managers/UInputMan.h Source/Managers/UInputMan.cpp Source/Main.cpp Source/Network/NetReconnectUx.h Source/Network/NetReconnectUx.cpp Source/Network/NetReconnectSession.h Source/Network/NetReconnectSession.cpp Source/Network/NetReconnectSessionSelfTest.cpp Source/Network/NetMatchService.h Source/Network/NetMatchService.cpp Source/CI/meson.build Source/Menus/meson.build
+exit=0
+--- stderr ---
+warning: in the working copy of 'Source/Network/NetReconnectSessionSelfTest.cpp', CRLF will be replaced by LF the next time Git touches it
+
+2026-09-11T04:52:12.639211+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/CI/NetModerationGUIProbe.cpp
+Source/CI/NetModerationGUIProbe.h
+Source/CI/meson.build
+Source/Main.cpp
+Source/Managers/MenuMan.cpp
+Source/Managers/MenuMan.h
+Source/Managers/UInputMan.cpp
+Source/Managers/UInputMan.h
+Source/Menus/MainMenuGUI.cpp
+Source/Menus/MainMenuGUI.h
+Source/Menus/NetModerationGUI.cpp
+Source/Menus/NetModerationGUI.h
+Source/Menus/meson.build
+Source/Network/NetMatchService.cpp
+Source/Network/NetMatchService.h
+Source/Network/NetReconnectSession.cpp
+Source/Network/NetReconnectSession.h
+Source/Network/NetReconnectSessionSelfTest.cpp
+Source/Network/NetReconnectUx.cpp
+Source/Network/NetReconnectUx.h
+
+2026-09-11T04:52:12.734629+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\08.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 318211fe3e] Give the host a live F6 panel and codec-17 seat snapshots
+ 20 files changed, 1428 insertions(+), 388 deletions(-)
+ create mode 100644 Source/CI/NetModerationGUIProbe.cpp
+ create mode 100644 Source/CI/NetModerationGUIProbe.h
+ create mode 100644 Source/Menus/NetModerationGUI.cpp
+ create mode 100644 Source/Menus/NetModerationGUI.h
+
+2026-09-11T04:52:12.754443+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+318211fe3e5b7c9b2d58c8d8dbd6c90b7c72bb1d
+
+2026-09-11T04:52:12.775652+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Give the host a live F6 panel and codec-17 seat snapshots
+
+2026-09-11T04:52:12.861533+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Entities/Activity.h Source/Entities/Activity.cpp Source/Activities/GameActivity.h Source/Activities/GameActivity.cpp Source/GUI/GUICheckpoint.h Source/GUI/GUIControlManager.cpp Source/Managers/FrameMan.h Source/Managers/FrameMan.cpp Source/System/Controller.h Source/System/Controller.cpp Source/Menus/SceneEditorGUI.h Source/Menus/SceneEditorGUI.cpp Source/Menus/InventoryMenuGUI.cpp Source/Managers/ActivityMan.h Source/Managers/ActivityMan.cpp
+exit=0
+
+2026-09-11T04:52:12.884951+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Activities/GameActivity.cpp
+Source/Activities/GameActivity.h
+Source/Entities/Activity.cpp
+Source/Entities/Activity.h
+Source/GUI/GUICheckpoint.h
+Source/GUI/GUIControlManager.cpp
+Source/Managers/ActivityMan.cpp
+Source/Managers/ActivityMan.h
+Source/Managers/FrameMan.cpp
+Source/Managers/FrameMan.h
+Source/Menus/InventoryMenuGUI.cpp
+Source/Menus/SceneEditorGUI.cpp
+Source/Menus/SceneEditorGUI.h
+Source/System/Controller.cpp
+Source/System/Controller.h
+
+2026-09-11T04:52:12.982402+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\09.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next ccb5586614] Restore peer-local player, UI and aliases after a restore
+ 15 files changed, 966 insertions(+), 14 deletions(-)
+
+2026-09-11T04:52:13.002564+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+ccb5586614dd723e5f0565086a845a747af0eb75
+
+2026-09-11T04:52:13.024191+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Restore peer-local player, UI and aliases after a restore
+
+2026-09-11T04:52:13.081157+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Managers/PresetMan.cpp Source/Network/NetLobbySession.h Source/Network/NetLobbySession.cpp Source/Network/NetMatchRunner.h Source/Network/NetMatchRunner.cpp Source/Network/NetMatchSelfTest.cpp Data/Tests.rte/Activities.ini Data/Tests.rte/Activities/NetLifecycleTest.lua
+exit=0
+
+2026-09-11T04:52:13.104095+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Data/Tests.rte/Activities.ini
+Data/Tests.rte/Activities/NetLifecycleTest.lua
+Source/Managers/PresetMan.cpp
+Source/Network/NetLobbySession.cpp
+Source/Network/NetLobbySession.h
+Source/Network/NetMatchRunner.cpp
+Source/Network/NetMatchRunner.h
+Source/Network/NetMatchSelfTest.cpp
+
+2026-09-11T04:52:13.198827+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\10.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 94c53269b3] Initialize saved-game modules and use the lobby shared clock
+ 8 files changed, 609 insertions(+), 63 deletions(-)
+ create mode 100644 Data/Tests.rte/Activities/NetLifecycleTest.lua
+
+2026-09-11T04:52:13.219446+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+94c53269b3cd7cea7259ca2e15a0afde09793a62
+
+2026-09-11T04:52:13.241624+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Initialize saved-game modules and use the lobby shared clock
+
+2026-09-11T04:52:13.289272+00:00 cwd=D:\Projects\takeover-fixes
+git add -- Source/Network/NetSession.h Source/Network/NetSession.cpp Source/Network/NetReconnectTicketStore.h Source/Network/NetReconnectTicketStore.cpp Source/Managers/MovableMan.h Source/Managers/MovableMan.cpp
+exit=0
+
+2026-09-11T04:52:13.312579+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+Source/Managers/MovableMan.cpp
+Source/Managers/MovableMan.h
+Source/Network/NetReconnectTicketStore.cpp
+Source/Network/NetReconnectTicketStore.h
+Source/Network/NetSession.cpp
+Source/Network/NetSession.h
+
+2026-09-11T04:52:13.393928+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\11.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next 77dea7f5ce] Record A7 recovery events on session, tickets and ownership
+ 6 files changed, 95 insertions(+), 1 deletion(-)
+
+2026-09-11T04:52:13.413767+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+77dea7f5ce279cb0f57d3935ed5180ae7bc4c629
+
+2026-09-11T04:52:13.434828+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Record A7 recovery events on session, tickets and ownership
+
+2026-09-11T04:52:13.473674+00:00 cwd=D:\Projects\takeover-fixes
+git add -- tools/compare_snapshots.py tools/test_snapshot_inventory_roles.py
+exit=0
+
+2026-09-11T04:52:13.497141+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+tools/compare_snapshots.py
+tools/test_snapshot_inventory_roles.py
+
+2026-09-11T04:52:13.573444+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\12.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next a622afdf45] Compare snapshots by the controlled actor's inventory role
+ 2 files changed, 157 insertions(+), 2 deletions(-)
+ create mode 100644 tools/test_snapshot_inventory_roles.py
+
+2026-09-11T04:52:13.593272+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+a622afdf4519adac9c750c85c98227b70b38e317
+
+2026-09-11T04:52:13.614132+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Compare snapshots by the controlled actor's inventory role
+
+2026-09-11T04:52:13.647361+00:00 cwd=D:\Projects\takeover-fixes
+git add -- RTEA.vcxproj RTEA.vcxproj.filters Source/Network/meson.build
+exit=0
+
+2026-09-11T04:52:13.673606+00:00 cwd=D:\Projects\takeover-fixes
+git diff --cached --name-only
+exit=0
+--- stdout ---
+RTEA.vcxproj
+RTEA.vcxproj.filters
+Source/Network/meson.build
+
+2026-09-11T04:52:13.750099+00:00 cwd=D:\Projects\takeover-fixes
+git commit -F D:\Projects\reviews\takeover-20260909\grok-workers\w1-commit-split\scratch\commit-msgs\13.txt
+exit=0
+--- stdout ---
+[stage2/takeover-next aaf7057e5d] Add the new network and moderation sources to the build
+ 3 files changed, 52 insertions(+)
+
+2026-09-11T04:52:13.770302+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+--- stdout ---
+aaf7057e5dfef135a9b9f09fbc6831672e091895
+
+2026-09-11T04:52:13.792116+00:00 cwd=D:\Projects\takeover-fixes
+git log -1 --format=%s
+exit=0
+--- stdout ---
+Add the new network and moderation sources to the build
+
+2026-09-11T04:52:13.838931+00:00 cwd=D:\Projects\takeover-fixes
+git status --porcelain
+exit=0
+--- stdout ---
+ M "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib"
+ M external/sources/luabind-0.7.1/_Bin/luabind-release.lib
+
+2026-09-11T04:52:27.019152+00:00 cwd=D:\Projects\takeover-fixes
+git diff --stat HEAD
+exit=0
+--- stdout ---
+ .../_Bin/allegro-release.lib                       | Bin 2305286 -> 2312380 bytes
+ .../sources/luabind-0.7.1/_Bin/luabind-release.lib | Bin 874344 -> 953448 bytes
+ 2 files changed, 0 insertions(+), 0 deletions(-)
+
+2026-09-11T04:52:27.080445+00:00 cwd=D:\Projects\takeover-fixes
+git diff --stat 60cb6981462d30400d372ca778d440c82a5bcbe3 HEAD
+exit=0
+--- stdout ---
+ Data/Tests.rte/Activities.ini                  |   12 +
+ Data/Tests.rte/Activities/NetLifecycleTest.lua |   47 +
+ RTEA.vcxproj                                   |   12 +
+ RTEA.vcxproj.filters                           |   36 +
+ Source/Activities/GameActivity.cpp             |  448 ++++++-
+ Source/Activities/GameActivity.h               |    7 +
+ Source/CI/NetModerationGUIProbe.cpp            |  251 ++++
+ Source/CI/NetModerationGUIProbe.h              |    8 +
+ Source/CI/meson.build                          |    1 +
+ Source/Entities/ACraft.cpp                     |    6 +
+ Source/Entities/ACraft.h                       |    1 +
+ Source/Entities/AHuman.cpp                     |    2 +-
+ Source/Entities/Activity.cpp                   |  206 ++++
+ Source/Entities/Activity.h                     |   23 +
+ Source/Entities/MovableObject.cpp              |   60 +
+ Source/Entities/MovableObject.h                |    1 +
+ Source/GUI/GUICheckpoint.h                     |   23 +-
+ Source/GUI/GUIControlManager.cpp               |   47 +-
+ Source/Main.cpp                                |   56 +-
+ Source/Managers/ActivityMan.cpp                |   22 +
+ Source/Managers/ActivityMan.h                  |    7 +
+ Source/Managers/FrameMan.cpp                   |   19 +
+ Source/Managers/FrameMan.h                     |    2 +
+ Source/Managers/LuaMan.cpp                     |  279 ++++-
+ Source/Managers/LuaMan.h                       |    2 +
+ Source/Managers/MenuMan.cpp                    |    8 +
+ Source/Managers/MenuMan.h                      |    7 +
+ Source/Managers/MovableMan.cpp                 |   42 +
+ Source/Managers/MovableMan.h                   |    1 +
+ Source/Managers/PresetMan.cpp                  |   20 +-
+ Source/Managers/UInputMan.cpp                  |   11 +-
+ Source/Managers/UInputMan.h                    |    2 +-
+ Source/Menus/InventoryMenuGUI.cpp              |    1 +
+ Source/Menus/MainMenuGUI.cpp                   |   50 +-
+ Source/Menus/MainMenuGUI.h                     |    3 +-
+ Source/Menus/NetModerationGUI.cpp              |  241 ++++
+ Source/Menus/NetModerationGUI.h                |   61 +
+ Source/Menus/SceneEditorGUI.cpp                |  113 +-
+ Source/Menus/SceneEditorGUI.h                  |    9 +
+ Source/Menus/meson.build                       |    1 +
+ Source/Network/NetA7Journal.cpp                |  388 ++++++
+ Source/Network/NetA7Journal.h                  |   35 +
+ Source/Network/NetGameCommand.cpp              |    7 +-
+ Source/Network/NetGameCommand.h                |   25 +-
+ Source/Network/NetLobbyProtocol.cpp            |   21 +-
+ Source/Network/NetLobbyProtocol.h              |   11 +-
+ Source/Network/NetLobbySession.cpp             |  124 +-
+ Source/Network/NetLobbySession.h               |   19 +-
+ Source/Network/NetLockstep.cpp                 | 1195 ++++++++++++++++--
+ Source/Network/NetLockstep.h                   |  138 ++-
+ Source/Network/NetLockstepSelfTest.cpp         | 1572 ++++++++++++++++++++++--
+ Source/Network/NetMatchRunner.cpp              |   16 +-
+ Source/Network/NetMatchRunner.h                |    6 +-
+ Source/Network/NetMatchSelfTest.cpp            |  428 ++++++-
+ Source/Network/NetMatchService.cpp             |  334 +++--
+ Source/Network/NetMatchService.h               |   26 +-
+ Source/Network/NetReconnectSession.cpp         |  149 ++-
+ Source/Network/NetReconnectSession.h           |   47 +-
+ Source/Network/NetReconnectSessionSelfTest.cpp |  357 ++++--
+ Source/Network/NetReconnectTicketStore.cpp     |    6 +
+ Source/Network/NetReconnectTicketStore.h       |    2 +
+ Source/Network/NetReconnectUx.cpp              |  153 +--
+ Source/Network/NetReconnectUx.h                |   50 +-
+ Source/Network/NetResyncRuntimeSelfTest.cpp    | 1241 +++++++++++++++++++
+ Source/Network/NetResyncRuntimeSelfTest.h      |   10 +
+ Source/Network/NetResyncSelfTest.cpp           |  691 +++++++++++
+ Source/Network/NetResyncSelfTest.h             |   10 +
+ Source/Network/NetResyncState.cpp              |  306 +++++
+ Source/Network/NetResyncState.h                |   45 +
+ Source/Network/NetSession.cpp                  |   40 +-
+ Source/Network/NetSession.h                    |    5 +
+ Source/Network/meson.build                     |    4 +
+ Source/System/Controller.cpp                   |   42 +-
+ Source/System/Controller.h                     |   11 +
+ Source/System/ScenarioRunner.cpp               |  389 +++++-
+ Source/System/ScenarioRunner.h                 |    9 +-
+ tools/compare_snapshots.py                     |   10 +-
+ tools/test_snapshot_inventory_roles.py         |  149 +++
+ 78 files changed, 9449 insertions(+), 770 deletions(-)
+
+2026-09-11T04:52:27.105473+00:00 cwd=D:\Projects\takeover-fixes
+git log --format=%B 60cb6981462d30400d372ca778d440c82a5bcbe3..HEAD
+exit=0
+--- stdout ---
+Add the new network and moderation sources to the build
+
+Wire the resync, A7 journal and F6 panel sources into MSBuild and Meson.
+
+Compare snapshots by the controlled actor's inventory role
+
+The comparator was selecting Activity1's brain; use the controlled actor so the retained pair matches.
+
+Record A7 recovery events on session, tickets and ownership
+
+Session heartbeats, loaded-ticket hashes and local unit ownership feed the existing A7 journal.
+
+Initialize saved-game modules and use the lobby shared clock
+
+Selected modules get writable save storage, and lobby waits use the session clock plus transfer progress instead of a flat timeout.
+
+Restore peer-local player, UI and aliases after a restore
+
+Capture and reload local bindings, camera, input and GUI-owned graphs without copying the host presentation onto a returning peer.
+
+Give the host a live F6 panel and codec-17 seat snapshots
+
+Replace stop-message notices with authenticated seat snapshots, keep seat metadata, and show a persistent roster.
+
+Add A7 journal helpers for recovery-arm traces
+
+Emit bounded JSON events the Mac A7 driver already reads.
+
+Keep ACraft exit selection and AHuman inventory across checkpoint load
+
+Checkpoint construction applies the persisted exit and skips empty-hand startup equip.
+
+Skip registry mutation when privately adopting a persisted UniqueID
+
+A non-registering faithful clone takes the saved id without unregistering the canonical object.
+
+Restore typed native aliases and isolate craft-fixture clones
+
+Borrowed owners keep their Lua class, and craft-fixture clones leave the source graph registered.
+
+Restore complete input, drop-map ownership and exact-target priming
+
+Replay acknowledged commands and delayed inputs after a heal, keep the drop map, and prime the resync at the exact saved target.
+
+Bound a resync envelope around archive, acks and pending commands
+
+Encode ownership maps, acknowledged command sequences and pending inputs in a size-capped envelope. Raise the lobby state-chunk ceiling so a complete-input archive fits.
+
+Carry player-binding observations on the command wire
+
+A peer's local slots travel as codec-18 PlayerBindings with a sender-local sequence so a pending command can cross a resync.
+
+
+2026-09-11T04:52:41.7013070Z cwd=D:\Projects\takeover-fixes
+git apply --check D:\Projects\reviews\takeover-20260909\handoff-20260910\post-positive20.patch
+exit=0
+
+2026-09-11T04:52:41.7419525Z cwd=D:\Projects\takeover-fixes
+git apply D:\Projects\reviews\takeover-20260909\handoff-20260910\post-positive20.patch
+exit=0
+
+2026-09-11T04:52:55.106405+00:00 cwd=D:\Projects\takeover-fixes
+git status --porcelain
+exit=0
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Network/NetA7Journal.cpp
+ M Source/Network/NetA7Journal.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetReconnectSession.cpp
+ M Source/Network/NetReconnectSession.h
+ M Source/Network/NetReconnectTxCache.cpp
+ M Source/Network/NetReconnectTxCache.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/meson.build
+ M "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib"
+ M external/sources/luabind-0.7.1/_Bin/luabind-release.lib
+?? Source/Network/NetRecoveryJournal.cpp
+?? Source/Network/NetRecoveryJournal.h
+
+2026-09-11T04:52:55.225460+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+aaf7057e5dfef135a9b9f09fbc6831672e091895
+
+2026-09-11T05:12:35.015355+00:00 cwd=D:\Projects\takeover-fixes
+git status --porcelain
+exit=0
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Network/NetA7Journal.cpp
+ M Source/Network/NetA7Journal.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetReconnectSession.cpp
+ M Source/Network/NetReconnectSession.h
+ M Source/Network/NetReconnectTxCache.cpp
+ M Source/Network/NetReconnectTxCache.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/meson.build
+ M "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib"
+ M external/sources/luabind-0.7.1/_Bin/luabind-release.lib
+?? Source/Network/NetRecoveryJournal.cpp
+?? Source/Network/NetRecoveryJournal.h
+
+2026-09-11T05:12:35.141233+00:00 cwd=D:\Projects\takeover-fixes
+git rev-parse HEAD
+exit=0
+0e2aa3812f0f015b1c6734649dcb4360b80650e5
+

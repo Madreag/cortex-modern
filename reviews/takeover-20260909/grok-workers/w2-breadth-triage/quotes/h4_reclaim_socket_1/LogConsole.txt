@@ -1,0 +1,18 @@
+- RTE Lua Console -
+See the Data Realms Wiki for commands: http://www.datarealms.com/wiki/
+Press F1 for a list of helpful shortcuts
+-------------------------------------
+Sound loading completed: 984 pending samples, 1231ms
+SYSTEM: Activity was reset!
+SYSTEM: Scene "Grasslands" was loaded
+SYSTEM: Activity "P4 Alpha Duel" was successfully started
+ERROR: Rejected a AIOrder command from a peer that does not control team 1
+NETWORK: Holding the match open for a player who can still return
+NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined
+SYSTEM: Game saved to "p5resync_5140"!
+SYSTEM: Game "p5resync_5140" staged for restart!
+SYSTEM: Activity was reset!
+SYSTEM: Scene "Grasslands" was loaded
+SYSTEM: Activity "P4 Alpha Duel" was successfully started
+SYSTEM: Activity "P4 Alpha Duel" was ended
+SYSTEM: Entire console contents saved to LogConsole.txt

@@ -1,0 +1,20 @@
+{
+  "stash_empty": false,
+  "stash_list": [
+    "stash@{0}: WIP on experiment/cross-arch-combat: 845f50c1a Route ExpDecay through the deterministic exp poly"
+  ],
+  "head": "60cb6981462d30400d372ca778d440c82a5bcbe3",
+  "manifest_head": "60cb6981462d30400d372ca778d440c82a5bcbe3",
+  "head_ok": true,
+  "mismatches": [],
+  "missing_in_tree": [],
+  "extra_in_tree": [],
+  "lib_files": [
+    "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib",
+    "external/sources/luabind-0.7.1/_Bin/luabind-release.lib"
+  ],
+  "manifest_file_count": 88,
+  "status_path_count": 84,
+  "hashes_match_manifest": true,
+  "ok": false
+}

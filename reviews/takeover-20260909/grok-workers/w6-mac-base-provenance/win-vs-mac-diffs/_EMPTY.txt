@@ -1,0 +1,8 @@
+Each of the 21 *.diff files in this directory is 0 bytes.
+
+Command: C:\Program Files\Git\usr\bin\diff.exe -u --strip-trailing-cr win-blobs-60cb698146/<path> mac-files/<path>
+Exit 0 for all 21.
+
+Python check (analyze_endings.py): after replacing CRLF and CR with LF, mac-files/<path> == git show 60cb698146:<path> for all 21.
+Every extra Mac byte equals an extra CR (byte_delta == cr_delta).
+Windows blobs are LF-only (crlf=0). Mac working-tree files are mixed CRLF+LF, so wholesale LF->CRLF of the Windows blob does not reproduce the Mac hash.

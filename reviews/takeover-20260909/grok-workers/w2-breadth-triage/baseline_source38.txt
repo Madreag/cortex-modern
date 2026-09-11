@@ -1,0 +1,264 @@
+1314|## Source38
+1315|
+1316|**Verdict: the final family holds. Gates 1–4 and 6 are green and identical to Source37; the eight H4
+1317|gates repeat the Source37 verdicts check for check with `peers_3_4_regression` 5/5; the lobby lanes
+1318|repeat their Source37 shape with the counters recorded; the compatibility ladder is clean against the
+1319|Source22 reference; and the one genuinely new thing on this build — the alias-only two-peer arm
+1320|`ai_defer_alias` — **passes, non-vacuously**: both peers read a byte-identical sequence of alias
+1321|writes made by an AI pass that calls nothing else on the container. Nothing regressed against
+1322|Source37, and the last sound-deferral residual is closed on a two-peer socket.**
+1323|
+1324|**Pinned executable:** `f29f69bcc9e1497434bcc5bd33d05a8e2c8f9f5eeb00e69466a472ba0f4f224b`, verified
+1325|against `grouped-build-f29f69bc/build.json` (the `manifest` field of `chain-source38-1.json`, main
+1326|HEAD `32312c71ecf9de3783baac6e229c2d4b6b1cb70d`) **before every driver** and again after the last one.
+1327|Unchanged throughout.
+1328|
+1329|Run root `D:\mx\s38lanes\`. Ports 45510/45520, 45710–45800, 46110–46260, 46400–46472, 46700–46722
+1330|(lobby), 48000/48010/48020 (sound) — all outside 43300–44300. One engine pair at a time.
+1331|`D:\mx\s38` (the lead's matrix) never read or written by this lane. `stage2_p4/` and `tools/`
+1332|re-hashed unchanged; the lobby lanes ran the **stock** `tools/test_lobby_lifecycle.py`
+1333|(`be585762…`, the instrumented driver), so no lane copy was involved.
+1334|
+1335|### Per-gate results
+1336|
+1337|| # | Gate | Source38 | Source37 |
+1338||---|---|---|---|
+1339|| 1 | Semantic battery | **10/10, 176 checks, 0 failures**, six lines identical | same |
+1340|| 2 | Interp matrix | **16/16, `FAILURES: 0`** | same |
+1341|| 3 | Fake-lag 100/200 ms | **PASS / PASS** (plus two extra fl200 repeats) | same |
+1342|| 4 | Tick-300 invariance | **PASS**, 8/8, control 8/8 | same |
+1343|| 6 | Discovery selftest | **PASS** | same |
+1344|| 2 | H4 §9a gates | **4 PASS / 4 FAIL**, `peers_3_4` **5/5** | identical, check for check |
+1345|| 3 | Lobby lanes | 3-peer control **3/3**; `rejoin_4_200` runs a match (0/3); `drop_4_200` and 4-peer/100 ms never start (0/3) | same shape |
+1346|| 4 | Sound two-peer | `ai_defer` **PASS**, **`ai_defer_alias` PASS (new)**, `per_machine` does not fire | `per_machine` same |
+1347|| 5 | Compatibility ladder | **0 real differences** vs Source22 across four fixtures | same |
+1348|
+1349|#### 1–4, 6 — green and identical
+1350|
+1351|Semantic battery (`D:\mx\s38lanes\sem\`, ports 45710–45800): every case `pass: true`, the set of
+1352|failing check names across all ten is **empty**, and all six semantic detail lines are
+1353|character-identical to Source37/36/35/33/32 — `fire … tick 204` · `reload … tick 443` ·
+1354|`switch: 1048625 -> 1048628 at 104, -> 1048631 at 204` · `jetpack … fuel 1360.0->760.0, rose 30.6 px` ·
+1355|`terrain: first carve at tick 155` · `pie: opened 153 … from 14 rounds` ·
+1356|`ai_orders: go-to 1048615 at 53 … disbanded at 603`.
+1357|
+1358|Interp matrix (`D:\mx\s38lanes\mx\`, 46110–46260): all 16 PASS, `FAILURES: 0`, zero failed checks.
+1359|`EXE SHA256: F29F69BC…  HEAD: 32312c71e`. `mismatch` carries the same two config hashes
+1360|(`7a9fa2b0.. vs 913a9174..`); `perturb` → `POSITIVE CONTROL PASS`; `rtdesync` →
+1361|`clean_no_false_positive: True`, `perturb_desync_detected: True`, `RUNTIME DESYNC DETECTION: PASS`.
+1362|
+1363|Tick-300 invariance: `pass: true`, `source_unchanged: true`, all three cases green,
+1364|`[lpinv] PASS tick 300: 8/8`; control fires on **8** cases, `0/8`, exit 5. Discovery:
+1365|`[net-discovery-selftest] PASS`, desktop `Default` before and after.
+1366|
+1367|**Fake-lag, with one thing worth recording.** Both lanes PASS with 0 failed checks, 600/600
+1368|identical, 601 ticks, **0 resyncs**, auto delays `{1:1, 2:8}` and `{1:1, 2:14}`. The **first** fl200
+1369|run was an outlier — host `wall_tps` 28.08 (against ~39.4 on Source35/36/37), `out_of_order_frames`
+1370|365 (against 12–13), Start chatter 51/50 (against 39/38), elapsed 35.2 s — while fl100 was unchanged
+1371|at 47.12. Because `039269c58` adds a settle point that walks every container Lua took a position from,
+1372|and the deferral lane recorded that cost as unmeasured, I repeated fl200 twice rather than attribute
+1373|it:
+1374|
+1375|| fl200 | wall_tps | out_of_order | start_sent/retransmits | verdict |
+1376||---|---|---|---|---|
+1377|| run 1 | 28.08 | 365 | 51 / 50 | PASS |
+1378|| run 2 | 37.50 | 19 | 41 / 40 | PASS |
+1379|| run 3 | 39.33 | 11 | 39 / 38 | PASS |
+1380|| Source37 reference | 39.33 | 12 | 39 / 38 | PASS |
+1381|
+1382|Runs 2 and 3 land on the Source37 values exactly. **The first run was a single-run outlier, not a
+1383|Source38 behaviour change** — no claim of a regression from the settle point is made, and none is
+1384|supported.
+1385|
+1386|---
+1387|
+1388|### 2. H4 §9a gates — the Source37 verdicts, repeated exactly
+1389|
+1390|Run root `D:\mx\s38lanes\h4\`, ports 46400–46472, this lane's fixed driver copies unchanged.
+1391|
+1392|| # | Gate | Verdict lines |
+1393||---|---|---|
+1394|| 1 | `gns_provider_smoke` | **PASS** — `executable_matches_manifest`, `epoch_armed_on_host`, `admission_attached_both host=True client=True`, `client_committed_over_socket`, `ticket_written`, `canary_allowlist_present`, `no_secret_in_artifacts`, `no_crypto_unavailable_line` |
+1395|| 2 | `old_wire_fixture` (`--inprocess`) | **PASS** — `old_wire_selftest_pass runner rc=0`, `live_match_undisturbed 0`, `host_counted_no_old_wire rejections=0 disconnects=0` |
+1396|| 3 | `clean_leave` | **FAIL** — FAIL `clean_leave_acked 0`, `clean_leave_cleared_ticket`, `host_closed_the_seat None`, `clean_old_ticket_refused used_stored_ticket=True commits=1`, `hosts_survived exits=[1,0,1]`; PASS `ambiguous_kept_ticket`, `ambiguous_reclaim_worked used_stored_ticket=True commits=1` |
+1397|| 4 | `reclaim_socket` | **FAIL** — FAIL `host_exit_zero 1`, `host_saw_seat_drop_and_return 0 committed seats`, `host_reseat_issued`; PASS `first_client_dropped_midmatch`, `returner_reclaimed_stored_ticket`, `returner_committed`, `returner_on_same_stable_seat`, `host_census_clean 0`, `resync_round_survived`, `funds_unchanged`, `no_authority_error` |
+1398|| 5 | `crash_relaunch_provisional` | **PASS** 10/10 — incl. `arm_a_host_counted_resume 2 seats`, `arm_b_provisional_expired relaunched after 26s, P2 is 20s`, `arm_b_no_stale_commit used_stored_ticket=False commits=1` |
+1399|| 6 | `fencing_two_transports` | **FAIL** — FAIL `host_bound_second_incarnation None`, `host_fenced_the_old_transport fenced_disconnects+fenced_packets=0`, `seat_not_dropped_by_stale_timeout []`, `host_survived 1`; PASS `second_client_committed`, `first_client_superseded` |
+1400|| 7 | `rejoin_after_resync` | **FAIL** — FAIL `resync_match_continued 1` only; PASS `resync_returner_reclaimed`, `resync_round_ran`, `resync_census_clean 0`, `rematch_completed 0`, `rematch_ticket_survived`, `rematch_seat_still_protected`, `rematch_no_host_fatal`, `no_stale_epoch_denials stale_epoch_drops=0` |
+1401|| 8 | `peers_3_4_regression` | **PASS ×5/5** — every check green in all five runs (`peers3_sim_gated_identical 3 traces identical`, `peers4_sim_gated_identical 4 traces identical`, `drop3_returner_reclaimed`, `drop3_survivors_identical`, `drop3_distinct_seats []`, `no_census_refusals 0`) |
+1402|
+1403|**The residues are identical to Source37, message for message.** The resync still completes end to
+1404|end (`peer stall recovered after 4450ms (tick 247)` → `rejoin: Client reconnected - resyncing the
+1405|match` → `snapbench save … saved=1` → `resync: match relaunched from the snapshot`), and the hosts
+1406|still report `exit 1, running_ticks 0, activity Over, "activity ended in state Over"` in
+1407|`reclaim_socket`, `rejoin_after_resync/resync_host` and `clean_leave/ambiguous_host`.
+1408|`fencing_two_transports` fails at `tick 566 lockstep queue: GNS peer was not found` (589 on
+1409|Source37 — the tick moves run to run, the failure does not), and `clean_leave/clean_host` still ends
+1410|at `tick 301 lockstep wait: PeerLeft:Match left`.
+1411|
+1412|Both open items carry forward unchanged to slice A6 (the post-relaunch game-over, the fencing, the
+1413|clean-leave ack), which is already committed on `stage2/h4-phase-a` and lands in the next family —
+1414|this lane measured Source38, which does not contain it.
+1415|
+1416|---
+1417|
+1418|### 3. Lobby lanes — the Source37 shape, counters recorded
+1419|
+1420|Stock `tools/test_lobby_lifecycle.py` (`be585762…`), run root `D:\mx\s38lanes\lg4\`, ports
+1421|46700–46722, three runs each.
+1422|
+1423|| lane | runs | pass | failing checks |
+1424||---|---|---|---|
+1425|| `ctl_rejoin_3_200` (3 peers, 200 ms) | 3 | **3** | none |
+1426|| `lobby_4_rejoin_200` | 3 | 0 | `{stayer2,stayer3,replacement}_{process,steps,simulation}` — host passes, `*_replacement_name` passes |
+1427|| `lobby_4_drop_200` | 3 | 0 | all 16 |
+1428|| `ctl_rejoin_4_100` (4 peers, 100 ms) | 3 | 0 | all 16 |
+1429|
+1430|Per-peer counters from `lockstep-stats.json`, `lobby_4_rejoin_200` (the only 4-peer lane that starts
+1431|a match), all three runs:
+1432|
+1433|| run | peer | framesAccepted | remoteControllerFramesReceived | missingFrameStalls | outOfOrderFrames | relay_send_failures | relay_resends | longest_stall_ms | last_relay_error |
+1434||---|---|---|---|---|---|---|---|---|---|
+1435|| r1 | host | 177 | 992 | 167 | 41 | **34** | 51 | 2957 | `SendMessageToConnection failed with EResult 25` |
+1436|| r1 | stayer2 / stayer3 / replacement | 176 | 1014 | 176 | 177 / 188 / 187 | 0 | 0 | 6215 / 5470 / 6064 | — |
+1437|| r2 | host | 177 | 990 | 167 | 5 | **22** | 42 | 3662 | same |
+1438|| r2 | stayer2 / stayer3 / replacement | 176 | 1014 | 176 | 164 / 164 / 162 | 0 | 0 | 6204 / 6755 / 6397 | — |
+1439|| r3 | host | 177 | 990 | 167 | 9 | **23** | 43 | 3069 | same |
+1440|| r3 | stayer2 / stayer3 / replacement | 176 | 1014 | 176 | 163 / 166 / 170 | 0 | 0 | 5561 / 5613 / 5769 | — |
+1441|
+1442|Passing 3-peer control for contrast (r1): host `fa=177, relay_send_failures=0, resends=0,
+1443|longest_stall=331 ms`; stayer2 and replacement `fa=177, ooo=164, longest_stall≈338 ms`.
+1444|
+1445|`lobby_4_drop_200` and `ctl_rejoin_4_100` produce **no counters** — `lockstep-stats.json` is null for
+1446|host/stayers/departing and all-zero for the replacement, because no match starts.
+1447|
+1448|**These are informational, as instructed.** The Source38 matrix ran beside this lane, so the timing
+1449|numbers are not a clean measurement, and the lobby-grace lane has since root-caused all three 4-peer
+1450|failures on its own branch (a roster peer the lobby had no seat for yet; a local GNS disconnect that
+1451|emitted no `PeerDisconnected`; and EResult 25 being the host genuinely queueing ~8 MB, dominated by
+1452|the 44-byte sound observations the committed-audibility contract sends every tick). None of those
+1453|fixes is in Source38, and the measured re-run belongs to Source39 with the machine to itself. Two
+1454|things the counters do settle regardless of contention: the failure is **not** load-dependent noise —
+1455|it reproduces 3/3 with the same `EResult 25` and the same 176/180 shortfall — and `relay_send_failures`
+1456|is **zero at three peers** under the identical 200 ms lag, so it scales with peer count.
+1457|`largest_relay_packet_bytes` reads null throughout: that counter is from the lobby-grace follow-up
+1458|commit, which is not in this build.
+1459|
+1460|---
+1461|
+1462|### 4. Two-peer sound modes — the new alias arm passes, non-vacuously
+1463|
+1464|Stock runner, ports 48000 / 48010 / 48020.
+1465|
+1466|| | `ai_defer` (match) | **`ai_defer_alias` (match)** | `per_machine` (diverge) |
+1467||---|---|---|---|
+1468|| `pass_expected_outcome` | **true** | **true** | **false** |
+1469|| `common_ticks` / `changed_ticks` | 600 / **0** | 600 / **0** | 600 / 0 |
+1470|| `effect_counts` | 2404 / 2404 | **4808 / 4808** | 4808 / 4808 |
+1471|| `trace_errors`, `native_or_lua_errors` | none | **none** | none |
+1472|
+1473|**`ai_defer_alias` is the one genuinely new result on this build, and it is not a vacuous match.**
+1474|The chain's own first attempt failed on a fixture error (luabind has no equality across the two
+1475|userdata wrappers) and passed on the lead's second run; this is an independent third run on the same
+1476|executable, with the `UniqueID`-comparing handler in place, and it passes with zero Lua or trace
+1477|errors. I checked that the arm actually did something rather than agreeing on nothing:
+1478|
+1479|```
+1480|actor=1048577/1048596/1048615/1048634  step=1    pos_x=0      pos_y=0
+1481|actor=1048634  step= 95   pos_x=234.5  pos_y=-45.25     <- the position is taken and held
+1482|actor=1048615  step= 96   pos_x=234.5  pos_y=-45.25
+1483|actor=1048634  step=135   pos_x=234.5  pos_y=77.5       <- Y written through the held alias
+1484|actor=1048615  step=136   pos_x=234.5  pos_y=77.5
+1485|actor=1048615  step=150   pos_x=235.5  pos_y=77.5       <- X written through the held alias
+1486|actor=1048634  step=151   pos_x=235.5  pos_y=77.5
+1487|actor=1048615  step=160   pos_x=235.5  pos_y=67.5       <- Y via the SendGlobalMessage handler
+1488|actor=1048634  step=161   pos_x=235.5  pos_y=67.5
+1489|```
+1490|
+1491|Both the **host-owned** actor `1048615` and the **client-owned** actor `1048634` hold a position in
+1492|one AI pass and write through it in later passes that call nothing else on the container, and the
+1493|shared `Update` on **both peers** reads the identical sequence — the full alias trace hashes equal
+1494|across the two peers (md5 `4fbfc55e…` on each). That is the last F2 residual closed on a real socket,
+1495|which is what `039269c58` was for. (The value sequence 77.5 → 235.5 → 67.5 matches the lead's run;
+1496|the step numbers differ slightly, which is the fixture's own pacing, not a divergence — the two peers
+1497|agree step for step within the run.)
+1498|
+1499|**`per_machine` still does not fire, for the reason I established on Source37, re-verified here.**
+1500|Its `audible=` arm was sampled 2404 times per peer; the host and client histograms are **identical
+1501|value for value and count for count** (md5 `9eea46a0…` on both):
+1502|
+1503|```
+1504|1299 audible=0 · 494 audible=0.00838188… · 8 audible=0.00838721… · 44 audible=0.02120014…
+1505|   6 audible=0.02121158… · 495 audible=0.02185382… · … (host and client identical)
+1506|```
+1507|
+1508|Carried forward and now confirmed by the lead's own reading: this arm reads the **committed
+1509|authority value**, which is the settled policy — the shared reading every peer commits — so the
+1510|private gains (`{host: 0.25, client: 0.75}`) never enter it and the control cannot diverge by design.
+1511|**Not a defect, and not a gate bug to fix by changing the fixture** (which I did not). The control is
+1512|re-armed instead with `CC_FAULT_INJECT=local_audibility`, and the chain records that arm diverging by
+1513|141 ticks on this same build — so the fixture family is proven sensitive. My Source36 note that
+1514|blamed `CC_TEST_AUDIO_NOSOUND` was wrong and was corrected in the Source37 section.
+1515|
+1516|---
+1517|
+1518|### 5. Compatibility ladder against the Source22 reference — clean
+1519|
+1520|Reference `grouped-build-4244e87e` (Source22, `4244e87e…`) and the approved build (`f29f69bc…`), same
+1521|`Data`, same private-runtime shape, single-process and socket-free.
+1522|
+1523|| fixture | lines compared | differing | UniqueID-only | **real differences** | cases (ref / app failures) |
+1524||---|---|---|---|---|---|
+1525|| `sound_ai_deferral.lua` (28 cases, `ec135e31…`) | 29 | 1 → **0** on repeat | 1 | **0** | 28, 0 / 0 |
+1526|| `compat_review_alias.lua` | 5 | **0** | 0 | **0** | symmetric (5 / 5, format not `ok=N`) |
+1527|| `compat_review_alias2.lua` | 3 | **0** | 0 | **0** | symmetric (3 / 3) |
+1528|| `compat_review_extra.lua` | 18 | **0** | 0 | **0** | symmetric (14 / 14) |
+1529|
+1530|The deferral fixture is **28 cases, all `ok=1`, on both rungs**. The first run showed exactly one
+1531|differing detail string — the `spawn_child` UniqueID counter, `uid=1049494` (reference) against
+1532|`uid=1049517` (approved), `ok=1` on both. Rather than report that as a build difference I repeated
+1533|the probe, and the reference itself moved: **`source22` printed `1049494` in run 1 and `1049517` in
+1534|run 2**, so in run 2 both rungs read `1049517` and the ladder had **0 differing lines at all**. The
+1535|counter varies run to run on the same executable and carries no build signal — which is exactly the
+1536|reviewer's point that the exception disappears when both arms run the same fixture. Every other line
+1537|across all four fixtures is character-identical on both rungs.
+1538|
+1539|The `cases` "failure" counts for the alias/alias2/extra fixtures are **symmetric between reference
+1540|and approved** (5/5, 3/3, 14/14): those fixtures print comparison values rather than the `ok=N` field
+1541|the probe's regex scores, so they are comparison fixtures, and the comparison — line for line — is
+1542|exact.
+1543|
+1544|---
+1545|
+1546|### What is new on Source38, and what still is not tested
+1547|
+1548|* **New and green:** `ai_defer_alias` passes on a two-peer socket with both peers reading an
+1549|  identical, non-trivial alias-write sequence — the last sound-deferral residual closed where it
+1550|  matters.
+1551|* **New, and a correction to the brief's expectation:** the ladder's `spawn_child` UniqueID counter
+1552|  *can* differ between two runs of the same fixture (it varies on the reference build itself), so
+1553|  "0 differences" holds for every semantic line but not always for that one counter.
+1554|* **Carried forward unchanged from Source37:** the `activity ended in state Over` residue behind three
+1555|  H4 reds; `fencing_two_transports`' `GNS peer was not found`; `clean_leave`'s unacked clean arm; the
+1556|  three 4-peer lobby lanes; `per_machine` not firing as designed (settled policy, re-armed by fault
+1557|  injection).
+1558|* **Still not tested:** the matrix at input delay 0 exercises no prediction; tick-300 invariance
+1559|  exercises only the already-armed arm; `old_wire_fixture`'s socket mode needs an injector;
+1560|  `crash_relaunch_provisional` arm A rejoins fresh rather than resuming; the headed §11 review; the
+1561|  Mac chain, the full matrix and the native/restore/heal/transaction gates (the lead's, not this
+1562|  lane's).
+1563|* **Not attempted:** any bisect; a contention-free lobby measurement (that is Source39's, with the
+1564|  machine idle); the A6/lobby-grace/B1/registry-audit commits, none of which are in this build.
+1565|
+1566|---
+1567|
+1568|### Summary
+1569|
+1570|1. Source38 (exe `f29f69bc…`, manifest-verified before every driver and after the last) is green and identical to Source37 on gates 1–4 and 6: the semantic battery is 10/10 with zero failing checks and all six lines unmoved, the matrix is 16/16 with `FAILURES: 0`, fake-lag passes at both lags with 0 resyncs, tick-300 invariance is 8/8 with its control firing, and discovery passes.
+1571|2. **The new alias-only two-peer arm `ai_defer_alias` passes non-vacuously** — the host-owned and client-owned actors each hold a position in one AI pass and write Y 77.5, X 235.5 and Y 67.5 through it in later passes that call nothing else, and both peers read a byte-identical sequence (md5-equal alias traces, 4808/4808 effects, no Lua or trace errors) — closing the last sound-deferral residual on a real socket.
+1572|3. The eight H4 gates repeat the Source37 verdicts check for check with `peers_3_4_regression` 5/5, and the residues are message-for-message identical: the resync completes (`saved=1` → `relaunched from the snapshot`) and the hosts then report `activity ended in state Over` with zero ticks; `fencing_two_transports` still fails on `GNS peer was not found`; `clean_leave`'s clean arm is still unacked. Slice A6 addresses all three and is not in this build.
+1573|4. The lobby lanes repeat their shape — 3-peer/200 ms control **3/3**, the three 4-peer lanes 0/3 — with counters recorded: `lobby_4_rejoin_200` reaches 176–177 of 180 frames on every peer with host `relay_send_failures` 22–34, 42–51 resends and `EResult 25` in all three runs, against **zero** refusals at three peers; the other two 4-peer lanes start no match and so produce no counters. Treated as informational per the brief (matrix beside the lane, root causes already found by lobby-grace, measured re-run on Source39).
+1574|5. The compatibility ladder is clean: four unchanged-Lua fixtures, 28/28 deferral cases `ok=1` on both rungs, and **zero real differences** against the Source22 reference — the only line that ever differed was the `spawn_child` UniqueID counter, which a repeat showed varies run to run on the reference executable itself (1049494 then 1049517), leaving the second run with no differing lines at all.
+1575|
+1576|---
+1577|

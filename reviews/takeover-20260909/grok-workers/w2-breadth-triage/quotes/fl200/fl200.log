@@ -1,0 +1,24 @@
+exe sha256 verified: bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+--- fl200: port=45520 host=['-net-fake-lag', '200', '-net-match-auto-delay'] client=['-net-fake-lag', '200'] timeout=400
+fl200 PASS []
+    host_pace_recorded: wall_tps=37.3348 sim_ms_per_tick=21.3136 (recorded, not asserted: two peers share one CPU here)
+    client_pace_recorded: wall_tps=37.3107 sim_ms_per_tick=27.105 (recorded, not asserted: two peers share one CPU here)
+    simgated_strict: compared_ticks=600 first_divergence=None reasons=[] subsystems=[['actors', 'carve_math', 'controller', 'funds', 'lua_state', 'particles', 'rot_angle', 'rot_angvel', 'scene', 'sim_rng', 'terrain', 'tick'], ['actors', 'con
+    prediction_executed: previews=589 violations=0
+    host_process_exit: exit_code=0 timed_out=False elapsed=27.636
+    client_process_exit: exit_code=0 timed_out=False elapsed=28.336
+    host_liveness: running_ticks=601 runtime_error='' setup_error='' activity_state=Over winner_team=-1
+    client_liveness: running_ticks=601 runtime_error='' setup_error='' activity_state=Over winner_team=-1
+    host lockstep: {"configured_start_frame": 1, "connections_closed_on_eviction": 0, "duplicate_frames": 0, "effective_start_frame": 2, "frame_packets_received": 589, "frame_packets_sent": 602, "frames_accepted": 601, "future_frame_drops": 0, "ignored_session_packets": 10, "input_delay_frames": 1, "largest_relay_packet_bytes": 0, "last_missing_peers": "Client", "last_relay_error": "", "local_controller_frames_sent"
+    host resyncs=0 pace={"iterations": 1627, "sim_ticks": 602, "wall_ms": 16124, "sim_ms": 12830, "draw_ms": 3267, "wall_tps": 37.3348, "sim_ms_per_tick": 21.3136, "draw_ms_per_iter": 2.00824, "net_wait_ms": 9699, "accrued_ms": 16130, "trimmed_
+{
+  "exe_sha256_before": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "exe_sha256_after": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "exe_unchanged": true,
+  "lanes": {
+    "fl200": {
+      "pass": true,
+      "failed": []
+    }
+  }
+}

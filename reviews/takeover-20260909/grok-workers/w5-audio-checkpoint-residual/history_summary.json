@@ -1,0 +1,82 @@
+{
+  "peers_jobs": [
+    {
+      "root": "D:\\mx\\s41b3",
+      "present": true,
+      "jobs": [
+        "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228",
+        "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527",
+        "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655",
+        "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824"
+      ]
+    },
+    {
+      "root": "D:\\mx\\s41",
+      "present": true,
+      "jobs": []
+    },
+    {
+      "root": "D:\\mx\\s40lanes",
+      "present": true,
+      "jobs": [
+        "D:\\mx\\s40lanes\\h4\\peers_3_4_regression_20260909_105714",
+        "D:\\mx\\s40lanes\\h4\\peers_3_4_regression_20260909_105923",
+        "D:\\mx\\s40lanes\\h4\\peers_3_4_regression_20260909_110133",
+        "D:\\mx\\s40lanes\\h4\\peers_3_4_regression_20260909_110342",
+        "D:\\mx\\s40lanes\\h4\\peers_3_4_regression_20260909_110551"
+      ]
+    }
+  ],
+  "jobs_with_class_needles": [
+    "peers_3_4_regression_20260910_022527"
+  ],
+  "interesting_count": 15,
+  "job_file_count_no_reparse": 145,
+  "skipped": [
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Data",
+      "reason": "reparse"
+    }
+  ]
+}

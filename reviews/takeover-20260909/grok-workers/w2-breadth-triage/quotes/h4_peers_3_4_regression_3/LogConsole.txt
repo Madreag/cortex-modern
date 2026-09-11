@@ -1,0 +1,14 @@
+- RTE Lua Console -
+See the Data Realms Wiki for commands: http://www.datarealms.com/wiki/
+Press F1 for a list of helpful shortcuts
+-------------------------------------
+Sound loading completed: 984 pending samples, 1241ms
+SYSTEM: Game "p5resync_17092_recv" staged for restart!
+SYSTEM: Activity was reset!
+SYSTEM: Scene "Grasslands" was loaded
+SYSTEM: Activity "P4 Alpha Duel" was successfully started
+ERROR: Could not restore audio checkpoint: voice 36 has no registered owner 9310
+ERROR: the prior game's Lua state could not be reinstated
+ERROR: could not launch the activity
+ERROR: No Activity to end!
+SYSTEM: Entire console contents saved to LogConsole.txt

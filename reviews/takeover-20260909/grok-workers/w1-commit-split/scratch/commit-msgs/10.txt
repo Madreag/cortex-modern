@@ -1,0 +1,3 @@
+Initialize saved-game modules and use the lobby shared clock
+
+Selected modules get writable save storage, and lobby waits use the session clock plus transfer progress instead of a flat timeout.

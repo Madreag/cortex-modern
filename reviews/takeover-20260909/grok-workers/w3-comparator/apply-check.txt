@@ -1,0 +1,2 @@
+COMMAND: git -C D:\Projects\p4b-interp-validation apply --check "D:\Projects\reviews\takeover-20260909\grok-workers\w3-comparator\compare_snapshots-repair.patch"
+EXIT=0

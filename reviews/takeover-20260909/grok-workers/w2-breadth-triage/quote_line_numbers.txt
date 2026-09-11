@@ -1,0 +1,27 @@
+D:\mx\s41b3\breadth.json:2047:        "host: auto delay differs from 14",
+D:\mx\s41b3\breadth.json:2048:        "client: auto delay differs from 14"
+D:\mx\s41b3\breadth.json:37368:        "compat output differs from Source22; no UID exclusions"
+D:\mx\s41b3\breadth.json:37323:        "D:\\mx\\s41b3\\logs\\heal.log:12: ModuleNotFoundError: No module named 'recovery_e2e'",
+D:\mx\s41b3\breadth.json:14303:        "B1 running activity is not evidenced",
+D:\mx\s41b3\logs\fl200.log:3:fl200 PASS []
+D:\mx\s41b3\j28\fl\fl200\host\stdout.log:5:[net-match] auto input delay: peer 2 rtt 400ms -> 13 frames (manual floor 0)
+NOTFOUND D:\mx\s41b3\j28\fl\fl200\client_report.json :: "2": 13
+D:\mx\s41b3\j28\fl\fl200\client_report.json:1:{"exit_code":0,"setup_error":"","runtime_error":"","activity_preset":"P4 Alpha Duel","activity_state":"Over","winner_team":-1,"entered_editor":false,"rematches":0,"resyncs":0,"actors":4,"actors_peak":4,"pace":{"iterations":40,"sim_ticks":60
+D:\mx\s41b3\logs\heal.log:12:ModuleNotFoundError: No module named 'recovery_e2e'
+D:\Projects\reviews\takeover-20260909\run_breadth.py:1666:                v.require(ls.get("peer_input_delays") == {"1": 1, "2": delay}, f"{peer}: auto delay differs from {delay}")
+D:\Projects\reviews\takeover-20260909\run_breadth.py:1708:                v.require(row.get("lines") == reference["lines"], "compat output differs from Source22; no UID exclusions")
+NOTFOUND D:\Projects\reviews\takeover-20260909\run_breadth.py :: import recovery_e2e
+D:\Projects\reviews\takeover-20260909\run_breadth.py:1879:    path = LANES / "invariance-300/recovery_expanded_mod_t300.py" if options.child == "invariance" else STAGE / "recovery_expanded_mod.py"
+D:\Projects\reviews\takeover-20260909\run_breadth.py:1885:    result = module.invariance(out) if options.child == "invariance" else module.heal(out)
+D:\Projects\reviews\takeover-20260909\run_breadth.py:1167:ERRORS = re.compile(
+D:\Projects\stage2_p4\recovery_expanded_mod.py:105:    import recovery_e2e as e2e
+D:\Projects\p4b-interp-validation\Source\Network\NetMatchRunner.cpp:79:		if (config.host && config.autoInputDelay) {
+D:\Projects\p4b-interp-validation\Source\Network\NetMatchRunner.cpp:84:				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
+D:\Projects\p4b-interp-validation\Source\Network\NetMatchRunner.cpp:88:				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
+D:\Projects\p4b-interp-validation\Source\Network\GnsTransport.cpp:242:				        ", ping " + std::to_string(status.m_nPing) + "ms";
+D:\Projects\p4b-interp-validation\Source\Managers\MovableMan.cpp:412:				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
+D:\Projects\p4b-interp-validation\Source\Managers\MovableMan.cpp:416:			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
+D:\Projects\p4b-interp-validation\Source\Managers\MovableMan.cpp:547:					g_ConsoleMan.PrintString("ERROR: Rejected a scuttle command for a craft off its claimed team");
+D:\Projects\p4b-interp-validation\Source\Managers\MovableMan.cpp:596:				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
+D:\Projects\p4b-interp-validation\Source\Managers\MovableMan.cpp:603:				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command for an actor off its claimed team");
+D:\Projects\p4b-interp-validation\Source\Managers\MovableMan.cpp:690:				g_ConsoleMan.PrintString("ERROR: Rejected a sound command from a peer that does not drive actor " + std::to_string(sound->actorUID));

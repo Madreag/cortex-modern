@@ -1,0 +1,41 @@
+diff --git a/Source/Managers/PrimitiveMan.h b/Source/Managers/PrimitiveMan.h
+index 3bfa9dc48..df51e9638 100644
+--- a/Source/Managers/PrimitiveMan.h
++++ b/Source/Managers/PrimitiveMan.h
+@@ -8,6 +8,7 @@
+ namespace RTE {
+ 
+ 	class Entity;
++	struct PrimitiveQueuesSetAside { std::deque<std::unique_ptr<GraphicalPrimitive>> primitives; };
+ 
+ 	/// Singleton manager responsible for all primitive drawing.
+ 	class PrimitiveMan : public Singleton<PrimitiveMan> {
+@@ -20,7 +21,18 @@ namespace RTE {
+ 
+ #pragma region Destruction
+ 		/// Delete all scheduled primitives, called on every FrameMan sim update.
+-		void ClearPrimitivesQueue() { m_ScheduledPrimitives.clear(); }
++		void ClearPrimitivesQueue() { std::lock_guard<std::mutex> lock(m_Mutex); m_ScheduledPrimitives.clear(); }
++		std::string SaveCheckpoint() const;
++		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, bool resolveReferences = true);
++		bool ResolveCheckpointReferences();
++		bool RunCheckpointSelfTest();
++		using QueuesSetAside = PrimitiveQueuesSetAside;
++		void SetAsideQueues(QueuesSetAside& output);
++		void ReinstateQueues(QueuesSetAside& input);
++		GraphicalPrimitive* GetCheckpointPrimitive(size_t index) const;
++		Vector* GetCheckpointVertex(size_t index) const;
++		int FindCheckpointPrimitive(const void* primitive) const;
++		int FindCheckpointVertex(const void* vertex) const;
+ #pragma endregion
+ 
+ #pragma region Primitive Drawing
+@@ -453,7 +465,7 @@ namespace RTE {
+ #pragma endregion
+ 
+ 	protected:
+-		std::mutex m_Mutex; //!< Mutex so that mutiple threads (i.e multithreaded scripts) can safely queue up draws
++		mutable std::mutex m_Mutex; //!< Mutex so that mutiple threads (i.e multithreaded scripts) can safely queue up draws
+ 		std::deque<std::unique_ptr<GraphicalPrimitive>> m_ScheduledPrimitives; //!< List of graphical primitives scheduled to draw this frame, cleared every frame during FrameMan::Draw().
+ 
+ 	private:

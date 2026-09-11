@@ -1,0 +1,788 @@
+{
+  "commit_subjects": [
+    "Carry player-binding observations on the command wire",
+    "Bound a resync envelope around archive, acks and pending commands",
+    "Restore complete input, drop-map ownership and exact-target priming",
+    "Restore typed native aliases and isolate craft-fixture clones",
+    "Skip registry mutation when privately adopting a persisted UniqueID",
+    "Keep ACraft exit selection and AHuman inventory across checkpoint load",
+    "Add A7 journal helpers for recovery-arm traces",
+    "Give the host a live F6 panel and codec-17 seat snapshots",
+    "Restore peer-local player, UI and aliases after a restore",
+    "Initialize saved-game modules and use the lobby shared clock",
+    "Record A7 recovery events on session, tickets and ownership",
+    "Compare snapshots by the controlled actor's inventory role"
+  ],
+  "files": {
+    "RTEA.vcxproj": {
+      "final_sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+      "base_sha256": "02b3ad3a44f5af4c92f520f85c4a5bd93ad5c6670fd36025493bd1b3b641a546",
+      "final_nlines": 1637,
+      "base_reconstructed_ok": true,
+      "added": [
+        {
+          "line_no": 852,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetResyncState.h\" />",
+          "units": [
+            "NetResyncState.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.h",
+          "entry_key": "Source/Network/NetResyncState.h"
+        },
+        {
+          "line_no": 853,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetResyncSelfTest.h\" />",
+          "units": [
+            "NetResyncSelfTest.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.h",
+          "entry_key": "Source/Network/NetResyncSelfTest.h"
+        },
+        {
+          "line_no": 854,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetResyncRuntimeSelfTest.h\" />",
+          "units": [
+            "NetResyncRuntimeSelfTest.h"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.h",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.h"
+        },
+        {
+          "line_no": 879,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetA7Journal.h\" />",
+          "units": [
+            "NetA7Journal.h"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.h",
+          "entry_key": "Source/Network/NetA7Journal.h"
+        },
+        {
+          "line_no": 882,
+          "text": "    <ClInclude Include=\"Source\\CI\\NetModerationGUIProbe.h\" />",
+          "units": [
+            "NetModerationGUIProbe.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.h",
+          "entry_key": "Source/CI/NetModerationGUIProbe.h"
+        },
+        {
+          "line_no": 1016,
+          "text": "    <ClInclude Include=\"Source\\Menus\\NetModerationGUI.h\" />",
+          "units": [
+            "NetModerationGUI.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.h",
+          "entry_key": "Source/Menus/NetModerationGUI.h"
+        },
+        {
+          "line_no": 1435,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetResyncState.cpp\" />",
+          "units": [
+            "NetResyncState.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.cpp",
+          "entry_key": "Source/Network/NetResyncState.cpp"
+        },
+        {
+          "line_no": 1436,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetResyncSelfTest.cpp\" />",
+          "units": [
+            "NetResyncSelfTest.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncSelfTest.cpp"
+        },
+        {
+          "line_no": 1437,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetResyncRuntimeSelfTest.cpp\" />",
+          "units": [
+            "NetResyncRuntimeSelfTest.cpp"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.cpp"
+        },
+        {
+          "line_no": 1461,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetA7Journal.cpp\" />",
+          "units": [
+            "NetA7Journal.cpp"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.cpp",
+          "entry_key": "Source/Network/NetA7Journal.cpp"
+        },
+        {
+          "line_no": 1464,
+          "text": "    <ClCompile Include=\"Source\\CI\\NetModerationGUIProbe.cpp\" />",
+          "units": [
+            "NetModerationGUIProbe.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.cpp",
+          "entry_key": "Source/CI/NetModerationGUIProbe.cpp"
+        },
+        {
+          "line_no": 1598,
+          "text": "    <ClCompile Include=\"Source\\Menus\\NetModerationGUI.cpp\" />",
+          "units": [
+            "NetModerationGUI.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.cpp",
+          "entry_key": "Source/Menus/NetModerationGUI.cpp"
+        }
+      ],
+      "last_touch_commit": 8,
+      "intermediates": {
+        "1": {
+          "sha256": "02b3ad3a44f5af4c92f520f85c4a5bd93ad5c6670fd36025493bd1b3b641a546",
+          "nlines": 1625,
+          "equals_final": false,
+          "touches": false
+        },
+        "2": {
+          "sha256": "a9ce6acfee6c5b5e00d049c7fe70c7d800ce805810ebd71f0dba0f2cf1491585",
+          "nlines": 1629,
+          "equals_final": false,
+          "touches": true
+        },
+        "3": {
+          "sha256": "7523b61fb3f1298a5d7faa7877e1eae4b8628649cd27b8d62b36251ce5d3bdc1",
+          "nlines": 1631,
+          "equals_final": false,
+          "touches": true
+        },
+        "4": {
+          "sha256": "7523b61fb3f1298a5d7faa7877e1eae4b8628649cd27b8d62b36251ce5d3bdc1",
+          "nlines": 1631,
+          "equals_final": false,
+          "touches": false
+        },
+        "5": {
+          "sha256": "7523b61fb3f1298a5d7faa7877e1eae4b8628649cd27b8d62b36251ce5d3bdc1",
+          "nlines": 1631,
+          "equals_final": false,
+          "touches": false
+        },
+        "6": {
+          "sha256": "7523b61fb3f1298a5d7faa7877e1eae4b8628649cd27b8d62b36251ce5d3bdc1",
+          "nlines": 1631,
+          "equals_final": false,
+          "touches": false
+        },
+        "7": {
+          "sha256": "33e769e6f8ea3be24ceaf9e75cf96febac4ec7057abe647096d7389ae0fa870a",
+          "nlines": 1633,
+          "equals_final": false,
+          "touches": true
+        },
+        "8": {
+          "sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+          "nlines": 1637,
+          "equals_final": true,
+          "touches": true
+        },
+        "9": {
+          "sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+          "nlines": 1637,
+          "equals_final": true,
+          "touches": false
+        },
+        "10": {
+          "sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+          "nlines": 1637,
+          "equals_final": true,
+          "touches": false
+        },
+        "11": {
+          "sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+          "nlines": 1637,
+          "equals_final": true,
+          "touches": false
+        },
+        "12": {
+          "sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+          "nlines": 1637,
+          "equals_final": true,
+          "touches": false
+        }
+      }
+    },
+    "RTEA.vcxproj.filters": {
+      "final_sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+      "base_sha256": "435eb970e7300491ebb42e22ae2ae1b78950a2ada3e89881cbad84e85e1a4795",
+      "final_nlines": 1560,
+      "base_reconstructed_ok": true,
+      "added": [
+        {
+          "line_no": 427,
+          "text": "    <ClInclude Include=\"Source\\Menus\\NetModerationGUI.h\">",
+          "units": [
+            "NetModerationGUI.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.h",
+          "entry_key": "Source/Menus/NetModerationGUI.h"
+        },
+        {
+          "line_no": 428,
+          "text": "      <Filter>Menus</Filter>",
+          "units": [
+            "NetModerationGUI.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.h",
+          "entry_key": "Source/Menus/NetModerationGUI.h"
+        },
+        {
+          "line_no": 429,
+          "text": "    </ClInclude>",
+          "units": [
+            "NetModerationGUI.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.h",
+          "entry_key": "Source/Menus/NetModerationGUI.h"
+        },
+        {
+          "line_no": 430,
+          "text": "    <ClInclude Include=\"Source\\CI\\NetModerationGUIProbe.h\">",
+          "units": [
+            "NetModerationGUIProbe.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.h",
+          "entry_key": "Source/CI/NetModerationGUIProbe.h"
+        },
+        {
+          "line_no": 431,
+          "text": "      <Filter>System</Filter>",
+          "units": [
+            "NetModerationGUIProbe.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.h",
+          "entry_key": "Source/CI/NetModerationGUIProbe.h"
+        },
+        {
+          "line_no": 432,
+          "text": "    </ClInclude>",
+          "units": [
+            "NetModerationGUIProbe.h"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.h",
+          "entry_key": "Source/CI/NetModerationGUIProbe.h"
+        },
+        {
+          "line_no": 460,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetA7Journal.h\">",
+          "units": [
+            "NetA7Journal.h"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.h",
+          "entry_key": "Source/Network/NetA7Journal.h"
+        },
+        {
+          "line_no": 461,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetA7Journal.h"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.h",
+          "entry_key": "Source/Network/NetA7Journal.h"
+        },
+        {
+          "line_no": 462,
+          "text": "    </ClInclude>",
+          "units": [
+            "NetA7Journal.h"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.h",
+          "entry_key": "Source/Network/NetA7Journal.h"
+        },
+        {
+          "line_no": 535,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetResyncState.h\">",
+          "units": [
+            "NetResyncState.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.h",
+          "entry_key": "Source/Network/NetResyncState.h"
+        },
+        {
+          "line_no": 536,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetResyncState.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.h",
+          "entry_key": "Source/Network/NetResyncState.h"
+        },
+        {
+          "line_no": 537,
+          "text": "    </ClInclude>",
+          "units": [
+            "NetResyncState.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.h",
+          "entry_key": "Source/Network/NetResyncState.h"
+        },
+        {
+          "line_no": 538,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetResyncSelfTest.h\">",
+          "units": [
+            "NetResyncSelfTest.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.h",
+          "entry_key": "Source/Network/NetResyncSelfTest.h"
+        },
+        {
+          "line_no": 539,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetResyncSelfTest.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.h",
+          "entry_key": "Source/Network/NetResyncSelfTest.h"
+        },
+        {
+          "line_no": 540,
+          "text": "    </ClInclude>",
+          "units": [
+            "NetResyncSelfTest.h"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.h",
+          "entry_key": "Source/Network/NetResyncSelfTest.h"
+        },
+        {
+          "line_no": 541,
+          "text": "    <ClInclude Include=\"Source\\Network\\NetResyncRuntimeSelfTest.h\">",
+          "units": [
+            "NetResyncRuntimeSelfTest.h"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.h",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.h"
+        },
+        {
+          "line_no": 542,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetResyncRuntimeSelfTest.h"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.h",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.h"
+        },
+        {
+          "line_no": 543,
+          "text": "    </ClInclude>",
+          "units": [
+            "NetResyncRuntimeSelfTest.h"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.h",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.h"
+        },
+        {
+          "line_no": 817,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetA7Journal.cpp\">",
+          "units": [
+            "NetA7Journal.cpp"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.cpp",
+          "entry_key": "Source/Network/NetA7Journal.cpp"
+        },
+        {
+          "line_no": 818,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetA7Journal.cpp"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.cpp",
+          "entry_key": "Source/Network/NetA7Journal.cpp"
+        },
+        {
+          "line_no": 819,
+          "text": "    </ClCompile>",
+          "units": [
+            "NetA7Journal.cpp"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.cpp",
+          "entry_key": "Source/Network/NetA7Journal.cpp"
+        },
+        {
+          "line_no": 892,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetResyncState.cpp\">",
+          "units": [
+            "NetResyncState.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.cpp",
+          "entry_key": "Source/Network/NetResyncState.cpp"
+        },
+        {
+          "line_no": 893,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetResyncState.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.cpp",
+          "entry_key": "Source/Network/NetResyncState.cpp"
+        },
+        {
+          "line_no": 894,
+          "text": "    </ClCompile>",
+          "units": [
+            "NetResyncState.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.cpp",
+          "entry_key": "Source/Network/NetResyncState.cpp"
+        },
+        {
+          "line_no": 895,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetResyncSelfTest.cpp\">",
+          "units": [
+            "NetResyncSelfTest.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncSelfTest.cpp"
+        },
+        {
+          "line_no": 896,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetResyncSelfTest.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncSelfTest.cpp"
+        },
+        {
+          "line_no": 897,
+          "text": "    </ClCompile>",
+          "units": [
+            "NetResyncSelfTest.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncSelfTest.cpp"
+        },
+        {
+          "line_no": 898,
+          "text": "    <ClCompile Include=\"Source\\Network\\NetResyncRuntimeSelfTest.cpp\">",
+          "units": [
+            "NetResyncRuntimeSelfTest.cpp"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.cpp"
+        },
+        {
+          "line_no": 899,
+          "text": "      <Filter>Network</Filter>",
+          "units": [
+            "NetResyncRuntimeSelfTest.cpp"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.cpp"
+        },
+        {
+          "line_no": 900,
+          "text": "    </ClCompile>",
+          "units": [
+            "NetResyncRuntimeSelfTest.cpp"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.cpp",
+          "entry_key": "Source/Network/NetResyncRuntimeSelfTest.cpp"
+        },
+        {
+          "line_no": 1267,
+          "text": "    <ClCompile Include=\"Source\\Menus\\NetModerationGUI.cpp\">",
+          "units": [
+            "NetModerationGUI.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.cpp",
+          "entry_key": "Source/Menus/NetModerationGUI.cpp"
+        },
+        {
+          "line_no": 1268,
+          "text": "      <Filter>Menus</Filter>",
+          "units": [
+            "NetModerationGUI.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.cpp",
+          "entry_key": "Source/Menus/NetModerationGUI.cpp"
+        },
+        {
+          "line_no": 1269,
+          "text": "    </ClCompile>",
+          "units": [
+            "NetModerationGUI.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUI.cpp",
+          "entry_key": "Source/Menus/NetModerationGUI.cpp"
+        },
+        {
+          "line_no": 1270,
+          "text": "    <ClCompile Include=\"Source\\CI\\NetModerationGUIProbe.cpp\">",
+          "units": [
+            "NetModerationGUIProbe.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.cpp",
+          "entry_key": "Source/CI/NetModerationGUIProbe.cpp"
+        },
+        {
+          "line_no": 1271,
+          "text": "      <Filter>System</Filter>",
+          "units": [
+            "NetModerationGUIProbe.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.cpp",
+          "entry_key": "Source/CI/NetModerationGUIProbe.cpp"
+        },
+        {
+          "line_no": 1272,
+          "text": "    </ClCompile>",
+          "units": [
+            "NetModerationGUIProbe.cpp"
+          ],
+          "commit_index": 8,
+          "reason": "unit NetModerationGUIProbe.cpp",
+          "entry_key": "Source/CI/NetModerationGUIProbe.cpp"
+        }
+      ],
+      "last_touch_commit": 8,
+      "intermediates": {
+        "1": {
+          "sha256": "435eb970e7300491ebb42e22ae2ae1b78950a2ada3e89881cbad84e85e1a4795",
+          "nlines": 1524,
+          "equals_final": false,
+          "touches": false
+        },
+        "2": {
+          "sha256": "f4a8bdca39d72e71c519b382d4b7f42f03613378a2456f61b1e943e9cf209b35",
+          "nlines": 1536,
+          "equals_final": false,
+          "touches": true
+        },
+        "3": {
+          "sha256": "bd686b6ce1c3c6b33824c02a974bb90db625171b4f6c47c093b2e79886304b70",
+          "nlines": 1542,
+          "equals_final": false,
+          "touches": true
+        },
+        "4": {
+          "sha256": "bd686b6ce1c3c6b33824c02a974bb90db625171b4f6c47c093b2e79886304b70",
+          "nlines": 1542,
+          "equals_final": false,
+          "touches": false
+        },
+        "5": {
+          "sha256": "bd686b6ce1c3c6b33824c02a974bb90db625171b4f6c47c093b2e79886304b70",
+          "nlines": 1542,
+          "equals_final": false,
+          "touches": false
+        },
+        "6": {
+          "sha256": "bd686b6ce1c3c6b33824c02a974bb90db625171b4f6c47c093b2e79886304b70",
+          "nlines": 1542,
+          "equals_final": false,
+          "touches": false
+        },
+        "7": {
+          "sha256": "fed5e655f0ebb5aff7c6edb4c9cfc8276b3495b159b7895483716b8d5edd58bc",
+          "nlines": 1548,
+          "equals_final": false,
+          "touches": true
+        },
+        "8": {
+          "sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+          "nlines": 1560,
+          "equals_final": true,
+          "touches": true
+        },
+        "9": {
+          "sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+          "nlines": 1560,
+          "equals_final": true,
+          "touches": false
+        },
+        "10": {
+          "sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+          "nlines": 1560,
+          "equals_final": true,
+          "touches": false
+        },
+        "11": {
+          "sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+          "nlines": 1560,
+          "equals_final": true,
+          "touches": false
+        },
+        "12": {
+          "sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+          "nlines": 1560,
+          "equals_final": true,
+          "touches": false
+        }
+      }
+    },
+    "Source/Network/meson.build": {
+      "final_sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+      "base_sha256": "d7ca4c9d7de2d0241487f495efd1f7e1a1dfeea19e25c74fc2b78b55ddd55240",
+      "final_nlines": 42,
+      "base_reconstructed_ok": true,
+      "added": [
+        {
+          "line_no": 7,
+          "text": "'NetA7Journal.cpp',",
+          "units": [
+            "NetA7Journal.cpp"
+          ],
+          "commit_index": 7,
+          "reason": "unit NetA7Journal.cpp",
+          "entry_key": "NetA7Journal.cpp"
+        },
+        {
+          "line_no": 12,
+          "text": "'NetResyncState.cpp',",
+          "units": [
+            "NetResyncState.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncState.cpp",
+          "entry_key": "NetResyncState.cpp"
+        },
+        {
+          "line_no": 13,
+          "text": "'NetResyncSelfTest.cpp',",
+          "units": [
+            "NetResyncSelfTest.cpp"
+          ],
+          "commit_index": 2,
+          "reason": "unit NetResyncSelfTest.cpp",
+          "entry_key": "NetResyncSelfTest.cpp"
+        },
+        {
+          "line_no": 14,
+          "text": "'NetResyncRuntimeSelfTest.cpp',",
+          "units": [
+            "NetResyncRuntimeSelfTest.cpp"
+          ],
+          "commit_index": 3,
+          "reason": "unit NetResyncRuntimeSelfTest.cpp",
+          "entry_key": "NetResyncRuntimeSelfTest.cpp"
+        }
+      ],
+      "last_touch_commit": 7,
+      "intermediates": {
+        "1": {
+          "sha256": "d7ca4c9d7de2d0241487f495efd1f7e1a1dfeea19e25c74fc2b78b55ddd55240",
+          "nlines": 38,
+          "equals_final": false,
+          "touches": false
+        },
+        "2": {
+          "sha256": "49ca85eebf7f43d30f71d0739155ab09174bc3d7ceddc7e97bf086b78bec2062",
+          "nlines": 40,
+          "equals_final": false,
+          "touches": true
+        },
+        "3": {
+          "sha256": "c2bed9acedc525f97cc19d79d1e429986494585ea568a5787c54c43c43c00a06",
+          "nlines": 41,
+          "equals_final": false,
+          "touches": true
+        },
+        "4": {
+          "sha256": "c2bed9acedc525f97cc19d79d1e429986494585ea568a5787c54c43c43c00a06",
+          "nlines": 41,
+          "equals_final": false,
+          "touches": false
+        },
+        "5": {
+          "sha256": "c2bed9acedc525f97cc19d79d1e429986494585ea568a5787c54c43c43c00a06",
+          "nlines": 41,
+          "equals_final": false,
+          "touches": false
+        },
+        "6": {
+          "sha256": "c2bed9acedc525f97cc19d79d1e429986494585ea568a5787c54c43c43c00a06",
+          "nlines": 41,
+          "equals_final": false,
+          "touches": false
+        },
+        "7": {
+          "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+          "nlines": 42,
+          "equals_final": true,
+          "touches": true
+        },
+        "8": {
+          "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+          "nlines": 42,
+          "equals_final": true,
+          "touches": false
+        },
+        "9": {
+          "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+          "nlines": 42,
+          "equals_final": true,
+          "touches": false
+        },
+        "10": {
+          "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+          "nlines": 42,
+          "equals_final": true,
+          "touches": false
+        },
+        "11": {
+          "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+          "nlines": 42,
+          "equals_final": true,
+          "touches": false
+        },
+        "12": {
+          "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+          "nlines": 42,
+          "equals_final": true,
+          "touches": false
+        }
+      }
+    }
+  },
+  "unmapped": []
+}

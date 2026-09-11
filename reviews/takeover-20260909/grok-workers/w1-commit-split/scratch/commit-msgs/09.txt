@@ -1,0 +1,3 @@
+Restore peer-local player, UI and aliases after a restore
+
+Capture and reload local bindings, camera, input and GUI-owned graphs without copying the host presentation onto a returning peer.

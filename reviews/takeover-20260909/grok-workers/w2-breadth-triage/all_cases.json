@@ -1,0 +1,3213 @@
+[
+  {
+    "i": 0,
+    "id": "semantic_fire_reload",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_fire_reload.log",
+    "out": "D:\\mx\\s41b3\\j01",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j01",
+      "-PortBase",
+      "45700",
+      "-Only",
+      "fire_reload"
+    ],
+    "meta": {
+      "case": "fire_reload"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j01\\fire_reload\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j01\\fire_reload\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j01\\fire_reload\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j01\\fire_reload\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j01\\fire_reload\\result.json",
+      "D:\\mx\\s41b3\\j01\\result.json"
+    ]
+  },
+  {
+    "i": 1,
+    "id": "semantic_weapon_switch",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_weapon_switch.log",
+    "out": "D:\\mx\\s41b3\\j02",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j02",
+      "-PortBase",
+      "45710",
+      "-Only",
+      "weapon_switch"
+    ],
+    "meta": {
+      "case": "weapon_switch"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j02\\result.json",
+      "D:\\mx\\s41b3\\j02\\weapon_switch\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j02\\weapon_switch\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j02\\weapon_switch\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j02\\weapon_switch\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j02\\weapon_switch\\result.json"
+    ]
+  },
+  {
+    "i": 2,
+    "id": "semantic_jetpack",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_jetpack.log",
+    "out": "D:\\mx\\s41b3\\j03",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j03",
+      "-PortBase",
+      "45720",
+      "-Only",
+      "jetpack"
+    ],
+    "meta": {
+      "case": "jetpack"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j03\\jetpack\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j03\\jetpack\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j03\\jetpack\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j03\\jetpack\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j03\\jetpack\\result.json",
+      "D:\\mx\\s41b3\\j03\\result.json"
+    ]
+  },
+  {
+    "i": 3,
+    "id": "semantic_terrain_fire",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_terrain_fire.log",
+    "out": "D:\\mx\\s41b3\\j04",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j04",
+      "-PortBase",
+      "45730",
+      "-Only",
+      "terrain_fire"
+    ],
+    "meta": {
+      "case": "terrain_fire"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j04\\result.json",
+      "D:\\mx\\s41b3\\j04\\terrain_fire\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j04\\terrain_fire\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j04\\terrain_fire\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j04\\terrain_fire\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j04\\terrain_fire\\result.json"
+    ]
+  },
+  {
+    "i": 4,
+    "id": "semantic_pie_reload",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_pie_reload.log",
+    "out": "D:\\mx\\s41b3\\j05",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j05",
+      "-PortBase",
+      "45740",
+      "-Only",
+      "pie_reload"
+    ],
+    "meta": {
+      "case": "pie_reload"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j05\\pie_reload\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j05\\pie_reload\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j05\\pie_reload\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j05\\pie_reload\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j05\\pie_reload\\result.json",
+      "D:\\mx\\s41b3\\j05\\result.json"
+    ]
+  },
+  {
+    "i": 5,
+    "id": "semantic_ai_orders",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_ai_orders.log",
+    "out": "D:\\mx\\s41b3\\j06",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j06",
+      "-PortBase",
+      "45750",
+      "-Only",
+      "ai_orders"
+    ],
+    "meta": {
+      "case": "ai_orders"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j06\\ai_orders\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j06\\ai_orders\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j06\\ai_orders\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j06\\ai_orders\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j06\\ai_orders\\result.json",
+      "D:\\mx\\s41b3\\j06\\result.json"
+    ]
+  },
+  {
+    "i": 6,
+    "id": "semantic_death_brainkill",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_death_brainkill.log",
+    "out": "D:\\mx\\s41b3\\j07",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j07",
+      "-PortBase",
+      "45760",
+      "-Only",
+      "death_brainkill"
+    ],
+    "meta": {
+      "case": "death_brainkill"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j07\\death_brainkill\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j07\\death_brainkill\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j07\\death_brainkill\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j07\\death_brainkill\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j07\\death_brainkill\\result.json",
+      "D:\\mx\\s41b3\\j07\\result.json"
+    ]
+  },
+  {
+    "i": 7,
+    "id": "semantic_cargo_deliver",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_cargo_deliver.log",
+    "out": "D:\\mx\\s41b3\\j08",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j08",
+      "-PortBase",
+      "45770",
+      "-Only",
+      "cargo_deliver"
+    ],
+    "meta": {
+      "case": "cargo_deliver"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j08\\cargo_deliver\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j08\\cargo_deliver\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j08\\cargo_deliver\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j08\\cargo_deliver\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j08\\cargo_deliver\\result.json",
+      "D:\\mx\\s41b3\\j08\\result.json"
+    ]
+  },
+  {
+    "i": 8,
+    "id": "semantic_buy_order",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_buy_order.log",
+    "out": "D:\\mx\\s41b3\\j09",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j09",
+      "-PortBase",
+      "45780",
+      "-Only",
+      "buy_order"
+    ],
+    "meta": {
+      "case": "buy_order"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j09\\buy_order\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j09\\buy_order\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j09\\buy_order\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j09\\buy_order\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j09\\buy_order\\result.json",
+      "D:\\mx\\s41b3\\j09\\result.json"
+    ]
+  },
+  {
+    "i": 9,
+    "id": "semantic_pause",
+    "family": "semantic",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\semantic_pause.log",
+    "out": "D:\\mx\\s41b3\\j10",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\semantic-battery\\driver\\test_gameplay_fixtures.ps1",
+      "-Repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j10",
+      "-PortBase",
+      "45790",
+      "-Only",
+      "pause"
+    ],
+    "meta": {
+      "case": "pause"
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j10\\pause\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j10\\pause\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j10\\pause\\isolated\\replay\\launch.json",
+      "D:\\mx\\s41b3\\j10\\pause\\isolated\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j10\\pause\\result.json",
+      "D:\\mx\\s41b3\\j10\\result.json"
+    ]
+  },
+  {
+    "i": 10,
+    "id": "interp_baseline",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_baseline.log",
+    "out": "D:\\mx\\s41b3\\j11",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j11",
+      "-Port",
+      "46110"
+    ],
+    "meta": {
+      "case": "baseline"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j11\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j11\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j11\\result.json"
+    ]
+  },
+  {
+    "i": 11,
+    "id": "interp_funds",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_funds.log",
+    "out": "D:\\mx\\s41b3\\j12",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j12",
+      "-Port",
+      "46120",
+      "-FundsCommandHost"
+    ],
+    "meta": {
+      "case": "funds"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j12\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j12\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j12\\result.json"
+    ]
+  },
+  {
+    "i": 12,
+    "id": "interp_spawn",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_spawn.log",
+    "out": "D:\\mx\\s41b3\\j13",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j13",
+      "-Port",
+      "46130",
+      "-SpawnCommandHost"
+    ],
+    "meta": {
+      "case": "spawn"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j13\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j13\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j13\\result.json"
+    ]
+  },
+  {
+    "i": 13,
+    "id": "interp_deliver",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_deliver.log",
+    "out": "D:\\mx\\s41b3\\j14",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j14",
+      "-Port",
+      "46140",
+      "-DeliverCommandHost"
+    ],
+    "meta": {
+      "case": "deliver"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j14\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j14\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j14\\result.json"
+    ]
+  },
+  {
+    "i": 14,
+    "id": "interp_scuttle",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_scuttle.log",
+    "out": "D:\\mx\\s41b3\\j15",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j15",
+      "-Port",
+      "46150",
+      "-ScuttleCommandHost"
+    ],
+    "meta": {
+      "case": "scuttle"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j15\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j15\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j15\\result.json"
+    ]
+  },
+  {
+    "i": 15,
+    "id": "interp_brainkill",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_brainkill.log",
+    "out": "D:\\mx\\s41b3\\j16",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j16",
+      "-Port",
+      "46160",
+      "-BrainKillCommandHost"
+    ],
+    "meta": {
+      "case": "brainkill"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j16\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j16\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j16\\result.json"
+    ]
+  },
+  {
+    "i": 16,
+    "id": "interp_stall",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_stall.log",
+    "out": "D:\\mx\\s41b3\\j17",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j17",
+      "-Port",
+      "46170",
+      "-StallTest"
+    ],
+    "meta": {
+      "case": "stall"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j17\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j17\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j17\\result.json"
+    ]
+  },
+  {
+    "i": 17,
+    "id": "interp_mismatch",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_mismatch.log",
+    "out": "D:\\mx\\s41b3\\j18",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j18",
+      "-Port",
+      "46180",
+      "-MismatchSmoke"
+    ],
+    "meta": {
+      "case": "mismatch"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j18\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j18\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j18\\result.json"
+    ]
+  },
+  {
+    "i": 18,
+    "id": "interp_perturb",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_perturb.log",
+    "out": "D:\\mx\\s41b3\\j19",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j19",
+      "-Port",
+      "46190",
+      "-PerturbHost"
+    ],
+    "meta": {
+      "case": "perturb"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j19\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j19\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j19\\result.json"
+    ]
+  },
+  {
+    "i": 19,
+    "id": "interp_rematch",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_rematch.log",
+    "out": "D:\\mx\\s41b3\\j20",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j20",
+      "-Port",
+      "46200",
+      "-RematchTest"
+    ],
+    "meta": {
+      "case": "rematch"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j20\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j20\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j20\\result.json"
+    ]
+  },
+  {
+    "i": 20,
+    "id": "interp_inventory",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_inventory.log",
+    "out": "D:\\mx\\s41b3\\j21",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j21",
+      "-Port",
+      "46210",
+      "-InventoryCommandHost"
+    ],
+    "meta": {
+      "case": "inventory"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j21\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j21\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j21\\result.json"
+    ]
+  },
+  {
+    "i": 21,
+    "id": "interp_buy",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_buy.log",
+    "out": "D:\\mx\\s41b3\\j22",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j22",
+      "-Port",
+      "46220",
+      "-BuyCommandHost"
+    ],
+    "meta": {
+      "case": "buy"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j22\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j22\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j22\\result.json"
+    ]
+  },
+  {
+    "i": 22,
+    "id": "interp_brainspawn",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_brainspawn.log",
+    "out": "D:\\mx\\s41b3\\j23",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j23",
+      "-Port",
+      "46230",
+      "-BrainSpawnTest"
+    ],
+    "meta": {
+      "case": "brainspawn"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j23\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j23\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j23\\result.json"
+    ]
+  },
+  {
+    "i": 23,
+    "id": "interp_pause",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_pause.log",
+    "out": "D:\\mx\\s41b3\\j24",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j24",
+      "-Port",
+      "46240",
+      "-PauseTest"
+    ],
+    "meta": {
+      "case": "pause"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j24\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j24\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j24\\result.json"
+    ]
+  },
+  {
+    "i": 24,
+    "id": "interp_fullloop",
+    "family": "interp",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_fullloop.log",
+    "out": "D:\\mx\\s41b3\\j25",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\stage2_p4\\run_interp_e2e.ps1",
+      "-SkipBuild",
+      "-ExactOutDir",
+      "-OutDir",
+      "D:\\mx\\s41b3\\j25",
+      "-Port",
+      "46250",
+      "-FullLoopTest"
+    ],
+    "meta": {
+      "case": "fullloop"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j25\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j25\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j25\\result.json"
+    ]
+  },
+  {
+    "i": 25,
+    "id": "interp_rtdesync",
+    "family": "rtdesync",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\interp_rtdesync.log",
+    "out": "D:\\mx\\s41b3\\j26",
+    "command": [
+      "pwsh",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_interp_desync.ps1",
+      "-Port",
+      "46260"
+    ],
+    "meta": {},
+    "n_failures": 0,
+    "n_evidence": 8,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_clean\\client.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_clean\\host.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_clean\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_clean\\isolated\\host.out\\launch.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_perturb\\client.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_perturb\\host.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_perturb\\isolated\\client.out\\launch.json",
+      "D:\\mx\\s41b3\\j26\\mx\\rtdesync_perturb\\isolated\\host.out\\launch.json"
+    ]
+  },
+  {
+    "i": 26,
+    "id": "fl100",
+    "family": "fakelag",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\fl100.log",
+    "out": "D:\\mx\\s41b3\\j27",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_fakelag.py",
+      "fl100"
+    ],
+    "meta": {
+      "case": "fl100"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\client\\launch.json",
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\client_report.json",
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\host\\launch.json",
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\host_report.json",
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\replay_playback\\launch.json",
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j27\\fl\\fl100\\result.json"
+    ]
+  },
+  {
+    "i": 27,
+    "id": "fl200",
+    "family": "fakelag",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\fl200.log",
+    "out": "D:\\mx\\s41b3\\j28",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_fakelag.py",
+      "fl200"
+    ],
+    "meta": {
+      "case": "fl200"
+    },
+    "n_failures": 2,
+    "n_evidence": 7,
+    "failures": [
+      "host: auto delay differs from 14",
+      "client: auto delay differs from 14"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\client\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\client_report.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\host\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\host_report.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\replay_playback\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\replay_verify\\launch.json",
+      "D:\\mx\\s41b3\\j28\\fl\\fl200\\result.json"
+    ]
+  },
+  {
+    "i": 28,
+    "id": "invariance_300",
+    "family": "invariance",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\invariance_300.log",
+    "out": "D:\\mx\\s41b3\\j29",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\takeover-20260909\\run_breadth.py",
+      "--source",
+      "41",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--out",
+      "D:\\mx\\s41b3\\j29",
+      "--child",
+      "invariance"
+    ],
+    "meta": {},
+    "n_failures": 0,
+    "n_evidence": 4,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j29\\clean\\launch.json",
+      "D:\\mx\\s41b3\\j29\\lua_fault\\launch.json",
+      "D:\\mx\\s41b3\\j29\\reference\\launch.json",
+      "D:\\mx\\s41b3\\j29\\result.json"
+    ]
+  },
+  {
+    "i": 29,
+    "id": "discovery",
+    "family": "discovery",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\discovery.log",
+    "out": "D:\\mx\\s41b3\\j30",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\run_sim_test.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j30",
+      "--timeout",
+      "300",
+      "--",
+      "-net-discovery-selftest"
+    ],
+    "meta": {},
+    "n_failures": 0,
+    "n_evidence": 1,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j30\\launch.json"
+    ]
+  },
+  {
+    "i": 30,
+    "id": "h4_gns_provider_smoke_1",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_gns_provider_smoke_1.log",
+    "out": "D:\\mx\\s41b3\\j31",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\gns_provider_smoke.py"
+    ],
+    "meta": {
+      "case": "gns_provider_smoke",
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 5,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j31\\gns_provider_smoke_20260910_021717\\client\\launch.json",
+      "D:\\mx\\s41b3\\j31\\gns_provider_smoke_20260910_021717\\client_report.json",
+      "D:\\mx\\s41b3\\j31\\gns_provider_smoke_20260910_021717\\host\\launch.json",
+      "D:\\mx\\s41b3\\j31\\gns_provider_smoke_20260910_021717\\host_report.json",
+      "D:\\mx\\s41b3\\j31\\gns_provider_smoke_20260910_021717\\verdict.json"
+    ]
+  },
+  {
+    "i": 31,
+    "id": "h4_old_wire_fixture_1",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_old_wire_fixture_1.log",
+    "out": "D:\\mx\\s41b3\\j32",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\old_wire_fixture.py",
+      "--inprocess"
+    ],
+    "meta": {
+      "case": "old_wire_fixture",
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 6,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j32\\old_wire_fixture_20260910_021746\\client\\launch.json",
+      "D:\\mx\\s41b3\\j32\\old_wire_fixture_20260910_021746\\client_report.json",
+      "D:\\mx\\s41b3\\j32\\old_wire_fixture_20260910_021746\\host\\launch.json",
+      "D:\\mx\\s41b3\\j32\\old_wire_fixture_20260910_021746\\host_report.json",
+      "D:\\mx\\s41b3\\j32\\old_wire_fixture_20260910_021746\\old_wire_selftest\\launch.json",
+      "D:\\mx\\s41b3\\j32\\old_wire_fixture_20260910_021746\\verdict.json"
+    ]
+  },
+  {
+    "i": 32,
+    "id": "h4_clean_leave_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_clean_leave_1.log",
+    "out": "D:\\mx\\s41b3\\j33",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\clean_leave.py"
+    ],
+    "meta": {
+      "case": "clean_leave",
+      "repeat": 1
+    },
+    "n_failures": 5,
+    "n_evidence": 14,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check clean_old_ticket_refused: fail used_stored_ticket=True commits=1",
+      "check hosts_survived: fail exits=[0, 0, 1] fatal=False",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host\\runtime\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_client1\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_client2\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_client2_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_client\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_client_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host2\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host2_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_host_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_stale\\launch.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\clean_stale_report.json",
+      "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\verdict.json"
+    ]
+  },
+  {
+    "i": 33,
+    "id": "h4_reclaim_socket_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_reclaim_socket_1.log",
+    "out": "D:\\mx\\s41b3\\j34",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\reclaim_socket.py"
+    ],
+    "meta": {
+      "case": "reclaim_socket",
+      "repeat": 1
+    },
+    "n_failures": 5,
+    "n_evidence": 6,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check host_saw_seat_drop_and_return: fail 0 committed seats",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client1\\launch.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\client2_report.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\launch.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host_report.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\returner\\launch.json",
+      "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\verdict.json"
+    ]
+  },
+  {
+    "i": 34,
+    "id": "h4_crash_relaunch_provisional_1",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_crash_relaunch_provisional_1.log",
+    "out": "D:\\mx\\s41b3\\j35",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\crash_relaunch_provisional.py"
+    ],
+    "meta": {
+      "case": "crash_relaunch_provisional",
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 11,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_a_client1\\launch.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_a_client2\\launch.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_a_client2_report.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_a_host\\launch.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_a_host_report.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_b_client1\\launch.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_b_client2\\launch.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_b_client2_report.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_b_host\\launch.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\arm_b_host_report.json",
+      "D:\\mx\\s41b3\\j35\\crash_relaunch_provisional_20260910_021942\\verdict.json"
+    ]
+  },
+  {
+    "i": 35,
+    "id": "h4_fencing_two_transports_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_fencing_two_transports_1.log",
+    "out": "D:\\mx\\s41b3\\j36",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\fencing_two_transports.py"
+    ],
+    "meta": {
+      "case": "fencing_two_transports",
+      "repeat": 1
+    },
+    "n_failures": 10,
+    "n_evidence": 7,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_bound_second_incarnation: fail None",
+      "check host_fenced_the_old_transport: fail fenced_disconnects+fenced_packets=0",
+      "check seat_not_dropped_by_stale_timeout: fail []",
+      "check host_survived: fail 1",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\stdout.log:4: [net-match-service-e2e] setup failed: SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:   0.0 pkts/sec   0.0 K/sec         Ping:0ms    Max latency variance: ???ms         Est avail bandwidth: 8554.7KB/s           Bytes buffered: 0     Lifetime stats:         Totals             Sent:          7 pkts           1,583 bytes             Recv:          6 pkts           1,268 bytes             Recv w seq:          3 pkts             Dropped   :          0 pkts   0.00%             OutOfOrder:          0 pkts   0.00%             OOOFixed  :          0 pkts   0.00%             Duplicate :          0 pkts   0.00%             SeqLurch  :          0 pkts   0.00%         Ping histogram: (5 total samples)                  0-25    25-50    50-75   75-100  100-125  125-150  150-200  200-300     300+                     5        0        0        0        0        0        0        0        0                100.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%         Ping distribution:            50th   75th             0ms    0ms         No connection quality distribution available.  (0 measurement intervals)         Latency variance histogram not available     No rate stats received from remote host     No lifetime stats received from remote host )",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\stdout.log:9: [net-match] resync failed: resync snapshot save failed",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\LogConsole.txt:11: ERROR: Cannot save when there's no game running, or the game is finished!",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\runtime\\LogConsole.txt:12: NETWORK: Resync failed: resync snapshot save failed"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1\\launch.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client1_report.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2\\launch.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\client2_report.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host\\launch.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\host_report.json",
+      "D:\\mx\\s41b3\\j36\\fencing_two_transports_20260910_022107\\verdict.json"
+    ]
+  },
+  {
+    "i": 36,
+    "id": "h4_rejoin_after_resync_1",
+    "family": "h4",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\h4_rejoin_after_resync_1.log",
+    "out": "D:\\mx\\s41b3\\j37",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\rejoin_after_resync.py"
+    ],
+    "meta": {
+      "case": "rejoin_after_resync",
+      "repeat": 1
+    },
+    "n_failures": 6,
+    "n_evidence": 10,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check resync_match_continued: fail 1",
+      "passed is missing or false",
+      "check resync_match_continued: fail 1",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_client\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_client_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_host\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\rematch_host_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_client1\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_client2\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_client2_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\launch.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host_report.json",
+      "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\verdict.json"
+    ]
+  },
+  {
+    "i": 37,
+    "id": "h4_peers_3_4_regression_1",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_peers_3_4_regression_1.log",
+    "out": "D:\\mx\\s41b3\\j38",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 22,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client2_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_host\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_host_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_returner\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_returner_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers3_client1_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers3_client2_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers3_host\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers3_host_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_client1\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_client1_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_client2\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_client2_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_client3\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_client3_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_host\\launch.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\peers4_host_report.json",
+      "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\verdict.json"
+    ]
+  },
+  {
+    "i": 38,
+    "id": "h4_peers_3_4_regression_2",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_peers_3_4_regression_2.log",
+    "out": "D:\\mx\\s41b3\\j39",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 22,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client2_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_host\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_host_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_returner\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_returner_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers3_client1_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers3_client2_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers3_host\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers3_host_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_client1\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_client1_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_client2\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_client2_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_client3\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_client3_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_host\\launch.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\peers4_host_report.json",
+      "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\verdict.json"
+    ]
+  },
+  {
+    "i": 39,
+    "id": "h4_peers_3_4_regression_3",
+    "family": "h4",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_peers_3_4_regression_3.log",
+    "out": "D:\\mx\\s41b3\\j40",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 3
+    },
+    "n_failures": 9,
+    "n_evidence": 22,
+    "failures": [
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:9: [audio-checkpoint] voice 36 has no registered owner 9310",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:10: [music-checkpoint] music audio restoration failed",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:11: [gui-sound-checkpoint] GUI audio restoration failed",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:13: [runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log:15: [runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:10: ERROR: Could not restore audio checkpoint: voice 36 has no registered owner 9310",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:11: ERROR: the prior game's Lua state could not be reinstated",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:12: ERROR: could not launch the activity",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt:13: ERROR: No Activity to end!"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\launch.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host_report.json",
+      "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json"
+    ]
+  },
+  {
+    "i": 40,
+    "id": "h4_peers_3_4_regression_4",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_peers_3_4_regression_4.log",
+    "out": "D:\\mx\\s41b3\\j41",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 4
+    },
+    "n_failures": 0,
+    "n_evidence": 22,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client2_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_host\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_host_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_returner\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_returner_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers3_client1_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers3_client2_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers3_host\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers3_host_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_client1\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_client1_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_client2\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_client2_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_client3\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_client3_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_host\\launch.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\peers4_host_report.json",
+      "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\verdict.json"
+    ]
+  },
+  {
+    "i": 41,
+    "id": "h4_peers_3_4_regression_5",
+    "family": "h4",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\h4_peers_3_4_regression_5.log",
+    "out": "D:\\mx\\s41b3\\j42",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\h4gates\\peers_3_4_regression.py"
+    ],
+    "meta": {
+      "case": "peers_3_4_regression",
+      "repeat": 5
+    },
+    "n_failures": 0,
+    "n_evidence": 22,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client2_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_host\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_host_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_returner\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_returner_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers3_client1\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers3_client1_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers3_client2\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers3_client2_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers3_host\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers3_host_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_client1\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_client1_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_client2\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_client2_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_client3\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_client3_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_host\\launch.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\peers4_host_report.json",
+      "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\verdict.json"
+    ]
+  },
+  {
+    "i": 42,
+    "id": "b1_substitute_commit",
+    "family": "b1",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\b1_substitute_commit.log",
+    "out": "D:\\mx\\s41b3\\j43",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_commit",
+      "--out",
+      "D:\\mx\\s41b3\\j43",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "meta": {
+      "case": "substitute_commit"
+    },
+    "n_failures": 10,
+    "n_evidence": 8,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check stayer_exit_zero: fail 1",
+      "check seat_dropped: fail None",
+      "check applicant_registered: fail None",
+      "check substitution_committed: fail None",
+      "B1 running activity is not evidenced",
+      "B1 did not adjudicate exactly one dropped seat",
+      "B1 substitutions_committed is not exactly one"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\host\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\host_report.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\leaver\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\stayer\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\stayer_report.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\substitute\\launch.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\substitute_report.json",
+      "D:\\mx\\s41b3\\j43\\substitute_commit_20260910_022955\\verdict.json"
+    ]
+  },
+  {
+    "i": 43,
+    "id": "b1_substitute_returner_wins",
+    "family": "b1",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\b1_substitute_returner_wins.log",
+    "out": "D:\\mx\\s41b3\\j44",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_returner_wins",
+      "--out",
+      "D:\\mx\\s41b3\\j44",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "meta": {
+      "case": "substitute_returner_wins"
+    },
+    "n_failures": 16,
+    "n_evidence": 10,
+    "failures": [
+      "driver exit 1",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check stayer_exit_zero: fail 1",
+      "check seat_dropped: fail None",
+      "check returner_reclaimed: fail None",
+      "check seat_has_one_holder: fail None",
+      "passed is missing or false",
+      "check host_exit_zero: fail 1",
+      "check stayer_exit_zero: fail 1",
+      "check seat_dropped: fail None",
+      "check returner_reclaimed: fail None",
+      "check seat_has_one_holder: fail None",
+      "B1 running activity is not evidenced",
+      "B1 did not adjudicate exactly one dropped seat",
+      "B1 reclaims_accepted is not exactly one"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\host\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\host_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\leaver\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\returner\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\returner_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\stayer\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\stayer_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\substitute\\launch.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\substitute_report.json",
+      "D:\\mx\\s41b3\\j44\\substitute_returner_wins_20260910_023039\\verdict.json"
+    ]
+  },
+  {
+    "i": 44,
+    "id": "b1_substitute_host_cancel",
+    "family": "b1",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\b1_substitute_host_cancel.log",
+    "out": "D:\\mx\\s41b3\\j45",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_host_cancel",
+      "--out",
+      "D:\\mx\\s41b3\\j45",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "meta": {
+      "case": "substitute_host_cancel"
+    },
+    "n_failures": 0,
+    "n_evidence": 8,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\host\\launch.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\host_report.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\leaver\\launch.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\stayer\\launch.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\stayer_report.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\substitute\\launch.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\substitute_report.json",
+      "D:\\mx\\s41b3\\j45\\substitute_host_cancel_20260910_023124\\verdict.json"
+    ]
+  },
+  {
+    "i": 45,
+    "id": "b1_substitute_bounds",
+    "family": "b1",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\b1_substitute_bounds.log",
+    "out": "D:\\mx\\s41b3\\j46",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\h4_substitution_gates.py",
+      "substitute_bounds",
+      "--out",
+      "D:\\mx\\s41b3\\j46",
+      "--expect-sha256",
+      "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation"
+    ],
+    "meta": {
+      "case": "substitute_bounds"
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\applicant1\\launch.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\applicant1_report.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\applicant2\\launch.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\applicant2_report.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\applicant3\\launch.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\applicant3_report.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\host\\launch.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\host_report.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\leaver\\launch.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\stayer\\launch.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\stayer_report.json",
+      "D:\\mx\\s41b3\\j46\\substitute_bounds_20260910_023246\\verdict.json"
+    ]
+  },
+  {
+    "i": 46,
+    "id": "lobby_rejoin_4_200_1",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_rejoin_4_200_1.log",
+    "out": "D:\\mx\\s41b3\\j47",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j47",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44160"
+    ],
+    "meta": {
+      "case": "rejoin_4_200",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j47\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j47\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j47\\host\\launch.json",
+      "D:\\mx\\s41b3\\j47\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j47\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j47\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j47\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j47\\result.json",
+      "D:\\mx\\s41b3\\j47\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j47\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j47\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j47\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 47,
+    "id": "lobby_rejoin_4_200_2",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_rejoin_4_200_2.log",
+    "out": "D:\\mx\\s41b3\\j48",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j48",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44161"
+    ],
+    "meta": {
+      "case": "rejoin_4_200",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j48\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j48\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j48\\host\\launch.json",
+      "D:\\mx\\s41b3\\j48\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j48\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j48\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j48\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j48\\result.json",
+      "D:\\mx\\s41b3\\j48\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j48\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j48\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j48\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 48,
+    "id": "lobby_rejoin_4_200_3",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_rejoin_4_200_3.log",
+    "out": "D:\\mx\\s41b3\\j49",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j49",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44162"
+    ],
+    "meta": {
+      "case": "rejoin_4_200",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 3
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j49\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j49\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j49\\host\\launch.json",
+      "D:\\mx\\s41b3\\j49\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j49\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j49\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j49\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j49\\result.json",
+      "D:\\mx\\s41b3\\j49\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j49\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j49\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j49\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 49,
+    "id": "lobby_drop_4_200_1",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_drop_4_200_1.log",
+    "out": "D:\\mx\\s41b3\\j50",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j50",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44170"
+    ],
+    "meta": {
+      "case": "drop_4_200",
+      "players": 4,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 11,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j50\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j50\\host\\launch.json",
+      "D:\\mx\\s41b3\\j50\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j50\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j50\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j50\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j50\\result.json",
+      "D:\\mx\\s41b3\\j50\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j50\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j50\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j50\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 50,
+    "id": "lobby_drop_4_200_2",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_drop_4_200_2.log",
+    "out": "D:\\mx\\s41b3\\j51",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j51",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44171"
+    ],
+    "meta": {
+      "case": "drop_4_200",
+      "players": 4,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 11,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j51\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j51\\host\\launch.json",
+      "D:\\mx\\s41b3\\j51\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j51\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j51\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j51\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j51\\result.json",
+      "D:\\mx\\s41b3\\j51\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j51\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j51\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j51\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 51,
+    "id": "lobby_drop_4_200_3",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_drop_4_200_3.log",
+    "out": "D:\\mx\\s41b3\\j52",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j52",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44172"
+    ],
+    "meta": {
+      "case": "drop_4_200",
+      "players": 4,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 3
+    },
+    "n_failures": 0,
+    "n_evidence": 11,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j52\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j52\\host\\launch.json",
+      "D:\\mx\\s41b3\\j52\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j52\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j52\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j52\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j52\\result.json",
+      "D:\\mx\\s41b3\\j52\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j52\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j52\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j52\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 52,
+    "id": "lobby_ctl_rejoin_4_100_1",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_rejoin_4_100_1.log",
+    "out": "D:\\mx\\s41b3\\j53",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j53",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "100",
+      "--port",
+      "44200"
+    ],
+    "meta": {
+      "case": "ctl_rejoin_4_100",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j53\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j53\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j53\\host\\launch.json",
+      "D:\\mx\\s41b3\\j53\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j53\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j53\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j53\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j53\\result.json",
+      "D:\\mx\\s41b3\\j53\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j53\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j53\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j53\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 53,
+    "id": "lobby_ctl_rejoin_4_100_2",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_rejoin_4_100_2.log",
+    "out": "D:\\mx\\s41b3\\j54",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j54",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "100",
+      "--port",
+      "44201"
+    ],
+    "meta": {
+      "case": "ctl_rejoin_4_100",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j54\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j54\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j54\\host\\launch.json",
+      "D:\\mx\\s41b3\\j54\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j54\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j54\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j54\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j54\\result.json",
+      "D:\\mx\\s41b3\\j54\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j54\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j54\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j54\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 54,
+    "id": "lobby_ctl_rejoin_4_100_3",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_rejoin_4_100_3.log",
+    "out": "D:\\mx\\s41b3\\j55",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j55",
+      "--players",
+      "4",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "100",
+      "--port",
+      "44202"
+    ],
+    "meta": {
+      "case": "ctl_rejoin_4_100",
+      "players": 4,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 3
+    },
+    "n_failures": 0,
+    "n_evidence": 12,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j55\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j55\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j55\\host\\launch.json",
+      "D:\\mx\\s41b3\\j55\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j55\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j55\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j55\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j55\\result.json",
+      "D:\\mx\\s41b3\\j55\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j55\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j55\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j55\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 55,
+    "id": "lobby_ctl_rejoin_3_200_1",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_rejoin_3_200_1.log",
+    "out": "D:\\mx\\s41b3\\j56",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j56",
+      "--players",
+      "3",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44180"
+    ],
+    "meta": {
+      "case": "ctl_rejoin_3_200",
+      "players": 3,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 10,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j56\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j56\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j56\\host\\launch.json",
+      "D:\\mx\\s41b3\\j56\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j56\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j56\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j56\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j56\\result.json",
+      "D:\\mx\\s41b3\\j56\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j56\\stayer2\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 56,
+    "id": "lobby_ctl_rejoin_3_200_2",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_rejoin_3_200_2.log",
+    "out": "D:\\mx\\s41b3\\j57",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j57",
+      "--players",
+      "3",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44181"
+    ],
+    "meta": {
+      "case": "ctl_rejoin_3_200",
+      "players": 3,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 10,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j57\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j57\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j57\\host\\launch.json",
+      "D:\\mx\\s41b3\\j57\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j57\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j57\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j57\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j57\\result.json",
+      "D:\\mx\\s41b3\\j57\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j57\\stayer2\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 57,
+    "id": "lobby_ctl_rejoin_3_200_3",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_rejoin_3_200_3.log",
+    "out": "D:\\mx\\s41b3\\j58",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j58",
+      "--players",
+      "3",
+      "--action",
+      "rejoin",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44182"
+    ],
+    "meta": {
+      "case": "ctl_rejoin_3_200",
+      "players": 3,
+      "action": "rejoin",
+      "frame": 0,
+      "repeat": 3
+    },
+    "n_failures": 0,
+    "n_evidence": 10,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j58\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j58\\departing\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j58\\host\\launch.json",
+      "D:\\mx\\s41b3\\j58\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j58\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j58\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j58\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j58\\result.json",
+      "D:\\mx\\s41b3\\j58\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j58\\stayer2\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 58,
+    "id": "lobby_ctl_drop_3_200_1",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_drop_3_200_1.log",
+    "out": "D:\\mx\\s41b3\\j59",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j59",
+      "--players",
+      "3",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44190"
+    ],
+    "meta": {
+      "case": "ctl_drop_3_200",
+      "players": 3,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 9,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j59\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j59\\host\\launch.json",
+      "D:\\mx\\s41b3\\j59\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j59\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j59\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j59\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j59\\result.json",
+      "D:\\mx\\s41b3\\j59\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j59\\stayer2\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 59,
+    "id": "lobby_ctl_drop_3_200_2",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_drop_3_200_2.log",
+    "out": "D:\\mx\\s41b3\\j60",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j60",
+      "--players",
+      "3",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44191"
+    ],
+    "meta": {
+      "case": "ctl_drop_3_200",
+      "players": 3,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 9,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j60\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j60\\host\\launch.json",
+      "D:\\mx\\s41b3\\j60\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j60\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j60\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j60\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j60\\result.json",
+      "D:\\mx\\s41b3\\j60\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j60\\stayer2\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 60,
+    "id": "lobby_ctl_drop_3_200_3",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_ctl_drop_3_200_3.log",
+    "out": "D:\\mx\\s41b3\\j61",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j61",
+      "--players",
+      "3",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44192"
+    ],
+    "meta": {
+      "case": "ctl_drop_3_200",
+      "players": 3,
+      "action": "drop",
+      "frame": 0,
+      "repeat": 3
+    },
+    "n_failures": 0,
+    "n_evidence": 9,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j61\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j61\\host\\launch.json",
+      "D:\\mx\\s41b3\\j61\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j61\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j61\\replacement\\launch.json",
+      "D:\\mx\\s41b3\\j61\\replacement\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j61\\result.json",
+      "D:\\mx\\s41b3\\j61\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j61\\stayer2\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 61,
+    "id": "lobby_drop_4_200_early_1",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_drop_4_200_early_1.log",
+    "out": "D:\\mx\\s41b3\\j62",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j62",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44210",
+      "--leave-at-frame",
+      "40"
+    ],
+    "meta": {
+      "case": "drop_4_200_early",
+      "players": 4,
+      "action": "drop",
+      "frame": 40,
+      "repeat": 1
+    },
+    "n_failures": 0,
+    "n_evidence": 9,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j62\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j62\\host\\launch.json",
+      "D:\\mx\\s41b3\\j62\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j62\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j62\\result.json",
+      "D:\\mx\\s41b3\\j62\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j62\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j62\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j62\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 62,
+    "id": "lobby_drop_4_200_early_2",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_drop_4_200_early_2.log",
+    "out": "D:\\mx\\s41b3\\j63",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j63",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44211",
+      "--leave-at-frame",
+      "40"
+    ],
+    "meta": {
+      "case": "drop_4_200_early",
+      "players": 4,
+      "action": "drop",
+      "frame": 40,
+      "repeat": 2
+    },
+    "n_failures": 0,
+    "n_evidence": 9,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j63\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j63\\host\\launch.json",
+      "D:\\mx\\s41b3\\j63\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j63\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j63\\result.json",
+      "D:\\mx\\s41b3\\j63\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j63\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j63\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j63\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 63,
+    "id": "lobby_drop_4_200_early_3",
+    "family": "lobby",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\lobby_drop_4_200_early_3.log",
+    "out": "D:\\mx\\s41b3\\j64",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\p4b-interp-validation\\tools\\test_lobby_lifecycle.py",
+      "--repo",
+      "D:\\Projects\\p4b-interp-validation",
+      "--out",
+      "D:\\mx\\s41b3\\j64",
+      "--players",
+      "4",
+      "--action",
+      "drop",
+      "--fake-lag-ms",
+      "200",
+      "--port",
+      "44212",
+      "--leave-at-frame",
+      "40"
+    ],
+    "meta": {
+      "case": "drop_4_200_early",
+      "players": 4,
+      "action": "drop",
+      "frame": 40,
+      "repeat": 3
+    },
+    "n_failures": 0,
+    "n_evidence": 9,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j64\\departing\\launch.json",
+      "D:\\mx\\s41b3\\j64\\host\\launch.json",
+      "D:\\mx\\s41b3\\j64\\host\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j64\\lockstep-stats.json",
+      "D:\\mx\\s41b3\\j64\\result.json",
+      "D:\\mx\\s41b3\\j64\\stayer2\\launch.json",
+      "D:\\mx\\s41b3\\j64\\stayer2\\lockstep-report.json",
+      "D:\\mx\\s41b3\\j64\\stayer3\\launch.json",
+      "D:\\mx\\s41b3\\j64\\stayer3\\lockstep-report.json"
+    ]
+  },
+  {
+    "i": 64,
+    "id": "sound_auth-match",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_auth-match.log",
+    "out": "D:\\mx\\s41b3\\j65",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_volume_authority.py",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j65",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "meta": {
+      "case": "auth-match",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-volume-authority-source41-match-1\\result.json",
+      "D:\\mx\\s41b3\\j65\\client\\launch.json",
+      "D:\\mx\\s41b3\\j65\\client\\report.json",
+      "D:\\mx\\s41b3\\j65\\host\\launch.json",
+      "D:\\mx\\s41b3\\j65\\host\\report.json",
+      "D:\\mx\\s41b3\\j65\\result.json"
+    ]
+  },
+  {
+    "i": 65,
+    "id": "sound_auth-fault",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_auth-fault.log",
+    "out": "D:\\mx\\s41b3\\j66",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_volume_authority.py",
+      "diverge",
+      "--out",
+      "D:\\mx\\s41b3\\j66",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--env",
+      "CC_FAULT_INJECT=local_audibility"
+    ],
+    "meta": {
+      "case": "auth-fault",
+      "expected": "diverge",
+      "changed_ticks": 72,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-volume-authority-source41-fault-1\\result.json",
+      "D:\\mx\\s41b3\\j66\\client\\launch.json",
+      "D:\\mx\\s41b3\\j66\\client\\report.json",
+      "D:\\mx\\s41b3\\j66\\host\\launch.json",
+      "D:\\mx\\s41b3\\j66\\host\\report.json",
+      "D:\\mx\\s41b3\\j66\\result.json"
+    ]
+  },
+  {
+    "i": 66,
+    "id": "sound_wounds",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_wounds.log",
+    "out": "D:\\mx\\s41b3\\j67",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "wounds",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j67",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "meta": {
+      "case": "wounds",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-query-wounds-source41-1\\result.json",
+      "D:\\mx\\s41b3\\j67\\client\\launch.json",
+      "D:\\mx\\s41b3\\j67\\client\\report.json",
+      "D:\\mx\\s41b3\\j67\\host\\launch.json",
+      "D:\\mx\\s41b3\\j67\\host\\report.json",
+      "D:\\mx\\s41b3\\j67\\result.json"
+    ]
+  },
+  {
+    "i": 67,
+    "id": "sound_rng_particles",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_rng_particles.log",
+    "out": "D:\\mx\\s41b3\\j68",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "rng_particles",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j68",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "meta": {
+      "case": "rng_particles",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-query-rng_particles-source41-1\\result.json",
+      "D:\\mx\\s41b3\\j68\\client\\launch.json",
+      "D:\\mx\\s41b3\\j68\\client\\report.json",
+      "D:\\mx\\s41b3\\j68\\host\\launch.json",
+      "D:\\mx\\s41b3\\j68\\host\\report.json",
+      "D:\\mx\\s41b3\\j68\\result.json"
+    ]
+  },
+  {
+    "i": 68,
+    "id": "sound_ui_bus",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_ui_bus.log",
+    "out": "D:\\mx\\s41b3\\j69",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "ui_bus",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j69",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "meta": {
+      "case": "ui_bus",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-query-ui_bus-source41-1\\result.json",
+      "D:\\mx\\s41b3\\j69\\client\\launch.json",
+      "D:\\mx\\s41b3\\j69\\client\\report.json",
+      "D:\\mx\\s41b3\\j69\\host\\launch.json",
+      "D:\\mx\\s41b3\\j69\\host\\report.json",
+      "D:\\mx\\s41b3\\j69\\result.json"
+    ]
+  },
+  {
+    "i": 69,
+    "id": "sound_ai_defer",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_ai_defer.log",
+    "out": "D:\\mx\\s41b3\\j70",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "ai_defer",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j70",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "meta": {
+      "case": "ai_defer",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-query-ai_defer-source41-1\\result.json",
+      "D:\\mx\\s41b3\\j70\\client\\launch.json",
+      "D:\\mx\\s41b3\\j70\\client\\report.json",
+      "D:\\mx\\s41b3\\j70\\host\\launch.json",
+      "D:\\mx\\s41b3\\j70\\host\\report.json",
+      "D:\\mx\\s41b3\\j70\\result.json"
+    ]
+  },
+  {
+    "i": 70,
+    "id": "sound_ai_defer_alias",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_ai_defer_alias.log",
+    "out": "D:\\mx\\s41b3\\j71",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "ai_defer_alias",
+      "match",
+      "--out",
+      "D:\\mx\\s41b3\\j71",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    ],
+    "meta": {
+      "case": "ai_defer_alias",
+      "expected": "match",
+      "changed_ticks": 0,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-query-ai_defer_alias-source41-1\\result.json",
+      "D:\\mx\\s41b3\\j71\\client\\launch.json",
+      "D:\\mx\\s41b3\\j71\\client\\report.json",
+      "D:\\mx\\s41b3\\j71\\host\\launch.json",
+      "D:\\mx\\s41b3\\j71\\host\\report.json",
+      "D:\\mx\\s41b3\\j71\\result.json"
+    ]
+  },
+  {
+    "i": 71,
+    "id": "sound_per_machine",
+    "family": "sound",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\sound_per_machine.log",
+    "out": "D:\\mx\\s41b3\\j72",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\run_sound_query_gate.py",
+      "per_machine",
+      "diverge",
+      "--out",
+      "D:\\mx\\s41b3\\j72",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--env",
+      "CC_FAULT_INJECT=local_audibility"
+    ],
+    "meta": {
+      "case": "per_machine",
+      "expected": "diverge",
+      "changed_ticks": 141,
+      "chain": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "source": 41,
+      "build_manifest": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json"
+    },
+    "n_failures": 0,
+    "n_evidence": 7,
+    "failures": [],
+    "evidence": [
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\chain-source41-1.json",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\sound-query-per_machine-source41-1\\result.json",
+      "D:\\mx\\s41b3\\j72\\client\\launch.json",
+      "D:\\mx\\s41b3\\j72\\client\\report.json",
+      "D:\\mx\\s41b3\\j72\\host\\launch.json",
+      "D:\\mx\\s41b3\\j72\\host\\report.json",
+      "D:\\mx\\s41b3\\j72\\result.json"
+    ]
+  },
+  {
+    "i": 72,
+    "id": "heal",
+    "family": "heal",
+    "passed": false,
+    "exit": 1,
+    "log": "D:\\mx\\s41b3\\logs\\heal.log",
+    "out": "D:\\mx\\s41b3\\j73",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\takeover-20260909\\run_breadth.py",
+      "--source",
+      "41",
+      "--build-manifest",
+      "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+      "--out",
+      "D:\\mx\\s41b3\\j73",
+      "--child",
+      "heal"
+    ],
+    "meta": {},
+    "n_failures": 5,
+    "n_evidence": 1,
+    "failures": [
+      "driver exit 1",
+      "missing/invalid result: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\\\mx\\\\s41b3\\\\j73\\\\result.json'",
+      "no runtime logs retained",
+      "D:\\mx\\s41b3\\logs\\heal.log:12: ModuleNotFoundError: No module named 'recovery_e2e'",
+      "no guarded launch records"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j73\\result.json"
+    ]
+  },
+  {
+    "i": 73,
+    "id": "compat_deferral_source22",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_deferral_source22.log",
+    "out": "D:\\mx\\s41b3\\j74",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_deferral_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j74"
+    ],
+    "meta": {
+      "case": "deferral",
+      "rung": "source22"
+    },
+    "n_failures": 1,
+    "n_evidence": 3,
+    "failures": [
+      "compat output differs from Source22; no UID exclusions"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j74\\source22\\launch.json",
+      "D:\\mx\\s41b3\\j74\\source22\\trace.json",
+      "D:\\mx\\s41b3\\j74\\summary.json"
+    ]
+  },
+  {
+    "i": 74,
+    "id": "compat_deferral_approved",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_deferral_approved.log",
+    "out": "D:\\mx\\s41b3\\j75",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_deferral_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j75"
+    ],
+    "meta": {
+      "case": "deferral",
+      "rung": "approved"
+    },
+    "n_failures": 1,
+    "n_evidence": 3,
+    "failures": [
+      "compat output differs from Source22; no UID exclusions"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j75\\approved\\launch.json",
+      "D:\\mx\\s41b3\\j75\\approved\\trace.json",
+      "D:\\mx\\s41b3\\j75\\summary.json"
+    ]
+  },
+  {
+    "i": 75,
+    "id": "compat_alias_source22",
+    "family": "compat",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_alias_source22.log",
+    "out": "D:\\mx\\s41b3\\j76",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j76",
+      "--fixture",
+      "compat_review_alias.lua"
+    ],
+    "meta": {
+      "case": "alias",
+      "rung": "source22"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j76\\source22\\launch.json",
+      "D:\\mx\\s41b3\\j76\\source22\\trace.json",
+      "D:\\mx\\s41b3\\j76\\summary.json"
+    ]
+  },
+  {
+    "i": 76,
+    "id": "compat_alias_approved",
+    "family": "compat",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_alias_approved.log",
+    "out": "D:\\mx\\s41b3\\j77",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j77",
+      "--fixture",
+      "compat_review_alias.lua"
+    ],
+    "meta": {
+      "case": "alias",
+      "rung": "approved"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j77\\approved\\launch.json",
+      "D:\\mx\\s41b3\\j77\\approved\\trace.json",
+      "D:\\mx\\s41b3\\j77\\summary.json"
+    ]
+  },
+  {
+    "i": 77,
+    "id": "compat_alias2_source22",
+    "family": "compat",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_alias2_source22.log",
+    "out": "D:\\mx\\s41b3\\j78",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j78",
+      "--fixture",
+      "compat_review_alias2.lua"
+    ],
+    "meta": {
+      "case": "alias2",
+      "rung": "source22"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j78\\source22\\launch.json",
+      "D:\\mx\\s41b3\\j78\\source22\\trace.json",
+      "D:\\mx\\s41b3\\j78\\summary.json"
+    ]
+  },
+  {
+    "i": 78,
+    "id": "compat_alias2_approved",
+    "family": "compat",
+    "passed": true,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_alias2_approved.log",
+    "out": "D:\\mx\\s41b3\\j79",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_alias_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j79",
+      "--fixture",
+      "compat_review_alias2.lua"
+    ],
+    "meta": {
+      "case": "alias2",
+      "rung": "approved"
+    },
+    "n_failures": 0,
+    "n_evidence": 3,
+    "failures": [],
+    "evidence": [
+      "D:\\mx\\s41b3\\j79\\approved\\launch.json",
+      "D:\\mx\\s41b3\\j79\\approved\\trace.json",
+      "D:\\mx\\s41b3\\j79\\summary.json"
+    ]
+  },
+  {
+    "i": 79,
+    "id": "compat_extra_source22",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_extra_source22.log",
+    "out": "D:\\mx\\s41b3\\j80",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_extra_probe.py",
+      "source22",
+      "--out",
+      "D:\\mx\\s41b3\\j80"
+    ],
+    "meta": {
+      "case": "extra",
+      "rung": "source22"
+    },
+    "n_failures": 8,
+    "n_evidence": 3,
+    "failures": [
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json.console.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j80\\source22\\runtime\\LogConsole.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j80\\source22\\launch.json",
+      "D:\\mx\\s41b3\\j80\\source22\\trace.json",
+      "D:\\mx\\s41b3\\j80\\summary.json"
+    ]
+  },
+  {
+    "i": 80,
+    "id": "compat_extra_approved",
+    "family": "compat",
+    "passed": false,
+    "exit": 0,
+    "log": "D:\\mx\\s41b3\\logs\\compat_extra_approved.log",
+    "out": "D:\\mx\\s41b3\\j81",
+    "command": [
+      "C:\\Program Files\\Python314\\python.exe",
+      "-B",
+      "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\source33-lanes\\driver\\run_extra_probe.py",
+      "approved",
+      "--out",
+      "D:\\mx\\s41b3\\j81"
+    ],
+    "meta": {
+      "case": "extra",
+      "rung": "approved"
+    },
+    "n_failures": 8,
+    "n_evidence": 3,
+    "failures": [
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json.console.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:12: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:38: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:43: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)",
+      "D:\\mx\\s41b3\\j81\\approved\\runtime\\LogConsole.txt:48: ERROR: Userdata/UserScenes.rte/compat_review_extra.lua:97: no overload of  'SoundSet:HasAnySounds' matched the arguments (SoundSet)"
+    ],
+    "evidence": [
+      "D:\\mx\\s41b3\\j81\\approved\\launch.json",
+      "D:\\mx\\s41b3\\j81\\approved\\trace.json",
+      "D:\\mx\\s41b3\\j81\\summary.json"
+    ]
+  }
+]
