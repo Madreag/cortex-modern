@@ -876,6 +876,7 @@
     <ClInclude Include="Source\Network\NetSessionSelfTest.h" />
     <ClInclude Include="Source\Network\NetTransport.h" />
     <ClInclude Include="Source\Network\SimChecksum.h" />
+    <ClInclude Include="Source\Network\NetA7Journal.h" />
     <ClInclude Include="Source\AI\MetricsCollector.h" />
     <ClInclude Include="Source\CI\DeterminismCheck.h" />
     <ClInclude Include="Source\System\ScenarioRunner.h" />
@@ -1455,6 +1456,7 @@
     <ClCompile Include="Source\Network\NetSession.cpp" />
     <ClCompile Include="Source\Network\NetSessionSelfTest.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
+    <ClCompile Include="Source\Network\NetA7Journal.cpp" />
     <ClCompile Include="Source\AI\MetricsCollector.cpp" />
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />
     <ClCompile Include="Source\System\ScenarioRunner.cpp" />
