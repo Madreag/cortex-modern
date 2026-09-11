@@ -1710,6 +1710,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			};
 			LocalPrediction::SetDepthOverride(depth);
 			const uint64_t previewsBefore = LocalPrediction::GetPreviewCount();
+			const uint64_t armsBefore = PreviewEventLedger::GetArmCount();
 			std::string outcomeFailure;
 			for (int n = 0; n < repeats; ++n) {
 				LocalPrediction::Clear();
@@ -1742,6 +1743,12 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			}
 			if (const uint64_t soundCursorAfter = g_AudioMan.GetCheckpointSoundContainerCursor(); soundCursorAfter != soundCursorBefore) {
 				fail("the audio checkpoint identity cursor moved " + std::to_string(soundCursorBefore) + " -> " + std::to_string(soundCursorAfter) + " across discarded previews");
+			}
+			if (const uint64_t armed = PreviewEventLedger::GetArmCount() - armsBefore; armed != previewsRun) {
+				fail("the event ledger armed " + std::to_string(armed) + " times for " + std::to_string(previewsRun) + " previews");
+			}
+			if (PreviewEventLedger::IsArmed()) {
+				fail("the event ledger is still armed after the previews");
 			}
 			if (!outcomeFailure.empty()) {
 				fail(outcomeFailure + " [" + outcome + "]");

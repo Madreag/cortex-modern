@@ -15,6 +15,7 @@
 #include "MOSRotating.h"
 #include "MovableMan.h"
 #include "PostProcessMan.h"
+#include "PreviewEventLedger.h"
 #include "RTETools.h"
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
@@ -141,6 +142,12 @@ namespace RTE {
 		LuaMan::SetScriptsFrozen(true);
 		AudioMan::SetPlaybackSuppressed(true);
 		PostProcessMan::SetRegistrationSuppressed(true);
+		std::vector<uint64_t> emitters;
+		emitters.reserve(targets.size());
+		for (const Preview& preview: targets) {
+			emitters.push_back(static_cast<uint64_t>(preview.original->GetUniqueID()));
+		}
+		PreviewEventLedger::Arm(static_cast<uint64_t>(simCount), soundIdentityCursor, std::move(emitters));
 		g_MovableMan.BeginSpeculation();
 		{
 			MovableObject::FaithfulCloneScope scope(false);
@@ -219,6 +226,12 @@ namespace RTE {
 		outcome.spawnedNames = g_MovableMan.DescribeAddedSince(mark);
 		std::vector<MovableObject*> taken;
 		g_MovableMan.EndSpeculation(&taken);
+		std::vector<uint64_t> takenEmitters;
+		takenEmitters.reserve(taken.size());
+		for (const MovableObject* resident: taken) {
+			takenEmitters.push_back(static_cast<uint64_t>(resident->GetRootParent()->GetUniqueID()));
+		}
+		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
 		const MovableMan::SpeculationStats statsAfter = g_MovableMan.GetSpeculationStats();
 		outcome.shadows = statsAfter.shadows - statsBefore.shadows;
@@ -244,6 +257,7 @@ namespace RTE {
 		MovableObject::PinUniqueIDCounter(uidCounter);
 		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
+		PreviewEventLedger::Disarm();
 		PostProcessMan::SetRegistrationSuppressed(false);
 		AudioMan::SetPlaybackSuppressed(false);
 		LuaMan::SetScriptsFrozen(false);
