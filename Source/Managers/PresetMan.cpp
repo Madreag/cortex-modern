@@ -164,16 +164,18 @@ bool PresetMan::LoadAllDataModules() {
 				}
 			}
 		}
+	}
 
-		// Load userdata modules AFTER all other techs etc are loaded; might be referring to stuff in user mods.
-		for (const auto& [userdataModuleName, userdataModuleFriendlyName]: c_UserdataModules) {
-			if (!std::filesystem::exists(System::GetWorkingDirectory() + System::GetUserdataDirectory() + userdataModuleName)) {
-				bool scanContentsAndIgnoreMissing = userdataModuleName == c_UserScenesModuleName;
-				DataModule::CreateOnDiskAsUserdata(userdataModuleName, userdataModuleFriendlyName, scanContentsAndIgnoreMissing, scanContentsAndIgnoreMissing);
-			}
-			if (!LoadDataModule(userdataModuleName, false, true, LoadingScreen::LoadingSplashProgressReport)) {
-				return false;
-			}
+	// Saved-game storage is required even when only one unofficial module is selected.
+	for (const auto& [userdataModuleName, userdataModuleFriendlyName]: c_UserdataModules) {
+		if (!m_SingleModuleToLoad.empty() && !IsModuleOfficial(m_SingleModuleToLoad) && userdataModuleName != c_UserScriptedSavesModuleName) continue;
+		if (GetModuleID(userdataModuleName) >= 0) continue;
+		if (!std::filesystem::exists(System::GetWorkingDirectory() + System::GetUserdataDirectory() + userdataModuleName)) {
+			bool scanContentsAndIgnoreMissing = userdataModuleName == c_UserScenesModuleName;
+			DataModule::CreateOnDiskAsUserdata(userdataModuleName, userdataModuleFriendlyName, scanContentsAndIgnoreMissing, scanContentsAndIgnoreMissing);
+		}
+		if (!LoadDataModule(userdataModuleName, false, true, LoadingScreen::LoadingSplashProgressReport)) {
+			return false;
 		}
 	}
 

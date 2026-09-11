@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -92,13 +93,19 @@ namespace RTE {
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
-		m_OutgoingChunks.clear();
 		m_StateBytesToSend.clear();
+		m_OutgoingStateId = 0;
+		m_OutgoingChunkIndex = 0;
+		m_OutgoingChunkCount = 0;
+		m_OutgoingChunkSentTo.clear();
 		m_ChunkSendStall = 0;
+		m_StateTransferProgressSerial = 0;
 		m_IncomingStateId = 0;
+		m_LastIncomingStateId = 0;
 		m_IncomingTotalBytes = 0;
 		m_IncomingReceivedBytes = 0;
-		m_IncomingChunks.clear();
+		m_IncomingChunkCount = 0;
+		m_IncomingNextChunkIndex = 0;
 		m_IncomingStateComplete = false;
 		m_ReceivedState.clear();
 		m_Stats = {};
@@ -116,7 +123,7 @@ namespace RTE {
 		}
 		const std::vector<NetTransportEvent> events = m_Transport->PollEvents();
 		if (m_Config.session) {
-			const uint64_t sessionNowMs = m_SessionClockBaseMs + nowMs;
+			const uint64_t sessionNowMs = m_Config.sessionNowMs ? m_Config.sessionNowMs() : m_SessionClockBaseMs + nowMs;
 			for (const NetTransportEvent& event: events) {
 				m_Config.session->InjectEvent(event, sessionNowMs);
 			}
@@ -162,45 +169,59 @@ namespace RTE {
 		if (!m_Config.host || fileBytes.empty() || IsTerminal(m_State)) {
 			return;
 		}
-		const uint32_t totalBytes = static_cast<uint32_t>(fileBytes.size());
-		const uint16_t chunkCount = static_cast<uint16_t>((fileBytes.size() + NetLobbyProtocol::c_MaxStateChunkBytes - 1) / NetLobbyProtocol::c_MaxStateChunkBytes);
-		// Steady-clock ns would be nicer but the id only disambiguates transfers within one lobby round.
-		const uint64_t transferId = 0x50355354ULL ^ totalBytes ^ (static_cast<uint64_t>(chunkCount) << 32);
-		m_OutgoingChunks.clear();
-		for (uint16_t index = 0; index < chunkCount; ++index) {
-			NetLobbyStateChunk chunk;
-			chunk.transferId = transferId;
-			chunk.totalBytes = totalBytes;
-			chunk.chunkIndex = index;
-			chunk.chunkCount = chunkCount;
-			const size_t begin = static_cast<size_t>(index) * NetLobbyProtocol::c_MaxStateChunkBytes;
-			const size_t end = std::min(fileBytes.size(), begin + NetLobbyProtocol::c_MaxStateChunkBytes);
-			chunk.bytes.assign(fileBytes.begin() + begin, fileBytes.begin() + end);
-			m_OutgoingChunks.push_back(std::move(chunk));
+		if (NetLobbyProtocol::GetStateChunkCount(fileBytes.size()) == 0) {
+			Fail("state transfer exceeds maximum size");
+			return;
 		}
 		m_StateBytesToSend = std::move(fileBytes);
+		RestartStateTransfer();
+	}
+
+	void NetLobbySession::RestartStateTransfer() {
+		const uint16_t chunkCount = NetLobbyProtocol::GetStateChunkCount(m_StateBytesToSend.size());
+		if (chunkCount == 0 || m_OutgoingStateId == std::numeric_limits<uint64_t>::max()) {
+			Fail("state transfer bounds are invalid");
+			return;
+		}
+		m_OutgoingStateId = m_OutgoingStateId == 0 ? 0x50355354ULL ^ static_cast<uint32_t>(m_StateBytesToSend.size()) ^ (static_cast<uint64_t>(chunkCount) << 32) : m_OutgoingStateId + 1;
+		m_OutgoingChunkIndex = 0;
+		m_OutgoingChunkCount = chunkCount;
+		m_OutgoingChunkSentTo.clear();
+		m_ChunkSendStall = 0;
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
+		if (!m_IncomingStateComplete) return {};
 		m_IncomingStateComplete = false;
 		m_IncomingStateId = 0;
 		return std::move(m_ReceivedState);
 	}
 
 	void NetLobbySession::SendQueuedStateChunks() {
-		// The transport's reliable send buffer backpressures a bulk stream: a refused chunk just
-		// waits for the next tick, and only a long stretch of zero progress is a real failure.
 		int budget = 2;
-		while (!m_OutgoingChunks.empty() && budget-- > 0) {
-			std::string error;
-			if (!Send(m_OutgoingChunks.front(), &error)) {
-				if (++m_ChunkSendStall > 4000) {
-					Fail("state transfer stalled: " + error);
+		while (HasPendingStateChunks() && budget-- > 0) {
+			NetLobbyStateChunk chunk;
+			chunk.transferId = m_OutgoingStateId;
+			chunk.totalBytes = static_cast<uint32_t>(m_StateBytesToSend.size());
+			chunk.chunkIndex = m_OutgoingChunkIndex;
+			chunk.chunkCount = m_OutgoingChunkCount;
+			const size_t begin = static_cast<size_t>(m_OutgoingChunkIndex) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			const size_t end = std::min(m_StateBytesToSend.size(), begin + NetLobbyProtocol::c_MaxStateChunkBytes);
+			chunk.bytes.assign(m_StateBytesToSend.begin() + begin, m_StateBytesToSend.begin() + end);
+			for (uint8_t peerId: m_RemotePeerIds) {
+				const NetPeerId transportId = m_RemoteTransports.at(peerId);
+				if (std::find(m_OutgoingChunkSentTo.begin(), m_OutgoingChunkSentTo.end(), transportId) != m_OutgoingChunkSentTo.end()) continue;
+				std::string error;
+				if (!SendTo(transportId, chunk, &error)) {
+					if (++m_ChunkSendStall > 4000) Fail("state transfer stalled: " + error);
+					return;
 				}
-				return;
+				m_OutgoingChunkSentTo.push_back(transportId);
+				++m_StateTransferProgressSerial;
+				m_ChunkSendStall = 0;
 			}
-			m_ChunkSendStall = 0;
-			m_OutgoingChunks.pop_front();
+			++m_OutgoingChunkIndex;
+			m_OutgoingChunkSentTo.clear();
 		}
 	}
 
@@ -209,32 +230,42 @@ namespace RTE {
 			return;
 		}
 		if (m_IncomingStateId != message.transferId) {
-			// A new transfer supersedes any partial one.
+			if (message.chunkIndex != 0 || message.transferId <= m_LastIncomingStateId) {
+				Fail("state transfer does not start with a new first chunk");
+				return;
+			}
 			m_IncomingStateId = message.transferId;
+			m_LastIncomingStateId = message.transferId;
 			m_IncomingTotalBytes = message.totalBytes;
 			m_IncomingReceivedBytes = 0;
-			m_IncomingChunks.clear();
+			m_IncomingChunkCount = message.chunkCount;
+			m_IncomingNextChunkIndex = 0;
 			m_IncomingStateComplete = false;
 			m_ReceivedState.clear();
 		}
-		if (m_IncomingStateComplete || m_IncomingChunks.find(message.chunkIndex) != m_IncomingChunks.end()) {
+		if (message.totalBytes != m_IncomingTotalBytes || message.chunkCount != m_IncomingChunkCount) {
+			Fail("state transfer header changed");
 			return;
 		}
-		m_IncomingReceivedBytes += static_cast<uint32_t>(message.bytes.size());
-		m_IncomingChunks[message.chunkIndex] = message.bytes;
-		if (m_IncomingChunks.size() < message.chunkCount) {
+		if (message.chunkIndex < m_IncomingNextChunkIndex) {
+			const size_t begin = static_cast<size_t>(message.chunkIndex) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			if (!std::equal(message.bytes.begin(), message.bytes.end(), m_ReceivedState.begin() + begin)) Fail("state transfer duplicate differs");
 			return;
 		}
-		m_ReceivedState.clear();
-		m_ReceivedState.reserve(m_IncomingTotalBytes);
-		for (const auto& [index, bytes]: m_IncomingChunks) {
-			m_ReceivedState.insert(m_ReceivedState.end(), bytes.begin(), bytes.end());
-		}
-		m_IncomingChunks.clear();
-		if (m_ReceivedState.size() != m_IncomingTotalBytes) {
-			Fail("state transfer size mismatch");
+		if (message.chunkIndex != m_IncomingNextChunkIndex) {
+			Fail("state transfer chunk is out of order");
 			return;
 		}
+		const size_t nextSize = m_ReceivedState.size() + message.bytes.size();
+		if (nextSize > m_ReceivedState.capacity()) {
+			const size_t capacity = std::min(static_cast<size_t>(m_IncomingTotalBytes), std::max(nextSize, m_ReceivedState.capacity() + m_ReceivedState.capacity() / 2));
+			m_ReceivedState.reserve(capacity);
+		}
+		m_ReceivedState.insert(m_ReceivedState.end(), message.bytes.begin(), message.bytes.end());
+		m_IncomingReceivedBytes = static_cast<uint32_t>(m_ReceivedState.size());
+		++m_IncomingNextChunkIndex;
+		++m_StateTransferProgressSerial;
+		if (m_IncomingNextChunkIndex != m_IncomingChunkCount) return;
 		m_IncomingStateComplete = true;
 		std::cout << "[net-match] state transfer complete: " << m_ReceivedState.size() << " bytes" << std::endl;
 	}
@@ -417,7 +448,7 @@ namespace RTE {
 		m_State = NetLobbyState::WaitingForConfigAck;
 		m_StartRequested = m_Config.autoStart;
 		m_PeerStatePending = true;
-		if (addedPeer && !m_StateBytesToSend.empty()) BeginStateTransfer(m_StateBytesToSend);
+		if (addedPeer && !m_StateBytesToSend.empty()) RestartStateTransfer();
 	}
 
 	bool NetLobbySession::AllConfigAcked() const {
@@ -544,7 +575,7 @@ namespace RTE {
 
 	void NetLobbySession::SendStartIfReady() {
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
-		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || !m_OutgoingChunks.empty() || IsTerminal(m_State)) {
+		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || HasPendingStateChunks() || IsTerminal(m_State)) {
 			return;
 		}
 		NetLobbyStart start;
@@ -616,6 +647,7 @@ namespace RTE {
 				}
 				const bool allowed = std::visit([&](const auto& payload) {
 					using Payload = std::decay_t<decltype(payload)>;
+					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) return !m_Config.host && event.lane == NetTransportLane::ControlReliable;
 					if (m_Config.host) {
 						if constexpr (requires { payload.peerId; }) {
 							return payload.peerId == sender->first;
@@ -730,6 +762,10 @@ namespace RTE {
 		    message.inputDelayFrames != m_Config.matchConfig.inputDelayFrames ||
 		    message.matchConfigHash != m_MatchConfigHash) {
 			Reject("lobby start does not match accepted config");
+			return;
+		}
+		if (m_IncomingStateId != 0 && !m_IncomingStateComplete) {
+			Fail("lobby started before state transfer completed");
 			return;
 		}
 		m_StartFrame = message.startFrame;
