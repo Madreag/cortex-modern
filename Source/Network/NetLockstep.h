@@ -699,6 +699,8 @@ namespace RTE {
 		void RefreshLeftSeatHolds();
 		/// Whether any peer that has left still holds a seat a returning player can reclaim.
 		bool AnyLeftSeatHeld() const;
+		/// A resync round already named this peer; a leftover drop or the old socket's close is not a new hold.
+		bool IgnoreStaleRefillLeave(uint8_t peerId, uint64_t nowMs) const;
 		/// A Reclaimed or Substituted seat is being refilled; it is not a last-player close.
 		bool SeatIsRefilling(uint8_t peerId) const;
 		bool AnySeatRefilling() const;
