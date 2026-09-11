@@ -179,40 +179,48 @@ namespace RTE {
 	void NetModerationUx::Refresh(const std::vector<NetH4ModerationSeat>& seats) {
 		m_Rows.clear();
 		for (const NetH4ModerationSeat& seat: seats) {
-			// Only a seat the host has something to decide about: the panel is a decision list.
-			if (!seat.substitutable && !seat.substituting && !seat.dropped) {
+			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped)) {
 				continue;
 			}
 			Row row;
+			row.view = seat;
 			row.stableSeat = seat.stableSeat;
 			row.lockstepPeerId = seat.lockstepPeerId;
 			row.text = DescribeSeat(seat);
 			row.applicants = seat.applicants.size();
 			row.substitutable = seat.substitutable;
 			row.substituting = seat.substituting;
-			// Keep the host's choice while that applicant is still asking; otherwise fall to the first.
-			const auto chosen = m_Chosen.find(seat.stableSeat);
-			size_t index = 0;
+			auto chosen = m_Chosen.find(seat.stableSeat);
+			const auto identity = NetSelectModerationSeat(seat);
+			if (chosen == m_Chosen.end() || chosen->second.epoch != seat.epoch ||
+			    chosen->second.holderGeneration != seat.holderGeneration || chosen->second.seatGeneration != seat.seatGeneration ||
+			    chosen->second.incarnation != seat.incarnation) {
+				m_Chosen[seat.stableSeat] = seat.applicants.empty() ? identity : NetSelectModerationSeat(seat, seat.applicants.front().connection);
+				chosen = m_Chosen.find(seat.stableSeat);
+			}
+			size_t index = seat.applicants.size();
 			for (size_t i = 0; i < seat.applicants.size(); ++i) {
-				if (chosen != m_Chosen.end() && seat.applicants[i].connection == chosen->second) {
+				if (seat.applicants[i].connection == chosen->second.applicant && seat.applicants[i].transactionId == chosen->second.applicantTransaction) {
 					index = i;
 					break;
 				}
 			}
-			if (seat.applicants.empty()) {
-				m_Chosen.erase(seat.stableSeat);
-				row.applicantText = "No applicants";
+			if (index == seat.applicants.size()) {
+				row.applicantText = seat.applicants.empty() ? "No applicants" : "Choose an applicant";
 			} else {
 				const NetH4ApplicantView& applicant = seat.applicants[index];
 				row.applicant = applicant.connection;
-				m_Chosen[seat.stableSeat] = applicant.connection;
 				row.applicantText = applicant.displayName + " (" + std::to_string(index + 1) + "/" + std::to_string(seat.applicants.size()) + ")";
 				if (applicant.approved) {
 					row.applicantText += " *";
 				}
 			}
+			row.selection = NetSelectModerationSeat(seat, row.applicant);
 			m_Rows.push_back(std::move(row));
 		}
+		std::erase_if(m_Chosen, [&seats](const auto& entry) {
+			return std::none_of(seats.begin(), seats.end(), [&entry](const auto& seat) { return seat.stableSeat == entry.first; });
+		});
 	}
 
 	size_t NetModerationUx::FindSeat(uint16_t stableSeat) const {
@@ -225,27 +233,24 @@ namespace RTE {
 	}
 
 	void NetModerationUx::CycleApplicant(size_t index) {
-		if (index >= m_Rows.size() || m_Rows[index].applicants < 2) {
-			return;
-		}
-		// The rows are rebuilt from the host's view every refresh, so the choice moves there and not here.
-		const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
-		const uint16_t stableSeat = m_Rows[index].stableSeat;
-		for (const NetH4ModerationSeat& seat: seats) {
-			if (seat.stableSeat != stableSeat || seat.applicants.empty()) {
-				continue;
+		if (index < m_Rows.size()) CycleApplicant(m_Rows[index]);
+	}
+
+	void NetModerationUx::CycleApplicant(const Row& displayed) {
+		if (!displayed.view.actionsAvailable || displayed.view.applicants.empty()) return;
+		const auto& candidates = displayed.view.applicants;
+		size_t next = 0;
+		for (size_t i = 0; i < candidates.size(); ++i) {
+			if (candidates[i].connection == displayed.selection.applicant && candidates[i].transactionId == displayed.selection.applicantTransaction) {
+				next = (i + 1) % candidates.size();
+				break;
 			}
-			size_t at = 0;
-			for (size_t i = 0; i < seat.applicants.size(); ++i) {
-				if (seat.applicants[i].connection == m_Rows[index].applicant) {
-					at = i;
-					break;
-				}
-			}
-			m_Chosen[stableSeat] = seat.applicants[(at + 1) % seat.applicants.size()].connection;
-			break;
 		}
-		Refresh(seats);
+		m_Chosen[displayed.stableSeat] = NetSelectModerationSeat(displayed.view, candidates[next].connection);
+	}
+
+	bool NetModerationUx::Available(const Row& row, NetModerationAction action) {
+		return NetModerationAvailability(row.view, row.selection, action) == NetH4ModerationResult::Ok;
 	}
 
 	NetH4ModerationResult NetModerationUx::Act(size_t index, NetModerationAction action) {
@@ -253,27 +258,18 @@ namespace RTE {
 			m_StatusText = "That seat is not one this host decides about.";
 			return NetH4ModerationResult::UnknownSeat;
 		}
-		const Row row = m_Rows[index];
-		NetH4ModerationResult result = NetH4ModerationResult::UnknownSeat;
-		switch (action) {
-			case NetModerationAction::Wait:
-				result = g_NetMatchService.WaitForSeat(row.stableSeat);
-				break;
-			case NetModerationAction::Substitute:
-				result = row.applicant == c_InvalidNetPeerId ? NetH4ModerationResult::UnknownApplicant
-				                                             : g_NetMatchService.SubstituteApplicant(row.stableSeat, row.applicant);
-				break;
-			case NetModerationAction::Cancel:
-				result = g_NetMatchService.CancelSubstitution(row.stableSeat);
-				break;
-		}
+		return Act(m_Rows[index], action);
+	}
+
+	NetH4ModerationResult NetModerationUx::Act(const Row& displayed, NetModerationAction action) {
+		const Row row = displayed;
+		const NetH4ModerationResult result = Available(row, action) ? g_NetMatchService.ApplyModeration(row.selection, action) : NetH4ModerationResult::ActionUnavailable;
 		const char* name = NetModerationActionName(action);
 		m_StatusText = result == NetH4ModerationResult::Ok
 		                   ? "Seat " + std::to_string(row.stableSeat) + ": " + name + " accepted."
 		                   : "Seat " + std::to_string(row.stableSeat) + ": " + name + " refused - " + NetH4ModerationResultName(result) + ".";
 		std::cout << "[net-moderation] " << name << " seat=" << row.stableSeat
 		          << " applicant=" << static_cast<int>(row.applicant) << " result=" << NetH4ModerationResultName(result) << std::endl;
-		Refresh(g_NetMatchService.GetModerationSeats());
 		return result;
 	}
 
@@ -289,50 +285,24 @@ namespace RTE {
 		       std::to_string(applicants) + (applicants == 1 ? " applicant" : " applicants");
 	}
 
-	void NetSeatPresence::Observe(const NetLockstepSeatNotice& notice) {
-		Seat& seat = m_Seats[notice.peerId];
-		switch (notice.kind) {
-			case NetSeatNoticeKind::Left:
-				seat = {NetSeatPresenceState::Left, 0, false, std::string()};
-				break;
-			case NetSeatNoticeKind::Dropped:
-				seat = {NetSeatPresenceState::Disconnected, notice.holdUntilFrame, false, std::string()};
-				break;
-			case NetSeatNoticeKind::Reclaiming:
-				// Only a seat still being held can be on its way back.
-				if (seat.state == NetSeatPresenceState::Disconnected) {
-					seat.state = NetSeatPresenceState::Reconnecting;
-				}
-				break;
-			case NetSeatNoticeKind::Reclaimed:
-				seat = {NetSeatPresenceState::Present, 0, false, std::string()};
-				break;
-			case NetSeatNoticeKind::Substituted:
-				seat = {NetSeatPresenceState::Substituted, 0, false, notice.name};
-				break;
-		}
+	bool NetSeatPresence::ApplySnapshot(const NetLockstepSeatSnapshot& snapshot, uint64_t receivedAtMs) {
+		if (m_Snapshot && snapshot.epoch == m_Snapshot->epoch && snapshot.sessionId == m_Snapshot->sessionId &&
+		    snapshot.roundId == m_Snapshot->roundId && snapshot.revision <= m_Snapshot->revision) return false;
+		m_Seats.clear();
+		for (const auto& seat: snapshot.seats) m_Seats.emplace(seat.peerId, seat);
+		m_Snapshot = snapshot;
+		m_ReceivedAtMs = receivedAtMs;
+		return true;
 	}
 
 	void NetSeatPresence::NoteFrame(uint64_t appliedFrame) {
-		if (appliedFrame < m_Frame) {
-			// A resync starts a new round from its own first frame. The hold belongs to the seat and not
-			// to the round, so it keeps the frames it had left rather than restarting or expiring.
-			for (auto& [peerId, seat]: m_Seats) {
-				seat.holdUntilFrame = seat.holdUntilFrame > m_Frame ? appliedFrame + (seat.holdUntilFrame - m_Frame) : 0;
-			}
-		}
 		m_Frame = appliedFrame;
-		for (auto& [peerId, seat]: m_Seats) {
-			const bool holding = seat.state == NetSeatPresenceState::Disconnected || seat.state == NetSeatPresenceState::Reconnecting;
-			if (holding && seat.holdUntilFrame != 0 && appliedFrame >= seat.holdUntilFrame) {
-				seat.state = NetSeatPresenceState::Left;
-				seat.holdRanOut = true;
-			}
-		}
 	}
 
 	void NetSeatPresence::Clear() {
 		m_Seats.clear();
+		m_Snapshot.reset();
+		m_ReceivedAtMs = 0;
 		m_Frame = 0;
 	}
 
@@ -349,29 +319,40 @@ namespace RTE {
 		return it->second.holdUntilFrame - m_Frame;
 	}
 
+	uint64_t NetSeatPresence::HoldWallSecondsRemaining(uint8_t peerId, uint64_t nowMs) const {
+		const auto it = m_Seats.find(peerId);
+		if (!m_Snapshot || it == m_Seats.end() || !it->second.holdActive ||
+		    it->second.holdUntilMs <= m_Snapshot->observedAtMs) return 0;
+		const uint64_t atReceipt = it->second.holdUntilMs - m_Snapshot->observedAtMs;
+		const uint64_t elapsed = nowMs > m_ReceivedAtMs ? nowMs - m_ReceivedAtMs : 0;
+		return elapsed >= atReceipt ? 0 : (atReceipt - elapsed + 999) / 1000;
+	}
+
 	std::string NetSeatPresence::Line(uint8_t peerId, const std::string& playerName) const {
 		const auto it = m_Seats.find(peerId);
 		if (it == m_Seats.end() || it->second.state == NetSeatPresenceState::Present) {
 			return std::string();
 		}
-		const Seat& seat = it->second;
-		const std::string who = playerName.empty() ? "Player " + std::to_string(peerId) : playerName;
+		const NetSeatPresenceEntry& seat = it->second;
+		const std::string who = !seat.holderName.empty() ? seat.holderName :
+		                        (playerName.empty() ? "Player " + std::to_string(peerId) : playerName);
 		switch (seat.state) {
 			case NetSeatPresenceState::Disconnected:
 			case NetSeatPresenceState::Reconnecting:
 				return who + ": " + (seat.state == NetSeatPresenceState::Reconnecting ? "reconnecting" : "disconnected") +
-				       " - seat held " + std::to_string(HoldSeconds(HoldFramesRemaining(peerId))) + "s";
+				       (seat.holdActive ? " - round hold " + std::to_string(HoldWallSecondsRemaining(peerId)) + "s" : "");
 			case NetSeatPresenceState::Substituted:
-				return who + ": substituted by " + (seat.holderName.empty() ? "another player" : seat.holderName);
+				return who + ": joined as substitute";
 			case NetSeatPresenceState::Left:
-				return who + (seat.holdRanOut ? ": left - the seat's hold ran out" : ": left");
+				return who + ": left";
 			default:
 				return std::string();
 		}
 	}
 
 	uint64_t NetSeatPresence::HoldSeconds(uint64_t frames) {
-		return (frames * c_FrameMicroseconds + 500000) / 1000000;
+		// The pinned 0.0166666 s timestep, rounded up without overflowing the product.
+		return (frames / 10000000) * 166666 + ((frames % 10000000) * 166666 + 9999999) / 10000000;
 	}
 
 	const char* NetSeatPresence::StateName(NetSeatPresenceState state) {

@@ -213,6 +213,7 @@ namespace RTE {
 		std::array<GUIButton*, 3> m_ModerationSubstituteButtons;
 		std::array<GUIButton*, 3> m_ModerationCancelButtons;
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
+		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		GUICollectionBox* m_CreditsScrollPanel;
@@ -318,7 +319,7 @@ namespace RTE {
 		/// Rebuilds §9b's moderation panel from the host's live seat view.
 		void RefreshModerationControls(const NetLobbySnapshot& snapshot);
 		/// The one path a moderation action takes, whether a player clicked it or a gate drove it.
-		void ActivateModerationRow(size_t row, NetModerationAction action);
+		void ActivateModerationRow(const GUIControl* control, NetModerationAction action);
 
 		/// §11: shows the recovery banner and the rejoin/cancel controls the reconnect state machine says apply.
 		void RefreshReconnectControls();
