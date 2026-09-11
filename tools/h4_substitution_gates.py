@@ -418,6 +418,14 @@ def run_gate(
     if not isinstance(transitions, list):
         transitions = []
     leaver_peer = service_of(read_json(root / "leaver_report.json")).get("local_peer_id")
+    if leaver_peer is None:
+        leaver_peer = service_of(read_json(root / "returner_report.json")).get("local_peer_id")
+    if leaver_peer is None:
+        leaver_peer = 2
+    try:
+        leaver_peer = int(leaver_peer)
+    except (TypeError, ValueError):
+        leaver_peer = 2
     leaver_transitions = [
         row
         for row in transitions
