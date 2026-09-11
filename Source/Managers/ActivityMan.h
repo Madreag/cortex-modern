@@ -8,6 +8,7 @@
 #include "BS_thread_pool.hpp"
 
 #include <functional>
+#include <unordered_set>
 
 #define g_ActivityMan ActivityMan::Instance()
 
@@ -134,6 +135,7 @@ namespace RTE {
 		/// @return Whether the save was queued. WaitForSaveGameTask returns its result.
 		bool SaveCurrentGame(const std::string& fileName);
 		std::string CaptureRuntimeGlobals() const;
+		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried) const;
 		bool RestoreRuntimeGlobals(std::string_view text, bool validateOnly = false);
 		bool PrepareCheckpointMaterials(std::string_view runtimeGlobals);
 		bool PrepareCheckpointPrimitives(std::string_view runtimeGlobals);
