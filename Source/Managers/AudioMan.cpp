@@ -2214,6 +2214,15 @@ bool AudioMan::RunCheckpointSelfTest() {
 			std::cout << "[audio-checkpoint-selftest] FAIL leftover_or_clone_apply " << error.what() << std::endl;
 			ok = false;
 		}
+		try {
+			SoundCheckpointSaveScope scope;
+			const std::string audio = ContainedAudioSave(scope);
+			CheckCarriedAudioOwners(audio, scope.Carried());
+			std::cout << "[audio-checkpoint-selftest] PASS carried_owners_match_archive" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL carried_owners_match_archive " << error.what() << std::endl;
+			ok = false;
+		}
 		if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("owner selftests left the audio checkpoint unrestored");
 		std::unique_ptr<SoundContainer> orphan(static_cast<SoundContainer*>(preset->Clone()));
 		orphan->SetPaused(true); orphan->SetImmobile(true); orphan->SetLoopSetting(-1);
