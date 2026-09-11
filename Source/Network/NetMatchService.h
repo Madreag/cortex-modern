@@ -62,6 +62,7 @@ namespace RTE {
 		}
 		uint64_t Total() const { return priorTicks + SegmentTicks(); }
 		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
+		bool EarlyOverIsSetupFailure(uint64_t matchTick) const { return matchTick < 100; }
 	};
 
 	inline uint64_t ParseLockstepStopTick(const std::string& error, uint64_t fallbackTick) {

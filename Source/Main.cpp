@@ -3074,7 +3074,10 @@ void RunGameLoop() {
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
 				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure())) {
+				const uint64_t earlyOverTick = ScenarioRunner::HasLockstepCoordinator()
+					                               ? ScenarioRunner::GetLockstepAppliedFrame()
+					                               : s_netMatchE2ETicks.Total();
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick))) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
