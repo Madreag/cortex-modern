@@ -550,9 +550,15 @@ def inventory_reference_roles(text, state):
     """
     while isinstance(state, dict) and state.get("version") in ("GameActivity1", "GameActivity2"):
         state = state["base" if state["version"] == "GameActivity1" else "values"]
-    if not isinstance(state, dict) or state.get("version") != "Activity1":
+    if not isinstance(state, dict) or state.get("version") not in ("Activity1", "Activity2", "Activity3"):
         return {}
-    local_actor = state["actor_links"][0][0]
+    links = state.get("actor_links")
+    if not isinstance(links, list) or len(links) != 4 or any(
+        not isinstance(slot, list) or len(slot) != 3 or any(type(uid) is not int or uid < 0 for uid in slot)
+        for slot in links
+    ):
+        raise ValueError("invalid activity actor-link layout")
+    local_actor = links[0][1]
     if not local_actor:
         return {}
     root = {"children": {}, "path": (), "actor": None}
