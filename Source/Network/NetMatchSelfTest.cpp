@@ -749,11 +749,25 @@ namespace RTE {
 				heal.NoteSimTick(tick);
 			}
 			heal.OnResyncRelaunch();
-			for (uint64_t tick = 60; tick <= 602; ++tick) {
+			for (uint64_t tick = 60; tick <= 600; ++tick) {
 				heal.NoteSimTick(tick);
 			}
-			if (heal.Total() != 600) {
-				*error = "heal clock total=" + std::to_string(heal.Total()) + " wanted 600";
+			if (heal.Total() != 598) {
+				*error = "heal clock total=" + std::to_string(heal.Total()) + " wanted 598";
+				return false;
+			}
+			NetMatchE2ETickClock skipped;
+			const uint64_t preHeal[] = {4, 30, 60};
+			const uint64_t postHeal[] = {60, 300, 600};
+			for (uint64_t tick: preHeal) {
+				skipped.NoteSimTick(tick);
+			}
+			skipped.OnResyncRelaunch();
+			for (uint64_t tick: postHeal) {
+				skipped.NoteSimTick(tick);
+			}
+			if (skipped.Total() != 598) {
+				*error = "skipped-note heal clock total=" + std::to_string(skipped.Total()) + " wanted 598";
 				return false;
 			}
 			NetMatchE2ETickClock plain;
