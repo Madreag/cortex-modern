@@ -3020,6 +3020,35 @@ assert(_NetPreview.Pos.X == 137.25, "vector alias stopped being live")
 	try {
 		const auto* preset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
 		if (!preset) throw std::runtime_error("editor preview preset unavailable");
+		{
+			auto probe = std::unique_ptr<Actor>(static_cast<Actor*>(preset->Clone()));
+			std::unordered_set<const void*> ownerOnly{probe.get()};
+			lua.SetTempEntity(probe.get());
+			lua.RunScriptString("_NetProbe = ToActor(LuaMan.TempEntity); _NetProbe = nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			check("unreferenced_wrappers_are_not_aliases", !lua.HasNativeAliases(ownerOnly));
+			check("weak_table_is_not_an_alias", lua.RunScriptString(R"lua(
+_NetWeak = setmetatable({}, { __mode = "v" })
+_NetWeak[1] = ToActor(LuaMan.TempEntity)
+)lua") == 0 && !lua.HasNativeAliases(ownerOnly));
+			check("alias_from_suspended_parent_frame", lua.RunScriptString(R"lua(
+_NetWeak = nil
+_NetCo = coroutine.create(function(obj)
+	local held = obj
+	local function inner() coroutine.yield() end
+	inner()
+end)
+assert(select(1, coroutine.resume(_NetCo, ToActor(LuaMan.TempEntity))))
+)lua") == 0 && lua.HasNativeAliases(ownerOnly));
+			check("alias_from_child_dependency", lua.RunScriptString(R"lua(
+_NetCo = nil
+_NetChild = _ScriptGraphOwnerReference(ToActor(LuaMan.TempEntity), "actor-controller", 0, false)
+assert(_NetChild ~= nil)
+)lua") == 0 && lua.HasNativeAliases(ownerOnly));
+			lua.RunScriptString("_NetChild=nil; _NetCo=nil; _NetWeak=nil; _NetProbe=nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			lua.SetTempEntity(restore.tempEntity);
+		}
 		for (bool repair: {false, true}) {
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
