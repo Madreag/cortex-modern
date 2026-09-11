@@ -157,7 +157,6 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		if (MovableObject* object = g_MovableMan.FindObjectByUniqueID(uid)) object->OnSave();
 	}
 	g_MovableMan.CompleteQueuedMOIDDrawings();
-	AudioMan::CheckpointRegistryScope captureSounds;
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
 	g_LuaMan.CollectGarbageForCheckpoint();
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
@@ -173,36 +172,40 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		~AwaitBitmapCopy() { if (task.valid()) task.wait(); }
 	} awaitBitmapCopy{copyBitmaps};
 
-	// We need a copy of our scene, because we have to do some fixup to remove PLACEONLOAD items and only keep the current MovableMan state.
-	std::unique_ptr<Scene> modifiableScene(dynamic_cast<Scene*>(scene->Clone()));
+	std::unique_ptr<Scene> modifiableScene;
+	{
+		AudioMan::CheckpointRegistryScope captureSounds;
+		// We need a copy of our scene, because we have to do some fixup to remove PLACEONLOAD items and only keep the current MovableMan state.
+		modifiableScene.reset(dynamic_cast<Scene*>(scene->Clone()));
 
-	// Delete any existing objects from our scene - we don't want to replace broken doors or repair any stuff when we load.
-	modifiableScene->ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, true);
+		// Delete any existing objects from our scene - we don't want to replace broken doors or repair any stuff when we load.
+		modifiableScene->ClearPlacedObjectSet(Scene::PlacedObjectSets::PLACEONLOAD, true);
 
-	// Become our own original preset, instead of being a copy of the Scene we got cloned from, so we don't still pick up the PlacedObjectSets from our parent when loading.
-	modifiableScene->SetPresetName(fileName);
-	modifiableScene->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
-	modifiableScene->SetSavedGameInternal(true);
+		// Become our own original preset, instead of being a copy of the Scene we got cloned from, so we don't still pick up the PlacedObjectSets from our parent when loading.
+		modifiableScene->SetPresetName(fileName);
+		modifiableScene->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
+		modifiableScene->SetSavedGameInternal(true);
 
-	// Make sure the terrain is also treated as an original preset, otherwise it will screw up if we save then load then save again, since it'll try to be a CopyOf of itself.
-	modifiableScene->GetTerrain()->SetPresetName(fileName);
-	modifiableScene->GetTerrain()->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
+		// Make sure the terrain is also treated as an original preset, otherwise it will screw up if we save then load then save again, since it'll try to be a CopyOf of itself.
+		modifiableScene->GetTerrain()->SetPresetName(fileName);
+		modifiableScene->GetTerrain()->MigrateToModule(g_PresetMan.GetModuleID(c_UserScriptedSavesModuleName));
 
-	// See our content files to point to our save game location. This won't actually save a file here- but it allows us to set these up as in-memory ContentFiles on load
-	// Meaning that our loading code doesn't need to care about whether it's loading a savegame or a file- it just sees it as an already loaded, cached bitmap
-	modifiableScene->GetTerrain()->GetContentFile().SetIsMemoryFile(true);
-	modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
-	modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
+		// See our content files to point to our save game location. This won't actually save a file here- but it allows us to set these up as in-memory ContentFiles on load
+		// Meaning that our loading code doesn't need to care about whether it's loading a savegame or a file- it just sees it as an already loaded, cached bitmap
+		modifiableScene->GetTerrain()->GetContentFile().SetIsMemoryFile(true);
+		modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
+		modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetIsMemoryFile(true);
 
-	modifiableScene->GetTerrain()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png");
-	modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save FG.png");
-	modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save BG.png");
+		modifiableScene->GetTerrain()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png");
+		modifiableScene->GetTerrain()->GetFGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save FG.png");
+		modifiableScene->GetTerrain()->GetBGSceneLayer()->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save BG.png");
 
-	for (int i = 0; i < Activity::MaxTeamCount; ++i) {
-		SceneLayer* unseenLayer = modifiableScene->GetUnseenLayer(i);
-		if (unseenLayer) {
-			unseenLayer->GetContentFile().SetIsMemoryFile(true);
-			unseenLayer->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + std::format("/Save UST{}.png", i));
+		for (int i = 0; i < Activity::MaxTeamCount; ++i) {
+			SceneLayer* unseenLayer = modifiableScene->GetUnseenLayer(i);
+			if (unseenLayer) {
+				unseenLayer->GetContentFile().SetIsMemoryFile(true);
+				unseenLayer->GetContentFile().SetDataPath(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + std::format("/Save UST{}.png", i));
+			}
 		}
 	}
 
