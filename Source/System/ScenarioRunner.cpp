@@ -1586,6 +1586,10 @@ namespace RTE {
 					s_SessionPump();
 				}
 			}
+			if (!s_LockstepCoordinator) {
+				if (error) *error = "lockstep coordinator is not active";
+				return false;
+			}
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
