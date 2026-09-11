@@ -36,6 +36,17 @@ namespace RTE {
 		bool operator==(const NetH4Seat&) const = default;
 	};
 
+	enum class NetHoldResolution : uint16_t {
+		Expired = 0,
+		Reclaimed = 1,
+		Substituted = 2,
+	};
+
+	struct NetHoldResolutionNotice {
+		uint8_t lockstepPeerId = 0;
+		NetHoldResolution resolution = NetHoldResolution::Expired;
+	};
+
 	/// The seat table in the pinned form, straight off the live match config.
 	std::vector<NetH4Seat> NetH4BuildSeatTable(const NetMatchConfig& config);
 
@@ -291,6 +302,7 @@ namespace RTE {
 		/// The seats that changed hands since the last read, for §11's roster line.
 		/// The reseats a committed reclaim earned, for the match runner to enqueue as lockstep commands.
 		std::vector<NetGameReseat> TakePendingReseats();
+		std::vector<NetHoldResolutionNotice> TakePendingHoldResolutions();
 
 		const NetReconnectHostStats& GetStats() const { return m_Stats; }
 		const NetReconnectAdmission& GetAdmission() const { return m_Admission; }
@@ -436,6 +448,7 @@ namespace RTE {
 		/// left has nothing to reclaim and the seat must be joinable again.
 		void ReleaseSeat(SeatState& seat);
 		void IssueReseat(const SeatState& seat);
+		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 
 		/// Whether an explicit host action may hand this seat to somebody else: a live match, a real
@@ -479,6 +492,7 @@ namespace RTE {
 		std::vector<Fence> m_Fences;
 		std::vector<NetH4Outbound> m_Outbound;
 		std::vector<NetGameReseat> m_PendingReseats;
+		std::vector<NetHoldResolutionNotice> m_PendingHoldResolutions;
 		std::vector<NetH4Commit> m_Commits;
 		NetReconnectHostStats m_Stats;
 	};
