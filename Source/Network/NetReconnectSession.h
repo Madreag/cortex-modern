@@ -570,7 +570,16 @@ namespace RTE {
 		bool IsAdmissionPending() const;
 		/// Why the last store read produced nothing, so §11 can tell missing from corrupt from stale.
 		NetH4TicketLoadResult GetLastLoadResult() const { return m_LastLoad; }
-		bool UsedStoredTicket() const { return m_UsedStoredTicket; }
+		bool UsedStoredTicket() const { return m_UsedStoredTicket && !m_FellBackToNewJoin; }
+		const char* ReclaimOutcome() const {
+			if (m_FellBackToNewJoin) {
+				return "new_join_after_refusal";
+			}
+			if (m_UsedStoredTicket) {
+				return "reclaim_accepted";
+			}
+			return "";
+		}
 		/// Set when an unacknowledged leave gave up: keep the ticket and close the link.
 		bool WantsLinkClosed() const { return m_WantsLinkClosed; }
 		/// The reason the host last refused this client, so §11 can say "the seat was reassigned"

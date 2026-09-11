@@ -8,6 +8,7 @@
 #include "GUIInput.h"
 #include "GnsTransport.h"
 #include "NetIdentity.h"
+#include "NetProtocol.h"
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
 #include "System.h"
@@ -54,6 +55,53 @@ static std::string ResyncSaveName() {
 
 		// The host dedupes joiners by nonce, so two clients on one session must present distinct ones.
 		// Transport-level identity only — the sim never sees it, so real randomness is fine here.
+		json AdmissionJsonFromHost(const NetReconnectHost& host) {
+			const NetReconnectHostStats& stats = host.GetStats();
+			return json{
+				{"new_joins", stats.newJoins},
+				{"ticket_offers_sent", stats.ticketOffersSent},
+				{"ticket_offer_retransmits", stats.ticketOfferRetransmits},
+				{"provisional_seats_opened", stats.provisionalSeatsOpened},
+				{"provisional_seats_committed", stats.provisionalSeatsCommitted},
+				{"provisional_seats_expired", stats.provisionalSeatsExpired},
+				{"provisional_seats_refused", stats.provisionalSeatsRefused},
+				{"provisional_seats_resumed", stats.provisionalSeatsResumed},
+				{"persistence_failures", stats.persistenceFailures},
+				{"reclaims_accepted", stats.reclaimsAccepted},
+				{"identity_rejections", stats.identityRejections},
+				{"denials_scheduled", stats.denialsScheduled},
+				{"denials_released", stats.denialsReleased},
+				{"replayed_results", stats.replayedResults},
+				{"stale_epoch_drops", stats.staleEpochDrops},
+				{"unknown_transaction_drops", stats.unknownTransactionDrops},
+				{"fenced_packets", stats.fencedPackets},
+				{"fenced_disconnects", stats.fencedDisconnects},
+				{"incarnations_bound", stats.incarnationsBound},
+				{"seats_dropped", stats.seatsDropped},
+				{"seats_closed_by_leave", stats.seatsClosedByLeave},
+				{"ledger_drops_recorded", stats.ledgerDropsRecorded},
+				{"reseats_issued", stats.reseatsIssued},
+				{"reseats_without_a_ledger", stats.reseatsWithoutALedger},
+				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
+				{"reseat_live_on_team_not_named", stats.reseatLiveOnTeamNotNamed},
+				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"seat_holds_expired", stats.seatHoldsExpired},
+				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
+				{"applicants_registered", stats.applicantsRegistered},
+				{"applicants_refused", stats.applicantsRefused},
+				{"applicants_expired", stats.applicantsExpired},
+				{"applicants_displaced", stats.applicantsDisplaced},
+				{"substitution_offers_sent", stats.substitutionOffersSent},
+				{"substitution_offer_retransmits", stats.substitutionOfferRetransmits},
+				{"substitutions_committed", stats.substitutionsCommitted},
+				{"substitutions_cancelled", stats.substitutionsCancelled},
+				{"substitutions_superseded", stats.substitutionsSuperseded},
+				{"substitution_ack_failures", stats.substitutionAckFailures},
+				{"reassigned_reclaims_refused", stats.reassignedReclaimsRefused},
+				{"pending_applicants", 0},
+			};
+		}
+
 		uint64_t MakeClientNonce() {
 			std::random_device device;
 			return c_ClientNonce ^ (static_cast<uint64_t>(device()) << 32) ^ static_cast<uint64_t>(device());
@@ -193,6 +241,36 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::ResyncSnapshotAllowed(const Activity* activity) {
+		return activity != nullptr && activity->GetActivityState() != Activity::Over;
+	}
+
+	NetRejoinAnswer NetMatchService::ClassifyRejoin(const Activity* activity) {
+		return ResyncSnapshotAllowed(activity) ? NetRejoinAnswer::Resync : NetRejoinAnswer::MatchOver;
+	}
+
+	void NetMatchService::AnswerMatchOverRejoin(const std::string& result) {
+		const std::string text = result.empty() ? "match over" : result;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RejoinOutcome = "match_over";
+			if (m_Transport && m_Session && m_Coordinator) {
+				for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+					if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+						NetMessage message;
+						message.payload = NetDisconnect{static_cast<uint16_t>(NetRejectReason::SessionEnded), text};
+						std::vector<uint8_t> bytes;
+						if (NetProtocol::Encode(message, bytes)) {
+							m_Transport->Send(peer.transportPeerId, NetTransportLane::ControlReliable, bytes, nullptr);
+							m_Transport->Disconnect(peer.transportPeerId, text);
+						}
+					}
+				}
+			}
+		}
+		FinishMatch(text);
+	}
+
 	bool NetMatchService::ResyncMatch(std::string* error) {
 		JoinWorkerIfDone();
 		// The host snapshots the live (diverged) match BEFORE the teardown; both sides then reload
@@ -207,6 +285,13 @@ static std::string ResyncSaveName() {
 		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
 		const uint64_t a7SaveBegin = a7Save ? AdmissionNowMs() : 0;
 		if (a7Save) NetA7Journal::Session("save_begin", a7SaveBegin, {{"resync", std::to_string(a7Resync)}}, "NetMatchService::AdmissionNowMs");
+		if (isHost && ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
+			AnswerMatchOverRejoin("match over");
+			if (error) {
+				*error = "match over";
+			}
+			return false;
+		}
 		if (isHost) {
 			// Snapshot callbacks stay on the game thread while waiting peers keep hearing from us.
 			std::jthread keepalive([this](std::stop_token stop) {
@@ -550,6 +635,9 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<GnsTransport> transport;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
+				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
+			}
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -830,6 +918,9 @@ static std::string ResyncSaveName() {
 		}
 		std::vector<NetTransportEvent> events;
 		events.swap(m_PendingSessionEvents);
+		bool answerMatchOver = false;
+		std::string rejoinName;
+		{
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_Session || m_State != NetMatchServiceState::Running) {
 			return;
@@ -882,11 +973,21 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning()) {
 			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 				if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
-					std::cout << "[net-match] rejoin: " << (peer.displayName.empty() ? "a player" : peer.displayName) << " reconnected - resyncing the match" << std::endl;
-					m_Coordinator->RequestResync("player rejoined");
+					rejoinName = peer.displayName.empty() ? "a player" : peer.displayName;
+					if (ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
+						answerMatchOver = true;
+					} else {
+						std::cout << "[net-match] rejoin: " << rejoinName << " reconnected - resyncing the match" << std::endl;
+						m_Coordinator->RequestResync("player rejoined");
+					}
 					break;
 				}
 			}
+		}
+		}
+		if (answerMatchOver) {
+			std::cout << "[net-match] rejoin: " << rejoinName << " reconnected - match is over" << std::endl;
+			AnswerMatchOverRejoin("match over");
 		}
 	}
 
@@ -971,6 +1072,7 @@ static std::string ResyncSaveName() {
 			{"clock_divergence_max_ms", m_MaxClockDivergenceMs.load()},
 			{"client_state", NetReconnectClientStateName(m_ReconnectClient.GetState())},
 			{"client_used_stored_ticket", m_ReconnectClient.UsedStoredTicket()},
+			{"client_reclaim_outcome", m_ReconnectClient.ReclaimOutcome()},
 			{"client_commits", m_ReconnectClient.GetStats().commitsReceived},
 			{"client_leave_acks", m_ReconnectClient.GetStats().leaveAcksReceived},
 			{"client_ambiguous_losses", m_ReconnectClient.GetStats().ambiguousLosses},
@@ -1066,9 +1168,21 @@ static std::string ResyncSaveName() {
 			                              {"round_id", snapshot->roundId}, {"revision", snapshot->revision},
 			                              {"observed_at_ms", snapshot->observedAtMs}, {"seats", entries}};
 		}
+		if (!m_RejoinOutcome.empty()) {
+			reconnect["rejoin_outcome"] = m_RejoinOutcome;
+		}
 		report["reconnect"] = reconnect;
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
+		} else if (!m_CapturedRunnerReport.empty()) {
+			report["runner"] = json::parse(m_CapturedRunnerReport);
+		} else {
+			const NetReconnectHostStats& stats = m_ReconnectHost.GetStats();
+			report["runner"] = json{
+				{"session",
+				 {{"admission", AdmissionJsonFromHost(m_ReconnectHost)},
+				  {"stats", {{"fenced_disconnects", stats.fencedDisconnects}, {"fenced_packets", stats.fencedPackets}}}}},
+			};
 		}
 		return report.dump();
 	}

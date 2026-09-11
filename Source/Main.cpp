@@ -196,8 +196,7 @@ static uint8_t s_netMatchPeers = 2;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
-static uint64_t s_netMatchServiceE2EStartTick = UINT64_MAX;
-static uint64_t s_netMatchServiceE2ERunningTicks = 0;
+static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
 // Loop-pace accounting, accumulated only while a lockstep match or playback runs: the honest
@@ -2100,7 +2099,7 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 static bool IsFirstE2ERematchReady() {
 	const Activity* activity = g_ActivityMan.GetActivity();
 	return s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
-	       activity && activity->IsOver() && s_netMatchServiceE2ERunningTicks >= 100;
+	       activity && activity->IsOver() && s_netMatchE2ETicks.Total() >= 100;
 }
 
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
@@ -2134,7 +2133,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		System::SetQuit(true);
 	} else {
 		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-		const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchServiceE2ERunningTicks >= e2eTickCap;
+		const bool e2eReachedCap = s_netMatchServiceE2E && s_netMatchE2ETicks.Total() >= e2eTickCap;
 		const bool e2ePeerStoppedAfterCap = e2eReachedCap &&
 			(error.find("Complete:") != std::string::npos ||
 			 error.find("MissingFrameTimeout") != std::string::npos ||
@@ -2179,6 +2178,19 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			g_ActivityMan.SetInActivity(false);
 			ScenarioRunner::ClearControllerReplayError();
 			returnToMenuAfterNetworkEnd = true;
+		} else if (error.find("Complete:") != std::string::npos &&
+		           (g_NetMatchService.GetState() == NetMatchServiceState::Completed ||
+		            error.find("match over") != std::string::npos)) {
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.FinishMatch(BuildNetMatchResultText());
+			}
+			g_ActivityMan.EndActivity();
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
+			}
 		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
 		           g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
@@ -2226,9 +2238,16 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
 				if (s_netMatchServiceE2E) {
-					// Round accounting restarts from the restored sim count.
-					s_netMatchServiceE2EStartTick = UINT64_MAX;
-					s_netMatchServiceE2ERunningTicks = 0;
+					s_netMatchE2ETicks.OnResyncRelaunch();
+				}
+			} else if (resyncError == "match over") {
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				ScenarioRunner::ClearControllerReplayError();
+				if (s_netMatchServiceE2E) {
+					System::SetQuit(true);
+				} else {
+					returnToMenuAfterNetworkEnd = true;
 				}
 			} else {
 				std::cerr << "[net-match] resync failed: " << resyncError << std::endl;
@@ -3047,13 +3066,12 @@ void RunGameLoop() {
 					}
 					std::cout << "[net-match-service-e2e] rematch: round 2 launching" << std::endl;
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
-					s_netMatchServiceE2EStartTick = UINT64_MAX;
-					s_netMatchServiceE2ERunningTicks = 0;
+					s_netMatchE2ETicks.OnNewMatch();
 					break;
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
 				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchServiceE2ERunningTicks < 100)) {
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure())) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
@@ -3061,15 +3079,12 @@ void RunGameLoop() {
 					break;
 				}
 				if (activityState == Activity::Running || activityState == Activity::Over) {
-					if (s_netMatchServiceE2EStartTick == UINT64_MAX) {
-						s_netMatchServiceE2EStartTick = nowTick;
-					}
-					s_netMatchServiceE2ERunningTicks = nowTick - s_netMatchServiceE2EStartTick;
+					s_netMatchE2ETicks.NoteSimTick(nowTick);
 					// In-match census; the report runs after EndActivity, which releases actors.
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					if (s_netMatchServiceE2ERunningTicks > tickCap) {
+					if (s_netMatchE2ETicks.Total() > tickCap) {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
@@ -3589,7 +3604,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
 	out << "\"actors_peak\":" << s_netMatchE2EActorCensusPeak << ",";
 	out << "\"pace\":" << BuildLoopPaceJson() << ",";
-	out << "\"running_ticks\":" << s_netMatchServiceE2ERunningTicks << ",";
+	out << "\"running_ticks\":" << s_netMatchE2ETicks.Total() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
