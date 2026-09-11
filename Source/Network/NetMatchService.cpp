@@ -269,7 +269,8 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
-		FinishMatch(text);
+		// The session pump must not destroy the coordinator; the main loop FinishMatch's the stop.
+		Complete(text);
 	}
 
 	bool NetMatchService::ResyncMatch(std::string* error) {
@@ -514,6 +515,30 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::ResetRosterTransitionHistory() {
+		m_RosterTransitions.clear();
+		m_RosterTransitionsDropped = 0;
+		m_LastRosterPair.clear();
+	}
+
+	void NetMatchService::RecordRosterTransitions(uint64_t observedAtMs) {
+		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			const std::string state = NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId));
+			const std::string line = m_SeatPresence.Line(member.peerId, member.displayName);
+			std::pair<std::string, std::string>& last = m_LastRosterPair[member.peerId];
+			if (last.first == state && last.second == line) {
+				continue;
+			}
+			last = {state, line};
+			if (m_RosterTransitions.size() >= 256) {
+				++m_RosterTransitionsDropped;
+				continue;
+			}
+			m_RosterTransitions.push_back({member.peerId, state, line, appliedFrame, observedAtMs});
+		}
+	}
+
 	void NetMatchService::EndAdmissionSession() {
 		if (m_AdmissionAttached && m_IsHost && m_Session) {
 			// P22: sent from the same call that clears the registry, so a client's record is provably
@@ -525,6 +550,7 @@ static std::string ResyncSaveName() {
 		m_ReconnectHost.TakeOutbound();
 		m_SeatStatuses.clear();
 		m_SeatPresence.Clear();
+		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
 		m_AdmissionAttached = false;
 	}
@@ -855,6 +881,9 @@ static std::string ResyncSaveName() {
 		}
 		outActivityPreset = m_ActivityPreset;
 		m_MatchWasRunning = true;
+		if (!m_PendingResyncState.has_value()) {
+			ResetRosterTransitionHistory();
+		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		CaptureA7SeatView();
@@ -866,7 +895,11 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator || m_State != NetMatchServiceState::Running) {
 			return;
 		}
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) {
+			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
+				RecordRosterTransitions(snapshot->observedAtMs);
+			}
+		}
 		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
 		CaptureA7SeatView();
 	}
@@ -914,7 +947,11 @@ static std::string ResyncSaveName() {
 		std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
 		m_ModerationSeats = std::move(seats);
 		(void)m_Coordinator->PublishSeatSnapshot(std::move(presence), AdmissionNowMs());
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) {
+			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
+				RecordRosterTransitions(snapshot->observedAtMs);
+			}
+		}
 	}
 
 	void NetMatchService::PumpSessionEvents() {
@@ -1177,6 +1214,18 @@ static std::string ResyncSaveName() {
 			}
 		}
 		reconnect["roster_lines"] = rosterLines;
+		json rosterTransitions = json::array();
+		for (const RosterTransition& row: m_RosterTransitions) {
+			rosterTransitions.push_back(json{
+				{"peer_id", static_cast<int>(row.peerId)},
+				{"state", row.state},
+				{"line", row.line},
+				{"applied_frame", row.appliedFrame},
+				{"observed_at_ms", row.observedAtMs},
+			});
+		}
+		reconnect["roster_transitions"] = rosterTransitions;
+		reconnect["roster_transitions_dropped"] = static_cast<int>(m_RosterTransitionsDropped);
 		if (const auto& snapshot = m_SeatPresence.GetSnapshot()) {
 			json entries = json::array();
 			for (const auto& seat: snapshot->seats) {
