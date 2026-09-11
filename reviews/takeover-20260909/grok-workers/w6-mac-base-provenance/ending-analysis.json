@@ -1,0 +1,737 @@
+[
+  {
+    "path": "Source/Activities/GAScripted.h",
+    "mac": {
+      "bytes": 8658,
+      "crlf": 176,
+      "lone_cr": 0,
+      "lone_lf": 2,
+      "cr_total": 176,
+      "lf_total": 178,
+      "sha256": "07c9855e8c75784e4ae75f990bc4953125db44b81f7ab4f27b4f52eedcfa3703"
+    },
+    "win": {
+      "bytes": 8482,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 178,
+      "cr_total": 0,
+      "lf_total": 178,
+      "sha256": "65ab37b8b82f6bf276800d99691b89f94243ba6c35861607feed3b15b740e159"
+    },
+    "byte_delta": 176,
+    "cr_delta": 176,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "65ab37b8b82f6bf276800d99691b89f94243ba6c35861607feed3b15b740e159",
+    "lf_norm_sha_win": "65ab37b8b82f6bf276800d99691b89f94243ba6c35861607feed3b15b740e159",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 179,
+      "line_count_b": 179
+    }
+  },
+  {
+    "path": "Source/Entities/Actor.cpp",
+    "mac": {
+      "bytes": 96437,
+      "crlf": 2262,
+      "lone_cr": 0,
+      "lone_lf": 28,
+      "cr_total": 2262,
+      "lf_total": 2290,
+      "sha256": "5d37ba4913c55b224ca49206e388dbf68390bce66fea430d82155b43aa7237e5"
+    },
+    "win": {
+      "bytes": 94175,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 2290,
+      "cr_total": 0,
+      "lf_total": 2290,
+      "sha256": "19587b5eac054886ec5c0740dc04e62f271302dd726888848b070d1dde809b33"
+    },
+    "byte_delta": 2262,
+    "cr_delta": 2262,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "19587b5eac054886ec5c0740dc04e62f271302dd726888848b070d1dde809b33",
+    "lf_norm_sha_win": "19587b5eac054886ec5c0740dc04e62f271302dd726888848b070d1dde809b33",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 2291,
+      "line_count_b": 2291
+    }
+  },
+  {
+    "path": "Source/Entities/Actor.h",
+    "mac": {
+      "bytes": 57077,
+      "crlf": 1196,
+      "lone_cr": 0,
+      "lone_lf": 3,
+      "cr_total": 1196,
+      "lf_total": 1199,
+      "sha256": "7ca9a5d06d575dee5af9106c5a8d2085a4983907d4007c0e07a6f24e7a14e79d"
+    },
+    "win": {
+      "bytes": 55881,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 1199,
+      "cr_total": 0,
+      "lf_total": 1199,
+      "sha256": "1bdfb5cf89c920d0673e1ca5f96ef8fd8774b1a286fb94d66e42440b6c2cbd00"
+    },
+    "byte_delta": 1196,
+    "cr_delta": 1196,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "1bdfb5cf89c920d0673e1ca5f96ef8fd8774b1a286fb94d66e42440b6c2cbd00",
+    "lf_norm_sha_win": "1bdfb5cf89c920d0673e1ca5f96ef8fd8774b1a286fb94d66e42440b6c2cbd00",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 1200,
+      "line_count_b": 1200
+    }
+  },
+  {
+    "path": "Source/Entities/Gib.cpp",
+    "mac": {
+      "bytes": 4296,
+      "crlf": 82,
+      "lone_cr": 0,
+      "lone_lf": 31,
+      "cr_total": 82,
+      "lf_total": 113,
+      "sha256": "ab5dbc97c229ed52b55b0b7b7bf30d22c0b0390456aae8c6f1bd87d62c59eff6"
+    },
+    "win": {
+      "bytes": 4214,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 113,
+      "cr_total": 0,
+      "lf_total": 113,
+      "sha256": "a8c8813a6a8ae4e20a2a98409e426f07657406822314f99d015d168ef4e5accc"
+    },
+    "byte_delta": 82,
+    "cr_delta": 82,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "a8c8813a6a8ae4e20a2a98409e426f07657406822314f99d015d168ef4e5accc",
+    "lf_norm_sha_win": "a8c8813a6a8ae4e20a2a98409e426f07657406822314f99d015d168ef4e5accc",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 114,
+      "line_count_b": 114
+    }
+  },
+  {
+    "path": "Source/Entities/GlobalScript.cpp",
+    "mac": {
+      "bytes": 5580,
+      "crlf": 180,
+      "lone_cr": 0,
+      "lone_lf": 1,
+      "cr_total": 180,
+      "lf_total": 181,
+      "sha256": "bc4bda01e4905b3f444e478704ca02b35745c5d3122af1bd0c335382a6b13cc2"
+    },
+    "win": {
+      "bytes": 5400,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 181,
+      "cr_total": 0,
+      "lf_total": 181,
+      "sha256": "a8e9f24ba7549386332b4fdef9d0d7d3520b6570f3fc7e997600f5e5408a0560"
+    },
+    "byte_delta": 180,
+    "cr_delta": 180,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "a8e9f24ba7549386332b4fdef9d0d7d3520b6570f3fc7e997600f5e5408a0560",
+    "lf_norm_sha_win": "a8e9f24ba7549386332b4fdef9d0d7d3520b6570f3fc7e997600f5e5408a0560",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 182,
+      "line_count_b": 182
+    }
+  },
+  {
+    "path": "Source/Entities/GlobalScript.h",
+    "mac": {
+      "bytes": 5680,
+      "crlf": 118,
+      "lone_cr": 0,
+      "lone_lf": 2,
+      "cr_total": 118,
+      "lf_total": 120,
+      "sha256": "48557ff894add482ba6df31903f2bc8c94d15f0082b7eaabd68effd061dd5e80"
+    },
+    "win": {
+      "bytes": 5562,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 120,
+      "cr_total": 0,
+      "lf_total": 120,
+      "sha256": "60e683f5d6c1bc8a1f2d4ae808502c7420e7aa4d7a160eba89370a70f0619009"
+    },
+    "byte_delta": 118,
+    "cr_delta": 118,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "60e683f5d6c1bc8a1f2d4ae808502c7420e7aa4d7a160eba89370a70f0619009",
+    "lf_norm_sha_win": "60e683f5d6c1bc8a1f2d4ae808502c7420e7aa4d7a160eba89370a70f0619009",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 121,
+      "line_count_b": 121
+    }
+  },
+  {
+    "path": "Source/GUI/GUIBanner.cpp",
+    "mac": {
+      "bytes": 16625,
+      "crlf": 417,
+      "lone_cr": 0,
+      "lone_lf": 36,
+      "cr_total": 417,
+      "lf_total": 453,
+      "sha256": "254e0bc3327dd841f30dce292abed82db59f9cf7de5f8d7cce2fef13231c2328"
+    },
+    "win": {
+      "bytes": 16208,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 453,
+      "cr_total": 0,
+      "lf_total": 453,
+      "sha256": "4922e3e82a88730a6cb43329a4c2a7f6a4bfa7c22cfc50352525c400cbd62683"
+    },
+    "byte_delta": 417,
+    "cr_delta": 417,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "4922e3e82a88730a6cb43329a4c2a7f6a4bfa7c22cfc50352525c400cbd62683",
+    "lf_norm_sha_win": "4922e3e82a88730a6cb43329a4c2a7f6a4bfa7c22cfc50352525c400cbd62683",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 454,
+      "line_count_b": 454
+    }
+  },
+  {
+    "path": "Source/GUI/GUIBanner.h",
+    "mac": {
+      "bytes": 8755,
+      "crlf": 228,
+      "lone_cr": 0,
+      "lone_lf": 8,
+      "cr_total": 228,
+      "lf_total": 236,
+      "sha256": "13aec953102e5d4d1d87060fd4fc339ebec039ada215ee17aab537af59aa2e37"
+    },
+    "win": {
+      "bytes": 8527,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 236,
+      "cr_total": 0,
+      "lf_total": 236,
+      "sha256": "2066c0fe58bd1b86a3be84bd011ba2c6a8515e8aee927cdf9ae2d2c86c727389"
+    },
+    "byte_delta": 228,
+    "cr_delta": 228,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "2066c0fe58bd1b86a3be84bd011ba2c6a8515e8aee927cdf9ae2d2c86c727389",
+    "lf_norm_sha_win": "2066c0fe58bd1b86a3be84bd011ba2c6a8515e8aee927cdf9ae2d2c86c727389",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 237,
+      "line_count_b": 237
+    }
+  },
+  {
+    "path": "Source/GUI/GUIFont.h",
+    "mac": {
+      "bytes": 3097,
+      "crlf": 109,
+      "lone_cr": 0,
+      "lone_lf": 3,
+      "cr_total": 109,
+      "lf_total": 112,
+      "sha256": "f64497163a7a9b81d8f046d3de72e8321f305b6b07aa991cdcfa1cdb5c3fb5a5"
+    },
+    "win": {
+      "bytes": 2988,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 112,
+      "cr_total": 0,
+      "lf_total": 112,
+      "sha256": "9006a524fb808ea7e078dd0edda1144d249839717a8cfded47c7da9f11d76fe6"
+    },
+    "byte_delta": 109,
+    "cr_delta": 109,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "9006a524fb808ea7e078dd0edda1144d249839717a8cfded47c7da9f11d76fe6",
+    "lf_norm_sha_win": "9006a524fb808ea7e078dd0edda1144d249839717a8cfded47c7da9f11d76fe6",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 113,
+      "line_count_b": 113
+    }
+  },
+  {
+    "path": "Source/GUI/GUIInput.cpp",
+    "mac": {
+      "bytes": 6557,
+      "crlf": 186,
+      "lone_cr": 0,
+      "lone_lf": 31,
+      "cr_total": 186,
+      "lf_total": 217,
+      "sha256": "be452b616f4a1900a4dcc68b60fcd43281245271e910336d51accf3113a1601a"
+    },
+    "win": {
+      "bytes": 6371,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 217,
+      "cr_total": 0,
+      "lf_total": 217,
+      "sha256": "e75baae32c923efbb1506b41db8b781c359d7813b66ed542f9191ebae0d7335e"
+    },
+    "byte_delta": 186,
+    "cr_delta": 186,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "e75baae32c923efbb1506b41db8b781c359d7813b66ed542f9191ebae0d7335e",
+    "lf_norm_sha_win": "e75baae32c923efbb1506b41db8b781c359d7813b66ed542f9191ebae0d7335e",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 218,
+      "line_count_b": 218
+    }
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.cpp",
+    "mac": {
+      "bytes": 29696,
+      "crlf": 443,
+      "lone_cr": 0,
+      "lone_lf": 181,
+      "cr_total": 443,
+      "lf_total": 624,
+      "sha256": "5abd1b549b00367116e11563373f4cf9b832655ce5dabea78d219f33fe988333"
+    },
+    "win": {
+      "bytes": 29253,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 624,
+      "cr_total": 0,
+      "lf_total": 624,
+      "sha256": "524a726e34666464702075a3eabac7c8d1da27941f5518131ce12916c6ae3e67"
+    },
+    "byte_delta": 443,
+    "cr_delta": 443,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "524a726e34666464702075a3eabac7c8d1da27941f5518131ce12916c6ae3e67",
+    "lf_norm_sha_win": "524a726e34666464702075a3eabac7c8d1da27941f5518131ce12916c6ae3e67",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 625,
+      "line_count_b": 625
+    }
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.h",
+    "mac": {
+      "bytes": 15013,
+      "crlf": 245,
+      "lone_cr": 0,
+      "lone_lf": 8,
+      "cr_total": 245,
+      "lf_total": 253,
+      "sha256": "45196f1897b36fa6206126357376e63091045602f6188f142e54ce2b8901695d"
+    },
+    "win": {
+      "bytes": 14768,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 253,
+      "cr_total": 0,
+      "lf_total": 253,
+      "sha256": "15561b569eaf589d2a1cd997fa096118be49124f707b46c0db0a1438b95089f5"
+    },
+    "byte_delta": 245,
+    "cr_delta": 245,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "15561b569eaf589d2a1cd997fa096118be49124f707b46c0db0a1438b95089f5",
+    "lf_norm_sha_win": "15561b569eaf589d2a1cd997fa096118be49124f707b46c0db0a1438b95089f5",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 254,
+      "line_count_b": 254
+    }
+  },
+  {
+    "path": "Source/Managers/PrimitiveMan.h",
+    "mac": {
+      "bytes": 31628,
+      "crlf": 12,
+      "lone_cr": 0,
+      "lone_lf": 474,
+      "cr_total": 12,
+      "lf_total": 486,
+      "sha256": "676793d17c3d85995c1c4a2f610e578d8dea987fee613f37ca78baf0a056d551"
+    },
+    "win": {
+      "bytes": 31616,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 486,
+      "cr_total": 0,
+      "lf_total": 486,
+      "sha256": "8ce0118ab2c3ebfa10de988cd863a5a45d2710c731ae93071e3d1e3ffd1aa558"
+    },
+    "byte_delta": 12,
+    "cr_delta": 12,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "8ce0118ab2c3ebfa10de988cd863a5a45d2710c731ae93071e3d1e3ffd1aa558",
+    "lf_norm_sha_win": "8ce0118ab2c3ebfa10de988cd863a5a45d2710c731ae93071e3d1e3ffd1aa558",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 487,
+      "line_count_b": 487
+    }
+  },
+  {
+    "path": "Source/Menus/BuyMenuGUI.h",
+    "mac": {
+      "bytes": 24952,
+      "crlf": 551,
+      "lone_cr": 0,
+      "lone_lf": 2,
+      "cr_total": 551,
+      "lf_total": 553,
+      "sha256": "ec82fb644f8ff422e3177558addb1dc7044b9401b05affc758cdd9a00eb9526a"
+    },
+    "win": {
+      "bytes": 24401,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 553,
+      "cr_total": 0,
+      "lf_total": 553,
+      "sha256": "59202d3a42e45c296c6db1119bcd0f3527a61c24a0bec1a46fe0513ce8c8f48c"
+    },
+    "byte_delta": 551,
+    "cr_delta": 551,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "59202d3a42e45c296c6db1119bcd0f3527a61c24a0bec1a46fe0513ce8c8f48c",
+    "lf_norm_sha_win": "59202d3a42e45c296c6db1119bcd0f3527a61c24a0bec1a46fe0513ce8c8f48c",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 554,
+      "line_count_b": 554
+    }
+  },
+  {
+    "path": "Source/Menus/InventoryMenuGUI.h",
+    "mac": {
+      "bytes": 26990,
+      "crlf": 422,
+      "lone_cr": 0,
+      "lone_lf": 2,
+      "cr_total": 422,
+      "lf_total": 424,
+      "sha256": "15c2bdc076d2d47a7e91fe978bc1f1b18965349fa4d7725d863eec8e193a5c93"
+    },
+    "win": {
+      "bytes": 26568,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 424,
+      "cr_total": 0,
+      "lf_total": 424,
+      "sha256": "b543f926d081f01a6afb6abbcfd4ab85cec9ba517688e374feea140cdf7e8ebd"
+    },
+    "byte_delta": 422,
+    "cr_delta": 422,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "b543f926d081f01a6afb6abbcfd4ab85cec9ba517688e374feea140cdf7e8ebd",
+    "lf_norm_sha_win": "b543f926d081f01a6afb6abbcfd4ab85cec9ba517688e374feea140cdf7e8ebd",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 425,
+      "line_count_b": 425
+    }
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.cpp",
+    "mac": {
+      "bytes": 14385,
+      "crlf": 27,
+      "lone_cr": 0,
+      "lone_lf": 271,
+      "cr_total": 27,
+      "lf_total": 298,
+      "sha256": "d5f25ba07e8357afbe71684287c659a3743205a6acd9d15751d5b998180182a9"
+    },
+    "win": {
+      "bytes": 14358,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 298,
+      "cr_total": 0,
+      "lf_total": 298,
+      "sha256": "75be7095a776b606c96f3c7418de9005f1616f4e77306f1d0669fcea918127cc"
+    },
+    "byte_delta": 27,
+    "cr_delta": 27,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "75be7095a776b606c96f3c7418de9005f1616f4e77306f1d0669fcea918127cc",
+    "lf_norm_sha_win": "75be7095a776b606c96f3c7418de9005f1616f4e77306f1d0669fcea918127cc",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 299,
+      "line_count_b": 299
+    }
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.h",
+    "mac": {
+      "bytes": 28495,
+      "crlf": 14,
+      "lone_cr": 0,
+      "lone_lf": 685,
+      "cr_total": 14,
+      "lf_total": 699,
+      "sha256": "5f50a1092e1e21a2c9b0916ca930a470b9b60a502ced1ca04deec5f202e21158"
+    },
+    "win": {
+      "bytes": 28481,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 699,
+      "cr_total": 0,
+      "lf_total": 699,
+      "sha256": "003fcc424bbb979170add37beba73edcdca9f7e6786e85ef1f263011d9294b08"
+    },
+    "byte_delta": 14,
+    "cr_delta": 14,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "003fcc424bbb979170add37beba73edcdca9f7e6786e85ef1f263011d9294b08",
+    "lf_norm_sha_win": "003fcc424bbb979170add37beba73edcdca9f7e6786e85ef1f263011d9294b08",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 700,
+      "line_count_b": 700
+    }
+  },
+  {
+    "path": "Source/System/ContractAudit.h",
+    "mac": {
+      "bytes": 130221,
+      "crlf": 1617,
+      "lone_cr": 0,
+      "lone_lf": 406,
+      "cr_total": 1617,
+      "lf_total": 2023,
+      "sha256": "9e30d6c451c3f836f16cf4780e08429d93e993d94a43bb895d306b14e0c73a40"
+    },
+    "win": {
+      "bytes": 128604,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 2023,
+      "cr_total": 0,
+      "lf_total": 2023,
+      "sha256": "4f3f09842a971026fade7e5ef7c1c5b08ff746cf7eb45f458a857a92695a151b"
+    },
+    "byte_delta": 1617,
+    "cr_delta": 1617,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "4f3f09842a971026fade7e5ef7c1c5b08ff746cf7eb45f458a857a92695a151b",
+    "lf_norm_sha_win": "4f3f09842a971026fade7e5ef7c1c5b08ff746cf7eb45f458a857a92695a151b",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 2024,
+      "line_count_b": 2024
+    }
+  },
+  {
+    "path": "tools/contracts/AUDIT.md",
+    "mac": {
+      "bytes": 24445,
+      "crlf": 2,
+      "lone_cr": 0,
+      "lone_lf": 203,
+      "cr_total": 2,
+      "lf_total": 205,
+      "sha256": "4c112c3278362e765dcd7c7ae85142de719377fdb3ec2d5a85872e852b3db9e3"
+    },
+    "win": {
+      "bytes": 24443,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 205,
+      "cr_total": 0,
+      "lf_total": 205,
+      "sha256": "54039103addcb8377741394e51d02ba466148ad5ed688efc15536ba67c27cc88"
+    },
+    "byte_delta": 2,
+    "cr_delta": 2,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "54039103addcb8377741394e51d02ba466148ad5ed688efc15536ba67c27cc88",
+    "lf_norm_sha_win": "54039103addcb8377741394e51d02ba466148ad5ed688efc15536ba67c27cc88",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 206,
+      "line_count_b": 206
+    }
+  },
+  {
+    "path": "tools/fixtures/mod_checkpoint.lua",
+    "mac": {
+      "bytes": 34814,
+      "crlf": 447,
+      "lone_cr": 0,
+      "lone_lf": 123,
+      "cr_total": 447,
+      "lf_total": 570,
+      "sha256": "93efdfbdad4b4cd81634c1e5a3069b3808c8a1858ea73b558b91a3700d418264"
+    },
+    "win": {
+      "bytes": 34367,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 570,
+      "cr_total": 0,
+      "lf_total": 570,
+      "sha256": "a91a87222ceb796edbdd861e0f93537852fece0c2eb2979c38a795cebdc9cdcb"
+    },
+    "byte_delta": 447,
+    "cr_delta": 447,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "a91a87222ceb796edbdd861e0f93537852fece0c2eb2979c38a795cebdc9cdcb",
+    "lf_norm_sha_win": "a91a87222ceb796edbdd861e0f93537852fece0c2eb2979c38a795cebdc9cdcb",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 571,
+      "line_count_b": 571
+    }
+  },
+  {
+    "path": "tools/run_restoration_tests.py",
+    "mac": {
+      "bytes": 10652,
+      "crlf": 134,
+      "lone_cr": 0,
+      "lone_lf": 29,
+      "cr_total": 134,
+      "lf_total": 163,
+      "sha256": "8352b428aaeedc59f926c58c2ab7c954dabbd638aafd15a0f87f90beba1886cc"
+    },
+    "win": {
+      "bytes": 10518,
+      "crlf": 0,
+      "lone_cr": 0,
+      "lone_lf": 163,
+      "cr_total": 0,
+      "lf_total": 163,
+      "sha256": "093c088683f2a162d7026b17d0dcee203a9560fb8452fa9a98eb43bbc369fa06"
+    },
+    "byte_delta": 134,
+    "cr_delta": 134,
+    "lf_normalized_equal": true,
+    "win_crlf_equals_mac": false,
+    "mac_crlf_equals_win": false,
+    "win_lf_equals_mac": false,
+    "mac_lf_equals_win": true,
+    "lf_norm_sha_mac": "093c088683f2a162d7026b17d0dcee203a9560fb8452fa9a98eb43bbc369fa06",
+    "lf_norm_sha_win": "093c088683f2a162d7026b17d0dcee203a9560fb8452fa9a98eb43bbc369fa06",
+    "lines": {
+      "strip_cr_lines_equal": true,
+      "line_count_a": 164,
+      "line_count_b": 164
+    }
+  }
+]

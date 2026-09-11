@@ -1,0 +1,17 @@
+Commands (Windows, read-only, D:\Projects\cccp object store):
+  git -C D:\Projects\cccp log --oneline -1 316e96375702eff5b0118714dc4762a0ee6eebd7
+  git -C D:\Projects\cccp log --oneline -1 60cb698146
+  git -C D:\Projects\cccp merge-base 316e96375702eff5b0118714dc4762a0ee6eebd7 60cb698146
+  git -C D:\Projects\cccp rev-list --count 316e96375702eff5b0118714dc4762a0ee6eebd7..60cb698146
+  git -C D:\Projects\cccp rev-list --count 60cb698146..316e96375702eff5b0118714dc4762a0ee6eebd7
+
+Results:
+  316e963757 feat(snapshot): encode portable runtime values and full controller state
+  60cb698146 Compose moderation with the current lockstep and reconnect work
+  merge-base = 316e96375702eff5b0118714dc4762a0ee6eebd7
+  316e..60cb count = 274
+  60cb..316e count = 0
+
+Mac repo does not contain object 60cb698146
+  (ssh Erol-Mac: git -C <positive> cat-file -t 60cb698146 -> fatal: Not a valid object name)
+  evidence: mac-git-state/mac_more_stdout.txt

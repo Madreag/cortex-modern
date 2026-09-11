@@ -1,0 +1,3 @@
+Restore complete input, drop-map ownership and exact-target priming
+
+Replay acknowledged commands and delayed inputs after a heal, keep the drop map, and prime the resync at the exact saved target.

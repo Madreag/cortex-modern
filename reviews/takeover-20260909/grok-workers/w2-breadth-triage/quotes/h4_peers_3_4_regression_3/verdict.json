@@ -1,0 +1,1146 @@
+{
+  "gate": "peers_3_4_regression",
+  "passed": true,
+  "executable_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "configuration": null,
+  "finished_utc": "2026-09-10T02:26:49.448927+00:00",
+  "checks": [
+    {
+      "name": "executable_matches_manifest",
+      "status": "pass",
+      "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+      "evidence": []
+    },
+    {
+      "name": "peers3_all_exit_zero",
+      "status": "pass",
+      "detail": "{'peers3_host': 0, 'peers3_client1': 0, 'peers3_client2': 0}",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527"
+      ]
+    },
+    {
+      "name": "peers3_sim_gated_identical",
+      "status": "pass",
+      "detail": "3 traces identical",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host_trace.json",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1_trace.json",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2_trace.json"
+      ]
+    },
+    {
+      "name": "peers4_all_exit_zero",
+      "status": "pass",
+      "detail": "{'peers4_host': 0, 'peers4_client1': 0, 'peers4_client2': 0, 'peers4_client3': 0}",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527"
+      ]
+    },
+    {
+      "name": "peers4_sim_gated_identical",
+      "status": "pass",
+      "detail": "4 traces identical",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host_trace.json",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1_trace.json",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2_trace.json",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3_trace.json"
+      ]
+    },
+    {
+      "name": "drop3_returner_reclaimed",
+      "status": "pass",
+      "detail": "",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json"
+      ]
+    },
+    {
+      "name": "drop3_survivors_identical",
+      "status": "pass",
+      "detail": "2 traces identical",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_trace.json",
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_trace.json"
+      ]
+    },
+    {
+      "name": "drop3_distinct_seats",
+      "status": "pass",
+      "detail": "[]",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527"
+      ]
+    },
+    {
+      "name": "no_census_refusals",
+      "status": "pass",
+      "detail": "census_refusals=0",
+      "evidence": [
+        "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527"
+      ]
+    }
+  ],
+  "records": {
+    "peers3": {
+      "peers3_host": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46460",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host.ticket",
+          "-net-match-peers",
+          "3",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host_report.json",
+          "-net-host"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_484b4aa5980d4f40bd31585cde365a98",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:27.141844+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 19988,
+        "started_utc": "2026-09-10T02:25:27.411290+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 20.158,
+        "ended_utc": "2026-09-10T02:25:47.569201+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 729,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "peers3_client1": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46460",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1.ticket",
+          "-net-match-peers",
+          "3",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1_report.json",
+          "-net-join",
+          "127.0.0.1"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_c3b0244c10274e03b4064a74b7cb52f4",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:27.268319+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 9252,
+        "started_utc": "2026-09-10T02:25:28.927464+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 22.148,
+        "ended_utc": "2026-09-10T02:25:51.075525+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 742,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "peers3_client2": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46460",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2.ticket",
+          "-net-match-peers",
+          "3",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2_report.json",
+          "-net-join",
+          "127.0.0.1"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_8159b449378543b29777108386295300",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:27.395497+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 12732,
+        "started_utc": "2026-09-10T02:25:29.444759+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 21.632,
+        "ended_utc": "2026-09-10T02:25:51.076536+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 742,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      }
+    },
+    "peers4": {
+      "peers4_host": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46462",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host.ticket",
+          "-net-match-peers",
+          "4",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host_report.json",
+          "-net-host"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_ca4da02c8fac45e4a6a455280b1f65a3",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:51.232059+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 10960,
+        "started_utc": "2026-09-10T02:25:51.642998+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 22.78,
+        "ended_utc": "2026-09-10T02:26:14.422678+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 772,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "peers4_client1": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46462",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1.ticket",
+          "-net-match-peers",
+          "4",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1_report.json",
+          "-net-join",
+          "127.0.0.1"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_073f2bfe63b64d6b8f6d3238a9fae344",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:51.358759+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 4348,
+        "started_utc": "2026-09-10T02:25:53.159144+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 21.666,
+        "ended_utc": "2026-09-10T02:26:14.824888+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 786,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "peers4_client2": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46462",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2.ticket",
+          "-net-match-peers",
+          "4",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2_report.json",
+          "-net-join",
+          "127.0.0.1"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_689caa962a8449bbb912d7fa18004b4f",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:51.497076+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 12384,
+        "started_utc": "2026-09-10T02:25:53.675384+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 21.251,
+        "ended_utc": "2026-09-10T02:26:14.925893+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 786,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "peers4_client3": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46462",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3.ticket",
+          "-net-match-peers",
+          "4",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3_report.json",
+          "-net-join",
+          "127.0.0.1"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_4a1ef76ae81141aca86c62c097c24de8",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:25:51.627267+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 28440,
+        "started_utc": "2026-09-10T02:25:54.192570+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 20.734,
+        "ended_utc": "2026-09-10T02:26:14.926784+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 786,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      }
+    },
+    "drop3": {
+      "drop3_client1": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46464",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1.ticket",
+          "-net-match-peers",
+          "3",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1_report.json",
+          "-net-join",
+          "127.0.0.1",
+          "-net-match-e2e-resync"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_d71836de60ec4ce29c8bb78a00de6a3f",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:26:15.236462+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 13408,
+        "started_utc": "2026-09-10T02:26:17.051089+00:00",
+        "injected_termination": "injected mid-match client drop",
+        "exit_code": 137,
+        "elapsed_seconds": 10.132,
+        "ended_utc": "2026-09-10T02:26:27.182645+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 460,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "drop3_returner": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46464",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1.ticket",
+          "-net-match-peers",
+          "3",
+          "-net-join",
+          "127.0.0.1",
+          "-net-match-e2e-resync",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_cce67c25eae14201beee02e3d39c242e",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:26:15.519525+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 17092,
+        "started_utc": "2026-09-10T02:26:28.202954+00:00",
+        "exit_code": 1,
+        "elapsed_seconds": 7.809,
+        "ended_utc": "2026-09-10T02:26:36.011922+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 1316,
+        "verdict_lines": [
+          "[net-match] state transfer complete: 5409186 bytes",
+          "[music-checkpoint] music audio restoration failed",
+          "[gui-sound-checkpoint] GUI audio restoration failed",
+          "[runtime-globals] apply failed: could not restore GUI/music/audio checkpoint",
+          "[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+          "[scriptgraph] reinstate refused before the world moved",
+          "[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067"
+        ],
+        "verdict_count": 7,
+        "last_verdict": "[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067",
+        "verdict_present": true,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "drop3_host": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46464",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host.ticket",
+          "-net-match-peers",
+          "3",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_report.json",
+          "-net-host",
+          "-net-match-e2e-resync"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_b3736677041247fa82332a2cc2b3741f",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:26:15.101349+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 5680,
+        "started_utc": "2026-09-10T02:26:15.535037+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 31.892,
+        "ended_utc": "2026-09-10T02:26:47.427429+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 1430,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      },
+      "drop3_client2": {
+        "runner": "win32_test_runner.py",
+        "runner_pid": 24636,
+        "argv": [
+          "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+          "-headless",
+          "-net-match-service-e2e",
+          "-net-port",
+          "46464",
+          "-net-match-ticks",
+          "600",
+          "-net-reconnect-ticket",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2.ticket",
+          "-net-match-peers",
+          "3",
+          "-tick-hashes",
+          "-max-ticks",
+          "600",
+          "-out",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_trace.json",
+          "-net-match-report",
+          "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_report.json",
+          "-net-join",
+          "127.0.0.1",
+          "-net-match-e2e-resync"
+        ],
+        "cwd": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime",
+        "timeout_seconds": 480.0,
+        "private_desktop": "CortexTest_bff314fa7a844e84ba381b8479e89853",
+        "input_desktop_before": "Default",
+        "created_utc": "2026-09-10T02:26:15.373336+00:00",
+        "headless_env": "1",
+        "env_set": {
+          "TEMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Temp",
+          "TMP": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Temp",
+          "CCCP_HEADLESS": "1"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Data -> D:\\Projects\\p4b-interp-validation\\Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2"
+          }
+        ],
+        "evidence_expected": [],
+        "exe_path": "D:\\Projects\\p4b-interp-validation\\Cortex Command.exe",
+        "exe_bytes": 18177536,
+        "exe_mtime_utc": "2026-09-09T21:33:47.578402+00:00",
+        "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+        "game_runtime_checks": true,
+        "job_memory_limit_bytes": 8589934592,
+        "pid": 21308,
+        "started_utc": "2026-09-10T02:26:17.567889+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 31.865,
+        "ended_utc": "2026-09-10T02:26:49.432803+00:00",
+        "input_desktop_after": "Default",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 1331,
+        "verdict_lines": [
+          "[net-match] state transfer complete: 5409186 bytes"
+        ],
+        "verdict_count": 1,
+        "last_verdict": "[net-match] state transfer complete: 5409186 bytes",
+        "verdict_present": true,
+        "evidence_present": [],
+        "evidence_missing": [],
+        "evidence_complete": true
+      }
+    }
+  }
+}

@@ -1,0 +1,110 @@
+[
+  {
+    "path": "D:\\mx\\s41b3\\breadth.json",
+    "line": 3203,
+    "text": "        \"D:\\\\mx\\\\s41b3\\\\j33\\\\clean_leave_20260910_021812\\\\ambiguous_host\\\\runtime\\\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1\"",
+    "context": [
+      "3198|      \"failures\": [",
+      "3199|        \"driver exit 1\",",
+      "3200|        \"passed is missing or false\",",
+      "3201|        \"check clean_old_ticket_refused: fail used_stored_ticket=True commits=1\",",
+      "3202|        \"check hosts_survived: fail exits=[0, 0, 1] fatal=False\",",
+      "3203|        \"D:\\\\mx\\\\s41b3\\\\j33\\\\clean_leave_20260910_021812\\\\ambiguous_host\\\\runtime\\\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1\"",
+      "3204|      ],",
+      "3205|      \"evidence\": [",
+      "3206|        \"D:\\\\mx\\\\s41b3\\\\j33\\\\clean_leave_20260910_021812\\\\ambiguous_client1\\\\launch.json\",",
+      "3207|        \"D:\\\\mx\\\\s41b3\\\\j33\\\\clean_leave_20260910_021812\\\\ambiguous_client2\\\\launch.json\",",
+      "3208|        \"D:\\\\mx\\\\s41b3\\\\j33\\\\clean_leave_20260910_021812\\\\ambiguous_client2_report.json\","
+    ]
+  },
+  {
+    "path": "D:\\mx\\s41b3\\breadth.json",
+    "line": 3985,
+    "text": "        \"D:\\\\mx\\\\s41b3\\\\j34\\\\reclaim_socket_20260910_021916\\\\host\\\\runtime\\\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1\"",
+    "context": [
+      "3980|      \"failures\": [",
+      "3981|        \"driver exit 1\",",
+      "3982|        \"passed is missing or false\",",
+      "3983|        \"check host_exit_zero: fail 1\",",
+      "3984|        \"check host_saw_seat_drop_and_return: fail 0 committed seats\",",
+      "3985|        \"D:\\\\mx\\\\s41b3\\\\j34\\\\reclaim_socket_20260910_021916\\\\host\\\\runtime\\\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1\"",
+      "3986|      ],",
+      "3987|      \"evidence\": [",
+      "3988|        \"D:\\\\mx\\\\s41b3\\\\j34\\\\reclaim_socket_20260910_021916\\\\client1\\\\launch.json\",",
+      "3989|        \"D:\\\\mx\\\\s41b3\\\\j34\\\\reclaim_socket_20260910_021916\\\\client2_report.json\",",
+      "3990|        \"D:\\\\mx\\\\s41b3\\\\j34\\\\reclaim_socket_20260910_021916\\\\host\\\\launch.json\","
+    ]
+  },
+  {
+    "path": "D:\\mx\\s41b3\\breadth.json",
+    "line": 5118,
+    "text": "        \"D:\\\\mx\\\\s41b3\\\\j37\\\\rejoin_after_resync_20260910_022132\\\\resync_host\\\\runtime\\\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1\"",
+    "context": [
+      "5113|        \"driver exit 1\",",
+      "5114|        \"passed is missing or false\",",
+      "5115|        \"check resync_match_continued: fail 1\",",
+      "5116|        \"passed is missing or false\",",
+      "5117|        \"check resync_match_continued: fail 1\",",
+      "5118|        \"D:\\\\mx\\\\s41b3\\\\j37\\\\rejoin_after_resync_20260910_022132\\\\resync_host\\\\runtime\\\\LogConsole.txt:9: ERROR: Rejected a AIOrder command from a peer that does not control team 1\"",
+      "5119|      ],",
+      "5120|      \"evidence\": [",
+      "5121|        \"D:\\\\mx\\\\s41b3\\\\j37\\\\rejoin_after_resync_20260910_022132\\\\rematch_client\\\\launch.json\",",
+      "5122|        \"D:\\\\mx\\\\s41b3\\\\j37\\\\rejoin_after_resync_20260910_022132\\\\rematch_client_report.json\",",
+      "5123|        \"D:\\\\mx\\\\s41b3\\\\j37\\\\rejoin_after_resync_20260910_022132\\\\rematch_host\\\\launch.json\","
+    ]
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j33\\clean_leave_20260910_021812\\ambiguous_host\\runtime\\LogConsole.txt",
+    "line": 9,
+    "text": "ERROR: Rejected a AIOrder command from a peer that does not control team 1",
+    "context": [
+      "4|-------------------------------------",
+      "5|Sound loading completed: 984 pending samples, 1232ms",
+      "6|SYSTEM: Activity was reset!",
+      "7|SYSTEM: Scene \"Grasslands\" was loaded",
+      "8|SYSTEM: Activity \"P4 Alpha Duel\" was successfully started",
+      "9|ERROR: Rejected a AIOrder command from a peer that does not control team 1",
+      "10|NETWORK: Holding the match open for a player who can still return",
+      "11|NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined",
+      "12|SYSTEM: Game saved to \"p5resync_12284\"!",
+      "13|SYSTEM: Game \"p5resync_12284\" staged for restart!",
+      "14|SYSTEM: Activity was reset!"
+    ]
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j34\\reclaim_socket_20260910_021916\\host\\runtime\\LogConsole.txt",
+    "line": 9,
+    "text": "ERROR: Rejected a AIOrder command from a peer that does not control team 1",
+    "context": [
+      "4|-------------------------------------",
+      "5|Sound loading completed: 984 pending samples, 1231ms",
+      "6|SYSTEM: Activity was reset!",
+      "7|SYSTEM: Scene \"Grasslands\" was loaded",
+      "8|SYSTEM: Activity \"P4 Alpha Duel\" was successfully started",
+      "9|ERROR: Rejected a AIOrder command from a peer that does not control team 1",
+      "10|NETWORK: Holding the match open for a player who can still return",
+      "11|NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined",
+      "12|SYSTEM: Game saved to \"p5resync_5140\"!",
+      "13|SYSTEM: Game \"p5resync_5140\" staged for restart!",
+      "14|SYSTEM: Activity was reset!"
+    ]
+  },
+  {
+    "path": "D:\\mx\\s41b3\\j37\\rejoin_after_resync_20260910_022132\\resync_host\\runtime\\LogConsole.txt",
+    "line": 9,
+    "text": "ERROR: Rejected a AIOrder command from a peer that does not control team 1",
+    "context": [
+      "4|-------------------------------------",
+      "5|Sound loading completed: 984 pending samples, 1215ms",
+      "6|SYSTEM: Activity was reset!",
+      "7|SYSTEM: Scene \"Grasslands\" was loaded",
+      "8|SYSTEM: Activity \"P4 Alpha Duel\" was successfully started",
+      "9|ERROR: Rejected a AIOrder command from a peer that does not control team 1",
+      "10|NETWORK: Holding the match open for a player who can still return",
+      "11|NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined",
+      "12|SYSTEM: Game saved to \"p5resync_27136\"!",
+      "13|SYSTEM: Game \"p5resync_27136\" staged for restart!",
+      "14|SYSTEM: Activity was reset!"
+    ]
+  }
+]

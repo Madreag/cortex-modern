@@ -1,0 +1,70 @@
+diff --git a/Source/Renderer/GraphicalPrimitive.cpp b/Source/Renderer/GraphicalPrimitive.cpp
+index 9b9797c78..a5fda6d5c 100644
+--- a/Source/Renderer/GraphicalPrimitive.cpp
++++ b/Source/Renderer/GraphicalPrimitive.cpp
+@@ -12,6 +12,8 @@
+ 
+ #include <array>
+ #include <cmath>
++#include <mutex>
++#include <unordered_map>
+ 
+ using namespace RTE;
+ 
+@@ -34,6 +36,28 @@ const GraphicalPrimitive::PrimitiveType PolygonFillPrimitive::c_PrimitiveType =
+ const GraphicalPrimitive::PrimitiveType TextPrimitive::c_PrimitiveType = PrimitiveType::Text;
+ const GraphicalPrimitive::PrimitiveType BitmapPrimitive::c_PrimitiveType = PrimitiveType::Bitmap;
+ 
++std::shared_ptr<BITMAP> GraphicalPrimitive::OwnBitmap(BITMAP* bitmap) {
++	return std::shared_ptr<BITMAP>(bitmap, [](BITMAP* image) {
++		if (image) { g_GLResourceMan.DestroyBitmapInfo(image); destroy_bitmap(image); }
++	});
++}
++
++std::vector<std::shared_ptr<Vector>> GraphicalPrimitive::OwnVertices(const std::vector<Vector*>& vertices) {
++	static std::mutex mutex;
++	static std::unordered_map<Vector*, std::weak_ptr<Vector>> owners;
++	std::lock_guard<std::mutex> lock(mutex);
++	std::vector<std::shared_ptr<Vector>> result;
++	for (auto* vertex: vertices) {
++		if (!vertex) { result.emplace_back(); continue; }
++		auto& reference = owners[vertex];
++		auto owner = reference.lock();
++		if (!owner) { owner.reset(vertex); reference = owner; }
++		result.push_back(std::move(owner));
++	}
++	std::erase_if(owners, [](const auto& entry) { return entry.second.expired(); });
++	return result;
++}
++
+ Vector GraphicalPrimitive::WrapCoordinates(Vector targetPos, const Vector& scenePos) const {
+ 	return targetPos + scenePos;
+ }
+@@ -215,6 +239,8 @@ void PolygonFillPrimitive::Draw(BITMAP* drawScreen, const Vector& targetPos) {
+ 
+ 
+ void TextPrimitive::CreateTextBitmap() {
++	m_TextBitmap = nullptr;
++	m_ImageOwners.clear();
+ 	if(m_Text.empty()) {
+ 		return;
+ 	}
+@@ -228,6 +254,7 @@ void TextPrimitive::CreateTextBitmap() {
+ 	drawing_mode(DRAW_MODE_SOLID, nullptr, 0, 0);
+ 	
+ 	m_TextBitmap = create_bitmap_ex(8, textWidth * 2, textHeight);
++	m_ImageOwners.push_back(OwnBitmap(m_TextBitmap));
+ 	clear_to_color(m_TextBitmap, ColorKeys::g_MaskColor);
+ 	AllegroBitmap tempDrawAllegroBitmap(m_TextBitmap);
+ 	font->DrawAligned(&tempDrawAllegroBitmap, textWidth, 0, m_Text, m_Alignment);
+@@ -251,10 +278,6 @@ void TextPrimitive::Draw(BITMAP* drawScreen, const Vector& targetPos) {
+ }
+ 
+ TextPrimitive::~TextPrimitive() {
+-	if (m_TextBitmap) {
+-		g_GLResourceMan.DestroyBitmapInfo(m_TextBitmap);
+-		destroy_bitmap(m_TextBitmap);
+-	}
+ }
+ 
+ void BitmapPrimitive::Draw(BITMAP* drawScreen, const Vector& targetPos) {

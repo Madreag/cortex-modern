@@ -1,0 +1,441 @@
+test_game_activity_wrappers_keep_versioned_bindings (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_game_activity_wrappers_keep_versioned_bindings) ... ok
+test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) ... 
+  test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) (version='Activity1', case='correct_pair') ... FAIL
+  test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) (version='Activity2', case='correct_pair') ... FAIL
+  test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) (version='Activity3', case='correct_pair') ... FAIL
+test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) ... 
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=None) ... ERROR
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10, 900, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, -1, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, '10', 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10.0, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, True, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=None) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10, 900, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, -1, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, '10', 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10.0, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, True, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=None) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10, 900, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, -1, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, '10', 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10.0, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+  test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, True, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]]) ... FAIL
+test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) ... 
+  test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) (version='Activity1') ... FAIL
+  test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) (version='Activity2') ... FAIL
+  test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) (version='Activity3') ... FAIL
+test_projection_stays_local_and_preserves_other_fields (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_projection_stays_local_and_preserves_other_fields) ... ok
+test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) ... 
+  test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) (version='Activity1') ... ERROR
+  test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) (version='Activity2') ... ERROR
+  test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) (version='Activity3') ... ERROR
+test_truncated_or_mislabeled_native_records_are_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_truncated_or_mislabeled_native_records_are_rejected) ... ok
+test_unsupported_versions_are_not_projected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_unsupported_versions_are_not_projected) ... ok
+test_cycle_renumbering_preserves_identity (test_compare_snapshots.GraphIdentityTests.test_cycle_renumbering_preserves_identity) ... ok
+test_distinct_equal_values_cannot_merge_or_split (test_compare_snapshots.GraphIdentityTests.test_distinct_equal_values_cannot_merge_or_split) ... ok
+test_native_runtime_inside_lua_userdata_is_validated (test_compare_snapshots.GraphIdentityTests.test_native_runtime_inside_lua_userdata_is_validated) ... ok
+test_native_userdata_identity_cannot_be_duplicated (test_compare_snapshots.GraphIdentityTests.test_native_userdata_identity_cannot_be_duplicated) ... ok
+test_owned_primitive_binary_payload_is_validated_and_byte_exact (test_compare_snapshots.GraphIdentityTests.test_owned_primitive_binary_payload_is_validated_and_byte_exact) ... ok
+test_owner_reference_checkpoint_token_keeps_owner_and_payload (test_compare_snapshots.GraphIdentityTests.test_owner_reference_checkpoint_token_keeps_owner_and_payload) ... ok
+test_reference_table_keys_are_bijective_and_order_independent (test_compare_snapshots.GraphIdentityTests.test_reference_table_keys_are_bijective_and_order_independent) ... ok
+test_shared_upvalue_cells_cannot_be_duplicated (test_compare_snapshots.GraphIdentityTests.test_shared_upvalue_cells_cannot_be_duplicated) ... ok
+test_all_graphical_primitive_types_parse_and_keep_their_fields (test_compare_snapshots.RuntimeProjectionTests.test_all_graphical_primitive_types_parse_and_keep_their_fields) ... ok
+test_background_scratch_projection_preserves_source_pixels_and_configuration (test_compare_snapshots.RuntimeProjectionTests.test_background_scratch_projection_preserves_source_pixels_and_configuration) ... ok
+test_bitmap_clipping_is_strict_and_malformed_images_are_rejected (test_compare_snapshots.RuntimeProjectionTests.test_bitmap_clipping_is_strict_and_malformed_images_are_rejected) ... ok
+test_bitmap_parser_rejects_malformed_data_before_scratch_projection (test_compare_snapshots.RuntimeProjectionTests.test_bitmap_parser_rejects_malformed_data_before_scratch_projection) ... ok
+test_buy_menu_runtime3_masks_only_its_timer_anchors (test_compare_snapshots.RuntimeProjectionTests.test_buy_menu_runtime3_masks_only_its_timer_anchors)
+BuyMenuGUI3 decodes like version 2, so its timers' real anchors stay masked and everything else strict. ... ok
+test_clock_projection_preserves_simulation_and_limits (test_compare_snapshots.RuntimeProjectionTests.test_clock_projection_preserves_simulation_and_limits) ... ok
+test_deferred_sound_op_counters_are_shared_in_audio_runtime3 (test_compare_snapshots.RuntimeProjectionTests.test_deferred_sound_op_counters_are_shared_in_audio_runtime3)
+AudioRuntime3 adds the deferred sound-op counters; only the listener-derived fields stay local. ... ok
+test_gui_reference_kinds_preserve_scene_slot_identity (test_compare_snapshots.RuntimeProjectionTests.test_gui_reference_kinds_preserve_scene_slot_identity) ... ok
+test_listener_derived_audio_and_palette_scratch_are_local (test_compare_snapshots.RuntimeProjectionTests.test_listener_derived_audio_and_palette_scratch_are_local)
+Only what FMOD derives from this peer's listener, and the live blend state, may differ. ... ok
+test_local_inventory_references_follow_world_ownership_and_preserve_aliases (test_compare_snapshots.RuntimeProjectionTests.test_local_inventory_references_follow_world_ownership_and_preserve_aliases) ... ok
+test_mouse_keeps_the_unused_zero_index_before_three_buttons (test_compare_snapshots.RuntimeProjectionTests.test_mouse_keeps_the_unused_zero_index_before_three_buttons) ... ok
+test_music_runtime_preserves_all_owners_and_rejects_missing_targets (test_compare_snapshots.RuntimeProjectionTests.test_music_runtime_preserves_all_owners_and_rejects_missing_targets) ... ok
+test_native_hud_and_ai_caches_do_not_mask_physical_fields (test_compare_snapshots.RuntimeProjectionTests.test_native_hud_and_ai_caches_do_not_mask_physical_fields) ... ok
+test_new_frame_fonts_and_text_input_remain_strict (test_compare_snapshots.RuntimeProjectionTests.test_new_frame_fonts_and_text_input_remain_strict) ... ok
+test_new_input_palette_material_and_postprocess_fields_remain_strict (test_compare_snapshots.RuntimeProjectionTests.test_new_input_palette_material_and_postprocess_fields_remain_strict) ... ok
+test_new_movable_and_audio_payload_fields_remain_strict (test_compare_snapshots.RuntimeProjectionTests.test_new_movable_and_audio_payload_fields_remain_strict) ... ok
+test_only_local_activity_slot_is_projected (test_compare_snapshots.RuntimeProjectionTests.test_only_local_activity_slot_is_projected) ... ok
+test_primitive_pool_aliases_and_invalid_references (test_compare_snapshots.RuntimeProjectionTests.test_primitive_pool_aliases_and_invalid_references) ... ok
+test_shared_bitmap_owner_and_pixels_remain_strict (test_compare_snapshots.RuntimeProjectionTests.test_shared_bitmap_owner_and_pixels_remain_strict) ... ok
+test_sim_rng_and_new_fields_are_always_shared (test_compare_snapshots.RuntimeProjectionTests.test_sim_rng_and_new_fields_are_always_shared) ... ok
+test_sprite_pool_frames_and_pie_bitmaps_remain_strict (test_compare_snapshots.RuntimeProjectionTests.test_sprite_pool_frames_and_pie_bitmaps_remain_strict) ... ok
+test_terrain_view_offsets_have_exact_layer_scope (test_compare_snapshots.RuntimeProjectionTests.test_terrain_view_offsets_have_exact_layer_scope) ... ok
+test_text_input_parser_validates_new_fields (test_compare_snapshots.RuntimeProjectionTests.test_text_input_parser_validates_new_fields) ... ok
+test_unknown_checkpoint_versions_stay_byte_exact (test_compare_snapshots.RuntimeProjectionTests.test_unknown_checkpoint_versions_stay_byte_exact) ... ok
+test_voice_control_and_lowpass_are_local_but_group_buses_are_not (test_compare_snapshots.RuntimeProjectionTests.test_voice_control_and_lowpass_are_local_but_group_buses_are_not)
+The same AudioControl1 payload is local under audio.voices and strict under audio.groups. ... ok
+test_alias_to_ai_descendant_cannot_be_split (test_compare_snapshots.SnapshotComparisonTests.test_alias_to_ai_descendant_cannot_be_split) ... ok
+test_configured_start_activity_is_compared_with_local_slot_scope (test_compare_snapshots.SnapshotComparisonTests.test_configured_start_activity_is_compared_with_local_slot_scope) ... ok
+test_configured_start_activity_presence_is_validated (test_compare_snapshots.SnapshotComparisonTests.test_configured_start_activity_presence_is_validated) ... ok
+test_every_graph_is_compared (test_compare_snapshots.SnapshotComparisonTests.test_every_graph_is_compared) ... ok
+test_global_alias_into_ai_promotes_it_to_shared (test_compare_snapshots.SnapshotComparisonTests.test_global_alias_into_ai_promotes_it_to_shared) ... ok
+test_limb_projection_preserves_sim_time_and_timer_limits (test_compare_snapshots.SnapshotComparisonTests.test_limb_projection_preserves_sim_time_and_timer_limits) ... ok
+test_local_activity_binding_is_full_state (test_compare_snapshots.SnapshotComparisonTests.test_local_activity_binding_is_full_state) ... ok
+test_local_activity_binding_must_be_present_on_both_peers (test_compare_snapshots.SnapshotComparisonTests.test_local_activity_binding_must_be_present_on_both_peers) ... ok
+test_local_ai_is_only_projected_at_an_actor_root (test_compare_snapshots.SnapshotComparisonTests.test_local_ai_is_only_projected_at_an_actor_root) ... ok
+test_malformed_graph_never_matches_itself (test_compare_snapshots.SnapshotComparisonTests.test_malformed_graph_never_matches_itself) ... ok
+test_matching (test_compare_snapshots.SnapshotComparisonTests.test_matching) ... ok
+test_muzzle_frame_does_not_hide_other_sprite_or_physics_fields (test_compare_snapshots.SnapshotComparisonTests.test_muzzle_frame_does_not_hide_other_sprite_or_physics_fields) ... ok
+test_native_custom_maps_are_order_independent_and_value_complete (test_compare_snapshots.SnapshotComparisonTests.test_native_custom_maps_are_order_independent_and_value_complete) ... ok
+test_native_custom_maps_reject_duplicate_and_malformed_entries (test_compare_snapshots.SnapshotComparisonTests.test_native_custom_maps_reject_duplicate_and_malformed_entries) ... ok
+test_native_custom_maps_stay_with_their_owners (test_compare_snapshots.SnapshotComparisonTests.test_native_custom_maps_stay_with_their_owners) ... ok
+test_native_projection_has_exact_owners (test_compare_snapshots.SnapshotComparisonTests.test_native_projection_has_exact_owners) ... ok
+test_only_filename_metadata_is_normalized (test_compare_snapshots.SnapshotComparisonTests.test_only_filename_metadata_is_normalized) ... ok
+test_required_blocks (test_compare_snapshots.SnapshotComparisonTests.test_required_blocks) ... ok
+test_shared_root_field_and_extra_global_are_not_ai (test_compare_snapshots.SnapshotComparisonTests.test_shared_root_field_and_extra_global_are_not_ai) ... ok
+test_vm_indexes_must_be_unique_and_complete (test_compare_snapshots.SnapshotComparisonTests.test_vm_indexes_must_be_unique_and_complete) ... ok
+
+======================================================================
+ERROR: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 133, in test_malformed_actor_link_layout_is_rejected
+    checker.inventory_reference_roles(world(), dict(version=version, actor_links=links))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\compare_snapshots.py", line 555, in inventory_reference_roles
+    local_actor = state["actor_links"][0][0]
+                  ~~~~~~~~~~~~~~~~~~~~^^^
+TypeError: 'NoneType' object is not subscriptable
+
+======================================================================
+ERROR: test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) (version='Activity1')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 66, in test_supported_versions_map_controlled_actor_and_exact_owned_path
+    self.assertEqual(roles[10], ("LOCAL_ACTOR",))
+                     ~~~~~^^^^
+KeyError: 10
+
+======================================================================
+ERROR: test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) (version='Activity2')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 66, in test_supported_versions_map_controlled_actor_and_exact_owned_path
+    self.assertEqual(roles[10], ("LOCAL_ACTOR",))
+                     ~~~~~^^^^
+KeyError: 10
+
+======================================================================
+ERROR: test_supported_versions_map_controlled_actor_and_exact_owned_path (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_supported_versions_map_controlled_actor_and_exact_owned_path) (version='Activity3')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 66, in test_supported_versions_map_controlled_actor_and_exact_owned_path
+    self.assertEqual(roles[10], ("LOCAL_ACTOR",))
+                     ~~~~~^^^^
+KeyError: 10
+
+======================================================================
+FAIL: test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) (version='Activity1', case='correct_pair')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 88, in test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not
+    self.assertEqual(projected, runtime.project(right, True, path=LOCAL_INVENTORY, local_roles=roles_b))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'ver[105 chars]id': 10, 'placed_set': -1, 'placed_index': 0, [466 chars]els'} != {'ver[105 chars]id': 20, 'placed_set': -1, 'placed_index': 0, [466 chars]els'}
+Diff is 1539 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) (version='Activity2', case='correct_pair')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 88, in test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not
+    self.assertEqual(projected, runtime.project(right, True, path=LOCAL_INVENTORY, local_roles=roles_b))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'ver[105 chars]id': 10, 'placed_set': -1, 'placed_index': 0, [466 chars]els'} != {'ver[105 chars]id': 20, 'placed_set': -1, 'placed_index': 0, [466 chars]els'}
+Diff is 1539 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not) (version='Activity3', case='correct_pair')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 88, in test_local_pairs_match_but_wrong_owner_item_and_aliases_do_not
+    self.assertEqual(projected, runtime.project(right, True, path=LOCAL_INVENTORY, local_roles=roles_b))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'ver[105 chars]id': 10, 'placed_set': -1, 'placed_index': 0, [466 chars]els'} != {'ver[105 chars]id': 20, 'placed_set': -1, 'placed_index': 0, [466 chars]els'}
+Diff is 1539 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10, 900, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, -1, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, '10', 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, 10.0, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity1', links=[[100, True, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10, 900, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, -1, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, '10', 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, 10.0, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity2', links=[[100, True, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10, 900, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, -1, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, '10', 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, 10.0, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_malformed_actor_link_layout_is_rejected (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_malformed_actor_link_layout_is_rejected) (version='Activity3', links=[[100, True, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 132, in test_malformed_actor_link_layout_is_rejected
+    with self.subTest(version=version, links=links), self.assertRaisesRegex(ValueError, "actor-link layout"):
+                                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) (version='Activity1')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 116, in test_no_controlled_actor_does_not_fall_back_to_brain
+    self.assertEqual(checker.inventory_reference_roles(world(), runtime.decode(activity_record(version, controlled=0))), {})
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {100: ('LOCAL_ACTOR',), 1100: ('LOCAL_ACTO[151 chars] 0))} != {}
++ {}
+- {100: ('LOCAL_ACTOR',),
+-  101: ('LOCAL_ACTOR', ('FGArm', 'Arm', 0), ('HeldDevice', 'HDFirearm', 0)),
+-  102: ('LOCAL_ACTOR', ('AddInventory', 'HDFirearm', 0)),
+-  1100: ('LOCAL_ACTOR', ('FGArm', 'Arm', 0))}
+
+======================================================================
+FAIL: test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) (version='Activity2')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 117, in test_no_controlled_actor_does_not_fall_back_to_brain
+    with self.assertRaisesRegex(ValueError, "controlled actor is missing"):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_no_controlled_actor_does_not_fall_back_to_brain (test_snapshot_inventory_roles.SnapshotInventoryRoleTests.test_no_controlled_actor_does_not_fall_back_to_brain) (version='Activity3')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\source41-matrix-review\snapshot-inventory-roles-20260910\control\test_snapshot_inventory_roles.py", line 117, in test_no_controlled_actor_does_not_fall_back_to_brain
+    with self.assertRaisesRegex(ValueError, "controlled actor is missing"):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 61 tests in 0.616s
+
+FAILED (failures=32, errors=4)

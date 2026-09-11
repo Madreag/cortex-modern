@@ -1,0 +1,3 @@
+D:\mx\s40lanes\h4\clean_leave_20260909_104531\ambiguous_host\runtime\LogConsole.txt:9:ERROR: Rejected a AIOrder command from a peer that does not control team 1
+D:\mx\s40lanes\h4\reclaim_socket_20260909_104643\host\runtime\LogConsole.txt:9:ERROR: Rejected a AIOrder command from a peer that does not control team 1
+D:\mx\s40lanes\h4\rejoin_after_resync_20260909_104844\resync_host\runtime\LogConsole.txt:9:ERROR: Rejected a AIOrder command from a peer that does not control team 1

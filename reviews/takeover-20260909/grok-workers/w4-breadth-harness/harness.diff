@@ -1,0 +1,181 @@
+--- pre/run_breadth.py
++++ run_breadth.py
+@@ -15,6 +15,7 @@
+ import hashlib
+ import importlib.util
+ import json
++import math
+ import ntpath
+ import os
+ from pathlib import Path
+@@ -953,11 +954,12 @@
+       "ticks": 260
+     },
+     "extra": {
+-      "fixture_sha256": "a3ba433eea9dcb5cbd67088f525e42458777b1d3dabd865e434d0793e9122fd4",
++      "fixture_sha256": "e92fa5fb5095b4cec374a6f7ef69c3559edb7028e6ed2fbc00a2fe214eccfaaf",
+       "cases": {
+         "shared_pos_setxy": "call_ok=0 x=1 y=2",
+         "shared_pos_methods": "setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5",
+         "shared_pos_absradangle": "call_ok=1 x=10 y=0",
++        "shared_soundset_structural": "before=1 removed=0 any=1",
+         "shared_soundset_cyclemode": "mode=2",
+         "shared_stopall_setup": "played=1 playing=1",
+         "ai_pos_setxy": "ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6",
+@@ -975,6 +977,7 @@
+         "PRINT: [extra] case=shared_pos_setxy call_ok=0 x=1 y=2",
+         "PRINT: [extra] case=shared_pos_methods setxy=0 flipx=0 setmag=0 x=3 y=4 mag=5",
+         "PRINT: [extra] case=shared_pos_absradangle call_ok=1 x=10 y=0",
++        "PRINT: [extra] case=shared_soundset_structural before=1 removed=0 any=1",
+         "PRINT: [extra] case=shared_soundset_cyclemode mode=2",
+         "PRINT: [extra] case=shared_stopall_setup played=1 playing=1",
+         "PRINT: [extra] case=ai_pos_setxy ai_ok=0 ai_x=5 ai_y=6 upd_x=5 upd_y=6",
+@@ -1173,6 +1176,11 @@
+     r"|EXCEPTION_|ERROR:|stack traceback|Runtime Error|scriptgraph[^\r\n]*failed",
+     re.IGNORECASE,
+ )
++SPAWN_CHILD_LINE = re.compile(r"^PRINT: \[deferral\] case=spawn_child ok=1 uid=\d+$")
++AUTO_DELAY_LINE = re.compile(r"\[net-match\] auto input delay: peer 2 rtt (\d+)ms -> (\d+) frames")
++COMPAT_LINES_ORACLE = (
++    "compat output differs from Source22 (spawn_child uid value excluded, run-to-run counter)"
++)
+ COUNTERS = ("clock_divergence_max_ms", "timeout_resumptions", "census_refusals",
+             "host_reseats_issued", "host_reseats_without_a_ledger", "host_reseats_without_survivors",
+             "host_reseat_live_on_team_not_named", "host_ledger_drops_recorded", "host_seats_dropped",
+@@ -1180,6 +1188,68 @@
+             "peer_leave_frames", "stops_from_left_peers", "unresolved_observation_packets",
+             "relay_send_failures", "relay_resends", "relay_congestion_holds",
+             "relay_longest_congestion_hold_ms", "relay_backlog_overflows", "timeout_reason")
++
++
++def select_jobs(jobs: list[Job], cases: list[str] | None) -> list[Job]:
++    if not cases:
++        return list(jobs)
++    wanted = set(cases)
++    unknown = sorted(wanted - set(REQUIRED_CASES))
++    if unknown:
++        raise ValueError("unknown --cases id(s): " + ", ".join(unknown))
++    selected = [job for job in jobs if job.id in wanted]
++    if {job.id for job in selected} != wanted:
++        raise ValueError("planned inventory is missing a requested case")
++    return selected
++
++
++def compat_lines_match(actual, expected) -> bool:
++    if not isinstance(actual, list) or not isinstance(expected, list) or len(actual) != len(expected):
++        return False
++    for got, want in zip(actual, expected):
++        if SPAWN_CHILD_LINE.match(want):
++            if not SPAWN_CHILD_LINE.match(got):
++                return False
++        elif got != want:
++            return False
++    return True
++
++
++def expected_auto_delay_frames(rtt_ms: int) -> int:
++    # NetMatchRunner.cpp:80-86 neededDelay = ceil(rttMs / (1000/30)) + 1
++    return int(math.ceil(rtt_ms / (1000.0 / 30.0))) + 1
++
++
++def fake_lag_auto_delay_failures(case: str, host_log: str, client_log: str,
++                                 host_delays, client_delays) -> list[str]:
++    lag = 100 if case == "fl100" else 200
++    lo, hi = 2 * lag, 2 * lag + 15
++    host_m = AUTO_DELAY_LINE.search(host_log or "")
++    client_m = AUTO_DELAY_LINE.search(client_log or "")
++    if host_m is None:
++        return ["host: auto input delay line missing"]
++    rtt, frames = int(host_m.group(1)), int(host_m.group(2))
++    failures = []
++    if client_m is not None:
++        client_rtt, client_frames = int(client_m.group(1)), int(client_m.group(2))
++        if (client_rtt, client_frames) != (rtt, frames):
++            failures.append(
++                f"auto delay peer disagreement: host rtt {rtt}ms -> {frames} "
++                f"client rtt {client_rtt}ms -> {client_frames}"
++            )
++    wanted = expected_auto_delay_frames(rtt)
++    if frames != wanted:
++        failures.append(
++            f"auto delay formula violated: rtt {rtt}ms -> {frames} frames, expected {wanted}"
++        )
++    if not (lo <= rtt <= hi):
++        failures.append(f"auto delay rtt band violated: rtt {rtt}ms not in [{lo}, {hi}]")
++    expected_map = {"1": 1, "2": frames}
++    if host_delays != expected_map:
++        failures.append(f"host: auto delay peer disagreement: {host_delays} != {expected_map}")
++    if client_delays != expected_map:
++        failures.append(f"client: auto delay peer disagreement: {client_delays} != {expected_map}")
++    return failures
+ 
+ 
+ def digest(path: Path) -> str:
+@@ -1662,8 +1732,17 @@
+                 for counter in ("start_packets_sent", "start_retransmits"):
+                     value = ls.get(counter)
+                     v.require(numeric(value) and 0 <= value <= 9, f"{peer}: {counter} not single digits")
+-                delay = 8 if job.meta["case"] == "fl100" else 14
+-                v.require(ls.get("peer_input_delays") == {"1": 1, "2": delay}, f"{peer}: auto delay differs from {delay}")
++            host_log = (folder / "host" / "stdout.log").read_text(encoding="utf-8-sig", errors="replace")
++            client_log = ""
++            client_stdout = folder / "client" / "stdout.log"
++            if client_stdout.is_file():
++                client_log = client_stdout.read_text(encoding="utf-8-sig", errors="replace")
++            host_ls = lockstep(v.json(folder / "host_report.json"))
++            client_ls = lockstep(v.json(folder / "client_report.json"))
++            for message in fake_lag_auto_delay_failures(
++                    job.meta["case"], host_log, client_log,
++                    host_ls.get("peer_input_delays"), client_ls.get("peer_input_delays")):
++                v.failures.append(message)
+         elif family == "invariance":
+             data = v.json(root / "result.json")
+             v.require(data.get("complete") is True and data.get("source_unchanged") is True and data.get("pass") is True, "invariance incomplete or failed")
+@@ -1705,7 +1784,8 @@
+                 v.require(row.get("exe_sha256") == (REFERENCE_SHA if job.meta["rung"] == "source22" else sha), "compat binary differs")
+                 v.require(row.get("exit_code") == reference["exit_code"] and row.get("timed_out") is False, "compat process termination differs from the retained reference")
+                 v.require(row.get("cases") == reference["cases"], "compat named case results differ from Source22")
+-                v.require(row.get("lines") == reference["lines"], "compat output differs from Source22; no UID exclusions")
++                # report.md:1531-1534 and :1574: same exe printed uid 1049494 then 1049517
++                v.require(compat_lines_match(row.get("lines"), reference["lines"]), COMPAT_LINES_ORACLE)
+                 scenario = v.json(root / job.meta["rung"] / "trace.json")
+                 runs = scenario.get("runs", [])
+                 v.require(len(runs) == 1 and runs[0].get("scenario") == "ActorStress" and runs[0].get("ticks") == reference["ticks"] + 1 and runs[0].get("numeric", {}).get("ended_externally") == 1,
+@@ -1882,6 +1962,7 @@
+         raise PinError("existing driver is not approved-tree configured")
+     module.INPUT_DELAY = 0
+     module.GLOBAL_SCRIPT = None
++    sys.path.insert(0, str(STAGE))
+     result = module.invariance(out) if options.child == "invariance" else module.heal(out)
+     try:
+         pin.verify()
+@@ -1900,6 +1981,7 @@
+     parser.add_argument("--source", type=int, required=True)
+     parser.add_argument("--build-manifest", type=Path, required=True)
+     parser.add_argument("--out", type=Path, required=True)
++    parser.add_argument("--cases", nargs="+", metavar="ID")
+     parser.add_argument("--child", choices=("invariance", "heal"), help=argparse.SUPPRESS)
+     options = parser.parse_args()
+     options.out = options.out.resolve()
+@@ -1922,6 +2004,10 @@
+     jobs = plan(options.source, pin.path, options.out, pin.sha)
+     if tuple(job.id for job in jobs) != REQUIRED_CASES or len(REQUIRED_CASES) != 81:
+         raise RuntimeError("breadth coverage inventory is incomplete")
++    try:
++        jobs = select_jobs(jobs, options.cases)
++    except ValueError as error:
++        parser.error(str(error))
+     options.out.mkdir(parents=True, exist_ok=False)
+     pin.driver_inputs = driver_inputs(jobs)
+     write_json(options.out / "drivers.json", {str(path): sha for path, sha in pin.driver_inputs.items()})
+--- pre/compat_review_extra.lua
++++ compat_review_extra.lua
+@@ -94,7 +94,7 @@
+ 		-- Structural SoundSet mutation from the shared hook: the control arm for the same calls
+ 		-- made from the AI hook later.
+ 		local s = self.xSet
+-		local before = s:GetTopLevelSoundSet():HasAnySounds()
++		local before = s:GetTopLevelSoundSet():HasAnySounds(true)
+ 		s:GetTopLevelSoundSet():AddSound(LONG)
+ 		local removed = s:GetTopLevelSoundSet():RemoveSound(LONG)
+ 		say("shared_soundset_structural", "before=" .. flag(before) ..

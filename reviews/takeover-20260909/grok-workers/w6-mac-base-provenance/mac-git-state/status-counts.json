@@ -1,0 +1,94 @@
+{
+  "porcelain_lines": 339,
+  "by_code": {
+    " M": 268,
+    "??": 71
+  },
+  "twenty_one_in_status": [
+    {
+      "status": " M",
+      "path": "Source/Activities/GAScripted.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/Entities/Actor.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/Entities/Actor.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/Entities/Gib.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/Entities/GlobalScript.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/Entities/GlobalScript.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/GUI/GUIBanner.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/GUI/GUIBanner.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/GUI/GUIFont.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/GUI/GUIInput.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/Managers/PostProcessMan.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/Managers/PostProcessMan.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/Managers/PrimitiveMan.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/Menus/BuyMenuGUI.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/Menus/InventoryMenuGUI.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/Renderer/GraphicalPrimitive.cpp"
+    },
+    {
+      "status": " M",
+      "path": "Source/Renderer/GraphicalPrimitive.h"
+    },
+    {
+      "status": " M",
+      "path": "Source/System/ContractAudit.h"
+    },
+    {
+      "status": " M",
+      "path": "tools/contracts/AUDIT.md"
+    },
+    {
+      "status": " M",
+      "path": "tools/fixtures/mod_checkpoint.lua"
+    },
+    {
+      "status": " M",
+      "path": "tools/run_restoration_tests.py"
+    }
+  ],
+  "twenty_one_count": 21
+}

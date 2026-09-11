@@ -1,0 +1,98 @@
+commit 9029cb3d6495541281e573803a687d86e1c63cb5
+Author:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+AuthorDate: Wed Sep 9 04:30:20 2026 -0700
+Commit:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+CommitDate: Wed Sep 9 04:30:20 2026 -0700
+
+    Pin the archive text an unset setting produces
+    
+    The refusal-and-name check only proved the reader's half: what the writer put in
+    the archive still varied by compiler. Two more checks in the audio checkpoint
+    selftest close that. assigned_bools_round_trip writes ordinary bools and a
+    vector<bool> through the archive and requires the exact text 0 and 1 back.
+    unset_setting_byte_reaches_the_archive poisons a runtime record's
+    muteOnFocusLoss byte with 100 and requires the archive itself to read
+    "13 AudioRuntime3 0 0 0 0 0 0 100 " - the token, in that field, whatever the
+    compiler thinks the bool is - before the existing check requires the reader to
+    refuse it and name '100'.
+
+ Source/Managers/AudioMan.cpp | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+commit d1c29203f0c7bf29682a59f11162eaa75dc658da
+Author:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+AuthorDate: Wed Sep 9 04:30:13 2026 -0700
+Commit:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+CommitDate: Wed Sep 9 04:30:13 2026 -0700
+
+    Write a bool's storage byte, not the compiler's opinion of it
+    
+    A bool whose owner never assigned it holds whatever byte the allocator had, and
+    reading that as a bool is undefined. Apple clang 17 exploits it three ways on the
+    same source: at -O0 the bool-typed copy masks to the low bit and the writer emits
+    0, so an unset setting would be archived as a valid false; at -O2 it emits 100;
+    and in the engine's inlined build to_chars takes the single-digit fast path on a
+    value it knows is 0 or 1 and emits the byte '0' + 100 = 0x94. MSVC emits 100. So
+    both the archive and the refusal that names it depended on the compiler.
+    
+    A non-template overload taking the reference copies the storage byte with memcpy
+    and writes the number it is: no bool-typed load anywhere on the path, which is the
+    only portable read of a byte that is not a valid bool. An assigned bool still
+    writes 0 or 1, so no archive changes. vector<bool> keeps its own overload because
+    it packs bits and its elements have no storage byte of their own.
+
+ Source/System/CheckpointArchive.h | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+commit 96ccf1ef0e089508ece8b3415398eb92657337a1
+Author:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+AuthorDate: Tue Sep 8 23:11:49 2026 -0700
+Commit:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+CommitDate: Tue Sep 8 23:11:49 2026 -0700
+
+    Initialise the audio manager's unset members
+    
+    MuteAudioOnFocusLoss was added next to the three mute flags but never added to
+    AudioMan::Clear(), so a boot whose Settings.ini omits the property left it at
+    whatever byte the heap handed the singleton. Update() read it every frame and the
+    checkpoint writer serialised it, which is how a raw byte reached the reader and
+    made a valid save unreadable. The five FMOD handles had the same hole: Clear()
+    never set them, so InitializeAudioSystem tested an uninitialised pointer.
+
+ Source/Managers/AudioMan.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+commit 55c5f9d908d0af5c64098ccd4b0d2d89f40ebb43
+Author:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+AuthorDate: Tue Sep 8 23:10:46 2026 -0700
+Commit:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+CommitDate: Tue Sep 8 23:10:46 2026 -0700
+
+    Cover the audio setting a boot never assigns
+    
+    Two checks in the audio checkpoint selftest: a MuteAudioOnFocusLoss byte that is
+    neither 0 nor 1 must be refused by the reader and named in the refusal, and the
+    manager's own value must be a bool the writer can serialise. The second is red on
+    a boot whose Settings.ini omits the setting.
+
+ Source/Managers/AudioMan.cpp | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+commit 7a9e735e76b0c045025a6e7d5692115fe4c8498b
+Author:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+AuthorDate: Tue Sep 8 23:10:36 2026 -0700
+Commit:     Erol Germain-Gomuc <egermain.ua@gmail.com>
+CommitDate: Tue Sep 8 23:10:36 2026 -0700
+
+    Name the value a runtime checkpoint refusal came from
+    
+    An AudioMan checkpoint that fails validation now says which check refused and on
+    what: the offending voice and path, the field that is not finite, the nested
+    payload's own type tag, and the text of an integer that does not fit its field.
+    Threaded out of AudioRuntime::Load through AudioMan::LoadCheckpoint so the
+    runtime-globals restore reports it instead of a bare "invalid AudioMan checkpoint".
+
+ Source/Managers/AudioMan.cpp      | 40 +++++++++++++++++++++++++++------------
+ Source/Managers/AudioMan.h        |  2 +-
+ Source/System/CheckpointArchive.h | 17 +++++++++++++----
+ 3 files changed, 42 insertions(+), 17 deletions(-)

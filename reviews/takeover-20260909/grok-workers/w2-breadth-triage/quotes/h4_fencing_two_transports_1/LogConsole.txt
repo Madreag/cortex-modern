@@ -1,0 +1,14 @@
+- RTE Lua Console -
+See the Data Realms Wiki for commands: http://www.datarealms.com/wiki/
+Press F1 for a list of helpful shortcuts
+-------------------------------------
+Sound loading completed: 984 pending samples, 1241ms
+SYSTEM: Activity was reset!
+SYSTEM: Scene "Grasslands" was loaded
+SYSTEM: Activity "P4 Alpha Duel" was successfully started
+SYSTEM: Activity "P4 Alpha Duel" was ended
+NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined
+ERROR: Cannot save when there's no game running, or the game is finished!
+NETWORK: Resync failed: resync snapshot save failed
+SYSTEM: Activity "P4 Alpha Duel" was ended
+SYSTEM: Entire console contents saved to LogConsole.txt

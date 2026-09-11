@@ -1,0 +1,7 @@
+Compare controlled actors across every activity in snapshot diffs
+
+The snapshot comparator only accepted Activity1 player bindings and then
+selected the brain UID instead of the controlled actor. Shared inventory
+comparison therefore skipped Activity2 and Activity3 and could treat the
+wrong actor as local. The detecting tests fail on the previous file and
+pass on this one.

@@ -1,0 +1,105 @@
+{
+  "gate": "substitute_returner_wins",
+  "passed": false,
+  "executable_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+  "finished_utc": "2026-09-10T02:31:18.771526+00:00",
+  "checks": [
+    {
+      "name": "executable_recorded",
+      "status": "pass",
+      "detail": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb"
+    },
+    {
+      "name": "host_adjudicated_the_drop",
+      "status": "pass",
+      "detail": "left the match at frame"
+    },
+    {
+      "name": "host_exit_zero",
+      "status": "fail",
+      "detail": "1"
+    },
+    {
+      "name": "stayer_exit_zero",
+      "status": "fail",
+      "detail": "1"
+    },
+    {
+      "name": "leaver_dropped_midmatch",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "name": "host_census_clean",
+      "status": "pass",
+      "detail": "0"
+    },
+    {
+      "name": "no_authority_error",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "name": "seat_dropped",
+      "status": "fail",
+      "detail": "None"
+    },
+    {
+      "name": "returner_reseat_decided",
+      "status": "pass",
+      "detail": "no ledgered survivors; printed=False; host_seats_dropped=1, host_ledger_drops_recorded=1, host_reseats_issued=0, host_reseats_without_a_ledger=0, host_reseats_without_survivors=1, host_reseat_live_on_team_not_named=0"
+    },
+    {
+      "name": "returner_reclaimed",
+      "status": "fail",
+      "detail": "None"
+    },
+    {
+      "name": "returner_joined",
+      "status": "pass",
+      "detail": "Joined"
+    },
+    {
+      "name": "substitution_did_not_commit",
+      "status": "pass",
+      "detail": "None"
+    },
+    {
+      "name": "substitute_not_joined",
+      "status": "pass",
+      "detail": "Idle"
+    },
+    {
+      "name": "seat_has_one_holder",
+      "status": "fail",
+      "detail": "None"
+    }
+  ],
+  "records": {
+    "leaver": {
+      "pid": 27416,
+      "exit_code": 137,
+      "timed_out": false
+    },
+    "host": {
+      "pid": 10056,
+      "exit_code": 1,
+      "timed_out": false
+    },
+    "stayer": {
+      "pid": 19608,
+      "exit_code": 1,
+      "timed_out": false
+    },
+    "substitute": {
+      "pid": 12188,
+      "exit_code": 1,
+      "timed_out": false
+    },
+    "returner": {
+      "pid": 4012,
+      "exit_code": 1,
+      "timed_out": false
+    }
+  }
+}

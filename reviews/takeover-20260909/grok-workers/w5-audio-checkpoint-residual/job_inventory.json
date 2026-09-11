@@ -1,0 +1,395 @@
+{
+  "job": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527",
+  "file_count_no_reparse": 145,
+  "interesting": [
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "drop3_client1\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "drop3_client2\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_report.json",
+      "rel": "drop3_client2_report.json",
+      "name": "drop3_client2_report.json",
+      "size": 7971,
+      "suffix": ".json"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "drop3_host\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_report.json",
+      "rel": "drop3_host_report.json",
+      "name": "drop3_host_report.json",
+      "size": 13863,
+      "suffix": ".json"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "drop3_returner\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json",
+      "rel": "drop3_returner_report.json",
+      "name": "drop3_returner_report.json",
+      "size": 2103,
+      "suffix": ".json"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers3_client1\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers3_client2\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers3_host\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers4_client1\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers4_client2\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers4_client3\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "rel": "peers4_host\\runtime\\Userdata\\UserSavedGames.rte\\Index.ini",
+      "name": "Index.ini",
+      "size": 99,
+      "suffix": ".ini"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\verdict.json",
+      "rel": "verdict.json",
+      "name": "verdict.json",
+      "size": 46100,
+      "suffix": ".json"
+    }
+  ],
+  "skipped": [
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_host\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client3\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client2\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers4_client1\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_host\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client2\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\peers3_client1\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\runtime\\Data",
+      "reason": "reparse"
+    },
+    {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\runtime\\Data",
+      "reason": "reparse"
+    }
+  ],
+  "errors": [],
+  "top_level": [
+    {
+      "name": "drop3_client1",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "drop3_client1.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "drop3_client2",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "drop3_client2.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "drop3_client2_report.json",
+      "is_dir": false,
+      "size": 7971
+    },
+    {
+      "name": "drop3_client2_trace.json",
+      "is_dir": false,
+      "size": 813580
+    },
+    {
+      "name": "drop3_client2_trace.json.console.txt",
+      "is_dir": false,
+      "size": 732
+    },
+    {
+      "name": "drop3_host",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "drop3_host_report.json",
+      "is_dir": false,
+      "size": 13863
+    },
+    {
+      "name": "drop3_host_trace.json",
+      "is_dir": false,
+      "size": 813556
+    },
+    {
+      "name": "drop3_host_trace.json.console.txt",
+      "is_dir": false,
+      "size": 742
+    },
+    {
+      "name": "drop3_returner",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "drop3_returner_report.json",
+      "is_dir": false,
+      "size": 2103
+    },
+    {
+      "name": "peers3_client1",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers3_client1.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "peers3_client1_report.json",
+      "is_dir": false,
+      "size": 7956
+    },
+    {
+      "name": "peers3_client1_trace.json",
+      "is_dir": false,
+      "size": 813478
+    },
+    {
+      "name": "peers3_client1_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "peers3_client2",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers3_client2.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "peers3_client2_report.json",
+      "is_dir": false,
+      "size": 7952
+    },
+    {
+      "name": "peers3_client2_trace.json",
+      "is_dir": false,
+      "size": 813478
+    },
+    {
+      "name": "peers3_client2_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "peers3_host",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers3_host_report.json",
+      "is_dir": false,
+      "size": 10504
+    },
+    {
+      "name": "peers3_host_trace.json",
+      "is_dir": false,
+      "size": 813546
+    },
+    {
+      "name": "peers3_host_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "peers4_client1",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers4_client1.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "peers4_client1_report.json",
+      "is_dir": false,
+      "size": 8565
+    },
+    {
+      "name": "peers4_client1_trace.json",
+      "is_dir": false,
+      "size": 829911
+    },
+    {
+      "name": "peers4_client1_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "peers4_client2",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers4_client2.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "peers4_client2_report.json",
+      "is_dir": false,
+      "size": 8564
+    },
+    {
+      "name": "peers4_client2_trace.json",
+      "is_dir": false,
+      "size": 829911
+    },
+    {
+      "name": "peers4_client2_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "peers4_client3",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers4_client3.ticket",
+      "is_dir": false,
+      "size": 155
+    },
+    {
+      "name": "peers4_client3_report.json",
+      "is_dir": false,
+      "size": 8562
+    },
+    {
+      "name": "peers4_client3_trace.json",
+      "is_dir": false,
+      "size": 829912
+    },
+    {
+      "name": "peers4_client3_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "peers4_host",
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "peers4_host_report.json",
+      "is_dir": false,
+      "size": 11732
+    },
+    {
+      "name": "peers4_host_trace.json",
+      "is_dir": false,
+      "size": 829844
+    },
+    {
+      "name": "peers4_host_trace.json.console.txt",
+      "is_dir": false,
+      "size": 454
+    },
+    {
+      "name": "verdict.json",
+      "is_dir": false,
+      "size": 46100
+    }
+  ]
+}

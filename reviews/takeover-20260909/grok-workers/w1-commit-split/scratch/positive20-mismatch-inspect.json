@@ -1,0 +1,966 @@
+{
+  "mismatch_total": 91,
+  "missing": [
+    "AbortCode.txt"
+  ],
+  "dirty_mismatches": [],
+  "crlf_only_count": 70,
+  "content_mismatch_count": 21,
+  "content_mismatches": [
+    "Source/Activities/GAScripted.h",
+    "Source/Entities/Actor.cpp",
+    "Source/Entities/Actor.h",
+    "Source/Entities/Gib.cpp",
+    "Source/Entities/GlobalScript.cpp",
+    "Source/Entities/GlobalScript.h",
+    "Source/GUI/GUIBanner.cpp",
+    "Source/GUI/GUIBanner.h",
+    "Source/GUI/GUIFont.h",
+    "Source/GUI/GUIInput.cpp",
+    "Source/Managers/PostProcessMan.cpp",
+    "Source/Managers/PostProcessMan.h",
+    "Source/Managers/PrimitiveMan.h",
+    "Source/Menus/BuyMenuGUI.h",
+    "Source/Menus/InventoryMenuGUI.h",
+    "Source/Renderer/GraphicalPrimitive.cpp",
+    "Source/Renderer/GraphicalPrimitive.h",
+    "Source/System/ContractAudit.h",
+    "tools/contracts/AUDIT.md",
+    "tools/fixtures/mod_checkpoint.lua",
+    "tools/run_restoration_tests.py"
+  ],
+  "dirty_file_verify_status": {
+    "Data/Tests.rte/Activities.ini": "match",
+    "Data/Tests.rte/Activities/NetLifecycleTest.lua": "match",
+    "RTEA.vcxproj": "match",
+    "RTEA.vcxproj.filters": "match",
+    "Source/Activities/GameActivity.cpp": "match",
+    "Source/Activities/GameActivity.h": "match",
+    "Source/CI/NetModerationGUIProbe.cpp": "match",
+    "Source/CI/NetModerationGUIProbe.h": "match",
+    "Source/CI/meson.build": "match",
+    "Source/Entities/ACraft.cpp": "match",
+    "Source/Entities/ACraft.h": "match",
+    "Source/Entities/AHuman.cpp": "match",
+    "Source/Entities/Activity.cpp": "match",
+    "Source/Entities/Activity.h": "match",
+    "Source/Entities/MovableObject.cpp": "match",
+    "Source/Entities/MovableObject.h": "match",
+    "Source/GUI/GUICheckpoint.h": "match",
+    "Source/GUI/GUIControlManager.cpp": "match",
+    "Source/Main.cpp": "match",
+    "Source/Managers/ActivityMan.cpp": "match",
+    "Source/Managers/ActivityMan.h": "match",
+    "Source/Managers/FrameMan.cpp": "match",
+    "Source/Managers/FrameMan.h": "match",
+    "Source/Managers/LuaMan.cpp": "match",
+    "Source/Managers/LuaMan.h": "match",
+    "Source/Managers/MenuMan.cpp": "match",
+    "Source/Managers/MenuMan.h": "match",
+    "Source/Managers/MovableMan.cpp": "match",
+    "Source/Managers/MovableMan.h": "match",
+    "Source/Managers/PresetMan.cpp": "match",
+    "Source/Managers/UInputMan.cpp": "match",
+    "Source/Managers/UInputMan.h": "match",
+    "Source/Menus/InventoryMenuGUI.cpp": "match",
+    "Source/Menus/MainMenuGUI.cpp": "match",
+    "Source/Menus/MainMenuGUI.h": "match",
+    "Source/Menus/NetModerationGUI.cpp": "match",
+    "Source/Menus/NetModerationGUI.h": "match",
+    "Source/Menus/SceneEditorGUI.cpp": "match",
+    "Source/Menus/SceneEditorGUI.h": "match",
+    "Source/Menus/meson.build": "match",
+    "Source/Network/NetA7Journal.cpp": "match",
+    "Source/Network/NetA7Journal.h": "match",
+    "Source/Network/NetGameCommand.cpp": "match",
+    "Source/Network/NetGameCommand.h": "match",
+    "Source/Network/NetLobbyProtocol.cpp": "match",
+    "Source/Network/NetLobbyProtocol.h": "match",
+    "Source/Network/NetLobbySession.cpp": "match",
+    "Source/Network/NetLobbySession.h": "match",
+    "Source/Network/NetLockstep.cpp": "match",
+    "Source/Network/NetLockstep.h": "match",
+    "Source/Network/NetLockstepSelfTest.cpp": "match",
+    "Source/Network/NetMatchRunner.cpp": "match",
+    "Source/Network/NetMatchRunner.h": "match",
+    "Source/Network/NetMatchSelfTest.cpp": "match",
+    "Source/Network/NetMatchService.cpp": "match",
+    "Source/Network/NetMatchService.h": "match",
+    "Source/Network/NetReconnectSession.cpp": "match",
+    "Source/Network/NetReconnectSession.h": "match",
+    "Source/Network/NetReconnectSessionSelfTest.cpp": "match",
+    "Source/Network/NetReconnectTicketStore.cpp": "match",
+    "Source/Network/NetReconnectTicketStore.h": "match",
+    "Source/Network/NetReconnectUx.cpp": "match",
+    "Source/Network/NetReconnectUx.h": "match",
+    "Source/Network/NetResyncRuntimeSelfTest.cpp": "match",
+    "Source/Network/NetResyncRuntimeSelfTest.h": "match",
+    "Source/Network/NetResyncSelfTest.cpp": "match",
+    "Source/Network/NetResyncSelfTest.h": "match",
+    "Source/Network/NetResyncState.cpp": "match",
+    "Source/Network/NetResyncState.h": "match",
+    "Source/Network/NetSession.cpp": "match",
+    "Source/Network/NetSession.h": "match",
+    "Source/Network/meson.build": "match",
+    "Source/System/Controller.cpp": "match",
+    "Source/System/Controller.h": "match",
+    "Source/System/ScenarioRunner.cpp": "match",
+    "Source/System/ScenarioRunner.h": "match",
+    "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib": "lib_excluded_from_pass_requirement_but_listed_if_in_manifest",
+    "external/sources/luabind-0.7.1/_Bin/luabind-release.lib": "lib_excluded_from_pass_requirement_but_listed_if_in_manifest",
+    "tools/compare_snapshots.py": "match",
+    "tools/test_snapshot_inventory_roles.py": "match"
+  },
+  "manifest_excluded_extensions": [
+    ".7z",
+    ".a",
+    ".bmp",
+    ".ccsave",
+    ".dll",
+    ".dylib",
+    ".exe",
+    ".flac",
+    ".gif",
+    ".icns",
+    ".ico",
+    ".ilk",
+    ".jpeg",
+    ".jpg",
+    ".lib",
+    ".mp3",
+    ".o",
+    ".obj",
+    ".ogg",
+    ".pdb",
+    ".pdf",
+    ".png",
+    ".so",
+    ".ttf",
+    ".wav",
+    ".zip"
+  ],
+  "manifest_head": "60cb6981462d30400d372ca778d440c82a5bcbe3",
+  "manifest_base_head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+  "manifest_status": " M \"external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib\"\n M external/sources/luabind-0.7.1/_Bin/luabind-release.lib\n?? AbortCode.txt\n",
+  "rows": [
+    {
+      "path": "Source/Activities/GAScripted.h",
+      "kind": "content",
+      "tree_size": 8482,
+      "manifest_size": 8658,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 178
+    },
+    {
+      "path": "Source/Entities/Actor.cpp",
+      "kind": "content",
+      "tree_size": 94175,
+      "manifest_size": 96437,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 2290
+    },
+    {
+      "path": "Source/Entities/Actor.h",
+      "kind": "content",
+      "tree_size": 55881,
+      "manifest_size": 57077,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 1199
+    },
+    {
+      "path": "Source/Entities/DynamicSong.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 9831,
+      "manifest_size": 10112,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 281
+    },
+    {
+      "path": "Source/Entities/DynamicSong.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 10470,
+      "manifest_size": 10686,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 216
+    },
+    {
+      "path": "Source/Entities/Gib.cpp",
+      "kind": "content",
+      "tree_size": 4214,
+      "manifest_size": 4296,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 113
+    },
+    {
+      "path": "Source/Entities/GlobalScript.cpp",
+      "kind": "content",
+      "tree_size": 5400,
+      "manifest_size": 5580,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 181
+    },
+    {
+      "path": "Source/Entities/GlobalScript.h",
+      "kind": "content",
+      "tree_size": 5562,
+      "manifest_size": 5680,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 120
+    },
+    {
+      "path": "Source/Entities/Loadout.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 4955,
+      "manifest_size": 5086,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 131
+    },
+    {
+      "path": "Source/Entities/MOPixel.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 10675,
+      "manifest_size": 10884,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 209
+    },
+    {
+      "path": "Source/Entities/SLBackground.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 14030,
+      "manifest_size": 14355,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 325
+    },
+    {
+      "path": "Source/Entities/SLBackground.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 11278,
+      "manifest_size": 11471,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 193
+    },
+    {
+      "path": "Source/Entities/TDExplosive.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 2076,
+      "manifest_size": 2164,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 88
+    },
+    {
+      "path": "Source/Entities/TDExplosive.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3601,
+      "manifest_size": 3688,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 87
+    },
+    {
+      "path": "Source/Entities/ThrownDevice.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 4577,
+      "manifest_size": 4719,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 142
+    },
+    {
+      "path": "Source/Entities/ThrownDevice.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 5934,
+      "manifest_size": 6066,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 132
+    },
+    {
+      "path": "Source/Entities/Turret.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6038,
+      "manifest_size": 6191,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 153
+    },
+    {
+      "path": "Source/Entities/Turret.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 5765,
+      "manifest_size": 5878,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 113
+    },
+    {
+      "path": "Source/GUI/GUIBanner.cpp",
+      "kind": "content",
+      "tree_size": 16208,
+      "manifest_size": 16625,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 453
+    },
+    {
+      "path": "Source/GUI/GUIBanner.h",
+      "kind": "content",
+      "tree_size": 8527,
+      "manifest_size": 8755,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 236
+    },
+    {
+      "path": "Source/GUI/GUIButton.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 5814,
+      "manifest_size": 5968,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 154
+    },
+    {
+      "path": "Source/GUI/GUICheckbox.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6817,
+      "manifest_size": 7087,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 270
+    },
+    {
+      "path": "Source/GUI/GUICheckbox.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3234,
+      "manifest_size": 3349,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 115
+    },
+    {
+      "path": "Source/GUI/GUICollectionBox.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3700,
+      "manifest_size": 3824,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 124
+    },
+    {
+      "path": "Source/GUI/GUIComboBox.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6963,
+      "manifest_size": 7197,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 234
+    },
+    {
+      "path": "Source/GUI/GUIControl.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6468,
+      "manifest_size": 6759,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 291
+    },
+    {
+      "path": "Source/GUI/GUIControl.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3834,
+      "manifest_size": 3984,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 150
+    },
+    {
+      "path": "Source/GUI/GUIControlManager.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 5875,
+      "manifest_size": 6038,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 163
+    },
+    {
+      "path": "Source/GUI/GUIEvent.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 804,
+      "manifest_size": 847,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 43
+    },
+    {
+      "path": "Source/GUI/GUIFont.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 10043,
+      "manifest_size": 10466,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 423
+    },
+    {
+      "path": "Source/GUI/GUIFont.h",
+      "kind": "content",
+      "tree_size": 2988,
+      "manifest_size": 3097,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 112
+    },
+    {
+      "path": "Source/GUI/GUIInput.cpp",
+      "kind": "content",
+      "tree_size": 6371,
+      "manifest_size": 6557,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 217
+    },
+    {
+      "path": "Source/GUI/GUIInput.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 5707,
+      "manifest_size": 5900,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 193
+    },
+    {
+      "path": "Source/GUI/GUILabel.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6245,
+      "manifest_size": 6399,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 154
+    },
+    {
+      "path": "Source/GUI/GUIListPanel.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 33750,
+      "manifest_size": 34939,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 1189
+    },
+    {
+      "path": "Source/GUI/GUIListPanel.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 12646,
+      "manifest_size": 12987,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 341
+    },
+    {
+      "path": "Source/GUI/GUIManager.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 8832,
+      "manifest_size": 9201,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 369
+    },
+    {
+      "path": "Source/GUI/GUIManager.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 2716,
+      "manifest_size": 2816,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 100
+    },
+    {
+      "path": "Source/GUI/GUIPanel.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 11829,
+      "manifest_size": 12382,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 553
+    },
+    {
+      "path": "Source/GUI/GUIPanel.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 9337,
+      "manifest_size": 9655,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 318
+    },
+    {
+      "path": "Source/GUI/GUIProgressBar.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3146,
+      "manifest_size": 3257,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 111
+    },
+    {
+      "path": "Source/GUI/GUIProperties.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3579,
+      "manifest_size": 3691,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 112
+    },
+    {
+      "path": "Source/GUI/GUIPropertyPage.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 8877,
+      "manifest_size": 9242,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 365
+    },
+    {
+      "path": "Source/GUI/GUIPropertyPage.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3861,
+      "manifest_size": 3978,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 117
+    },
+    {
+      "path": "Source/GUI/GUIRadioButton.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 7339,
+      "manifest_size": 7625,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 286
+    },
+    {
+      "path": "Source/GUI/GUIRadioButton.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3098,
+      "manifest_size": 3203,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 105
+    },
+    {
+      "path": "Source/GUI/GUIScrollPanel.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 18324,
+      "manifest_size": 19024,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 700
+    },
+    {
+      "path": "Source/GUI/GUIScrollPanel.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 4583,
+      "manifest_size": 4758,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 175
+    },
+    {
+      "path": "Source/GUI/GUISkin.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3446,
+      "manifest_size": 3532,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 86
+    },
+    {
+      "path": "Source/GUI/GUISlider.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 4600,
+      "manifest_size": 4766,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 166
+    },
+    {
+      "path": "Source/GUI/GUITab.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 7139,
+      "manifest_size": 7427,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 288
+    },
+    {
+      "path": "Source/GUI/GUITab.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 3063,
+      "manifest_size": 3169,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 106
+    },
+    {
+      "path": "Source/GUI/GUITextBox.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 2153,
+      "manifest_size": 2228,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 75
+    },
+    {
+      "path": "Source/GUI/GUITextPanel.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 16331,
+      "manifest_size": 16958,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 627
+    },
+    {
+      "path": "Source/GUI/GUITextPanel.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6518,
+      "manifest_size": 6697,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 179
+    },
+    {
+      "path": "Source/GUI/Wrappers/AllegroBitmap.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6241,
+      "manifest_size": 6393,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 152
+    },
+    {
+      "path": "Source/Lua/LuaBindingsActivities.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 11910,
+      "manifest_size": 12088,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 178
+    },
+    {
+      "path": "Source/Lua/LuaBindingsGUI.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6117,
+      "manifest_size": 6211,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 94
+    },
+    {
+      "path": "Source/Lua/LuaBindingsManagers.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 39700,
+      "manifest_size": 40208,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 508
+    },
+    {
+      "path": "Source/Managers/CameraMan.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 13037,
+      "manifest_size": 13271,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 234
+    },
+    {
+      "path": "Source/Managers/PostProcessMan.cpp",
+      "kind": "content",
+      "tree_size": 29253,
+      "manifest_size": 29696,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 624
+    },
+    {
+      "path": "Source/Managers/PostProcessMan.h",
+      "kind": "content",
+      "tree_size": 14768,
+      "manifest_size": 15013,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 253
+    },
+    {
+      "path": "Source/Managers/PrimitiveMan.h",
+      "kind": "content",
+      "tree_size": 31616,
+      "manifest_size": 31628,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 486
+    },
+    {
+      "path": "Source/Managers/SettingsMan.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 22620,
+      "manifest_size": 23041,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 421
+    },
+    {
+      "path": "Source/Managers/SettingsMan.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 29372,
+      "manifest_size": 29835,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 463
+    },
+    {
+      "path": "Source/Managers/TimerMan.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 5036,
+      "manifest_size": 5194,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 158
+    },
+    {
+      "path": "Source/Managers/TimerMan.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 14974,
+      "manifest_size": 15260,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 286
+    },
+    {
+      "path": "Source/Menus/BuyMenuGUI.h",
+      "kind": "content",
+      "tree_size": 24401,
+      "manifest_size": 24952,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 553
+    },
+    {
+      "path": "Source/Menus/InventoryMenuGUI.h",
+      "kind": "content",
+      "tree_size": 26568,
+      "manifest_size": 26990,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 424
+    },
+    {
+      "path": "Source/Menus/SaveLoadMenuGUI.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 15948,
+      "manifest_size": 16345,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 397
+    },
+    {
+      "path": "Source/Renderer/GraphicalPrimitive.cpp",
+      "kind": "content",
+      "tree_size": 14358,
+      "manifest_size": 14385,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 298
+    },
+    {
+      "path": "Source/Renderer/GraphicalPrimitive.h",
+      "kind": "content",
+      "tree_size": 28481,
+      "manifest_size": 28495,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 699
+    },
+    {
+      "path": "Source/System/ContractAudit.h",
+      "kind": "content",
+      "tree_size": 128604,
+      "manifest_size": 130221,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 2023
+    },
+    {
+      "path": "Source/System/Gamepad.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 2585,
+      "manifest_size": 2637,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 52
+    },
+    {
+      "path": "Source/System/InputMapping.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 2372,
+      "manifest_size": 2454,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 82
+    },
+    {
+      "path": "Source/System/InputMapping.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 4692,
+      "manifest_size": 4804,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 112
+    },
+    {
+      "path": "Source/System/InputScheme.cpp",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 35878,
+      "manifest_size": 36455,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 577
+    },
+    {
+      "path": "Source/System/InputScheme.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 7956,
+      "manifest_size": 8133,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 177
+    },
+    {
+      "path": "Source/System/MovableObjectReference.h",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 1394,
+      "manifest_size": 1430,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 36
+    },
+    {
+      "path": "tools/check_state_inventory.py",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 6568,
+      "manifest_size": 6784,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 216
+    },
+    {
+      "path": "tools/contracts/AUDIT.md",
+      "kind": "content",
+      "tree_size": 24443,
+      "manifest_size": 24445,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 205
+    },
+    {
+      "path": "tools/contracts/mod_failure_continuation.lua",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 37160,
+      "manifest_size": 37782,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 622
+    },
+    {
+      "path": "tools/contracts/mod_native_contracts.lua",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 36798,
+      "manifest_size": 36990,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 192
+    },
+    {
+      "path": "tools/contracts/mod_ui_contracts.lua",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 8715,
+      "manifest_size": 8855,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 140
+    },
+    {
+      "path": "tools/contracts/mod_ui_perturb_contracts.lua",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 10159,
+      "manifest_size": 10323,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 164
+    },
+    {
+      "path": "tools/fixtures/mod_checkpoint.lua",
+      "kind": "content",
+      "tree_size": 34367,
+      "manifest_size": 34814,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 570
+    },
+    {
+      "path": "tools/fixtures/mod_save_callbacks.lua",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 858,
+      "manifest_size": 883,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 25
+    },
+    {
+      "path": "tools/run_restoration_tests.py",
+      "kind": "content",
+      "tree_size": 10518,
+      "manifest_size": 10652,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 163
+    },
+    {
+      "path": "tools/test_compare_snapshots.py",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 38802,
+      "manifest_size": 39417,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 615
+    },
+    {
+      "path": "tools/test_save_callbacks.py",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 2499,
+      "manifest_size": 2549,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 50
+    },
+    {
+      "path": "tools/win32_test_runner.py",
+      "kind": "lf_tree_crlf_manifest",
+      "tree_size": 21198,
+      "manifest_size": 21808,
+      "in_git_status": false,
+      "cr_count": 0,
+      "lf_count": 610
+    }
+  ]
+}

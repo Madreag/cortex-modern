@@ -1,0 +1,8 @@
+  PASS executable_matches_manifest bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+  PASS second_client_committed
+  FAIL host_bound_second_incarnation None
+  FAIL host_fenced_the_old_transport fenced_disconnects+fenced_packets=0
+  FAIL seat_not_dropped_by_stale_timeout []
+  PASS first_client_superseded
+  FAIL host_survived 1
+GATE fencing_two_transports FAIL -> D:\mx\s41b3\j36\fencing_two_transports_20260910_022107

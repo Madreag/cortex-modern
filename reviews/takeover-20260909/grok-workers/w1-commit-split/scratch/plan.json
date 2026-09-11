@@ -1,0 +1,171 @@
+{
+  "unit": "whole-file",
+  "head_before": "60cb6981462d30400d372ca778d440c82a5bcbe3",
+  "excluded_from_commits": [
+    "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib",
+    "external/sources/luabind-0.7.1/_Bin/luabind-release.lib"
+  ],
+  "notes": [
+    "NetLobbyProtocol is with the envelope because NetResyncState.cpp static_asserts against c_MaxTotalStateBytes.",
+    "Ownership/drop-map and exact-target priming live in NetLockstep/ScenarioRunner/runtime selftest, so they share that commit.",
+    "a7_support.py is not in this working tree; A7 harness here is NetA7Journal plus its session/ticket/ownership hooks."
+  ],
+  "commits": [
+    {
+      "subject": "Carry player-binding observations on the command wire",
+      "body": "A peer's local slots travel as codec-18 PlayerBindings with a sender-local sequence so a pending command can cross a resync.",
+      "files": [
+        "Source/Network/NetGameCommand.h",
+        "Source/Network/NetGameCommand.cpp"
+      ]
+    },
+    {
+      "subject": "Bound a resync envelope around archive, acks and pending commands",
+      "body": "Encode ownership maps, acknowledged command sequences and pending inputs in a size-capped envelope. Raise the lobby state-chunk ceiling so a complete-input archive fits.",
+      "files": [
+        "Source/Network/NetLobbyProtocol.h",
+        "Source/Network/NetLobbyProtocol.cpp",
+        "Source/Network/NetResyncState.h",
+        "Source/Network/NetResyncState.cpp",
+        "Source/Network/NetResyncSelfTest.h",
+        "Source/Network/NetResyncSelfTest.cpp"
+      ]
+    },
+    {
+      "subject": "Restore complete input, drop-map ownership and exact-target priming",
+      "body": "Replay acknowledged commands and delayed inputs after a heal, keep the drop map, and prime the resync at the exact saved target.",
+      "files": [
+        "Source/Network/NetLockstep.h",
+        "Source/Network/NetLockstep.cpp",
+        "Source/Network/NetLockstepSelfTest.cpp",
+        "Source/System/ScenarioRunner.h",
+        "Source/System/ScenarioRunner.cpp",
+        "Source/Network/NetResyncRuntimeSelfTest.h",
+        "Source/Network/NetResyncRuntimeSelfTest.cpp"
+      ]
+    },
+    {
+      "subject": "Restore typed native aliases and isolate craft-fixture clones",
+      "body": "Borrowed owners keep their Lua class, and craft-fixture clones leave the source graph registered.",
+      "files": [
+        "Source/Managers/LuaMan.h",
+        "Source/Managers/LuaMan.cpp"
+      ]
+    },
+    {
+      "subject": "Skip registry mutation when privately adopting a persisted UniqueID",
+      "body": "A non-registering faithful clone takes the saved id without unregistering the canonical object.",
+      "files": [
+        "Source/Entities/MovableObject.h",
+        "Source/Entities/MovableObject.cpp"
+      ]
+    },
+    {
+      "subject": "Keep ACraft exit selection and AHuman inventory across checkpoint load",
+      "body": "Checkpoint construction applies the persisted exit and skips empty-hand startup equip.",
+      "files": [
+        "Source/Entities/ACraft.h",
+        "Source/Entities/ACraft.cpp",
+        "Source/Entities/AHuman.cpp"
+      ]
+    },
+    {
+      "subject": "Add A7 journal helpers for recovery-arm traces",
+      "body": "Emit bounded JSON events the Mac A7 driver already reads.",
+      "files": [
+        "Source/Network/NetA7Journal.h",
+        "Source/Network/NetA7Journal.cpp"
+      ]
+    },
+    {
+      "subject": "Give the host a live F6 panel and codec-17 seat snapshots",
+      "body": "Replace stop-message notices with authenticated seat snapshots, keep seat metadata, and show a persistent roster.",
+      "files": [
+        "Source/Menus/NetModerationGUI.h",
+        "Source/Menus/NetModerationGUI.cpp",
+        "Source/CI/NetModerationGUIProbe.h",
+        "Source/CI/NetModerationGUIProbe.cpp",
+        "Source/Menus/MainMenuGUI.h",
+        "Source/Menus/MainMenuGUI.cpp",
+        "Source/Managers/MenuMan.h",
+        "Source/Managers/MenuMan.cpp",
+        "Source/Managers/UInputMan.h",
+        "Source/Managers/UInputMan.cpp",
+        "Source/Main.cpp",
+        "Source/Network/NetReconnectUx.h",
+        "Source/Network/NetReconnectUx.cpp",
+        "Source/Network/NetReconnectSession.h",
+        "Source/Network/NetReconnectSession.cpp",
+        "Source/Network/NetReconnectSessionSelfTest.cpp",
+        "Source/Network/NetMatchService.h",
+        "Source/Network/NetMatchService.cpp",
+        "Source/CI/meson.build",
+        "Source/Menus/meson.build"
+      ]
+    },
+    {
+      "subject": "Restore peer-local player, UI and aliases after a restore",
+      "body": "Capture and reload local bindings, camera, input and GUI-owned graphs without copying the host presentation onto a returning peer.",
+      "files": [
+        "Source/Entities/Activity.h",
+        "Source/Entities/Activity.cpp",
+        "Source/Activities/GameActivity.h",
+        "Source/Activities/GameActivity.cpp",
+        "Source/GUI/GUICheckpoint.h",
+        "Source/GUI/GUIControlManager.cpp",
+        "Source/Managers/FrameMan.h",
+        "Source/Managers/FrameMan.cpp",
+        "Source/System/Controller.h",
+        "Source/System/Controller.cpp",
+        "Source/Menus/SceneEditorGUI.h",
+        "Source/Menus/SceneEditorGUI.cpp",
+        "Source/Menus/InventoryMenuGUI.cpp",
+        "Source/Managers/ActivityMan.h",
+        "Source/Managers/ActivityMan.cpp"
+      ]
+    },
+    {
+      "subject": "Initialize saved-game modules and use the lobby shared clock",
+      "body": "Selected modules get writable save storage, and lobby waits use the session clock plus transfer progress instead of a flat timeout.",
+      "files": [
+        "Source/Managers/PresetMan.cpp",
+        "Source/Network/NetLobbySession.h",
+        "Source/Network/NetLobbySession.cpp",
+        "Source/Network/NetMatchRunner.h",
+        "Source/Network/NetMatchRunner.cpp",
+        "Source/Network/NetMatchSelfTest.cpp",
+        "Data/Tests.rte/Activities.ini",
+        "Data/Tests.rte/Activities/NetLifecycleTest.lua"
+      ]
+    },
+    {
+      "subject": "Record A7 recovery events on session, tickets and ownership",
+      "body": "Session heartbeats, loaded-ticket hashes and local unit ownership feed the existing A7 journal.",
+      "files": [
+        "Source/Network/NetSession.h",
+        "Source/Network/NetSession.cpp",
+        "Source/Network/NetReconnectTicketStore.h",
+        "Source/Network/NetReconnectTicketStore.cpp",
+        "Source/Managers/MovableMan.h",
+        "Source/Managers/MovableMan.cpp"
+      ]
+    },
+    {
+      "subject": "Compare snapshots by the controlled actor's inventory role",
+      "body": "The comparator was selecting Activity1's brain; use the controlled actor so the retained pair matches.",
+      "files": [
+        "tools/compare_snapshots.py",
+        "tools/test_snapshot_inventory_roles.py"
+      ]
+    },
+    {
+      "subject": "Add the new network and moderation sources to the build",
+      "body": "Wire the resync, A7 journal and F6 panel sources into MSBuild and Meson.",
+      "files": [
+        "RTEA.vcxproj",
+        "RTEA.vcxproj.filters",
+        "Source/Network/meson.build"
+      ]
+    }
+  ]
+}

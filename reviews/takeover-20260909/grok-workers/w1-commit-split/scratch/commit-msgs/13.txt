@@ -1,0 +1,3 @@
+Add the new network and moderation sources to the build
+
+Wire the resync, A7 journal and F6 panel sources into MSBuild and Meson.

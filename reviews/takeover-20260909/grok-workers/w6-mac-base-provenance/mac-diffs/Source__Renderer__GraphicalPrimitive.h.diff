@@ -1,0 +1,73 @@
+diff --git a/Source/Renderer/GraphicalPrimitive.h b/Source/Renderer/GraphicalPrimitive.h
+index 4d366a902..5236d00b2 100644
+--- a/Source/Renderer/GraphicalPrimitive.h
++++ b/Source/Renderer/GraphicalPrimitive.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "MOSprite.h"
++#include "MovableObjectReference.h"
+ 
+ #include <array>
+ #include <string>
+@@ -50,6 +51,15 @@ namespace RTE {
+ 		DrawBlendMode m_BlendMode = DrawBlendMode::NoBlend; //!< The blending mode that will be used when drawing this primitive.
+ 		std::array<int, 4> m_ColorChannelBlendAmounts = {BlendAmountLimits::MinBlend, BlendAmountLimits::MinBlend, BlendAmountLimits::MinBlend, BlendAmountLimits::MinBlend}; //!< The blending amount for each color channel when drawing in blended mode.
+ 		float m_Depth{c_PrimitiveDepth};
++		std::vector<std::shared_ptr<BITMAP>> m_ImageOwners;
++		std::vector<std::shared_ptr<Vector>> m_VertexOwners;
++		static std::shared_ptr<BITMAP> OwnBitmap(BITMAP* bitmap);
++		static std::vector<std::shared_ptr<Vector>> OwnVertices(const std::vector<Vector*>& vertices);
++		std::string SaveCheckpoint() const;
++		bool LoadCheckpoint(std::string_view text);
++		bool ResolveCheckpointReferences();
++		static std::unique_ptr<GraphicalPrimitive> CreateCheckpointType(PrimitiveType type);
++		static const char* CheckpointTypeName(PrimitiveType type);
+ 
+ 		/// Destructor method used to clean up a GraphicalPrimitive object before deletion from system memory.
+ 		virtual ~GraphicalPrimitive() = default;
+@@ -490,6 +500,7 @@ namespace RTE {
+ 		/// @param color Color to draw this primitive with.
+ 		PolygonPrimitive(int player, const Vector& startPos, unsigned char color, const std::vector<Vector*>& vertices, float depth = c_PrimitiveDepth) :
+ 		    m_Vertices(vertices) {
++			m_VertexOwners = OwnVertices(vertices);
+ 
+ 			m_StartPos = startPos;
+ 			m_Color = color;
+@@ -518,6 +529,7 @@ namespace RTE {
+ 		/// @param color Color to draw this primitive with.
+ 		PolygonFillPrimitive(int player, const Vector& startPos, unsigned char color, const std::vector<Vector*>& vertices, float depth = c_PrimitiveDepth) :
+ 		    m_Vertices(vertices) {
++			m_VertexOwners = OwnVertices(vertices);
+ 
+ 			m_StartPos = startPos;
+ 			m_Color = color;
+@@ -581,6 +593,10 @@ namespace RTE {
+ 		bool m_HFlipped = false; //!< Whether the Bitmap to draw should be horizontally flipped.
+ 		bool m_VFlipped = false; //!< Whether the Bitmap to draw should be vertically flipped.
+ 		float m_Scale = 1.0f;
++		MovableObjectReference m_SpriteOwner;
++		unsigned int m_SpriteFrame = 0;
++		bool m_IconBitmap = false;
++		std::string m_PendingSpriteReference;
+ 
+ 		/// Constructor method for BitmapPrimitive object.
+ 		/// @param player Player screen to draw this primitive on.
+@@ -624,6 +640,8 @@ namespace RTE {
+ 		/// @param vFlipped Whether the BITMAP to draw should be vertically flipped.
+ 		BitmapPrimitive(int player, const Vector& centerPos, const MOSprite* moSprite, float rotAngle, unsigned int frame, float scale, bool hFlipped, bool vFlipped, float depth = c_PrimitiveDepth) :
+ 		    m_Bitmap(moSprite->GetSpriteFrame(frame)), m_RotAngle(rotAngle), m_HFlipped(hFlipped), m_VFlipped(vFlipped), m_Scale(scale) {
++			m_SpriteOwner = moSprite; m_SpriteFrame = frame;
++			m_ImageOwners.push_back(moSprite->ShareSpriteBitmap(m_Bitmap));
+ 
+ 			m_StartPos = centerPos;
+ 			m_Player = player;
+@@ -640,6 +658,8 @@ namespace RTE {
+ 		/// @param vFlipped Whether the BITMAP to draw should be vertically flipped.
+ 		BitmapPrimitive(int player, const Vector& centerPos, const MOSprite* moSprite, float rotAngle, unsigned int frame, bool hFlipped, bool vFlipped, float depth = c_PrimitiveDepth) :
+ 		    m_Bitmap(moSprite->GetSpriteFrame(frame)), m_RotAngle(rotAngle), m_HFlipped(hFlipped), m_VFlipped(vFlipped), m_Scale(1.0f) {
++			m_SpriteOwner = moSprite; m_SpriteFrame = frame;
++			m_ImageOwners.push_back(moSprite->ShareSpriteBitmap(m_Bitmap));
+ 			m_StartPos = centerPos;
+ 			m_Player = player;
+ 			m_Depth = depth;

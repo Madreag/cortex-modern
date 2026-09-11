@@ -1,0 +1,84 @@
+ M Data/Tests.rte/Activities.ini
+ M RTEA.vcxproj
+ M RTEA.vcxproj.filters
+ M Source/Activities/GameActivity.cpp
+ M Source/Activities/GameActivity.h
+ M Source/CI/meson.build
+ M Source/Entities/ACraft.cpp
+ M Source/Entities/ACraft.h
+ M Source/Entities/AHuman.cpp
+ M Source/Entities/Activity.cpp
+ M Source/Entities/Activity.h
+ M Source/Entities/MovableObject.cpp
+ M Source/Entities/MovableObject.h
+ M Source/GUI/GUICheckpoint.h
+ M Source/GUI/GUIControlManager.cpp
+ M Source/Main.cpp
+ M Source/Managers/ActivityMan.cpp
+ M Source/Managers/ActivityMan.h
+ M Source/Managers/FrameMan.cpp
+ M Source/Managers/FrameMan.h
+ M Source/Managers/LuaMan.cpp
+ M Source/Managers/LuaMan.h
+ M Source/Managers/MenuMan.cpp
+ M Source/Managers/MenuMan.h
+ M Source/Managers/MovableMan.cpp
+ M Source/Managers/MovableMan.h
+ M Source/Managers/PresetMan.cpp
+ M Source/Managers/UInputMan.cpp
+ M Source/Managers/UInputMan.h
+ M Source/Menus/InventoryMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.cpp
+ M Source/Menus/MainMenuGUI.h
+ M Source/Menus/SceneEditorGUI.cpp
+ M Source/Menus/SceneEditorGUI.h
+ M Source/Menus/meson.build
+ M Source/Network/NetGameCommand.cpp
+ M Source/Network/NetGameCommand.h
+ M Source/Network/NetLobbyProtocol.cpp
+ M Source/Network/NetLobbyProtocol.h
+ M Source/Network/NetLobbySession.cpp
+ M Source/Network/NetLobbySession.h
+ M Source/Network/NetLockstep.cpp
+ M Source/Network/NetLockstep.h
+ M Source/Network/NetLockstepSelfTest.cpp
+ M Source/Network/NetMatchRunner.cpp
+ M Source/Network/NetMatchRunner.h
+ M Source/Network/NetMatchSelfTest.cpp
+ M Source/Network/NetMatchService.cpp
+ M Source/Network/NetMatchService.h
+ M Source/Network/NetReconnectSession.cpp
+ M Source/Network/NetReconnectSession.h
+ M Source/Network/NetReconnectSessionSelfTest.cpp
+ M Source/Network/NetReconnectTicketStore.cpp
+ M Source/Network/NetReconnectTicketStore.h
+ M Source/Network/NetReconnectTxCache.cpp
+ M Source/Network/NetReconnectTxCache.h
+ M Source/Network/NetReconnectUx.cpp
+ M Source/Network/NetReconnectUx.h
+ M Source/Network/NetSession.cpp
+ M Source/Network/NetSession.h
+ M Source/Network/meson.build
+ M Source/System/Controller.cpp
+ M Source/System/Controller.h
+ M Source/System/ScenarioRunner.cpp
+ M Source/System/ScenarioRunner.h
+ M "external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib"
+ M external/sources/luabind-0.7.1/_Bin/luabind-release.lib
+ M tools/compare_snapshots.py
+?? Data/Tests.rte/Activities/NetLifecycleTest.lua
+?? Source/CI/NetModerationGUIProbe.cpp
+?? Source/CI/NetModerationGUIProbe.h
+?? Source/Menus/NetModerationGUI.cpp
+?? Source/Menus/NetModerationGUI.h
+?? Source/Network/NetA7Journal.cpp
+?? Source/Network/NetA7Journal.h
+?? Source/Network/NetRecoveryJournal.cpp
+?? Source/Network/NetRecoveryJournal.h
+?? Source/Network/NetResyncRuntimeSelfTest.cpp
+?? Source/Network/NetResyncRuntimeSelfTest.h
+?? Source/Network/NetResyncSelfTest.cpp
+?? Source/Network/NetResyncSelfTest.h
+?? Source/Network/NetResyncState.cpp
+?? Source/Network/NetResyncState.h
+?? tools/test_snapshot_inventory_roles.py

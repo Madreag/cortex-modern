@@ -1,0 +1,17 @@
+[audio] output silenced for the headless run
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] pinned dt 0x3c88893b -> 0x3c888865
+[net-match] state transfer complete: 5409186 bytes
+[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)
+[snapbench] read_ms=581
+[net-match] launching from the received snapshot: p5resync_17092_recv
+[snapbench] restart_ms=148
+[audio-checkpoint] voice 36 has no registered owner 9310
+[music-checkpoint] music audio restoration failed
+[gui-sound-checkpoint] GUI audio restoration failed
+[runtime-globals] apply failed: could not restore GUI/music/audio checkpoint
+[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067
+[scriptgraph] reinstate refused before the world moved
+[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067
+[net-match] could not launch the activity
+[net-match-service-e2e] wrote report: D:\mx\s41b3\j40\peers_3_4_regression_20260910_022527\drop3_returner_report.json

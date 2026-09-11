@@ -1,0 +1,12 @@
+  PASS executable_matches_manifest bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+  PASS resync_returner_reclaimed
+  PASS resync_round_ran
+  FAIL resync_match_continued 1
+  PASS resync_census_clean 0
+  PASS resync_reseat_decided no ledgered survivors; printed=False; host_seats_dropped=1, host_ledger_drops_recorded=1, host_reseats_issued=0, host_reseats_without_a_ledger=0, host_reseats_without_survivors=1, host_reseat_live_on_team_not_named=0
+  PASS rematch_completed 0
+  PASS rematch_ticket_survived D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_client.ticket
+  PASS rematch_seat_still_protected [{'applicants': 0, 'closed': False, 'committed': False, 'dropped': False, 'lockstep_peer_id': 1, 'reclaiming': False, 'stable_seat': 0, 'substituting': False}, {'applicants': 0, 'closed': False, 'committed': True, 'dropped': False, 'lockstep_peer_id': 2, 'reclaiming': False, 'stable_seat': 1, 'substituting': False}]
+  PASS rematch_no_host_fatal
+  PASS no_stale_epoch_denials stale_epoch_drops=0
+GATE rejoin_after_resync FAIL -> D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132

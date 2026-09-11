@@ -1,0 +1,170 @@
+[
+  {
+    "path": "Source/Activities/GAScripted.h",
+    "mac_head_blob": "691faab90ab66aff3dc4017c84ecbd8bef13aead",
+    "win_316e_blob": "691faab90ab66aff3dc4017c84ecbd8bef13aead",
+    "win_60cb_blob": "691faab90ab66aff3dc4017c84ecbd8bef13aead",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": true
+  },
+  {
+    "path": "Source/Entities/Actor.cpp",
+    "mac_head_blob": "d96e5ef8505e940dfd056d6d7c9ea19e0d8ccaf0",
+    "win_316e_blob": "d96e5ef8505e940dfd056d6d7c9ea19e0d8ccaf0",
+    "win_60cb_blob": "17a9a221816377dac8bac75045405de1d493e451",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Entities/Actor.h",
+    "mac_head_blob": "14286442643f797d2682e32224abfc866458288a",
+    "win_316e_blob": "14286442643f797d2682e32224abfc866458288a",
+    "win_60cb_blob": "849094c821e8152d4385b09d8c099740c4d2af5e",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Entities/Gib.cpp",
+    "mac_head_blob": "2a3f7bda3f6b47780cbb8c66f404981ef3894913",
+    "win_316e_blob": "2a3f7bda3f6b47780cbb8c66f404981ef3894913",
+    "win_60cb_blob": "2a3f7bda3f6b47780cbb8c66f404981ef3894913",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": true
+  },
+  {
+    "path": "Source/Entities/GlobalScript.cpp",
+    "mac_head_blob": "a205cb7e06704f798a6c8e0ff9ef6ae7bfdd02cf",
+    "win_316e_blob": "a205cb7e06704f798a6c8e0ff9ef6ae7bfdd02cf",
+    "win_60cb_blob": "a205cb7e06704f798a6c8e0ff9ef6ae7bfdd02cf",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": true
+  },
+  {
+    "path": "Source/Entities/GlobalScript.h",
+    "mac_head_blob": "dd547b04631046e6540c1249f3443590fd0a17ac",
+    "win_316e_blob": "dd547b04631046e6540c1249f3443590fd0a17ac",
+    "win_60cb_blob": "dd547b04631046e6540c1249f3443590fd0a17ac",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": true
+  },
+  {
+    "path": "Source/GUI/GUIBanner.cpp",
+    "mac_head_blob": "eefb7fbbbf7ea2ec4f093b0015cd0ca22b900806",
+    "win_316e_blob": "eefb7fbbbf7ea2ec4f093b0015cd0ca22b900806",
+    "win_60cb_blob": "659ba3ff1859014fe6725aab499ffb9ba049c343",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/GUI/GUIBanner.h",
+    "mac_head_blob": "1d4144c2d7de7e337b1c9748dbc93da9179d76cb",
+    "win_316e_blob": "1d4144c2d7de7e337b1c9748dbc93da9179d76cb",
+    "win_60cb_blob": "5d895cc5cc3c3c57e35ff8a16079dc29b21e7a88",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/GUI/GUIFont.h",
+    "mac_head_blob": "53cb07ed848d300a2197b009a3eb62d786b84a2c",
+    "win_316e_blob": "53cb07ed848d300a2197b009a3eb62d786b84a2c",
+    "win_60cb_blob": "506008c2e69d8fdddea0d8bb3634bc0862cc42c0",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/GUI/GUIInput.cpp",
+    "mac_head_blob": "fb068ddd6f6d6b1358c0dfeda1e45660b105c4c9",
+    "win_316e_blob": "fb068ddd6f6d6b1358c0dfeda1e45660b105c4c9",
+    "win_60cb_blob": "bc26931c33266d4bf7564a9904aeac4fa3164ac5",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.cpp",
+    "mac_head_blob": "2992c2e662bae6bdb9e0077b8f5c21b15b81e644",
+    "win_316e_blob": "2992c2e662bae6bdb9e0077b8f5c21b15b81e644",
+    "win_60cb_blob": "521c802b4bfecc55611f17013f7ca9c2ca7c41ab",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Managers/PostProcessMan.h",
+    "mac_head_blob": "1bae2922eb7705261b2e9c3424c7481a97c87268",
+    "win_316e_blob": "1bae2922eb7705261b2e9c3424c7481a97c87268",
+    "win_60cb_blob": "3d03d228191d26c272927e55737c74cfb0f74b21",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Managers/PrimitiveMan.h",
+    "mac_head_blob": "3bfa9dc48d2b332f8b4ee4d991bbda825796cb3a",
+    "win_316e_blob": "3bfa9dc48d2b332f8b4ee4d991bbda825796cb3a",
+    "win_60cb_blob": "5046259844c1df226a4e343f2096bddd7c04301d",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Menus/BuyMenuGUI.h",
+    "mac_head_blob": "955da7afc3b9968bdf2e41a1b1df0e7ce2ee368b",
+    "win_316e_blob": "955da7afc3b9968bdf2e41a1b1df0e7ce2ee368b",
+    "win_60cb_blob": "8313694f26b750b2873a1d1625960834e1b847ec",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Menus/InventoryMenuGUI.h",
+    "mac_head_blob": "8090877789d86a13b82c6523667a19c4d734de11",
+    "win_316e_blob": "8090877789d86a13b82c6523667a19c4d734de11",
+    "win_60cb_blob": "285dbb13b4686bfbfaa49ed9f88ed85813796011",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.cpp",
+    "mac_head_blob": "9b9797c78d0b18024dc09ae270ce82dc79375abb",
+    "win_316e_blob": "9b9797c78d0b18024dc09ae270ce82dc79375abb",
+    "win_60cb_blob": "d5d1e71f0e9ee57abf8c456f62fd7daf6bb4d8e7",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/Renderer/GraphicalPrimitive.h",
+    "mac_head_blob": "4d366a90268047cb3111ea55b785fc57131edc74",
+    "win_316e_blob": "4d366a90268047cb3111ea55b785fc57131edc74",
+    "win_60cb_blob": "afdb1c383e74fa429690ef70e4d7d07ac6cf1596",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "Source/System/ContractAudit.h",
+    "mac_head_blob": "207c3413245b7241d33eaee7aef9989ae576cc7d",
+    "win_316e_blob": "207c3413245b7241d33eaee7aef9989ae576cc7d",
+    "win_60cb_blob": "5dea29d8027d3cfd781d8baa2f65d6681a36e932",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  },
+  {
+    "path": "tools/contracts/AUDIT.md",
+    "mac_head_blob": "7faf3e7ad743d29ae2aa61ddc9f0e831a8614d8f",
+    "win_316e_blob": "7faf3e7ad743d29ae2aa61ddc9f0e831a8614d8f",
+    "win_60cb_blob": "7faf3e7ad743d29ae2aa61ddc9f0e831a8614d8f",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": true
+  },
+  {
+    "path": "tools/fixtures/mod_checkpoint.lua",
+    "mac_head_blob": "895e52e901ed303bddb5a3c74a18691a94fd8bcf",
+    "win_316e_blob": "895e52e901ed303bddb5a3c74a18691a94fd8bcf",
+    "win_60cb_blob": "895e52e901ed303bddb5a3c74a18691a94fd8bcf",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": true
+  },
+  {
+    "path": "tools/run_restoration_tests.py",
+    "mac_head_blob": "027951e047c11e8168f2a9e2b16488a22ddb8951",
+    "win_316e_blob": "027951e047c11e8168f2a9e2b16488a22ddb8951",
+    "win_60cb_blob": "71bcf52fb5e5eaf439690361c3aa9cc77124b96e",
+    "mac_head_eq_win_316e": true,
+    "win_316e_eq_60cb": false
+  }
+]

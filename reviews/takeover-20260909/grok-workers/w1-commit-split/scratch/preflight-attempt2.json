@@ -1,0 +1,12 @@
+{
+  "head": "60cb6981462d30400d372ca778d440c82a5bcbe3",
+  "head_ok": true,
+  "tag_w1_split_attempt1": "aaf7057e5dfef135a9b9f09fbc6831672e091895",
+  "stash": [
+    "stash@{0}: WIP on experiment/cross-arch-combat: 845f50c1a Route ExpDecay through the deterministic exp poly"
+  ],
+  "changed_vs_attempt1": [],
+  "only_now": [],
+  "only_old": [],
+  "ok": true
+}

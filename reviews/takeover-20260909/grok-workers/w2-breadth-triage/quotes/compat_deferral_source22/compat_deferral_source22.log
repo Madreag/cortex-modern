@@ -1,0 +1,30 @@
+=== source22 4244e87e exit=1 cases=28 failed=0 
+    PRINT: [deferral] claim actor=1048607 preset=Green Dummy
+    PRINT: [deferral] case=shared_pos_component ok=1 x=33 y=77 alias_y=77
+    PRINT: [deferral] case=shared_pos_identity ok=1 b_x=33.5 read_x=33.5
+    PRINT: [deferral] case=shared_vector_ops ok=1 magnitude=134.72309875488281 sum_x=121.5 sum_y=62.25 copy_ok=0 copy_x=none
+    PRINT: [deferral] case=shared_native_argument ok=1 grounded_x=120.5 matter=0 played=1 pos_x=120.5 pos_y=60.25
+    PRINT: [deferral] case=shared_native_effect ok=1 particle_x=140.5 particle_vel_x=1.4049999713897705
+    PRINT: [deferral] case=shared_immobile_guard ok=1 x=7.5 y=8.5
+    PRINT: [deferral] case=shared_lifetime_setup ok=1 held=1
+    PRINT: [deferral] case=shared_lifetime_read ok=1 read_ok=1 x=0
+    PRINT: [deferral] case=shared_play ok=1 live=1 hold=1 restart=1 live_playing=1
+    PRINT: [deferral] case=ai_sees_play ok=1 ai_playing=1 upd_playing=1 ai_audible=0 upd_audible=0
+    PRINT: [deferral] case=ai_replay_guard ok=1 ai_hold_replay=0 upd_hold_replay=0
+    PRINT: [deferral] case=ai_restart_takes ok=1 ai_restart=1 upd_playing=1
+    PRINT: [deferral] case=ai_play_lands ok=1 ai_play=1 ai_playing_after=1 upd_playing=1
+    PRINT: [deferral] case=ai_props_readback ok=1 read=0.25/0.5/0.125/7/42/0/1/1/123.5/0.5/0.75/1/1/13.5,-24.25
+    PRINT: [deferral] case=ai_props_visible ok=1 read=0.25/0.5/0.125/7/42/0/1/1/123.5/0.5/0.75/1/1/13.5,-24.25
+    PRINT: [deferral] case=ai_pos_component ok=1 ai_x=66 ai_y=55 upd_x=66 upd_y=55
+    PRINT: [deferral] case=ai_pos_alias ok=1 ai_reread=111 ai_alias=111 upd_x=111
+    PRINT: [deferral] case=ai_read_tracks_shared ok=1 ai_x=-400.5 upd_x=-400.5
+    PRINT: [deferral] case=shared_pos_retained_alias ok=1 read_x=55.25 read_y=66.5
+    PRINT: [deferral] case=ai_alias_only ok=1 ai_x=210.5 upd_x=210.5 upd_y=201
+    PRINT: [deferral] case=shared_props ok=1 read=0.25/0.5/0.125/7/42/0/1/1/123.5/0.5/0.75/1/1/13.5,-24.25
+    PRINT: [deferral] case=ai_alias_only_retained ok=1 upd_x=210.5 upd_y=220.5
+    PRINT: [deferral] case=ai_soundset_selection ok=1 ai_live=0 ctrl_live=0 ai_played=1 ctrl_played=1
+    PRINT: [deferral] case=spawn_child ok=1 uid=1049513
+    PRINT: [deferral] case=ai_pos_retained_alias ok=1 ai_y=-77.25 upd_y=-77.25
+    PRINT: [deferral] case=ai_stop_takes ok=1 ai_stop=1 ai_playing_after=0 upd_playing=0
+    PRINT: [deferral] case=spawn_first_ai ok=1 created=1 ai_before_first_update=1 ai_runs=20 updates=40
+    PRINT: [deferral] case=done ok=1 step=150 ai_runs=75

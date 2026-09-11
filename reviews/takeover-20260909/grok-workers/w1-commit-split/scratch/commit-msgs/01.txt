@@ -1,0 +1,3 @@
+Carry player-binding observations on the command wire
+
+A peer's local slots travel as codec-18 PlayerBindings with a sender-local sequence so a pending command can cross a resync.

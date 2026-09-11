@@ -1,0 +1,10 @@
+  PASS executable_matches_manifest bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+  PASS peers3_all_exit_zero {'peers3_host': 0, 'peers3_client1': 0, 'peers3_client2': 0}
+  PASS peers3_sim_gated_identical 3 traces identical
+  PASS peers4_all_exit_zero {'peers4_host': 0, 'peers4_client1': 0, 'peers4_client2': 0, 'peers4_client3': 0}
+  PASS peers4_sim_gated_identical 4 traces identical
+  PASS drop3_returner_reclaimed
+  PASS drop3_survivors_identical 2 traces identical
+  PASS drop3_distinct_seats []
+  PASS no_census_refusals census_refusals=0
+GATE peers_3_4_regression PASS -> D:\mx\s41b3\j40\peers_3_4_regression_20260910_022527

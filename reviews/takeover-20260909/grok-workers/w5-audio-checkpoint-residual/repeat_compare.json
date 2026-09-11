@@ -1,0 +1,2811 @@
+{
+  "1": {
+    "root": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228",
+    "exists": true,
+    "verdict_passed": true,
+    "exe": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "returner_stdout": {
+      "path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_returner\\stdout.log",
+      "missing": false,
+      "size": 823,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match] state transfer complete: 5476307 bytes"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] read_ms=587"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] launching from the received snapshot: p5resync_19116_recv"
+        },
+        {
+          "n": 8,
+          "text": "[snapbench] restart_ms=144"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 10,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_returner_report.json"
+        }
+      ]
+    },
+    "returner_console": {
+      "path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_returner\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 510,
+      "lines": [
+        {
+          "n": 6,
+          "text": "SYSTEM: Game \"p5resync_19116_recv\" staged for restart!"
+        }
+      ]
+    },
+    "host_stdout": {
+      "path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_host\\stdout.log",
+      "missing": false,
+      "size": 1363,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,local,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] restart_ms=85"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] waiting on peer frames (tick 198, Client)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] Client left the match at frame 198 (connection lost)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] peer stall recovered after 4454ms (tick 198)"
+        },
+        {
+          "n": 10,
+          "text": "[net-reconnect] reseating team 1 onto peer 2 (2 actors)"
+        },
+        {
+          "n": 11,
+          "text": "[net-match] rejoin: Client reconnected - resyncing the match"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] save main_ms=136 zip_io_ms=77 saved=1"
+        },
+        {
+          "n": 14,
+          "text": "[snapbench] read_ms=578"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] launching from the received snapshot: p5resync_676"
+        },
+        {
+          "n": 16,
+          "text": "[snapbench] restart_ms=136"
+        },
+        {
+          "n": 17,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 18,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 19,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_host_trace.json"
+        },
+        {
+          "n": 20,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_host_report.json"
+        }
+      ]
+    },
+    "host_console": {
+      "path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_host\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 683,
+      "lines": [
+        {
+          "n": 9,
+          "text": "NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined"
+        },
+        {
+          "n": 10,
+          "text": "SYSTEM: Game saved to \"p5resync_676\"!"
+        },
+        {
+          "n": 11,
+          "text": "SYSTEM: Game \"p5resync_676\" staged for restart!"
+        }
+      ]
+    },
+    "client2_stdout": {
+      "path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client2\\stdout.log",
+      "missing": false,
+      "size": 1264,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,local,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=94"
+        },
+        {
+          "n": 6,
+          "text": "[net-match] waiting on peer frames (tick 198, Client)"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] Client left the match at frame 198 (connection lost)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] peer stall recovered after 4456ms (tick 198)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 10,
+          "text": "[net-match] state transfer complete: 5476307 bytes"
+        },
+        {
+          "n": 11,
+          "text": "[snapbench] read_ms=584"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] launching from the received snapshot: p5resync_2320_recv"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] restart_ms=139"
+        },
+        {
+          "n": 14,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 16,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client2_trace.json"
+        },
+        {
+          "n": 17,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client2_report.json"
+        }
+      ]
+    },
+    "client1_stdout": {
+      "path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client1\\stdout.log",
+      "missing": false,
+      "size": 460,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=91"
+        }
+      ]
+    },
+    "returner_report": {
+      "exit_code": 0,
+      "setup_error": "",
+      "runtime_error": "",
+      "activity_preset": "P4 Alpha Duel",
+      "activity_state": "Over",
+      "winner_team": -1,
+      "entered_editor": false,
+      "rematches": 0,
+      "resyncs": 0,
+      "actors": 5,
+      "actors_peak": 5,
+      "pace": {
+        "iterations": 617,
+        "sim_ticks": 602,
+        "wall_ms": 11012,
+        "sim_ms": 10595,
+        "draw_ms": 424,
+        "wall_tps": 54.6649,
+        "sim_ms_per_tick": 17.601,
+        "draw_ms_per_iter": 0.6883,
+        "net_wait_ms": 10002,
+        "accrued_ms": 11012,
+        "trimmed_ms": 995,
+        "wall_seen_ms": 11012,
+        "cap_lost_ms": 0,
+        "paused_lost_ms": 0,
+        "update_calls": 617,
+        "reset_calls": 0,
+        "time_scale": 1
+      },
+      "running_ticks": 601,
+      "frames_planned": 600,
+      "local_prediction": {
+        "enabled": true,
+        "previews": 0,
+        "actor_ticks": 0,
+        "ms_total": 0,
+        "shadows": 0,
+        "taken": 0,
+        "violations": 0
+      },
+      "controller_boundary": {
+        "equip_commands": 0,
+        "sound_commands": 0,
+        "aim_intents": 0,
+        "flip_intents": 0,
+        "direct_writes": 0
+      },
+      "replay_recording": {
+        "frames": 0,
+        "closed": false
+      },
+      "setup_surface": "fixed-alpha-duel",
+      "unsupported_setup_surface": "stock pregame editor/deployment/buy-menu setup is not synchronized in P4A",
+      "service": {
+        "activity_preset": "P4 Alpha Duel",
+        "error": "",
+        "is_host": false,
+        "local_peer_id": 2,
+        "local_team": 1,
+        "reconnect": {
+          "admission_attached": true,
+          "admission_clock_ms": 14646,
+          "admission_enabled": true,
+          "census_refusals": 0,
+          "client_ambiguous_losses": 0,
+          "client_applications_acknowledged": 0,
+          "client_applications_sent": 0,
+          "client_commits": 1,
+          "client_confirmed_session_ends": 0,
+          "client_leave_acks": 0,
+          "client_reject_reason": "",
+          "client_retransmits": 0,
+          "client_state": "Joined",
+          "client_substitution_acks": 0,
+          "client_substitution_offers": 0,
+          "client_unacknowledged_leaves": 0,
+          "client_used_stored_ticket": true,
+          "clock_divergence_max_ms": 0,
+          "host_ledger_drops_recorded": 0,
+          "host_reseat_live_on_team_not_named": 0,
+          "host_reseats_issued": 0,
+          "host_reseats_without_a_ledger": 0,
+          "host_reseats_without_survivors": 0,
+          "host_seats_dropped": 0,
+          "moderation": [],
+          "seats": [],
+          "ticket_clears": 0,
+          "ticket_refused_loads": 0,
+          "ticket_store_path": "D:\\mx\\s41b3\\j38\\peers_3_4_regression_20260910_022228\\drop3_client1.ticket",
+          "ticket_stored": true,
+          "ticket_stores": 0,
+          "ux_attempts": 0,
+          "ux_state": "Connected"
+        },
+        "runner": {
+          "lobby": {
+            "config_acked": false,
+            "failure_reason": "",
+            "local_peer_id": 2,
+            "local_ready": true,
+            "match_config": {
+              "activity_preset": "P4 Alpha Duel",
+              "activity_type": "GAScripted",
+              "host_peer_id": 1,
+              "input_delay_frames": 0,
+              "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+              "mode": "pvp-skirmish",
+              "mode_preset": "pvp-skirmish",
+              "ownership_policy": "team-owner",
+              "peer_count": 3,
+              "peer_input_delays": [],
+              "players": [
+                {
+                  "cpu": false,
+                  "display_name": "Host",
+                  "peer_id": 1,
+                  "team": 0
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 2,
+                  "team": 1
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 3,
+                  "team": 2
+                }
+              ],
+              "scene_name": "Grasslands",
+              "session_id": 6004495977551122484,
+              "version": 2
+            },
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "remote_peer_id": 1,
+            "remote_peers": [
+              {
+                "config_acked": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "ready": true
+              }
+            ],
+            "remote_ready": true,
+            "role": "client",
+            "start_frame": 317,
+            "start_requested": false,
+            "state": "Started",
+            "stats": {
+              "config_acks_received": 0,
+              "config_packets_sent": 0,
+              "ignored_session_packets": 8,
+              "malformed_messages": 0,
+              "messages_received": 124,
+              "messages_sent": 3,
+              "ready_packets_received": 0,
+              "start_packets_received": 1,
+              "start_packets_sent": 0,
+              "timeouts": 0,
+              "unbound_connection_faults": 0,
+              "unbound_disconnects": 0
+            }
+          },
+          "lockstep": {
+            "configured_start_frame": 317,
+            "connections_closed_on_eviction": 0,
+            "duplicate_frames": 0,
+            "effective_start_frame": 317,
+            "frame_packets_received": 1204,
+            "frame_packets_sent": 602,
+            "frames_accepted": 602,
+            "future_frame_drops": 0,
+            "ignored_session_packets": 0,
+            "input_delay_frames": 0,
+            "largest_relay_packet_bytes": 0,
+            "last_missing_peers": "Client",
+            "last_relay_error": "",
+            "local_controller_frames_sent": 1204,
+            "local_peer_id": 2,
+            "longest_stall_ms": 35,
+            "missing_frame_stalls": 602,
+            "next_frame": 919,
+            "observations_carried": 0,
+            "observations_dropped": 0,
+            "out_of_order_frames": 0,
+            "peer_input_delays": {
+              "1": 0,
+              "2": 0,
+              "3": 0
+            },
+            "peer_leave_frames": {},
+            "peer_silence_leave_ms": 10000,
+            "peers": {
+              "1": {
+                "controller_frames_received": 602,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 918,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11925,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              },
+              "3": {
+                "controller_frames_received": 1204,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 918,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11939,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              }
+            },
+            "peers_dropped_silent": 0,
+            "peers_left": 0,
+            "pre_start_frames_buffered": 0,
+            "relay_backlog_bytes": 0,
+            "relay_backlog_overflows": 0,
+            "relay_backlog_peers": 0,
+            "relay_bytes_sent": 0,
+            "relay_congested_refusals": 0,
+            "relay_congestion_hold_leave_ms": 15000,
+            "relay_congestion_holds": 0,
+            "relay_longest_congestion_hold_ms": 0,
+            "relay_observation_overflows": 0,
+            "relay_packets_sent": 0,
+            "relay_resends": 0,
+            "relay_send_failures": 0,
+            "remote_controller_frames_accepted": 1806,
+            "remote_controller_frames_received": 1806,
+            "remote_peer_id": 0,
+            "round_id": 11877610745514921464,
+            "round_readoptions": 0,
+            "session_id": 6004495977551122484,
+            "stale_round_packets": 0,
+            "start_answers": 0,
+            "start_answers_suppressed": 0,
+            "start_packets_received": 2,
+            "start_packets_sent": 1,
+            "start_retransmits": 0,
+            "starts_relayed_on_repeat": 0,
+            "state": "Stopped",
+            "stops_from_left_peers": 0,
+            "timeout_reason": "Complete:e2e complete",
+            "timeouts": 0,
+            "unresolved_observation_packets": 0
+          },
+          "match_config": {
+            "activity_preset": "P4 Alpha Duel",
+            "activity_type": "GAScripted",
+            "host_peer_id": 1,
+            "input_delay_frames": 0,
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "mode": "pvp-skirmish",
+            "mode_preset": "pvp-skirmish",
+            "ownership_policy": "team-owner",
+            "peer_count": 3,
+            "peer_input_delays": [],
+            "players": [
+              {
+                "cpu": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "team": 0
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 2,
+                "team": 1
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 3,
+                "team": 2
+              }
+            ],
+            "scene_name": "Grasslands",
+            "session_id": 6004495977551122484,
+            "version": 2
+          },
+          "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+          "session": {
+            "accepted": true,
+            "actual": "",
+            "admission": {},
+            "clock_ms": 952,
+            "expected": "",
+            "final_state": "Ready",
+            "local_identity": {
+              "build_id": "stage2-p2d-local",
+              "deterministic_config_hash": "aa795c0e0d7498f12ca171a9d8e434736a2057efb233fa9460dcf314ec281228",
+              "has_userdata_modules": true,
+              "module_manifest_hash": "4659391376df15b48dd4dd356d0eb0711fa5433bfb0c4b890f7e70a15e0f16f1",
+              "num_lua_states": 4,
+              "num_lua_states_override": 4,
+              "selected_module": "",
+              "session_rules_hash": "12dedcec1129d7bcd72f6dff276631f2060ad0208b60919e6560044406869077"
+            },
+            "local_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "mismatch_key": "",
+            "peers": [
+              {
+                "display_name": "Host",
+                "identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+                "last_heartbeat_ms": 936,
+                "peer_id": 0,
+                "state": "Ready",
+                "transport_peer_id": 1
+              }
+            ],
+            "reject_reason": "",
+            "rejected": false,
+            "remote_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "role": "client",
+            "schema": 1,
+            "session_id": "6004495977551122484",
+            "stats": {
+              "admission_messages": 2,
+              "fenced_disconnects": 0,
+              "fenced_packets": 0,
+              "ignored_phase_packets": 125,
+              "malformed_messages": 0,
+              "old_wire_disconnects": 0,
+              "old_wire_rejections_sent": 0,
+              "pending_admission_joins": 0,
+              "received_messages": 12,
+              "sent_messages": 18,
+              "timeout_resumptions": 0,
+              "timeouts": 0,
+              "unauthenticated_connections_refused": 0,
+              "unbound_connection_faults": 0
+            },
+            "summary": ""
+          },
+          "setup_error": "",
+          "state": "Running",
+          "uses_lobby_protocol": true
+        },
+        "state": "Running",
+        "status": "e2e complete"
+      }
+    }
+  },
+  "2": {
+    "root": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357",
+    "exists": true,
+    "verdict_passed": true,
+    "exe": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "returner_stdout": {
+      "path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_returner\\stdout.log",
+      "missing": false,
+      "size": 822,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match] state transfer complete: 5467438 bytes"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] read_ms=583"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] launching from the received snapshot: p5resync_5520_recv"
+        },
+        {
+          "n": 8,
+          "text": "[snapbench] restart_ms=146"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 10,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_returner_report.json"
+        }
+      ]
+    },
+    "returner_console": {
+      "path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_returner\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 509,
+      "lines": [
+        {
+          "n": 6,
+          "text": "SYSTEM: Game \"p5resync_5520_recv\" staged for restart!"
+        }
+      ]
+    },
+    "host_stdout": {
+      "path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_host\\stdout.log",
+      "missing": false,
+      "size": 1365,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,local,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] restart_ms=98"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] waiting on peer frames (tick 198, Client)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] Client left the match at frame 198 (connection lost)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] peer stall recovered after 4464ms (tick 198)"
+        },
+        {
+          "n": 10,
+          "text": "[net-reconnect] reseating team 1 onto peer 2 (2 actors)"
+        },
+        {
+          "n": 11,
+          "text": "[net-match] rejoin: Client reconnected - resyncing the match"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] save main_ms=135 zip_io_ms=77 saved=1"
+        },
+        {
+          "n": 14,
+          "text": "[snapbench] read_ms=574"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] launching from the received snapshot: p5resync_13660"
+        },
+        {
+          "n": 16,
+          "text": "[snapbench] restart_ms=134"
+        },
+        {
+          "n": 17,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 18,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 19,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_host_trace.json"
+        },
+        {
+          "n": 20,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_host_report.json"
+        }
+      ]
+    },
+    "host_console": {
+      "path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_host\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 687,
+      "lines": [
+        {
+          "n": 9,
+          "text": "NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined"
+        },
+        {
+          "n": 10,
+          "text": "SYSTEM: Game saved to \"p5resync_13660\"!"
+        },
+        {
+          "n": 11,
+          "text": "SYSTEM: Game \"p5resync_13660\" staged for restart!"
+        }
+      ]
+    },
+    "client2_stdout": {
+      "path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client2\\stdout.log",
+      "missing": false,
+      "size": 1265,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,local,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=96"
+        },
+        {
+          "n": 6,
+          "text": "[net-match] waiting on peer frames (tick 198, Client)"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] Client left the match at frame 198 (connection lost)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] peer stall recovered after 4465ms (tick 198)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 10,
+          "text": "[net-match] state transfer complete: 5467438 bytes"
+        },
+        {
+          "n": 11,
+          "text": "[snapbench] read_ms=577"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] launching from the received snapshot: p5resync_16544_recv"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] restart_ms=139"
+        },
+        {
+          "n": 14,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 16,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client2_trace.json"
+        },
+        {
+          "n": 17,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client2_report.json"
+        }
+      ]
+    },
+    "client1_stdout": {
+      "path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client1\\stdout.log",
+      "missing": false,
+      "size": 460,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=96"
+        }
+      ]
+    },
+    "returner_report": {
+      "exit_code": 0,
+      "setup_error": "",
+      "runtime_error": "",
+      "activity_preset": "P4 Alpha Duel",
+      "activity_state": "Over",
+      "winner_team": -1,
+      "entered_editor": false,
+      "rematches": 0,
+      "resyncs": 0,
+      "actors": 4,
+      "actors_peak": 5,
+      "pace": {
+        "iterations": 626,
+        "sim_ticks": 602,
+        "wall_ms": 10879,
+        "sim_ms": 10476,
+        "draw_ms": 410,
+        "wall_tps": 55.3347,
+        "sim_ms_per_tick": 17.4036,
+        "draw_ms_per_iter": 0.655153,
+        "net_wait_ms": 9887,
+        "accrued_ms": 10879,
+        "trimmed_ms": 865,
+        "wall_seen_ms": 10879,
+        "cap_lost_ms": 0,
+        "paused_lost_ms": 0,
+        "update_calls": 626,
+        "reset_calls": 0,
+        "time_scale": 1
+      },
+      "running_ticks": 601,
+      "frames_planned": 600,
+      "local_prediction": {
+        "enabled": true,
+        "previews": 0,
+        "actor_ticks": 0,
+        "ms_total": 0,
+        "shadows": 0,
+        "taken": 0,
+        "violations": 0
+      },
+      "controller_boundary": {
+        "equip_commands": 0,
+        "sound_commands": 0,
+        "aim_intents": 0,
+        "flip_intents": 0,
+        "direct_writes": 0
+      },
+      "replay_recording": {
+        "frames": 0,
+        "closed": false
+      },
+      "setup_surface": "fixed-alpha-duel",
+      "unsupported_setup_surface": "stock pregame editor/deployment/buy-menu setup is not synchronized in P4A",
+      "service": {
+        "activity_preset": "P4 Alpha Duel",
+        "error": "",
+        "is_host": false,
+        "local_peer_id": 2,
+        "local_team": 1,
+        "reconnect": {
+          "admission_attached": true,
+          "admission_clock_ms": 14532,
+          "admission_enabled": true,
+          "census_refusals": 0,
+          "client_ambiguous_losses": 0,
+          "client_applications_acknowledged": 0,
+          "client_applications_sent": 0,
+          "client_commits": 1,
+          "client_confirmed_session_ends": 0,
+          "client_leave_acks": 0,
+          "client_reject_reason": "",
+          "client_retransmits": 0,
+          "client_state": "Joined",
+          "client_substitution_acks": 0,
+          "client_substitution_offers": 0,
+          "client_unacknowledged_leaves": 0,
+          "client_used_stored_ticket": true,
+          "clock_divergence_max_ms": 0,
+          "host_ledger_drops_recorded": 0,
+          "host_reseat_live_on_team_not_named": 0,
+          "host_reseats_issued": 0,
+          "host_reseats_without_a_ledger": 0,
+          "host_reseats_without_survivors": 0,
+          "host_seats_dropped": 0,
+          "moderation": [],
+          "seats": [],
+          "ticket_clears": 0,
+          "ticket_refused_loads": 0,
+          "ticket_store_path": "D:\\mx\\s41b3\\j39\\peers_3_4_regression_20260910_022357\\drop3_client1.ticket",
+          "ticket_stored": true,
+          "ticket_stores": 0,
+          "ux_attempts": 0,
+          "ux_state": "Connected"
+        },
+        "runner": {
+          "lobby": {
+            "config_acked": false,
+            "failure_reason": "",
+            "local_peer_id": 2,
+            "local_ready": true,
+            "match_config": {
+              "activity_preset": "P4 Alpha Duel",
+              "activity_type": "GAScripted",
+              "host_peer_id": 1,
+              "input_delay_frames": 0,
+              "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+              "mode": "pvp-skirmish",
+              "mode_preset": "pvp-skirmish",
+              "ownership_policy": "team-owner",
+              "peer_count": 3,
+              "peer_input_delays": [],
+              "players": [
+                {
+                  "cpu": false,
+                  "display_name": "Host",
+                  "peer_id": 1,
+                  "team": 0
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 2,
+                  "team": 1
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 3,
+                  "team": 2
+                }
+              ],
+              "scene_name": "Grasslands",
+              "session_id": 6004495977551122484,
+              "version": 2
+            },
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "remote_peer_id": 1,
+            "remote_peers": [
+              {
+                "config_acked": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "ready": true
+              }
+            ],
+            "remote_ready": true,
+            "role": "client",
+            "start_frame": 311,
+            "start_requested": false,
+            "state": "Started",
+            "stats": {
+              "config_acks_received": 0,
+              "config_packets_sent": 0,
+              "ignored_session_packets": 8,
+              "malformed_messages": 0,
+              "messages_received": 124,
+              "messages_sent": 3,
+              "ready_packets_received": 0,
+              "start_packets_received": 1,
+              "start_packets_sent": 0,
+              "timeouts": 0,
+              "unbound_connection_faults": 0,
+              "unbound_disconnects": 0
+            }
+          },
+          "lockstep": {
+            "configured_start_frame": 311,
+            "connections_closed_on_eviction": 0,
+            "duplicate_frames": 0,
+            "effective_start_frame": 311,
+            "frame_packets_received": 1204,
+            "frame_packets_sent": 602,
+            "frames_accepted": 602,
+            "future_frame_drops": 0,
+            "ignored_session_packets": 0,
+            "input_delay_frames": 0,
+            "largest_relay_packet_bytes": 0,
+            "last_missing_peers": "Client",
+            "last_relay_error": "",
+            "local_controller_frames_sent": 1204,
+            "local_peer_id": 2,
+            "longest_stall_ms": 36,
+            "missing_frame_stalls": 602,
+            "next_frame": 913,
+            "observations_carried": 0,
+            "observations_dropped": 0,
+            "out_of_order_frames": 0,
+            "peer_input_delays": {
+              "1": 0,
+              "2": 0,
+              "3": 0
+            },
+            "peer_leave_frames": {},
+            "peer_silence_leave_ms": 10000,
+            "peers": {
+              "1": {
+                "controller_frames_received": 579,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 912,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11790,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              },
+              "3": {
+                "controller_frames_received": 1204,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 912,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11805,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              }
+            },
+            "peers_dropped_silent": 0,
+            "peers_left": 0,
+            "pre_start_frames_buffered": 0,
+            "relay_backlog_bytes": 0,
+            "relay_backlog_overflows": 0,
+            "relay_backlog_peers": 0,
+            "relay_bytes_sent": 0,
+            "relay_congested_refusals": 0,
+            "relay_congestion_hold_leave_ms": 15000,
+            "relay_congestion_holds": 0,
+            "relay_longest_congestion_hold_ms": 0,
+            "relay_observation_overflows": 0,
+            "relay_packets_sent": 0,
+            "relay_resends": 0,
+            "relay_send_failures": 0,
+            "remote_controller_frames_accepted": 1783,
+            "remote_controller_frames_received": 1783,
+            "remote_peer_id": 0,
+            "round_id": 17684173834031409626,
+            "round_readoptions": 0,
+            "session_id": 6004495977551122484,
+            "stale_round_packets": 0,
+            "start_answers": 0,
+            "start_answers_suppressed": 0,
+            "start_packets_received": 2,
+            "start_packets_sent": 1,
+            "start_retransmits": 0,
+            "starts_relayed_on_repeat": 0,
+            "state": "Stopped",
+            "stops_from_left_peers": 0,
+            "timeout_reason": "Complete:e2e complete",
+            "timeouts": 0,
+            "unresolved_observation_packets": 0
+          },
+          "match_config": {
+            "activity_preset": "P4 Alpha Duel",
+            "activity_type": "GAScripted",
+            "host_peer_id": 1,
+            "input_delay_frames": 0,
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "mode": "pvp-skirmish",
+            "mode_preset": "pvp-skirmish",
+            "ownership_policy": "team-owner",
+            "peer_count": 3,
+            "peer_input_delays": [],
+            "players": [
+              {
+                "cpu": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "team": 0
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 2,
+                "team": 1
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 3,
+                "team": 2
+              }
+            ],
+            "scene_name": "Grasslands",
+            "session_id": 6004495977551122484,
+            "version": 2
+          },
+          "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+          "session": {
+            "accepted": true,
+            "actual": "",
+            "admission": {},
+            "clock_ms": 974,
+            "expected": "",
+            "final_state": "Ready",
+            "local_identity": {
+              "build_id": "stage2-p2d-local",
+              "deterministic_config_hash": "aa795c0e0d7498f12ca171a9d8e434736a2057efb233fa9460dcf314ec281228",
+              "has_userdata_modules": true,
+              "module_manifest_hash": "4659391376df15b48dd4dd356d0eb0711fa5433bfb0c4b890f7e70a15e0f16f1",
+              "num_lua_states": 4,
+              "num_lua_states_override": 4,
+              "selected_module": "",
+              "session_rules_hash": "12dedcec1129d7bcd72f6dff276631f2060ad0208b60919e6560044406869077"
+            },
+            "local_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "mismatch_key": "",
+            "peers": [
+              {
+                "display_name": "Host",
+                "identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+                "last_heartbeat_ms": 962,
+                "peer_id": 0,
+                "state": "Ready",
+                "transport_peer_id": 1
+              }
+            ],
+            "reject_reason": "",
+            "rejected": false,
+            "remote_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "role": "client",
+            "schema": 1,
+            "session_id": "6004495977551122484",
+            "stats": {
+              "admission_messages": 2,
+              "fenced_disconnects": 0,
+              "fenced_packets": 0,
+              "ignored_phase_packets": 125,
+              "malformed_messages": 0,
+              "old_wire_disconnects": 0,
+              "old_wire_rejections_sent": 0,
+              "pending_admission_joins": 0,
+              "received_messages": 12,
+              "sent_messages": 18,
+              "timeout_resumptions": 0,
+              "timeouts": 0,
+              "unauthenticated_connections_refused": 0,
+              "unbound_connection_faults": 0
+            },
+            "summary": ""
+          },
+          "setup_error": "",
+          "state": "Running",
+          "uses_lobby_protocol": true
+        },
+        "state": "Running",
+        "status": "e2e complete"
+      }
+    }
+  },
+  "3": {
+    "root": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527",
+    "exists": true,
+    "verdict_passed": true,
+    "exe": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "returner_stdout": {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\stdout.log",
+      "missing": false,
+      "size": 1316,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match] state transfer complete: 5409186 bytes"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] read_ms=581"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] launching from the received snapshot: p5resync_17092_recv"
+        },
+        {
+          "n": 8,
+          "text": "[snapbench] restart_ms=148"
+        },
+        {
+          "n": 9,
+          "text": "[audio-checkpoint] voice 36 has no registered owner 9310"
+        },
+        {
+          "n": 10,
+          "text": "[music-checkpoint] music audio restoration failed"
+        },
+        {
+          "n": 11,
+          "text": "[gui-sound-checkpoint] GUI audio restoration failed"
+        },
+        {
+          "n": 12,
+          "text": "[runtime-globals] apply failed: could not restore GUI/music/audio checkpoint"
+        },
+        {
+          "n": 13,
+          "text": "[runtime-globals] validation failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067"
+        },
+        {
+          "n": 14,
+          "text": "[scriptgraph] reinstate refused before the world moved"
+        },
+        {
+          "n": 15,
+          "text": "[runtime-globals] apply failed: invalid AudioMan checkpoint: voice 1 has owner 9124 past the sound container cursor 9067"
+        },
+        {
+          "n": 16,
+          "text": "[net-match] could not launch the activity"
+        },
+        {
+          "n": 17,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner_report.json"
+        }
+      ]
+    },
+    "returner_console": {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_returner\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 673,
+      "lines": [
+        {
+          "n": 6,
+          "text": "SYSTEM: Game \"p5resync_17092_recv\" staged for restart!"
+        },
+        {
+          "n": 12,
+          "text": "ERROR: could not launch the activity"
+        }
+      ]
+    },
+    "host_stdout": {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\stdout.log",
+      "missing": false,
+      "size": 1430,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,local,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] restart_ms=89"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] waiting on peer frames (tick 193, Client)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] Client left the match at frame 193 (connection lost)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] peer stall recovered after 4459ms (tick 193)"
+        },
+        {
+          "n": 10,
+          "text": "[net-reconnect] reseating team 1 onto peer 2 (2 actors)"
+        },
+        {
+          "n": 11,
+          "text": "[net-match] rejoin: Client reconnected - resyncing the match"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] save main_ms=135 zip_io_ms=77 saved=1"
+        },
+        {
+          "n": 14,
+          "text": "[snapbench] read_ms=576"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] launching from the received snapshot: p5resync_5680"
+        },
+        {
+          "n": 16,
+          "text": "[snapbench] restart_ms=140"
+        },
+        {
+          "n": 17,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 18,
+          "text": "[net-match] Client left the match at frame 308 (connection lost)"
+        },
+        {
+          "n": 19,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 20,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_trace.json"
+        },
+        {
+          "n": 21,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host_report.json"
+        }
+      ]
+    },
+    "host_console": {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_host\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 685,
+      "lines": [
+        {
+          "n": 9,
+          "text": "NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined"
+        },
+        {
+          "n": 10,
+          "text": "SYSTEM: Game saved to \"p5resync_5680\"!"
+        },
+        {
+          "n": 11,
+          "text": "SYSTEM: Game \"p5resync_5680\" staged for restart!"
+        }
+      ]
+    },
+    "client2_stdout": {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2\\stdout.log",
+      "missing": false,
+      "size": 1331,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,local,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=94"
+        },
+        {
+          "n": 6,
+          "text": "[net-match] waiting on peer frames (tick 193, Client)"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] Client left the match at frame 193 (connection lost)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] peer stall recovered after 4465ms (tick 193)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 10,
+          "text": "[net-match] state transfer complete: 5409186 bytes"
+        },
+        {
+          "n": 11,
+          "text": "[snapbench] read_ms=584"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] launching from the received snapshot: p5resync_21308_recv"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] restart_ms=141"
+        },
+        {
+          "n": 14,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] Client left the match at frame 308 (connection lost)"
+        },
+        {
+          "n": 16,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 17,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_trace.json"
+        },
+        {
+          "n": 18,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client2_report.json"
+        }
+      ]
+    },
+    "client1_stdout": {
+      "path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1\\stdout.log",
+      "missing": false,
+      "size": 460,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=92"
+        }
+      ]
+    },
+    "returner_report": {
+      "exit_code": 1,
+      "setup_error": "",
+      "runtime_error": "could not launch the activity",
+      "activity_preset": "P4 Alpha Duel",
+      "activity_state": "NoActivity",
+      "winner_team": -1,
+      "entered_editor": false,
+      "rematches": 0,
+      "resyncs": 0,
+      "actors": -1,
+      "actors_peak": -1,
+      "pace": {
+        "iterations": 0,
+        "sim_ticks": 0,
+        "wall_ms": 0,
+        "sim_ms": 0,
+        "draw_ms": 0,
+        "wall_tps": 0,
+        "sim_ms_per_tick": 0,
+        "draw_ms_per_iter": 0,
+        "net_wait_ms": 0,
+        "accrued_ms": 6105,
+        "trimmed_ms": 1077,
+        "wall_seen_ms": 10321,
+        "cap_lost_ms": 4215,
+        "paused_lost_ms": 0,
+        "update_calls": 1066,
+        "reset_calls": 0,
+        "time_scale": 1
+      },
+      "running_ticks": 0,
+      "frames_planned": 600,
+      "local_prediction": {
+        "enabled": true,
+        "previews": 0,
+        "actor_ticks": 0,
+        "ms_total": 0,
+        "shadows": 0,
+        "taken": 0,
+        "violations": 0
+      },
+      "controller_boundary": {
+        "equip_commands": 0,
+        "sound_commands": 0,
+        "aim_intents": 0,
+        "flip_intents": 0,
+        "direct_writes": 0
+      },
+      "replay_recording": {
+        "frames": 0,
+        "closed": false
+      },
+      "setup_surface": "fixed-alpha-duel",
+      "unsupported_setup_surface": "stock pregame editor/deployment/buy-menu setup is not synchronized in P4A",
+      "service": {
+        "activity_preset": "P4 Alpha Duel",
+        "error": "could not launch the activity",
+        "is_host": false,
+        "local_peer_id": 0,
+        "local_team": -1,
+        "reconnect": {
+          "admission_attached": false,
+          "admission_clock_ms": 2238,
+          "admission_enabled": true,
+          "census_refusals": 0,
+          "client_ambiguous_losses": 0,
+          "client_applications_acknowledged": 0,
+          "client_applications_sent": 0,
+          "client_commits": 1,
+          "client_confirmed_session_ends": 0,
+          "client_leave_acks": 0,
+          "client_reject_reason": "",
+          "client_retransmits": 0,
+          "client_state": "Joined",
+          "client_substitution_acks": 0,
+          "client_substitution_offers": 0,
+          "client_unacknowledged_leaves": 0,
+          "client_used_stored_ticket": true,
+          "clock_divergence_max_ms": 0,
+          "host_ledger_drops_recorded": 0,
+          "host_reseat_live_on_team_not_named": 0,
+          "host_reseats_issued": 0,
+          "host_reseats_without_a_ledger": 0,
+          "host_reseats_without_survivors": 0,
+          "host_seats_dropped": 0,
+          "moderation": [],
+          "seats": [],
+          "ticket_clears": 0,
+          "ticket_refused_loads": 0,
+          "ticket_store_path": "D:\\mx\\s41b3\\j40\\peers_3_4_regression_20260910_022527\\drop3_client1.ticket",
+          "ticket_stored": true,
+          "ticket_stores": 0,
+          "ux_attempts": 0,
+          "ux_state": "Connected"
+        },
+        "state": "Failed",
+        "status": "Match stopped"
+      }
+    }
+  },
+  "4": {
+    "root": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655",
+    "exists": true,
+    "verdict_passed": true,
+    "exe": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "returner_stdout": {
+      "path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_returner\\stdout.log",
+      "missing": false,
+      "size": 822,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match] state transfer complete: 5467780 bytes"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] read_ms=582"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] launching from the received snapshot: p5resync_6112_recv"
+        },
+        {
+          "n": 8,
+          "text": "[snapbench] restart_ms=144"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 10,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_returner_report.json"
+        }
+      ]
+    },
+    "returner_console": {
+      "path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_returner\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 509,
+      "lines": [
+        {
+          "n": 6,
+          "text": "SYSTEM: Game \"p5resync_6112_recv\" staged for restart!"
+        }
+      ]
+    },
+    "host_stdout": {
+      "path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_host\\stdout.log",
+      "missing": false,
+      "size": 1364,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,local,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] restart_ms=90"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] waiting on peer frames (tick 200, Client)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] Client left the match at frame 200 (connection lost)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] peer stall recovered after 4467ms (tick 200)"
+        },
+        {
+          "n": 10,
+          "text": "[net-reconnect] reseating team 1 onto peer 2 (2 actors)"
+        },
+        {
+          "n": 11,
+          "text": "[net-match] rejoin: Client reconnected - resyncing the match"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] save main_ms=137 zip_io_ms=78 saved=1"
+        },
+        {
+          "n": 14,
+          "text": "[snapbench] read_ms=573"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] launching from the received snapshot: p5resync_5192"
+        },
+        {
+          "n": 16,
+          "text": "[snapbench] restart_ms=133"
+        },
+        {
+          "n": 17,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 18,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 19,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_host_trace.json"
+        },
+        {
+          "n": 20,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_host_report.json"
+        }
+      ]
+    },
+    "host_console": {
+      "path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_host\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 685,
+      "lines": [
+        {
+          "n": 9,
+          "text": "NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined"
+        },
+        {
+          "n": 10,
+          "text": "SYSTEM: Game saved to \"p5resync_5192\"!"
+        },
+        {
+          "n": 11,
+          "text": "SYSTEM: Game \"p5resync_5192\" staged for restart!"
+        }
+      ]
+    },
+    "client2_stdout": {
+      "path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client2\\stdout.log",
+      "missing": false,
+      "size": 1264,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,local,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=90"
+        },
+        {
+          "n": 6,
+          "text": "[net-match] waiting on peer frames (tick 200, Client)"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] Client left the match at frame 200 (connection lost)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] peer stall recovered after 4466ms (tick 200)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 10,
+          "text": "[net-match] state transfer complete: 5467780 bytes"
+        },
+        {
+          "n": 11,
+          "text": "[snapbench] read_ms=577"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] launching from the received snapshot: p5resync_2984_recv"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] restart_ms=136"
+        },
+        {
+          "n": 14,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 16,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client2_trace.json"
+        },
+        {
+          "n": 17,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client2_report.json"
+        }
+      ]
+    },
+    "client1_stdout": {
+      "path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client1\\stdout.log",
+      "missing": false,
+      "size": 460,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=92"
+        }
+      ]
+    },
+    "returner_report": {
+      "exit_code": 0,
+      "setup_error": "",
+      "runtime_error": "",
+      "activity_preset": "P4 Alpha Duel",
+      "activity_state": "Over",
+      "winner_team": -1,
+      "entered_editor": false,
+      "rematches": 0,
+      "resyncs": 0,
+      "actors": 4,
+      "actors_peak": 5,
+      "pace": {
+        "iterations": 635,
+        "sim_ticks": 602,
+        "wall_ms": 11015,
+        "sim_ms": 10569,
+        "draw_ms": 430,
+        "wall_tps": 54.6482,
+        "sim_ms_per_tick": 17.5568,
+        "draw_ms_per_iter": 0.678455,
+        "net_wait_ms": 9971,
+        "accrued_ms": 11016,
+        "trimmed_ms": 986,
+        "wall_seen_ms": 11016,
+        "cap_lost_ms": 0,
+        "paused_lost_ms": 0,
+        "update_calls": 635,
+        "reset_calls": 0,
+        "time_scale": 1
+      },
+      "running_ticks": 601,
+      "frames_planned": 600,
+      "local_prediction": {
+        "enabled": true,
+        "previews": 0,
+        "actor_ticks": 0,
+        "ms_total": 0,
+        "shadows": 0,
+        "taken": 0,
+        "violations": 0
+      },
+      "controller_boundary": {
+        "equip_commands": 0,
+        "sound_commands": 0,
+        "aim_intents": 0,
+        "flip_intents": 0,
+        "direct_writes": 0
+      },
+      "replay_recording": {
+        "frames": 0,
+        "closed": false
+      },
+      "setup_surface": "fixed-alpha-duel",
+      "unsupported_setup_surface": "stock pregame editor/deployment/buy-menu setup is not synchronized in P4A",
+      "service": {
+        "activity_preset": "P4 Alpha Duel",
+        "error": "",
+        "is_host": false,
+        "local_peer_id": 2,
+        "local_team": 1,
+        "reconnect": {
+          "admission_attached": true,
+          "admission_clock_ms": 14629,
+          "admission_enabled": true,
+          "census_refusals": 0,
+          "client_ambiguous_losses": 0,
+          "client_applications_acknowledged": 0,
+          "client_applications_sent": 0,
+          "client_commits": 1,
+          "client_confirmed_session_ends": 0,
+          "client_leave_acks": 0,
+          "client_reject_reason": "",
+          "client_retransmits": 0,
+          "client_state": "Joined",
+          "client_substitution_acks": 0,
+          "client_substitution_offers": 0,
+          "client_unacknowledged_leaves": 0,
+          "client_used_stored_ticket": true,
+          "clock_divergence_max_ms": 0,
+          "host_ledger_drops_recorded": 0,
+          "host_reseat_live_on_team_not_named": 0,
+          "host_reseats_issued": 0,
+          "host_reseats_without_a_ledger": 0,
+          "host_reseats_without_survivors": 0,
+          "host_seats_dropped": 0,
+          "moderation": [],
+          "seats": [],
+          "ticket_clears": 0,
+          "ticket_refused_loads": 0,
+          "ticket_store_path": "D:\\mx\\s41b3\\j41\\peers_3_4_regression_20260910_022655\\drop3_client1.ticket",
+          "ticket_stored": true,
+          "ticket_stores": 0,
+          "ux_attempts": 0,
+          "ux_state": "Connected"
+        },
+        "runner": {
+          "lobby": {
+            "config_acked": false,
+            "failure_reason": "",
+            "local_peer_id": 2,
+            "local_ready": true,
+            "match_config": {
+              "activity_preset": "P4 Alpha Duel",
+              "activity_type": "GAScripted",
+              "host_peer_id": 1,
+              "input_delay_frames": 0,
+              "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+              "mode": "pvp-skirmish",
+              "mode_preset": "pvp-skirmish",
+              "ownership_policy": "team-owner",
+              "peer_count": 3,
+              "peer_input_delays": [],
+              "players": [
+                {
+                  "cpu": false,
+                  "display_name": "Host",
+                  "peer_id": 1,
+                  "team": 0
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 2,
+                  "team": 1
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 3,
+                  "team": 2
+                }
+              ],
+              "scene_name": "Grasslands",
+              "session_id": 6004495977551122484,
+              "version": 2
+            },
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "remote_peer_id": 1,
+            "remote_peers": [
+              {
+                "config_acked": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "ready": true
+              }
+            ],
+            "remote_ready": true,
+            "role": "client",
+            "start_frame": 312,
+            "start_requested": false,
+            "state": "Started",
+            "stats": {
+              "config_acks_received": 0,
+              "config_packets_sent": 0,
+              "ignored_session_packets": 8,
+              "malformed_messages": 0,
+              "messages_received": 124,
+              "messages_sent": 3,
+              "ready_packets_received": 0,
+              "start_packets_received": 1,
+              "start_packets_sent": 0,
+              "timeouts": 0,
+              "unbound_connection_faults": 0,
+              "unbound_disconnects": 0
+            }
+          },
+          "lockstep": {
+            "configured_start_frame": 312,
+            "connections_closed_on_eviction": 0,
+            "duplicate_frames": 0,
+            "effective_start_frame": 312,
+            "frame_packets_received": 1204,
+            "frame_packets_sent": 602,
+            "frames_accepted": 602,
+            "future_frame_drops": 0,
+            "ignored_session_packets": 0,
+            "input_delay_frames": 0,
+            "largest_relay_packet_bytes": 0,
+            "last_missing_peers": "Client",
+            "last_relay_error": "",
+            "local_controller_frames_sent": 1204,
+            "local_peer_id": 2,
+            "longest_stall_ms": 36,
+            "missing_frame_stalls": 602,
+            "next_frame": 914,
+            "observations_carried": 0,
+            "observations_dropped": 0,
+            "out_of_order_frames": 0,
+            "peer_input_delays": {
+              "1": 0,
+              "2": 0,
+              "3": 0
+            },
+            "peer_leave_frames": {},
+            "peer_silence_leave_ms": 10000,
+            "peers": {
+              "1": {
+                "controller_frames_received": 578,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 913,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11919,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              },
+              "3": {
+                "controller_frames_received": 1204,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 913,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11919,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              }
+            },
+            "peers_dropped_silent": 0,
+            "peers_left": 0,
+            "pre_start_frames_buffered": 0,
+            "relay_backlog_bytes": 0,
+            "relay_backlog_overflows": 0,
+            "relay_backlog_peers": 0,
+            "relay_bytes_sent": 0,
+            "relay_congested_refusals": 0,
+            "relay_congestion_hold_leave_ms": 15000,
+            "relay_congestion_holds": 0,
+            "relay_longest_congestion_hold_ms": 0,
+            "relay_observation_overflows": 0,
+            "relay_packets_sent": 0,
+            "relay_resends": 0,
+            "relay_send_failures": 0,
+            "remote_controller_frames_accepted": 1782,
+            "remote_controller_frames_received": 1782,
+            "remote_peer_id": 0,
+            "round_id": 12954634677653119712,
+            "round_readoptions": 0,
+            "session_id": 6004495977551122484,
+            "stale_round_packets": 0,
+            "start_answers": 0,
+            "start_answers_suppressed": 0,
+            "start_packets_received": 2,
+            "start_packets_sent": 1,
+            "start_retransmits": 0,
+            "starts_relayed_on_repeat": 0,
+            "state": "Stopped",
+            "stops_from_left_peers": 0,
+            "timeout_reason": "Complete:e2e complete",
+            "timeouts": 0,
+            "unresolved_observation_packets": 0
+          },
+          "match_config": {
+            "activity_preset": "P4 Alpha Duel",
+            "activity_type": "GAScripted",
+            "host_peer_id": 1,
+            "input_delay_frames": 0,
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "mode": "pvp-skirmish",
+            "mode_preset": "pvp-skirmish",
+            "ownership_policy": "team-owner",
+            "peer_count": 3,
+            "peer_input_delays": [],
+            "players": [
+              {
+                "cpu": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "team": 0
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 2,
+                "team": 1
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 3,
+                "team": 2
+              }
+            ],
+            "scene_name": "Grasslands",
+            "session_id": 6004495977551122484,
+            "version": 2
+          },
+          "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+          "session": {
+            "accepted": true,
+            "actual": "",
+            "admission": {},
+            "clock_ms": 956,
+            "expected": "",
+            "final_state": "Ready",
+            "local_identity": {
+              "build_id": "stage2-p2d-local",
+              "deterministic_config_hash": "aa795c0e0d7498f12ca171a9d8e434736a2057efb233fa9460dcf314ec281228",
+              "has_userdata_modules": true,
+              "module_manifest_hash": "4659391376df15b48dd4dd356d0eb0711fa5433bfb0c4b890f7e70a15e0f16f1",
+              "num_lua_states": 4,
+              "num_lua_states_override": 4,
+              "selected_module": "",
+              "session_rules_hash": "12dedcec1129d7bcd72f6dff276631f2060ad0208b60919e6560044406869077"
+            },
+            "local_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "mismatch_key": "",
+            "peers": [
+              {
+                "display_name": "Host",
+                "identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+                "last_heartbeat_ms": 945,
+                "peer_id": 0,
+                "state": "Ready",
+                "transport_peer_id": 1
+              }
+            ],
+            "reject_reason": "",
+            "rejected": false,
+            "remote_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "role": "client",
+            "schema": 1,
+            "session_id": "6004495977551122484",
+            "stats": {
+              "admission_messages": 2,
+              "fenced_disconnects": 0,
+              "fenced_packets": 0,
+              "ignored_phase_packets": 125,
+              "malformed_messages": 0,
+              "old_wire_disconnects": 0,
+              "old_wire_rejections_sent": 0,
+              "pending_admission_joins": 0,
+              "received_messages": 12,
+              "sent_messages": 18,
+              "timeout_resumptions": 0,
+              "timeouts": 0,
+              "unauthenticated_connections_refused": 0,
+              "unbound_connection_faults": 0
+            },
+            "summary": ""
+          },
+          "setup_error": "",
+          "state": "Running",
+          "uses_lobby_protocol": true
+        },
+        "state": "Running",
+        "status": "e2e complete"
+      }
+    }
+  },
+  "5": {
+    "root": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824",
+    "exists": true,
+    "verdict_passed": true,
+    "exe": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "built_from": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "returner_stdout": {
+      "path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_returner\\stdout.log",
+      "missing": false,
+      "size": 822,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match] state transfer complete: 5477079 bytes"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] read_ms=586"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] launching from the received snapshot: p5resync_1224_recv"
+        },
+        {
+          "n": 8,
+          "text": "[snapbench] restart_ms=155"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 10,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_returner_report.json"
+        }
+      ]
+    },
+    "returner_console": {
+      "path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_returner\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 509,
+      "lines": [
+        {
+          "n": 6,
+          "text": "SYSTEM: Game \"p5resync_1224_recv\" staged for restart!"
+        }
+      ]
+    },
+    "host_stdout": {
+      "path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_host\\stdout.log",
+      "missing": false,
+      "size": 1364,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 5,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,local,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 6,
+          "text": "[snapbench] restart_ms=98"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] waiting on peer frames (tick 200, Client)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] Client left the match at frame 200 (connection lost)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] peer stall recovered after 4449ms (tick 200)"
+        },
+        {
+          "n": 10,
+          "text": "[net-reconnect] reseating team 1 onto peer 2 (2 actors)"
+        },
+        {
+          "n": 11,
+          "text": "[net-match] rejoin: Client reconnected - resyncing the match"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] save main_ms=134 zip_io_ms=78 saved=1"
+        },
+        {
+          "n": 14,
+          "text": "[snapbench] read_ms=578"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] launching from the received snapshot: p5resync_9160"
+        },
+        {
+          "n": 16,
+          "text": "[snapbench] restart_ms=138"
+        },
+        {
+          "n": 17,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 18,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 19,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_host_trace.json"
+        },
+        {
+          "n": 20,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_host_report.json"
+        }
+      ]
+    },
+    "host_console": {
+      "path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_host\\runtime\\LogConsole.txt",
+      "missing": false,
+      "size": 685,
+      "lines": [
+        {
+          "n": 9,
+          "text": "NETWORK: Resyncing from the host (1): ResyncRequested:player rejoined"
+        },
+        {
+          "n": 10,
+          "text": "SYSTEM: Game saved to \"p5resync_9160\"!"
+        },
+        {
+          "n": 11,
+          "text": "SYSTEM: Game \"p5resync_9160\" staged for restart!"
+        }
+      ]
+    },
+    "client2_stdout": {
+      "path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client2\\stdout.log",
+      "missing": false,
+      "size": 1265,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms) | peer3=Client(team2,local,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=102"
+        },
+        {
+          "n": 6,
+          "text": "[net-match] waiting on peer frames (tick 200, Client)"
+        },
+        {
+          "n": 7,
+          "text": "[net-match] Client left the match at frame 200 (connection lost)"
+        },
+        {
+          "n": 8,
+          "text": "[net-match] peer stall recovered after 4462ms (tick 200)"
+        },
+        {
+          "n": 9,
+          "text": "[net-match] resync: requested, reloading from the host snapshot"
+        },
+        {
+          "n": 10,
+          "text": "[net-match] state transfer complete: 5477079 bytes"
+        },
+        {
+          "n": 11,
+          "text": "[snapbench] read_ms=582"
+        },
+        {
+          "n": 12,
+          "text": "[net-match] launching from the received snapshot: p5resync_4268_recv"
+        },
+        {
+          "n": 13,
+          "text": "[snapbench] restart_ms=139"
+        },
+        {
+          "n": 14,
+          "text": "[net-match] resync: match relaunched from the snapshot"
+        },
+        {
+          "n": 15,
+          "text": "[net-match] reseat: team 1 -> peer 2 actors 2/2"
+        },
+        {
+          "n": 16,
+          "text": "[net-match-service-e2e] wrote trace: D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client2_trace.json"
+        },
+        {
+          "n": 17,
+          "text": "[net-match-service-e2e] wrote report: D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client2_report.json"
+        }
+      ]
+    },
+    "client1_stdout": {
+      "path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client1\\stdout.log",
+      "missing": false,
+      "size": 460,
+      "lines": [
+        {
+          "n": 1,
+          "text": "[audio] output silenced for the headless run"
+        },
+        {
+          "n": 4,
+          "text": "[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=3 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms) | peer3=Client(team2,remote,ready,ping0ms)"
+        },
+        {
+          "n": 5,
+          "text": "[snapbench] restart_ms=97"
+        }
+      ]
+    },
+    "returner_report": {
+      "exit_code": 0,
+      "setup_error": "",
+      "runtime_error": "",
+      "activity_preset": "P4 Alpha Duel",
+      "activity_state": "Over",
+      "winner_team": -1,
+      "entered_editor": false,
+      "rematches": 0,
+      "resyncs": 0,
+      "actors": 4,
+      "actors_peak": 5,
+      "pace": {
+        "iterations": 626,
+        "sim_ticks": 602,
+        "wall_ms": 11049,
+        "sim_ms": 10622,
+        "draw_ms": 434,
+        "wall_tps": 54.4801,
+        "sim_ms_per_tick": 17.6446,
+        "draw_ms_per_iter": 0.694406,
+        "net_wait_ms": 10016,
+        "accrued_ms": 11050,
+        "trimmed_ms": 1032,
+        "wall_seen_ms": 11050,
+        "cap_lost_ms": 0,
+        "paused_lost_ms": 0,
+        "update_calls": 626,
+        "reset_calls": 0,
+        "time_scale": 1
+      },
+      "running_ticks": 601,
+      "frames_planned": 600,
+      "local_prediction": {
+        "enabled": true,
+        "previews": 0,
+        "actor_ticks": 0,
+        "ms_total": 0,
+        "shadows": 0,
+        "taken": 0,
+        "violations": 0
+      },
+      "controller_boundary": {
+        "equip_commands": 0,
+        "sound_commands": 0,
+        "aim_intents": 0,
+        "flip_intents": 0,
+        "direct_writes": 0
+      },
+      "replay_recording": {
+        "frames": 0,
+        "closed": false
+      },
+      "setup_surface": "fixed-alpha-duel",
+      "unsupported_setup_surface": "stock pregame editor/deployment/buy-menu setup is not synchronized in P4A",
+      "service": {
+        "activity_preset": "P4 Alpha Duel",
+        "error": "",
+        "is_host": false,
+        "local_peer_id": 2,
+        "local_team": 1,
+        "reconnect": {
+          "admission_attached": true,
+          "admission_clock_ms": 14694,
+          "admission_enabled": true,
+          "census_refusals": 0,
+          "client_ambiguous_losses": 0,
+          "client_applications_acknowledged": 0,
+          "client_applications_sent": 0,
+          "client_commits": 1,
+          "client_confirmed_session_ends": 0,
+          "client_leave_acks": 0,
+          "client_reject_reason": "",
+          "client_retransmits": 0,
+          "client_state": "Joined",
+          "client_substitution_acks": 0,
+          "client_substitution_offers": 0,
+          "client_unacknowledged_leaves": 0,
+          "client_used_stored_ticket": true,
+          "clock_divergence_max_ms": 0,
+          "host_ledger_drops_recorded": 0,
+          "host_reseat_live_on_team_not_named": 0,
+          "host_reseats_issued": 0,
+          "host_reseats_without_a_ledger": 0,
+          "host_reseats_without_survivors": 0,
+          "host_seats_dropped": 0,
+          "moderation": [],
+          "seats": [],
+          "ticket_clears": 0,
+          "ticket_refused_loads": 0,
+          "ticket_store_path": "D:\\mx\\s41b3\\j42\\peers_3_4_regression_20260910_022824\\drop3_client1.ticket",
+          "ticket_stored": true,
+          "ticket_stores": 0,
+          "ux_attempts": 0,
+          "ux_state": "Connected"
+        },
+        "runner": {
+          "lobby": {
+            "config_acked": false,
+            "failure_reason": "",
+            "local_peer_id": 2,
+            "local_ready": true,
+            "match_config": {
+              "activity_preset": "P4 Alpha Duel",
+              "activity_type": "GAScripted",
+              "host_peer_id": 1,
+              "input_delay_frames": 0,
+              "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+              "mode": "pvp-skirmish",
+              "mode_preset": "pvp-skirmish",
+              "ownership_policy": "team-owner",
+              "peer_count": 3,
+              "peer_input_delays": [],
+              "players": [
+                {
+                  "cpu": false,
+                  "display_name": "Host",
+                  "peer_id": 1,
+                  "team": 0
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 2,
+                  "team": 1
+                },
+                {
+                  "cpu": false,
+                  "display_name": "Client",
+                  "peer_id": 3,
+                  "team": 2
+                }
+              ],
+              "scene_name": "Grasslands",
+              "session_id": 6004495977551122484,
+              "version": 2
+            },
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "remote_peer_id": 1,
+            "remote_peers": [
+              {
+                "config_acked": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "ready": true
+              }
+            ],
+            "remote_ready": true,
+            "role": "client",
+            "start_frame": 313,
+            "start_requested": false,
+            "state": "Started",
+            "stats": {
+              "config_acks_received": 0,
+              "config_packets_sent": 0,
+              "ignored_session_packets": 8,
+              "malformed_messages": 0,
+              "messages_received": 124,
+              "messages_sent": 3,
+              "ready_packets_received": 0,
+              "start_packets_received": 1,
+              "start_packets_sent": 0,
+              "timeouts": 0,
+              "unbound_connection_faults": 0,
+              "unbound_disconnects": 0
+            }
+          },
+          "lockstep": {
+            "configured_start_frame": 313,
+            "connections_closed_on_eviction": 0,
+            "duplicate_frames": 0,
+            "effective_start_frame": 313,
+            "frame_packets_received": 1204,
+            "frame_packets_sent": 602,
+            "frames_accepted": 602,
+            "future_frame_drops": 0,
+            "ignored_session_packets": 0,
+            "input_delay_frames": 0,
+            "largest_relay_packet_bytes": 0,
+            "last_missing_peers": "Client",
+            "last_relay_error": "",
+            "local_controller_frames_sent": 1204,
+            "local_peer_id": 2,
+            "longest_stall_ms": 37,
+            "missing_frame_stalls": 602,
+            "next_frame": 915,
+            "observations_carried": 0,
+            "observations_dropped": 0,
+            "out_of_order_frames": 0,
+            "peer_input_delays": {
+              "1": 0,
+              "2": 0,
+              "3": 0
+            },
+            "peer_leave_frames": {},
+            "peer_silence_leave_ms": 10000,
+            "peers": {
+              "1": {
+                "controller_frames_received": 457,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 914,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11980,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              },
+              "3": {
+                "controller_frames_received": 1204,
+                "duplicate_frames": 0,
+                "frame_packets_received": 602,
+                "frames_contributed": 602,
+                "future_frame_drops": 0,
+                "highest_target_frame": 914,
+                "largest_relay_packet_bytes": 0,
+                "last_heard_ms": 11993,
+                "last_relay_error": "",
+                "longest_congestion_hold_ms": 0,
+                "out_of_order_frames": 0,
+                "pre_start_buffered": 0,
+                "relay_backlog_overflows": 0,
+                "relay_backlog_packets": 0,
+                "relay_bytes_sent": 0,
+                "relay_packets_sent": 0,
+                "relay_resends": 0,
+                "relay_send_failures": 0,
+                "stale_round_packets": 0
+              }
+            },
+            "peers_dropped_silent": 0,
+            "peers_left": 0,
+            "pre_start_frames_buffered": 0,
+            "relay_backlog_bytes": 0,
+            "relay_backlog_overflows": 0,
+            "relay_backlog_peers": 0,
+            "relay_bytes_sent": 0,
+            "relay_congested_refusals": 0,
+            "relay_congestion_hold_leave_ms": 15000,
+            "relay_congestion_holds": 0,
+            "relay_longest_congestion_hold_ms": 0,
+            "relay_observation_overflows": 0,
+            "relay_packets_sent": 0,
+            "relay_resends": 0,
+            "relay_send_failures": 0,
+            "remote_controller_frames_accepted": 1661,
+            "remote_controller_frames_received": 1661,
+            "remote_peer_id": 0,
+            "round_id": 8051623832101080259,
+            "round_readoptions": 0,
+            "session_id": 6004495977551122484,
+            "stale_round_packets": 0,
+            "start_answers": 0,
+            "start_answers_suppressed": 0,
+            "start_packets_received": 2,
+            "start_packets_sent": 1,
+            "start_retransmits": 0,
+            "starts_relayed_on_repeat": 0,
+            "state": "Stopped",
+            "stops_from_left_peers": 0,
+            "timeout_reason": "Complete:e2e complete",
+            "timeouts": 0,
+            "unresolved_observation_packets": 0
+          },
+          "match_config": {
+            "activity_preset": "P4 Alpha Duel",
+            "activity_type": "GAScripted",
+            "host_peer_id": 1,
+            "input_delay_frames": 0,
+            "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+            "mode": "pvp-skirmish",
+            "mode_preset": "pvp-skirmish",
+            "ownership_policy": "team-owner",
+            "peer_count": 3,
+            "peer_input_delays": [],
+            "players": [
+              {
+                "cpu": false,
+                "display_name": "Host",
+                "peer_id": 1,
+                "team": 0
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 2,
+                "team": 1
+              },
+              {
+                "cpu": false,
+                "display_name": "Client",
+                "peer_id": 3,
+                "team": 2
+              }
+            ],
+            "scene_name": "Grasslands",
+            "session_id": 6004495977551122484,
+            "version": 2
+          },
+          "match_config_hash": "353f4216348a6a5964c4d3c13f01c338d5e4d9c01f47076988b32e1585448eeb",
+          "session": {
+            "accepted": true,
+            "actual": "",
+            "admission": {},
+            "clock_ms": 948,
+            "expected": "",
+            "final_state": "Ready",
+            "local_identity": {
+              "build_id": "stage2-p2d-local",
+              "deterministic_config_hash": "aa795c0e0d7498f12ca171a9d8e434736a2057efb233fa9460dcf314ec281228",
+              "has_userdata_modules": true,
+              "module_manifest_hash": "4659391376df15b48dd4dd356d0eb0711fa5433bfb0c4b890f7e70a15e0f16f1",
+              "num_lua_states": 4,
+              "num_lua_states_override": 4,
+              "selected_module": "",
+              "session_rules_hash": "12dedcec1129d7bcd72f6dff276631f2060ad0208b60919e6560044406869077"
+            },
+            "local_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "mismatch_key": "",
+            "peers": [
+              {
+                "display_name": "Host",
+                "identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+                "last_heartbeat_ms": 931,
+                "peer_id": 0,
+                "state": "Ready",
+                "transport_peer_id": 1
+              }
+            ],
+            "reject_reason": "",
+            "rejected": false,
+            "remote_identity_hash": "9e3d7a905454e706603e1b75ad950d7520c785298210c98820a863f7c34fbd22",
+            "role": "client",
+            "schema": 1,
+            "session_id": "6004495977551122484",
+            "stats": {
+              "admission_messages": 2,
+              "fenced_disconnects": 0,
+              "fenced_packets": 0,
+              "ignored_phase_packets": 125,
+              "malformed_messages": 0,
+              "old_wire_disconnects": 0,
+              "old_wire_rejections_sent": 0,
+              "pending_admission_joins": 0,
+              "received_messages": 12,
+              "sent_messages": 18,
+              "timeout_resumptions": 0,
+              "timeouts": 0,
+              "unauthenticated_connections_refused": 0,
+              "unbound_connection_faults": 0
+            },
+            "summary": ""
+          },
+          "setup_error": "",
+          "state": "Running",
+          "uses_lobby_protocol": true
+        },
+        "state": "Running",
+        "status": "e2e complete"
+      }
+    }
+  }
+}

@@ -1,0 +1,184 @@
+[
+  {
+    "index": 1,
+    "hash": "55435673b835303ff28240a8c40c6fb7d3e7e637",
+    "subject": "Carry player-binding observations on the command wire",
+    "file_count": 2,
+    "files": [
+      "Source/Network/NetGameCommand.h",
+      "Source/Network/NetGameCommand.cpp"
+    ]
+  },
+  {
+    "index": 2,
+    "hash": "c5292b097ec7327e0ff14922b01220cb18c3eacd",
+    "subject": "Bound a resync envelope around archive, acks and pending commands",
+    "file_count": 6,
+    "files": [
+      "Source/Network/NetLobbyProtocol.h",
+      "Source/Network/NetLobbyProtocol.cpp",
+      "Source/Network/NetResyncState.h",
+      "Source/Network/NetResyncState.cpp",
+      "Source/Network/NetResyncSelfTest.h",
+      "Source/Network/NetResyncSelfTest.cpp"
+    ]
+  },
+  {
+    "index": 3,
+    "hash": "2b8abb701a943f59a709447b0fe4e308c01474ef",
+    "subject": "Restore complete input, drop-map ownership and exact-target priming",
+    "file_count": 7,
+    "files": [
+      "Source/Network/NetLockstep.h",
+      "Source/Network/NetLockstep.cpp",
+      "Source/Network/NetLockstepSelfTest.cpp",
+      "Source/System/ScenarioRunner.h",
+      "Source/System/ScenarioRunner.cpp",
+      "Source/Network/NetResyncRuntimeSelfTest.h",
+      "Source/Network/NetResyncRuntimeSelfTest.cpp"
+    ]
+  },
+  {
+    "index": 4,
+    "hash": "983efb1381f7ae12a3d067d78919fc578b5bdb8c",
+    "subject": "Restore typed native aliases and isolate craft-fixture clones",
+    "file_count": 2,
+    "files": [
+      "Source/Managers/LuaMan.h",
+      "Source/Managers/LuaMan.cpp"
+    ]
+  },
+  {
+    "index": 5,
+    "hash": "3fec09209efadaed6e220da99c1cc14264de2a62",
+    "subject": "Skip registry mutation when privately adopting a persisted UniqueID",
+    "file_count": 2,
+    "files": [
+      "Source/Entities/MovableObject.h",
+      "Source/Entities/MovableObject.cpp"
+    ]
+  },
+  {
+    "index": 6,
+    "hash": "c25f690860fb5e8e32c56e7227a9e42db63c9761",
+    "subject": "Keep ACraft exit selection and AHuman inventory across checkpoint load",
+    "file_count": 3,
+    "files": [
+      "Source/Entities/ACraft.h",
+      "Source/Entities/ACraft.cpp",
+      "Source/Entities/AHuman.cpp"
+    ]
+  },
+  {
+    "index": 7,
+    "hash": "30713812dcda02b34109e8f3986e65a9dd25fe4a",
+    "subject": "Add A7 journal helpers for recovery-arm traces",
+    "file_count": 2,
+    "files": [
+      "Source/Network/NetA7Journal.h",
+      "Source/Network/NetA7Journal.cpp"
+    ]
+  },
+  {
+    "index": 8,
+    "hash": "318211fe3e5b7c9b2d58c8d8dbd6c90b7c72bb1d",
+    "subject": "Give the host a live F6 panel and codec-17 seat snapshots",
+    "file_count": 20,
+    "files": [
+      "Source/Menus/NetModerationGUI.h",
+      "Source/Menus/NetModerationGUI.cpp",
+      "Source/CI/NetModerationGUIProbe.h",
+      "Source/CI/NetModerationGUIProbe.cpp",
+      "Source/Menus/MainMenuGUI.h",
+      "Source/Menus/MainMenuGUI.cpp",
+      "Source/Managers/MenuMan.h",
+      "Source/Managers/MenuMan.cpp",
+      "Source/Managers/UInputMan.h",
+      "Source/Managers/UInputMan.cpp",
+      "Source/Main.cpp",
+      "Source/Network/NetReconnectUx.h",
+      "Source/Network/NetReconnectUx.cpp",
+      "Source/Network/NetReconnectSession.h",
+      "Source/Network/NetReconnectSession.cpp",
+      "Source/Network/NetReconnectSessionSelfTest.cpp",
+      "Source/Network/NetMatchService.h",
+      "Source/Network/NetMatchService.cpp",
+      "Source/CI/meson.build",
+      "Source/Menus/meson.build"
+    ]
+  },
+  {
+    "index": 9,
+    "hash": "ccb5586614dd723e5f0565086a845a747af0eb75",
+    "subject": "Restore peer-local player, UI and aliases after a restore",
+    "file_count": 15,
+    "files": [
+      "Source/Entities/Activity.h",
+      "Source/Entities/Activity.cpp",
+      "Source/Activities/GameActivity.h",
+      "Source/Activities/GameActivity.cpp",
+      "Source/GUI/GUICheckpoint.h",
+      "Source/GUI/GUIControlManager.cpp",
+      "Source/Managers/FrameMan.h",
+      "Source/Managers/FrameMan.cpp",
+      "Source/System/Controller.h",
+      "Source/System/Controller.cpp",
+      "Source/Menus/SceneEditorGUI.h",
+      "Source/Menus/SceneEditorGUI.cpp",
+      "Source/Menus/InventoryMenuGUI.cpp",
+      "Source/Managers/ActivityMan.h",
+      "Source/Managers/ActivityMan.cpp"
+    ]
+  },
+  {
+    "index": 10,
+    "hash": "94c53269b3cd7cea7259ca2e15a0afde09793a62",
+    "subject": "Initialize saved-game modules and use the lobby shared clock",
+    "file_count": 8,
+    "files": [
+      "Source/Managers/PresetMan.cpp",
+      "Source/Network/NetLobbySession.h",
+      "Source/Network/NetLobbySession.cpp",
+      "Source/Network/NetMatchRunner.h",
+      "Source/Network/NetMatchRunner.cpp",
+      "Source/Network/NetMatchSelfTest.cpp",
+      "Data/Tests.rte/Activities.ini",
+      "Data/Tests.rte/Activities/NetLifecycleTest.lua"
+    ]
+  },
+  {
+    "index": 11,
+    "hash": "77dea7f5ce279cb0f57d3935ed5180ae7bc4c629",
+    "subject": "Record A7 recovery events on session, tickets and ownership",
+    "file_count": 6,
+    "files": [
+      "Source/Network/NetSession.h",
+      "Source/Network/NetSession.cpp",
+      "Source/Network/NetReconnectTicketStore.h",
+      "Source/Network/NetReconnectTicketStore.cpp",
+      "Source/Managers/MovableMan.h",
+      "Source/Managers/MovableMan.cpp"
+    ]
+  },
+  {
+    "index": 12,
+    "hash": "a622afdf4519adac9c750c85c98227b70b38e317",
+    "subject": "Compare snapshots by the controlled actor's inventory role",
+    "file_count": 2,
+    "files": [
+      "tools/compare_snapshots.py",
+      "tools/test_snapshot_inventory_roles.py"
+    ]
+  },
+  {
+    "index": 13,
+    "hash": "aaf7057e5dfef135a9b9f09fbc6831672e091895",
+    "subject": "Add the new network and moderation sources to the build",
+    "file_count": 3,
+    "files": [
+      "RTEA.vcxproj",
+      "RTEA.vcxproj.filters",
+      "Source/Network/meson.build"
+    ]
+  }
+]

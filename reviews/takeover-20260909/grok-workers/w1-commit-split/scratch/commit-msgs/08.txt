@@ -1,0 +1,3 @@
+Give the host a live F6 panel and codec-17 seat snapshots
+
+Replace stop-message notices with authenticated seat snapshots, keep seat metadata, and show a persistent roster.

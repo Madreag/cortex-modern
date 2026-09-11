@@ -1,0 +1,50 @@
+{
+  "copied": {
+    "run_breadth.py": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w4-breadth-harness\\pre\\run_breadth.py",
+    "run_breadth_sha256": "08b0f81dc2c95b6b28a203e257d75ed47b3313946c41bbb7e610a58424454434",
+    "fixture": "D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w4-breadth-harness\\pre\\compat_review_extra.lua",
+    "fixture_sha256": "a3ba433eea9dcb5cbd67088f525e42458777b1d3dabd865e434d0793e9122fd4"
+  },
+  "build_json": {
+    "path": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\grouped-build-bb3cf264\\build.json",
+    "head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "has_inputs_key": false,
+    "artifact_count": 6
+  },
+  "export": {
+    "path": "D:\\Projects\\reviews\\recovery-2026-09-07\\contract-audit\\mac-peer-20260907\\combined-source-41.manifest.json",
+    "head": "c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e",
+    "file_count": 9043,
+    "source_file_count": 570,
+    "tools_compare_in_export": true,
+    "tools_inventory_in_export": false
+  },
+  "repo": {
+    "head": "9751a90e292eb300013c1d6052f3df7bbe228869",
+    "log": "9751a90e292eb300013c1d6052f3df7bbe228869\nCompare controlled actors across every activity in snapshot diffs\nErol Germain-Gomuc\negermain.ua@gmail.com",
+    "stat": "tools/compare_snapshots.py             |  10 ++-\n tools/test_snapshot_inventory_roles.py | 149 +++++++++++++++++++++++++++++++++\n 2 files changed, 157 insertions(+), 2 deletions(-)",
+    "exe_present": true,
+    "exe_sha256": "bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb",
+    "exe_matches_pin": true,
+    "head_matches_pin": false
+  },
+  "tools": {
+    "tools/compare_snapshots.py": {
+      "in_export": true,
+      "pinned_sha256": "dfa1cdfee50e2a49aebe82516fbf4dd06b493a369bc3ff394497759d62f40561",
+      "working_sha256": "5843330c5d4be7585c99c0d713be990ff92653bc6249b9633534baabba676fb6",
+      "match": false
+    },
+    "tools/test_snapshot_inventory_roles.py": {
+      "in_export": false,
+      "pinned_sha256": null,
+      "working_sha256": "80ac96f9843a3e7368957e5f97d914b6780be04f795fd98c89f0e102bc8c1d82",
+      "match": false
+    }
+  },
+  "first_input_mismatches": [
+    "tools/compare_snapshots.py"
+  ],
+  "pin_verify_would_fail": true
+}

@@ -1,0 +1,13 @@
+  PASS executable_matches_manifest bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+  FAIL host_exit_zero 1
+  PASS first_client_dropped_midmatch terminated by the driver
+  PASS returner_reclaimed_stored_ticket
+  PASS returner_committed
+  FAIL host_saw_seat_drop_and_return 0 committed seats
+  PASS returner_on_same_stable_seat shared ticket path
+  PASS host_census_clean 0
+  PASS host_reseat_issued no ledgered survivors; printed=False; host_seats_dropped=1, host_ledger_drops_recorded=1, host_reseats_issued=0, host_reseats_without_a_ledger=0, host_reseats_without_survivors=1, host_reseat_live_on_team_not_named=0
+  PASS resync_round_survived
+  PASS funds_unchanged no funds command was issued in this gate
+  PASS no_authority_error
+GATE reclaim_socket FAIL -> D:\mx\s41b3\j34\reclaim_socket_20260910_021916

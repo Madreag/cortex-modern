@@ -1,0 +1,3 @@
+Restore typed native aliases and isolate craft-fixture clones
+
+Borrowed owners keep their Lua class, and craft-fixture clones leave the source graph registered.

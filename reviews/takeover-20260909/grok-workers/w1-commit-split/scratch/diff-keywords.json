@@ -1,0 +1,1686 @@
+[
+  {
+    "path": "Data/Tests.rte/Activities.ini",
+    "status": " M",
+    "stat": "12\t0\tData/Tests.rte/Activities.ini",
+    "hits": {},
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 818
+  },
+  {
+    "path": "RTEA.vcxproj",
+    "status": " M",
+    "stat": "12\t0\tRTEA.vcxproj",
+    "hits": {
+      "resync": 6,
+      "Resync": 6,
+      "moderation": 4,
+      "journal": 2,
+      "A7": 2
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 2699
+  },
+  {
+    "path": "RTEA.vcxproj.filters",
+    "status": " M",
+    "stat": "36\t0\tRTEA.vcxproj.filters",
+    "hits": {
+      "resync": 6,
+      "Resync": 6,
+      "moderation": 4,
+      "journal": 2,
+      "A7": 2
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 2430
+  },
+  {
+    "path": "Source/Activities/GameActivity.cpp",
+    "status": " M",
+    "stat": "445\t3\tSource/Activities/GameActivity.cpp",
+    "hits": {
+      "PlayerBinding": 6,
+      "alias": 14,
+      "AdoptPersisted": 2,
+      "FaithfulClone": 1,
+      "module": 10,
+      "NetLocalRestore": 3,
+      "GUICheckpoint": 11
+    },
+    "added_funcs": [
+      "CollectOwnedMovableObjects",
+      "CreateNetLocalUI",
+      "Restore",
+      "RestoreNetLocalBanner",
+      "RestoreNetLocalMenu",
+      "SaveActivityOwnedEntity",
+      "check",
+      "clones",
+      "for",
+      "if",
+      "observeReclaim",
+      "pointers",
+      "reader",
+      "report",
+      "visit",
+      "writer"
+    ],
+    "funcs": [
+      "RestoreNetLocalBanner",
+      "RestoreNetLocalMenu",
+      "SaveIdentity"
+    ],
+    "bytes": 31502
+  },
+  {
+    "path": "Source/Activities/GameActivity.h",
+    "status": " M",
+    "stat": "7\t0\tSource/Activities/GameActivity.h",
+    "hits": {
+      "PlayerBinding": 4,
+      "ownership": 1,
+      "controlled actor": 1
+    },
+    "added_funcs": [
+      "ApplyNetPlayerBindings",
+      "CaptureNetLocalPlayerState",
+      "CaptureNetPlayerBindings",
+      "CreateNetLocalUI",
+      "LoadNetLocalGameState",
+      "RestoreNetLocalPlayerState",
+      "RunNetLocalUIRestoreSelfTest"
+    ],
+    "funcs": [
+      "ApplyNetPlayerBindings",
+      "CaptureNetLocalPlayerState",
+      "CaptureNetPlayerBindings",
+      "CreateNetLocalUI",
+      "LoadNetLocalGameState",
+      "LoadValueCheckpoint",
+      "RestoreNetLocalPlayerState",
+      "RunNetLocalUIRestoreSelfTest",
+      "SaveCheckpoint",
+      "SaveValueCheckpoint"
+    ],
+    "bytes": 1305
+  },
+  {
+    "path": "Source/CI/meson.build",
+    "status": " M",
+    "stat": "1\t0\tSource/CI/meson.build",
+    "hits": {
+      "moderation": 1
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 244
+  },
+  {
+    "path": "Source/Entities/ACraft.cpp",
+    "status": " M",
+    "stat": "6\t0\tSource/Entities/ACraft.cpp",
+    "hits": {
+      "CurrentExit": 13
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 1464
+  },
+  {
+    "path": "Source/Entities/ACraft.h",
+    "status": " M",
+    "stat": "1\t0\tSource/Entities/ACraft.h",
+    "hits": {
+      "CurrentExit": 2
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 403
+  },
+  {
+    "path": "Source/Entities/AHuman.cpp",
+    "status": " M",
+    "stat": "1\t1\tSource/Entities/AHuman.cpp",
+    "hits": {},
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 604
+  },
+  {
+    "path": "Source/Entities/Activity.cpp",
+    "status": " M",
+    "stat": "206\t0\tSource/Entities/Activity.cpp",
+    "hits": {
+      "PlayerBinding": 8,
+      "alias": 1
+    },
+    "added_funcs": [
+      "CaptureNetPlayerBindings",
+      "Restore",
+      "check",
+      "for",
+      "if",
+      "writer"
+    ],
+    "funcs": [],
+    "bytes": 11728
+  },
+  {
+    "path": "Source/Entities/Activity.h",
+    "status": " M",
+    "stat": "23\t0\tSource/Entities/Activity.h",
+    "hits": {
+      "PlayerBinding": 6
+    },
+    "added_funcs": [
+      "ApplyNetPlayerBindings",
+      "ApplyNetPlayerSlots",
+      "CaptureNetLocalPlayerState",
+      "CaptureNetPlayerBindings",
+      "NetActorUID",
+      "ResolveNetActor",
+      "RestoreNetLocalPlayerState",
+      "RunNetLocalPlayerStateSelfTest"
+    ],
+    "funcs": [
+      "ApplyNetPlayerBindings",
+      "ApplyNetPlayerSlots",
+      "CaptureNetLocalPlayerState",
+      "CaptureNetPlayerBindings",
+      "PrepareCheckpointUI",
+      "RestoreNetLocalPlayerState",
+      "RunNetLocalPlayerStateSelfTest"
+    ],
+    "bytes": 1821
+  },
+  {
+    "path": "Source/Entities/MovableObject.cpp",
+    "status": " M",
+    "stat": "60\t0\tSource/Entities/MovableObject.cpp",
+    "hits": {
+      "AdoptPersisted": 2,
+      "FaithfulClone": 2
+    },
+    "added_funcs": [
+      "for",
+      "if",
+      "lock",
+      "scriptNames"
+    ],
+    "funcs": [
+      "lock"
+    ],
+    "bytes": 3783
+  },
+  {
+    "path": "Source/Entities/MovableObject.h",
+    "status": " M",
+    "stat": "1\t0\tSource/Entities/MovableObject.h",
+    "hits": {
+      "AdoptPersisted": 1
+    },
+    "added_funcs": [
+      "PublishNetPrivateObjectGraph"
+    ],
+    "funcs": [
+      "AdoptPersistedUniqueID",
+      "PublishNetPrivateObjectGraph"
+    ],
+    "bytes": 467
+  },
+  {
+    "path": "Source/GUI/GUICheckpoint.h",
+    "status": " M",
+    "stat": "22\t1\tSource/GUI/GUICheckpoint.h",
+    "hits": {
+      "NetLocalRestore": 8,
+      "GUICheckpoint": 4
+    },
+    "added_funcs": [
+      "IsCapturingNetLocalUI",
+      "IsRestoringNetLocalUI",
+      "LoadOwnedEntity",
+      "NetLocalCaptureScope",
+      "NetLocalRestoreScope"
+    ],
+    "funcs": [
+      "IsCapturingNetLocalUI",
+      "IsRestoringNetLocalUI",
+      "SaveBitmap",
+      "SaveEntityReference",
+      "SaveOwnedEntity"
+    ],
+    "bytes": 1924
+  },
+  {
+    "path": "Source/GUI/GUIControlManager.cpp",
+    "status": " M",
+    "stat": "45\t2\tSource/GUI/GUIControlManager.cpp",
+    "hits": {
+      "AdoptPersisted": 1,
+      "FaithfulClone": 1,
+      "NetLocalRestore": 11,
+      "GUICheckpoint": 18
+    },
+    "added_funcs": [
+      "catch",
+      "check",
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 5146
+  },
+  {
+    "path": "Source/Main.cpp",
+    "status": " M",
+    "stat": "51\t5\tSource/Main.cpp",
+    "hits": {
+      "resync": 8,
+      "Resync": 8,
+      "ownership": 1,
+      "moderation": 8,
+      "F6": 2,
+      "journal": 11,
+      "A7": 17
+    },
+    "added_funcs": [
+      "UpdateResyncUI",
+      "bitmap",
+      "if"
+    ],
+    "funcs": [
+      "DrawFrameWithPreviews",
+      "DriveModerationE2e",
+      "HandleControllerReplayFailure",
+      "HandleMainArgs",
+      "PollSDLEvents",
+      "RunGameLoop",
+      "RunNetMatchServiceE2E",
+      "RunNetReplayPlayback",
+      "UpdateResyncUI"
+    ],
+    "bytes": 5633
+  },
+  {
+    "path": "Source/Managers/ActivityMan.cpp",
+    "status": " M",
+    "stat": "22\t0\tSource/Managers/ActivityMan.cpp",
+    "hits": {
+      "A7": 1
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 2153
+  },
+  {
+    "path": "Source/Managers/ActivityMan.h",
+    "status": " M",
+    "stat": "7\t0\tSource/Managers/ActivityMan.h",
+    "hits": {},
+    "added_funcs": [
+      "SetPendingCheckpointCallbacks"
+    ],
+    "funcs": [
+      "HasFullScriptGraphToRestore",
+      "LoadGameToRestart",
+      "SetPendingCheckpointCallbacks"
+    ],
+    "bytes": 1091
+  },
+  {
+    "path": "Source/Managers/FrameMan.cpp",
+    "status": " M",
+    "stat": "19\t0\tSource/Managers/FrameMan.cpp",
+    "hits": {},
+    "added_funcs": [
+      "VisitCheckpoint",
+      "reader",
+      "writer"
+    ],
+    "funcs": [],
+    "bytes": 1006
+  },
+  {
+    "path": "Source/Managers/FrameMan.h",
+    "status": " M",
+    "stat": "2\t0\tSource/Managers/FrameMan.h",
+    "hits": {},
+    "added_funcs": [
+      "LoadNetLocalState",
+      "SaveNetLocalState"
+    ],
+    "funcs": [
+      "LoadCheckpoint",
+      "LoadNetLocalState",
+      "RunPaletteCheckpointSelfTest",
+      "SaveNetLocalState"
+    ],
+    "bytes": 461
+  },
+  {
+    "path": "Source/Managers/LuaMan.cpp",
+    "status": " M",
+    "stat": "260\t19\tSource/Managers/LuaMan.cpp",
+    "hits": {
+      "alias": 2,
+      "AdoptPersisted": 1,
+      "FaithfulClone": 1,
+      "CurrentExit": 9,
+      "GUICheckpoint": 4
+    },
+    "added_funcs": [
+      "CollectOwnedMovableObjects",
+      "ScriptGraphNativeRelease",
+      "ScriptGraphPropertyOwner",
+      "ScriptGraphPushEntity",
+      "SelectExit",
+      "check",
+      "clone",
+      "constexpr",
+      "detachSource",
+      "entity",
+      "faithful",
+      "for",
+      "if",
+      "lock",
+      "lua_pop",
+      "lua_pushlstring",
+      "lua_rawseti",
+      "ordinary",
+      "path",
+      "push",
+      "reader",
+      "value",
+      "writer"
+    ],
+    "funcs": [
+      "ScriptGraphNativeRelease",
+      "ScriptGraphOwnerReference",
+      "ScriptGraphOwnerReferenceDescriptor",
+      "ScriptGraphProperty",
+      "ScriptGraphPropertyOwner",
+      "ScriptGraphPushEntity",
+      "SelectExit",
+      "VisitScriptOwnedObjects",
+      "path"
+    ],
+    "bytes": 23319
+  },
+  {
+    "path": "Source/Managers/LuaMan.h",
+    "status": " M",
+    "stat": "2\t0\tSource/Managers/LuaMan.h",
+    "hits": {
+      "alias": 1
+    },
+    "added_funcs": [
+      "HasNativeAliases",
+      "RekeyScriptObjects"
+    ],
+    "funcs": [
+      "HasNativeAliases",
+      "RekeyScriptObjects",
+      "ReleaseScriptOwnedObjects"
+    ],
+    "bytes": 676
+  },
+  {
+    "path": "Source/Managers/MenuMan.cpp",
+    "status": " M",
+    "stat": "8\t0\tSource/Managers/MenuMan.cpp",
+    "hits": {
+      "moderation": 2
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 1524
+  },
+  {
+    "path": "Source/Managers/MenuMan.h",
+    "status": " M",
+    "stat": "7\t0\tSource/Managers/MenuMan.h",
+    "hits": {
+      "moderation": 3
+    },
+    "added_funcs": [
+      "DrawNetworkUI",
+      "GetNetworkPanel",
+      "IsNetworkPanelOpen",
+      "ToggleNetworkPanel",
+      "UpdateNetworkUI"
+    ],
+    "funcs": [
+      "Draw",
+      "DrawNetworkUI",
+      "IsNetworkPanelOpen",
+      "ToggleNetworkPanel",
+      "UpdateNetworkUI"
+    ],
+    "bytes": 982
+  },
+  {
+    "path": "Source/Managers/MovableMan.cpp",
+    "status": " M",
+    "stat": "42\t0\tSource/Managers/MovableMan.cpp",
+    "hits": {
+      "PlayerBinding": 2,
+      "ownership": 2,
+      "journal": 4,
+      "A7": 5
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [
+      "ApplyLockstepGameCommands",
+      "IsLockstepLocalActor"
+    ],
+    "bytes": 3642
+  },
+  {
+    "path": "Source/Managers/MovableMan.h",
+    "status": " M",
+    "stat": "1\t0\tSource/Managers/MovableMan.h",
+    "hits": {
+      "ownership": 2,
+      "A7": 1
+    },
+    "added_funcs": [
+      "RecordA7UnitOwnership"
+    ],
+    "funcs": [
+      "RecordA7UnitOwnership"
+    ],
+    "bytes": 515
+  },
+  {
+    "path": "Source/Managers/PresetMan.cpp",
+    "status": " M",
+    "stat": "11\t9\tSource/Managers/PresetMan.cpp",
+    "hits": {
+      "module": 32
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 1818
+  },
+  {
+    "path": "Source/Managers/UInputMan.cpp",
+    "status": " M",
+    "stat": "9\t2\tSource/Managers/UInputMan.cpp",
+    "hits": {
+      "F6": 1
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 1114
+  },
+  {
+    "path": "Source/Managers/UInputMan.h",
+    "status": " M",
+    "stat": "1\t1\tSource/Managers/UInputMan.h",
+    "hits": {},
+    "added_funcs": [
+      "Update"
+    ],
+    "funcs": [
+      "LoadCheckpoint",
+      "SaveCheckpoint",
+      "Update"
+    ],
+    "bytes": 582
+  },
+  {
+    "path": "Source/Menus/InventoryMenuGUI.cpp",
+    "status": " M",
+    "stat": "1\t0\tSource/Menus/InventoryMenuGUI.cpp",
+    "hits": {
+      "GUICheckpoint": 1
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 780
+  },
+  {
+    "path": "Source/Menus/MainMenuGUI.cpp",
+    "status": " M",
+    "stat": "32\t18\tSource/Menus/MainMenuGUI.cpp",
+    "hits": {
+      "moderation": 73
+    },
+    "added_funcs": [
+      "ActivateModerationRow",
+      "UpdateMultiplayerScreen",
+      "for",
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 5626
+  },
+  {
+    "path": "Source/Menus/MainMenuGUI.h",
+    "status": " M",
+    "stat": "2\t1\tSource/Menus/MainMenuGUI.h",
+    "hits": {
+      "moderation": 11
+    },
+    "added_funcs": [
+      "ActivateModerationRow"
+    ],
+    "funcs": [
+      "ActivateModerationRow",
+      "RefreshModerationControls"
+    ],
+    "bytes": 1018
+  },
+  {
+    "path": "Source/Menus/SceneEditorGUI.cpp",
+    "status": " M",
+    "stat": "107\t6\tSource/Menus/SceneEditorGUI.cpp",
+    "hits": {
+      "ownership": 1,
+      "alias": 2,
+      "module": 1,
+      "GUICheckpoint": 21
+    },
+    "added_funcs": [
+      "NetEditorOwnerReferenced",
+      "ReclaimNetRetainedOwners",
+      "for",
+      "if",
+      "pointers",
+      "reader",
+      "writer"
+    ],
+    "funcs": [
+      "NetEditorOwnerReferenced"
+    ],
+    "bytes": 10519
+  },
+  {
+    "path": "Source/Menus/SceneEditorGUI.h",
+    "status": " M",
+    "stat": "9\t0\tSource/Menus/SceneEditorGUI.h",
+    "hits": {},
+    "added_funcs": [
+      "GetCheckpointRetainedOwner",
+      "GetCheckpointRetainedOwners",
+      "ReclaimNetRetainedOwners",
+      "RetainNetReferencedOwner"
+    ],
+    "funcs": [
+      "ReclaimNetRetainedOwners",
+      "RetainNetReferencedOwner"
+    ],
+    "bytes": 1469
+  },
+  {
+    "path": "Source/Menus/meson.build",
+    "status": " M",
+    "stat": "1\t0\tSource/Menus/meson.build",
+    "hits": {
+      "moderation": 1
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 306
+  },
+  {
+    "path": "Source/Network/NetGameCommand.cpp",
+    "status": " M",
+    "stat": "6\t1\tSource/Network/NetGameCommand.cpp",
+    "hits": {
+      "PlayerBinding": 5
+    },
+    "added_funcs": [
+      "constexpr"
+    ],
+    "funcs": [],
+    "bytes": 1012
+  },
+  {
+    "path": "Source/Network/NetGameCommand.h",
+    "status": " M",
+    "stat": "24\t1\tSource/Network/NetGameCommand.h",
+    "hits": {
+      "PlayerBinding": 7,
+      "resync": 1,
+      "Resync": 1,
+      "local player": 1,
+      "F6": 1,
+      "A7": 1
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 1991
+  },
+  {
+    "path": "Source/Network/NetLobbyProtocol.cpp",
+    "status": " M",
+    "stat": "16\t5\tSource/Network/NetLobbyProtocol.cpp",
+    "hits": {},
+    "added_funcs": [
+      "EncodePayload",
+      "SetError",
+      "ValidateStateChunkHeader",
+      "if"
+    ],
+    "funcs": [
+      "EncodePayload",
+      "ValidateStateChunkHeader"
+    ],
+    "bytes": 2431
+  },
+  {
+    "path": "Source/Network/NetLobbyProtocol.h",
+    "status": " M",
+    "stat": "7\t4\tSource/Network/NetLobbyProtocol.h",
+    "hits": {},
+    "added_funcs": [
+      "GetStateChunkCount",
+      "MessageTypeOf",
+      "static_assert"
+    ],
+    "funcs": [],
+    "bytes": 1362
+  },
+  {
+    "path": "Source/Network/NetLobbySession.cpp",
+    "status": " M",
+    "stat": "80\t44\tSource/Network/NetLobbySession.cpp",
+    "hits": {
+      "Acked": 2,
+      "A7": 1
+    },
+    "added_funcs": [
+      "Fail",
+      "RestartStateTransfer",
+      "constexpr",
+      "for",
+      "if",
+      "while"
+    ],
+    "funcs": [],
+    "bytes": 9276
+  },
+  {
+    "path": "Source/Network/NetLobbySession.h",
+    "status": " M",
+    "stat": "14\t5\tSource/Network/NetLobbySession.h",
+    "hits": {
+      "A7": 1
+    },
+    "added_funcs": [
+      "GetStateTransferProgressSerial",
+      "HasPendingStateChunks",
+      "IsStateTransferOutgoing",
+      "RestartStateTransfer"
+    ],
+    "funcs": [
+      "BuildReportJson",
+      "HandleStateChunk",
+      "HasCompleteStateTransfer",
+      "HasPendingStateChunks",
+      "IsStateTransferOutgoing",
+      "Reject",
+      "RejectRemote",
+      "RestartStateTransfer",
+      "SendQueuedStateChunks"
+    ],
+    "bytes": 2985
+  },
+  {
+    "path": "Source/Network/NetLockstep.cpp",
+    "status": " M",
+    "stat": "1086\t109\tSource/Network/NetLockstep.cpp",
+    "hits": {
+      "PlayerBinding": 26,
+      "resync": 43,
+      "Resync": 43,
+      "command sequence": 2,
+      "ownership": 12,
+      "prime": 19,
+      "local player": 1,
+      "seat snapshot": 4
+    },
+    "added_funcs": [
+      "AdvancesSeatSnapshot",
+      "AppendU16LE",
+      "AppendU32LE",
+      "AppendU64LE",
+      "AppendU8",
+      "AppendVarU64",
+      "CountRelaySent",
+      "DecodeFrame",
+      "DecodeRecoveryChunk",
+      "DecodeSeatSnapshot",
+      "EmptyPlayerBinding",
+      "EncodePayload",
+      "Fail",
+      "FlushRecoveryInputs",
+      "FlushSeatSnapshot",
+      "HandleFrame",
+      "IsKnownStopReason",
+      "NoteRelayError",
+      "NoteRelayRefusal",
+      "QueueInputAtTarget",
+      "ReadStopReason",
+      "RelayToOtherRemotes",
+      "Remaining",
+      "RememberLocalInput",
+      "SetError",
+      "UpdateRelayBacklogBytes",
+      "ValidateCommandCounts",
+      "ValidatePlayerBindings",
+      "ValidateRecoveryChunk",
+      "ValidateSeatSnapshot"
+    ],
+    "funcs": [
+      "AdvancesSeatSnapshot",
+      "AtEnd",
+      "DecodeFrame",
+      "DecodeRecoveryChunk",
+      "DecodeSeatSnapshot",
+      "DecodeStart",
+      "EmptyPlayerBinding",
+      "EncodePayload",
+      "IsKnownStopReason",
+      "ReadStopReason",
+      "ValidateCommandCounts",
+      "ValidatePlayerBindings",
+      "ValidateRecoveryChunk",
+      "ValidateSeatSnapshot"
+    ],
+    "bytes": 84813
+  },
+  {
+    "path": "Source/Network/NetLockstep.h",
+    "status": " M",
+    "stat": "108\t30\tSource/Network/NetLockstep.h",
+    "hits": {
+      "PlayerBinding": 2,
+      "resync": 14,
+      "Resync": 14,
+      "ownership": 2,
+      "prime": 5,
+      "local player": 1,
+      "roster": 5
+    },
+    "added_funcs": [
+      "CaptureLocalInputHistory",
+      "CapturePendingCommands",
+      "CapturePendingInputs",
+      "CapturePendingPlayerBindings",
+      "DecodeRecoveryInput",
+      "EncodeRecoveryInput",
+      "FindLocalInput",
+      "FlushRecoveryInputs",
+      "FlushSeatSnapshot",
+      "GetAuthoritativeCommandAcks",
+      "HandleFrame",
+      "HandleRecoveryChunk",
+      "HandleSeatSnapshot",
+      "HasPendingRelayWork",
+      "InstallResyncInputs",
+      "NeedsResyncPriming",
+      "PrimeResyncFrames",
+      "PrimeResyncInputs",
+      "PublishSeatSnapshot",
+      "QueueInputAtTarget",
+      "QueueRecoveredInput",
+      "RememberLocalInput",
+      "RetainRecoveryInput",
+      "SubmitLocalChecksum",
+      "TakeSeatSnapshot"
+    ],
+    "funcs": [
+      "AdvanceReadyFrames",
+      "AnnounceSeatChange",
+      "ApplyPeerLeave",
+      "Complete",
+      "DecodeRecoveryInput",
+      "DescribeMissingPeers",
+      "Encode",
+      "EncodeRecoveryInput",
+      "FindLocalInput",
+      "FlushRecoveryInputs",
+      "FlushResendFrames",
+      "FlushSeatSnapshot",
+      "HandleChecksum",
+      "HandleFrame",
+      "HandlePacket",
+      "HandleRecoveryChunk",
+      "HandleSeatSnapshot",
+      "HandleStart",
+      "HandleStop",
+      "HasPendingRelayWork"
+    ],
+    "bytes": 15972
+  },
+  {
+    "path": "Source/Network/NetLockstepSelfTest.cpp",
+    "status": " M",
+    "stat": "1445\t127\tSource/Network/NetLockstepSelfTest.cpp",
+    "hits": {
+      "complete-input": 1,
+      "resync": 20,
+      "Resync": 20,
+      "ownership": 9,
+      "prime": 5,
+      "seat snapshot": 1,
+      "roster": 14
+    },
+    "added_funcs": [
+      "Authority",
+      "B2SnapshotFailure",
+      "B2SnapshotFixLength",
+      "B2SnapshotPacket",
+      "B2SnapshotRefused",
+      "B2SnapshotSeats",
+      "B2SnapshotWriteLE",
+      "CheckRecoveredInput",
+      "CheckRecoveryRoute",
+      "Commit",
+      "Equals",
+      "Inject",
+      "MakeFrame",
+      "MakeObservationSet",
+      "PollEvents",
+      "Publish",
+      "Pump",
+      "RecoveryDictionaryState",
+      "RecoveryWireCheck",
+      "RecoveryWireChunks",
+      "RecoveryWireInput",
+      "Running",
+      "SameRecoveryInputs",
+      "Send",
+      "SendToClients",
+      "Start",
+      "StartRound",
+      "TestB2SeatSnapshotAuthority",
+      "TestB2SeatSnapshotCoalesces",
+      "TestB2SeatSnapshotCodec"
+    ],
+    "funcs": [
+      "B2SnapshotFailure",
+      "B2SnapshotFixLength",
+      "B2SnapshotRefused",
+      "B2SnapshotWriteLE",
+      "CheckRecoveredInput",
+      "CheckRecoveryRoute",
+      "Commit",
+      "Equals",
+      "Inject",
+      "Publish",
+      "Pump",
+      "RecoveryWireCheck",
+      "Running",
+      "SameRecoveryInputs",
+      "Send",
+      "SendToClients",
+      "Start",
+      "StartRound",
+      "TestB2SeatSnapshotAuthority",
+      "TestB2SeatSnapshotCoalesces"
+    ],
+    "bytes": 102074
+  },
+  {
+    "path": "Source/Network/NetMatchRunner.cpp",
+    "status": " M",
+    "stat": "15\t1\tSource/Network/NetMatchRunner.cpp",
+    "hits": {
+      "resync": 3,
+      "Resync": 3,
+      "F6": 1
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 2789
+  },
+  {
+    "path": "Source/Network/NetMatchRunner.h",
+    "status": " M",
+    "stat": "3\t3\tSource/Network/NetMatchRunner.h",
+    "hits": {
+      "resync": 1,
+      "Resync": 1
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 1505
+  },
+  {
+    "path": "Source/Network/NetMatchSelfTest.cpp",
+    "status": " M",
+    "stat": "427\t1\tSource/Network/NetMatchSelfTest.cpp",
+    "hits": {
+      "ownership": 3,
+      "roster": 1
+    },
+    "added_funcs": [
+      "Connect",
+      "Disconnect",
+      "MakeStateChunk",
+      "PollEvents",
+      "Send",
+      "StartHost",
+      "StateTransferTap",
+      "Stop",
+      "TestLobbyStateChunkBounds",
+      "TestLobbyStateChunkConsistency",
+      "TestLobbyStateTransferBackpressure",
+      "TestLobbyStateTransferRestart",
+      "TestLobbyThreePeer",
+      "TestRunnerStateTransferProgress",
+      "for",
+      "if",
+      "invalid",
+      "original",
+      "replacement",
+      "setLE",
+      "smaller",
+      "state",
+      "tap",
+      "tick"
+    ],
+    "funcs": [
+      "Connect",
+      "Disconnect",
+      "Send",
+      "StartHost",
+      "Stop",
+      "TestLobbyStateChunkBounds",
+      "TestLobbyStateChunkConsistency",
+      "TestLobbyStateTransferBackpressure",
+      "TestLobbyStateTransferRestart",
+      "TestLobbyThreePeer",
+      "TestRunnerStateTransferProgress"
+    ],
+    "bytes": 24219
+  },
+  {
+    "path": "Source/Network/NetMatchService.cpp",
+    "status": " M",
+    "stat": "208\t126\tSource/Network/NetMatchService.cpp",
+    "hits": {
+      "PlayerBinding": 7,
+      "resync": 94,
+      "Resync": 94,
+      "envelope": 3,
+      "acknowledged": 2,
+      "moderation": 31,
+      "roster": 5,
+      "module": 8,
+      "SaveGame": 1,
+      "journal": 12,
+      "A7": 30
+    },
+    "added_funcs": [
+      "CaptureA7SeatView",
+      "PublishModerationView",
+      "for",
+      "if",
+      "keepalive",
+      "lock",
+      "out",
+      "while"
+    ],
+    "funcs": [
+      "ResyncSaveName",
+      "in",
+      "keepalive",
+      "out"
+    ],
+    "bytes": 26474
+  },
+  {
+    "path": "Source/Network/NetMatchService.h",
+    "status": " M",
+    "stat": "14\t12\tSource/Network/NetMatchService.h",
+    "hits": {
+      "resync": 12,
+      "Resync": 12,
+      "moderation": 14,
+      "seat snapshot": 1,
+      "roster": 2,
+      "journal": 1,
+      "A7": 3
+    },
+    "added_funcs": [
+      "ApplyModeration",
+      "CanSealA7Journal",
+      "CaptureA7SeatView",
+      "PrepareReceivedResync",
+      "PublishModerationView",
+      "WaitForA7ConnectGate"
+    ],
+    "funcs": [
+      "AnnounceSeatTransitions",
+      "CanSealA7Journal",
+      "CaptureA7SeatView",
+      "DriveAutoSubstitution",
+      "PrepareReceivedResync",
+      "PublishModerationView",
+      "PumpSeatPresence",
+      "PumpSessionEvents",
+      "Start",
+      "WaitForA7ConnectGate",
+      "WorkerRematchMain",
+      "WorkerResyncMain"
+    ],
+    "bytes": 4460
+  },
+  {
+    "path": "Source/Network/NetReconnectSession.cpp",
+    "status": " M",
+    "stat": "132\t17\tSource/Network/NetReconnectSession.cpp",
+    "hits": {
+      "Acked": 1,
+      "acknowledged": 3,
+      "moderation": 43,
+      "journal": 27,
+      "A7": 36
+    },
+    "added_funcs": [
+      "CancelSubstitution",
+      "NetModerationAvailability",
+      "NetSelectModerationSeat",
+      "SubstituteApplicant",
+      "Tick",
+      "WaitForSeat",
+      "for",
+      "if",
+      "switch"
+    ],
+    "funcs": [],
+    "bytes": 15117
+  },
+  {
+    "path": "Source/Network/NetReconnectSession.h",
+    "status": " M",
+    "stat": "36\t11\tSource/Network/NetReconnectSession.h",
+    "hits": {
+      "moderation": 21,
+      "roster": 4,
+      "A7": 1
+    },
+    "added_funcs": [
+      "ApplyModeration",
+      "GetEpoch",
+      "NetModerationActionName",
+      "NetModerationAvailability",
+      "NetSelectModerationSeat"
+    ],
+    "funcs": [
+      "Configure",
+      "SetSeatTable"
+    ],
+    "bytes": 5755
+  },
+  {
+    "path": "Source/Network/NetReconnectSessionSelfTest.cpp",
+    "status": " M",
+    "stat": "283\t74\tSource/Network/NetReconnectSessionSelfTest.cpp",
+    "hits": {
+      "resync": 1,
+      "Resync": 1,
+      "acknowledged": 9,
+      "ownership": 1,
+      "moderation": 85,
+      "roster": 5
+    },
+    "added_funcs": [
+      "ConfigureEndpoint",
+      "ConfigureWire",
+      "Fail",
+      "TestFailedProofEndsPublicReconnecting",
+      "TestModerationSelectionModel",
+      "TestModerationSelectionTransactions",
+      "for",
+      "if",
+      "scope",
+      "step"
+    ],
+    "funcs": [
+      "Add",
+      "TestFailedProofEndsPublicReconnecting",
+      "TestModerationSelectionModel",
+      "TestModerationSelectionTransactions",
+      "TestSeatPresenceLine"
+    ],
+    "bytes": 25829
+  },
+  {
+    "path": "Source/Network/NetReconnectTicketStore.cpp",
+    "status": " M",
+    "stat": "6\t0\tSource/Network/NetReconnectTicketStore.cpp",
+    "hits": {
+      "journal": 5,
+      "A7": 8
+    },
+    "added_funcs": [
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 960
+  },
+  {
+    "path": "Source/Network/NetReconnectTicketStore.h",
+    "status": " M",
+    "stat": "2\t0\tSource/Network/NetReconnectTicketStore.h",
+    "hits": {
+      "F6": 1,
+      "A7": 3
+    },
+    "added_funcs": [
+      "GetA7LoadedSha256"
+    ],
+    "funcs": [],
+    "bytes": 749
+  },
+  {
+    "path": "Source/Network/NetReconnectUx.cpp",
+    "status": " M",
+    "stat": "67\t86\tSource/Network/NetReconnectUx.cpp",
+    "hits": {
+      "resync": 1,
+      "Resync": 1,
+      "moderation": 32
+    },
+    "added_funcs": [
+      "Act",
+      "NetModerationAvailability",
+      "for",
+      "if",
+      "return"
+    ],
+    "funcs": [],
+    "bytes": 10680
+  },
+  {
+    "path": "Source/Network/NetReconnectUx.h",
+    "status": " M",
+    "stat": "15\t35\tSource/Network/NetReconnectUx.h",
+    "hits": {
+      "moderation": 12,
+      "F6": 1,
+      "roster": 2
+    },
+    "added_funcs": [
+      "Act",
+      "ApplySnapshot",
+      "Available",
+      "CycleApplicant",
+      "GetSeats",
+      "GetSnapshot",
+      "HoldWallSecondsRemaining"
+    ],
+    "funcs": [
+      "ApplySnapshot",
+      "Available",
+      "Clear",
+      "CycleApplicant",
+      "Line",
+      "NoteFrame",
+      "Observe"
+    ],
+    "bytes": 4483
+  },
+  {
+    "path": "Source/Network/NetSession.cpp",
+    "status": " M",
+    "stat": "39\t1\tSource/Network/NetSession.cpp",
+    "hits": {
+      "resync": 2,
+      "Resync": 2,
+      "journal": 30,
+      "A7": 55
+    },
+    "added_funcs": [
+      "SendHeartbeat",
+      "if"
+    ],
+    "funcs": [],
+    "bytes": 6623
+  },
+  {
+    "path": "Source/Network/NetSession.h",
+    "status": " M",
+    "stat": "5\t0\tSource/Network/NetSession.h",
+    "hits": {
+      "A7": 5
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 862
+  },
+  {
+    "path": "Source/Network/meson.build",
+    "status": " M",
+    "stat": "4\t0\tSource/Network/meson.build",
+    "hits": {
+      "resync": 3,
+      "Resync": 3,
+      "ownership": 1,
+      "F6": 1,
+      "journal": 1,
+      "A7": 2
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 507
+  },
+  {
+    "path": "Source/System/Controller.cpp",
+    "status": " M",
+    "stat": "40\t2\tSource/System/Controller.cpp",
+    "hits": {},
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 2473
+  },
+  {
+    "path": "Source/System/Controller.h",
+    "status": " M",
+    "stat": "11\t0\tSource/System/Controller.h",
+    "hits": {},
+    "added_funcs": [
+      "CaptureLocalInputState",
+      "ResetLocalInputState",
+      "RestoreLocalInputState"
+    ],
+    "funcs": [
+      "GetSeatPlayerRaw",
+      "ReleaseDelayPassed",
+      "ResetLocalInputState",
+      "RestoreLocalInputState"
+    ],
+    "bytes": 841
+  },
+  {
+    "path": "Source/System/ScenarioRunner.cpp",
+    "status": " M",
+    "stat": "385\t4\tSource/System/ScenarioRunner.cpp",
+    "hits": {
+      "PlayerBinding": 44,
+      "resync": 21,
+      "Resync": 21,
+      "acknowledged": 1,
+      "command sequence": 1,
+      "CommandSeq": 13,
+      "ownership": 1,
+      "prime": 5
+    },
+    "added_funcs": [
+      "SameCommandBits",
+      "SameInputBits",
+      "batches",
+      "for",
+      "if",
+      "while"
+    ],
+    "funcs": [
+      "SameCommandBits",
+      "SameInputBits"
+    ],
+    "bytes": 27026
+  },
+  {
+    "path": "Source/System/ScenarioRunner.h",
+    "status": " M",
+    "stat": "8\t1\tSource/System/ScenarioRunner.h",
+    "hits": {
+      "PlayerBinding": 2,
+      "resync": 6,
+      "Resync": 6,
+      "acknowledged": 1
+    },
+    "added_funcs": [
+      "CaptureNetResyncState",
+      "CaptureUnacknowledgedLocalCommands",
+      "ConsumeLockstepGameCommand",
+      "GetLockstepRoundId",
+      "ObserveLockstepPlayerBindings",
+      "RestoreNetResyncState",
+      "SetLockstepCoordinator"
+    ],
+    "funcs": [
+      "CaptureNetResyncState",
+      "ConsumeLockstepGameCommand",
+      "ObserveLockstepPlayerBindings",
+      "RestoreNetResyncState",
+      "SetLockstepCoordinator"
+    ],
+    "bytes": 1559
+  },
+  {
+    "path": "tools/compare_snapshots.py",
+    "status": " M",
+    "stat": "8\t2\ttools/compare_snapshots.py",
+    "hits": {
+      "Activity1": 4
+    },
+    "added_funcs": [
+      "ValueError",
+      "isinstance"
+    ],
+    "funcs": [],
+    "bytes": 1053
+  },
+  {
+    "path": "Data/Tests.rte/Activities/NetLifecycleTest.lua",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {},
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 1561
+  },
+  {
+    "path": "Source/CI/NetModerationGUIProbe.cpp",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "moderation": 4,
+      "F6": 5
+    },
+    "added_funcs": [],
+    "funcs": [
+      "AfterDraw",
+      "BeforePoll",
+      "Load",
+      "Process",
+      "Push",
+      "Require",
+      "Step",
+      "WriteResult",
+      "input",
+      "output"
+    ],
+    "bytes": 11223
+  },
+  {
+    "path": "Source/CI/NetModerationGUIProbe.h",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "moderation": 1
+    },
+    "added_funcs": [],
+    "funcs": [
+      "AfterDraw",
+      "BeforePoll"
+    ],
+    "bytes": 227
+  },
+  {
+    "path": "Source/Menus/NetModerationGUI.cpp",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "resync": 1,
+      "Resync": 1,
+      "moderation": 23,
+      "F6": 2,
+      "roster": 11
+    },
+    "added_funcs": [],
+    "funcs": [
+      "DisplayName",
+      "WrapText"
+    ],
+    "bytes": 10481
+  },
+  {
+    "path": "Source/Menus/NetModerationGUI.h",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "moderation": 6,
+      "roster": 3
+    },
+    "added_funcs": [],
+    "funcs": [
+      "AutomationModerate",
+      "Draw",
+      "DrawRoster",
+      "HandleEvents",
+      "IsOpen",
+      "Refresh",
+      "SetOpen",
+      "Update"
+    ],
+    "bytes": 1588
+  },
+  {
+    "path": "Source/Network/NetA7Journal.cpp",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "resync": 5,
+      "Resync": 5,
+      "module": 1,
+      "journal": 29,
+      "A7": 38
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Enqueue",
+      "Env",
+      "FileSha",
+      "Positive",
+      "Token",
+      "WriteRecord",
+      "Writer",
+      "input",
+      "text"
+    ],
+    "bytes": 16999
+  },
+  {
+    "path": "Source/Network/NetA7Journal.h",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "resync": 2,
+      "Resync": 2,
+      "journal": 1,
+      "A7": 1
+    },
+    "added_funcs": [],
+    "funcs": [
+      "AppliedTick",
+      "ControlledSilentClient",
+      "Emit",
+      "Enabled",
+      "Gap",
+      "HasConnectGate",
+      "Hex",
+      "Seal",
+      "Session",
+      "SetSeatView",
+      "Sha256",
+      "StartE2E",
+      "WaitForConnectGate"
+    ],
+    "bytes": 1352
+  },
+  {
+    "path": "Source/Network/NetResyncRuntimeSelfTest.cpp",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "PlayerBinding": 24,
+      "resync": 105,
+      "Resync": 105,
+      "envelope": 2,
+      "acknowledged": 13,
+      "command sequence": 2,
+      "ownership": 7,
+      "prime": 36
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Check",
+      "CheckAckApplication",
+      "CheckAckHistory",
+      "CheckOutbox",
+      "CheckReady",
+      "Collect",
+      "CollectFull",
+      "NothingReady",
+      "ObserveRemoteBinding",
+      "QueueFull",
+      "QueueOrdinary",
+      "RefuseRepeat",
+      "RefuseRestoreUnchanged",
+      "RefuseWrongCounts",
+      "RestartRound",
+      "Running",
+      "SameInput",
+      "SameInputs",
+      "SamePending",
+      "SeedOutbox"
+    ],
+    "bytes": 77956
+  },
+  {
+    "path": "Source/Network/NetResyncRuntimeSelfTest.h",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "resync": 1,
+      "Resync": 1
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Run"
+    ],
+    "bytes": 118
+  },
+  {
+    "path": "Source/Network/NetResyncSelfTest.cpp",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "PlayerBinding": 55,
+      "CompleteInput": 4,
+      "resync": 28,
+      "Resync": 28,
+      "envelope": 16,
+      "command sequence": 4,
+      "CommandSeq": 2,
+      "A7": 1
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Check",
+      "FixPacketLength",
+      "PacketTruncations",
+      "RejectPacket",
+      "RejectPacketEncode",
+      "RejectState",
+      "RejectStateEncode",
+      "SameBindings",
+      "StateRoundTrip",
+      "TestBindingAcks",
+      "TestBindingLimits",
+      "TestBindingRoundTrips",
+      "TestChecksumAcks",
+      "TestCommandCapacityAndOrder",
+      "TestCommandSequences",
+      "TestCompleteInputRefusals",
+      "TestCompleteInputWindow",
+      "TestEnvelopeInputLimits",
+      "TestEnvelopeRefusalAtomicity",
+      "TestEnvelopeRoundTrips"
+    ],
+    "bytes": 35196
+  },
+  {
+    "path": "Source/Network/NetResyncSelfTest.h",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "resync": 1,
+      "Resync": 1
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Run"
+    ],
+    "bytes": 111
+  },
+  {
+    "path": "Source/Network/NetResyncState.cpp",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "PlayerBinding": 13,
+      "resync": 22,
+      "Resync": 22,
+      "envelope": 7,
+      "Acked": 17
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Future",
+      "GetOwners",
+      "Put",
+      "PutCommand",
+      "PutInput",
+      "PutOwners",
+      "PutPending",
+      "Require",
+      "SameCommand",
+      "ValidPeer"
+    ],
+    "bytes": 16890
+  },
+  {
+    "path": "Source/Network/NetResyncState.h",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "PlayerBinding": 6,
+      "resync": 12,
+      "Resync": 12
+    },
+    "added_funcs": [],
+    "funcs": [
+      "Decode",
+      "Encode"
+    ],
+    "bytes": 1919
+  },
+  {
+    "path": "tools/test_snapshot_inventory_roles.py",
+    "status": "??",
+    "stat": "untracked",
+    "hits": {
+      "alias": 1,
+      "module": 1,
+      "controlled actor": 1,
+      "Activity1": 2
+    },
+    "added_funcs": [],
+    "funcs": [],
+    "bytes": 8201
+  }
+]

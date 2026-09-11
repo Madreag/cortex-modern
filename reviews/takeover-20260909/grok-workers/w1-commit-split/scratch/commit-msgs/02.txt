@@ -1,0 +1,3 @@
+Bound a resync envelope around archive, acks and pending commands
+
+Encode ownership maps, acknowledged command sequences and pending inputs in a size-capped envelope. Raise the lobby state-chunk ceiling so a complete-input archive fits.

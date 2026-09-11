@@ -1,0 +1,2290 @@
+#include "Actor.h"
+#include <iostream>
+#include "CheckpointArchive.h"
+#include "NativeCheckpoint.h"
+#include "Base64/base64.h"
+
+#include <bit>
+
+#include "UInputMan.h"
+#include "ActivityMan.h"
+#include "CameraMan.h"
+#include "Singleton.h"
+#include "GameActivity.h"
+#include "ACrab.h"
+#include "ACraft.h"
+#include "AHuman.h"
+#include "AtomGroup.h"
+#include "Controller.h"
+#include "RTETools.h"
+#include "LuaMan.h"
+#include "SceneMan.h"
+#include "HeldDevice.h"
+#include "PresetMan.h"
+#include "AEmitter.h"
+#include "Material.h"
+#include "MOPixel.h"
+#include "Scene.h"
+#include "SettingsMan.h"
+#include "FrameMan.h"
+#include "PerformanceMan.h"
+#include "PostProcessMan.h"
+#include "PieMenu.h"
+#include "ScenarioRunner.h"
+#include "NetGameCommand.h"
+
+#include "GUI.h"
+#include "AllegroBitmap.h"
+
+#include "tracy/Tracy.hpp"
+
+#include <algorithm>
+#include <iterator>
+
+using namespace RTE;
+
+namespace {
+	struct ActorIconReference {
+		int kind = 0;
+		int team = -1;
+		std::string module, preset;
+		template <class Archive> void Fields(Archive& archive) { archive(kind, team, module, preset); }
+		std::string Save() { CheckpointWriter archive("ActorIcon1"); Fields(archive); return archive.Text(); }
+		bool Load(std::string_view text) {
+			try { CheckpointReader archive(text, "ActorIcon1"); Fields(archive); archive.Finish(); return kind >= 0 && kind <= 2 && (kind != 1 || (team >= 0 && team < Activity::Teams::MaxTeamCount)); }
+			catch (const std::exception&) { return false; }
+		}
+	};
+	std::string CaptureActorIconReference(const Icon* icon) {
+		ActorIconReference reference;
+		if (!icon) return reference.Save();
+		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int team = 0; team < Activity::Teams::MaxTeamCount; ++team) {
+				if (icon == activity->GetTeamIcon(team)) { reference.kind = 1; reference.team = team; return reference.Save(); }
+			}
+		}
+		std::list<Entity*> presets;
+		g_PresetMan.GetAllOfType(presets, "Icon");
+		for (const Entity* preset: presets) {
+			if (preset == icon) { reference.kind = 2; reference.module = preset->GetModuleName(); reference.preset = preset->GetPresetName(); return reference.Save(); }
+		}
+		throw std::runtime_error("actor icon is not owned by the activity or preset registry");
+	}
+	const Icon* ResolveActorIconReference(const std::string& text) {
+		ActorIconReference reference;
+		if (!reference.Load(text)) throw std::runtime_error("invalid actor icon reference");
+		if (reference.kind == 0) return nullptr;
+		const Icon* icon = reference.kind == 1 ? (g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamIcon(reference.team) : nullptr) : dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", reference.preset, reference.module));
+		if (!icon) throw std::runtime_error("actor icon owner could not be restored");
+		return icon;
+	}
+}
+
+ConcreteClassInfo(Actor, MOSRotating, 20);
+
+std::vector<BITMAP*> Actor::m_apNoTeamIcon;
+BITMAP* Actor::m_apAIIcons[AIMODE_COUNT];
+std::vector<BITMAP*> Actor::m_apSelectArrow;
+std::vector<BITMAP*> Actor::m_apAlarmExclamation;
+bool Actor::m_sIconsLoaded = false;
+
+#define ARROWTIME 1000
+
+Actor::Actor() {
+	Clear();
+}
+
+Actor::~Actor() {
+	Destroy(true);
+}
+
+void Actor::Clear() {
+	m_PersistedActorRuntime.clear();
+	m_PersistedActorIconReferences = {};
+	m_PersistedControllerCheckpoint.clear();
+	m_Controller.Reset();
+	m_PersistedControllerInputMode = -1;
+	m_PersistedControllerQuickDisabled = -1;
+	m_PersistedControllerPlayer = 0;
+	m_PersistedPieMenuState.clear();
+	m_HasPersistedViewPoint = false;
+	m_HasPersistedMovePath = false;
+	m_PlayerControllable = true;
+	m_BodyHitSound = nullptr;
+	m_AlarmSound = nullptr;
+	m_PainSound = nullptr;
+	m_DeathSound = nullptr;
+	m_DeviceSwitchSound = nullptr;
+	m_Status = STABLE;
+	m_Health = m_PrevHealth = m_MaxHealth = 100.0F;
+	m_pTeamIcon = nullptr;
+	m_pControllerIcon = nullptr;
+	m_LastSecondTimer.Reset();
+	m_LastSecondPos.Reset();
+	m_RecentMovement.Reset();
+	m_TravelImpulseDamage = 750.0F;
+	m_StableVel.SetXY(15.0F, 25.0F);
+	m_StableRecoverDelay = 1000;
+	m_CanRun = true;
+	m_CrouchWalkSpeedMultiplier = 0.7F;
+	m_HeartBeat.Reset();
+	m_NewControlTmr.Reset();
+	m_DeathTmr.Reset();
+	m_GoldCarried = 0;
+	m_GoldPicked = false;
+	m_AimState = AIMSTILL;
+	m_AimAngle = 0;
+	m_AimRange = c_HalfPI;
+	m_AimDistance = 0;
+	m_AimTmr.Reset();
+	m_SharpAimTimer.Reset();
+	m_SharpAimDelay = 250;
+	m_SharpAimProgress = 0;
+	m_SharpAimMaxedOut = false;
+	m_PointingTarget.Reset();
+	m_SeenTargetPos.Reset();
+	// Set the limit to soemthing reasonable, if the timer is over it, there's no alarm
+	m_AlarmTimer.SetSimTimeLimitMS(3000);
+	m_AlarmTimer.SetElapsedSimTimeMS(4000);
+	m_LastAlarmPos.Reset();
+	m_SightDistance = 450.0F;
+	m_Perceptiveness = 0.5F;
+	m_PainThreshold = 15.0F;
+	m_CanRevealUnseen = true;
+	m_CharHeight = 0;
+	m_HolsterOffset.Reset();
+	m_ReloadOffset.Reset();
+	m_ViewPoint.Reset();
+	m_Inventory.clear();
+	m_MaxInventoryMass = -1.0F;
+	m_pItemInReach = nullptr;
+	m_HotkeyActivated.fill(false);
+	m_HUDStack = 0;
+	m_DeploymentID = 0;
+	m_PassengerSlots = 1;
+
+	m_AIMode = AIMODE_NONE;
+	m_Waypoints.clear();
+	m_WaypointCursor = 0;
+	m_DrawWaypoints = false;
+	m_MoveTarget.Reset();
+	m_pMOMoveTarget = nullptr;
+	m_PrevPathTarget.Reset();
+	m_MoveVector.Reset();
+	m_MovePath.clear();
+	m_UpdateMovePath = false;
+	m_MoveProximityLimit = 20.0F;
+	m_AIBaseDigStrength = c_PathFindingDefaultDigStrength;
+	m_BaseMass = std::numeric_limits<float>::infinity();
+
+	m_DamageMultiplier = 1.0F;
+
+	m_Organic = false;
+	m_Mechanical = false;
+
+	m_LimbPushForcesAndCollisionsDisabled = false;
+
+	m_PieMenu.reset();
+	m_MovementState = NOMOVE;
+	m_PersistedViewPoint.Reset();
+	m_PersistedSharpAimTimerAnchor = {};
+	m_PersistedAimTimerAnchor = {};
+	m_FaithfulWaypointUIDs.clear();
+}
+
+int Actor::Create() {
+	if (MOSRotating::Create() < 0) {
+		return -1;
+	}
+
+	// Set MO Type.
+	m_MOType = MovableObject::TypeActor;
+
+	// Default to an interesting AI controller mode
+	m_Controller.SetInputMode(Controller::CIM_AI);
+	m_Controller.SetControlledActor(this);
+
+	m_ViewPoint = m_Pos;
+	m_HUDStack = -m_CharHeight / 2;
+
+	// Sets up the team icon
+	SetTeam(m_Team);
+
+	if (const Actor* presetActor = static_cast<const Actor*>(GetPreset())) {
+		m_BaseMass = presetActor->GetMass();
+	}
+
+	// All brain actors by default avoid hitting each other on the same team
+	if (IsInGroup("Brains")) {
+		m_IgnoresTeamHits = true;
+	}
+
+	if (!m_PieMenu) {
+		SetPieMenu(static_cast<PieMenu*>(g_PresetMan.GetEntityPreset("PieMenu", GetDefaultPieMenuName())->Clone()));
+	} else {
+		m_PieMenu->SetOwner(this);
+	}
+
+	return 0;
+}
+
+int Actor::Create(const Actor& reference) {
+	MOSRotating::Create(reference);
+
+	// Set MO Type.
+	m_MOType = MovableObject::TypeActor;
+
+	m_Controller = reference.m_Controller;
+	if (IsFaithfulClone()) {
+		m_Controller.CopyCheckpointFrom(reference.m_Controller);
+	} else {
+		m_Controller.SetInputMode(Controller::CIM_AI);
+	}
+	m_Controller.SetControlledActor(this);
+	m_PersistedControllerCheckpoint = reference.m_PersistedControllerCheckpoint;
+	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
+	m_PersistedControllerQuickDisabled = reference.m_PersistedControllerQuickDisabled;
+	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
+	m_PersistedPieMenuState = reference.m_PersistedPieMenuState;
+	m_PersistedViewPoint = reference.m_PersistedViewPoint;
+	m_HasPersistedViewPoint = reference.m_HasPersistedViewPoint;
+	m_HasPersistedMovePath = reference.m_HasPersistedMovePath;
+	m_PlayerControllable = reference.m_PlayerControllable;
+
+	if (reference.m_BodyHitSound) {
+		m_BodyHitSound = dynamic_cast<SoundContainer*>(reference.m_BodyHitSound->Clone());
+	}
+	if (reference.m_AlarmSound) {
+		m_AlarmSound = dynamic_cast<SoundContainer*>(reference.m_AlarmSound->Clone());
+	}
+	if (reference.m_PainSound) {
+		m_PainSound = dynamic_cast<SoundContainer*>(reference.m_PainSound->Clone());
+	}
+	if (reference.m_DeathSound) {
+		m_DeathSound = dynamic_cast<SoundContainer*>(reference.m_DeathSound->Clone());
+	}
+	if (reference.m_DeviceSwitchSound) {
+		m_DeviceSwitchSound = dynamic_cast<SoundContainer*>(reference.m_DeviceSwitchSound->Clone());
+	}
+	//    m_FacingRight = reference.m_FacingRight;
+	m_Status = reference.m_Status;
+	m_Health = m_PrevHealth = reference.m_Health;
+	m_MaxHealth = reference.m_MaxHealth;
+	m_pTeamIcon = reference.m_pTeamIcon;
+	//    m_LastSecondTimer.Reset();
+	//    m_LastSecondPos.Reset();
+	//    m_RecentMovement.Reset();
+	m_LastSecondPos = reference.m_LastSecondPos;
+	m_TravelImpulseDamage = reference.m_TravelImpulseDamage;
+	m_StableVel = reference.m_StableVel;
+	m_StableRecoverDelay = reference.m_StableRecoverDelay;
+	m_CanRun = reference.m_CanRun;
+	m_CrouchWalkSpeedMultiplier = reference.m_CrouchWalkSpeedMultiplier;
+	m_GoldCarried = reference.m_GoldCarried;
+	m_AimState = reference.m_AimState;
+	m_AimRange = reference.m_AimRange;
+	m_AimAngle = reference.m_AimAngle;
+	m_AimDistance = reference.m_AimDistance;
+	m_SharpAimDelay = reference.m_SharpAimDelay;
+	m_SharpAimProgress = reference.m_SharpAimProgress;
+	m_SharpAimMaxedOut = reference.m_SharpAimMaxedOut;
+	// The aim timers stay at their spawn-time reset; a save restores them through the anchors at adopt.
+	m_PersistedAimTimerAnchor = reference.m_PersistedAimTimerAnchor;
+	m_PersistedSharpAimTimerAnchor = reference.m_PersistedSharpAimTimerAnchor;
+	m_PointingTarget = reference.m_PointingTarget;
+	m_SeenTargetPos = reference.m_SeenTargetPos;
+	m_SightDistance = reference.m_SightDistance;
+	m_Perceptiveness = reference.m_Perceptiveness;
+	m_PainThreshold = reference.m_PainThreshold;
+	m_CanRevealUnseen = reference.m_CanRevealUnseen;
+	m_CharHeight = reference.m_CharHeight;
+	m_HolsterOffset = reference.m_HolsterOffset;
+	m_ReloadOffset = reference.m_ReloadOffset;
+
+	for (std::deque<MovableObject*>::const_iterator itr = reference.m_Inventory.begin(); itr != reference.m_Inventory.end(); ++itr) {
+		m_Inventory.push_back(dynamic_cast<MovableObject*>((*itr)->Clone()));
+	}
+
+	m_MaxInventoryMass = reference.m_MaxInventoryMass;
+
+	// Only load the static AI mode icons once
+	if (!m_sIconsLoaded) {
+		ContentFile("Base.rte/GUIs/TeamIcons/NoTeam.png").GetAsAnimation(m_apNoTeamIcon, 2);
+
+		ContentFile iconFile("Base.rte/GUIs/PieMenus/PieIcons/Blank000.png");
+		m_apAIIcons[AIMODE_NONE] = iconFile.GetAsBitmap();
+		m_apAIIcons[AIMODE_BOMB] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Eye000.png");
+		m_apAIIcons[AIMODE_SENTRY] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Cycle000.png");
+		m_apAIIcons[AIMODE_PATROL] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/GoTo000.png");
+		m_apAIIcons[AIMODE_GOTO] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Brain000.png");
+		m_apAIIcons[AIMODE_BRAINHUNT] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Dig000.png");
+		m_apAIIcons[AIMODE_GOLDDIG] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Return000.png");
+		m_apAIIcons[AIMODE_RETURN] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Land000.png");
+		m_apAIIcons[AIMODE_STAY] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Launch000.png");
+		m_apAIIcons[AIMODE_DELIVER] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Death000.png");
+		m_apAIIcons[AIMODE_SCUTTLE] = iconFile.GetAsBitmap();
+		iconFile.SetDataPath("Base.rte/GUIs/PieMenus/PieIcons/Follow000.png");
+		m_apAIIcons[AIMODE_SQUAD] = iconFile.GetAsBitmap();
+
+		ContentFile("Base.rte/GUIs/Indicators/SelectArrow.png").GetAsAnimation(m_apSelectArrow, 4);
+		ContentFile("Base.rte/GUIs/Indicators/AlarmExclamation.png").GetAsAnimation(m_apAlarmExclamation, 2);
+
+		m_sIconsLoaded = true;
+	}
+	m_HotkeyActivated = reference.m_HotkeyActivated;
+	m_DeploymentID = reference.m_DeploymentID;
+	m_PassengerSlots = reference.m_PassengerSlots;
+
+	m_AIMode = reference.m_AIMode;
+	m_Waypoints = reference.m_Waypoints;
+	m_DrawWaypoints = reference.m_DrawWaypoints;
+	m_MoveTarget = reference.m_MoveTarget;
+	m_pMOMoveTarget = reference.m_pMOMoveTarget;
+	m_PrevPathTarget = reference.m_PrevPathTarget;
+	m_MoveVector = reference.m_MoveVector;
+	m_MovePath.clear();
+	m_UpdateMovePath = reference.m_UpdateMovePath;
+	if (IsFaithfulClone() || m_HasPersistedMovePath) {
+		m_MovePath = reference.m_MovePath;
+		m_WaypointCursor = reference.m_WaypointCursor;
+	}
+	m_MoveProximityLimit = reference.m_MoveProximityLimit;
+	m_AIBaseDigStrength = reference.m_AIBaseDigStrength;
+	m_BaseMass = reference.m_BaseMass;
+
+	m_Organic = reference.m_Organic;
+	m_Mechanical = reference.m_Mechanical;
+
+	m_LimbPushForcesAndCollisionsDisabled = reference.m_LimbPushForcesAndCollisionsDisabled;
+
+	RTEAssert(reference.m_PieMenu != nullptr, "Tried to clone actor with no pie menu.");
+	SetPieMenu(static_cast<PieMenu*>(reference.m_PieMenu->Clone()));
+	m_PieMenu->AddWhilePieMenuOpenListener(this, std::bind(&Actor::WhilePieMenuOpenListener, this, m_PieMenu.get()));
+
+	if (IsFaithfulClone()) {
+		m_LastAlarmPos = reference.m_LastAlarmPos;
+		m_PrevHealth = reference.m_PrevHealth;
+		m_LastSecondTimer = reference.m_LastSecondTimer;
+		m_RecentMovement = reference.m_RecentMovement;
+		m_StableRecoverTimer = reference.m_StableRecoverTimer;
+		m_HeartBeat = reference.m_HeartBeat;
+		m_NewControlTmr = reference.m_NewControlTmr;
+		m_DeathTmr = reference.m_DeathTmr;
+		m_GoldPicked = reference.m_GoldPicked;
+		m_AimTmr = reference.m_AimTmr;
+		m_SharpAimTimer = reference.m_SharpAimTimer;
+		m_AlarmTimer = reference.m_AlarmTimer;
+		m_ViewPoint = reference.m_ViewPoint;
+		m_MovePath = reference.m_MovePath;
+		m_MovementState = reference.m_MovementState;
+		m_FaithfulItemInReachUID = reference.m_pItemInReach ? reference.m_pItemInReach->GetUniqueID() : reference.m_FaithfulItemInReachUID;
+		m_pItemInReach = nullptr;
+		m_FaithfulMOMoveTargetUID = reference.m_pMOMoveTarget ? reference.m_pMOMoveTarget->GetUniqueID() : reference.m_FaithfulMOMoveTargetUID;
+		m_pMOMoveTarget = nullptr;
+		m_FaithfulWaypointUIDs.clear();
+		for (auto& [waypointPosition, waypointObject]: m_Waypoints) {
+			m_FaithfulWaypointUIDs.push_back(waypointObject ? waypointObject->GetUniqueID() : 0);
+			waypointObject = nullptr;
+		}
+		if (!reference.m_FaithfulWaypointUIDs.empty()) {
+			m_FaithfulWaypointUIDs = reference.m_FaithfulWaypointUIDs;
+		}
+	} else {
+		m_FaithfulItemInReachUID = reference.m_FaithfulItemInReachUID;
+		m_FaithfulMOMoveTargetUID = reference.m_FaithfulMOMoveTargetUID;
+		m_FaithfulWaypointUIDs = reference.m_FaithfulWaypointUIDs;
+	}
+	m_PersistedActorRuntime = reference.m_PersistedActorRuntime;
+	m_PersistedActorIconReferences = reference.m_PersistedActorIconReferences;
+	if (IsFaithfulClone() && m_PersistedActorRuntime.empty()) m_PersistedActorRuntime = reference.SaveActorRuntime();
+	return 0;
+}
+
+// The wire codec's bulk setter needs the unpacked state array, which cannot live inside the
+// property macro (the template comma breaks its argument parsing).
+static void ApplyControllerStateMask(Controller& controller, long long stateMask) {
+	std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
+	for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+		controlStates[state] = (stateMask & (1LL << state)) != 0;
+	}
+	controller.ApplyWireState(controlStates, controller.GetAnalogMove(), controller.GetAnalogAim(), controller.GetAnalogCursor(), controller.GetMouseMovement(), controller.GetInputMode(), controller.GetPlayerRaw(), controller.IsQuickDisabled());
+}
+
+int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
+	StartPropertyList(return MOSRotating::ReadProperty(propName, reader));
+	MatchProperty("SpecialBehaviour_ActorRuntime", {
+		m_PersistedActorRuntime = base64_decode(reader.ReadPropValue());
+		if (!LoadActorRuntime(m_PersistedActorRuntime, true)) reader.ReportError("invalid Actor runtime checkpoint");
+	});
+
+	MatchProperty("PlayerControllable", { reader >> m_PlayerControllable; });
+	MatchProperty("BodyHitSound", {
+		delete m_BodyHitSound;
+		m_BodyHitSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("AlarmSound", {
+		delete m_AlarmSound;
+		m_AlarmSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("PainSound", {
+		delete m_PainSound;
+		m_PainSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("DeathSound", {
+		delete m_DeathSound;
+		m_DeathSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("DeviceSwitchSound", {
+		delete m_DeviceSwitchSound;
+		m_DeviceSwitchSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("Status", { reader >> m_Status; });
+	MatchProperty("ControllerStateMask", {
+		// The controller rides the actor copy, so reading into it here survives the scene clone.
+		long long controllerStateMask = 0;
+		reader >> controllerStateMask;
+		ApplyControllerStateMask(m_Controller, controllerStateMask);
+	});
+	MatchProperty("ControllerAnalogMove", {
+		Vector analogMove;
+		reader >> analogMove;
+		m_Controller.SetAnalogMove(analogMove);
+	});
+	MatchProperty("ControllerAnalogAim", {
+		Vector analogAim;
+		reader >> analogAim;
+		m_Controller.SetAnalogAim(analogAim);
+	});
+	MatchProperty("SpecialBehaviour_ControllerCheckpoint", {
+		m_PersistedControllerCheckpoint = base64_decode(reader.ReadPropValue());
+		if (!m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint, true)) reader.ReportError("invalid Controller checkpoint");
+	});
+	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
+	MatchProperty("ControllerQuickDisabled", { reader >> m_PersistedControllerQuickDisabled; });
+	MatchProperty("PieMenuState", { reader >> m_PersistedPieMenuState; });
+	MatchProperty("SpecialBehaviour_MovementState", {
+		int state = 0;
+		reader >> state;
+		m_MovementState = static_cast<MovementState>(state);
+	});
+	MatchProperty("LastSecondTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_LastSecondTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("StableRecoverTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_StableRecoverTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("HeartBeatTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_HeartBeat.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("NewControlTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_NewControlTmr.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("DeathTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_DeathTmr.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("AlarmTimerStart", {
+		int64_t start = 0;
+		reader >> start;
+		m_AlarmTimer.SetStartSimTimeTicks(start);
+	});
+	MatchProperty("SpecialBehaviour_RecentMovement", { reader >> m_RecentMovement; });
+	MatchProperty("SpecialBehaviour_LastSecondPos", { reader >> m_LastSecondPos; });
+	MatchProperty("ItemInReachUniqueID", { reader >> m_FaithfulItemInReachUID; });
+	MatchProperty("MOMoveTargetUniqueID", { reader >> m_FaithfulMOMoveTargetUID; });
+	MatchProperty("SpecialBehaviour_LastAlarmPos", { reader >> m_LastAlarmPos; });
+	MatchProperty("SpecialBehaviour_ViewPoint", {
+		reader >> m_PersistedViewPoint;
+		m_HasPersistedViewPoint = true;
+	});
+	MatchProperty("SpecialBehaviour_GoldPicked", { reader >> m_GoldPicked; });
+	MatchProperty("SpecialBehaviour_PrevHealth", { reader >> m_PrevHealth; });
+	MatchProperty("ControllerPlayer", { reader >> m_PersistedControllerPlayer; });
+	MatchProperty("DeploymentID", { reader >> m_DeploymentID; });
+	MatchProperty("PassengerSlots", { reader >> m_PassengerSlots; });
+	MatchProperty("Health",
+	              {
+		              reader >> m_Health;
+		              m_PrevHealth = m_Health;
+		              if (m_Health > m_MaxHealth)
+			              m_MaxHealth = m_Health;
+	              });
+	MatchProperty("MaxHealth",
+	              {
+		              reader >> m_MaxHealth;
+		              if (m_MaxHealth < m_Health) {
+			              m_Health = m_MaxHealth;
+			              m_PrevHealth = m_Health;
+		              }
+	              });
+	MatchProperty("ImpulseDamageThreshold", { reader >> m_TravelImpulseDamage; });
+	MatchProperty("StableVelocityThreshold", { reader >> m_StableVel; });
+	MatchProperty("StableRecoveryDelay", { reader >> m_StableRecoverDelay; });
+	MatchProperty("CanRun", { reader >> m_CanRun; });
+	MatchProperty("CrouchWalkSpeedMultiplier", { reader >> m_CrouchWalkSpeedMultiplier; });
+	MatchProperty("GoldCarried", { reader >> m_GoldCarried; });
+	MatchProperty("AimAngle", { reader >> m_AimAngle; });
+	MatchProperty("AimRange", { reader >> m_AimRange; });
+	MatchProperty("AimDistance", { reader >> m_AimDistance; });
+	MatchProperty("SharpAimDelay", { reader >> m_SharpAimDelay; });
+	MatchProperty("SpecialBehaviour_SharpAimProgress", { reader >> m_SharpAimProgress; });
+	MatchProperty("SpecialBehaviour_SharpAimMaxedOut", { reader >> m_SharpAimMaxedOut; });
+	MatchProperty("SharpAimTimerStart", {
+		reader >> m_PersistedSharpAimTimerAnchor.startTicks;
+		m_PersistedSharpAimTimerAnchor.pending = true;
+	});
+	MatchProperty("SpecialBehaviour_AimState", {
+		int aimState = AIMSTILL;
+		reader >> aimState;
+		if (aimState >= AIMSTILL && aimState < AimStateCount) {
+			m_AimState = static_cast<AimState>(aimState);
+		}
+	});
+	MatchProperty("AimTimerStart", {
+		reader >> m_PersistedAimTimerAnchor.startTicks;
+		m_PersistedAimTimerAnchor.pending = true;
+	});
+	MatchProperty("SightDistance", { reader >> m_SightDistance; });
+	MatchProperty("Perceptiveness", { reader >> m_Perceptiveness; });
+	MatchProperty("PainThreshold", { reader >> m_PainThreshold; });
+	MatchProperty("CanRevealUnseen", { reader >> m_CanRevealUnseen; });
+	MatchProperty("CharHeight", { reader >> m_CharHeight; });
+	MatchProperty("HolsterOffset", { reader >> m_HolsterOffset; });
+	MatchProperty("ReloadOffset", { reader >> m_ReloadOffset; });
+	MatchForwards("AddInventoryDevice") MatchProperty("AddInventory",
+	                                                  {
+		                                                  MovableObject* pInvMO = dynamic_cast<MovableObject*>(g_PresetMan.ReadReflectedPreset(reader));
+		                                                  if (!pInvMO) {
+			                                                  reader.ReportError("Object added to inventory is broken.");
+		                                                  }
+		                                                  AddToInventoryBack(pInvMO);
+	                                                  });
+	MatchProperty("MaxInventoryMass", { reader >> m_MaxInventoryMass; });
+	MatchProperty("AIMode", {
+		int mode;
+		reader >> mode;
+		m_AIMode = static_cast<AIMode>(mode);
+	});
+	MatchProperty("SpecialBehaviour_AddAISceneWaypoint", {
+		Vector waypointToAdd;
+		reader >> waypointToAdd;
+		AddAISceneWaypoint(waypointToAdd);
+	});
+	MatchProperty("SpecialBehaviour_ClearAIOrders", {
+		reader >> m_HasPersistedMovePath;
+		m_Waypoints.clear();
+		m_FaithfulWaypointUIDs.clear();
+		m_MovePath.clear();
+	});
+	MatchProperty("SpecialBehaviour_AIWaypointUniqueID", {
+		long uid = 0;
+		reader >> uid;
+		m_FaithfulWaypointUIDs.push_back(uid);
+	});
+	MatchProperty("SpecialBehaviour_AddMovePathPoint", {
+		Vector point;
+		reader >> point;
+		m_MovePath.push_back(point);
+	});
+	MatchProperty("SpecialBehaviour_WaypointCursor", { reader >> m_WaypointCursor; });
+	MatchProperty("SpecialBehaviour_MoveTarget", { reader >> m_MoveTarget; });
+	MatchProperty("SpecialBehaviour_PrevPathTarget", { reader >> m_PrevPathTarget; });
+	MatchProperty("SpecialBehaviour_MoveVector", { reader >> m_MoveVector; });
+	MatchProperty("SpecialBehaviour_UpdateMovePath", { reader >> m_UpdateMovePath; });
+	MatchProperty("PieMenu", {
+		m_PieMenu = std::unique_ptr<PieMenu>(dynamic_cast<PieMenu*>(g_PresetMan.ReadReflectedPreset(reader)));
+		if (!m_PieMenu) {
+			reader.ReportError("Failed to set Actor's pie menu. Doublecheck your name and everything is correct.");
+		}
+		m_PieMenu->Create(this);
+	});
+	MatchProperty("Organic", { reader >> m_Organic; });
+	MatchProperty("Mechanical", { reader >> m_Mechanical; });
+	MatchProperty("AIBaseDigStrength", { reader >> m_AIBaseDigStrength; });
+	MatchProperty("SpecialBehaviour_MoveProximityLimit", { reader >> m_MoveProximityLimit; });
+	MatchProperty("SpecialBehaviour_LimbPushForcesAndCollisionsDisabled", { reader >> m_LimbPushForcesAndCollisionsDisabled; });
+	MatchProperty("SpecialBehaviour_BodyHitSound", {
+		delete m_BodyHitSound;
+		m_BodyHitSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_AlarmSound", {
+		delete m_AlarmSound;
+		m_AlarmSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_PainSound", {
+		delete m_PainSound;
+		m_PainSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_DeathSound", {
+		delete m_DeathSound;
+		m_DeathSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+	MatchProperty("SpecialBehaviour_DeviceSwitchSound", {
+		delete m_DeviceSwitchSound;
+		m_DeviceSwitchSound = dynamic_cast<SoundContainer*>(g_PresetMan.ReadReflectedPreset(reader));
+	});
+
+	EndPropertyList;
+}
+
+void Actor::SaveSnapshotConfiguration(Writer& writer) const {
+	MOSRotating::SaveSnapshotConfiguration(writer);
+	if (m_PieMenu) writer.NewPropertyWithValue("PieMenu", m_PieMenu.get());
+	writer.NewPropertyWithValue("GoldCarried", m_GoldCarried);
+	writer.NewPropertyWithValue("AIMode", m_AIMode);
+	writer.NewPropertyWithValue("SpecialBehaviour_ClearAIOrders", true);
+	size_t waypointIndex = 0;
+	for (const auto& [position, object]: m_Waypoints) {
+		const long uid = object ? object->GetUniqueID() : (waypointIndex < m_FaithfulWaypointUIDs.size() ? m_FaithfulWaypointUIDs[waypointIndex] : 0);
+		writer.NewPropertyWithValue("SpecialBehaviour_AddAISceneWaypoint", position);
+		writer.NewPropertyWithValue("SpecialBehaviour_AIWaypointUniqueID", uid);
+		++waypointIndex;
+	}
+	for (const Vector& point: m_MovePath) {
+		writer.NewPropertyWithValue("SpecialBehaviour_AddMovePathPoint", point);
+	}
+	writer.NewPropertyWithValue("SpecialBehaviour_WaypointCursor", m_WaypointCursor);
+	writer.NewPropertyWithValue("SpecialBehaviour_MoveTarget", m_MoveTarget);
+	writer.NewPropertyWithValue("SpecialBehaviour_PrevPathTarget", m_PrevPathTarget);
+	writer.NewPropertyWithValue("SpecialBehaviour_MoveVector", m_MoveVector);
+	writer.NewPropertyWithValue("SpecialBehaviour_UpdateMovePath", m_UpdateMovePath);
+	writer.NewPropertyWithValue("PassengerSlots", m_PassengerSlots);
+	writer.NewPropertyWithValue("ImpulseDamageThreshold", m_TravelImpulseDamage);
+	writer.NewPropertyWithValue("StableVelocityThreshold", m_StableVel);
+	writer.NewPropertyWithValue("StableRecoveryDelay", m_StableRecoverDelay);
+	writer.NewPropertyWithValue("CanRun", m_CanRun);
+	writer.NewPropertyWithValue("CrouchWalkSpeedMultiplier", m_CrouchWalkSpeedMultiplier);
+	writer.NewPropertyWithValue("AimRange", m_AimRange);
+	writer.NewPropertyWithValue("AimDistance", m_AimDistance);
+	writer.NewPropertyWithValue("SharpAimDelay", m_SharpAimDelay);
+	writer.NewPropertyWithValue("SightDistance", m_SightDistance);
+	writer.NewPropertyWithValue("Perceptiveness", m_Perceptiveness);
+	writer.NewPropertyWithValue("PainThreshold", m_PainThreshold);
+	writer.NewPropertyWithValue("CanRevealUnseen", m_CanRevealUnseen);
+	writer.NewPropertyWithValue("CharHeight", m_CharHeight);
+	writer.NewPropertyWithValue("HolsterOffset", m_HolsterOffset);
+	writer.NewPropertyWithValue("ReloadOffset", m_ReloadOffset);
+	writer.NewPropertyWithValue("MaxInventoryMass", m_MaxInventoryMass);
+	writer.NewPropertyWithValue("Organic", m_Organic);
+	writer.NewPropertyWithValue("Mechanical", m_Mechanical);
+	writer.NewPropertyWithValue("AIBaseDigStrength", m_AIBaseDigStrength);
+	writer.NewPropertyWithValue("SpecialBehaviour_MoveProximityLimit", m_MoveProximityLimit);
+	writer.NewPropertyWithValue("SpecialBehaviour_LimbPushForcesAndCollisionsDisabled", m_LimbPushForcesAndCollisionsDisabled);
+	writer.NewPropertyWithValue("SpecialBehaviour_BodyHitSound", m_BodyHitSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_AlarmSound", m_AlarmSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_DeathSound", m_DeathSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_DeviceSwitchSound", m_DeviceSwitchSound);
+	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", base64_encode(m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime, true));
+}
+
+int Actor::Save(Writer& writer) const {
+	MOSRotating::Save(writer);
+
+	writer.NewPropertyWithValue("PlayerControllable", m_PlayerControllable);
+	writer.NewProperty("BodyHitSound");
+	writer << m_BodyHitSound;
+	writer.NewProperty("AlarmSound");
+	writer << m_AlarmSound;
+	writer.NewProperty("PainSound");
+	writer << m_PainSound;
+	writer.NewProperty("DeathSound");
+	writer << m_DeathSound;
+	writer.NewProperty("DeviceSwitchSound");
+	writer << m_DeviceSwitchSound;
+	writer.NewProperty("Status");
+	writer << m_Status;
+	writer.NewProperty("Health");
+	writer << m_Health;
+	writer.NewProperty("MaxHealth");
+	writer << m_MaxHealth;
+	if (m_DeploymentID) {
+		writer.NewProperty("DeploymentID");
+		writer << m_DeploymentID;
+	}
+	writer.NewProperty("ImpulseDamageThreshold");
+	writer << m_TravelImpulseDamage;
+	writer.NewProperty("StableVelocityThreshold");
+	writer << m_StableVel;
+	writer.NewProperty("StableRecoveryDelay");
+	writer << m_StableRecoverDelay;
+	writer.NewProperty("CanRun");
+	writer << m_CanRun;
+	writer.NewProperty("CrouchWalkSpeedMultiplier");
+	writer << m_CrouchWalkSpeedMultiplier;
+	writer.NewProperty("GoldCarried");
+	writer << m_GoldCarried;
+	writer.NewProperty("AimAngle");
+	writer << m_AimAngle;
+	writer.NewProperty("AimRange");
+	writer << m_AimRange;
+	writer.NewProperty("AimDistance");
+	writer << m_AimDistance;
+	writer.NewProperty("SharpAimDelay");
+	writer << m_SharpAimDelay;
+	writer.NewProperty("SightDistance");
+	writer << m_SightDistance;
+	writer.NewProperty("Perceptiveness");
+	writer << m_Perceptiveness;
+	writer.NewProperty("PainThreshold");
+	writer << m_PainThreshold;
+	writer.NewProperty("CanRevealUnseen");
+	writer << m_CanRevealUnseen;
+	writer.NewProperty("CharHeight");
+	writer << m_CharHeight;
+	writer.NewProperty("HolsterOffset");
+	writer << m_HolsterOffset;
+	writer.NewPropertyWithValue("ReloadOffset", m_ReloadOffset);
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		writer.NewProperty("AddInventory");
+		writer << **itr;
+	}
+	writer.NewProperty("MaxInventoryMass");
+	writer << m_MaxInventoryMass;
+	writer.NewProperty("AIMode");
+	writer << m_AIMode;
+	writer.NewProperty("PieMenu");
+	writer << m_PieMenu.get();
+
+	writer.NewPropertyWithValue("Organic", m_Organic);
+	writer.NewPropertyWithValue("Mechanical", m_Mechanical);
+	writer.NewPropertyWithValue("AIBaseDigStrength", m_AIBaseDigStrength);
+
+	return 0;
+}
+
+void Actor::DestroyScriptState() {
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		(*itr)->DestroyScriptState();
+	}
+
+	MOSRotating::DestroyScriptState();
+}
+
+void Actor::Destroy(bool notInherited) {
+	delete m_DeviceSwitchSound;
+	delete m_BodyHitSound;
+	delete m_PainSound;
+	delete m_DeathSound;
+	delete m_AlarmSound;
+
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		delete (*itr);
+	}
+
+	if (!notInherited) {
+		MOSRotating::Destroy();
+	}
+
+	Clear();
+}
+
+float Actor::GetInventoryMass() const {
+	float inventoryMass = 0.0F;
+	for (const MovableObject* inventoryItem: m_Inventory) {
+		inventoryMass += inventoryItem->GetMass();
+	}
+	return inventoryMass;
+}
+
+float Actor::GetMass() const {
+	return MOSRotating::GetMass() + GetInventoryMass() + (m_GoldCarried * g_SceneMan.GetKgPerOz());
+}
+
+float Actor::GetBaseMass() {
+	if (m_BaseMass == std::numeric_limits<float>::infinity()) {
+		if (const Actor* presetActor = static_cast<const Actor*>(GetPreset())) {
+			m_BaseMass = presetActor->GetMass();
+		} else {
+			m_BaseMass = GetMass();
+		}
+	}
+
+	return m_BaseMass;
+}
+
+bool Actor::IsPlayerControlled() const {
+	return m_Controller.GetInputMode() == Controller::CIM_PLAYER && m_Controller.GetPlayer() >= 0;
+}
+
+float Actor::GetTotalValue(int nativeModule, float foreignMult, float nativeMult) const {
+	float totalValue = (GetGoldValue(nativeModule, foreignMult, nativeMult) / 2) + ((GetGoldValue(nativeModule, foreignMult, nativeMult) / 2) * (GetHealth() / GetMaxHealth()));
+	totalValue += GetGoldCarried();
+
+	MOSprite* pItem = 0;
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		pItem = dynamic_cast<MOSprite*>(*itr);
+		if (pItem)
+			totalValue += pItem->GetTotalValue(nativeModule, foreignMult, nativeMult);
+	}
+
+	return totalValue;
+}
+
+bool Actor::HasObject(std::string objectName) const {
+	if (MOSRotating::HasObject(objectName))
+		return true;
+
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		if ((*itr) && (*itr)->HasObject(objectName))
+			return true;
+	}
+
+	return false;
+}
+
+bool Actor::HasObjectInGroup(std::string groupName) const {
+	if (MOSRotating::HasObjectInGroup(groupName))
+		return true;
+
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		if ((*itr) && (*itr)->HasObjectInGroup(groupName))
+			return true;
+	}
+
+	return false;
+}
+
+void Actor::SetTeam(int team) {
+	MovableObject::SetTeam(team);
+
+	// Change the Team Icon to display
+	m_pTeamIcon = 0;
+	if (g_ActivityMan.GetActivity())
+		m_pTeamIcon = g_ActivityMan.GetActivity()->GetTeamIcon(m_Team);
+
+	// Also set all actors in the inventory
+	Actor* pActor = 0;
+	for (std::deque<MovableObject*>::const_iterator itr = m_Inventory.begin(); itr != m_Inventory.end(); ++itr) {
+		pActor = dynamic_cast<Actor*>(*itr);
+		if (pActor)
+			pActor->SetTeam(team);
+	}
+}
+
+void Actor::SetControllerMode(Controller::InputMode newMode, int newPlayer) {
+	Controller::InputMode previousControllerMode = m_Controller.GetInputMode();
+	int previousControllingPlayer = m_Controller.GetPlayer();
+
+	m_Controller.SetInputMode(newMode);
+	m_Controller.SetPlayer(newPlayer);
+
+	// Under lockstep the sim-facing change lands with the committed frame, which notifies every peer then.
+	if (!m_Controller.IsWireOwned()) {
+		OnControllerInputModeChanged(previousControllerMode, previousControllingPlayer);
+	}
+}
+
+void Actor::OnControllerInputModeChanged(Controller::InputMode previousMode, int previousPlayer) {
+	RunScriptedFunctionInAppropriateScripts("OnControllerInputModeChange", false, false, {}, {std::to_string(previousMode), std::to_string(previousPlayer)});
+	m_NewControlTmr.Reset();
+	// The selection wobble is sim state, so it plays where the handoff lands: on every peer at the same tick.
+	if (m_PieMenu && m_Controller.GetInputMode() == Controller::CIM_PLAYER) {
+		m_PieMenu->DoDisableAnimation();
+	}
+}
+
+Controller::InputMode Actor::SwapControllerModes(Controller::InputMode newMode, int newPlayer) {
+	Controller::InputMode returnMode = m_Controller.GetInputMode();
+	SetControllerMode(newMode, newPlayer);
+	return returnMode;
+}
+
+bool Actor::Look(float FOVSpread, float range) {
+	if (!g_SceneMan.AnythingUnseen(m_Team) || m_CanRevealUnseen == false) {
+		return false;
+	}
+
+	// Use the 'eyes' on the 'head', if applicable
+	Vector aimPos = GetEyePos();
+	/*
+	    Matrix aimMatrix(m_HFlipped ? -m_AimAngle : m_AimAngle);
+	    aimMatrix.SetXFlipped(m_HFlipped);
+	    // Get the langth of the look vector
+	    Vector aimDistance = m_ViewPoint - aimPos;
+	    // Add half the screen width
+	    Vector lookVector(fabs(aimDistance.m_X) + range, 0);
+	    // Set the rotation to the acutal aiming angle
+	    lookVector *= aimMatrix;
+	    // Add the spread
+	    lookVector.DegRotate(FOVSpread * NormalRand());
+	// TEST: Really need so far?
+	    lookVector /= 2;
+	*/
+	Vector lookVector = m_Vel;
+	// If there is no vel, just look in all directions
+	if (lookVector.GetLargest() < 0.01) {
+		lookVector.SetXY(range, 0);
+		lookVector.DegRotate(RandomNum(-180.0F, 180.0F));
+	} else {
+		// Set the distance in the look direction
+		lookVector.SetMagnitude(range);
+		// Add the spread from the directed look
+		lookVector.DegRotate(FOVSpread * RandomNormalNum());
+	}
+
+	// The smallest dimension of the fog block, divided by two, but always at least one, as the step for the casts
+	int step = (int)g_SceneMan.GetUnseenResolution(m_Team).GetSmallest() / 2;
+
+	// TODO: generate an alarm event if we spot an enemy actor?
+
+	Vector ignored(0, 0);
+	return g_SceneMan.CastSeeRay(m_Team, aimPos, lookVector, ignored, 25, step);
+}
+
+void Actor::AddGold(float goldOz) {
+	bool isHumanTeam = g_ActivityMan.GetActivity()->IsHumanTeam(m_Team);
+	if (g_SettingsMan.GetAutomaticGoldDeposit() || !isHumanTeam) {
+		// TODO: Allow AI to reliably deliver gold via craft
+		g_ActivityMan.GetActivity()->ChangeTeamFunds(goldOz, m_Team);
+	} else {
+		m_GoldCarried += goldOz;
+		m_GoldPicked = true;
+		if (isHumanTeam) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; player++) {
+				if (g_ActivityMan.GetActivity()->GetTeamOfPlayer(player) == m_Team) {
+					g_GUISound.FundsChangedSound()->Play(player);
+				}
+			}
+		}
+	}
+}
+
+void Actor::RestDetection() {
+	MOSRotating::RestDetection();
+
+	if (m_Status != DEAD) {
+		m_AngOscillations = 0;
+		m_VelOscillations = 0;
+		m_RestTimer.Reset();
+		m_ToSettle = false;
+	}
+}
+
+void Actor::HandlePendingPieCommand() {
+	if (m_PieMenu) {
+		if (const PieSliceType command = m_PieMenu->GetPieCommand(); command != PieSliceType::NoType) {
+			HandlePieCommand(command);
+		}
+	}
+}
+
+void Actor::FormSquad(const Vector& selectionEdge) {
+	SetAIMode(AIMODE_SENTRY);
+	const float sqrRadius = g_SceneMan.ShortestDistance(selectionEdge, m_Pos, true).GetSqrMagnitude();
+	Actor* first = g_MovableMan.GetNextTeamActor(m_Team);
+	Actor* actor = first;
+	do {
+		if (actor && !actor->GetController()->IsPlayerControlled() && !actor->IsInGroup("Brains") && (dynamic_cast<AHuman*>(actor) || dynamic_cast<ACrab*>(actor)) && g_SceneMan.ShortestDistance(m_Pos, actor->GetPos(), true).GetSqrMagnitude() < sqrRadius) {
+			actor->FlashWhite();
+			actor->ClearAIWaypoints();
+			actor->SetAIMode(AIMODE_SQUAD);
+			actor->AddAIMOWaypoint(this);
+			actor->SetMovePathToUpdate();
+		}
+		actor = g_MovableMan.GetNextTeamActor(m_Team, actor);
+	} while (actor && actor != first);
+}
+
+bool Actor::HasSquad() const {
+	Actor* first = g_MovableMan.GetNextTeamActor(m_Team);
+	Actor* actor = first;
+	do {
+		if (actor && (dynamic_cast<AHuman*>(actor) || dynamic_cast<ACrab*>(actor)) && actor->GetAIMOWaypointID() == GetID()) {
+			return true;
+		}
+		actor = g_MovableMan.GetNextTeamActor(m_Team, actor);
+	} while (actor && actor != first);
+	return false;
+}
+
+bool Actor::DisbandSquad() {
+	bool hadSquad = false;
+	Actor* first = g_MovableMan.GetNextTeamActor(m_Team);
+	Actor* actor = first;
+	do {
+		if (actor && (dynamic_cast<AHuman*>(actor) || dynamic_cast<ACrab*>(actor)) && actor->GetAIMOWaypointID() == GetID()) {
+			actor->FlashWhite();
+			actor->ClearAIWaypoints();
+			actor->SetAIMode(static_cast<AIMode>(m_AIMode));
+			hadSquad = true;
+		}
+		actor = g_MovableMan.GetNextTeamActor(m_Team, actor);
+	} while (actor && actor != first);
+	return hadSquad;
+}
+
+void Actor::RequestAIMode(AIMode newMode) {
+	if (m_AIMode == newMode) {
+		return;
+	}
+	// The AI decides per-machine, but the mode is sim state the craft death gates read, so under
+	// lockstep the write crosses the wire and lands on both peers at the same frame.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetActorAIMode{static_cast<int64_t>(GetUniqueID()), GetTeam(), static_cast<uint8_t>(newMode)}});
+	} else {
+		SetAIMode(newMode);
+	}
+}
+
+void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
+	if (g_MovableMan.ValidMO(pMOWaypoint) && (m_Waypoints.empty() || m_Waypoints.back().second != pMOWaypoint)) {
+		m_Waypoints.push_back(std::pair<Vector, const MovableObject*>(pMOWaypoint->GetPos(), pMOWaypoint));
+	}
+}
+
+void Actor::PopFrontWaypoint(const Vector& expected) {
+	if (!m_Waypoints.empty() && m_Waypoints.front().first == expected) {
+		m_Waypoints.pop_front();
+		m_WaypointCursor = std::max(m_WaypointCursor - 1, 0);
+	}
+}
+
+void Actor::AlarmPoint(const Vector& alarmPoint) {
+	if (m_AlarmSound && m_AlarmTimer.IsPastSimTimeLimit()) {
+		m_AlarmSound->Play(alarmPoint);
+	}
+
+	if (m_AlarmTimer.GetElapsedSimTimeMS() > 50) {
+		m_AlarmTimer.Reset();
+		m_LastAlarmPos = m_PointingTarget = alarmPoint;
+	}
+}
+
+MovableObject* Actor::SwapNextInventory(MovableObject* pSwapIn, bool muteSound) {
+	MovableObject* pRetDev = 0;
+	bool playSound = false;
+	if (!m_Inventory.empty()) {
+		pRetDev = m_Inventory.front();
+		// Reset all the timers of the object being taken out of inventory so it doesn't emit a bunch of particles that have been backed up while dormant in inventory
+		pRetDev->ResetAllTimers();
+		m_Inventory.pop_front();
+		playSound = true;
+	}
+	if (pSwapIn) {
+		pSwapIn->SetAsNoID();
+		AddToInventoryBack(pSwapIn);
+		playSound = true;
+	}
+
+	if (m_DeviceSwitchSound && playSound && !muteSound)
+		m_DeviceSwitchSound->Play(m_Pos);
+
+	return pRetDev;
+}
+
+void Actor::RemoveInventoryItem(const std::string& moduleName, const std::string& presetName) {
+	for (std::deque<MovableObject*>::iterator inventoryIterator = m_Inventory.begin(); inventoryIterator != m_Inventory.end(); ++inventoryIterator) {
+		if ((moduleName.empty() || (*inventoryIterator)->GetModuleName() == moduleName) && (*inventoryIterator)->GetPresetName() == presetName) {
+			(*inventoryIterator)->DestroyScriptState();
+			delete (*inventoryIterator);
+			m_Inventory.erase(inventoryIterator);
+			break;
+		}
+	}
+}
+
+MovableObject* Actor::RemoveInventoryItemAtIndex(int inventoryIndex) {
+	if (inventoryIndex >= 0 && inventoryIndex < m_Inventory.size()) {
+		MovableObject* itemAtIndex = m_Inventory[inventoryIndex];
+		m_Inventory.erase(m_Inventory.begin() + inventoryIndex);
+		return itemAtIndex;
+	}
+	return nullptr;
+}
+
+MovableObject* Actor::SwapPrevInventory(MovableObject* pSwapIn) {
+	MovableObject* pRetDev = 0;
+	bool playSound = false;
+	if (!m_Inventory.empty()) {
+		pRetDev = m_Inventory.back();
+		m_Inventory.pop_back();
+		playSound = true;
+	}
+	if (pSwapIn) {
+		pSwapIn->SetAsNoID();
+		AddToInventoryFront(pSwapIn);
+		playSound = true;
+	}
+
+	if (m_DeviceSwitchSound && playSound)
+		m_DeviceSwitchSound->Play(m_Pos);
+
+	return pRetDev;
+}
+
+bool Actor::SwapInventoryItemsByIndex(int inventoryIndex1, int inventoryIndex2) {
+	if (inventoryIndex1 < 0 || inventoryIndex2 < 0 || inventoryIndex1 >= m_Inventory.size() || inventoryIndex2 >= m_Inventory.size()) {
+		return false;
+	}
+
+	std::swap(m_Inventory.at(inventoryIndex1), m_Inventory.at(inventoryIndex2));
+	return true;
+}
+
+MovableObject* Actor::SetInventoryItemAtIndex(MovableObject* newInventoryItem, int inventoryIndex) {
+	if (!newInventoryItem) {
+		return RemoveInventoryItemAtIndex(inventoryIndex);
+	}
+	newInventoryItem->SetAsNoID();
+
+	if (inventoryIndex < 0 || inventoryIndex >= m_Inventory.size()) {
+		AddToInventoryBack(newInventoryItem);
+		return nullptr;
+	}
+	MovableObject* currentInventoryItemAtIndex = m_Inventory.at(inventoryIndex);
+	m_Inventory.at(inventoryIndex) = newInventoryItem;
+	return currentInventoryItemAtIndex;
+}
+
+void Actor::LaunchDroppedItem(MovableObject* itemToLaunch, const Vector* dropDirection) {
+	Vector itemPosition = m_Pos;
+	Vector throwForce(0.75F + (0.25F * RandomNum()), 0);
+	if (dropDirection && dropDirection->MagnitudeIsGreaterThan(0.5F)) {
+		itemPosition += Vector(GetRadius(), 0).AbsRotateTo(*dropDirection);
+		throwForce.SetX(throwForce.GetX() + 5.0F);
+		throwForce.AbsRotateTo(*dropDirection);
+		throwForce *= dropDirection->GetMagnitude();
+	} else {
+		itemPosition += Vector(m_HFlipped ? -10 : 10, -8);
+		throwForce += Vector(5.0F, -1.0F + RandomNum());
+		throwForce.FlipX(m_HFlipped);
+		throwForce *= GetRotAngle();
+	}
+	itemToLaunch->SetPos(itemPosition);
+	throwForce.CapMagnitude(itemToLaunch->GetMass() * 100);
+	itemToLaunch->AddImpulseForce(throwForce);
+	g_MovableMan.AddMO(itemToLaunch);
+}
+
+bool Actor::DropHeldOrInventoryItem(int equippedItemIndex, int inventoryItemIndex, const Vector* dropDirection) {
+	if (equippedItemIndex > -1 || inventoryItemIndex < 0 || inventoryItemIndex >= GetInventorySize()) {
+		return false;
+	}
+	MovableObject* itemToLaunch = RemoveInventoryItemAtIndex(inventoryItemIndex);
+	if (!itemToLaunch) {
+		return false;
+	}
+	LaunchDroppedItem(itemToLaunch, dropDirection);
+	return true;
+}
+
+void Actor::DropAllInventory() {
+	MovableObject* pObject = 0;
+	Actor* pPassenger = 0;
+	float velMin, velMax, angularVel;
+	Vector gibROffset, gibVel;
+	for (std::deque<MovableObject*>::iterator gItr = m_Inventory.begin(); gItr != m_Inventory.end(); ++gItr) {
+		// Get handy handle to the object we're putting
+		pObject = *gItr;
+		if (pObject) {
+			// Generate the velocities procedurally
+			velMin = 3.0F;
+			velMax = velMin + std::sqrt(m_SpriteRadius);
+
+			// Randomize the offset from center to be within the original object
+			gibROffset.SetXY(m_SpriteRadius * 0.35F * RandomNum(), 0);
+			gibROffset.RadRotate(c_PI * RandomNormalNum());
+			// Set up its position and velocity according to the parameters of this AEmitter.
+			pObject->SetPos(m_Pos + gibROffset);
+			pObject->SetPrevPos(GetPrevPos() + gibROffset);
+			pObject->SetRotAngle(m_Rotation.GetRadAngle() + pObject->GetRotMatrix().GetRadAngle());
+			// Rotational angle
+			pObject->SetAngularVel((pObject->GetAngularVel() * 0.35F) + (pObject->GetAngularVel() * 0.65F / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F)) * RandomNum());
+			// Make it rotate away in the appropriate direction depending on which side of the object it is on
+			// If the object is far to the relft or right of the center, make it always rotate outwards to some degree
+			if (gibROffset.m_X > m_aSprite[0]->w / 3) {
+				float offCenterRatio = gibROffset.m_X / (m_aSprite[0]->w / 2);
+				angularVel = std::abs(pObject->GetAngularVel() * 0.5F);
+				angularVel += std::abs(pObject->GetAngularVel() * 0.5F * offCenterRatio);
+				pObject->SetAngularVel(angularVel * (gibROffset.m_X > 0.0F ? -1 : 1));
+			}
+			// Gib is too close to center to always make it rotate in one direction, so give it a baseline rotation and then randomize
+			else {
+				// Order the draws explicitly — unsequenced arg evaluation desyncs cross-compiler.
+				const float spinScale = RandomNum(0.5F, 1.5F);
+				const float spinSign = RandomNum() < 0.5F ? 1.0F : -1.0F;
+				pObject->SetAngularVel(pObject->GetAngularVel() * spinScale * spinSign);
+			}
+
+			// TODO: Optimize making the random angles!")
+			gibVel = gibROffset;
+			if (gibVel.IsZero()) {
+				gibVel.SetXY(RandomNum(velMin, velMax), 0.0F);
+				gibVel.RadRotate(c_PI * RandomNormalNum());
+			} else {
+				gibVel.SetMagnitude(RandomNum(velMin, velMax));
+			}
+			// Distribute any impact implse out over all the gibs
+			//            gibVel += (impactImpulse / m_Gibs.size()) / pObject->GetMass();
+			pObject->SetVel(m_Vel + gibVel);
+			// Reset all the timers of the object being shot out so it doesn't emit a bunch of particles that have been backed up while dormant in inventory
+			pObject->ResetAllTimers();
+
+			// Detect whether we're dealing with a passenger and add it as Actor instead
+			if (pPassenger = dynamic_cast<Actor*>(pObject)) {
+				pPassenger->SetRotAngle(c_HalfPI * RandomNormalNum());
+				pPassenger->SetAngularVel(pPassenger->GetAngularVel() * 5.0F);
+				pPassenger->SetHFlipped(RandomNum() > 0.5F);
+				pPassenger->SetStatus(UNSTABLE);
+				g_MovableMan.AddActor(pPassenger);
+			}
+			// Add the gib to the scene, passing ownership from the inventory
+			else
+				g_MovableMan.AddParticle(pObject);
+
+			pPassenger = 0;
+			pObject = 0;
+		}
+	}
+
+	// We have exhausted all teh inventory into the scene, passing ownership
+	m_Inventory.clear();
+}
+
+void Actor::DropAllGold() {
+	const Material* goldMaterial = g_SceneMan.GetMaterialFromID(g_MaterialGold);
+	float velMin = 3.0F;
+	float velMax = velMin + std::sqrt(m_SpriteRadius);
+
+	for (int i = 0; i < static_cast<int>(std::floor(m_GoldCarried)); i++) {
+		Vector dropOffset(m_SpriteRadius * 0.3F * RandomNum(), 0);
+		dropOffset.RadRotate(c_PI * RandomNormalNum());
+
+		Vector dropVelocity(dropOffset);
+		dropVelocity.SetMagnitude(RandomNum(velMin, velMax));
+
+		Atom* goldMOPixelAtom = new Atom(Vector(), g_MaterialGold, nullptr, goldMaterial->GetColor(), 2);
+
+		MOPixel* goldMOPixel = new MOPixel(goldMaterial->GetColor(), goldMaterial->GetPixelDensity(), m_Pos + dropOffset, dropVelocity, goldMOPixelAtom);
+		goldMOPixel->SetToHitMOs(false);
+		g_MovableMan.AddParticle(goldMOPixel);
+	}
+	m_GoldCarried = 0;
+}
+
+bool Actor::AddToInventoryFront(MovableObject* itemToAdd) {
+	// This function is called often to add stuff we just removed from our hands, which may be set to delete so we need to guard against that lest we crash.
+	if (!itemToAdd || itemToAdd->IsSetToDelete()) {
+		return false;
+	}
+
+	m_Inventory.push_front(itemToAdd);
+	return true;
+}
+
+bool Actor::AddToInventoryBack(MovableObject* itemToAdd) {
+	// This function is called often to add stuff we just removed from our hands, which may be set to delete so we need to guard against that lest we crash.
+	if (!itemToAdd || itemToAdd->IsSetToDelete()) {
+		return false;
+	}
+
+	m_Inventory.push_back(itemToAdd);
+	return true;
+}
+
+void Actor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
+	// Play death sound
+	// TODO: Don't attenuate since death is pretty important.. maybe only make this happen for teh brains
+	if (m_DeathSound) {
+		m_DeathSound->Play(m_Pos);
+	}
+
+	// Gib all the regular gibs
+	MOSRotating::GibThis(impactImpulse, movableObjectToIgnore);
+
+	// Throw out all the inventory with the appropriate force and directions
+	MovableObject* pObject = 0;
+	Actor* pPassenger = 0;
+	float velMin, velRange, angularVel;
+	Vector gibROffset, gibVel;
+	for (std::deque<MovableObject*>::iterator gItr = m_Inventory.begin(); gItr != m_Inventory.end(); ++gItr) {
+		// Get handy handle to the object we're putting
+		pObject = *gItr;
+
+		// Generate the velocities procedurally
+		velMin = m_GibBlastStrength / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F);
+		velRange = 10.0F;
+
+		// Randomize the offset from center to be within the original object
+		// Order the draws explicitly — unsequenced arg evaluation desyncs cross-compiler.
+		const float gibOffsetX = m_SpriteRadius * 0.35F * RandomNormalNum();
+		const float gibOffsetY = m_SpriteRadius * 0.35F * RandomNormalNum();
+		gibROffset.SetXY(gibOffsetX, gibOffsetY);
+		// Set up its position and velocity according to the parameters of this AEmitter.
+		pObject->SetPos(m_Pos + gibROffset /*Vector(m_Pos.m_X + 5 * NormalRand(), m_Pos.m_Y + 5 * NormalRand())*/);
+		pObject->SetPrevPos(GetPrevPos() + gibROffset);
+		pObject->SetRotAngle(m_Rotation.GetRadAngle() + pObject->GetRotMatrix().GetRadAngle());
+		// Rotational angle
+		pObject->SetAngularVel((pObject->GetAngularVel() * 0.35F) + (pObject->GetAngularVel() * 0.65F / (pObject->GetMass() != 0 ? pObject->GetMass() : 0.0001F)) * RandomNum());
+		// Make it rotate away in the appropriate direction depending on which side of the object it is on
+		// If the object is far to the relft or right of the center, make it always rotate outwards to some degree
+		if (gibROffset.m_X > m_aSprite[0]->w / 3) {
+			float offCenterRatio = gibROffset.m_X / (m_aSprite[0]->w / 2);
+			angularVel = fabs(pObject->GetAngularVel() * 0.5F);
+			angularVel += fabs(pObject->GetAngularVel() * 0.5F * offCenterRatio);
+			pObject->SetAngularVel(angularVel * (gibROffset.m_X > 0 ? -1 : 1));
+		}
+		// Gib is too close to center to always make it rotate in one direction, so give it a baseline rotation and then randomize
+		else {
+			// Order the draws explicitly — unsequenced operand evaluation desyncs cross-compiler.
+			const float gibSpinScale = RandomNum();
+			const float gibSpinSign = RandomNormalNum() > 0.0F ? 1.0F : -1.0F;
+			pObject->SetAngularVel((pObject->GetAngularVel() * 0.5F + pObject->GetAngularVel() * gibSpinScale) * gibSpinSign);
+		}
+
+		// TODO: Optimize making the random angles!")
+		gibVel = gibROffset;
+		if (gibVel.IsZero())
+			gibVel.SetXY(velMin + RandomNum(0.0F, velRange), 0.0F);
+		else
+			gibVel.SetMagnitude(velMin + RandomNum(0.0F, velRange));
+		gibVel.RadRotate(impactImpulse.GetAbsRadAngle());
+		// Don't! the offset was already rotated!
+		//            gibVel = RotateOffset(gibVel);
+		// Distribute any impact implse out over all the gibs
+		//            gibVel += (impactImpulse / m_Gibs.size()) / pObject->GetMass();
+		pObject->SetVel(m_Vel + gibVel);
+		// Reset all the timers of the object being shot out so it doesn't emit a bunch of particles that have been backed up while dormant in inventory
+		pObject->ResetAllTimers();
+
+		// Set the gib to not hit a specific MO
+		if (movableObjectToIgnore)
+			pObject->SetWhichMOToNotHit(movableObjectToIgnore);
+
+		// Detect whether we're dealing with a passenger and add it as Actor instead
+		if (pPassenger = dynamic_cast<Actor*>(pObject)) {
+			pPassenger->SetRotAngle(c_HalfPI * RandomNormalNum());
+			pPassenger->SetAngularVel(pPassenger->GetAngularVel() * 5.0F);
+			pPassenger->SetHFlipped(RandomNum() > 0.5F);
+			pPassenger->SetStatus(UNSTABLE);
+			g_MovableMan.AddActor(pPassenger);
+		}
+		// Add the gib to the scene, passing ownership from the inventory
+		else
+			g_MovableMan.AddParticle(pObject);
+
+		pPassenger = 0;
+		pObject = 0;
+	}
+
+	// We have exhausted all teh inventory into the scene, passing ownership
+	m_Inventory.clear();
+
+	// If this is the actual brain of any player, flash that player's screen when he's now dead
+	if (g_SettingsMan.FlashOnBrainDamage() && g_ActivityMan.IsInActivity()) {
+		int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichPlayer(this);
+		// Only flash if player is human (AI players don't have screens!)
+		if (brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->PlayerHuman(brainOfPlayer)) {
+			// Croaked.. flash for a longer period
+			if (m_ToDelete || m_Status == DEAD)
+				g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_WhiteColor, 500);
+		}
+	}
+}
+
+bool Actor::ParticlePenetration(HitData& hd) {
+	bool penetrated = MOSRotating::ParticlePenetration(hd);
+
+	MovableObject* hitor = hd.Body[HITOR];
+	float damageToAdd = hitor->DamageOnCollision();
+	damageToAdd += penetrated ? hitor->DamageOnPenetration() : 0;
+	if (hitor->GetApplyWoundDamageOnCollision()) {
+		damageToAdd += m_pEntryWound->GetEmitDamage() * hitor->WoundDamageMultiplier();
+	}
+	if (hitor->GetApplyWoundBurstDamageOnCollision()) {
+		damageToAdd += m_pEntryWound->GetBurstDamage() * hitor->WoundDamageMultiplier();
+	}
+
+	if (damageToAdd != 0) {
+		if (SceneMan::IsTrackedUID(GetUniqueID())) {
+			SceneMan::TraceTerrainEvent("hdmh", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damageToAdd), static_cast<int>(hitor->GetUniqueID()), penetrated ? 1 : 0, static_cast<int>(GetUniqueID()));
+		}
+		m_Health = std::min(m_Health - (damageToAdd * m_DamageMultiplier), m_MaxHealth);
+	}
+	if ((penetrated || damageToAdd != 0) && m_Perceptiveness > 0 && m_Health > 0) {
+		Vector extruded(hd.HitVel[HITOR]);
+		extruded.SetMagnitude(m_CharHeight);
+		extruded = m_Pos - extruded;
+		g_SceneMan.WrapPosition(extruded);
+		AlarmPoint(extruded);
+	}
+
+	return penetrated;
+}
+
+BITMAP* Actor::GetAIModeIcon() {
+	return m_apAIIcons[m_AIMode];
+}
+
+MOID Actor::GetAIMOWaypointID() const {
+	if (g_MovableMan.ValidMO(m_pMOMoveTarget))
+		return m_pMOMoveTarget->GetID();
+	else
+		return g_NoMOID;
+}
+
+void Actor::UpdateMovePath() {
+	if (g_SceneMan.GetScene() == nullptr) {
+		return;
+	}
+
+	// Estimate how much material this actor can dig through
+	float digStrength = EstimateDigStrength();
+	float jumpHeight = EstimateJumpHeight();
+
+	// If we're following someone/thing, then never advance waypoints until that thing disappears
+	if (g_MovableMan.ValidMO(m_pMOMoveTarget)) {
+		m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), m_pMOMoveTarget->GetPos(), jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+	} else {
+		// Do we currently have a path to a static target we would like to still pursue?
+		if (m_MovePath.empty()) {
+			// Ok no path going, so get a new path to the next waypoint, if there is a next waypoint
+			const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+			const size_t loaded = lockstep ? static_cast<size_t>(std::max(m_WaypointCursor, 0)) : 0;
+			if (m_Waypoints.size() > loaded) {
+				const auto& waypoint = *std::next(m_Waypoints.begin(), static_cast<long>(loaded));
+				// Make sure the path starts from the ground and not somewhere up in the air if/when dropped out of ship
+				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), waypoint.first, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+
+				// If the waypoint was tied to an MO to pursue, then load it into the current MO target
+				if (g_MovableMan.ValidMO(waypoint.second)) {
+					m_pMOMoveTarget = waypoint.second;
+				} else {
+					m_pMOMoveTarget = 0;
+				}
+
+				// We loaded the waypoint, no need to keep it. The queue is sim state, so under lockstep the owner drops it through the wire.
+				if (lockstep) {
+					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
+					}
+					++m_WaypointCursor;
+				} else {
+					m_Waypoints.pop_front();
+				}
+			}
+			// Just try to get to the last Move Target
+			else {
+				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), m_MoveTarget, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+			}
+		}
+		// We had a path before trying to update, so use its last point as the final destination
+		else {
+			m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), Vector(m_MovePath.back()), jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+		}
+	}
+
+	m_UpdateMovePath = false;
+}
+
+float Actor::EstimateDigStrength() const {
+	return m_AIBaseDigStrength;
+}
+
+float Actor::EstimateJumpHeight() const {
+	// Sentinel value that is explicitly checked for within pathfinder code.
+	return FLT_MAX;
+}
+
+void Actor::VerifyMOIDs() {
+	std::vector<MOID> MOIDs;
+	GetMOIDs(MOIDs);
+
+	for (std::vector<MOID>::iterator it = MOIDs.begin(); it != MOIDs.end(); it++) {
+		RTEAssert(*it == g_NoMOID || *it < g_MovableMan.GetMOIDCount(), "Invalid MOID in actor");
+	}
+}
+
+void Actor::SetPieMenu(PieMenu* newPieMenu) {
+	m_PieMenu = std::unique_ptr<PieMenu>(newPieMenu);
+	m_PieMenu->Create(this);
+	m_PieMenu->AddWhilePieMenuOpenListener(this, std::bind(&Actor::WhilePieMenuOpenListener, this, m_PieMenu.get()));
+}
+
+void Actor::OnNewMovePath() {
+	if (!m_MovePath.empty()) {
+		// Remove the first one; it's our position
+		m_PrevPathTarget = m_MovePath.front();
+		m_MovePath.pop_front();
+		// Also remove the one after that; it may move in opposite direction since it heads to the nearest PathNode center
+		// Unless it is the last one, in which case it shouldn't be removed
+		if (m_MovePath.size() > 1) {
+			m_PrevPathTarget = m_MovePath.front();
+			m_MovePath.pop_front();
+		}
+	} else if (m_pMOMoveTarget) {
+		m_MoveTarget = m_pMOMoveTarget->GetPos();
+	} else {
+		// Nowhere to gooooo
+		m_MoveTarget = m_PrevPathTarget = m_Pos;
+	}
+
+	// Smash all non-airborne waypoints down to just above the ground, so they more accurately represent the ground path
+	std::list<Vector>::iterator finalItr = m_MovePath.end();
+	--finalItr;
+	for (std::list<Vector>::iterator lItr = m_MovePath.begin(); lItr != finalItr; ++lItr) {
+		(*lItr) = g_SceneMan.MovePointToGround((*lItr), m_CharHeight * 0.2, 0, g_SettingsMan.GetPathFinderGridNodeSize() * 2.5f);
+	}
+}
+
+void Actor::PreControllerUpdate() {
+	if (m_PathRequest && m_PathRequest->complete) {
+		m_MovePath = const_cast<std::list<Vector>&>(m_PathRequest->path);
+		m_PathRequest.reset();
+		OnNewMovePath();
+	}
+
+	// We update this after, because pathing requests are forced to take at least 1 frame for the sake of determinism for now.
+	// In future maybe we can move this back, but it doesn't make much difference
+	if (m_UpdateMovePath) {
+		UpdateMovePath();
+	}
+}
+
+void Actor::AdoptPersistedUniqueID() {
+	MOSRotating::AdoptPersistedUniqueID();
+	m_PersistedSharpAimTimerAnchor.Apply(m_SharpAimTimer);
+	m_PersistedAimTimerAnchor.Apply(m_AimTmr);
+	if (m_PieMenu && !m_PersistedPieMenuState.empty()) {
+		m_PieMenu->UnpackInteractionState(m_PersistedPieMenuState);
+	}
+	m_PersistedPieMenuState.clear();
+	if (m_HasPersistedViewPoint) {
+		m_ViewPoint = m_PersistedViewPoint;
+		m_HasPersistedViewPoint = false;
+	}
+	m_HasPersistedMovePath = false;
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->AdoptPersistedUniqueID();
+	}
+	if (!m_PersistedActorRuntime.empty()) {
+		if (!LoadActorRuntime(m_PersistedActorRuntime)) throw std::runtime_error("could not restore Actor runtime checkpoint");
+		m_PersistedActorRuntime.clear();
+	}
+}
+
+MovableObject* Actor::FindPartByUniqueID(long uid) {
+	if (MovableObject* found = MOSRotating::FindPartByUniqueID(uid)) {
+		return found;
+	}
+	for (MovableObject* inventoryItem: m_Inventory) {
+		if (MovableObject* found = inventoryItem->FindPartByUniqueID(uid)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
+long Actor::GetItemInReachUniqueID() const {
+	return m_pItemInReach ? m_pItemInReach->GetUniqueID() : m_FaithfulItemInReachUID;
+}
+
+void Actor::ResolveFaithfulLinks() {
+	MOSRotating::ResolveFaithfulLinks();
+	if (!m_PersistedActorIconReferences[0].empty()) {
+		m_pTeamIcon = ResolveActorIconReference(m_PersistedActorIconReferences[0]);
+		m_pControllerIcon = ResolveActorIconReference(m_PersistedActorIconReferences[1]);
+		m_PersistedActorIconReferences = {};
+	}
+	if (m_FaithfulItemInReachUID > 0) {
+		m_pItemInReach = dynamic_cast<HeldDevice*>(g_MovableMan.FindObjectByUniqueID(m_FaithfulItemInReachUID));
+		m_FaithfulItemInReachUID = 0;
+	}
+	if (m_FaithfulMOMoveTargetUID > 0) {
+		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOMoveTargetUID);
+		m_FaithfulMOMoveTargetUID = 0;
+	}
+	if (!m_FaithfulWaypointUIDs.empty()) {
+		auto uid = m_FaithfulWaypointUIDs.begin();
+		for (auto& [waypointPosition, waypointObject]: m_Waypoints) {
+			if (uid == m_FaithfulWaypointUIDs.end()) {
+				break;
+			}
+			waypointObject = *uid > 0 ? g_MovableMan.FindObjectByUniqueID(*uid) : nullptr;
+			++uid;
+		}
+		m_FaithfulWaypointUIDs.clear();
+	}
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->ResolveFaithfulLinks();
+	}
+}
+
+void Actor::DiscardPersistedSnapshotState() {
+	m_PersistedActorIconReferences = {};
+	m_PersistedControllerCheckpoint.clear();
+	MOSRotating::DiscardPersistedSnapshotState();
+	m_PersistedSharpAimTimerAnchor.pending = false;
+	m_PersistedAimTimerAnchor.pending = false;
+	m_PersistedControllerInputMode = -1;
+	m_PersistedControllerQuickDisabled = -1;
+	m_PersistedPieMenuState.clear();
+	m_HasPersistedViewPoint = false;
+	m_HasPersistedMovePath = false;
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->DiscardPersistedSnapshotState();
+	}
+	m_PersistedActorRuntime.clear();
+}
+
+void Actor::ApplyPersistedControllerMode() {
+	if (m_PersistedControllerInputMode >= 0) {
+		// The saved mode is the sim's; a wire-owned controller keeps this machine's seat.
+		if (m_Controller.IsWireOwned()) {
+			m_Controller.ApplyWireMode(static_cast<Controller::InputMode>(m_PersistedControllerInputMode), static_cast<int>(m_PersistedControllerPlayer));
+		} else {
+			m_Controller.SetInputMode(static_cast<Controller::InputMode>(m_PersistedControllerInputMode));
+			m_Controller.SetPlayerRaw(static_cast<int>(m_PersistedControllerPlayer));
+		}
+		m_PersistedControllerInputMode = -1;
+	}
+	if (m_PersistedControllerQuickDisabled >= 0) {
+		std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
+		for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+			controlStates[state] = m_Controller.IsState(static_cast<ControlState>(state));
+		}
+		m_Controller.ApplyWireState(controlStates, m_Controller.GetAnalogMove(), m_Controller.GetAnalogAim(), m_Controller.GetAnalogCursor(), m_Controller.GetMouseMovement(), m_Controller.GetInputMode(), m_Controller.GetPlayerRaw(), m_PersistedControllerQuickDisabled != 0);
+		m_PersistedControllerQuickDisabled = -1;
+	}
+	if (!m_PersistedControllerCheckpoint.empty()) {
+		m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint);
+		m_Controller.SetControlledActor(this);
+		m_PersistedControllerCheckpoint.clear();
+	}
+}
+
+void Actor::Update() {
+	ZoneScoped;
+
+	/////////////////////////////////
+	// Hit Body update and handling
+	MOSRotating::Update();
+
+	m_PieMenu->Update();
+
+	// Update the viewpoint to be at least what the position is
+	m_ViewPoint = m_Pos;
+
+	// Check if the MO we're following still exists, and if not, then clear the destination
+	if (m_pMOMoveTarget && !g_MovableMan.ValidMO(m_pMOMoveTarget)) {
+		m_pMOMoveTarget = nullptr;
+	}
+
+	///////////////////////////////////////////////////////////////////////////////
+	// Check for manual player-made progress made toward the set AI goal
+
+	if ((m_AIMode == AIMODE_GOTO || m_AIMode == AIMODE_SQUAD) && (!m_PathRequest || m_PathRequest->complete) && m_Controller.IsPlayerControlled() && !m_Controller.IsDisabled()) {
+		Vector notUsed;
+		// See if we are close enough to the next move target that we should grab the next in the path that is out of proximity range
+		Vector pathPointVec;
+		for (std::list<Vector>::iterator lItr = m_MovePath.begin(); lItr != m_MovePath.end();) {
+			pathPointVec = g_SceneMan.ShortestDistance(m_Pos, *lItr);
+			// Make sure we are within range AND have a clear sight to the path point we're about to eliminate, or it might be around a corner
+			if (pathPointVec.MagnitudeIsLessThan(m_MoveProximityLimit) && !g_SceneMan.CastStrengthRay(m_Pos, pathPointVec, 5, notUsed, 0)) {
+				lItr++;
+				// Save the last one before being popped off so we can use it to check if we need to dig (if there's any material between last and current)
+				m_PrevPathTarget = m_MovePath.front();
+				m_MovePath.pop_front();
+			} else {
+				break;
+			}
+		}
+
+		if (!m_MovePath.empty()) {
+			Vector notUsed;
+
+			// See if we are close enough to the last point in the current path, in which case we can toss teh whole current path and start ont he next
+			pathPointVec = g_SceneMan.ShortestDistance(m_Pos, m_MovePath.back());
+			// Clear out the current path, the player apparently took a shortcut
+			if (pathPointVec.MagnitudeIsLessThan(m_MoveProximityLimit) && !g_SceneMan.CastStrengthRay(m_Pos, pathPointVec, 5, notUsed, 0, g_MaterialDoor)) {
+				m_MovePath.clear();
+			}
+		}
+
+		// If still stuff in the path, get the next point on it
+		if (!m_MovePath.empty())
+			m_MoveTarget = m_MovePath.front();
+		// No more path, so check if any more waypoints to make a new path to? This doesn't apply if we're following something
+		else if (m_MovePath.empty() && !m_Waypoints.empty() && !m_pMOMoveTarget)
+			UpdateMovePath();
+		// Nope, so just conclude that we must have reached the ultimate AI target set and exit the goto mode
+		else if (!m_pMOMoveTarget)
+			m_AIMode = AIMODE_SENTRY;
+	}
+	// Save health state so we can compare next update
+	m_PrevHealth = m_Health;
+	/////////////////////////////////////
+	// Take damage/heal from wounds and wounds on Attachables
+	const bool traced = SceneMan::IsTrackedUID(GetUniqueID());
+	for (AEmitter* wound: m_Wounds) {
+		const float damage = wound->CollectDamage() * m_DamageMultiplier;
+		if (traced && damage != 0.0F) {
+			SceneMan::TraceTerrainEvent("hdmw", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(wound->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
+		}
+		m_Health -= damage;
+	}
+	for (Attachable* attachable: m_Attachables) {
+		const float damage = attachable->CollectDamage();
+		if (traced && damage != 0.0F) {
+			SceneMan::TraceTerrainEvent("hdma", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(attachable->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
+		}
+		m_Health -= damage;
+	}
+	m_Health = std::min(m_Health, m_MaxHealth);
+
+	/////////////////////////////
+	// Stability logic
+
+	if (m_Status == STABLE) {
+		// If moving really fast, we're not able to be stable
+		if (std::abs(m_Vel.m_X) > std::abs(m_StableVel.m_X) || std::abs(m_Vel.m_Y) > std::abs(m_StableVel.m_Y)) {
+			m_Status = UNSTABLE;
+		}
+
+		m_StableRecoverTimer.Reset();
+	} else if (m_Status == UNSTABLE) {
+		// Only regain stability if we're not moving too fast and it's been a while since we lost it
+		if (m_StableRecoverTimer.IsPastSimMS(m_StableRecoverDelay) && !(std::abs(m_Vel.m_X) > std::abs(m_StableVel.m_X) || std::abs(m_Vel.m_Y) > std::abs(m_StableVel.m_Y))) {
+			m_Status = STABLE;
+		}
+	}
+
+	/////////////////////////////////////////////
+	// Take damage from large hits during travel
+
+	const float travelImpulseMagnitudeSqr = m_TravelImpulse.GetSqrMagnitude();
+
+	// If we're travelling at least half the speed to hurt ourselves, play the body hit noise
+	float halfTravelImpulseDamage = m_TravelImpulseDamage * 0.5F;
+	if (m_BodyHitSound && travelImpulseMagnitudeSqr > (halfTravelImpulseDamage * halfTravelImpulseDamage)) {
+		m_BodyHitSound->Play(m_Pos);
+	}
+
+	// But only actually damage ourselves if we're unstable
+	if (m_Status == Actor::UNSTABLE && travelImpulseMagnitudeSqr > (m_TravelImpulseDamage * m_TravelImpulseDamage)) {
+		const float impulse = std::sqrt(travelImpulseMagnitudeSqr) - m_TravelImpulseDamage;
+		const float damage = std::max(impulse / (m_GibImpulseLimit - m_TravelImpulseDamage) * m_MaxHealth, 0.0F);
+		m_Health -= damage;
+		m_ForceDeepCheck = true;
+	}
+
+	// Spread the carried items and gold around before death.
+	if (m_Status == DYING || m_Status == DEAD) {
+		// Actor may die for a long time, no need to call this more than once
+		if (m_Inventory.size() > 0) {
+			DropAllInventory();
+		}
+		if (m_GoldCarried > 0) {
+			DropAllGold();
+		}
+	}
+
+	////////////////////////////////
+	// Death logic
+
+	if (m_Status != DYING && m_Status != DEAD && m_Health <= 0) {
+		if (m_DeathSound) {
+			m_DeathSound->Play(m_Pos);
+		}
+		DropAllInventory();
+		m_Status = DYING;
+		m_DeathTmr.Reset();
+	}
+
+	// Prevent dead actors from rotating like mad
+	if (m_Status == DYING || m_Status == DEAD) {
+		m_AngularVel = m_AngularVel * 0.98F;
+	}
+
+	if (m_Status == DYING && m_DeathTmr.GetElapsedSimTimeMS() > 1000) {
+		m_Status = DEAD;
+	}
+
+	//////////////////////////////////////////////////////
+	// Save previous second's position so we can detect larger movement
+
+	if (m_LastSecondTimer.IsPastSimMS(1000)) {
+		m_RecentMovement = m_Pos - m_LastSecondPos;
+		m_LastSecondPos = m_Pos;
+		m_LastSecondTimer.Reset();
+	}
+
+	////////////////////////////////////////
+	// Animate the sprite, if applicable
+
+	if (m_FrameCount > 1) {
+		if (m_SpriteAnimMode == LOOPWHENACTIVE) {
+			if (m_Controller.IsState(MOVE_LEFT) || m_Controller.IsState(MOVE_RIGHT) || m_Controller.GetAnalogMove().GetLargest() > 0.1) {
+				// TODO: improve; make this
+				float cycleTime = ((long)m_SpriteAnimTimer.GetElapsedSimTimeMS()) % m_SpriteAnimDuration;
+				m_Frame = std::floor((cycleTime / (float)m_SpriteAnimDuration) * (float)m_FrameCount);
+			}
+		}
+	}
+
+	/////////////////////////////////
+	// Misc
+
+	// If in AI setting mode prior to actor switch, made the team rosters get sorted so the lines are drawn correctly
+	if (m_Controller.IsState(PIE_MENU_ACTIVE)) {
+		g_MovableMan.SortTeamRoster(m_Team);
+	}
+
+	// Play PainSound if damage this frame exceeded PainThreshold
+	if (m_PainThreshold > 0 && m_PrevHealth - m_Health > m_PainThreshold && m_Health > 1 && m_PainSound) {
+		m_PainSound->Play(m_Pos);
+	}
+
+	int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichPlayer(this);
+	if (brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->PlayerHuman(brainOfPlayer)) {
+		if (m_PrevHealth - m_Health > 1.5F) {
+			// If this is a brain that's under attack, broadcast an alarm event so that the enemy AI won't dawdle in trying to kill it.
+			g_MovableMan.RegisterAlarmEvent(AlarmEvent(m_Pos, m_Team, 0.5F));
+			if (g_SettingsMan.FlashOnBrainDamage()) {
+				g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_RedColor, 10);
+			}
+		}
+		if ((m_ToDelete || m_Status == DEAD) && g_SettingsMan.FlashOnBrainDamage()) {
+			g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_WhiteColor, 500);
+		}
+	}
+
+	if (m_Controller.IsState(ACTOR_PRIMARY_HOTKEY)) {
+		ActivateHotkeyAction(PRIMARYHOTKEY);
+	} else {
+		DeactivateHotkeyAction(PRIMARYHOTKEY);
+	}
+
+	if (m_Controller.IsState(ACTOR_AUXILIARY_HOTKEY)) {
+		ActivateHotkeyAction(AUXILIARYHOTKEY);
+	} else {
+		DeactivateHotkeyAction(AUXILIARYHOTKEY);
+	}
+}
+
+void RTE::Actor::CastSeeRays() {
+	// See-ray casting runs on the thread pool and reaches g_SimRNG via Look(); redirect to a per-actor stream.
+	DeterministicMORNGScope rngScope(GetUniqueID(), Hash("CastSeeRays"));
+	// Vision reads the frozen terrain copy so concurrent carving can't race the see-ray reads.
+	SceneMan::ScopedTerrainCopyRead terrainCopyScope;
+
+	// "See" the location and surroundings of this actor on the unseen map
+	if (m_Status != Actor::INACTIVE) {
+		const int lookIterations = 6; // How many see rays to cast per frame
+		for (int i = 0; i < lookIterations; ++i) {
+			Look(45 * m_Perceptiveness, g_FrameMan.GetPlayerScreenWidth() * 0.51 * m_Perceptiveness);
+		}
+	}
+}
+
+void Actor::FullUpdate() {
+	PreControllerUpdate();
+	m_Controller.Update();
+	Update();
+}
+
+void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScreen, bool playerControlled) {
+	// This should indeed be a local var and not alter a member one in a draw func! Can cause nasty jittering etc if multiple sim updates are done without a drawing in between etc
+	m_HUDStack = -m_CharHeight / 2;
+
+	// Only do HUD if on a team
+	if (m_Team < 0) {
+		return;
+	}
+
+	// Only draw if the team viewing this is on the same team OR has seen the space where this is located.
+	int viewingTeam = g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen));
+	if (viewingTeam != m_Team && viewingTeam != Activity::NoTeam && (!g_SettingsMan.ShowEnemyHUD() || g_SceneMan.IsUnseen(m_Pos.GetFloorIntX(), m_Pos.GetFloorIntY(), viewingTeam))) {
+		return;
+	}
+
+	// Draw stat info HUD
+	char str[64];
+
+	GUIFont* pSymbolFont = g_FrameMan.GetLargeFont();
+	GUIFont* pSmallFont = g_FrameMan.GetSmallFont();
+
+	Vector currentPos = GetRenderPos();
+	Vector drawPos(currentPos - targetPos);
+	Vector cpuPos = GetRenderCPUPos() - targetPos;
+
+	// If we have something to draw, adjust the draw position to work if drawn to a target screen bitmap that is straddling a scene seam
+	if ((m_HUDVisible || m_PieMenu->IsVisible()) && !targetPos.IsZero()) {
+		// Spans vertical scene seam
+		int sceneWidth = g_SceneMan.GetSceneWidth();
+		if (g_SceneMan.SceneWrapsX() && pTargetBitmap->w < sceneWidth) {
+			if ((targetPos.m_X < 0) && (currentPos.m_X > (sceneWidth - pTargetBitmap->w))) {
+				drawPos.m_X -= sceneWidth;
+				cpuPos.m_X -= sceneWidth;
+			} else if (((targetPos.m_X + pTargetBitmap->w) > sceneWidth) && (currentPos.m_X < pTargetBitmap->w)) {
+				drawPos.m_X += sceneWidth;
+				cpuPos.m_X += sceneWidth;
+			}
+		}
+
+		// Spans horizontal scene seam
+		int sceneHeight = g_SceneMan.GetSceneHeight();
+		if (g_SceneMan.SceneWrapsY() && pTargetBitmap->h < sceneHeight) {
+			if ((targetPos.m_Y < 0) && (currentPos.m_Y > (sceneHeight - pTargetBitmap->h))) {
+				drawPos.m_Y -= sceneHeight;
+				cpuPos.m_Y -= sceneHeight;
+			} else if (((targetPos.m_Y + pTargetBitmap->h) > sceneHeight) && (currentPos.m_Y < pTargetBitmap->h)) {
+				drawPos.m_Y += sceneHeight;
+				cpuPos.m_Y += sceneHeight;
+			}
+		}
+	}
+
+	int actorScreen = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->ScreenOfPlayer(m_Controller.GetSeatPlayer()) : -1;
+	bool screenTeamIsSameAsActorTeam = g_ActivityMan.GetActivity() ? g_ActivityMan.GetActivity()->GetTeamOfPlayer(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen)) == m_Team : true;
+	if (m_PieMenu->IsVisible() && screenTeamIsSameAsActorTeam && (!m_PieMenu->IsInNormalAnimationMode() || (actorScreen == whichScreen))) {
+		m_PieMenu->RenderUpdate();
+		m_PieMenu->Draw(pTargetBitmap, targetPos);
+	}
+
+	if (!m_HUDVisible) {
+		return;
+	}
+
+	// Draw the selection arrow, if controlled and under the arrow's time limit
+	if (m_Controller.IsSeatedByPlayer() && m_NewControlTmr.GetElapsedSimTimeMS() < ARROWTIME) {
+		draw_sprite(pTargetBitmap, m_apSelectArrow[m_Team], cpuPos.m_X, EaseOut(drawPos.m_Y + m_HUDStack - 60, drawPos.m_Y + m_HUDStack - 20, m_NewControlTmr.GetElapsedSimTimeMS() / (float)ARROWTIME));
+	}
+
+	// Draw the alarm exclamation mark if we are alarmed!
+	if (m_AlarmTimer.GetSimTimeLimitProgress() < 0.25) {
+		draw_sprite(pTargetBitmap, m_apAlarmExclamation[m_AgeTimer.AlternateSim(100)], cpuPos.m_X - 3, EaseOut(drawPos.m_Y + m_HUDStack - 10, drawPos.m_Y + m_HUDStack - 25, m_AlarmTimer.GetSimTimeLimitProgress() / 0.25f));
+	}
+
+	if (pSmallFont && pSymbolFont) {
+		AllegroBitmap bitmapInt(pTargetBitmap);
+
+		if (!m_Controller.IsState(PIE_MENU_ACTIVE) || actorScreen != whichScreen) {
+			// If we're still alive, show the team colors
+			if (m_Health > 0) {
+
+				// Get the Icon bitmaps of this Actor's team, if any
+				std::vector<BITMAP*> apIconBitmaps;
+				if (m_pTeamIcon) {
+					apIconBitmaps = m_pTeamIcon->GetBitmaps8();
+				}
+
+				// Team Icon could not be found, or of no team, so use the static noteam Icon instead
+				if (apIconBitmaps.empty()) {
+					apIconBitmaps = m_apNoTeamIcon;
+				}
+
+				// Now draw the Icon if we can
+				if (!apIconBitmaps.empty() && m_pTeamIcon && m_pTeamIcon->GetFrameCount() > 0) {
+					// Make team icon blink faster as the health goes down
+					int f = m_HeartBeat.AlternateReal(200 + 800 * (MAX(m_Health, 0) / 100)) ? 0 : 1;
+					f = MIN(f, m_pTeamIcon ? m_pTeamIcon->GetFrameCount() - 1 : 1);
+					masked_blit(apIconBitmaps.at(f), pTargetBitmap, 0, 0, drawPos.m_X - apIconBitmaps.at(f)->w - 2, drawPos.m_Y + m_HUDStack - (apIconBitmaps.at(f)->h / 2) + 8, apIconBitmaps.at(f)->w, apIconBitmaps.at(f)->h);
+				}
+			} else {
+				// Draw death icon
+				str[0] = -39;
+				str[1] = 0;
+				pSymbolFont->DrawAligned(&bitmapInt, drawPos.m_X - 10, drawPos.m_Y + m_HUDStack, str, GUIFont::Left);
+			}
+
+			std::snprintf(str, sizeof(str), "%.0f", std::ceil(m_Health));
+			pSymbolFont->DrawAligned(&bitmapInt, drawPos.m_X - 0, drawPos.m_Y + m_HUDStack, str, GUIFont::Left);
+
+			m_HUDStack += -12;
+
+			if (m_Controller.IsSeatedByPlayer()) {
+				if (GetGoldCarried() > 0) {
+					str[0] = m_GoldPicked ? -57 : -58;
+					str[1] = 0;
+					pSymbolFont->DrawAligned(&bitmapInt, drawPos.GetFloorIntX() - 11, drawPos.GetFloorIntY() + m_HUDStack, str, GUIFont::Left);
+					std::snprintf(str, sizeof(str), "%.0f oz", GetGoldCarried());
+					pSmallFont->DrawAligned(&bitmapInt, drawPos.GetFloorIntX() - 0, drawPos.GetFloorIntY() + m_HUDStack + 2, str, GUIFont::Left);
+
+					m_HUDStack -= 11;
+				}
+			}
+		}
+	}
+
+	// Don't proceed to draw all the secret stuff below if this screen is for a player on the other team!
+	if (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->GetTeamOfPlayer(whichScreen) != m_Team) {
+		return;
+	}
+
+	// AI waypoints or points of interest
+	if (m_DrawWaypoints && m_PlayerControllable && (m_AIMode == AIMODE_GOTO || m_AIMode == AIMODE_SQUAD)) {
+		// Draw the AI paths, from the ultimate destination back up to the actor's position.
+		// We do this backwards so the lines won't crawl and the dots can be evenly spaced throughout
+		Vector waypoint;
+		std::list<std::pair<Vector, MovableObjectReference>>::reverse_iterator vLast, vItr;
+		std::list<Vector>::reverse_iterator lLast, lItr;
+		int skipPhase = 0;
+
+		// Draw the line between the end of the movepath and the first waypoint after that, if any
+		if (!m_Waypoints.empty()) {
+			// Draw the first destination/waypoint point
+			//            waypoint = m_MoveTarget - targetPos;
+			//            circlefill(pTargetBitmap, waypoint.m_X, waypoint.m_Y, 2, g_YellowGlowColor);
+
+			// Draw the additional waypoint points beyond the first one
+			vLast = m_Waypoints.rbegin();
+			vItr = m_Waypoints.rbegin();
+			for (; vItr != m_Waypoints.rend(); ++vItr) {
+				// Draw the line
+				g_FrameMan.DrawLine(pTargetBitmap, (*vLast).first - targetPos, (*vItr).first - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, 0, true);
+				vLast = vItr;
+
+				// Draw the points
+				waypoint = (*vItr).first - targetPos;
+				circlefill(pTargetBitmap, waypoint.m_X, waypoint.m_Y, 2, g_YellowGlowColor);
+
+				// Add pixel glow area around it, in scene coordinates
+				g_PostProcessMan.RegisterGlowArea((*vItr).first, 5);
+			}
+
+			// Draw line from the last movetarget on the current path to the first waypoint in queue after that
+			if (!m_MovePath.empty()) {
+				g_FrameMan.DrawLine(pTargetBitmap, m_MovePath.back() - targetPos, m_Waypoints.front().first - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, 0, true);
+			} else {
+				g_FrameMan.DrawLine(pTargetBitmap, m_MoveTarget - targetPos, m_Waypoints.front().first - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, 0, true);
+			}
+		}
+
+		// Draw the current movepath, but backwards so the dot spacing can be even and they don't crawl as the guy approaches
+		if (!m_MovePath.empty()) {
+			lLast = m_MovePath.rbegin();
+			lItr = m_MovePath.rbegin();
+			for (; lItr != m_MovePath.rend(); ++lItr) {
+				// Draw these backwards so the skip phase works
+				skipPhase = g_FrameMan.DrawLine(pTargetBitmap, (*lLast) - targetPos, (*lItr) - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+				lLast = lItr;
+			}
+
+			// Draw the line between the current position and to the start of the movepath, backwards so the dotted lines doesn't crawl
+			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MovePath.front() - targetPos, GetRenderPos() - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+
+			// Draw the first destination/waypoint point
+			waypoint = m_MovePath.back() - targetPos;
+			circlefill(pTargetBitmap, waypoint.m_X, waypoint.m_Y, 2, g_YellowGlowColor);
+
+			// Add pixel glow area around it, in scene coordinates
+			g_PostProcessMan.RegisterGlowArea(m_MovePath.back(), 5);
+		} else {
+			// No points left on movepath, so draw straight line to the movetarget
+
+			// Draw it backwards so the dotted lines doesn't crawl
+			skipPhase = g_FrameMan.DrawLine(pTargetBitmap, m_MoveTarget - targetPos, GetRenderPos() - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, skipPhase, true);
+
+			// Draw the first destination/waypoint point
+			waypoint = m_MoveTarget - targetPos;
+			circlefill(pTargetBitmap, waypoint.m_X, waypoint.m_Y, 2, g_YellowGlowColor);
+
+			// Add pixel glow area around it, in scene coordinates
+			g_PostProcessMan.RegisterGlowArea(m_MoveTarget, 5);
+		}
+	}
+
+	// AI Mode team roster HUD lines
+	if (m_PlayerControllable && g_ActivityMan.GetActivity()->GetViewState(g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen)) == Activity::ViewState::ActorSelect && g_SceneMan.ShortestDistance(m_Pos, g_CameraMan.GetScrollTarget(whichScreen), g_SceneMan.SceneWrapsX()).GetMagnitude() < 100) {
+		draw_sprite(pTargetBitmap, GetAIModeIcon(), cpuPos.m_X - 6, cpuPos.m_Y - 6);
+	} else if (m_Controller.IsState(ACTOR_NEXT_PREP) || m_Controller.IsState(ACTOR_PREV_PREP)) {
+		int prevColor = m_Controller.IsState(ACTOR_PREV_PREP) ? 122 : (m_Team == Activity::TeamOne ? 13 : 147);
+		int nextColor = m_Controller.IsState(ACTOR_NEXT_PREP) ? 122 : (m_Team == Activity::TeamOne ? 13 : 147);
+		int prevSpacing = m_Controller.IsState(ACTOR_PREV_PREP) ? 3 : 9;
+		int nextSpacing = m_Controller.IsState(ACTOR_NEXT_PREP) ? 3 : 9;
+		int altColor = m_Team == Activity::TeamOne ? 11 : 160;
+
+		Actor* pPrevAdj = 0;
+		Actor* pNextAdj = 0;
+		std::list<Actor*>* pRoster = g_MovableMan.GetTeamRoster(m_Team);
+
+		if (pRoster->size() > 1) {
+			// Find this in the list, both ways
+			std::list<Actor*>::reverse_iterator selfRItr = find(pRoster->rbegin(), pRoster->rend(), this);
+			RTEAssert(selfRItr != pRoster->rend(), "Actor couldn't find self in Team roster! " + GetPresetName() + " uid " + std::to_string(GetUniqueID()) + " team " + std::to_string(m_Team));
+			std::list<Actor*>::iterator selfItr = find(pRoster->begin(), pRoster->end(), this);
+			RTEAssert(selfItr != pRoster->end(), "Actor couldn't find self in Team roster!");
+
+			// Find the adjacent actors
+			if (selfItr != pRoster->end()) {
+				// Get the previous available actor in the list (not controlled by another player)
+				std::list<Actor*>::reverse_iterator prevItr = selfRItr;
+				do {
+					if (++prevItr == pRoster->rend())
+						prevItr = pRoster->rbegin();
+					if ((*prevItr) == (*selfItr))
+						break;
+				} while (!(*prevItr)->IsPlayerControllable() || (*prevItr)->GetController()->IsSeatedByPlayer() ||
+				         g_ActivityMan.GetActivity()->IsOtherPlayerBrain((*prevItr), m_Controller.GetSeatPlayer()));
+
+				// Get the next actor in the list (not controlled by another player)
+				std::list<Actor*>::iterator nextItr = selfItr;
+				do {
+					if (++nextItr == pRoster->end()) {
+						nextItr = pRoster->begin();
+					}
+
+					if ((*nextItr) == (*selfItr)) {
+						break;
+					}
+				} while (!(*nextItr)->IsPlayerControllable() || (*nextItr)->GetController()->IsSeatedByPlayer() || g_ActivityMan.GetActivity()->IsOtherPlayerBrain((*prevItr), m_Controller.GetSeatPlayer()));
+
+				Vector iconPos = cpuPos;
+
+				// Only continue if there are available adjacent Actors
+				if ((*prevItr) != (*selfItr) && (*nextItr) != (*selfItr)) {
+					pPrevAdj = *prevItr;
+					pNextAdj = *nextItr;
+					if (pPrevAdj != pNextAdj) {
+						// Only draw both lines if they're not pointing to the same thing
+						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pPrevAdj->GetRenderCPUPos() - targetPos, prevColor, prevColor, prevSpacing, 0, true);
+						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pNextAdj->GetRenderCPUPos() - targetPos, nextColor, nextColor, nextSpacing, 0, true);
+					} else {
+						// If only one other available Actor, only draw one yellow line to it
+						g_FrameMan.DrawLine(pTargetBitmap, cpuPos, pNextAdj->GetRenderCPUPos() - targetPos, 122, 122, 3, 0, true);
+					}
+
+					// Prev selected icon
+					iconPos = pPrevAdj->GetRenderCPUPos() - targetPos;
+					draw_sprite(pTargetBitmap, pPrevAdj->GetAIModeIcon(), iconPos.m_X - 6, iconPos.m_Y - 6);
+
+					// Next selected icon
+					iconPos = pNextAdj->GetRenderCPUPos() - targetPos;
+					draw_sprite(pTargetBitmap, pNextAdj->GetAIModeIcon(), iconPos.m_X - 6, iconPos.m_Y - 6);
+				}
+
+				// Self selected icon
+				iconPos = cpuPos;
+				draw_sprite(pTargetBitmap, GetAIModeIcon(), iconPos.m_X - 6, iconPos.m_Y - 6);
+			}
+		}
+	}
+}
+
+std::string Actor::SaveActorRuntime() const {
+	CheckpointWriter archive("ActorRuntime1");
+	archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
+	archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
+	archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
+	archive(m_AimAngle, m_AimDistance, m_AimTmr, m_SharpAimTimer, m_SharpAimDelay, m_SharpAimProgress, m_SharpAimMaxedOut);
+	archive(m_PointingTarget, m_SeenTargetPos, m_AlarmTimer, m_LastAlarmPos, m_SightDistance, m_Perceptiveness, m_PainThreshold);
+	archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
+	archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
+	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
+	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
+	return archive.Text();
+}
+
+bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
+	try {
+		CheckpointReader archive(text, "ActorRuntime1", validateOnly);
+		archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
+		archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
+		archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
+		archive(m_AimAngle, m_AimDistance, m_AimTmr, m_SharpAimTimer, m_SharpAimDelay, m_SharpAimProgress, m_SharpAimMaxedOut);
+		archive(m_PointingTarget, m_SeenTargetPos, m_AlarmTimer, m_LastAlarmPos, m_SightDistance, m_Perceptiveness, m_PainThreshold);
+		archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
+		archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
+		archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+		archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
+		std::array<std::string, 2> icons;
+		archive.Value(icons);
+		for (const std::string& icon: icons) { ActorIconReference reference; if (!reference.Load(icon)) return false; }
+		archive.OnCommit([this, icons = std::move(icons)] { m_PersistedActorIconReferences = icons; });
+		archive.Finish();
+		return true;
+	} catch (const std::exception&) { return false; }
+}
+
+std::vector<long> Actor::GetCheckpointBorrowedReferences() const {
+	auto identities = MovableObject::GetCheckpointBorrowedReferences();
+	identities.push_back(m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : 0);
+	for (const auto& [position, target]: m_Waypoints) identities.push_back(target ? target->GetUniqueID() : 0);
+	return identities;
+}
+
+bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {
+	if (identities.size() != m_Waypoints.size() + 2) return false;
+	for (long identity: identities) {
+		if (identity < 0) return false;
+		const auto* target = identity ? g_MovableMan.FindObjectByUniqueID(identity) : nullptr;
+		if (identity && !target) return false;
+	}
+	if (!validateOnly) {
+		m_pMOToNotHit = g_MovableMan.FindObjectByUniqueID(identities[0]);
+		m_MOToNotHitUID = identities[0];
+		m_FaithfulMOToNotHitUID = 0;
+		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(identities[1]);
+		m_FaithfulMOMoveTargetUID = 0;
+		size_t index = 2;
+		for (auto& [position, target]: m_Waypoints) target = g_MovableMan.FindObjectByUniqueID(identities[index++]);
+		m_FaithfulWaypointUIDs.clear();
+	}
+	return true;
+}
+
+bool Actor::RunBorrowedReferenceSelfTest() {
+    MovableMan::ConstructionRegistryScope registryScope;
+    try {
+        auto owner = std::make_unique<Actor>();
+        auto target = std::make_unique<Actor>();
+        if (target->MovableObject::Create(1) < 0) return false;
+        const long firstIdentity = target->GetUniqueID();
+        owner->SetWhichMOToNotHit(target.get());
+        owner->SetMOMoveTarget(target.get());
+        owner->m_Waypoints.emplace_back(Vector(3, 4), target.get());
+        auto copiedWaypoints = owner->m_Waypoints;
+        std::vector<MovableObjectReference> links;
+        for (int index = 0; index < 128; ++index) links.emplace_back(target.get());
+        auto copiedLinks = links;
+        auto movedLinks = std::move(links);
+        if (owner->GetMOToNotHitUID() != firstIdentity || owner->GetMOMoveTargetUniqueID() != firstIdentity) return false;
+        target->Reset();
+        if (owner->GetWhichMOToNotHit() || owner->GetMOToNotHitUID() || owner->GetMOMoveTarget() || owner->GetMOMoveTargetUniqueID()) return false;
+        if (owner->m_Waypoints.front().second || copiedWaypoints.front().second || owner->m_Waypoints.front().first != Vector(3, 4)) return false;
+        for (const auto& link: copiedLinks) if (link) return false;
+        for (const auto& link: movedLinks) if (link) return false;
+        // Reusing the exact same object address must not revive expired links.
+        if (target->MovableObject::Create(1) < 0 || target->GetUniqueID() == firstIdentity) return false;
+        if (owner->GetWhichMOToNotHit() || owner->GetMOMoveTarget() || copiedWaypoints.front().second) return false;
+        owner->SetWhichMOToNotHit(target.get());
+        owner->SetMOMoveTarget(target.get());
+        owner->m_Waypoints.front().second = target.get();
+        const MovableObject* retiredAddress = target.get();
+        target.reset();
+        if (owner->GetWhichMOToNotHit() || owner->GetMOToNotHitUID() || owner->GetMOMoveTarget() || owner->m_Waypoints.front().second) return false;
+        auto replacement = std::make_unique<Actor>();
+        if (replacement->MovableObject::Create(1) < 0) return false;
+        if (owner->GetWhichMOToNotHit() || owner->GetMOMoveTarget() || owner->m_Waypoints.front().second) return false;
+        owner->SetMOMoveTarget(replacement.get());
+        owner->m_Waypoints.front().second = replacement.get();
+        owner.reset();
+        replacement->Reset();
+        std::cout << "[native-reference-selftest] reset/deletion, reused address, copied/moved links and owner-first destruction PASS; pool_reused=" << (replacement.get() == retiredAddress) << std::endl;
+        return true;
+    } catch (const std::exception& error) {
+        std::cout << "[native-reference-selftest] " << error.what() << std::endl;
+        return false;
+    }
+}

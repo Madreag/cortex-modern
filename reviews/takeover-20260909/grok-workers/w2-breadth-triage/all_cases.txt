@@ -1,0 +1,99 @@
+# all cases
+i | passed | exit | id | out
+00 | True | 0 | semantic_fire_reload | D:\mx\s41b3\j01
+01 | True | 0 | semantic_weapon_switch | D:\mx\s41b3\j02
+02 | True | 0 | semantic_jetpack | D:\mx\s41b3\j03
+03 | True | 0 | semantic_terrain_fire | D:\mx\s41b3\j04
+04 | True | 0 | semantic_pie_reload | D:\mx\s41b3\j05
+05 | True | 0 | semantic_ai_orders | D:\mx\s41b3\j06
+06 | True | 0 | semantic_death_brainkill | D:\mx\s41b3\j07
+07 | True | 0 | semantic_cargo_deliver | D:\mx\s41b3\j08
+08 | True | 0 | semantic_buy_order | D:\mx\s41b3\j09
+09 | True | 0 | semantic_pause | D:\mx\s41b3\j10
+10 | True | 0 | interp_baseline | D:\mx\s41b3\j11
+11 | True | 0 | interp_funds | D:\mx\s41b3\j12
+12 | True | 0 | interp_spawn | D:\mx\s41b3\j13
+13 | True | 0 | interp_deliver | D:\mx\s41b3\j14
+14 | True | 0 | interp_scuttle | D:\mx\s41b3\j15
+15 | True | 0 | interp_brainkill | D:\mx\s41b3\j16
+16 | True | 0 | interp_stall | D:\mx\s41b3\j17
+17 | True | 0 | interp_mismatch | D:\mx\s41b3\j18
+18 | True | 0 | interp_perturb | D:\mx\s41b3\j19
+19 | True | 0 | interp_rematch | D:\mx\s41b3\j20
+20 | True | 0 | interp_inventory | D:\mx\s41b3\j21
+21 | True | 0 | interp_buy | D:\mx\s41b3\j22
+22 | True | 0 | interp_brainspawn | D:\mx\s41b3\j23
+23 | True | 0 | interp_pause | D:\mx\s41b3\j24
+24 | True | 0 | interp_fullloop | D:\mx\s41b3\j25
+25 | True | 0 | interp_rtdesync | D:\mx\s41b3\j26
+26 | True | 0 | fl100 | D:\mx\s41b3\j27
+27 | False | 0 | fl200 | D:\mx\s41b3\j28
+28 | True | 0 | invariance_300 | D:\mx\s41b3\j29
+29 | True | 0 | discovery | D:\mx\s41b3\j30
+30 | True | 0 | h4_gns_provider_smoke_1 | D:\mx\s41b3\j31
+31 | True | 0 | h4_old_wire_fixture_1 | D:\mx\s41b3\j32
+32 | False | 1 | h4_clean_leave_1 | D:\mx\s41b3\j33
+33 | False | 1 | h4_reclaim_socket_1 | D:\mx\s41b3\j34
+34 | True | 0 | h4_crash_relaunch_provisional_1 | D:\mx\s41b3\j35
+35 | False | 1 | h4_fencing_two_transports_1 | D:\mx\s41b3\j36
+36 | False | 1 | h4_rejoin_after_resync_1 | D:\mx\s41b3\j37
+37 | True | 0 | h4_peers_3_4_regression_1 | D:\mx\s41b3\j38
+38 | True | 0 | h4_peers_3_4_regression_2 | D:\mx\s41b3\j39
+39 | False | 0 | h4_peers_3_4_regression_3 | D:\mx\s41b3\j40
+40 | True | 0 | h4_peers_3_4_regression_4 | D:\mx\s41b3\j41
+41 | True | 0 | h4_peers_3_4_regression_5 | D:\mx\s41b3\j42
+42 | False | 1 | b1_substitute_commit | D:\mx\s41b3\j43
+43 | False | 1 | b1_substitute_returner_wins | D:\mx\s41b3\j44
+44 | True | 0 | b1_substitute_host_cancel | D:\mx\s41b3\j45
+45 | True | 0 | b1_substitute_bounds | D:\mx\s41b3\j46
+46 | True | 0 | lobby_rejoin_4_200_1 | D:\mx\s41b3\j47
+47 | True | 0 | lobby_rejoin_4_200_2 | D:\mx\s41b3\j48
+48 | True | 0 | lobby_rejoin_4_200_3 | D:\mx\s41b3\j49
+49 | True | 0 | lobby_drop_4_200_1 | D:\mx\s41b3\j50
+50 | True | 0 | lobby_drop_4_200_2 | D:\mx\s41b3\j51
+51 | True | 0 | lobby_drop_4_200_3 | D:\mx\s41b3\j52
+52 | True | 0 | lobby_ctl_rejoin_4_100_1 | D:\mx\s41b3\j53
+53 | True | 0 | lobby_ctl_rejoin_4_100_2 | D:\mx\s41b3\j54
+54 | True | 0 | lobby_ctl_rejoin_4_100_3 | D:\mx\s41b3\j55
+55 | True | 0 | lobby_ctl_rejoin_3_200_1 | D:\mx\s41b3\j56
+56 | True | 0 | lobby_ctl_rejoin_3_200_2 | D:\mx\s41b3\j57
+57 | True | 0 | lobby_ctl_rejoin_3_200_3 | D:\mx\s41b3\j58
+58 | True | 0 | lobby_ctl_drop_3_200_1 | D:\mx\s41b3\j59
+59 | True | 0 | lobby_ctl_drop_3_200_2 | D:\mx\s41b3\j60
+60 | True | 0 | lobby_ctl_drop_3_200_3 | D:\mx\s41b3\j61
+61 | True | 0 | lobby_drop_4_200_early_1 | D:\mx\s41b3\j62
+62 | True | 0 | lobby_drop_4_200_early_2 | D:\mx\s41b3\j63
+63 | True | 0 | lobby_drop_4_200_early_3 | D:\mx\s41b3\j64
+64 | True | 0 | sound_auth-match | D:\mx\s41b3\j65
+65 | True | 0 | sound_auth-fault | D:\mx\s41b3\j66
+66 | True | 0 | sound_wounds | D:\mx\s41b3\j67
+67 | True | 0 | sound_rng_particles | D:\mx\s41b3\j68
+68 | True | 0 | sound_ui_bus | D:\mx\s41b3\j69
+69 | True | 0 | sound_ai_defer | D:\mx\s41b3\j70
+70 | True | 0 | sound_ai_defer_alias | D:\mx\s41b3\j71
+71 | True | 0 | sound_per_machine | D:\mx\s41b3\j72
+72 | False | 1 | heal | D:\mx\s41b3\j73
+73 | False | 0 | compat_deferral_source22 | D:\mx\s41b3\j74
+74 | False | 0 | compat_deferral_approved | D:\mx\s41b3\j75
+75 | True | 0 | compat_alias_source22 | D:\mx\s41b3\j76
+76 | True | 0 | compat_alias_approved | D:\mx\s41b3\j77
+77 | True | 0 | compat_alias2_source22 | D:\mx\s41b3\j78
+78 | True | 0 | compat_alias2_approved | D:\mx\s41b3\j79
+79 | False | 0 | compat_extra_source22 | D:\mx\s41b3\j80
+80 | False | 0 | compat_extra_approved | D:\mx\s41b3\j81
+
+# validation_errors
+breadth is not complete and passing
+fl200: failed or incomplete case verdict
+h4_clean_leave_1: failed or incomplete case verdict
+h4_reclaim_socket_1: failed or incomplete case verdict
+h4_fencing_two_transports_1: failed or incomplete case verdict
+h4_rejoin_after_resync_1: failed or incomplete case verdict
+h4_peers_3_4_regression_3: failed or incomplete case verdict
+b1_substitute_commit: failed or incomplete case verdict
+b1_substitute_returner_wins: failed or incomplete case verdict
+heal: failed or incomplete case verdict
+compat_deferral_source22: failed or incomplete case verdict
+compat_deferral_approved: failed or incomplete case verdict
+compat_extra_source22: failed or incomplete case verdict
+compat_extra_approved: failed or incomplete case verdict

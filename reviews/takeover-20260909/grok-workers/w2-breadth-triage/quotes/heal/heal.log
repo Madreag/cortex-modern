@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "D:\Projects\reviews\takeover-20260909\run_breadth.py", line 1936, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "D:\Projects\reviews\takeover-20260909\run_breadth.py", line 1919, in main
+    return child(options, pin)
+  File "D:\Projects\reviews\takeover-20260909\run_breadth.py", line 1885, in child
+    result = module.invariance(out) if options.child == "invariance" else module.heal(out)
+                                                                          ~~~~~~~~~~~^^^^^
+  File "D:\Projects\stage2_p4\recovery_expanded_mod.py", line 105, in heal
+    import recovery_e2e as e2e
+ModuleNotFoundError: No module named 'recovery_e2e'

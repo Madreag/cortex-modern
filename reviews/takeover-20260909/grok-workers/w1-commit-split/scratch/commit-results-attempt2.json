@@ -1,0 +1,266 @@
+[
+  {
+    "index": 1,
+    "hash": "407660b40bd27cf17e9a71dc94773b9e7b493417",
+    "subject": "Carry player-binding observations on the command wire",
+    "file_count": 2,
+    "files": [
+      "Source/Network/NetGameCommand.cpp",
+      "Source/Network/NetGameCommand.h"
+    ],
+    "build": []
+  },
+  {
+    "index": 2,
+    "hash": "2ce183842c6cec402b7350df361dfbc879ad6e2f",
+    "subject": "Bound a resync envelope around archive, acks and pending commands",
+    "file_count": 9,
+    "files": [
+      "RTEA.vcxproj",
+      "RTEA.vcxproj.filters",
+      "Source/Network/NetLobbyProtocol.cpp",
+      "Source/Network/NetLobbyProtocol.h",
+      "Source/Network/NetResyncSelfTest.cpp",
+      "Source/Network/NetResyncSelfTest.h",
+      "Source/Network/NetResyncState.cpp",
+      "Source/Network/NetResyncState.h",
+      "Source/Network/meson.build"
+    ],
+    "build": [
+      {
+        "path": "RTEA.vcxproj",
+        "blob": "9d2071f0c339f7b4076650ecb5a39ebb827cc475",
+        "sha256": "a9ce6acfee6c5b5e00d049c7fe70c7d800ce805810ebd71f0dba0f2cf1491585",
+        "nlines": 1629
+      },
+      {
+        "path": "RTEA.vcxproj.filters",
+        "blob": "a81320ae8c591cb62cfd2823e16cf64ef2008ad6",
+        "sha256": "f4a8bdca39d72e71c519b382d4b7f42f03613378a2456f61b1e943e9cf209b35",
+        "nlines": 1536
+      },
+      {
+        "path": "Source/Network/meson.build",
+        "blob": "ed41fd8f6086596e441b96b3ae12d40667f2f696",
+        "sha256": "49ca85eebf7f43d30f71d0739155ab09174bc3d7ceddc7e97bf086b78bec2062",
+        "nlines": 40
+      }
+    ]
+  },
+  {
+    "index": 3,
+    "hash": "8a0fcae45f07dfdca23a67bfcef6fc60ea066190",
+    "subject": "Restore complete input, drop-map ownership and exact-target priming",
+    "file_count": 10,
+    "files": [
+      "RTEA.vcxproj",
+      "RTEA.vcxproj.filters",
+      "Source/Network/NetLockstep.cpp",
+      "Source/Network/NetLockstep.h",
+      "Source/Network/NetLockstepSelfTest.cpp",
+      "Source/Network/NetResyncRuntimeSelfTest.cpp",
+      "Source/Network/NetResyncRuntimeSelfTest.h",
+      "Source/Network/meson.build",
+      "Source/System/ScenarioRunner.cpp",
+      "Source/System/ScenarioRunner.h"
+    ],
+    "build": [
+      {
+        "path": "RTEA.vcxproj",
+        "blob": "202483beecdba51c22e15d5d92d0264fb1287dad",
+        "sha256": "7523b61fb3f1298a5d7faa7877e1eae4b8628649cd27b8d62b36251ce5d3bdc1",
+        "nlines": 1631
+      },
+      {
+        "path": "RTEA.vcxproj.filters",
+        "blob": "46e56da22815239e45a1e8a38db4d6cd77d923b5",
+        "sha256": "bd686b6ce1c3c6b33824c02a974bb90db625171b4f6c47c093b2e79886304b70",
+        "nlines": 1542
+      },
+      {
+        "path": "Source/Network/meson.build",
+        "blob": "38430dae0f2912674e6fff29c7c43c7af3cb78e1",
+        "sha256": "c2bed9acedc525f97cc19d79d1e429986494585ea568a5787c54c43c43c00a06",
+        "nlines": 41
+      }
+    ]
+  },
+  {
+    "index": 4,
+    "hash": "1f184512ad42a72a88f5790ea161febbe1638ca9",
+    "subject": "Restore typed native aliases and isolate craft-fixture clones",
+    "file_count": 2,
+    "files": [
+      "Source/Managers/LuaMan.cpp",
+      "Source/Managers/LuaMan.h"
+    ],
+    "build": []
+  },
+  {
+    "index": 5,
+    "hash": "039a42c72ed780ef2b5ffa14821b8e99747544e4",
+    "subject": "Skip registry mutation when privately adopting a persisted UniqueID",
+    "file_count": 2,
+    "files": [
+      "Source/Entities/MovableObject.cpp",
+      "Source/Entities/MovableObject.h"
+    ],
+    "build": []
+  },
+  {
+    "index": 6,
+    "hash": "debd38630573b82a6f53e41920b4ef783262f997",
+    "subject": "Keep ACraft exit selection and AHuman inventory across checkpoint load",
+    "file_count": 3,
+    "files": [
+      "Source/Entities/ACraft.cpp",
+      "Source/Entities/ACraft.h",
+      "Source/Entities/AHuman.cpp"
+    ],
+    "build": []
+  },
+  {
+    "index": 7,
+    "hash": "72fe9734c5da8eb65396e61f59bb6f452638ad96",
+    "subject": "Add A7 journal helpers for recovery-arm traces",
+    "file_count": 5,
+    "files": [
+      "RTEA.vcxproj",
+      "RTEA.vcxproj.filters",
+      "Source/Network/NetA7Journal.cpp",
+      "Source/Network/NetA7Journal.h",
+      "Source/Network/meson.build"
+    ],
+    "build": [
+      {
+        "path": "RTEA.vcxproj",
+        "blob": "33aae11ed4d04d39093767b01c75dce998ce4bb2",
+        "sha256": "33e769e6f8ea3be24ceaf9e75cf96febac4ec7057abe647096d7389ae0fa870a",
+        "nlines": 1633
+      },
+      {
+        "path": "RTEA.vcxproj.filters",
+        "blob": "28daad995dcdba8e005eb53c35ed45837db980b8",
+        "sha256": "fed5e655f0ebb5aff7c6edb4c9cfc8276b3495b159b7895483716b8d5edd58bc",
+        "nlines": 1548
+      },
+      {
+        "path": "Source/Network/meson.build",
+        "blob": "bc071f6984965841366eca01c0c7823b0c73b406",
+        "sha256": "87e0325f32c38e67b0a679e3602c65c209a2d138dc36efab4cd1bd07f1223140",
+        "nlines": 42
+      }
+    ]
+  },
+  {
+    "index": 8,
+    "hash": "4a8ac20de3da9b0b817511a6039bb3161556ba96",
+    "subject": "Give the host a live F6 panel and codec-17 seat snapshots",
+    "file_count": 22,
+    "files": [
+      "RTEA.vcxproj",
+      "RTEA.vcxproj.filters",
+      "Source/CI/NetModerationGUIProbe.cpp",
+      "Source/CI/NetModerationGUIProbe.h",
+      "Source/CI/meson.build",
+      "Source/Main.cpp",
+      "Source/Managers/MenuMan.cpp",
+      "Source/Managers/MenuMan.h",
+      "Source/Managers/UInputMan.cpp",
+      "Source/Managers/UInputMan.h",
+      "Source/Menus/MainMenuGUI.cpp",
+      "Source/Menus/MainMenuGUI.h",
+      "Source/Menus/NetModerationGUI.cpp",
+      "Source/Menus/NetModerationGUI.h",
+      "Source/Menus/meson.build",
+      "Source/Network/NetMatchService.cpp",
+      "Source/Network/NetMatchService.h",
+      "Source/Network/NetReconnectSession.cpp",
+      "Source/Network/NetReconnectSession.h",
+      "Source/Network/NetReconnectSessionSelfTest.cpp",
+      "Source/Network/NetReconnectUx.cpp",
+      "Source/Network/NetReconnectUx.h"
+    ],
+    "build": [
+      {
+        "path": "RTEA.vcxproj",
+        "blob": "d4d516f89f111a1e43b8335dd56c7cc5f1ac7e5d",
+        "sha256": "0d6e70c93f08fdaa0119578cc7230b32be984ee61bb201a491abd8ce9cc9600c",
+        "nlines": 1637
+      },
+      {
+        "path": "RTEA.vcxproj.filters",
+        "blob": "e5d733d3b273a945c75f0af93d7cffc5f2adc30c",
+        "sha256": "c454bd39222bc41d9aceaa4abc6089fe76a1206007607a4be89cef309815b860",
+        "nlines": 1560
+      }
+    ]
+  },
+  {
+    "index": 9,
+    "hash": "ee2679ee1300705c979acb601f1e81a555d1f540",
+    "subject": "Restore peer-local player, UI and aliases after a restore",
+    "file_count": 15,
+    "files": [
+      "Source/Activities/GameActivity.cpp",
+      "Source/Activities/GameActivity.h",
+      "Source/Entities/Activity.cpp",
+      "Source/Entities/Activity.h",
+      "Source/GUI/GUICheckpoint.h",
+      "Source/GUI/GUIControlManager.cpp",
+      "Source/Managers/ActivityMan.cpp",
+      "Source/Managers/ActivityMan.h",
+      "Source/Managers/FrameMan.cpp",
+      "Source/Managers/FrameMan.h",
+      "Source/Menus/InventoryMenuGUI.cpp",
+      "Source/Menus/SceneEditorGUI.cpp",
+      "Source/Menus/SceneEditorGUI.h",
+      "Source/System/Controller.cpp",
+      "Source/System/Controller.h"
+    ],
+    "build": []
+  },
+  {
+    "index": 10,
+    "hash": "153e413603b1f76dc2a07d13bdd23566c77049e0",
+    "subject": "Initialize saved-game modules and use the lobby shared clock",
+    "file_count": 8,
+    "files": [
+      "Data/Tests.rte/Activities.ini",
+      "Data/Tests.rte/Activities/NetLifecycleTest.lua",
+      "Source/Managers/PresetMan.cpp",
+      "Source/Network/NetLobbySession.cpp",
+      "Source/Network/NetLobbySession.h",
+      "Source/Network/NetMatchRunner.cpp",
+      "Source/Network/NetMatchRunner.h",
+      "Source/Network/NetMatchSelfTest.cpp"
+    ],
+    "build": []
+  },
+  {
+    "index": 11,
+    "hash": "1d5feacd0fb8c559778d483d2ded3c19df735664",
+    "subject": "Record A7 recovery events on session, tickets and ownership",
+    "file_count": 6,
+    "files": [
+      "Source/Managers/MovableMan.cpp",
+      "Source/Managers/MovableMan.h",
+      "Source/Network/NetReconnectTicketStore.cpp",
+      "Source/Network/NetReconnectTicketStore.h",
+      "Source/Network/NetSession.cpp",
+      "Source/Network/NetSession.h"
+    ],
+    "build": []
+  },
+  {
+    "index": 12,
+    "hash": "0e2aa3812f0f015b1c6734649dcb4360b80650e5",
+    "subject": "Compare snapshots by the controlled actor's inventory role",
+    "file_count": 2,
+    "files": [
+      "tools/compare_snapshots.py",
+      "tools/test_snapshot_inventory_roles.py"
+    ],
+    "build": []
+  }
+]

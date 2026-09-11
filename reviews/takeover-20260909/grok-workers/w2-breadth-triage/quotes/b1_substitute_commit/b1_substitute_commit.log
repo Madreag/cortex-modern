@@ -1,0 +1,17 @@
+  PASS executable_recorded bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb
+  PASS host_adjudicated_the_drop left the match at frame
+  FAIL host_exit_zero 1
+  FAIL stayer_exit_zero 1
+  PASS leaver_dropped_midmatch
+  PASS host_census_clean 0
+  PASS no_authority_error
+  FAIL seat_dropped None
+  FAIL applicant_registered None
+  PASS host_approved
+  FAIL substitution_committed None
+  PASS substitute_offered_a_ticket
+  PASS substitute_joined Joined
+  PASS substitute_stored_its_ticket
+  PASS no_reclaim_happened None
+  PASS reseat_issued no ledgered survivors; printed=False; host_seats_dropped=1, host_ledger_drops_recorded=1, host_reseats_issued=0, host_reseats_without_a_ledger=0, host_reseats_without_survivors=1, host_reseat_live_on_team_not_named=0
+GATE substitute_commit FAIL -> D:\mx\s41b3\j43\substitute_commit_20260910_022955
