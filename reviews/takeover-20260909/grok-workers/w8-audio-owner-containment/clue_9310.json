@@ -1,0 +1,18 @@
+[
+  {
+    "identity": 9310,
+    "preset": "Metal Impact Machinery",
+    "copied_from": "Metal Impact Machinery",
+    "nearby": [
+      "prop=AddSound=ContentFile",
+      "prop=AddSound=ContentFile",
+      "prop=AddSound=ContentFile",
+      "prop=AddSound=ContentFile",
+      "file=Data/Base.rte/Sounds/Penetration/Metal/MetalImpactD6.flac",
+      "file=Data/Base.rte/Sounds/Penetration/Metal/MetalImpactD7.flac",
+      "file=Data/Base.rte/Sounds/Penetration/Metal/MetalImpactD8.flac",
+      "file=Data/Base.rte/Sounds/Penetration/Metal/MetalImpactD9.flac",
+      "file=Data/Base.rte/Sounds/Penetration/Metal/MetalImpactD10.flac"
+    ]
+  }
+]

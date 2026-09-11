@@ -1,0 +1,30 @@
+FATAL Save.ini missing in D:\mx\s38\archive_loads\empty_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave; entries=[] D:\mx\s38\archive_loads\empty_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL Save.ini missing in D:\mx\s38\archive_loads\missing_ini\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave; entries=['Index.ini', 'Save Mat.png', 'Save FG.png', 'Save BG.png'] D:\mx\s38\archive_loads\missing_ini\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL File is not a zip file D:\mx\s38\archive_loads\truncated_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+D:\mx\s40lanes\h4\peers_3_4_regression_20260909_105714\drop3_host\runtime\Userdata\UserSavedGames.rte\p5resync_56264.ccsave voices=12
+D:\mx\s40lanes\h4\peers_3_4_regression_20260909_105923\drop3_host\runtime\Userdata\UserSavedGames.rte\p5resync_54452.ccsave voices=12
+D:\mx\s40lanes\h4\peers_3_4_regression_20260909_110133\drop3_host\runtime\Userdata\UserSavedGames.rte\p5resync_58156.ccsave voices=12
+D:\mx\s40lanes\h4\peers_3_4_regression_20260909_110342\drop3_host\runtime\Userdata\UserSavedGames.rte\p5resync_32464.ccsave voices=12
+D:\mx\s40lanes\h4\peers_3_4_regression_20260909_110551\drop3_host\runtime\Userdata\UserSavedGames.rte\p5resync_56948.ccsave voices=10
+FATAL Save.ini missing in D:\mx\s38\archive_loads\empty_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave; entries=[] D:\mx\s41\archive_loads\empty_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\archive_loads\missing_ini\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave; entries=['Index.ini', 'Save Mat.png', 'Save FG.png', 'Save BG.png'] D:\mx\s41\archive_loads\missing_ini\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL File is not a zip file D:\mx\s41\archive_loads\truncated_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\crc_error\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\crc_error\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\crc_error\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\crc_error\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\directory\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\directory\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\empty_index\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\empty_index\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\empty_index\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\empty_index\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL File is not a zip file D:\mx\s41\catalog\invalid_zip\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\invalid_zip\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\invalid_zip\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\malformed_index\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\malformed_index\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\malformed_index\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\malformed_index\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\missing_index\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['other.txt'] D:\mx\s41\catalog\missing_index\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\missing_index\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\missing_index\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\short_entry\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\short_entry\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\short_entry\runtime\Userdata\UserSavedGames.rte\valid.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\short_entry\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\valid\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\valid\runtime\Userdata\UserSavedGames.rte\candidate.ccsave
+FATAL Save.ini missing in D:\mx\s41\catalog\valid\runtime\Userdata\UserSavedGames.rte\candidate.ccsave; entries=['Index.ini', 'other.txt'] D:\mx\s41\catalog\valid\runtime\Userdata\UserSavedGames.rte\valid.ccsave
+D:\Projects\reviews\claude-review-2026-09-08\lanes\sound-ai-deferral\artifacts\source35-SoundContainerControl.ccsave voices=37
+FATAL Save.ini missing in D:\mx\s38\archive_loads\empty_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave; entries=[] D:\Projects\reviews\recovery-2026-09-07\load-global-final-1\empty_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL Save.ini missing in D:\Projects\reviews\recovery-2026-09-07\load-global-final-1\missing_ini\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave; entries=['Index.ini', 'Save Mat.png', 'Save FG.png', 'Save BG.png'] D:\Projects\reviews\recovery-2026-09-07\load-global-final-1\missing_ini\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave
+FATAL File is not a zip file D:\Projects\reviews\recovery-2026-09-07\load-global-final-1\truncated_archive\runtime\Userdata\UserSavedGames.rte\load_candidate.ccsave

@@ -14,6 +14,7 @@ FILES = [
     "RESUME.md",
     "AGENTS.md",
     "CLAUDE.md",
+    "STATUS.md",
     r"reviews\takeover-20260909\run_breadth.py",
     r"reviews\claude-review-2026-09-08\lanes\compat-review\fixtures\compat_review_extra.lua",
 ]
@@ -21,11 +22,10 @@ DIRS = [r"reviews\takeover-20260909\grok-workers", r"reviews\takeover-20260909\h
 SKIP_DIRS = {"scratch-repo", "mac-files", "pre", "untracked-before", ".git", "__pycache__"}
 MAX_BYTES = 3_000_000
 MESSAGE = (
-    "Back up the breadth harness repairs, worker reports and live docs\n\n"
-    "Second snapshot: run_breadth.py with the heal import path, the single-field\n"
-    "spawn_child uid exclusion, the fake-lag formula oracle and the --cases filter;\n"
-    "the compat_review_extra fixture calling HasAnySounds(true); the W1-W7 reports\n"
-    "and lead verdicts; RESUME.md, AGENTS.md and CLAUDE.md as of 2026-09-11 05:30 UTC.\n"
+    "Back up the live docs, fix-group design and worker reports\n\n"
+    "Third snapshot, 2026-09-11 06:55 UTC: the RESUME.md live-state entry, the STATUS.md\n"
+    "board, the AGENTS.md/CLAUDE.md rules added today, FIX_GROUP_1_DESIGN.md, the W1-W22\n"
+    "reports, the Mac CLI launcher and the firewall scripts.\n"
 )
 
 

@@ -1960,7 +1960,8 @@ def child(options, pin):
     module = load_driver(path, "breadth_existing_driver")
     if module.REPO.resolve() != REPO.resolve():
         raise PinError("existing driver is not approved-tree configured")
-    module.INPUT_DELAY = 0
+    # Source40 20260909_112620_heal_26d39dc2/result.json input_delay
+    module.INPUT_DELAY = 3 if options.child == "heal" else 0
     module.GLOBAL_SCRIPT = None
     sys.path.insert(0, str(STAGE))
     result = module.invariance(out) if options.child == "invariance" else module.heal(out)

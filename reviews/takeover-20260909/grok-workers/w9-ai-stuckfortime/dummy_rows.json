@@ -1,0 +1,50 @@
+[
+  {
+    "path": "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\host\\trace.json.simdump.txt",
+    "line": 55,
+    "kind": "particle",
+    "nv": "AI_StuckForTime:0x1.d4bb333333333p+11;TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;",
+    "has_stuck": true,
+    "status": "4",
+    "health": "-0x1.8a3d700000000p+1",
+    "aimode": "4",
+    "team": "-1",
+    "mode": "2"
+  },
+  {
+    "path": "D:\\mx\\s41r2\\heal_global_d0\\fresh\\e2e\\resync_heal\\client\\trace.json.simdump.txt",
+    "line": 55,
+    "kind": "particle",
+    "nv": "TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;",
+    "has_stuck": false,
+    "status": "4",
+    "health": "-0x1.8a3d700000000p+1",
+    "aimode": "4",
+    "team": "-1",
+    "mode": "2"
+  },
+  {
+    "path": "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\host\\trace.json.simdump.txt",
+    "line": 72,
+    "kind": "actor",
+    "nv": "AI_StuckForTime:0x1.963bd70a3d70ap+12;TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;",
+    "has_stuck": true,
+    "status": "0",
+    "health": "0x1.9000000000000p+6",
+    "aimode": "4",
+    "team": "-1",
+    "mode": "2"
+  },
+  {
+    "path": "D:\\mx\\s41r2\\heal_global_d3\\fresh\\e2e\\resync_heal\\client\\trace.json.simdump.txt",
+    "line": 72,
+    "kind": "actor",
+    "nv": "TestCheckpointState:0x1.c1a0000000000p+11;TestUpdates:0x1.8f00000000000p+8;global_script_spawn:0x1.0000000000000p+0;",
+    "has_stuck": false,
+    "status": "0",
+    "health": "0x1.9000000000000p+6",
+    "aimode": "4",
+    "team": "-1",
+    "mode": "2"
+  }
+]

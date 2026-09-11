@@ -1,0 +1,78 @@
+=== clean_leave D:\mx\s41b3\j33 exists=True ===
+  clean_leave_20260910_021812 dir=True reparse=False
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client2_report.json bytes=2092
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_host_report.json bytes=2143
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_client_report.json bytes=7319
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host2_report.json bytes=9254
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host_report.json bytes=9241
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_stale_report.json bytes=7351
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\verdict.json bytes=27137
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_stale\launch.json bytes=2955
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_stale\stdout.log bytes=570
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_stale\runtime\LogConsole.txt bytes=498
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host2\launch.json bytes=2938
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host2\stdout.log bytes=563
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host2\runtime\LogConsole.txt bytes=498
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host\launch.json bytes=2929
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host\stdout.log bytes=624
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_host\runtime\LogConsole.txt bytes=533
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_client\launch.json bytes=2993
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_client\stdout.log bytes=621
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\clean_client\runtime\LogConsole.txt bytes=519
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_host\launch.json bytes=2996
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_host\stdout.log bytes=1099
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_host\runtime\LogConsole.txt bytes=887
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client2\launch.json bytes=3146
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client2\stdout.log bytes=678
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client2\runtime\LogConsole.txt bytes=576
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client1\launch.json bytes=3099
+FILE D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client1\stdout.log bytes=417
+=== reclaim_socket D:\mx\s41b3\j34 exists=True ===
+  reclaim_socket_20260910_021916 dir=True reparse=False
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\client2_report.json bytes=2084
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\host_report.json bytes=2136
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\verdict.json bytes=13485
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\returner\launch.json bytes=3089
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\returner\stdout.log bytes=672
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\returner\runtime\LogConsole.txt bytes=577
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\host\launch.json bytes=2930
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\host\stdout.log bytes=1090
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\host\runtime\LogConsole.txt bytes=885
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\client1\launch.json bytes=3036
+FILE D:\mx\s41b3\j34\reclaim_socket_20260910_021916\client1\stdout.log bytes=417
+=== fencing_two_transports D:\mx\s41b3\j36 exists=True ===
+  fencing_two_transports_20260910_022107 dir=True reparse=False
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client1_report.json bytes=2254
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client2_report.json bytes=12940
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\host_report.json bytes=2168
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\verdict.json bytes=13326
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\host\launch.json bytes=3121
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\host\stdout.log bytes=750
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\host\runtime\LogConsole.txt bytes=697
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client2\launch.json bytes=3856
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client2\stdout.log bytes=1898
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client2\runtime\LogConsole.txt bytes=283
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client1\launch.json bytes=3320
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client1\stdout.log bytes=665
+FILE D:\mx\s41b3\j36\fencing_two_transports_20260910_022107\client1\runtime\LogConsole.txt bytes=620
+=== rejoin_after_resync D:\mx\s41b3\j37 exists=True ===
+  rejoin_after_resync_20260910_022132 dir=True reparse=False
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_client_report.json bytes=7352
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_host_report.json bytes=9265
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_client2_report.json bytes=2096
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_host_report.json bytes=2148
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\verdict.json bytes=21735
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_host\launch.json bytes=3040
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_host\stdout.log bytes=1103
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_host\runtime\LogConsole.txt bytes=887
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_client2\launch.json bytes=3190
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_client2\stdout.log bytes=684
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_client2\runtime\LogConsole.txt bytes=577
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_client1\launch.json bytes=3144
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\resync_client1\stdout.log bytes=418
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_host\launch.json bytes=3048
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_host\stdout.log bytes=729
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_host\runtime\LogConsole.txt bytes=713
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_client\launch.json bytes=3085
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_client\stdout.log bytes=736
+FILE D:\mx\s41b3\j37\rejoin_after_resync_20260910_022132\rematch_client\runtime\LogConsole.txt bytes=713

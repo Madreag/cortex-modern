@@ -1,0 +1,37 @@
+{
+  "name": "net-session",
+  "cmd": [
+    "C:\\Program Files\\Python314\\python.exe",
+    "D:\\Projects\\takeover-build\\tools\\win32_test_runner.py",
+    "--cwd",
+    "D:\\mx\\w12\\net-session\\runtime",
+    "--out",
+    "D:\\mx\\w12\\net-session",
+    "--timeout",
+    "120",
+    "--",
+    "D:\\Projects\\takeover-build\\Cortex Command.exe",
+    "-headless",
+    "-net-session-selftest"
+  ],
+  "runner_exit": 0,
+  "runner_stdout": "{\n  \"runner\": \"win32_test_runner.py\",\n  \"runner_pid\": 5460,\n  \"argv\": [\n    \"D:\\\\Projects\\\\takeover-build\\\\Cortex Command.exe\",\n    \"-headless\",\n    \"-net-session-selftest\"\n  ],\n  \"cwd\": \"D:\\\\mx\\\\w12\\\\net-session\\\\runtime\",\n  \"timeout_seconds\": 120,\n  \"private_desktop\": \"CortexTest_28ffb6e57d9c49b0ba1bcae6feeb6ba9\",\n  \"input_desktop_before\": \"Default\",\n  \"created_utc\": \"2026-09-11T05:45:16.461645+00:00\",\n  \"headless_env\": \"1\",\n  \"env_set\": {\n    \"CCCP_HEADLESS\": \"1\"\n  },\n  \"desktop_switch_restricted\": true,\n  \"job_kill_on_close\": true,\n  \"started\": true,\n  \"startup_checks\": [\n    {\n      \"check\": \"exe_exists\",\n      \"ok\": true,\n      \"detail\": \"D:\\\\Projects\\\\takeover-build\\\\Cortex Command.exe\"\n    },\n    {\n      \"check\": \"exe_sha256_recorded\",\n      \"ok\": true,\n      \"detail\": \"992b14992a6e8e7e5b6e49899e9171a8dfc1678013dcdc3769b408a036b2652d\"\n    },\n    {\n      \"check\": \"cwd_exists\",\n      \"ok\": true,\n      \"detail\": \"D:\\\\mx\\\\w12\\\\net-session\\\\runtime\"\n    },\n    {\n      \"check\": \"data_junction_resolves\",\n      \"ok\": true,\n      \"detail\": \"D:\\\\mx\\\\w12\\\\net-session\\\\runtime\\\\Data -> D:\\\\Projects\\\\takeover-build\\\\Data\"\n    },\n    {\n      \"check\": \"userdata_writable\",\n      \"ok\": true,\n      \"detail\": \"D:\\\\mx\\\\w12\\\\net-session\\\\runtime\\\\Userdata\"\n    },\n    {\n      \"check\": \"out_dir_private_writable\",\n      \"ok\": true,\n      \"detail\": \"D:\\\\mx\\\\w12\\\\net-session\"\n    }\n  ],\n  \"evidence_expected\": [],\n  \"exe_path\": \"D:\\\\Projects\\\\takeover-build\\\\Cortex Command.exe\",\n  \"exe_bytes\": 19223552,\n  \"exe_mtime_utc\": \"2026-09-11T05:43:30.190181+00:00\",\n  \"exe_sha256\": \"992b14992a6e8e7e5b6e49899e9171a8dfc1678013dcdc3769b408a036b2652d\",\n  \"game_runtime_checks\": true,\n  \"job_memory_limit_bytes\": 8589934592,\n  \"pid\": 16752,\n  \"started_utc\": \"2026-09-11T05:45:16.477243+00:00\",\n  \"exit_code\": 0,\n  \"elapsed_seconds\": 0.603,\n  \"ended_utc\": \"2026-09-11T05:45:17.080461+00:00\",\n  \"input_desktop_after\": \"Default\",\n  \"timed_out\": false,\n  \"job_closed\": true,\n  \"stdout_bytes\": 378,\n  \"verdict_lines\": [\n    \"[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current\",\n    \"[net-match] state transfer complete: 245777 bytes\",\n    \"[net-match] state transfer complete: 245777 bytes\",\n    \"[net-match] state transfer complete: 245777 bytes\",\n    \"[net-match] state transfer complete: 245777 bytes\",\n    \"[net-match] state transfer complete: 245777 bytes\",\n    \"[net-session-selftest] PASS\"\n  ],\n  \"verdict_count\": 7,\n  \"last_verdict\": \"[net-session-selftest] PASS\",\n  \"verdict_present\": true,\n  \"evidence_present\": [],\n  \"evidence_missing\": [],\n  \"evidence_complete\": true\n}\n",
+  "runner_stderr": "",
+  "out": "D:\\mx\\w12\\net-session",
+  "stdout_log": "D:\\mx\\w12\\net-session\\stdout.log",
+  "verdict_lines": [
+    "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current",
+    "[net-session-selftest] PASS"
+  ],
+  "engine_exit": 0,
+  "timed_out": false,
+  "launch_verdict_lines": [
+    "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current",
+    "[net-match] state transfer complete: 245777 bytes",
+    "[net-match] state transfer complete: 245777 bytes",
+    "[net-match] state transfer complete: 245777 bytes",
+    "[net-match] state transfer complete: 245777 bytes",
+    "[net-match] state transfer complete: 245777 bytes",
+    "[net-session-selftest] PASS"
+  ]
+}

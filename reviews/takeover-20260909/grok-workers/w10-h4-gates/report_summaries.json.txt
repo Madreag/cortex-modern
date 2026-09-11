@@ -1,0 +1,633 @@
+===== j33\clean_leave_20260910_021812\ambiguous_client2_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "activity ended in state Over",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": true,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j33\clean_leave_20260910_021812\ambiguous_host_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "activity ended in state Over",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j33\clean_leave_20260910_021812\clean_client_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 1,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "runner": {
+      "lobby": {
+        "state": "Started",
+        "stats": {
+          "config_acks_received": 0,
+          "config_packets_sent": 0,
+          "ignored_session_packets": 2,
+          "malformed_messages": 0,
+          "messages_received": 6,
+          "messages_sent": 3,
+          "ready_packets_received": 0,
+          "start_packets_received": 1,
+          "start_packets_sent": 0,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Stopped"
+      },
+      "session": {
+        "admission": {},
+        "stats": {
+          "admission_messages": 3,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 7,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 7,
+          "sent_messages": 8,
+          "timeout_resumptions": 1,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "",
+      "state": "Running"
+    },
+    "state": "Completed"
+  }
+}
+
+===== j33\clean_leave_20260910_021812\clean_host2_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": [
+        {
+          "applicants": 0,
+          "closed": false,
+          "committed": false,
+          "dropped": false,
+          "lockstep_peer_id": 1,
+          "reclaiming": false,
+          "stable_seat": 0,
+          "substituting": false
+        },
+        {
+          "applicants": 0,
+          "closed": false,
+          "committed": true,
+          "dropped": false,
+          "lockstep_peer_id": 2,
+          "reclaiming": false,
+          "stable_seat": 1,
+          "substituting": false
+        }
+      ]
+    },
+    "runner": {
+      "lobby": {
+        "state": "Started",
+        "stats": {
+          "config_acks_received": 1,
+          "config_packets_sent": 1,
+          "ignored_session_packets": 2,
+          "malformed_messages": 0,
+          "messages_received": 3,
+          "messages_sent": 6,
+          "ready_packets_received": 1,
+          "start_packets_received": 0,
+          "start_packets_sent": 1,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Stopped"
+      },
+      "session": {
+        "admission": {
+          "ledger_drops_recorded": 0,
+          "reseats_issued": 0,
+          "reseats_without_survivors": 0,
+          "seats_dropped": 0
+        },
+        "stats": {
+          "admission_messages": 7,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 3,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 10,
+          "sent_messages": 8,
+          "timeout_resumptions": 0,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "",
+      "state": "Running"
+    },
+    "state": "Running"
+  }
+}
+
+===== j33\clean_leave_20260910_021812\clean_host_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": [
+        {
+          "applicants": 0,
+          "closed": false,
+          "committed": false,
+          "dropped": false,
+          "lockstep_peer_id": 1,
+          "reclaiming": false,
+          "stable_seat": 0,
+          "substituting": false
+        },
+        {
+          "applicants": 0,
+          "closed": true,
+          "committed": false,
+          "dropped": false,
+          "lockstep_peer_id": 2,
+          "reclaiming": false,
+          "stable_seat": 1,
+          "substituting": false
+        }
+      ]
+    },
+    "runner": {
+      "lobby": {
+        "state": "Started",
+        "stats": {
+          "config_acks_received": 1,
+          "config_packets_sent": 1,
+          "ignored_session_packets": 2,
+          "malformed_messages": 0,
+          "messages_received": 3,
+          "messages_sent": 6,
+          "ready_packets_received": 1,
+          "start_packets_received": 0,
+          "start_packets_sent": 1,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Stopped"
+      },
+      "session": {
+        "admission": {
+          "ledger_drops_recorded": 0,
+          "reseats_issued": 0,
+          "reseats_without_survivors": 0,
+          "seats_dropped": 0
+        },
+        "stats": {
+          "admission_messages": 3,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 3,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 7,
+          "sent_messages": 7,
+          "timeout_resumptions": 0,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "",
+      "state": "Running"
+    },
+    "state": "Completed"
+  }
+}
+
+===== j33\clean_leave_20260910_021812\clean_stale_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": true,
+      "seats": []
+    },
+    "runner": {
+      "lobby": {
+        "state": "Started",
+        "stats": {
+          "config_acks_received": 0,
+          "config_packets_sent": 0,
+          "ignored_session_packets": 2,
+          "malformed_messages": 0,
+          "messages_received": 6,
+          "messages_sent": 3,
+          "ready_packets_received": 0,
+          "start_packets_received": 1,
+          "start_packets_sent": 0,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Stopped"
+      },
+      "session": {
+        "admission": {},
+        "stats": {
+          "admission_messages": 3,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 6,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 8,
+          "sent_messages": 11,
+          "timeout_resumptions": 0,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "",
+      "state": "Running"
+    },
+    "state": "Running"
+  }
+}
+
+===== j34\reclaim_socket_20260910_021916\client2_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "activity ended in state Over",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": true,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j34\reclaim_socket_20260910_021916\host_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "activity ended in state Over",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j36\fencing_two_transports_20260910_022107\client1_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "tick 566 lockstep wait: PeerDisconnected:Host disconnected: seat reclaimed by a newer connection",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j36\fencing_two_transports_20260910_022107\client2_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:   0.0 pkts/sec   0.0 K/sec         Ping:0ms    Max latency variance: ???ms         Est avail bandwidth: 8554.7KB/s           Bytes buffered: 0     Lifetime stats:         Totals             Sent:          7 pkts           1,583 bytes             Recv:          6 pkts           1,268 bytes             Recv w seq:          3 pkts             Dropped   :          0 pkts   0.00%             OutOfOrder:          0 pkts   0.00%             OOOFixed  :          0 pkts   0.00%             Duplicate :          0 pkts   0.00%             SeqLurch  :          0 pkts   0.00%         Ping histogram: (5 total samples)                  0-25    25-50    50-75   75-100  100-125  125-150  150-200  200-300     300+                     5        0        0        0        0        0        0        0        0                100.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%         Ping distribution:            50th   75th             0ms    0ms         No connection quality distribution available.  (0 measurement intervals)         Latency variance histogram not available     No rate stats received from remote host     No lifetime stats received from remote host )",
+  "activity_state": "NoActivity",
+  "service": {
+    "error": "SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:   0.0 pkts/sec   0.0 K/sec         Ping:0ms    Max latency variance: ???ms         Est avail bandwidth: 8554.7KB/s           Bytes buffered: 0     Lifetime stats:         Totals             Sent:          7 pkts           1,583 bytes             Recv:          6 pkts           1,268 bytes             Recv w seq:          3 pkts             Dropped   :          0 pkts   0.00%             OutOfOrder:          0 pkts   0.00%             OOOFixed  :          0 pkts   0.00%             Duplicate :          0 pkts   0.00%             SeqLurch  :          0 pkts   0.00%         Ping histogram: (5 total samples)                  0-25    25-50    50-75   75-100  100-125  125-150  150-200  200-300     300+                     5        0        0        0        0        0        0        0        0                100.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%         Ping distribution:            50th   75th             0ms    0ms         No connection quality distribution available.  (0 measurement intervals)         Latency variance histogram not available     No rate stats received from remote host     No lifetime stats received from remote host )",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": true,
+      "seats": []
+    },
+    "runner": {
+      "lobby": {
+        "state": "Failed",
+        "stats": {
+          "config_acks_received": 0,
+          "config_packets_sent": 0,
+          "ignored_session_packets": 0,
+          "malformed_messages": 0,
+          "messages_received": 0,
+          "messages_sent": 0,
+          "ready_packets_received": 0,
+          "start_packets_received": 0,
+          "start_packets_sent": 0,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Idle"
+      },
+      "session": {
+        "admission": {},
+        "stats": {
+          "admission_messages": 2,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 0,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 4,
+          "sent_messages": 5,
+          "timeout_resumptions": 0,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:   0.0 pkts/sec   0.0 K/sec         Ping:0ms    Max latency variance: ???ms         Est avail bandwidth: 8554.7KB/s           Bytes buffered: 0     Lifetime stats:         Totals             Sent:          7 pkts           1,583 bytes             Recv:          6 pkts           1,268 bytes             Recv w seq:          3 pkts             Dropped   :          0 pkts   0.00%             OutOfOrder:          0 pkts   0.00%             OOOFixed  :          0 pkts   0.00%             Duplicate :          0 pkts   0.00%             SeqLurch  :          0 pkts   0.00%         Ping histogram: (5 total samples)                  0-25    25-50    50-75   75-100  100-125  125-150  150-200  200-300     300+                     5        0        0        0        0        0        0        0        0                100.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%         Ping distribution:            50th   75th             0ms    0ms         No connection quality distribution available.  (0 measurement intervals)         Latency variance histogram not available     No rate stats received from remote host     No lifetime stats received from remote host )",
+      "state": "Failed"
+    },
+    "state": "Failed"
+  }
+}
+
+===== j36\fencing_two_transports_20260910_022107\host_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "resync failed: resync snapshot save failed",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j37\rejoin_after_resync_20260910_022132\rematch_client_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "runner": {
+      "lobby": {
+        "state": "Started",
+        "stats": {
+          "config_acks_received": 0,
+          "config_packets_sent": 0,
+          "ignored_session_packets": 5,
+          "malformed_messages": 0,
+          "messages_received": 4,
+          "messages_sent": 3,
+          "ready_packets_received": 0,
+          "start_packets_received": 1,
+          "start_packets_sent": 0,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Stopped"
+      },
+      "session": {
+        "admission": {},
+        "stats": {
+          "admission_messages": 2,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 10,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 12,
+          "sent_messages": 12,
+          "timeout_resumptions": 1,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "",
+      "state": "Running"
+    },
+    "state": "Running"
+  }
+}
+
+===== j37\rejoin_after_resync_20260910_022132\rematch_host_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": [
+        {
+          "applicants": 0,
+          "closed": false,
+          "committed": false,
+          "dropped": false,
+          "lockstep_peer_id": 1,
+          "reclaiming": false,
+          "stable_seat": 0,
+          "substituting": false
+        },
+        {
+          "applicants": 0,
+          "closed": false,
+          "committed": true,
+          "dropped": false,
+          "lockstep_peer_id": 2,
+          "reclaiming": false,
+          "stable_seat": 1,
+          "substituting": false
+        }
+      ]
+    },
+    "runner": {
+      "lobby": {
+        "state": "Started",
+        "stats": {
+          "config_acks_received": 1,
+          "config_packets_sent": 2,
+          "ignored_session_packets": 5,
+          "malformed_messages": 0,
+          "messages_received": 3,
+          "messages_sent": 7,
+          "ready_packets_received": 1,
+          "start_packets_received": 0,
+          "start_packets_sent": 1,
+          "timeouts": 0,
+          "unbound_connection_faults": 0,
+          "unbound_disconnects": 0
+        }
+      },
+      "lockstep": {
+        "state": "Stopped"
+      },
+      "session": {
+        "admission": {
+          "ledger_drops_recorded": 0,
+          "reseats_issued": 0,
+          "reseats_without_survivors": 0,
+          "seats_dropped": 0
+        },
+        "stats": {
+          "admission_messages": 2,
+          "fenced_disconnects": 0,
+          "fenced_packets": 0,
+          "ignored_phase_packets": 6,
+          "malformed_messages": 0,
+          "old_wire_disconnects": 0,
+          "old_wire_rejections_sent": 0,
+          "pending_admission_joins": 0,
+          "received_messages": 10,
+          "sent_messages": 12,
+          "timeout_resumptions": 1,
+          "timeouts": 0,
+          "unauthenticated_connections_refused": 0,
+          "unbound_connection_faults": 0
+        }
+      },
+      "setup_error": "",
+      "state": "Running"
+    },
+    "state": "Running"
+  }
+}
+
+===== j37\rejoin_after_resync_20260910_022132\resync_client2_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "activity ended in state Over",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 1,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": true,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}
+
+===== j37\rejoin_after_resync_20260910_022132\resync_host_report.json keys=['exit_code', 'setup_error', 'runtime_error', 'activity_preset', 'activity_state', 'winner_team', 'entered_editor', 'rematches', 'resyncs', 'actors', 'actors_peak', 'pace', 'running_ticks', 'frames_planned', 'local_prediction', 'controller_boundary', 'replay_recording', 'setup_surface', 'unsupported_setup_surface', 'service'] =====
+{
+  "setup_error": "",
+  "activity_state": "Over",
+  "service": {
+    "error": "activity ended in state Over",
+    "reconnect": {
+      "census_refusals": 0,
+      "client_commits": 0,
+      "client_leave_acks": 0,
+      "client_used_stored_ticket": false,
+      "seats": []
+    },
+    "state": "Failed"
+  }
+}

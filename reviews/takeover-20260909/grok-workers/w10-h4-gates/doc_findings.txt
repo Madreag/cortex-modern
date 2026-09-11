@@ -1,0 +1,129 @@
+===== D:\Projects\RESUME.md lines=2570 chars=468419 =====
+--- RESUME.md:65 hits=['activity ended in state Over'] linelen=240 ---
+  around 'activity ended in state Over' @114:
+  7. Then the long-red H4 gates (`clean_leave`, `reclaim_socket`, `fencing_two_transports`, `rejoin_after_resync`; "activity ended in state Over" residue), B1 substitution 2/4, then section B-1 items 5b, 7, 8 and the measured 100-200 ms feel.
+
+--- RESUME.md:95 hits=['PumpSessionEvents', 'TickAdmissionPlane', '15 ms', 'seat hold', 'silent connection', 'activity ended in state Over', '02:20', 'NetMatchService.cpp:724', 'NetSession.cpp:165', 'clean leave'] linelen=95113 ---
+  around 'PumpSessionEvents' @1810:
+  idence paths naming the pre-existing folder `reviews/claude-review-2026-09-08`, left unchanged with the history). Four further findings from that reviewer are in flight: A (`NetMatchService.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86` clock projection reachin
+
+  around 'TickAdmissionPlane' @1962:
+  er are in flight: A (`NetMatchService.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86` clock projection reaching inside multi-line native strings) are in the harness lane's `followup-1.md`. The harness port into `tools/` is a separate later concern (tested port, 
+
+  around '15 ms' @1834:
+  pre-existing folder `reviews/claude-review-2026-09-08`, left unchanged with the history). Four further findings from that reviewer are in flight: A (`NetMatchService.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86` clock projection reaching inside multi-line nati
+
+  around 'seat hold' @1894:
+   unchanged with the history). Four further findings from that reviewer are in flight: A (`NetMatchService.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86` clock projection reaching inside multi-line native strings) are in the harness lane's `followup-1.md`. The h
+
+  around 'silent connection' @1996:
+  ice.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86` clock projection reaching inside multi-line native strings) are in the harness lane's `followup-1.md`. The harness port into `tools/` is a separate later concern (tested port, no generated evidence). RESUME.md 
+
+  around 'activity ended in state Over' @54879:
+  e adjudicated as `connection lost` (Source39 `Match left`), client `Leaving (ticket kept)`, no LeaveAck, `clean_leave_acked` 1 -> 0. Still open: `host_reseat_issued` red on both reclaim drivers, the `activity ended in state Over` residue, and B1's `substitute_commit`/`substitute_returner_wins` hosts now end gracefully with `resync failed: resync snapshot save failed` (the crash became a named refusal; the save still fails there). The matrix step is running (`D:\mx\s40`). BRIEFS WRITTEN: `h4-a4-semantics/followup-6.md` (R1, R2, the reseat, then the residuals; in-process reproduction and a code-
+
+  around '02:20' @14:
+  **2026-09-09 ~02:20 UTC WORKFLOW CHANGE AND FIRST CHECKPOINT PUSH.** The user, on an independent reviewer's recommendation, authorised routine pushes of verified development checkpoints to origin after major fix groups (still no PRs, no squash or rewrite, no attribution anywhere, and cleanup of folders, worktrees, run roots or evidence remains UNAUTHORISED: the retirement inventory in this session's transcript 
+
+  around 'NetMatchService.cpp:724' @1784:
+   the forbidden word are evidence paths naming the pre-existing folder `reviews/claude-review-2026-09-08`, left unchanged with the history). Four further findings from that reviewer are in flight: A (`NetMatchService.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86
+
+  around 'NetSession.cpp:165' @1941:
+  ings from that reviewer are in flight: A (`NetMatchService.cpp:724` `PumpSessionEvents` adds 15 ms per call and is called twice a tick, halving the 20 s seat hold; use monotonic elapsed time) and B (`NetSession.cpp:165` `TickAdmissionPlane` never expires silent connections, so eight of them block reconnects) go to the H4 lane when a worker slot frees; C (`run_audit.py:397` accepted loads exempt from the errors gate) and D (`run_audit.py:86` clock projection reaching inside multi-line native strings) are in the harness lane's `followup-1.md`. The harness port into `tools/` is a separate later c
+
+  around 'clean leave' @70880:
+  ixture extended to five frames and both survivors is red on the control and green on the tip (`host_defers == stayer_defers` at the drop, mid-window, the last held frame, the deadline and past it), a clean leave holds nothing. Re-review launched: `lanes/h4-fixes-review/followup-2.md` (the wire value, the frame across a resync, the expiry, frames against P2's wall clock). B1 HOLD RE-REVIEW RETURNED (06:56; `lanes/h4-fixes-review/report.md` `## Follow-up 2`): READY as `1eb6314055` - both inputs to the hold ride the leave notice, the answer is read at the frame the sim applies, both survivors agr
+
+--- RESUME.md:107 hits=['seat hold', 'activity ended in state Over', 'clean leave', 'clean-leave'] linelen=62101 ---
+  around 'seat hold' @33933:
+  ` → `could not apply MovableMan checkpoint` → `resync failed`, after which the returner crashes on a null Scene in `CameraMan::Update` (survivors byte-identical throughout). Lead decisions: a dropped seat holding a valid ticket is held open for the reclaim window even as the last remote peer (a clean leave with nobody left still ends the match), the leave exchange runs before teardown, the second incarnation must fence the first, and a failed resync returns to the menu instead of running the loop on a null Scene — lane `lanes/h4-a4-semantics` (worktree `D:/Projects/h4-phase-a`); the resync app
+
+  around 'activity ended in state Over' @55468:
+  s_3_4_regression` 5/5 - A5 removed the `resync snapshot save failed` blocker and the resync now completes (save, read, relaunch), but the relaunched activity then ends in state Over with zero ticks (`activity ended in state Over`, hosts exit 1) in `reclaim_socket`, `rejoin_after_resync` and `clean_leave`'s ambiguous arm, `fencing_two_transports` still fails on `GNS peer was not found` at tick 589 with no fencing, and the clean-leave arm is still unacked (`clean_leave_acked 0`); lobby: the 3-peer/200 ms control is 3/3 (the Source36 regression is closed), `lobby_4_rejoin_200` now runs a match an
+
+  around 'clean leave' @34029:
+  on a null Scene in `CameraMan::Update` (survivors byte-identical throughout). Lead decisions: a dropped seat holding a valid ticket is held open for the reclaim window even as the last remote peer (a clean leave with nobody left still ends the match), the leave exchange runs before teardown, the second incarnation must fence the first, and a failed resync returns to the menu instead of running the loop on a null Scene — lane `lanes/h4-a4-semantics` (worktree `D:/Projects/h4-phase-a`); the resync apply failure was root-caused and fixed by lane `lanes/resync-refs` (worktree `D:/Projects/resync-r
+
+  around 'clean-leave' @55693:
+  ver`, hosts exit 1) in `reclaim_socket`, `rejoin_after_resync` and `clean_leave`'s ambiguous arm, `fencing_two_transports` still fails on `GNS peer was not found` at tick 589 with no fencing, and the clean-leave arm is still unacked (`clean_leave_acked 0`); lobby: the 3-peer/200 ms control is 3/3 (the Source36 regression is closed), `lobby_4_rejoin_200` now runs a match and its counters are on record (host `relay_send_failures` 16-27 with `SendMessageToConnection failed with EResult 25`, 30-50 resends, every peer 176-177 of 180 frames, stalls 6 s against the control's 0.3 s; zero refusals at t
+
+--- RESUME.md:532 hits=['clean leave'] linelen=91 ---
+  around 'clean leave' @60:
+  connections leave or are refused; replacements pass after a clean leave, malformed join and
+
+--- RESUME.md:928 hits=['02:20'] linelen=96 ---
+  around '02:20' @27:
+  - [x] 1e **DONE 2026-09-06 02:20** (`52034ba1f`): the preview clone collides with MOs again (the
+
+--- RESUME.md:933 hits=['02:20'] linelen=100 ---
+  around '02:20' @27:
+  - [x] 1f **DONE 2026-09-06 02:20** (`723ae949c`): an actor's travel and update draw from a per-actor
+
+--- RESUME.md:958 hits=['02:20'] linelen=101 ---
+  around '02:20' @68:
+  - Found by the trust battery on the re-recorded fixtures 2026-09-06 02:20: its corrupt-recording case
+
+--- RESUME.md:968 hits=['02:20'] linelen=99 ---
+  around '02:20' @54:
+  - **Trust battery 22/22 on the final build 2026-09-06 02:20** (`test_trust_20260906_021328_49612`):
+
+--- RESUME.md:972 hits=['02:20'] linelen=116 ---
+  around '02:20' @27:
+  - [x] 2a **DONE 2026-09-06 02:20** (`93b5a7624`): `MovableMan::SetAsideWorld/ReinstateWorld` move the live residents
+
+--- RESUME.md:979 hits=['02:20'] linelen=132 ---
+  around '02:20' @27:
+  - [x] 2b **DONE 2026-09-06 02:20** (`93b5a7624`): `LuaStateWrapper::DescribeScriptObjectIdentity` (the `_ScriptedObjects[uid]` table
+
+--- RESUME.md:1731 hits=['finding A'] linelen=96 ---
+  around 'finding A' @7:
+     pathfinding allowed); ONLY each actor's Controller crosses the wire. Never determinize the AI
+
+===== D:\Projects\STAGE2_H4_RECONNECT_PLAN.md lines=559 chars=84320 =====
+--- STAGE2_H4_RECONNECT_PLAN.md:29 hits=['clean leave'] linelen=1126 ---
+  around 'clean leave' @798:
+  ily, the Mac chain, the breadth lane and the final matrix are running. Engineering lanes on the Source38 tree: H4 slice A6 (the resync relaunch ends the activity at once, the fence never engages, the clean leave is unacked), lobby-grace (EResult 25 relay refusals at four peers, the 4-peer lobby start), H4 Phase B slice B1 (substitution), the world set-aside registry audit. Open: the headed section 11 review on the interactive desktop, then the rest of the roadmap. Details: D:\Projects\RESUME.md second checkpoint paragraph.
+
+--- STAGE2_H4_RECONNECT_PLAN.md:143 hits=['TickAdmissionPlane'] linelen=965 ---
+  around 'TickAdmissionPlane' @768:
+  . The 5 000 ms deadline is the existing session `timeoutMs` (`NetMatchService.cpp:1236`) that `NetSession::ExpireSilentHandshakes` applies to `Handshake` peers (`NetSession.cpp:755-768`, called from `TickAdmissionPlane:171` and `CheckTimeouts:731`, on every evaluation including a resumed one, so a resumption never extends P14) - the new thing here is the CAP, not the timeout. **LEAD-CONFIRM** |
+
+--- STAGE2_H4_RECONNECT_PLAN.md:153 hits=['clean leave'] linelen=547 ---
+  around 'clean leave' @98:
+  | P24 | Rematch-lobby seat protection (§7) | Lasts the WHOLE hosted session - until `RevokeSeat` (clean leave / substitution) or `EndSession`. **No timer.** | `NetSeatAuthRegistry` entries persist until revoked or the session ends (`NetSeatAuth.cpp:18-22,61-67`) and the epoch explicitly survives resync/rejoin/rematch (`NetSeatAuth.h:24`). A shorter protection timer would open a window in which a claimed seat silently becomes ticketless-joinable - precisely the H4 threat - so "no timer" is both
+
+--- STAGE2_H4_RECONNECT_PLAN.md:155 hits=['seat hold'] linelen=903 ---
+  around 'seat hold' @85:
+  | P26 | Drop-time ownership ledger (§8, used by §7 lifecycle) | One entry per stable seat holding the `m_PersistedUniqueID` list captured at the drop frame (`Entities/MovableObject.cpp:402,474`), capped at **512 actor UIDs per seat**, replaced wholesale on each new drop of that seat, retained for the whole hosted session and cleared on `RevokeSeat`/`EndSession` (same lifetime as P24). | Retention must at least match the ticket that can redeem it, so it follows the registry lifetim
+
+--- STAGE2_H4_RECONNECT_PLAN.md:157 hits=['clean-leave'] linelen=715 ---
+  around 'clean-leave' @225:
+   the substitution CAS value (§9b) | **u32 LE per stable seat**, 1 at the seat table's creation, +1 on every event that changes who may hold the seat: a commit (`BindIncarnation`), a mid-match drop, a clean-leave close, a lobby release, and the hosted session's end. An approval records the value; the commit requires it unchanged. Saturates at `UINT32_MAX` (no wrap). | §9b's "seat-generation CAS" needs a value that moves on exactly the events that invalidate an approval, and on nothing else - a counter over "who may hold this seat" is that. It is deliberately NOT the holder generation (which a s
+
+--- STAGE2_H4_RECONNECT_PLAN.md:167 hits=['TickAdmissionPlane'] linelen=99 ---
+  around 'TickAdmissionPlane' @49:
+  runs from `NetSession::Tick` alone - never from `TickAdmissionPlane` or `InjectEvent`, which is the
+
+--- STAGE2_H4_RECONNECT_PLAN.md:198 hits=['seat hold'] linelen=99 ---
+  around 'seat hold' @36:
+  can. The frame clock should own the seat hold - it is the only one every peer shares, and the plane
+
+--- STAGE2_H4_RECONNECT_PLAN.md:234 hits=['PumpSessionEvents'] linelen=97 ---
+  around 'PumpSessionEvents' @27:
+    `NetSession` pumped via `PumpSessionEvents`→`InjectEvent` (`NetMatchService.cpp:488`), and that
+
+--- STAGE2_H4_RECONNECT_PLAN.md:382 hits=['clean leave'] linelen=95 ---
+  around 'clean leave' @4:
+  - **Clean leave IS a protocol, not a flag:** `LeaveRequest → host closes the seat + revokes the
+
+--- STAGE2_H4_RECONNECT_PLAN.md:385 hits=['clean leave'] linelen=95 ---
+  around 'clean leave' @76:
+    2 000 ms, is an ambiguous loss that KEEPS the ticket (P21). Gate: after a clean leave the OLD
+
+--- STAGE2_H4_RECONNECT_PLAN.md:392 hits=['clean leave'] linelen=91 ---
+  around 'clean leave' @71:
+    the host sends from the same place it clears the seat registry, OR a clean LeaveAck — and
+
+--- STAGE2_H4_RECONNECT_PLAN.md:453 hits=['clean-leave'] linelen=95 ---
+  around 'clean-leave' @2:
+  - Clean-leave protocol: LeaveAck clears the ticket + closes the seat; old ticket can't reclaim.

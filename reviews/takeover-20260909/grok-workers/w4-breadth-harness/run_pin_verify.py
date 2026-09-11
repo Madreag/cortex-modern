@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-OUT = HERE / "pin-verify-rerun.txt"
+OUT = HERE / (sys.argv[1] if len(sys.argv) > 1 else "pin-verify-rerun.txt")
 BREADTH = Path(r"D:\Projects\reviews\takeover-20260909\run_breadth.py")
 MANIFEST = Path(
     r"D:\Projects\reviews\recovery-2026-09-07\contract-audit\grouped-build-bb3cf264\build.json"
 )
-
-import sys
 
 spec = importlib.util.spec_from_file_location("breadth_pin_verify", BREADTH)
 module = importlib.util.module_from_spec(spec)

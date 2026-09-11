@@ -1,0 +1,357 @@
+{
+  "command": "python D:\\Projects\\reviews\\takeover-20260909\\grok-workers\\w13-harness-review\\probe.py",
+  "imported": "D:\\Projects\\reviews\\takeover-20260909\\run_breadth.py",
+  "compat_cases": [
+    {
+      "name": "identical",
+      "old_rejects": false,
+      "new_rejects": false,
+      "new_accepts": true
+    },
+    {
+      "name": "uid_only",
+      "old_rejects": true,
+      "new_rejects": false,
+      "new_accepts": true
+    },
+    {
+      "name": "ok_zero",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "reordered",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "changed_non_uid",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "spawn_extra_text",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "missing_spawn",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "extra_line",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "uid_non_digits",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    },
+    {
+      "name": "wrong_case_name",
+      "old_rejects": true,
+      "new_rejects": true,
+      "new_accepts": false
+    }
+  ],
+  "formula_rows": [
+    {
+      "rtt": 199,
+      "rtt_over_tick": 5.97,
+      "ceil_plus_1": 7,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 200,
+      "rtt_over_tick": 6.0,
+      "ceil_plus_1": 7,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": false,
+      "new_fl100_band": true,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 201,
+      "rtt_over_tick": 6.029999999999999,
+      "ceil_plus_1": 8,
+      "old_fl100_accepts": true,
+      "old_fl200_accepts": false,
+      "new_fl100_band": true,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 202,
+      "rtt_over_tick": 6.06,
+      "ceil_plus_1": 8,
+      "old_fl100_accepts": true,
+      "old_fl200_accepts": false,
+      "new_fl100_band": true,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 215,
+      "rtt_over_tick": 6.449999999999999,
+      "ceil_plus_1": 8,
+      "old_fl100_accepts": true,
+      "old_fl200_accepts": false,
+      "new_fl100_band": true,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 216,
+      "rtt_over_tick": 6.4799999999999995,
+      "ceil_plus_1": 8,
+      "old_fl100_accepts": true,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 233,
+      "rtt_over_tick": 6.989999999999999,
+      "ceil_plus_1": 8,
+      "old_fl100_accepts": true,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 367,
+      "rtt_over_tick": 11.01,
+      "ceil_plus_1": 13,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 399,
+      "rtt_over_tick": 11.969999999999999,
+      "ceil_plus_1": 13,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 400,
+      "rtt_over_tick": 12.0,
+      "ceil_plus_1": 13,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": true
+    },
+    {
+      "rtt": 401,
+      "rtt_over_tick": 12.03,
+      "ceil_plus_1": 14,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": true,
+      "new_fl100_band": false,
+      "new_fl200_band": true
+    },
+    {
+      "rtt": 415,
+      "rtt_over_tick": 12.45,
+      "ceil_plus_1": 14,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": true,
+      "new_fl100_band": false,
+      "new_fl200_band": true
+    },
+    {
+      "rtt": 416,
+      "rtt_over_tick": 12.479999999999999,
+      "ceil_plus_1": 14,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": true,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 433,
+      "rtt_over_tick": 12.989999999999998,
+      "ceil_plus_1": 14,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": true,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    },
+    {
+      "rtt": 434,
+      "rtt_over_tick": 13.02,
+      "ceil_plus_1": 15,
+      "old_fl100_accepts": false,
+      "old_fl200_accepts": false,
+      "new_fl100_band": false,
+      "new_fl200_band": false
+    }
+  ],
+  "lag_cases": [
+    {
+      "name": "s41b4_fl200_measured",
+      "failures": [],
+      "rejects": false
+    },
+    {
+      "name": "s41b4_fl100_measured",
+      "failures": [],
+      "rejects": false
+    },
+    {
+      "name": "formula_wrong_400_to_14",
+      "failures": [
+        "auto delay formula violated: rtt 400ms -> 14 frames, expected 13"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "dropped_plus_one",
+      "failures": [
+        "auto delay formula violated: rtt 401ms -> 13 frames, expected 14"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "band_low_399",
+      "failures": [
+        "auto delay rtt band violated: rtt 399ms not in [400, 415]"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "band_high_416",
+      "failures": [
+        "auto delay rtt band violated: rtt 416ms not in [400, 415]"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "peer_map_disagree",
+      "failures": [
+        "client: auto delay peer disagreement: {'1': 1, '2': 14} != {'1': 1, '2': 13}"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "client_log_disagree",
+      "failures": [
+        "auto delay peer disagreement: host rtt 400ms -> 13 client rtt 401ms -> 14"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "host_line_missing",
+      "failures": [
+        "host: auto input delay line missing"
+      ],
+      "rejects": true
+    },
+    {
+      "name": "hardcoded_13_at_400",
+      "failures": [],
+      "rejects": false
+    }
+  ],
+  "extra_compare": {
+    "j80_vs_j81_cases": true,
+    "j80_vs_j81_lines": true,
+    "j80_line_count": 19,
+    "j81_line_count": 19,
+    "pin_cases_eq_j80": true,
+    "pin_lines_eq_j80": true,
+    "pin_lines_eq_j81": true,
+    "pin_fixture": "e92fa5fb5095b4cec374a6f7ef69c3559edb7028e6ed2fbc00a2fe214eccfaaf",
+    "j80_fixture": "e92fa5fb5095b4cec374a6f7ef69c3559edb7028e6ed2fbc00a2fe214eccfaaf",
+    "j81_fixture": "e92fa5fb5095b4cec374a6f7ef69c3559edb7028e6ed2fbc00a2fe214eccfaaf",
+    "pin_vs_j80_case_keys_only_in_pin": [],
+    "pin_vs_j80_line_diffs": [],
+    "j80_vs_j81_line_diffs": []
+  },
+  "select_jobs": {
+    "none_returns_same_ids": true,
+    "none_is_copy": true,
+    "empty_list_is_falsy_returns_all": true,
+    "unknown_error": "unknown --cases id(s): not_a_case",
+    "subset_ids": [
+      "fl200",
+      "heal"
+    ],
+    "driver_inputs_always_adds_fixed_fixtures": true
+  },
+  "heal": {
+    "source40_input_delay": 3,
+    "source40_argv_has_delay_3": true,
+    "pre_vs_fixed_heal_list_equal": true,
+    "heal_list": [
+      "host_process_exit",
+      "host_report_present",
+      "client_process_exit",
+      "client_report_present",
+      "host_liveness",
+      "host_lockstep_completed",
+      "host_no_editor",
+      "host_pace_recorded",
+      "host_resynced",
+      "client_liveness",
+      "client_lockstep_completed",
+      "client_no_editor",
+      "client_pace_recorded",
+      "client_resynced",
+      "config_agreement",
+      "census_agreement",
+      "scenario_identity_recorded",
+      "prediction_counters_recorded",
+      "prediction_executed",
+      "host_script_continued",
+      "host_no_script_errors",
+      "client_script_continued",
+      "client_no_script_errors"
+    ],
+    "pre_input_delay_literal": 0,
+    "fixed_heal_input_delay_literal": 3
+  },
+  "old_pin_rtt_to_frames": {
+    "note": "frames = ceil(rtt/(1000/30))+1; old pin checked only the frame count",
+    "fl100_old_wanted_frames": 8,
+    "fl200_old_wanted_frames": 14,
+    "rtt_giving_8": [
+      201,
+      202,
+      215,
+      216,
+      233
+    ],
+    "rtt_giving_7": [
+      199,
+      200
+    ],
+    "rtt_giving_13": [
+      367,
+      399,
+      400
+    ],
+    "rtt_giving_14": [
+      401,
+      415,
+      416,
+      433
+    ],
+    "exact_400_over_tick": 12.0,
+    "exact_200_over_tick": 6.0,
+    "exact_401_over_tick": 12.03
+  }
+}

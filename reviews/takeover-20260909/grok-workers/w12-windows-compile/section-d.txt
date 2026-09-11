@@ -1,0 +1,60 @@
+# §D. HOW TO BUILD, RUN, AND VERIFY
+
+## Windows (primary)
+
+```powershell
+$env:GNS_ROOT     = "D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release"
+$env:GNS_DEP_ROOT = "D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release\vcpkg_installed\x64-windows"
+$vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"   # LITERAL path
+$msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+& $msbuild "D:\Projects\p4b-interp-validation\RTEA.sln" /t:RTEA /p:Configuration="Final" /p:Platform=x64 /m /nologo /v:minimal
+```
+
+*(These env vars are also set permanently in three places — Windows user env, `~/.bashrc`, and
+`~/.claude/settings.json` — per the machine's CLAUDE.md rule. Claude Code shells are non-login and
+read ONLY `settings.json`.)*
+
+- Configs: `Debug Full` | `Debug Minimal` | `Debug Release` | `Final`. **There is NO plain
+  "Release" config.** `/t:RTEA` incremental, `/t:RTEA:Rebuild` clean; a `:Build` target does NOT
+  exist. Allegro is a separate vcxproj that `/t:RTEA` does NOT rebuild.
+- Kill prior instances:
+  `Get-Process | Where-Object { $_.ProcessName -like "Cortex Command*" } | Stop-Process -Force`
+- The exe is GUI-subsystem: **PIPE output** (`2>&1 | Out-Host`). A `>` redirect **DETACHES** the
+  process — empty exit code, no output, looks like a crash but isn't.
+- MSB4011 duplicate-import and luabind C4297 warnings are pre-existing noise.
+
+## ⚠️ If the GNS prefix is missing — rebuild it
+
+`GNS_ROOT` / `GNS_DEP_ROOT` point into `D:\Projects\stage2_p2\gns_spike\`, which is **build output,
+not source, and is NOT in git.** It was accidentally deleted 2026-09-05 and rebuilt. GNS links
+**statically** (`GameNetworkingSockets_s.lib`), so an already-built exe keeps working without it —
+only recompilation breaks.
+
+```powershell
+# 1. vcpkg — must be a FULL clone; --depth 1 breaks the manifest baseline lookup
+git clone https://github.com/microsoft/vcpkg.git D:\Projects\gns_rebuild\vcpkg
+D:\Projects\gns_rebuild\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+# 2. GNS pinned to v1.6.0 — the version P2D was built and 3-platform verified against
+git clone https://github.com/ValveSoftware/GameNetworkingSockets.git D:\Projects\gns_rebuild\GameNetworkingSockets
+git -C D:\Projects\gns_rebuild\GameNetworkingSockets checkout v1.6.0
+
+# 3. Build + install into the ORIGINAL paths so every doc reference stays valid
+cmake -S D:\Projects\gns_rebuild\GameNetworkingSockets `
+      -B D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release `
+      -DCMAKE_TOOLCHAIN_FILE=D:\Projects\gns_rebuild\vcpkg\scripts\buildsystems\vcpkg.cmake `
+      -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_BUILD_TYPE=Release `
+      -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF `
+      -DCMAKE_INSTALL_PREFIX=D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release
+cmake --build   D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release --config Release --parallel
+cmake --install D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release --config Release
+```
+
+What the solution consumes: `$(GNS_ROOT)\include\GameNetworkingSockets`, `$(GNS_ROOT)\lib`
+(→ `GameNetworkingSockets_s.lib`), `$(GNS_DEP_ROOT)\include`, `$(GNS_DEP_ROOT)\lib`
+(→ `abseil_dll.lib`, `libprotobuf.lib`, `libcrypto.lib`). All guarded by `CCCP_WITH_GNS`; without
+the env vars the build is GNS-free and still compiles (that's a required gate flavour). GNS runtime
+DLLs are staged beside the exe (gitignored) — bare launches throw DLL dialogs without them.
+
+**Lesson: treat any path referenced by an env var as a dependency, not as scratch.**
+

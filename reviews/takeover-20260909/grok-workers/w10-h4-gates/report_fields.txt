@@ -1,0 +1,247 @@
+===== ambiguous_host_report.json =====
+  exit_code=1
+  runtime_error=activity ended in state Over
+  activity_state=Over
+  winner_team=0
+  running_ticks=0
+  resyncs=1
+  actors=2
+  actors_peak=4
+  service.error='activity ended in state Over'
+  service.state=Failed
+  runner_present=False runner.state=None
+  admission_keys=[]
+  admission.incarnations_bound=None
+  admission.fenced_disconnects=None
+  admission.fenced_packets=None
+  admission.reclaims_accepted=None
+  admission.new_joins=None
+  admission.seats_closed_by_leave=None
+  admission.seats_dropped=None
+  session.stats.fenced_disconnects=None
+  session.stats.fenced_packets=None
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=False
+  reconnect.client_commits=0
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=1
+  reconnect.host_reseats_without_survivors=1
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[]
+
+===== clean_stale_report.json =====
+  exit_code=0
+  runtime_error=
+  activity_state=Over
+  winner_team=0
+  running_ticks=900
+  resyncs=0
+  actors=2
+  actors_peak=4
+  service.error=''
+  service.state=Running
+  runner_present=True runner.state=Running
+  admission_keys=[]
+  admission.incarnations_bound=None
+  admission.fenced_disconnects=None
+  admission.fenced_packets=None
+  admission.reclaims_accepted=None
+  admission.new_joins=None
+  admission.seats_closed_by_leave=None
+  admission.seats_dropped=None
+  session.stats.fenced_disconnects=0
+  session.stats.fenced_packets=0
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=True
+  reconnect.client_commits=1
+  reconnect.client_reject_reason=HostNotAccepting
+  reconnect.host_seats_dropped=0
+  reconnect.host_reseats_without_survivors=0
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[]
+
+===== clean_host2_report.json =====
+  exit_code=0
+  runtime_error=
+  activity_state=Over
+  winner_team=0
+  running_ticks=901
+  resyncs=0
+  actors=2
+  actors_peak=4
+  service.error=''
+  service.state=Running
+  runner_present=True runner.state=Running
+  admission_keys=['applicants_displaced', 'applicants_expired', 'applicants_refused', 'applicants_registered', 'denials_released', 'denials_scheduled', 'fenced_disconnects', 'fenced_packets', 'identity_rejections', 'incarnations_bound', 'ledger_drops_recorded', 'ledger_empty_drops_refused', 'ledger_seats', 'new_joins', 'outstanding_challenges', 'pending_applicants', 'persistence_failures', 'provisional_seats_committed', 'provisional_seats_expired', 'provisional_seats_opened', 'provisional_seats_refused', 'provisional_seats_resumed', 'rate_limited_attempts', 'reassigned_reclaims_refused', 'reclaim_retransmits_dropped', 'reclaims_accepted', 'replayed_results', 'reseat_live_on_team_not_named', 'reseats_issued', 'reseats_without_a_ledger', 'reseats_without_survivors', 'seat_holds_expired', 'seats_closed_by_leave', 'seats_dropped', 'seats_released_in_lobby', 'stale_epoch_drops', 'substitution_ack_failures', 'substitution_offer_retransmits', 'substitution_offers_sent', 'substitutions_cancelled', 'substitutions_committed', 'substitutions_superseded', 'synthetic_challenges', 'ticket_offer_retransmits', 'ticket_offers_sent', 'unknown_transaction_drops']
+  admission.incarnations_bound=1
+  admission.fenced_disconnects=0
+  admission.fenced_packets=0
+  admission.reclaims_accepted=0
+  admission.new_joins=1
+  admission.seats_closed_by_leave=0
+  admission.seats_dropped=0
+  session.stats.fenced_disconnects=0
+  session.stats.fenced_packets=0
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=False
+  reconnect.client_commits=0
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=0
+  reconnect.host_reseats_without_survivors=0
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[{'applicants': 0, 'closed': False, 'committed': False, 'dropped': False, 'lockstep_peer_id': 1, 'reclaiming': False, 'stable_seat': 0, 'substituting': False}, {'applicants': 0, 'closed': False, 'committed': True, 'dropped': False, 'lockstep_peer_id': 2, 'reclaiming': False, 'stable_seat': 1, 'substituting': False}]
+
+===== clean_host_report.json =====
+  exit_code=0
+  runtime_error=
+  activity_state=Over
+  winner_team=0
+  running_ticks=299
+  resyncs=0
+  actors=2
+  actors_peak=4
+  service.error=''
+  service.state=Completed
+  runner_present=True runner.state=Running
+  admission_keys=['applicants_displaced', 'applicants_expired', 'applicants_refused', 'applicants_registered', 'denials_released', 'denials_scheduled', 'fenced_disconnects', 'fenced_packets', 'identity_rejections', 'incarnations_bound', 'ledger_drops_recorded', 'ledger_empty_drops_refused', 'ledger_seats', 'new_joins', 'outstanding_challenges', 'pending_applicants', 'persistence_failures', 'provisional_seats_committed', 'provisional_seats_expired', 'provisional_seats_opened', 'provisional_seats_refused', 'provisional_seats_resumed', 'rate_limited_attempts', 'reassigned_reclaims_refused', 'reclaim_retransmits_dropped', 'reclaims_accepted', 'replayed_results', 'reseat_live_on_team_not_named', 'reseats_issued', 'reseats_without_a_ledger', 'reseats_without_survivors', 'seat_holds_expired', 'seats_closed_by_leave', 'seats_dropped', 'seats_released_in_lobby', 'stale_epoch_drops', 'substitution_ack_failures', 'substitution_offer_retransmits', 'substitution_offers_sent', 'substitutions_cancelled', 'substitutions_committed', 'substitutions_superseded', 'synthetic_challenges', 'ticket_offer_retransmits', 'ticket_offers_sent', 'unknown_transaction_drops']
+  admission.incarnations_bound=1
+  admission.fenced_disconnects=0
+  admission.fenced_packets=0
+  admission.reclaims_accepted=0
+  admission.new_joins=1
+  admission.seats_closed_by_leave=1
+  admission.seats_dropped=0
+  session.stats.fenced_disconnects=0
+  session.stats.fenced_packets=0
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=False
+  reconnect.client_commits=0
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=0
+  reconnect.host_reseats_without_survivors=0
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[{'applicants': 0, 'closed': False, 'committed': False, 'dropped': False, 'lockstep_peer_id': 1, 'reclaiming': False, 'stable_seat': 0, 'substituting': False}, {'applicants': 0, 'closed': True, 'committed': False, 'dropped': False, 'lockstep_peer_id': 2, 'reclaiming': False, 'stable_seat': 1, 'substituting': False}]
+
+===== host_report.json =====
+  exit_code=1
+  runtime_error=activity ended in state Over
+  activity_state=Over
+  winner_team=0
+  running_ticks=0
+  resyncs=1
+  actors=2
+  actors_peak=4
+  service.error='activity ended in state Over'
+  service.state=Failed
+  runner_present=False runner.state=None
+  admission_keys=[]
+  admission.incarnations_bound=None
+  admission.fenced_disconnects=None
+  admission.fenced_packets=None
+  admission.reclaims_accepted=None
+  admission.new_joins=None
+  admission.seats_closed_by_leave=None
+  admission.seats_dropped=None
+  session.stats.fenced_disconnects=None
+  session.stats.fenced_packets=None
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=False
+  reconnect.client_commits=0
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=1
+  reconnect.host_reseats_without_survivors=1
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[]
+
+===== host_report.json =====
+  exit_code=1
+  runtime_error=resync failed: resync snapshot save failed
+  activity_state=Over
+  winner_team=0
+  running_ticks=563
+  resyncs=1
+  actors=2
+  actors_peak=4
+  service.error='resync failed: resync snapshot save failed'
+  service.state=Failed
+  runner_present=False runner.state=None
+  admission_keys=[]
+  admission.incarnations_bound=None
+  admission.fenced_disconnects=None
+  admission.fenced_packets=None
+  admission.reclaims_accepted=None
+  admission.new_joins=None
+  admission.seats_closed_by_leave=None
+  admission.seats_dropped=None
+  session.stats.fenced_disconnects=None
+  session.stats.fenced_packets=None
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=False
+  reconnect.client_commits=0
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=0
+  reconnect.host_reseats_without_survivors=0
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[]
+
+===== client2_report.json =====
+  exit_code=1
+  runtime_error=
+  activity_state=NoActivity
+  winner_team=-1
+  running_ticks=0
+  resyncs=0
+  actors=-1
+  actors_peak=-1
+  service.error='SendMessageToConnection failed with EResult 3 (46 bytes, handed over 683, pending reliable 0, unreliable 0, unacked 0, rate 8760000 B/s, queue 9223372036854775ms, ping 0ms, buffer budget 8388608, detail: End-to-end connection: closed by remote host, reason code 1000.  (transport stopped)     Current rates:         Sent:   0.0 pkts/sec   0.0 K/sec         Recv:   0.0 pkts/sec   0.0 K/sec         Ping:0ms    Max latency variance: ???ms         Est avail bandwidth: 8554.7KB/s           Bytes buffered: 0     Lifetime stats:         Totals             Sent:          7 pkts           1,583 bytes             Recv:          6 pkts           1,268 bytes             Recv w seq:          3 pkts             Dropped   :          0 pkts   0.00%             OutOfOrder:          0 pkts   0.00%             OOOFixed  :          0 pkts   0.00%             Duplicate :          0 pkts   0.00%             SeqLurch  :          0 pkts   0.00%         Ping histogram: (5 total samples)                  0-25    25-50    50-75   75-100  100-125  125-150  150-200  200-300     300+                     5        0        0        0        0        0        0        0        0                100.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%     0.0%         Ping distribution:            50th   75th             0ms    0ms         No connection quality distribution available.  (0 measurement intervals)         Latency variance histogram not available     No rate stats received from remote host     No lifetime stats received from remote host )'
+  service.state=Failed
+  runner_present=True runner.state=Failed
+  admission_keys=[]
+  admission.incarnations_bound=None
+  admission.fenced_disconnects=None
+  admission.fenced_packets=None
+  admission.reclaims_accepted=None
+  admission.new_joins=None
+  admission.seats_closed_by_leave=None
+  admission.seats_dropped=None
+  session.stats.fenced_disconnects=0
+  session.stats.fenced_packets=0
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=True
+  reconnect.client_commits=1
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=0
+  reconnect.host_reseats_without_survivors=0
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[]
+
+===== resync_host_report.json =====
+  exit_code=1
+  runtime_error=activity ended in state Over
+  activity_state=Over
+  winner_team=0
+  running_ticks=0
+  resyncs=1
+  actors=2
+  actors_peak=4
+  service.error='activity ended in state Over'
+  service.state=Failed
+  runner_present=False runner.state=None
+  admission_keys=[]
+  admission.incarnations_bound=None
+  admission.fenced_disconnects=None
+  admission.fenced_packets=None
+  admission.reclaims_accepted=None
+  admission.new_joins=None
+  admission.seats_closed_by_leave=None
+  admission.seats_dropped=None
+  session.stats.fenced_disconnects=None
+  session.stats.fenced_packets=None
+  session.stats.incarnations_bound=None
+  reconnect.client_used_stored_ticket=False
+  reconnect.client_commits=0
+  reconnect.client_reject_reason=
+  reconnect.host_seats_dropped=1
+  reconnect.host_reseats_without_survivors=1
+  reconnect.host_reseats_issued=0
+  reconnect.seats=[]

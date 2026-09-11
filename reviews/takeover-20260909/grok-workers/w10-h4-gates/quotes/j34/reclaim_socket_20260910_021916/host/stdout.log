@@ -1,0 +1,17 @@
+[audio] output silenced for the headless run
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] pinned dt 0x3c88893b -> 0x3c888865
+[net-auth] reconnect-auth epoch armed
+[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=2 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,local,ready,ping0ms) | peer2=Client(team1,remote,ready,ping0ms)
+[snapbench] restart_ms=84
+[net-match] waiting on peer frames (tick 250, Client)
+[net-match] Client left the match at frame 250 (connection lost)
+[net-match] peer stall recovered after 4448ms (tick 250)
+[net-match] rejoin: Client reconnected - resyncing the match
+[net-match] resync: requested, reloading from the host snapshot
+[snapbench] save main_ms=128 zip_io_ms=74 saved=1
+[snapbench] read_ms=511
+[net-match] launching from the received snapshot: p5resync_5140
+[snapbench] restart_ms=111
+[net-match] resync: match relaunched from the snapshot
+[net-match-service-e2e] wrote report: D:\mx\s41b3\j34\reclaim_socket_20260910_021916\host_report.json

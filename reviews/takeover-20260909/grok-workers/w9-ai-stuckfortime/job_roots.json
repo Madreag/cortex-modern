@@ -1,0 +1,30 @@
+{
+  "_roots": [
+    {
+      "path": "D:\\mx\\s41",
+      "exists": true,
+      "reparse": false
+    },
+    {
+      "path": "D:\\mx\\s41r2",
+      "exists": true,
+      "reparse": false
+    },
+    {
+      "path": "D:\\mx\\s41b3",
+      "exists": true,
+      "reparse": false
+    },
+    {
+      "path": "D:\\mx\\s41b4",
+      "exists": true,
+      "reparse": false
+    }
+  ],
+  "heal_global_d0": [
+    "D:\\mx\\s41r2\\heal_global_d0"
+  ],
+  "heal_global_d3": [
+    "D:\\mx\\s41r2\\heal_global_d3"
+  ]
+}

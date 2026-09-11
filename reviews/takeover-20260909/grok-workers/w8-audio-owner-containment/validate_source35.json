@@ -1,0 +1,849 @@
+{
+  "path": "D:\\Projects\\reviews\\claude-review-2026-09-08\\lanes\\sound-ai-deferral\\artifacts\\source35-SoundContainerControl.ccsave",
+  "ini_source": "zip:Save.ini",
+  "ini_bytes": 29563045,
+  "runtime_globals_version": "RuntimeGlobals9",
+  "audio": {
+    "version": "AudioRuntime2",
+    "enabled": true,
+    "next_voice": 37,
+    "next_sound_container": 9356,
+    "sample_count": 1724,
+    "voice_count_token": 37,
+    "voice_count_parsed": 37,
+    "audio_voice1_tag_count": 37,
+    "leftover_bytes": 0
+  },
+  "ini_sound_checkpoint_count": 264,
+  "ini_identities": [
+    918,
+    9069,
+    9070,
+    9071,
+    9072,
+    9073,
+    9074,
+    9075,
+    9076,
+    9077,
+    9078,
+    9079,
+    9080,
+    9081,
+    9082,
+    9083,
+    9084,
+    9085,
+    9086,
+    9089,
+    9092,
+    9093,
+    9094,
+    9095,
+    9096,
+    9097,
+    9098,
+    9099,
+    9100,
+    9101,
+    9102,
+    9103,
+    9104,
+    9105,
+    9106,
+    9107,
+    9108,
+    9109,
+    9110,
+    9113,
+    9116,
+    9117,
+    9118,
+    9119,
+    9120,
+    9121,
+    9122,
+    9123,
+    9124,
+    9125,
+    9126,
+    9127,
+    9128,
+    9129,
+    9130,
+    9131,
+    9132,
+    9133,
+    9134,
+    9137,
+    9140,
+    9141,
+    9142,
+    9143,
+    9144,
+    9145,
+    9146,
+    9147,
+    9148,
+    9149,
+    9150,
+    9151,
+    9152,
+    9153,
+    9154,
+    9155,
+    9156,
+    9157,
+    9158,
+    9161,
+    9164,
+    9165,
+    9166,
+    9167,
+    9168,
+    9169,
+    9170,
+    9171,
+    9172,
+    9173,
+    9174,
+    9175,
+    9176,
+    9177,
+    9178,
+    9179,
+    9180,
+    9181,
+    9182,
+    9185,
+    9188,
+    9189,
+    9190,
+    9191,
+    9192,
+    9193,
+    9194,
+    9195,
+    9196,
+    9197,
+    9198,
+    9199,
+    9200,
+    9201,
+    9202,
+    9203,
+    9204,
+    9205,
+    9206,
+    9209,
+    9212,
+    9213,
+    9214,
+    9215,
+    9216,
+    9217,
+    9218,
+    9219,
+    9220,
+    9221,
+    9222,
+    9223,
+    9224,
+    9225,
+    9226,
+    9227,
+    9228,
+    9229,
+    9230,
+    9233,
+    9236,
+    9237,
+    9238,
+    9239,
+    9240,
+    9241,
+    9242,
+    9243,
+    9244,
+    9245,
+    9246,
+    9247,
+    9248,
+    9249,
+    9250,
+    9251,
+    9252,
+    9253,
+    9254,
+    9257,
+    9260,
+    9261,
+    9262,
+    9263,
+    9264,
+    9265,
+    9266,
+    9267,
+    9268,
+    9269,
+    9270,
+    9271,
+    9272,
+    9273,
+    9274,
+    9275,
+    9276,
+    9277,
+    9278,
+    9281,
+    9284,
+    9285,
+    9286,
+    9287,
+    9288,
+    9289,
+    9290,
+    9291,
+    9292,
+    9293,
+    9294,
+    9295,
+    9296,
+    9297,
+    9298,
+    9299,
+    9300,
+    9301,
+    9302,
+    9305,
+    9308,
+    9309,
+    9310,
+    9311,
+    9312,
+    9313,
+    9314,
+    9315,
+    9316,
+    9317,
+    9318,
+    9319,
+    9320,
+    9321,
+    9322,
+    9323,
+    9324,
+    9325,
+    9326,
+    9329,
+    9332,
+    9333,
+    9334,
+    9335,
+    9336,
+    9337,
+    9338,
+    9339,
+    9340,
+    9341,
+    9342,
+    9343,
+    9344,
+    9345,
+    9346,
+    9347,
+    9348,
+    9349,
+    9350,
+    9353,
+    9356
+  ],
+  "gui_sound_count": 27,
+  "carried_identity_count": 272,
+  "graph_notes": [
+    {
+      "index": 0,
+      "bytes": 687106,
+      "identities_added": [
+        9064,
+        9065,
+        9066,
+        9067
+      ],
+      "copy_preset_hits": 0,
+      "soundcontainer_snippets": [
+        "SoundContainer\rSelfHeal\u0013SetNumberValue",
+        "SoundContainer\u0017IsPlayerControlled\u000fPresetName\u0015EquipNamedDevice\rToDelete\u000eAddScript\u0011EnableScript;",
+        "SoundContainer\u0012movementSound\u0011respawnTimer\u0012movementTimer",
+        "SoundContainer\fSandbag\u0015EquipNamedDevice\u0016Ronin.rte/Sandbag\u0017CreateThrownDevice\u0015AddInventoryItem\f",
+        "SoundContainer#489;s33:defaultCorrectEntrySoundContainer#490;s31:defaultFirstEntrySoundContain",
+        "SoundContainer#492;F403;Rg2;s15:SecretCodeEntrys21:GetCodeSequenceLengthDs5223:\u001bLJ\u0002\b=@Data/Bas",
+        "SoundContainer!codeCompletionSoundContainer(defaultIncorrectEntrySoundContainer!incorrectEntry",
+        "SoundContainer&defaultCorrectEntrySoundContainer\u001fcorrectEntrySoundContainer$defaultFirstEntryS"
+      ]
+    },
+    {
+      "index": 1,
+      "bytes": 857634,
+      "identities_added": [],
+      "copy_preset_hits": 0,
+      "soundcontainer_snippets": [
+        "SoundContainer\rSelfHeal\u0013SetNumberValue",
+        "SoundContainer\u0012activateSound\u0012detonateDelay\u0016detonateThreshold\u0018checkDelayExtension\u000fcheckDelay\rta",
+        "SoundContainer\u0012detonateSound\u000fRateOfFire\u0012detonateDelay\u000falliedTeam\u000bfireOn\u0010actionPhase",
+        "SoundContainer\u0012activateSound\u0011AutoDetonate\u0016NumberValueExists\u0011autoDetonate\tTeam\u000eSharpness\u000fallied",
+        "SoundContainer\u0014shieldWalkSound\u0001\u0001\u0001\u0001\u0001\u0002\u0002\u0002\u0003self\u0000\u0000",
+        "SoundContainer\ruseSound\u0010maxStrength\u0011baseStrength\u0004\u0001\u0001\u0002\u0002\u0002\u0004\u0004\u0004\u0004\u0004\u0005\u0005\u0005\u0005\u0005\u0006self\u0000\u0000\u0011\u0000\u0000E#410;u0;F413;Rg2;s4",
+        "SoundContainer\u000fbuildSound\u0014buildsPerSecond\u0018ParticleSpreadRange\brad\tmath\u0010spreadRange\u000edigLength\u0010d",
+        "SoundContainer\u000ferrorSound\u0010targetTable\u000bVector\u0011MuzzleOffset"
+      ]
+    }
+  ],
+  "parse_errors": [],
+  "voices": [
+    {
+      "voice_identity": 1,
+      "owner": 46,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/GUIs/ActorSwitch.flac",
+      "carried_by": "gui",
+      "carrier_clues": [
+        "gui: preset=None"
+      ]
+    },
+    {
+      "voice_identity": 2,
+      "owner": 9069,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 3,
+      "owner": 9071,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 4,
+      "owner": 9072,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 5,
+      "owner": 9093,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge2.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 6,
+      "owner": 9095,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 7,
+      "owner": 9096,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice3.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 8,
+      "owner": 9117,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge3.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 9,
+      "owner": 9119,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 10,
+      "owner": 9120,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice5.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 11,
+      "owner": 9141,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge2.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 12,
+      "owner": 9143,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 13,
+      "owner": 9144,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice5.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 14,
+      "owner": 9165,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 15,
+      "owner": 9167,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 16,
+      "owner": 9168,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 17,
+      "owner": 9189,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 18,
+      "owner": 9191,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 19,
+      "owner": 9192,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice3.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 20,
+      "owner": 9213,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge3.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 21,
+      "owner": 9215,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 22,
+      "owner": 9216,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 23,
+      "owner": 9237,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 24,
+      "owner": 9239,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 25,
+      "owner": 9240,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotDeath1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 26,
+      "owner": 9261,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 27,
+      "owner": 9263,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain3.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 28,
+      "owner": 9264,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 29,
+      "owner": 9285,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 30,
+      "owner": 9287,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 31,
+      "owner": 9288,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 32,
+      "owner": 9309,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 33,
+      "owner": 9311,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 34,
+      "owner": 9312,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotDeath1.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    },
+    {
+      "voice_identity": 35,
+      "owner": 9333,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Plastic Generic Gib Large",
+        "copied_from=Plastic Generic Gib Large",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge5.flac",
+        "file=Data/Base.rte/Sounds/Penetration/Plastic/GenericGibLarge6.flac"
+      ]
+    },
+    {
+      "voice_identity": 36,
+      "owner": 9335,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotPain4.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Pain",
+        "copied_from=Robot Pain",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice1.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice2.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice4.flac"
+      ]
+    },
+    {
+      "voice_identity": 37,
+      "owner": 9336,
+      "playing": true,
+      "path": "Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+      "carried_by": "ini",
+      "carrier_clues": [
+        "preset=Robot Death",
+        "copied_from=Robot Death",
+        "prop=AddSound=ContentFile",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice6.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotVoice7.flac",
+        "file=Data/Base.rte/Sounds/Actors/RobotDeath1.flac"
+      ]
+    }
+  ],
+  "missing": [],
+  "validation": {
+    "voice_count_matches_token": true,
+    "voice_count_matches_audiovoice1_tags": true,
+    "audio_leftover_empty": true
+  }
+}

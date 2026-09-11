@@ -1,0 +1,6 @@
+- RTE Lua Console -
+See the Data Realms Wiki for commands: http://www.datarealms.com/wiki/
+Press F1 for a list of helpful shortcuts
+-------------------------------------
+Sound loading completed: 984 pending samples, 1165ms
+SYSTEM: Entire console contents saved to LogConsole.txt

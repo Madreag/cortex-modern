@@ -54,3 +54,56 @@ extra2 command: same wrapper, `--out D:\mx\s41b4-extra2 --cases compat_extra_sou
 
 - Wrapper aggregate `execution_pass` on a `--cases` subset (inventory check still requires 81). Per-case rows above are the case verdicts.
 
+## Heal at input delay 3
+
+Design E: keep `BASELINE["heal"]`; heal child runs at Source40 delay 3. Invariance child unchanged.
+
+### Invariance baseline delay
+
+`D:\mx\s40lanes` reparse-safe walk: 0 invariance `result.json` / `provenance.json` (`s40-invariance-search.json`). Source40 invariance lived under the lanes tree.
+
+- Command: `python recovery_expanded_mod_t300.py invariance --input-delay 0` (`source33-lanes\report.md:195`, same at `:543`).
+- Source40 evidence `lanes/invariance-300/evidence/20260909_104408_invariance_16a03fe1` (exe `ec9db6d0…`): `provenance.json:11` `"input_delay": 0`. `result.json` has no `input_delay` field.
+- Driver: `--input-delay` on non-heal errors (`driver.py:176`).
+
+Invariance child stays `INPUT_DELAY = 0`. Not edited.
+
+### Check-name comparison
+
+`compare_heal_checks.py` → `heal-check-compare.json`. Wrapper `BASELINE["heal"]` vs `20260909_112620_heal_26d39dc2\result.json` check names: 23/23, same order, `only_in_wrapper=[]`, `only_in_source40=[]`. List not edited.
+
+### Code
+
+`run_breadth.py:1963-1964`:
+
+```
+# Source40 20260909_112620_heal_26d39dc2/result.json input_delay
+module.INPUT_DELAY = 3 if options.child == "heal" else 0
+```
+
+`harness.diff` regenerated (`write_diff.py`).
+
+### Tests
+
+| run | command | result | path |
+|---|---|---|---|
+| after-heal | `python -B -m unittest test_run_breadth.py test_family_breadth.py test_run_breadth_repairs.py -v` cwd `takeover-20260909` | 68 tests, 0.382s, OK | `tests-after-heal.txt` |
+| against-pre-heal | same repairs file with `BREADTH_UNDER_TEST=pre\run_breadth.py` `FIXTURE_UNDER_TEST=pre\compat_review_extra.lua` | 21 tests, 19 FAIL, 2 OK | `tests-against-pre-heal.txt` |
+
+New: `test_heal_child_uses_source40_input_delay` (expects 3; against-pre `AssertionError: 0 != 3`). `test_invariance_child_keeps_source40_input_delay` expects 0 (OK against pre). Against-pre OK also: `test_import_recovery_e2e_with_stage_on_path`.
+
+### Rerun
+
+Preflight: `python grok-workers/w4-breadth-harness/run_pin_verify.py pin-verify-s41b5.txt` → pass, head `c8f8188ae0b4f4524f83ee5cdaebf4ef0ec3e49e`, exe `bb3cf264b4e7304f45486440998e4b63e37d5d46d0d119caa04f76c2fc378ffb`, `source_files` 9043 (`pin-verify-s41b5.txt`, `2026-09-11T05:25:17Z`).
+
+Command: `python -B D:\Projects\reviews\takeover-20260909\run_breadth.py --source 41 --build-manifest D:\Projects\reviews\recovery-2026-09-07\contract-audit\grouped-build-bb3cf264\build.json --out D:\mx\s41b5 --cases heal` (wrapper stdout `s41b5-wrapper.out`). Size without reparse: 14.7 MB (`size_no_reparse.py D:\mx\s41b5`). Collect: `s41b5-collect.json`.
+
+Wrapper `execution_pass=false` (expected_jobs 1 != 81; `validation_errors` inventory). Per-case heal: `passed=true` `exit=0` `failures=[]` (`D:\mx\s41b5\breadth.json:15-19`). `j73\result.json`: `input_delay=3` (`:10`), `pass=true`, `source_unchanged=true`, `complete=true` (`:481-483`). `logs\heal.log`: `resync_heal PASS []` / `heal_mod_semantics` `pass=true` `failed=[]`.
+
+| check | status | detail |
+|---|---|---|
+| prediction_counters_recorded | pass | `enabled=True previews=636 actor_ticks=1908 taken=0 violations=0` (`j73\result.json:395-397`) |
+| prediction_executed | pass | `previews=636 violations=0` (`j73\result.json:403-405`) |
+
+Host `local_prediction`: `enabled=true previews=636 actor_ticks=1908 ms_total=2627.94 shadows=129 taken=0 violations=0` (`j73\fresh\e2e\resync_heal\host_report.json`). Client: `previews=55 actor_ticks=165 ms_total=231.248 shadows=0 taken=0 violations=0` (`client_report.json`). Source40 heal host was `previews=657 actor_ticks=1971`.
+

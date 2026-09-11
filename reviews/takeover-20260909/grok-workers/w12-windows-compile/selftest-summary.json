@@ -1,0 +1,179 @@
+[
+  {
+    "name": "net-protocol",
+    "path": "D:\\mx\\w12\\net-protocol",
+    "stdout_log": "D:\\mx\\w12\\net-protocol\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-protocol-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-identity",
+    "path": "D:\\mx\\w12\\net-identity",
+    "stdout_log": "D:\\mx\\w12\\net-identity\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-identity-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-session",
+    "path": "D:\\mx\\w12\\net-session",
+    "stdout_log": "D:\\mx\\w12\\net-session\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 2,
+    "last_verdicts": [
+      "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current",
+      "[net-session-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-lockstep",
+    "path": "D:\\mx\\w12\\net-lockstep",
+    "stdout_log": "D:\\mx\\w12\\net-lockstep\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 79,
+    "last_verdicts": [
+      "[net-resync-runtime-selftest] PASS: three-peer capture",
+      "[net-resync-runtime-selftest] PASS: local history bound",
+      "[net-resync-runtime-selftest] PASS: second heal before resend",
+      "[net-resync-runtime-selftest] PASS: unknown local input",
+      "[net-resync-runtime-selftest] PASS: authoritative input restore",
+      "[net-resync-runtime-selftest] PASS: restore metadata refusals",
+      "[net-resync-runtime-selftest] PASS: restore history conflicts",
+      "[net-resync-runtime-selftest] PASS: unsent intent targets",
+      "[net-resync-runtime-selftest] PASS: repeated full restore 1/3",
+      "[net-resync-runtime-selftest] PASS: repeated full restore 3/1",
+      "[net-resync-runtime-selftest] PASS",
+      "[net-lockstep-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-match",
+    "path": "D:\\mx\\w12\\net-match",
+    "stdout_log": "D:\\mx\\w12\\net-match\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-match-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-auth",
+    "path": "D:\\mx\\w12\\net-auth",
+    "stdout_log": "D:\\mx\\w12\\net-auth\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-auth-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-admission",
+    "path": "D:\\mx\\w12\\net-admission",
+    "stdout_log": "D:\\mx\\w12\\net-admission\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-admission-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-reconnect",
+    "path": "D:\\mx\\w12\\net-reconnect",
+    "stdout_log": "D:\\mx\\w12\\net-reconnect\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-reconnect-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-reconnect-session",
+    "path": "D:\\mx\\w12\\net-reconnect-session",
+    "stdout_log": "D:\\mx\\w12\\net-reconnect-session\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 7,
+    "last_verdicts": [
+      "[net-reconnect-session-selftest] PASS: moderation view ages the drop from the plane's clock",
+      "[net-reconnect-session-selftest] GATE initial-disconnect-before-ack PASS",
+      "[net-reconnect-session-selftest] GATE ack-lost PASS",
+      "[net-reconnect-session-selftest] GATE commit-result-lost PASS",
+      "[net-reconnect-session-selftest] GATE delayed-duplicate PASS",
+      "[net-reconnect-session-selftest] GATE substitute-disappears-before-ack PASS",
+      "[net-reconnect-session-selftest] PASS"
+    ]
+  },
+  {
+    "name": "net-discovery",
+    "path": "D:\\mx\\w12\\net-discovery",
+    "stdout_log": "D:\\mx\\w12\\net-discovery\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[net-discovery-selftest] PASS"
+    ]
+  },
+  {
+    "name": "controller-frame",
+    "path": "D:\\mx\\w12\\controller-frame",
+    "stdout_log": "D:\\mx\\w12\\controller-frame\\stdout.log",
+    "engine_exit": 0,
+    "timed_out": false,
+    "fail_lines": [],
+    "verdict_count": 1,
+    "last_verdicts": [
+      "[controller-frame-selftest] PASS"
+    ]
+  },
+  {
+    "name": "native-graph",
+    "path": "D:\\mx\\w12\\native-graph",
+    "stdout_log": "D:\\mx\\w12\\native-graph\\stdout.log",
+    "engine_exit": 1,
+    "timed_out": false,
+    "fail_lines": [
+      "[net-local-ui-selftest] FAIL unreferenced_owner_reclaimed",
+      "[script-graph-selftest] FAIL native_runtime_checkpoint_values",
+      "[script-graph-selftest] FAIL"
+    ],
+    "verdict_count": 640,
+    "last_verdicts": [
+      "[script-graph-selftest] PASS strict_graph_reject_unknown_factory",
+      "[script-graph-selftest] PASS strict_graph_reject_negative_length",
+      "[script-graph-selftest] PASS strict_graph_valid_SG1 table: 0x0282a4fb0428",
+      "[script-graph-selftest] PASS legacy_graph_SG1",
+      "[script-graph-selftest] PASS strict_graph_valid_SG2 table: 0x0282aa576e08",
+      "[script-graph-selftest] PASS legacy_graph_SG2",
+      "[script-graph-selftest] PASS negative_vm_rng_checkpoint",
+      "[script-graph-selftest] PASS native_vm_rng_rewound",
+      "[script-graph-selftest] FAIL",
+      "[script-graph-selftest] PASS rollback_probe_capture_settles_first",
+      "[script-graph-selftest] PASS contract_audit_observation_settles_first",
+      "[script-graph-selftest] PASS refused_reinstate_leaves_the_next_hold_possible"
+    ]
+  }
+]

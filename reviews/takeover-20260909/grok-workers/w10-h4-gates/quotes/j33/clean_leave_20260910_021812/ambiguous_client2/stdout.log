@@ -1,0 +1,9 @@
+[audio] output silenced for the headless run
+libpng warning: iCCP: known incorrect sRGB profile
+[scenario] pinned dt 0x3c88893b -> 0x3c888865
+[net-match] state transfer complete: 5204620 bytes
+[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=2 local_ready=1 remote_ready=1 activity=P4 Alpha Duel scene=Grasslands mode=pvp-skirmish | peer1=Host(team0,remote,ready,ping0ms) | peer2=Client(team1,local,ready,ping0ms)
+[snapbench] read_ms=509
+[net-match] launching from the received snapshot: p5resync_8800_recv
+[snapbench] restart_ms=125
+[net-match-service-e2e] wrote report: D:\mx\s41b3\j33\clean_leave_20260910_021812\ambiguous_client2_report.json

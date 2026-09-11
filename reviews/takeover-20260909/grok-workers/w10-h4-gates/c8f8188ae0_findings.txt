@@ -1,0 +1,82 @@
+commit c8f8188ae0
+===== NetMatchService.cpp PumpSessionEvents / AdmissionNowMs =====
+608:	}
+609:
+610:	uint64_t NetMatchService::AdmissionNowMs() const {
+611:		return m_AdmissionClock.NowMs(SteadyNowMs());
+612:	}
+718:	void NetMatchService::PumpSessionEvents() {
+719:		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
+720:		if (m_PendingSessionEvents.empty() && !hostAdmission) {
+721:			return;
+722:		}
+723:		std::vector<NetTransportEvent> events;
+724:		events.swap(m_PendingSessionEvents);
+725:		std::lock_guard<std::mutex> lock(m_Mutex);
+726:		if (!m_Session || m_State != NetMatchServiceState::Running) {
+727:			return;
+728:		}
+729:		// This is the sim thread inside the tick, so the drop-frame ownership census may walk the world
+730:		// here and nowhere else. The scope is what makes that a checked property rather than a comment.
+731:		const SimCensusScope censusScope;
+732:		if (hostAdmission) {
+733:			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
+734:			m_ReconnectHost.SetLiveMatch(true);
+735:			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
+736:		}
+737:		const uint64_t nowMs = AdmissionNowMs();
+738:		// F1.5: the two clocks must be one. Sampled here, at the pump, because the report is written
+739:		// after the loop stops feeding the session and its difference reads the teardown by then.
+740:		if (const uint64_t sessionMs = m_Session->GetClockMs(); sessionMs > nowMs) {
+741:			const uint64_t divergenceMs = sessionMs - nowMs;
+742:			uint64_t seen = m_MaxClockDivergenceMs.load();
+743:			while (divergenceMs > seen && !m_MaxClockDivergenceMs.compare_exchange_weak(seen, divergenceMs)) {
+744:			}
+745:		}
+746:		if (hostAdmission) {
+747:			// The coordinator owns the transport queue mid-match, so the session's own Tick never runs;
+748:			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
+749:			// dropped seat's reclaim window would wait for the match to end.
+750:			m_Session->TickAdmissionPlane(nowMs);
+751:		}
+752:		for (const NetTransportEvent& event: events) {
+753:			m_Session->InjectEvent(event, nowMs);
+754:		}
+755:		if (hostAdmission) {
+===== NetSession.cpp TickAdmissionPlane / ExpireSilent =====
+166:	void NetSession::TickAdmissionPlane(uint64_t nowMs) {
+167:		m_NowMs = std::max(m_NowMs, nowMs);
+168:		if (!m_Transport || !m_ReconnectHost || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+169:		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+170:			return;
+171:		}
+172:		ExpireSilentHandshakes();
+173:		m_ReconnectHost->Tick(m_NowMs);
+174:		FlushReconnectOutbound();
+175:	}
+762:	void NetSession::ExpireSilentHandshakes() {
+763:		if (m_Config.timeoutMs == 0 || m_Role != NetSessionRole::Host) {
+764:			return;
+765:		}
+766:		for (PeerState& peer : m_Peers) {
+767:			if (peer.state != NetSessionState::Handshake) {
+768:				continue;
+769:			}
+770:			if (m_NowMs >= peer.connectedAtMs && m_NowMs - peer.connectedAtMs > m_Config.timeoutMs) {
+771:				++m_Stats.timeouts;
+772:				RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.connectedAtMs), "client hello timeout");
+773:			}
+774:		}
+775:	}
+===== NetAdmissionClock =====
+45:	class NetAdmissionClock {
+46:	public:
+47:		void Start(uint64_t steadyNowMs) {
+48:			m_OriginMs = steadyNowMs;
+49:			m_Started = true;
+50:		}
+51:		bool IsStarted() const { return m_Started; }
+52:		/// @return Milliseconds since Start; zero before it, and never backwards if the clock hiccups.
+53:		uint64_t NowMs(uint64_t steadyNowMs) const { return m_Started && steadyNowMs > m_OriginMs ? steadyNowMs - m_OriginMs : 0; }
+54:
+55:	private:

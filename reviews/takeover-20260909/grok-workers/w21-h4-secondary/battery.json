@@ -1,0 +1,101 @@
+{
+  "failed": 1,
+  "rows": [
+    {
+      "name": "protocol",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-protocol-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\protocol"
+    },
+    {
+      "name": "identity",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-identity-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\identity"
+    },
+    {
+      "name": "session",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-session-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\session"
+    },
+    {
+      "name": "lockstep",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-lockstep-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\lockstep"
+    },
+    {
+      "name": "match",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-match-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\match"
+    },
+    {
+      "name": "auth",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-auth-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\auth"
+    },
+    {
+      "name": "admission",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-admission-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\admission"
+    },
+    {
+      "name": "reconnect",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-reconnect-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\reconnect"
+    },
+    {
+      "name": "reconnect-session",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-reconnect-session-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\reconnect-session"
+    },
+    {
+      "name": "discovery",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[net-discovery-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\discovery"
+    },
+    {
+      "name": "controller-frame",
+      "runner_exit": 0,
+      "exit_code": 0,
+      "timed_out": false,
+      "last_verdict": "[controller-frame-selftest] PASS",
+      "out": "D:\\mx\\w21\\battery\\controller-frame"
+    },
+    {
+      "name": "script-graph",
+      "runner_exit": 1,
+      "exit_code": 1,
+      "timed_out": false,
+      "last_verdict": "[script-graph-selftest] PASS refused_reinstate_leaves_the_next_hold_possible",
+      "out": "D:\\mx\\w21\\battery\\script-graph"
+    }
+  ]
+}
