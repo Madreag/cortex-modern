@@ -1490,27 +1490,27 @@ bool MovableObject::InLocalAIValueDomain() {
 }
 
 void MovableObject::NoteValueWrites() {
-	if (m_ValueWritesNoted) {
+	if (m_ValueWritesNoted.load(std::memory_order_relaxed)) {
 		return;
 	}
 	std::lock_guard<std::mutex> lock(g_PendingValueMutex);
-	if (m_ValueWritesNoted) {
+	if (m_ValueWritesNoted.load(std::memory_order_relaxed)) {
 		return;
 	}
-	m_ValueWritesNoted = true;
+	m_ValueWritesNoted.store(true, std::memory_order_relaxed);
 	g_PendingValueObjects.push_back(this);
 }
 
 void MovableObject::UnnoteValueWrites() {
-	if (!m_ValueWritesNoted) {
+	if (!m_ValueWritesNoted.load(std::memory_order_relaxed)) {
 		return;
 	}
 	std::lock_guard<std::mutex> lock(g_PendingValueMutex);
-	if (!m_ValueWritesNoted) {
+	if (!m_ValueWritesNoted.load(std::memory_order_relaxed)) {
 		return;
 	}
 	std::erase(g_PendingValueObjects, this);
-	m_ValueWritesNoted = false;
+	m_ValueWritesNoted.store(false, std::memory_order_relaxed);
 }
 
 void MovableObject::ClearValueOverlay() {
@@ -1555,7 +1555,7 @@ std::vector<MovableObject::PendingValueOp> MovableObject::SamplePendingValueOps(
 		std::lock_guard<std::mutex> lock(g_PendingValueMutex);
 		noted.swap(g_PendingValueObjects);
 		for (MovableObject* object: noted) {
-			object->m_ValueWritesNoted = false;
+			object->m_ValueWritesNoted.store(false, std::memory_order_relaxed);
 		}
 	}
 	std::vector<PendingValueOp> sampled;
