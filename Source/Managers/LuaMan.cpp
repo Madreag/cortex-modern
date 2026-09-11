@@ -10,6 +10,7 @@
 #include "LuaThreadCodec.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
+#include "MovableObject.h"
 #include "ActivityMan.h"
 #include "GAScripted.h"
 #include "SceneMan.h"
@@ -4780,6 +4781,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	}
 	checkpointValues = g_AudioMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_AudioMan.RunLogicalPlaybackSelfTest() && checkpointValues;
+	checkpointValues = MovableObject::RunValueMapSelfTest() && checkpointValues;
 	checkpointValues = g_MusicMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
