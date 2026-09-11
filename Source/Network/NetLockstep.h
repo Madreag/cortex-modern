@@ -152,6 +152,22 @@ namespace RTE {
 		bool operator==(const NetSoundObservation&) const = default;
 	};
 
+	/// One peer's local-AI write to a MovableObject number or string map, sampled at its input
+	/// boundary and committed with the sender's delayed frame.
+	struct NetValueObservation {
+		uint8_t senderPeerId = 0;
+		uint64_t objectUID = 0;
+		uint64_t tick = 0;
+		uint32_t ordinal = 0;
+		uint8_t mapKind = 0;
+		std::string key;
+		uint8_t op = 0;
+		double numberValue = 0;
+		std::string stringValue;
+
+		bool operator==(const NetValueObservation&) const = default;
+	};
+
 	/// Which sound an observation is about, without the reading. The wire spells one of these out once
 	/// per sender and refers to it by slot afterwards.
 	struct NetSoundObservationKey {
@@ -226,6 +242,7 @@ namespace RTE {
 		std::vector<NetGameCommand> commands;
 		uint64_t roundId = 0;
 		std::vector<NetSoundObservation> observations;
+		std::vector<NetValueObservation> valueObservations;
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -323,6 +340,8 @@ namespace RTE {
 		std::vector<NetGameCommand> remoteCommands;
 		std::vector<NetSoundObservation> localObservations;
 		std::vector<NetSoundObservation> remoteObservations;
+		std::vector<NetValueObservation> localValueObservations;
+		std::vector<NetValueObservation> remoteValueObservations;
 	};
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
@@ -389,6 +408,8 @@ namespace RTE {
 		uint64_t relayBacklogBytes = 0; //!< Bytes still held for peers whose forwards were refused.
 		uint64_t observationsCarried = 0; //!< Times a full frame left a reading for the next one to carry.
 		uint64_t observationsDropped = 0; //!< Carried readings dropped because new sounds outran the wire for frames on end.
+		uint64_t valueObservationsCarried = 0;
+		uint64_t valueObservationsDropped = 0;
 		uint32_t unresolvedObservationPackets = 0; //!< Frames dropped because an observation named a slot this peer never got.
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
@@ -406,7 +427,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 19;
+		static constexpr uint16_t c_Version = 20;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -417,8 +438,10 @@ namespace RTE {
 		// Version 17 carries authenticated, complete seat-presence snapshots.
 		// Version 18 carries each peer's local player bindings with its applied inputs.
 		// Version 19 carries host hold resolutions (Reclaimed / Substituted / Expired) on the stop wire.
+		// Version 20 carries local-AI number and string value observations next to the sound readings.
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
+		static constexpr uint16_t c_ValueObservationVersion = 20;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
@@ -431,6 +454,8 @@ namespace RTE {
 		// How much a sender may hold back for later. Reaching this needs thousands of sounds nobody has
 		// heard before, every frame, for frames on end; past it the stalest readings go.
 		static constexpr size_t c_MaxCarriedObservations = NetSoundObservationDictionary::c_MaxSlots;
+		static constexpr size_t c_MaxValueKeyBytes = 256;
+		static constexpr size_t c_MaxValueStringBytes = 4096;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxRecoveryInputBytes = 512U * 1024U;
@@ -461,7 +486,7 @@ namespace RTE {
 		/// what a replay record and a one-shot round trip want. With one, only what fits the observation
 		/// byte budget is encoded and outObservationsEncoded says how many, so the caller can carry the
 		/// rest; the dictionary is touched only once the packet is certain to encode.
-		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr);
+		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, size_t* outValueObservationsEncoded = nullptr);
 		static bool EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr);
 		static bool DecodeRecoveryInput(const std::vector<uint8_t>& bytes, NetLockstepFrame& outFrame, NetLockstepError* error = nullptr);
 		/// The frame version selects the ControllerFrame layout and semantics; a recording carries its own.
@@ -489,11 +514,11 @@ namespace RTE {
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
-		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {});
+		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
 		/// Rewinds a playback coordinator to re-commit from an earlier frame (the rollback
 		/// fidelity gate re-runs a window). Replay mode only — there is no wire to rewind.
 		bool RewindReplay(uint64_t firstFrame, std::string* error = nullptr);
-		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr, const std::vector<NetSoundObservation>& observations = {});
+		bool QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr, const std::vector<NetSoundObservation>& observations = {}, const std::vector<NetValueObservation>& valueObservations = {});
 		bool PrimeResyncFrames(const std::vector<std::vector<NetGameCommand>>& batches, std::string* error = nullptr);
 		bool PrimeResyncInputs(const std::vector<NetLockstepFrame>& batches, std::string* error = nullptr);
 		bool InstallResyncInputs(const std::vector<NetLockstepFrame>& authoritativeInputs, std::string* error = nullptr);
@@ -536,6 +561,7 @@ namespace RTE {
 		/// The readings this peer held and then had to drop. Their sampler must forget it ever sent them,
 		/// or it will not offer them again until the sound's audibility moves.
 		std::vector<NetSoundObservation> TakeDroppedObservations();
+		std::vector<NetValueObservation> TakeDroppedValueObservations();
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
 		uint64_t GetRoundId() const { return m_RoundId; }
@@ -591,9 +617,9 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 	private:
-		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations);
+		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
 		/// Sends to every remote, or to one when onlyPeerId names it.
-		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0);
+		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0, size_t* outValueObservationsEncoded = nullptr);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
@@ -725,6 +751,8 @@ namespace RTE {
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetGameCommand>>> m_RemoteCommands; //!< frame -> (peerId -> commands)
 		std::map<uint64_t, std::vector<NetSoundObservation>> m_LocalObservations;
 		std::map<uint64_t, std::map<uint8_t, std::vector<NetSoundObservation>>> m_RemoteObservations; //!< frame -> (peerId -> observations)
+		std::map<uint64_t, std::vector<NetValueObservation>> m_LocalValueObservations;
+		std::map<uint64_t, std::map<uint8_t, std::vector<NetValueObservation>>> m_RemoteValueObservations;
 		uint64_t m_RoundId = 0;
 		uint64_t m_LastStartSentMs = UINT64_MAX;
 		std::map<uint8_t, uint64_t> m_LastStartAnswerMs; //!< peerId -> when we last answered its repeated start.
@@ -754,6 +782,8 @@ namespace RTE {
 		NetSoundObservationTables m_ObservationEncodeTables;
 		std::vector<NetSoundObservation> m_PendingObservations; //!< What the last frame could not hold; rides the next one.
 		std::vector<NetSoundObservation> m_DroppedObservations; //!< Readings the wire never carried, for their sampler to take back.
+		std::vector<NetValueObservation> m_PendingValueObservations;
+		std::vector<NetValueObservation> m_DroppedValueObservations;
 		std::map<uint8_t, std::deque<NetLockstepFrame>> m_PreStartFrames; //!< A peer's frames that outran its start.
 		std::map<uint8_t, std::deque<NetLockstepChecksum>> m_PreStartChecksums;
 		std::map<uint64_t, std::array<uint8_t, 32>> m_LocalChecksums;

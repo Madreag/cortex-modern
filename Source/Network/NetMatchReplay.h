@@ -51,6 +51,7 @@ namespace RTE {
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
 		/// A committed tick with every peer's sound observations; their senders trail the record like the commands'.
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, std::string* error);
+		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error);
 		void Close();
 		bool IsOpen() const { return m_Out.is_open(); }
 		uint64_t GetFramesWritten() const { return m_FramesWritten; }

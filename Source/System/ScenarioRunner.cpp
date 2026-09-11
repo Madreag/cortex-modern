@@ -67,6 +67,29 @@ namespace RTE {
 		std::vector<NetResyncPendingCommand> s_RecoveredCommands, s_RecoveredPlayerBindings;
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
+		std::vector<NetValueObservation> s_DroppedValueObservations;
+
+		NetValueObservation ToValueObservation(const MovableObject::PendingValueOp& op) {
+			NetValueObservation observation;
+			observation.objectUID = op.objectUID;
+			observation.tick = op.tick;
+			observation.ordinal = op.ordinal;
+			observation.mapKind = static_cast<uint8_t>(op.map);
+			observation.key = op.key;
+			observation.op = static_cast<uint8_t>(op.op);
+			observation.numberValue = op.number;
+			observation.stringValue = op.text;
+			return observation;
+		}
+
+		std::vector<NetValueObservation> SampleValueObservations() {
+			std::vector<NetValueObservation> observations = std::move(s_DroppedValueObservations);
+			s_DroppedValueObservations.clear();
+			for (const MovableObject::PendingValueOp& op: MovableObject::SamplePendingValueOps()) {
+				observations.push_back(ToValueObservation(op));
+			}
+			return observations;
+		}
 
 		bool SameCommandBits(const NetGameCommand& left, const NetGameCommand& right) {
 			NetLockstepFrame a, b;
@@ -919,7 +942,7 @@ namespace RTE {
 			if (!s_ReplayRewindBuffer.empty() && s_ReplayRewindBuffer.front().targetFrame == tick) {
 				NetLockstepFrame buffered = s_ReplayRewindBuffer.front();
 				s_ReplayRewindBuffer.pop_front();
-				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error, std::move(buffered.observations));
+				return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(buffered.frames), std::move(buffered.commands), error, std::move(buffered.observations), std::move(buffered.valueObservations));
 			}
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
@@ -946,7 +969,7 @@ namespace RTE {
 			if (record.targetFrame >= s_ReplayRewindFrom && record.targetFrame < s_ReplayRewindFrom + s_ReplayRewindCount) {
 				s_ReplayRewindKeep.push_back(record);
 			}
-			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations));
+			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
 		}
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
@@ -1018,7 +1041,7 @@ namespace RTE {
 			if (config.localPeerId == config.matchConfig.hostPeerId) bindings.appliedCommands = s_AppliedCommandSequences;
 			commands.push_back({config.localPeerId, bindings});
 		}
-		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, commands, error, g_AudioMan.SampleSoundObservations());
+		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, commands, error, g_AudioMan.SampleSoundObservations(), SampleValueObservations());
 		if (queued) {
 			s_RequeuedCommands.erase(targetFrame);
 			s_RequeuedPlayerBindings.erase(targetFrame);
@@ -1027,6 +1050,7 @@ namespace RTE {
 		}
 		// A reading the wire had to drop was still recorded as sent, so hand it back to be sampled afresh.
 		g_AudioMan.ForgetSentAudibility(s_LockstepCoordinator->TakeDroppedObservations());
+		s_DroppedValueObservations = s_LockstepCoordinator->TakeDroppedValueObservations();
 		return queued;
 	}
 
@@ -1581,8 +1605,10 @@ namespace RTE {
 						allCommands.insert(allCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
 						std::vector<NetSoundObservation> allObservations = ready.localObservations;
 						allObservations.insert(allObservations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+						std::vector<NetValueObservation> allValueObservations = ready.localValueObservations;
+						allValueObservations.insert(allValueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
 						std::string writeError;
-						if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, &writeError)) {
+						if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
 							std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
 							s_ReplayWriter.Close();
 						}
