@@ -748,6 +748,7 @@ static std::string ResyncSaveName() {
 		// The lockstep wait parks the sim thread; without this the plane could not answer a leave or a
 		// reclaim while the round waits on the very peer that sent it.
 		ScenarioRunner::SetSessionPump([this] { PumpSessionEvents(); });
+		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
 		m_PendingSessionEvents.clear();
@@ -825,7 +826,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::PumpSessionEvents() {
 		PumpSeatPresence();
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
-		if (m_PendingSessionEvents.empty() && !hostAdmission) {
+		const bool holdPause = m_Coordinator && m_Coordinator->AnyDroppedSeatHeld();
+		if (m_PendingSessionEvents.empty() && !hostAdmission && !holdPause) {
 			return;
 		}
 		std::vector<NetTransportEvent> events;
@@ -857,6 +859,9 @@ static std::string ResyncSaveName() {
 			// dropped seat's reclaim window would wait for the match to end.
 			m_Session->TickAdmissionPlane(nowMs);
 		}
+		if (holdPause && m_Session) {
+			m_Session->TickKeepalive(nowMs);
+		}
 		for (const NetTransportEvent& event: events) {
 			m_Session->InjectEvent(event, nowMs);
 		}
@@ -869,6 +874,17 @@ static std::string ResyncSaveName() {
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
+			}
+			if (m_Coordinator) {
+				for (const NetHoldResolutionNotice& notice: m_ReconnectHost.TakePendingHoldResolutions()) {
+					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
+					switch (notice.resolution) {
+						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
+						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
+						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
+					}
+					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
+				}
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
 			PublishModerationView();
