@@ -542,6 +542,8 @@ namespace RTE {
 		/// Keeps recovery and completion aligned with applied simulation ticks, while input may be prefetched.
 		void DeferStopsToTickBoundary() { m_DeferStops = true; }
 		bool HasPendingRecoveryStop() const { return m_PendingRecoveryStop.has_value(); }
+		/// The first frame the sim has not applied: a heal resumes the round here.
+		uint64_t GetResumeFrame() const { return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
 		bool FinishSimulationTick(uint64_t completedTick);
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
 		/// would otherwise discard while it owns the transport queue.
