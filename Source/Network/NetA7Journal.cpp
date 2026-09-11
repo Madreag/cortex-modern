@@ -1,4 +1,7 @@
 #include "NetA7Journal.h"
+#include "NetLockstep.h"
+#include "NetReconnectSession.h"
+#include "NetReconnectUx.h"
 
 #include "System/FaultInjection.h"
 
@@ -57,6 +60,8 @@ namespace RTE {
 			std::atomic<uint32_t> producers{0};
 			std::atomic<bool> enabled{false}, stop{false}, failed{false}, gateReleased{false};
 			std::string run, peer, exeSha, fault, gate;
+			std::string b2Fault, b2Name, b2ReplayGate;
+			bool b2Enabled = false, recoveryInputJournal = false, b2ReplayInvalid = false;
 			std::function<bool()> cancelled;
 			uint32_t heartbeatTag = 0;
 			uint64_t pid = 0;
@@ -75,6 +80,7 @@ namespace RTE {
 		thread_local json t_Seats = json::array();
 		thread_local std::string t_SeatSource = "unobserved";
 		thread_local uint64_t t_SeatSessionMs = 0, t_Round = 0, t_Frame = 0;
+		thread_local std::map<std::string, std::string> t_B2Snapshots;
 
 		std::string Env(const char* name) {
 			const char* value = std::getenv(name);
@@ -181,7 +187,7 @@ namespace RTE {
 			return std::fwrite(line.data(), 1, line.size(), s_State.file) == line.size() && std::fflush(s_State.file) == 0;
 		}
 
-		void Writer() {
+		void DrainJournal() {
 			uint64_t sequence = 0, reportedGaps = 0;
 			std::map<std::string, uint64_t> leaveOrdinals;
 			try {
@@ -214,7 +220,9 @@ namespace RTE {
 
 	bool NetA7Journal::StartE2E(std::string* error, std::function<bool()> cancelled) {
 		const std::string log = Env("CC_A7_EVENT_LOG"), run = Env("CC_A7_RUN_ID"), peer = Env("CC_A7_PEER"), expected = Env("CC_A7_BINARY_SHA256");
-		if (log.empty() && run.empty() && peer.empty() && expected.empty()) return true;
+		const std::string b2Fault = Env("CC_TEST_B2_FAULT"), b2Name = Env("CC_TEST_B2_NAME"), b2ReplayGate = Env("CC_TEST_B2_REPLAY_GATE");
+		const std::string recoveryJournal = Env("CC_TEST_NET_RECOVERY_JOURNAL");
+		if (log.empty() && run.empty() && peer.empty() && expected.empty() && b2Fault.empty() && b2Name.empty() && b2ReplayGate.empty() && recoveryJournal.empty()) return true;
 		auto fail = [error](const char* message) { if (error) *error = message; return false; };
 		if (!Token(run) || !Token(peer) || log.empty() || expected.size() != 64 || s_State.file) return fail("A7 requires one fresh E2E journal and complete process identity");
 		for (char c: expected) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return fail("A7 binary identity must be lowercase SHA-256");
@@ -234,6 +242,16 @@ namespace RTE {
 		s_State.gate = Env("CC_A7_CONNECT_GATE");
 		std::error_code fsError;
 		if (!s_State.gate.empty() && (std::filesystem::exists(s_State.gate, fsError) || fsError)) return fail("A7 connect gate must be absent at journal activation");
+		if (!b2Fault.empty() && b2Fault != "none" && b2Fault != "hold_offer_before_send" && b2Fault != "retain_ack_after_p17") return fail("unsupported B2 fault mode");
+		if (b2Name.size() > 64 || std::any_of(b2Name.begin(), b2Name.end(), [](unsigned char c) { return c < 32 || c > 126; })) return fail("B2 names must contain at most 64 printable ASCII bytes");
+		if ((b2Fault == "retain_ack_after_p17") != !b2ReplayGate.empty()) return fail("B2 retained ACK requires exactly one fresh replay gate path");
+		if (!b2ReplayGate.empty() && (std::filesystem::exists(b2ReplayGate, fsError) || fsError)) return fail("B2 replay gate must be absent at journal activation");
+		if (!recoveryJournal.empty() && recoveryJournal != "1") return fail("recovery input journal requires explicit value 1");
+		s_State.b2Enabled = !b2Fault.empty() || !b2Name.empty() || !b2ReplayGate.empty();
+		s_State.b2Fault = b2Fault.empty() ? "none" : b2Fault;
+		s_State.b2Name = b2Name;
+		s_State.b2ReplayGate = b2ReplayGate;
+		s_State.recoveryInputJournal = recoveryJournal == "1";
 		const std::string heartbeat = Env("CC_A7_SILENT_HEARTBEAT_MS"), tag = Env("CC_A7_SILENT_HEARTBEAT_TAG"), receive = Env("CC_A7_SILENT_RECEIVE_BUDGET_MS");
 		if (!heartbeat.empty() || !tag.empty() || !receive.empty()) {
 			uint64_t parsedTag = 0;
@@ -257,14 +275,52 @@ namespace RTE {
 		for (size_t i = 0; i < c_QueueSize; ++i) (*s_State.slots)[i].turn.store(i);
 		s_State.enabled.store(true);
 		Emit("ready", {{"schema", 1}, {"exe_sha256", s_State.exeSha}, {"fault", s_State.fault},
+			{"b2_fault", s_State.b2Fault}, {"h4_fault", static_cast<unsigned>(NetH4GetFault())}, {"recovery_input_journal", s_State.recoveryInputJournal},
 			{"capabilities", {"identity", "listening", "commit", "running", "progress", "terminal", "connect_gate", "handshake_age", "drop", "reclaim", "resumption", "leave_exchange", "save_gap", "owner_observation", "decision_clock_v1", "journal_integrity_v1", "loaded_ticket_sha256_v1", "leave_queue_clock_v1", "local_player_view_v1"}},
 			{"shared_hash_algorithm", c_HashAlgorithm}, {"shared_hash_scope", "existing approved SimGatedHash feeds; lua_state is RNG only"},
 			{"clock_domains", {{"at_ms", "journal_writer_delivery"}, {"captured_ms", "journal_producer_capture"}, {"session_ms", "authority_session_decision"}}}});
-		s_State.writer = std::thread(Writer);
+		s_State.writer = std::thread(DrainJournal);
 		return true;
 	}
 
 	bool NetA7Journal::Enabled() { return s_State.enabled.load(std::memory_order_relaxed); }
+	bool NetA7Journal::B2Enabled() { return Enabled() && s_State.b2Enabled; }
+	bool NetA7Journal::RecoveryInputJournalEnabled() { return Enabled() && s_State.recoveryInputJournal; }
+	const std::string& NetA7Journal::B2Fault() { return s_State.b2Fault; }
+	const std::string& NetA7Journal::B2Name() { return s_State.b2Name; }
+	bool NetA7Journal::B2ReplayRequested() { return B2Enabled() && s_State.b2Fault == "retain_ack_after_p17"; }
+
+	bool NetA7Journal::ValidateB2ReplayGate(const json& gate, const json& expected) {
+		if (!gate.is_object() || !expected.is_object() || gate.size() != expected.size() + 3 ||
+		    !gate.contains("schema") || !gate["schema"].is_number_integer() || gate["schema"] != 1 ||
+		    !gate.contains("run_id") || !gate["run_id"].is_string() || !Token(gate["run_id"].get<std::string>()) ||
+		    !gate.contains("peer") || !gate["peer"].is_string() || !Token(gate["peer"].get<std::string>())) return false;
+		for (const auto& [key, value]: expected.items()) {
+			if (!gate.contains(key) || gate[key].type() != value.type() || gate[key] != value) return false;
+		}
+		return true;
+	}
+
+	bool NetA7Journal::ReadB2ReplayGate(const json& expected, bool& released) {
+		released = false;
+		if (!B2ReplayRequested() || s_State.b2ReplayInvalid) return !s_State.b2ReplayInvalid;
+		std::error_code error;
+		const auto status = std::filesystem::symlink_status(s_State.b2ReplayGate, error);
+		if (error == std::errc::no_such_file_or_directory || (!error && status.type() == std::filesystem::file_type::not_found)) return true;
+		if (!error && std::filesystem::is_regular_file(status) && std::filesystem::file_size(s_State.b2ReplayGate, error) <= 4096 && !error) {
+			std::ifstream input(s_State.b2ReplayGate, std::ios::binary);
+			std::array<char, 4097> bytes{};
+			input.read(bytes.data(), bytes.size());
+			const auto size = input.gcount();
+			if (input.eof() && size > 0 && size <= 4096) {
+				const json gate = json::parse(bytes.data(), bytes.data() + size, nullptr, false);
+				if (ValidateB2ReplayGate(gate, expected) && gate["run_id"] == s_State.run && gate["peer"] == s_State.peer) { released = true; return true; }
+			}
+		}
+		s_State.b2ReplayInvalid = true;
+		Gap("B2 replay gate is invalid or no longer names the retained live session");
+		return false;
+	}
 
 	void NetA7Journal::Emit(const char* event, json fields) {
 		if (!Enabled()) return;
@@ -319,6 +375,69 @@ namespace RTE {
 		if (EVP_Digest(bytes, size, digest.data(), &outputSize, EVP_sha256(), nullptr) == 1 && outputSize == digest.size()) return Hex(digest.data(), digest.size());
 	#endif
 		return {};
+	}
+
+	std::string NetA7Journal::FileSha256(const std::string& path) { return FileSha(path); }
+
+	std::string NetA7Journal::PayloadSha256(const NetPayload& payload) {
+		NetMessage message;
+		message.sequence = 0;
+		message.payload = payload;
+		std::vector<uint8_t> bytes;
+		if (!NetProtocol::Encode(message, bytes)) { Gap("B2 canonical payload could not be encoded"); return {}; }
+		const auto hash = Sha256(bytes.data(), bytes.size());
+		if (hash.empty()) Gap("B2 canonical payload SHA-256 is unavailable");
+		return hash;
+	}
+
+	std::string NetA7Journal::CommandSha256(const NetGameCommand& command) {
+		NetLockstepFrame frame;
+		frame.senderPeerId = command.senderPeerId;
+		frame.roundId = 1;
+		frame.targetFrame = 0;
+		frame.commands.push_back(command);
+		std::vector<uint8_t> bytes;
+		if (!NetLockstepCodec::EncodeRecoveryInput(frame, bytes)) { Gap("canonical recovery command could not be encoded"); return {}; }
+		const auto hash = Sha256(bytes.data(), bytes.size());
+		if (hash.empty()) Gap("canonical recovery command SHA-256 is unavailable");
+		return hash;
+	}
+
+	json NetA7Journal::B2Selection(const NetModerationSelection& selected) {
+		return {{"epoch", Hex(selected.epoch.data(), selected.epoch.size())}, {"stable_seat", selected.stableSeat},
+			{"holder_generation", selected.holderGeneration}, {"seat_generation", selected.seatGeneration}, {"incarnation", selected.incarnation},
+			{"applicant", selected.applicant}, {"applicant_transaction", Hex(selected.applicantTransaction.data(), selected.applicantTransaction.size())},
+			{"substitution_transaction", Hex(selected.substitutionTransaction.data(), selected.substitutionTransaction.size())}};
+	}
+
+	json NetA7Journal::B2PayloadFields(const NetPayload& payload) {
+		json fields = json::object();
+		if (const auto* offer = std::get_if<NetH4SubstitutionOffer>(&payload)) {
+			fields = {{"transaction", Hex(offer->txId.data(), offer->txId.size())}, {"stable_seat", offer->stableSeat}, {"holder_generation", offer->holderGeneration}};
+		} else if (const auto* ack = std::get_if<NetH4SubstitutionAck>(&payload)) {
+			fields = {{"transaction", Hex(ack->txId.data(), ack->txId.size())}, {"stable_seat", ack->stableSeat}, {"holder_generation", ack->holderGeneration}};
+		} else if (const auto* committed = std::get_if<NetH4JoinCommitted>(&payload)) {
+			fields = {{"transaction", Hex(committed->txId.data(), committed->txId.size())}, {"stable_seat", committed->stableSeat}, {"holder_generation", committed->holderGeneration}};
+		} else return fields;
+		fields["message"] = NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(payload));
+		fields["payload_sha256"] = PayloadSha256(payload);
+		return fields;
+	}
+
+	void NetA7Journal::B2SeatSnapshot(const NetLockstepSeatSnapshot& snapshot, const char* source, const char* phase) {
+		if (!B2Enabled()) return;
+		json seats = json::array();
+		for (const auto& seat: snapshot.seats) {
+			seats.push_back({{"stable_seat", seat.stableSeat}, {"peer_id", seat.peerId}, {"state", NetSeatPresence::StateName(seat.state)},
+				{"holder_name", seat.holderName}, {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration},
+				{"incarnation", seat.incarnation}, {"hold_active", seat.holdActive}, {"hold_until_ms", seat.holdUntilMs}, {"hold_until_frame", seat.holdUntilFrame}});
+		}
+		json observed = {{"sender_peer_id", snapshot.senderPeerId}, {"epoch", Hex(snapshot.epoch.data(), snapshot.epoch.size())},
+			{"session_id", snapshot.sessionId}, {"round_id", snapshot.roundId}, {"revision", snapshot.revision}, {"observed_at_ms", snapshot.observedAtMs}, {"seats", std::move(seats)}};
+		const std::string key = std::string(source) + ":" + phase, identity = observed.dump();
+		if (t_B2Snapshots[key] == identity) return;
+		t_B2Snapshots[key] = identity;
+		Emit("b2_snapshot", {{"phase", phase}, {"source", source}, {"snapshot", std::move(observed)}});
 	}
 
 	bool NetA7Journal::HasConnectGate() { return Enabled() && !s_State.gate.empty() && !s_State.gateReleased.load(); }

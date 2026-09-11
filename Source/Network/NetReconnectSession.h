@@ -8,8 +8,12 @@
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectTxCache.h"
 #include "NetTransport.h"
+#include "nlohmann/json.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -251,6 +255,8 @@ namespace RTE {
 		static constexpr size_t c_MaxApplicantsPerConnection = 1;
 
 		void Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity);
+		void ObserveB2State(bool force = false);
+		void SetB2HeldResultObserver(std::function<void(NetPeerId, const NetPayload&)> observer) { m_B2HeldResultObserver = std::move(observer); }
 		NetAuthBytes16 GetEpoch() const;
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
@@ -307,7 +313,7 @@ namespace RTE {
 		NetH4ModerationResult WaitForSeat(uint16_t stableSeat);
 		/// Approves one applicant for one seat, atomically: the seat is never released first, and the
 		/// approval hands out a provisional ticket without touching the seat's current holder.
-		NetH4ModerationResult SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection, uint64_t nowMs);
+		NetH4ModerationResult SubstituteApplicant(uint16_t stableSeat, NetPeerId applicantConnection, uint64_t nowMs, const NetModerationSelection* observedSelection = nullptr);
 		/// Withdraws an approval that has not committed. The provisional record is invalidated and
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
@@ -375,6 +381,8 @@ namespace RTE {
 			uint32_t retransmits = 0;
 			NetH4TxKey key;
 			NetH4SubstitutionOffer offer;
+			NetPeerId b2OriginalConnection = c_InvalidNetPeerId;
+			std::optional<uint64_t> b2PreviousEvaluationElapsed;
 		};
 
 		struct Provisional {
@@ -435,7 +443,7 @@ namespace RTE {
 		/// Hands a seat back to the pool. Only in a lobby: nothing has been played, so the player who
 		/// left has nothing to reclaim and the seat must be joinable again.
 		void ReleaseSeat(SeatState& seat);
-		void IssueReseat(const SeatState& seat);
+		void IssueReseat(const SeatState& seat, const NetAuthBytes16& transaction);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 
 		/// Whether an explicit host action may hand this seat to somebody else: a live match, a real
@@ -451,7 +459,7 @@ namespace RTE {
 		Applicant* FindApplicant(NetPeerId connection, uint16_t stableSeat);
 		/// Ends a pending substitution: caches the terminal refusal under its transaction id so a
 		/// retransmitted ack replays it, tells the substitute, and forgets the credential.
-		void AbandonSubstitution(size_t index, NetH4DenialReason reason, const std::string& summary, uint64_t nowMs);
+		void AbandonSubstitution(size_t index, NetH4DenialReason reason, const std::string& summary, uint64_t nowMs, const char* observedReason = "other");
 		/// Every applicant for the seat except the one that just took it hears that it is gone.
 		void DisplaceApplicants(uint16_t stableSeat, NetPeerId keepConnection, uint64_t nowMs);
 		void DropApplicantsFor(NetPeerId connection);
@@ -481,6 +489,9 @@ namespace RTE {
 		std::vector<NetGameReseat> m_PendingReseats;
 		std::vector<NetH4Commit> m_Commits;
 		NetReconnectHostStats m_Stats;
+		std::string m_B2StateFingerprint;
+		std::map<NetAuthBytes16, NetPeerId> m_B2TransactionConnections;
+		std::function<void(NetPeerId, const NetPayload&)> m_B2HeldResultObserver;
 	};
 
 	enum class NetH4ClientState : uint8_t {
@@ -519,6 +530,8 @@ namespace RTE {
 		uint32_t confirmedSessionEnds = 0;
 	};
 
+	enum class NetB2ClientObservation { Reset, ProvisionalPeer, ProvisionalTeam, MatchedTeam, SnapshotBytes, SimulationAttached };
+
 	/// The client half: it persists the ticket the host offers before acknowledging it, answers a
 	/// challenge from the stored credential, and clears the record on exactly two events - an
 	/// acknowledged leave and a confirmed hosted-session end.
@@ -529,6 +542,7 @@ namespace RTE {
 		static constexpr uint64_t c_LeaveAckBudgetMs = 2000;
 
 		void Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName);
+		void ObserveB2(NetB2ClientObservation observation, int value, uint64_t nowMs, const char* source);
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
 		/// Names the host this client is joining, so a stored record can be told from another host's and
 		/// the record it writes says where it came from.
@@ -591,6 +605,7 @@ namespace RTE {
 		void Resend(uint64_t nowMs);
 		void Fail(std::string error);
 		uint64_t UnixNowMs() const;
+		void EmitB2Client(const char* phase, uint64_t nowMs, const char* source, nlohmann::json fields = nlohmann::json::object());
 
 		NetReconnectTicketStore* m_Store = nullptr;
 		NetH4Identity m_Identity;
@@ -624,6 +639,10 @@ namespace RTE {
 		std::string m_Error;
 		std::vector<NetH4Outbound> m_Outbound;
 		NetReconnectClientStats m_Stats;
+		NetAuthBytes16 m_B2ApplicationTx{}, m_B2SubstitutionTx{};
+		bool m_B2ApplicationStarted = false, m_B2Admitted = false;
+		bool m_B2TeamAssigned = false, m_B2SnapshotReceived = false, m_B2AuthorityGranted = false;
+		int m_B2ProvisionalPeerId = 0, m_B2ProvisionalTeam = -1;
 	};
 
 } // namespace RTE

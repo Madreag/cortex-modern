@@ -850,6 +850,7 @@
     <ClInclude Include="Source\Network\NetLobbySession.h" />
     <ClInclude Include="Source\Network\NetGameCommand.h" />
     <ClInclude Include="Source\Network\NetResyncState.h" />
+    <ClInclude Include="Source\Network\NetRecoveryJournal.h" />
     <ClInclude Include="Source\Network\NetResyncSelfTest.h" />
     <ClInclude Include="Source\Network\NetResyncRuntimeSelfTest.h" />
     <ClInclude Include="Source\Network\NetLockstep.h" />
@@ -1433,6 +1434,7 @@
     <ClCompile Include="Source\Network\NetLobbySession.cpp" />
     <ClCompile Include="Source\Network\NetGameCommand.cpp" />
     <ClCompile Include="Source\Network\NetResyncState.cpp" />
+    <ClCompile Include="Source\Network\NetRecoveryJournal.cpp" />
     <ClCompile Include="Source\Network\NetResyncSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetResyncRuntimeSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetLockstep.cpp" />
