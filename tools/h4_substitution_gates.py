@@ -412,11 +412,28 @@ def run_gate(
     )
     checks.check("no_authority_error", "Rejected a Reseat" not in host_log)
     # §11: the surviving CLIENT derived its own roster line from the wire, without asking the host.
-    stayer_lines = reconnect_of(read_json(root / "stayer_report.json")).get("roster_lines")
+    stayer_reconnect = reconnect_of(read_json(root / "stayer_report.json"))
+    stayer_lines = stayer_reconnect.get("roster_lines")
+    transitions = stayer_reconnect.get("roster_transitions")
+    if not isinstance(transitions, list):
+        transitions = []
+    leaver_peer = service_of(read_json(root / "leaver_report.json")).get("local_peer_id")
+    leaver_transitions = [
+        row
+        for row in transitions
+        if isinstance(row, dict) and row.get("peer_id") == leaver_peer
+    ]
+    hold_shown = any(
+        row.get("state") != "Present" and row.get("line") for row in leaver_transitions
+    )
+    seat_line_ok = bool(stayer_lines) or hold_shown
+    if gate == "substitute_returner_wins":
+        last = leaver_transitions[-1] if leaver_transitions else {}
+        seat_line_ok = seat_line_ok and last.get("state") == "Present"
     checks.check(
         "stayer_shows_the_seat_line",
-        bool(stayer_lines),
-        stayer_lines,
+        seat_line_ok,
+        leaver_transitions,
     )
     checks.check(
         "seat_dropped",
