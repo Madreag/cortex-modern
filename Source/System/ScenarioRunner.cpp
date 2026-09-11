@@ -21,6 +21,9 @@
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
+#include "MenuMan.h"
+#include "UInputMan.h"
+#include "NetModerationGUIProbe.h"
 #include "RenderTarget.h"
 
 #include <SDL3/SDL.h>
@@ -118,6 +121,7 @@ namespace RTE {
 		std::vector<ScenarioRunner::NetUiToastRecord> s_NetUiToastLog; //!< Report log; survives the queue.
 		uint64_t s_NetUiResyncOverlayFrames = 0;
 		constexpr uint64_t c_NetUiToastMs = 3000;
+		void (*s_StallEventPoll)() = nullptr;
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
 		std::string s_ReplayRecordArmedPath;
@@ -190,14 +194,33 @@ namespace RTE {
 					smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
 				}
 			}
+			g_MenuMan.DrawNetworkUI();
+			ScenarioRunner::DrawNetUiToasts();
 			g_WindowMan.ClearBackbuffer(false);
 			g_WindowMan.GetScreenBuffer()->Begin();
 			g_WindowMan.UploadFrame();
+			NetModerationGUIProbe::AfterDraw();
 			static bool s_LoggedOnce = false;
 			if (!s_LoggedOnce) {
 				s_LoggedOnce = true;
 				std::cout << "[net-match] stall overlay drawn" << std::endl;
 			}
+		}
+
+		// The sim thread owns the stall wait; without this pump the seats panel and the UI probe freeze
+		// for the whole hold. Presentation only — no UInputMan frame/sim-edge buffers are consumed here.
+		void PumpLockstepStallUI(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+			if (s_StallEventPoll) {
+				s_StallEventPoll();
+			}
+			static bool s_F6WasHeld = false;
+			const bool f6Held = g_UInputMan.KeyHeld(SDLK_F6);
+			if (f6Held && !s_F6WasHeld) {
+				g_MenuMan.ToggleNetworkPanel();
+			}
+			s_F6WasHeld = f6Held;
+			g_MenuMan.UpdateNetworkUI();
+			DrawLockstepStallOverlay(stallMs, graceMs, waitingOn, holdPause, holdName, holdSeconds);
 		}
 
 		std::string FloatBitsHex(float value) {
@@ -693,6 +716,10 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetResyncOverlayFrames() {
 		return s_NetUiResyncOverlayFrames;
+	}
+
+	void ScenarioRunner::SetStallEventPoll(void (*poll)()) {
+		s_StallEventPoll = poll;
 	}
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
@@ -1724,8 +1751,8 @@ namespace RTE {
 						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 					}
 				}
-				if (s_LockstepStallOverlayEnabled) {
-					DrawLockstepStallOverlay(stallMs, timeoutMs, missing, holdPause, holdName, holdSeconds);
+				if (s_LockstepStallOverlayEnabled || s_StallEventPoll) {
+					PumpLockstepStallUI(stallMs, timeoutMs, missing, holdPause, holdName, holdSeconds);
 				}
 				nextOverlayMs = stallMs + 200;
 			}

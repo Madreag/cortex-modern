@@ -175,6 +175,8 @@ namespace RTE {
 		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
 		/// Reads the cached moderation view; actions require a running match on the game thread.
 		std::vector<NetH4ModerationSeat> GetModerationSeats() const;
+		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
+		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
