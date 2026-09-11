@@ -288,7 +288,7 @@ namespace RTE {
 			std::vector<NetTransportEvent> injected;
 			std::vector<NetTransportEvent> PollEvents() override {
 				auto events = LoopbackTransport::PollEvents();
-				for (auto& event: injected) events.push_back(std::move(event));
+				events.insert(events.begin(), injected.begin(), injected.end());
 				injected.clear();
 				return events;
 			}
@@ -7287,6 +7287,7 @@ namespace RTE {
 				c.relayToOtherPeers = relay;
 				c.scenario = "LockstepSelfTest";
 				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
 				return c;
 			};
 			NetLockstepCoordinator client;
@@ -7476,6 +7477,99 @@ namespace RTE {
 			}
 			if (host.GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
 				*error = "3-peer Reclaimed did not request resync: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			return true;
+		}
+
+		bool TestResyncRoundCommitsAfterReclaimed(std::string* error) {
+			LoopbackTransport hostT, clientT;
+			NetLockstepCoordinator host;
+			uint64_t leaveFrame = 0;
+			uint64_t now = 0;
+			if (!DriveTwoPeerHoldResolution(43090, 0x7000000000000090ULL, NetLockstepHoldResolution::Reclaimed, host, hostT, clientT, leaveFrame, now, error)) {
+				return false;
+			}
+			RecoveryWireTransport resyncHostT, resyncClientT;
+			if (!resyncHostT.StartHost(43091, error) || !resyncClientT.Connect("loopback", 43091, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000091ULL;
+				c.roundId = relay ? 0x7000000000000092ULL : 0;
+				c.startFrame = leaveFrame;
+				c.resumeFromSnapshot = true;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			NetLockstepCoordinator resyncHost, resyncClient;
+			if (!resyncHost.Start(resyncHostT, cfg(1, {{2, 1}}, true), error) ||
+			    !resyncClient.Start(resyncClientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			NetLockstepStop leftover;
+			leftover.senderPeerId = 2;
+			leftover.reason = NetLockstepStopReason::PeerDropped;
+			leftover.frame = leaveFrame;
+			leftover.message = "connection lost";
+			std::vector<uint8_t> leftoverBytes;
+			if (!EncodePacket({leftover}, leftoverBytes, error)) {
+				return false;
+			}
+			resyncHostT.injected.push_back({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "connection lost"});
+			resyncHostT.injected.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, leftoverBytes, {}});
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					resyncHost.Tick(now);
+					resyncClient.Tick(now);
+					if (done()) {
+						return true;
+					}
+					resyncHostT.AdvanceTimeMs(5);
+					resyncClientT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return resyncHost.IsRunning() && resyncClient.IsRunning(); })) {
+				*error = "resync round after reclaim never started";
+				return false;
+			}
+			if (!resyncHost.PrimeResyncInputs({}, error) || !resyncClient.PrimeResyncInputs({}, error)) {
+				return false;
+			}
+			if (resyncHost.GetPeerLeaveFrames().count(2) != 0 || resyncHost.AnyDroppedSeatHeld()) {
+				*error = "resync round re-held the returner's seat";
+				return false;
+			}
+			if (!resyncHost.QueueLocalInput(leaveFrame, {MakeFrame(100, 3)}, {}, error) ||
+			    !resyncClient.QueueLocalInput(leaveFrame, {MakeFrame(200, 3)}, {}, error)) {
+				return false;
+			}
+			NetLockstepReadyFrame ready;
+			size_t hostCommitted = 0;
+			size_t clientCommitted = 0;
+			if (!drive(2000, [&] {
+					while (resyncHost.PopReadyFrame(ready)) {
+						++hostCommitted;
+					}
+					while (resyncClient.PopReadyFrame(ready)) {
+						++clientCommitted;
+					}
+					return hostCommitted >= 1 && clientCommitted >= 1;
+				})) {
+				*error = "resync round after reclaim never committed";
+				return false;
+			}
+			if (resyncHost.IsStopped() || resyncHost.IsFailed()) {
+				*error = "resync round stopped instead of committing: " + resyncHost.GetStats().timeoutReason;
 				return false;
 			}
 			return true;
@@ -8408,6 +8502,7 @@ namespace RTE {
 		    !TestTwoPeerSubstitutedRequestsResync(&error) ||
 		    !TestTwoPeerExpiredEndsLastPlayer(&error) ||
 		    !TestThreePeerReclaimedRequestsResync(&error) ||
+		    !TestResyncRoundCommitsAfterReclaimed(&error) ||
 		    !TestHoldHeartbeatsKeepPeersUnadjudicated(&error) ||
 		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
