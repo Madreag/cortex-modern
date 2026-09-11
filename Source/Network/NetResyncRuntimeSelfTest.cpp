@@ -670,6 +670,71 @@ namespace RTE {
 			             error, "conflicting pending command targets were accepted or changed the capture destination");
 		}
 
+		bool TestDeferredStopCapture(std::string* error) {
+			Pair pair(44215, 0, 0);
+			if (!pair.Start(error) || !pair.Running(error)) return false;
+			ScenarioRunner::SetLockstepCoordinator(&pair.host);
+			pair.host.DeferStopsToTickBoundary();
+			pair.client.DeferStopsToTickBoundary();
+			if (!pair.host.PrimeResyncInputs({}, error) || !pair.client.PrimeResyncInputs({}, error)) return false;
+			constexpr uint64_t applied = c_Start + 1, last = applied + 3;
+			InputsByFrame host, client;
+			for (uint64_t target = c_Start; target <= last; ++target) {
+				host[target] = FullInput(1, target, pair.host.GetRoundId());
+				client[target] = FullInput(2, target, pair.client.GetRoundId());
+				if (!QueueFull(pair.host, host.at(target), error) || !QueueFull(pair.client, client.at(target), error)) return false;
+			}
+			if (!pair.Until([&] { return pair.host.GetStats().nextFrame == last + 1; }, error, 400)) return false;
+			// The sim applies through `applied`; a deferred stop leaves the later commits ready and unapplied.
+			for (uint64_t target = c_Start; target <= applied; ++target) {
+				NetLockstepReadyFrame ready;
+				if (!Check(pair.host.PopReadyFrame(ready) && ready.frame == target, error, "deferred stop fixture lost a committed frame")) return false;
+				for (uint8_t peer: {uint8_t{1}, uint8_t{2}}) {
+					for (const auto& command: (peer == 1 ? host : client).at(target).commands) {
+						if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
+							ScenarioRunner::ObserveLockstepPlayerBindings(peer, target, *bindings);
+						} else if (!Check(ScenarioRunner::ConsumeLockstepGameCommand(command), error, "deferred stop fixture reapplied a command")) {
+							return false;
+						}
+					}
+				}
+				(void)ScenarioRunner::FinishLockstepSimulationTick(target);
+			}
+			if (!Check(ScenarioRunner::GetLockstepResumeFrame() == applied + 1, error,
+				"resume frame is " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + " not the first unapplied frame " + std::to_string(applied + 1))) return false;
+			std::vector<NetLockstepFrame> committed;
+			for (uint64_t target = applied + 1; target <= last; ++target) {
+				committed.push_back(host.at(target));
+				committed.push_back(client.at(target));
+			}
+			// Both ways into a heal snapshot the same applied tick: a frame wait that failed inside the
+			// drop frame, and a deferred stop that ended the last applied tick.
+			const auto heal = [&](uint64_t simUpdateCount, const std::string& entry) {
+				uint64_t dropFrame = 0;
+				bool rewind = false;
+				if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), simUpdateCount, dropFrame, rewind, error)) return false;
+				NetResyncState captured, decoded;
+				std::vector<uint8_t> envelope, archive;
+				if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, captured, error)) return false;
+				if (!NetResyncCodec::Encode(captured, {1}, envelope, error) ||
+					!NetResyncCodec::Decode(envelope, captured.sessionId, dropFrame, decoded, archive, error)) {
+					*error = entry + ": " + *error;
+					return false;
+				}
+				return Check(dropFrame == applied + 1 && rewind == (simUpdateCount == dropFrame) && decoded.savedTick == applied &&
+					SameInputs(decoded.pendingInputs, committed), error,
+					entry + " healed at frame " + std::to_string(dropFrame) + " from tick " + std::to_string(decoded.savedTick) +
+					" with " + std::to_string(decoded.pendingInputs.size()) + " pending inputs");
+			};
+			if (!heal(applied, "deferred stop") || !heal(applied + 1, "frame wait failure")) return false;
+			uint64_t rejectedFrame = 0;
+			bool rejectedRewind = false;
+			std::string rejected;
+			return Check(!ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied - 1, rejectedFrame, rejectedRewind, &rejected) && !rejected.empty() &&
+				!ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied + 2, rejectedFrame, rejectedRewind, &rejected), error,
+				"a sim tick that is neither the applied tick nor the drop frame was accepted");
+		}
+
 		bool TestThreePeerCapture(std::string* error) {
 			std::array<LoopbackTransport, 3> transports;
 			std::array<NetLockstepCoordinator, 3> coordinators;
@@ -1215,6 +1280,7 @@ namespace RTE {
 		run("binding ACK authority", TestBindingAckAuthority);
 		run("checksum ACK authority", TestChecksumAckAuthority);
 		run("snapshot capture", TestSnapshotCapture);
+		run("deferred stop capture", TestDeferredStopCapture);
 		run("full asymmetric input 0/3", [](auto* error) { return TestFullAsymmetric(0, 3, 44196, error); });
 		run("full asymmetric input 3/0", [](auto* error) { return TestFullAsymmetric(3, 0, 44197, error); });
 		run("full asymmetric input 1/3", [](auto* error) { return TestFullAsymmetric(1, 3, 44198, error); });
