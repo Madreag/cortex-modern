@@ -524,7 +524,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	const char* phase = RestorePlayPhaseScope::Name();
 	if (restoring || (phase && std::strcmp(phase, "staging") == 0)) {
 		std::cout << "[audio-checkpoint] play during restore: preset \"" << soundContainer->GetPresetName() << "\" identity " << soundContainer->GetCheckpointIdentity()
-		          << " owner-class " << soundContainer->GetClassName() << " phase " << (phase && phase[0] ? phase : "none") << " restoring=" << (restoring ? 1 : 0) << std::endl;
+		          << " owner-class " << soundContainer->GetClass().GetName() << " phase " << (phase && phase[0] ? phase : "none") << " restoring=" << (restoring ? 1 : 0) << std::endl;
 		PrintRestorePlayBacktrace();
 	}
 	const bool logical = soundContainer->UsesLogicalPlayback();
