@@ -262,6 +262,8 @@ namespace RTE {
 			m_ReceivedState.reserve(capacity);
 		}
 		m_ReceivedState.insert(m_ReceivedState.end(), message.bytes.begin(), message.bytes.end());
+		if (m_IncomingReceivedBytes == 0 && !message.bytes.empty() && m_Config.session && m_Config.session->GetReconnectClient())
+			m_Config.session->GetReconnectClient()->ObserveB2(NetB2ClientObservation::SnapshotBytes, 1, m_Config.session->GetClockMs(), "NetLobbySession::HandleStateChunk/accepted_bytes");
 		m_IncomingReceivedBytes = static_cast<uint32_t>(m_ReceivedState.size());
 		++m_IncomingNextChunkIndex;
 		++m_StateTransferProgressSerial;

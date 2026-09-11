@@ -138,6 +138,9 @@ static std::string ResyncSaveName() {
 			m_IsHost = request.host;
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.host ? 0 : 1;
+			m_ReconnectClient.ObserveB2(NetB2ClientObservation::Reset, 0, 0, "NetMatchService::Start");
+			m_ReconnectClient.ObserveB2(NetB2ClientObservation::ProvisionalPeer, m_LocalPeerId, 0, "NetMatchService::Start");
+			m_ReconnectClient.ObserveB2(NetB2ClientObservation::ProvisionalTeam, m_LocalTeam, 0, "NetMatchService::Start");
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
 			m_BeaconGamePort = request.port;
@@ -743,6 +746,7 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
+		m_ReconnectClient.ObserveB2(NetB2ClientObservation::SimulationAttached, 1, AdmissionNowMs(), "NetMatchService::ConsumeReadyToLaunch/SetLockstepCoordinator");
 		m_Coordinator->DeferStopsToTickBoundary();
 		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
 		// The lockstep wait parks the sim thread; without this the plane could not answer a leave or a
@@ -771,7 +775,8 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator || m_State != NetMatchServiceState::Running) {
 			return;
 		}
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot(); snapshot && m_SeatPresence.ApplySnapshot(*snapshot))
+			NetA7Journal::B2SeatSnapshot(*snapshot, "NetMatchService::PumpSeatPresence/NetSeatPresence::ApplySnapshot", "applied");
 		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
 		CaptureA7SeatView();
 	}
@@ -819,13 +824,14 @@ static std::string ResyncSaveName() {
 		std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
 		m_ModerationSeats = std::move(seats);
 		(void)m_Coordinator->PublishSeatSnapshot(std::move(presence), AdmissionNowMs());
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot(); snapshot && m_SeatPresence.ApplySnapshot(*snapshot))
+			NetA7Journal::B2SeatSnapshot(*snapshot, "NetMatchService::PublishModerationView/NetSeatPresence::ApplySnapshot", "applied");
 	}
 
 	void NetMatchService::PumpSessionEvents() {
 		PumpSeatPresence();
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
-		if (m_PendingSessionEvents.empty() && !hostAdmission) {
+		if (m_PendingSessionEvents.empty() && !hostAdmission && !NetA7Journal::B2ReplayRequested()) {
 			return;
 		}
 		std::vector<NetTransportEvent> events;
@@ -843,6 +849,7 @@ static std::string ResyncSaveName() {
 			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
 		const uint64_t nowMs = AdmissionNowMs();
+		m_Session->PumpB2Replay(nowMs);
 		// F1.5: the two clocks must be one. Sampled here, at the pump, because the report is written
 		// after the loop stops feeding the session and its difference reads the teardown by then.
 		if (const uint64_t sessionMs = m_Session->GetClockMs(); sessionMs > nowMs) {
@@ -868,7 +875,13 @@ static std::string ResyncSaveName() {
 			for (const NetGameReseat& reseat: m_ReconnectHost.TakePendingReseats()) {
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
-				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
+				const NetGameCommand command{ScenarioRunner::GetLockstepHostPeerId(), reseat};
+				if (NetA7Journal::B2Enabled()) NetA7Journal::Session("b2_reseat_issued", nowMs, {{"phase", "queued"}, {"source", "NetMatchService::PumpSessionEvents"},
+					{"epoch", NetA7Journal::Hex(m_ReconnectHost.GetEpoch().data(), m_ReconnectHost.GetEpoch().size())}, {"session_id", m_Session->GetSessionId()},
+					{"round_id", m_Coordinator->GetRoundId()}, {"sender_peer_id", command.senderPeerId}, {"command_sequence", command.sequence},
+					{"command_sha256", NetA7Journal::CommandSha256(command)}, {"payload_sha256", NetA7Journal::CommandSha256(command)},
+					{"command_hash_algorithm", NetA7Journal::c_CommandHashAlgorithm}, {"owner_peer_id", reseat.newOwnerPeerId}, {"team", reseat.team}, {"surviving_uids", reseat.actorUIDs}}, "NetMatchService::AdmissionNowMs");
+				ScenarioRunner::EnqueueLocalGameCommand(command);
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
 			PublishModerationView();
@@ -1163,9 +1176,11 @@ static std::string ResyncSaveName() {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
 				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
 				int localTeam = m_LocalTeam;
+				bool matchedTeam = false;
 				for (const NetMatchPlayerSlot& slot : runner->GetMatchConfig().players) {
 					if (slot.peerId == localLockstepId) {
 						localTeam = slot.team;
+						matchedTeam = true;
 						break;
 					}
 				}
@@ -1175,6 +1190,7 @@ static std::string ResyncSaveName() {
 				m_Runner = std::move(runner);
 				m_LocalPeerId = localLockstepId;
 				m_LocalTeam = localTeam;
+				if (matchedTeam) m_ReconnectClient.ObserveB2(NetB2ClientObservation::MatchedTeam, localTeam, m_Session->GetClockMs(), "NetMatchService::WorkerMain/matched_slot");
 				m_PendingResyncLoad = pendingLoad;
 				m_PendingResyncState = std::move(pendingState);
 				m_State = NetMatchServiceState::ReadyToLaunch;

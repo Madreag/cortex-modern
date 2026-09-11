@@ -3,6 +3,8 @@
 #include "NetProtocol.h"
 
 #include <cstdint>
+#include <functional>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -29,6 +31,8 @@ namespace RTE {
 
 		NetReconnectTxCache() = default;
 		NetReconnectTxCache(size_t maxEntries, uint64_t retentionMs);
+		using EvictionObserver = std::function<void(const NetAuthBytes16&, const NetH4TxKey&, const NetPayload&, uint64_t, uint64_t, bool)>;
+		void SetEvictionObserver(EvictionObserver observer) { m_EvictionObserver = std::move(observer); }
 
 		/// Records a transaction's terminal result. Re-storing a known id keeps the original age, so
 		/// retransmissions cannot hold an entry alive past the window.
@@ -72,6 +76,7 @@ namespace RTE {
 		uint32_t m_KeyMismatches = 0;
 		uint32_t m_ExpiredEvictions = 0;
 		uint32_t m_CapacityEvictions = 0;
+		EvictionObserver m_EvictionObserver;
 	};
 
 } // namespace RTE

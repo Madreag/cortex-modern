@@ -91,6 +91,7 @@ namespace RTE {
 		/// Advances the admission plane alone: mid-match the coordinator owns the transport queue and the
 		/// heartbeats, so this must not poll either or a peer whose traffic rides the round would time out.
 		void TickAdmissionPlane(uint64_t nowMs);
+		void PumpB2Replay(uint64_t nowMs);
 		void Close(const std::string& reason);
 		/// Ends the hosted session for every peer with the one reason that lets a client delete its
 		/// recovery record. Sent from the same place the seat registry is cleared, and nowhere else.
@@ -98,7 +99,7 @@ namespace RTE {
 
 		/// Attaches the H4 admission plane. Without one the session behaves exactly as it did before
 		/// reconnect existed: an admission message is an unexpected handshake message.
-		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
+		void SetReconnectHost(NetReconnectHost* host);
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
 		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
 		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
@@ -155,7 +156,8 @@ namespace RTE {
 			NetHash32 identityHash{};
 		};
 
-		bool Send(NetPeerId peerId, NetPayload payload, std::string* error = nullptr);
+		bool Send(NetPeerId peerId, NetPayload payload, std::string* error = nullptr, const char* observedCause = nullptr);
+		void ObserveB2Packet(NetPeerId connection, const NetPayload& payload, const char* direction, const char* outcome, const char* cause = nullptr);
 		void SendHeartbeat(NetPeerId peerId);
 		void MaybeSendHeartbeats();
 		void ProcessEvent(const NetTransportEvent& event);
@@ -238,6 +240,13 @@ namespace RTE {
 		NetReconnectClient* m_ReconnectClient = nullptr;
 		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
+		std::map<NetAuthBytes16, std::string> m_B2HeldOffers;
+		std::optional<NetH4SubstitutionAck> m_B2RetainedAck;
+		NetAuthBytes16 m_B2AckEpoch{};
+		NetPeerId m_B2AckConnection = c_InvalidNetPeerId;
+		uint64_t m_B2AckSession = 0, m_B2NextGateCheckMs = 0;
+		std::string m_B2AckSha;
+		bool m_B2AckReplayed = false, m_B2AckInvalid = false;
 	};
 
 } // namespace RTE

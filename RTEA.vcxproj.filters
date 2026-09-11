@@ -535,6 +535,9 @@
     <ClInclude Include="Source\Network\NetResyncState.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetRecoveryJournal.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetResyncSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -890,6 +893,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetResyncState.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetRecoveryJournal.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetResyncSelfTest.cpp">

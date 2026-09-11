@@ -144,6 +144,7 @@ namespace RTE {
 			m_ReconnectClient->Tick(m_NowMs);
 		}
 		FlushReconnectOutbound();
+		PumpB2Replay(m_NowMs);
 	}
 
 	void NetSession::TickKeepalive(uint64_t nowMs) {
@@ -153,6 +154,49 @@ namespace RTE {
 			return;
 		}
 		MaybeSendHeartbeats();
+		PumpB2Replay(m_NowMs);
+	}
+
+	void NetSession::SetReconnectHost(NetReconnectHost* host) {
+		if (m_ReconnectHost && NetA7Journal::B2Enabled()) m_ReconnectHost->SetB2HeldResultObserver({});
+		m_ReconnectHost = host;
+		if (host && NetA7Journal::B2Enabled()) host->SetB2HeldResultObserver([this](NetPeerId connection, const NetPayload& payload) {
+			ObserveB2Packet(connection, payload, "tx", "held");
+		});
+	}
+
+	void NetSession::ObserveB2Packet(NetPeerId connection, const NetPayload& payload, const char* direction, const char* outcome, const char* cause) {
+		if (!NetA7Journal::B2Enabled()) return;
+		auto fields = NetA7Journal::B2PayloadFields(payload);
+		if (fields.empty()) return;
+		NetAuthBytes16 epoch{};
+		if (m_ReconnectHost) epoch = m_ReconnectHost->GetEpoch();
+		else if (m_ReconnectClient && m_ReconnectClient->HasRecord()) epoch = m_ReconnectClient->GetRecord().epoch;
+		if (const auto* offer = std::get_if<NetH4SubstitutionOffer>(&payload)) epoch = offer->epoch;
+		fields.update({{"connection", std::to_string(connection)}, {"epoch", NetA7Journal::Hex(epoch.data(), epoch.size())},
+			{"session_id", m_SessionId}, {"direction", direction}, {"outcome", outcome}});
+		if (std::string(outcome) == "held" || std::string(outcome) == "suppressed_retry") fields["boundary"] = "before_transport_send";
+		if (cause) fields["cause"] = cause;
+		NetA7Journal::Session("b2_packet", m_NowMs, std::move(fields));
+	}
+
+	void NetSession::PumpB2Replay(uint64_t nowMs) {
+		if (!NetA7Journal::B2ReplayRequested() || !m_B2RetainedAck || m_B2AckReplayed || m_B2AckInvalid) return;
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (!m_Transport || !m_ReconnectClient || m_RemoteTransportPeerId != m_B2AckConnection || m_SessionId != m_B2AckSession ||
+		    !m_ReconnectClient->HasRecord() || m_ReconnectClient->GetRecord().epoch != m_B2AckEpoch ||
+		    m_State == NetSessionState::Closed || m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
+			m_B2AckInvalid = true;
+			NetA7Journal::Gap("B2 retained ACK lost its live session binding");
+			return;
+		}
+		if (m_State != NetSessionState::Ready || m_NowMs < m_B2NextGateCheckMs) return;
+		m_B2NextGateCheckMs = m_NowMs + 10;
+		bool released = false;
+		const json expected = {{"epoch", NetA7Journal::Hex(m_B2AckEpoch.data(), m_B2AckEpoch.size())}, {"session_id", m_B2AckSession},
+			{"connection", std::to_string(m_B2AckConnection)}, {"transaction", NetA7Journal::Hex(m_B2RetainedAck->txId.data(), m_B2RetainedAck->txId.size())}, {"ack_sha256", m_B2AckSha}};
+		if (!NetA7Journal::ReadB2ReplayGate(expected, released) || !released) return;
+		if (Send(m_B2AckConnection, *m_B2RetainedAck, nullptr, "retained_ack_after_p17")) m_B2AckReplayed = true;
 	}
 
 	void NetSession::InjectEvent(const NetTransportEvent& event, uint64_t nowMs) {
@@ -192,6 +236,11 @@ namespace RTE {
 	}
 
 	void NetSession::Close(const std::string& reason) {
+		m_B2RetainedAck.reset();
+		m_B2HeldOffers.clear();
+		m_B2AckReplayed = false;
+		m_B2AckInvalid = false;
+		m_B2NextGateCheckMs = 0;
 		if (!m_Transport) {
 			return;
 		}
@@ -254,7 +303,7 @@ namespace RTE {
 		return (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) ? 1U : 0U;
 	}
 
-	bool NetSession::Send(NetPeerId peerId, NetPayload payload, std::string* error) {
+	bool NetSession::Send(NetPeerId peerId, NetPayload payload, std::string* error, const char* observedCause) {
 		if (!m_Transport) {
 			if (error) *error = "session has no transport";
 			return false;
@@ -271,10 +320,38 @@ namespace RTE {
 			if (error) *error = encodeError.message;
 			return false;
 		}
+		if (NetA7Journal::B2Enabled() && NetA7Journal::B2Fault() == "hold_offer_before_send") {
+			if (const auto* offer = std::get_if<NetH4SubstitutionOffer>(&message.payload)) {
+				const auto hash = NetA7Journal::PayloadSha256(message.payload);
+				const auto found = m_B2HeldOffers.find(offer->txId);
+				if (found != m_B2HeldOffers.end()) {
+					if (found->second != hash) NetA7Journal::Gap("B2 held offer changed during its retry ladder");
+					ObserveB2Packet(peerId, message.payload, "tx", "suppressed_retry");
+				} else if (m_B2HeldOffers.size() < NetReconnectTxCache::c_MaxEntries) {
+					m_B2HeldOffers.emplace(offer->txId, hash);
+					ObserveB2Packet(peerId, message.payload, "tx", "held");
+				} else NetA7Journal::Gap("B2 held-offer observation bound exceeded");
+				return true;
+			}
+		}
 		if (!m_Transport->Send(peerId, NetTransportLane::ControlReliable, bytes, error)) {
 			return false;
 		}
 		++m_Stats.sentMessages;
+		ObserveB2Packet(peerId, message.payload, "tx", "sent", observedCause);
+		if (NetA7Journal::B2ReplayRequested() && m_Role == NetSessionRole::Client && !m_B2RetainedAck) {
+			if (const auto* ack = std::get_if<NetH4SubstitutionAck>(&message.payload)) {
+				if (!m_ReconnectClient || !m_ReconnectClient->HasRecord() || m_ReconnectClient->GetRecord().hostSessionId != m_SessionId) {
+					NetA7Journal::Gap("B2 successful ACK lacks its original live-session record");
+				} else {
+					m_B2RetainedAck = *ack;
+					m_B2AckEpoch = m_ReconnectClient->GetRecord().epoch;
+					m_B2AckConnection = peerId;
+					m_B2AckSession = m_SessionId;
+					m_B2AckSha = NetA7Journal::PayloadSha256(message.payload);
+				}
+			}
+		}
 		if (a7Heartbeat) NetA7Journal::Session("silent_heartbeat_sent", m_NowMs, {{"sequence", message.sequence}, {"connected_age_ms", m_NowMs - m_A7ClientConnectedMs}});
 		if (NetA7Journal::Enabled()) {
 			if (const auto* leave = std::get_if<NetH4LeaveRequest>(&message.payload))
@@ -582,8 +659,10 @@ namespace RTE {
 		}
 		bool handled = false;
 		if (m_Role == NetSessionRole::Host && m_ReconnectHost) {
+			ObserveB2Packet(peerId, payload, "rx", "received");
 			handled = m_ReconnectHost->HandleMessage(peerId, payload, m_NowMs);
 		} else if (m_Role == NetSessionRole::Client && m_ReconnectClient) {
+			ObserveB2Packet(peerId, payload, "rx", "received");
 			handled = m_ReconnectClient->HandleMessage(payload, m_NowMs);
 		}
 		if (handled) {
@@ -687,6 +766,7 @@ namespace RTE {
 			}
 			m_SessionId = accepted->sessionId;
 			m_LocalPeerId = accepted->assignedPeerId;
+			if (m_ReconnectClient) m_ReconnectClient->ObserveB2(NetB2ClientObservation::ProvisionalPeer, m_LocalPeerId, m_NowMs, "NetSession::HandleClientMessage/JoinAccepted");
 			m_Config.heartbeatIntervalMs = accepted->heartbeatIntervalMs;
 			m_Config.timeoutMs = accepted->timeoutMs;
 			// §4 expands the handshake: with an admission plane attached, Ready waits for JoinCommitted,

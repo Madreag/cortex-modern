@@ -10,6 +10,7 @@ sources += files(
 'NetAuthSelfTest.cpp',
 'NetGameCommand.cpp',
 'NetResyncState.cpp',
+'NetRecoveryJournal.cpp',
 'NetResyncSelfTest.cpp',
 'NetResyncRuntimeSelfTest.cpp',
 'NetIdentity.cpp',

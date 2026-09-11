@@ -1,8 +1,10 @@
 #include "NetLockstep.h"
 
 #include "NetActorOwnership.h"
+#include "NetA7Journal.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
+#include "NetRecoveryJournal.h"
 #include "NetResyncState.h"
 
 #include <algorithm>
@@ -2593,6 +2595,7 @@ namespace RTE {
 		if (m_LastQueuedTargetFrame == std::numeric_limits<uint64_t>::max() || targetFrame > m_LastQueuedTargetFrame) {
 			m_LastQueuedTargetFrame = targetFrame;
 		}
+		NetRecoveryJournal::Input(m_Config, packet, "accepted_local", "NetLockstepCoordinator::QueueLocalInput");
 		return true;
 	}
 
@@ -2713,6 +2716,7 @@ namespace RTE {
 		m_RecoveryOutgoing.push_back(std::move(pending));
 		UpdateRelayBacklogBytes();
 		if (frame.senderPeerId == m_Config.localPeerId) RememberLocalInput(frame);
+		NetRecoveryJournal::Input(m_Config, frame, frame.senderPeerId == m_Config.localPeerId ? "accepted_local" : "retained_relay", "NetLockstepCoordinator::RetainRecoveryInput");
 		return true;
 	}
 
@@ -2846,6 +2850,13 @@ namespace RTE {
 			}
 		}
 		m_InstalledResyncTargets = std::move(targets);
+		if (NetA7Journal::RecoveryInputJournalEnabled()) {
+			const auto scope = NetRecoveryJournal::NextScope();
+			for (size_t index = 0; index < authoritativeInputs.size(); ++index) NetRecoveryJournal::Input(m_Config, authoritativeInputs[index], "installed_authoritative", "NetLockstepCoordinator::InstallResyncInputs", scope, index);
+			auto fields = NetRecoveryJournal::Context(m_Config, m_RoundId);
+			fields.update({{"phase", "install"}, {"source", "NetLockstepCoordinator::InstallResyncInputs"}, {"scope_id", scope}, {"saved_tick", m_Config.startFrame - 1}, {"input_count", authoritativeInputs.size()}});
+			NetA7Journal::Emit("recovery_boundary", fields);
+		}
 		return true;
 	}
 
@@ -2917,6 +2928,7 @@ namespace RTE {
 				m_Stats.localControllerFramesSent += pending.frame.frames.size();
 			}
 			if (pending.frame.senderPeerId == m_Config.localPeerId) ++m_Stats.framePacketsSent;
+			NetRecoveryJournal::Input(m_Config, pending.frame, "transport_complete", "NetLockstepCoordinator::FlushRecoveryInputs");
 			m_RecoveryOutgoing.pop_front();
 		}
 		UpdateRelayBacklogBytes();
@@ -3975,6 +3987,7 @@ namespace RTE {
 			held.push_back(frame);
 			++m_Stats.preStartFramesBuffered;
 			++peerStats.preStartBuffered;
+			NetRecoveryJournal::Input(m_Config, frame, "retained_provisional", "NetLockstepCoordinator::HandleFrame");
 			return;
 		}
 		// A sender's frames never target its own delay window; one that does is a broken build.
@@ -4020,6 +4033,7 @@ namespace RTE {
 		if (!frame.observations.empty()) {
 			m_RemoteObservations[frame.targetFrame][frame.senderPeerId] = frame.observations;
 		}
+		NetRecoveryJournal::Input(m_Config, frame, "accepted_remote", "NetLockstepCoordinator::HandleFrame");
 		AdvanceReadyFrames(nowMs);
 	}
 
@@ -4113,6 +4127,7 @@ namespace RTE {
 		    !AdvancesSeatSnapshot(m_SeatSnapshot, snapshot, m_Config.peerCount, m_Config.matchConfig)) return;
 		m_SeatSnapshot = snapshot;
 		m_SeatSnapshotUnread = true;
+		NetA7Journal::B2SeatSnapshot(snapshot, "NetLockstepCoordinator::HandleSeatSnapshot", "accepted");
 	}
 
 	std::optional<NetLockstepSeatSnapshot> NetLockstepCoordinator::TakeSeatSnapshot() {
