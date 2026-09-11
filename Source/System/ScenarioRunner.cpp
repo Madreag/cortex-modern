@@ -67,6 +67,29 @@ namespace RTE {
 		std::vector<NetResyncPendingCommand> s_RecoveredCommands, s_RecoveredPlayerBindings;
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
+		std::vector<NetValueObservation> s_DroppedValueObservations;
+
+		NetValueObservation ToValueObservation(const MovableObject::PendingValueOp& op) {
+			NetValueObservation observation;
+			observation.objectUID = op.objectUID;
+			observation.tick = op.tick;
+			observation.ordinal = op.ordinal;
+			observation.mapKind = static_cast<uint8_t>(op.map);
+			observation.key = op.key;
+			observation.op = static_cast<uint8_t>(op.op);
+			observation.numberValue = op.number;
+			observation.stringValue = op.text;
+			return observation;
+		}
+
+		std::vector<NetValueObservation> SampleValueObservations() {
+			std::vector<NetValueObservation> observations = std::move(s_DroppedValueObservations);
+			s_DroppedValueObservations.clear();
+			for (const MovableObject::PendingValueOp& op: MovableObject::SamplePendingValueOps()) {
+				observations.push_back(ToValueObservation(op));
+			}
+			return observations;
+		}
 
 		bool SameCommandBits(const NetGameCommand& left, const NetGameCommand& right) {
 			NetLockstepFrame a, b;
@@ -1018,7 +1041,7 @@ namespace RTE {
 			if (config.localPeerId == config.matchConfig.hostPeerId) bindings.appliedCommands = s_AppliedCommandSequences;
 			commands.push_back({config.localPeerId, bindings});
 		}
-		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, commands, error, g_AudioMan.SampleSoundObservations());
+		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, commands, error, g_AudioMan.SampleSoundObservations(), SampleValueObservations());
 		if (queued) {
 			s_RequeuedCommands.erase(targetFrame);
 			s_RequeuedPlayerBindings.erase(targetFrame);
@@ -1027,6 +1050,7 @@ namespace RTE {
 		}
 		// A reading the wire had to drop was still recorded as sent, so hand it back to be sampled afresh.
 		g_AudioMan.ForgetSentAudibility(s_LockstepCoordinator->TakeDroppedObservations());
+		s_DroppedValueObservations = s_LockstepCoordinator->TakeDroppedValueObservations();
 		return queued;
 	}
 
