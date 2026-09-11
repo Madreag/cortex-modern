@@ -2,6 +2,7 @@
 
 #include "ControllerFrame.h"
 #include "NetLockstep.h"
+#include "NetResyncState.h"
 
 #include <cstdint>
 #include <functional>
@@ -114,7 +115,12 @@ namespace RTE {
 		static bool HasControllerReplayError();
 		static const std::string& GetControllerReplayError();
 
-		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator);
+		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands = false);
+		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
+		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
+		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
+		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr);
+		static bool RestoreNetResyncState(const NetResyncState& state, std::string* error = nullptr);
 		/// Pumps the coordinator until the relay host owes no peer a forward, or the budget runs out,
 		/// then keeps relaying for lingerMs. The star's hub is the only route between its clients, so
 		/// quitting with a forward still held takes the round off every client that was waiting on it.
@@ -170,6 +176,7 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		static uint64_t GetLockstepRoundId();
 
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
