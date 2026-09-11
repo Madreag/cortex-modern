@@ -7498,7 +7498,7 @@ namespace RTE {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000091ULL;
 				c.roundId = relay ? 0x7000000000000092ULL : 0;
-				c.startFrame = leaveFrame;
+				c.startFrame = ScenarioRunner::ResyncResumeStartFrame(leaveFrame);
 				c.resumeFromSnapshot = true;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
@@ -7542,6 +7542,11 @@ namespace RTE {
 				*error = "resync round after reclaim never started";
 				return false;
 			}
+			if (resyncHost.GetConfig().startFrame != leaveFrame || resyncHost.GetStats().effectiveStartFrame != leaveFrame) {
+				*error = "resync first frame is " + std::to_string(resyncHost.GetStats().effectiveStartFrame) +
+				         " not drop frame " + std::to_string(leaveFrame);
+				return false;
+			}
 			if (!resyncHost.PrimeResyncInputs({}, error) || !resyncClient.PrimeResyncInputs({}, error)) {
 				return false;
 			}
@@ -7550,23 +7555,37 @@ namespace RTE {
 				return false;
 			}
 			if (!resyncHost.QueueLocalInput(leaveFrame, {MakeFrame(100, 3)}, {}, error) ||
-			    !resyncClient.QueueLocalInput(leaveFrame, {MakeFrame(200, 3)}, {}, error)) {
+			    !resyncClient.QueueLocalInput(leaveFrame, {MakeFrame(200, 3)}, {}, error) ||
+			    !resyncHost.QueueLocalInput(leaveFrame + 1, {MakeFrame(100, 4)}, {}, error) ||
+			    !resyncClient.QueueLocalInput(leaveFrame + 1, {MakeFrame(200, 4)}, {}, error)) {
 				return false;
 			}
 			NetLockstepReadyFrame ready;
-			size_t hostCommitted = 0;
+			std::vector<uint64_t> hostFrames;
 			size_t clientCommitted = 0;
 			if (!drive(2000, [&] {
 					while (resyncHost.PopReadyFrame(ready)) {
-						++hostCommitted;
+						hostFrames.push_back(ready.frame);
 					}
 					while (resyncClient.PopReadyFrame(ready)) {
 						++clientCommitted;
 					}
-					return hostCommitted >= 1 && clientCommitted >= 1;
+					return hostFrames.size() >= 2 && clientCommitted >= 2;
 				})) {
 				*error = "resync round after reclaim never committed";
 				return false;
+			}
+			std::vector<uint64_t> recorded;
+			if (leaveFrame > 0) {
+				recorded.push_back(leaveFrame - 1);
+			}
+			recorded.insert(recorded.end(), hostFrames.begin(), hostFrames.end());
+			for (size_t i = 1; i < recorded.size(); ++i) {
+				if (recorded[i] != recorded[i - 1] + 1) {
+					*error = "resync frame sequence is not contiguous at " + std::to_string(recorded[i - 1]) +
+					         " -> " + std::to_string(recorded[i]);
+					return false;
+				}
 			}
 			if (resyncHost.IsStopped() || resyncHost.IsFailed()) {
 				*error = "resync round stopped instead of committing: " + resyncHost.GetStats().timeoutReason;
