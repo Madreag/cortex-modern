@@ -320,8 +320,12 @@ namespace RTE {
 		}
 		if (m_LiveMatch) {
 			// Phase A: a claimant without a ticket cannot prove anything, so a live match refuses it.
+			// The refusal names the reason so the joiner can offer to apply for a seat instead; it
+			// rides the same release delay every denial does, and a NewJoin only ever reaches this
+			// path on a live match, so nothing an observer could not already time is disclosed.
 			++m_Stats.provisionalSeatsRefused;
-			DenyUniformly(connection, message.txId, NetH4DenialReason::UnknownSeat, nowMs);
+			const NetPayload refusal = NetJoinRejected{NetRejectReason::HostNotAccepting, "the match is already in progress", "live_match", "", ""};
+			m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::UnknownSeat, nowMs, &refusal);
 			return;
 		}
 		if (m_Provisionals.size() >= c_MaxProvisionalSeats) {
@@ -816,6 +820,28 @@ namespace RTE {
 		return found == m_Applicants.end() ? nullptr : &*found;
 	}
 
+	NetReconnectHost::Applicant* NetReconnectHost::FindApplicantByTransaction(NetPeerId connection, const NetAuthBytes16& txId) {
+		const auto found = std::find_if(m_Applicants.begin(), m_Applicants.end(), [connection, &txId](const Applicant& applicant) {
+			return applicant.connection == connection && applicant.txId == txId;
+		});
+		return found == m_Applicants.end() ? nullptr : &*found;
+	}
+
+	NetReconnectHost::SeatState* NetReconnectHost::FindSubstitutableSeatWithRoom() {
+		for (SeatState& seat: m_Seats) {
+			if (!IsSeatSubstitutable(seat)) {
+				continue;
+			}
+			const size_t forSeat = static_cast<size_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [&seat](const Applicant& applicant) {
+				return applicant.stableSeat == seat.seat.stableSeat;
+			}));
+			if (forSeat < c_MaxApplicantsPerSeat) {
+				return &seat;
+			}
+		}
+		return nullptr;
+	}
+
 	bool NetReconnectHost::HasSubstitution(uint16_t stableSeat) const {
 		return std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [stableSeat](const Substitution& pending) {
 			return pending.stableSeat == stableSeat;
@@ -876,9 +902,12 @@ namespace RTE {
 			Send(connection, *cached);
 			return;
 		}
-		if (Applicant* existing = FindApplicant(connection, message.stableSeat); existing != nullptr && existing->txId == message.txId) {
+		Applicant* existing = message.stableSeat == c_NetH4AnySubstitutableSeat
+		                          ? FindApplicantByTransaction(connection, message.txId)
+		                          : FindApplicant(connection, message.stableSeat);
+		if (existing != nullptr && existing->txId == message.txId) {
 			// The ladder is retransmitting; the answer is the one already recorded, not a second slot.
-			Send(connection, NetH4ApplicantAck{c_NetH4Version, message.txId, message.stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)});
+			Send(connection, NetH4ApplicantAck{c_NetH4Version, message.txId, existing->stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)});
 			return;
 		}
 		if (!m_Admission.BeginAttempt(connection, nowMs)) {
@@ -886,14 +915,15 @@ namespace RTE {
 			DenyUniformly(connection, message.txId, NetH4DenialReason::RateLimited, nowMs);
 			return;
 		}
-		SeatState* seat = FindSeat(message.stableSeat);
+		SeatState* seat = message.stableSeat == c_NetH4AnySubstitutableSeat ? FindSubstitutableSeatWithRoom() : FindSeat(message.stableSeat);
 		if (seat == nullptr || !IsSeatSubstitutable(*seat)) {
 			++m_Stats.applicantsRefused;
 			DenyUniformly(connection, message.txId, NetH4DenialReason::SeatNotSubstitutable, nowMs);
 			return;
 		}
-		const size_t forSeat = static_cast<size_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [&message](const Applicant& applicant) {
-			return applicant.stableSeat == message.stableSeat;
+		const uint16_t stableSeat = seat->seat.stableSeat;
+		const size_t forSeat = static_cast<size_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [stableSeat](const Applicant& applicant) {
+			return applicant.stableSeat == stableSeat;
 		}));
 		const size_t forConnection = static_cast<size_t>(std::count_if(m_Applicants.begin(), m_Applicants.end(), [connection](const Applicant& applicant) {
 			return applicant.connection == connection;
@@ -906,7 +936,7 @@ namespace RTE {
 
 		Applicant applicant;
 		applicant.connection = connection;
-		applicant.stableSeat = message.stableSeat;
+		applicant.stableSeat = stableSeat;
 		applicant.txId = message.txId;
 		applicant.identity = message.identity;
 		applicant.displayName = message.displayName;
@@ -915,8 +945,8 @@ namespace RTE {
 		m_Applicants.push_back(applicant);
 		++m_Stats.applicantsRegistered;
 		std::cout << "[net-reconnect] applicant " << (applicant.displayName.empty() ? "a player" : applicant.displayName)
-		          << " asked for seat " << message.stableSeat << std::endl;
-		const NetH4ApplicantAck ack{c_NetH4Version, message.txId, message.stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
+		          << " asked for seat " << stableSeat << std::endl;
+		const NetH4ApplicantAck ack{c_NetH4Version, message.txId, stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		Send(connection, ack);
 	}
@@ -1681,6 +1711,8 @@ namespace RTE {
 			m_HasPendingRequest = false;
 			m_State = NetH4ClientState::Applied;
 			m_AppliedAtMs = nowMs;
+			// An application that named no seat learns which one it landed on from the ack.
+			m_ApplySeat = ack->stableSeat;
 			++m_Stats.applicationsAcknowledged;
 			return true;
 		}
