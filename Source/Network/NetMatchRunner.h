@@ -96,7 +96,8 @@ namespace RTE {
 		/// Client: the survivors to hand SetRematchRoster, from what its own round saw.
 		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats);
 		/// Whether a host's rematch proposal is the roster this peer derived, less seats only the host knows are gone.
-		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived, uint8_t localPeerId, std::string* reason = nullptr);
+		/// derivedLocalPeerId names this peer in its own derivation when the host reseated it; 0 means the same id.
+		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived, uint8_t localPeerId, std::string* reason = nullptr, uint8_t derivedLocalPeerId = 0);
 
 		static const char* StateName(NetMatchRuntimeState state);
 
@@ -124,6 +125,7 @@ namespace RTE {
 		bool m_ResyncRound = false;
 		std::vector<uint8_t> m_RematchRoster; //!< Client: the peers its last round still had; consumed by the next rematch.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
+		uint8_t m_RematchDerivedPeerId = 0;   //!< Client: its own seat in m_RematchConfig, before the host reseats it.
 		bool m_RematchRound = false;
 		std::string m_SetupError;
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.

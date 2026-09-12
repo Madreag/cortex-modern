@@ -397,8 +397,27 @@ namespace RTE {
 			    !RoundTrip(NetLobbyConfigAck{2, true, configHash, ""}, error) ||
 			    !RoundTrip(NetLobbyReady{2, true}, error) ||
 			    !RoundTrip(NetLobbyStart{config.sessionId, 120, 0, configHash}, error) ||
-			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error)) {
+			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error) ||
+			    !RoundTrip(NetLobbySeatAssign{2}, error) ||
+			    !RoundTrip(NetLobbySeatAssign{static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers)}, error)) {
 				return false;
+			}
+			// A seat assignment names a real seat; zero and out-of-range must not decode.
+			for (const uint8_t assigned: {uint8_t{0}, static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers + 1)}) {
+				NetLobbyMessage message;
+				message.payload = NetLobbySeatAssign{2};
+				std::vector<uint8_t> bytes;
+				NetLobbyError encodeError;
+				if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) {
+					*error = "could not encode a seat assignment";
+					return false;
+				}
+				bytes.at(NetLobbyProtocol::c_HeaderBytes) = assigned;
+				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
+				if (decoded.ok || decoded.error.code != NetLobbyErrorCode::InvalidValue) {
+					*error = "seat assignment peer id " + std::to_string(assigned) + " was not rejected";
+					return false;
+				}
 			}
 			// A config carrying per-sender delays must survive the wire unchanged.
 			NetMatchConfig perSender = MakeConfig();
@@ -2676,10 +2695,36 @@ namespace RTE {
 			return true;
 		}
 
+		// The MIDDLE seat's process dies after round 1 ends, so the survivor below it moves up a seat.
+		bool RematchAfterMiddleDropBetweenRounds(std::string& details, std::string* error) {
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "middle-drop-after-round", 43164, 3, error)) return false;
+			std::string step;
+			auto fail = [&](const std::string& what) {
+				*error = "rematch after a middle-seat drop between rounds: " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step)) return fail("round 1 setup failed");
+			if (!PlayRematchTicks(fixture, 6) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not finish");
+			RematchPeer* dropped = fixture.Client(2);
+			RematchPeer* survivor = fixture.Client(3);
+			if (!survivor || !dropped) return fail("round 1 did not seat lockstep peers 2 and 3");
+			dropped->gone = true;
+			dropped->transport.Stop();
+			if (ClientRematchSurvivors(*survivor) != std::vector<uint8_t>{1, 2, 3}) return fail("the survivor's round saw the drop after all");
+			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
+			if (!CheckRematchRelaunch(fixture, *survivor, 2, details, &step)) return fail("the rematch roster");
+			details += " survivor_derived_lockstep=3 adopted_lockstep=" + std::to_string(survivor->LockstepId());
+			StopRematchFixture(fixture);
+			return true;
+		}
+
 		// Three peers, one hard drop nobody reclaims, then a rematch: the host proposes the two survivors.
 		bool TestRematchAfterAHardDrop(std::string* error) {
 			std::string inRound;
 			std::string betweenRounds;
+			std::string middleSeat;
 			std::string details;
 			if (RematchAfterDropInRound(details, &inRound)) {
 				std::cout << "PASS rematch_after_hard_drop in_round " << details << std::endl;
@@ -2687,7 +2732,12 @@ namespace RTE {
 			if (RematchAfterDropBetweenRounds(details, &betweenRounds)) {
 				std::cout << "PASS rematch_after_hard_drop between_rounds " << details << std::endl;
 			}
-			*error = inRound + (!inRound.empty() && !betweenRounds.empty() ? "; " : "") + betweenRounds;
+			if (RematchAfterMiddleDropBetweenRounds(details, &middleSeat)) {
+				std::cout << "PASS rematch_after_hard_drop middle_seat_between_rounds " << details << std::endl;
+			}
+			for (const std::string* failure: {&inRound, &betweenRounds, &middleSeat}) {
+				if (!failure->empty()) *error += (error->empty() ? "" : "; ") + *failure;
+			}
 			return error->empty();
 		}
 
