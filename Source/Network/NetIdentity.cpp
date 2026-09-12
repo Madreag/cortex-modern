@@ -131,8 +131,7 @@ namespace RTE {
 			AppendInt(hasher, "recommended_moid_count", static_cast<uint64_t>(config.recommendedMoidCount));
 			AppendBool(hasher, "particle_settling", config.particleSettling);
 			AppendBool(hasher, "mo_subtraction", config.moSubtraction);
-			AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
-			AppendSignedInt(hasher, "num_lua_states_override", config.numLuaStatesOverride);
+			// The threaded Lua state count does not change the sim, so peers may run different counts.
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
 			AppendInt(hasher, "lockstep_codec_version", config.lockstepCodecVersion);
