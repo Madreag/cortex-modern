@@ -1,6 +1,7 @@
 #include "PreviewEventLedger.h"
 
 #include "AudioMan.h"
+#include "MovableMan.h"
 #include "TimerMan.h"
 
 #include <algorithm>
@@ -150,6 +151,9 @@ namespace RTE {
 				++entry;
 				continue;
 			}
+			if (entry->key.kind == Projectile && MovableMan::IsConstructed()) {
+				g_MovableMan.DropPreviewGhost(entry->key);
+			}
 			Retire(*entry);
 			++s_Counters.expired;
 			if (TraceEnabled()) {
@@ -161,10 +165,16 @@ namespace RTE {
 
 	void PreviewEventLedger::Clear() {
 		for (Entry& entry: s_Entries) {
+			if (entry.key.kind == Projectile && MovableMan::IsConstructed()) {
+				g_MovableMan.DropPreviewGhost(entry.key);
+			}
 			Retire(entry);
 			++s_Counters.expired;
 		}
 		s_Entries.clear();
+		if (MovableMan::IsConstructed()) {
+			g_MovableMan.DropAllPreviewGhosts();
+		}
 		s_PreviewedEmitters.clear();
 		s_PreviewSeq.clear();
 		s_CanonicalSeq.clear();

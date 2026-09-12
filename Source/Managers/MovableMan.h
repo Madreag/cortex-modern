@@ -16,6 +16,7 @@
 #include "Activity.h"
 #include "Scene.h"
 #include "SpatialPartitionGrid.h"
+#include "PreviewEventLedger.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -281,6 +282,11 @@ namespace RTE {
 		size_t GetSpeculativeSpawnCount() const;
 		/// The preset names of the speculative spawns, comma separated.
 		std::string DescribeSpeculativeSpawns() const;
+		/// Drops the ghost that matches this ledger key; the canonical particle takes the pixel.
+		void DropPreviewGhost(const PreviewEventLedger::Key& key);
+		void DropAllPreviewGhosts();
+		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
+		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 
@@ -895,6 +901,14 @@ namespace RTE {
 		void RecordSpeculativeSpawnMeta(MovableObject* mo);
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
+		void TakePreviewSpawn(MovableObject* particle);
+		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
+		struct PreviewGhost {
+			MovableObject* object = nullptr;
+			PreviewEventLedger::Key key;
+		};
+		std::vector<PreviewGhost> m_PreviewGhosts;
+		uint64_t m_PreviewGhostPeak = 0;
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.

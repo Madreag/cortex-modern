@@ -45,6 +45,9 @@
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
+#include "PreviewEventLedger.h"
+#include "RTETools.h"
+#include "TimerMan.h"
 
 #include <bit>
 
@@ -1133,6 +1136,8 @@ MovableMan::~MovableMan() {
 
 void MovableMan::Clear() {
 	m_Speculation = Speculation();
+	DropAllPreviewGhosts();
+	m_PreviewGhostPeak = 0;
 	m_RenderHidden.clear();
 	m_LinkRoot = nullptr;
 	m_WorldSetAside = nullptr;
@@ -2051,9 +2056,92 @@ std::string MovableMan::DescribeSpeculativeSpawns() const {
 	return out;
 }
 
+void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key) {
+	if (!mo) {
+		return;
+	}
+	mo->SetAsAddedToMovableMan(false);
+	mo->DestroyScriptState();
+	m_ValidActors.erase(mo);
+	m_ValidItems.erase(mo);
+	m_ValidParticles.erase(mo);
+	if (Actor* actor = dynamic_cast<Actor*>(mo); actor && actor->GetTeam() >= 0) {
+		RemoveActorFromTeamRoster(actor);
+	}
+	UnregisterObject(mo);
+	mo->SetAsNoID();
+	m_PreviewGhosts.push_back({mo, key});
+	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
+		m_PreviewGhostPeak = m_PreviewGhosts.size();
+	}
+}
+
+void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
+	for (auto ghost = m_PreviewGhosts.begin(); ghost != m_PreviewGhosts.end(); ++ghost) {
+		if (ghost->key.kind == key.kind && ghost->key.emitterUID == key.emitterUID && ghost->key.presetHash == key.presetHash && ghost->key.tick == key.tick && ghost->key.seq == key.seq) {
+			delete ghost->object;
+			m_PreviewGhosts.erase(ghost);
+			return;
+		}
+	}
+}
+
+void MovableMan::DropAllPreviewGhosts() {
+	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		delete ghost.object;
+	}
+	m_PreviewGhosts.clear();
+}
+
+static bool IsNamedSpeculativeSpawn(const MovableObject* mo) {
+	return mo && mo->GetPresetName() != "None" && !mo->GetPresetName().empty();
+}
+
+static void NoteProjectileEvent(const PreviewEventLedger::Key& key, bool predicted) {
+	for (const PreviewEventLedger::EventStart& start: PreviewEventLedger::GetEventStarts()) {
+		if (start.kind == key.kind && start.emitterUID == key.emitterUID && start.eventTick == key.tick && start.seq == key.seq && start.predicted == predicted) {
+			return;
+		}
+	}
+	PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), key, predicted);
+}
+
+void MovableMan::TakePreviewSpawn(MovableObject* particle) {
+	if (!IsNamedSpeculativeSpawn(particle)) {
+		return;
+	}
+	const uint64_t emitter = SoundSimulationScope::CurrentKey().objectUID;
+	if (PreviewEventLedger::IsArmed() || !PreviewEventLedger::IsPreviewedEmitter(emitter)) {
+		return;
+	}
+	const uint64_t presetHash = Hash(particle->GetPresetName() + "@" + std::to_string(particle->GetModuleID()));
+	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, emitter, 0, presetHash, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	std::vector<int> voices;
+	if (PreviewEventLedger::Consume(key, voices)) {
+		DropPreviewGhost(key);
+		NoteProjectileEvent(key, false);
+	}
+}
+
 void MovableMan::DisposeSpeculativeSpawns() {
 	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
-		DestroySpeculativeSpawn(spawn.object);
+		MovableObject* mo = spawn.object;
+		if (!mo) {
+			continue;
+		}
+		if (mo->IsSetToDelete() || !IsNamedSpeculativeSpawn(mo) || !PreviewEventLedger::IsPreviewedEmitter(spawn.emitterUID)) {
+			DestroySpeculativeSpawn(mo);
+			continue;
+		}
+		const uint64_t presetHash = Hash(mo->GetPresetName() + "@" + std::to_string(mo->GetModuleID()));
+		const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, spawn.emitterUID, 0, presetHash, spawn.tick);
+		if (PreviewEventLedger::AlreadyPlayed(key)) {
+			DestroySpeculativeSpawn(mo);
+			continue;
+		}
+		PreviewEventLedger::Insert(key, {});
+		NoteProjectileEvent(key, true);
+		InstallPreviewGhost(mo, key);
 	}
 	m_Speculation.spawns.clear();
 	m_Speculation.spawnMeta.clear();
@@ -2935,6 +3023,9 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 			}
 		}
 		RecordSpeculativeSpawnMeta(particleToAdd);
+		if (!m_Speculation.active && !m_RestoringSnapshot) {
+			TakePreviewSpawn(particleToAdd);
+		}
 		if (particleToAdd->IsDevice()) {
 			std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
 			m_AddedItems.push_back(particleToAdd);
@@ -4708,6 +4799,11 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		for (std::deque<MovableObject*>::iterator parIt = m_Particles.begin(); parIt != m_Particles.end(); ++parIt) {
 			if (m_RenderHidden.empty() || m_RenderHidden.count(*parIt) == 0) {
 				(*parIt)->Draw(pTargetBitmap, targetPos);
+			}
+		}
+		for (const PreviewGhost& ghost: m_PreviewGhosts) {
+			if (ghost.object) {
+				ghost.object->Draw(pTargetBitmap, targetPos);
 			}
 		}
 	}
