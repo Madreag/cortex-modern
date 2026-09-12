@@ -229,7 +229,7 @@ namespace RTE {
 				*error = "session_identity_hash stopped reacting to session_rules_hash";
 				return false;
 			}
-			std::cout << "[net-identity-selftest] lua state count out of identity: 4 and 32 states share deterministic_config_hash "
+			std::cout << "[net-identity-selftest] PASS lua state count out of identity: 4 and 32 states share deterministic_config_hash "
 			          << NetIdentity::HashHex(configFour) << " and session_identity_hash " << NetIdentity::HashHex(identityFour) << std::endl;
 			return true;
 		}
