@@ -58,6 +58,11 @@ void SettingsMan::Clear() {
 	m_SessionDirectoryCertSha256.clear();
 	m_NetworkPortMapEnable = false;
 	m_NetworkPortMapEnableOverride = -1;
+	m_NetworkIceEnable = false;
+	m_NetworkStunServers.clear();
+	m_NetworkTurnServers.clear();
+	m_NetworkTurnUser.clear();
+	m_NetworkTurnPass.clear();
 	m_LocalPrediction = true;
 	m_LocalPredictionMaxTicks = 20;
 	m_NumberOfLuaStatesOverride = -1;
@@ -211,6 +216,11 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("SessionDirectoryInstallKey", { reader >> m_SessionDirectoryInstallKey; });
 	MatchProperty("SessionDirectoryCertSha256", { reader >> m_SessionDirectoryCertSha256; });
 	MatchProperty("NetworkPortMapEnable", { reader >> m_NetworkPortMapEnable; });
+	MatchProperty("NetworkIceEnable", { reader >> m_NetworkIceEnable; });
+	MatchProperty("NetworkStunServers", { reader >> m_NetworkStunServers; });
+	MatchProperty("NetworkTurnServers", { reader >> m_NetworkTurnServers; });
+	MatchProperty("NetworkTurnUser", { reader >> m_NetworkTurnUser; });
+	MatchProperty("NetworkTurnPass", { reader >> m_NetworkTurnPass; });
 	MatchProperty("LocalPrediction", { reader >> m_LocalPrediction; });
 	MatchProperty("LocalPredictionMaxTicks", { reader >> m_LocalPredictionMaxTicks; });
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
@@ -345,6 +355,11 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("SessionDirectoryInstallKey", m_SessionDirectoryInstallKey);
 	writer.NewPropertyWithValue("SessionDirectoryCertSha256", m_SessionDirectoryCertSha256);
 	writer.NewPropertyWithValue("NetworkPortMapEnable", m_NetworkPortMapEnable);
+	writer.NewPropertyWithValue("NetworkIceEnable", m_NetworkIceEnable);
+	writer.NewPropertyWithValue("NetworkStunServers", m_NetworkStunServers);
+	writer.NewPropertyWithValue("NetworkTurnServers", m_NetworkTurnServers);
+	writer.NewPropertyWithValue("NetworkTurnUser", m_NetworkTurnUser);
+	writer.NewPropertyWithValue("NetworkTurnPass", m_NetworkTurnPass);
 	writer.NewPropertyWithValue("LocalPrediction", m_LocalPrediction);
 	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	writer.NewPropertyWithValue("NumberOfLuaStatesOverride", m_NumberOfLuaStatesOverride);

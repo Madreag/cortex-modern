@@ -77,6 +77,8 @@ namespace RTE {
 
 		State GetState() const { return m_State; }
 		const std::string& GetSessionId() const { return m_SessionId; }
+		/// The session token the register reply issued; the host's signaling channel proves it.
+		const std::string& GetToken() const { return m_Token; }
 
 		/// Host: keep the row listed. The first call after Idle registers; the row passed on each
 		/// call carries the live peer_count/seats_free for the next heartbeat.
