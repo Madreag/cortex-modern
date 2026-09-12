@@ -584,7 +584,7 @@ namespace RTE {
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
 		void SeedAllLuaRNGs(uint64_t baseSeed);
 
-		/// Folds the master Lua state's RNG into the lua_state SimChecksum subsystem.
+		/// Folds the master Lua state's RNG, then every scripted object's script graph in unique ID order, into the lua_state SimChecksum subsystem.
 		void HashAllLuaStatesIntoSimChecksum();
 
 		/// Blocks until any in-flight async GC finishes.
