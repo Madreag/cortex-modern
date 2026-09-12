@@ -9,6 +9,7 @@
 
 #ifdef CCCP_WITH_GNS
 #include <steam/isteamnetworkingutils.h>
+#include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 #endif
 
@@ -515,6 +516,227 @@ namespace RTE {
 			}
 		}
 
+		bool StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error) {
+			Stop();
+			if (!Acquire(error)) {
+				return false;
+			}
+			if (virtualPort < 0 || virtualPort > 0xffff) {
+				SetError(error, "GNS P2P virtual port must be 0-65535");
+				return false;
+			}
+
+			m_Interface = SteamNetworkingSockets();
+			if (!ApplyP2PIdentity(config, error)) {
+				return false;
+			}
+			ApplySimulatedLag();
+			std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
+			m_ListenSocket = m_Interface->CreateListenSocketP2P(virtualPort, static_cast<int>(connectionConfigs.size()), connectionConfigs.data());
+			if (m_ListenSocket == k_HSteamListenSocket_Invalid) {
+				SetError(error, "CreateListenSocketP2P failed");
+				return false;
+			}
+
+			m_PollGroup = m_Interface->CreatePollGroup();
+			if (m_PollGroup == k_HSteamNetPollGroup_Invalid) {
+				SetError(error, "CreatePollGroup failed");
+				Stop();
+				return false;
+			}
+
+			m_IsHost = true;
+			m_IsStarted = true;
+			m_NextPeerId = 1;
+			return true;
+		}
+
+		bool ConnectP2P(ISteamNetworkingConnectionSignaling* signaling, const std::string& peerIdentity, int remoteVirtualPort, const GnsP2PConfig& config, std::string* error) {
+			Stop();
+			if (!signaling) {
+				SetError(error, "GNS P2P connect needs a signaling object");
+				return false;
+			}
+
+			SteamNetworkingIdentity peer;
+			peer.Clear();
+			if (remoteVirtualPort < 0 || remoteVirtualPort > 0xffff) {
+				SetError(error, "GNS P2P virtual port must be 0-65535");
+			} else if (!peerIdentity.empty() && !peer.ParseString(peerIdentity.c_str())) {
+				SetError(error, "GNS could not parse peer identity '" + peerIdentity + "'");
+			} else if (Acquire(error)) {
+				m_Interface = SteamNetworkingSockets();
+				if (ApplyP2PIdentity(config, error)) {
+					ApplySimulatedLag();
+					std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
+					if (config.localVirtualPort >= 0) {
+						connectionConfigs.emplace_back();
+						connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_LocalVirtualPort, config.localVirtualPort);
+					}
+					// From this call on GNS owns signaling, and releases it itself if the call fails.
+					m_ServerConnection = m_Interface->ConnectP2PCustomSignaling(signaling, peer.IsInvalid() ? nullptr : &peer, remoteVirtualPort, static_cast<int>(connectionConfigs.size()), connectionConfigs.data());
+					if (m_ServerConnection == k_HSteamNetConnection_Invalid) {
+						SetError(error, "ConnectP2PCustomSignaling failed");
+						return false;
+					}
+
+					m_IsHost = false;
+					m_IsStarted = true;
+					m_PeersByConnection[m_ServerConnection] = 1;
+					m_ConnectionsByPeer[1] = m_ServerConnection;
+					s_ConnectionOwners[m_ServerConnection] = this;
+					return true;
+				}
+			}
+			signaling->Release();
+			return false;
+		}
+
+		bool ReceiveP2PSignal(const void* blob, int size, ISteamNetworkingSignalingRecvContext* context) {
+			if (!m_Interface || !blob || size <= 0) {
+				return false;
+			}
+			OwningRecvContext owningContext(this, context);
+			return m_Interface->ReceivedP2PCustomSignal(blob, size, &owningContext);
+		}
+
+		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId peerId) {
+			GnsPeerConnectionInfo result;
+			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
+			SteamNetConnectionInfo_t info{};
+			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end() || !m_Interface->GetConnectionInfo(connectionIt->second, &info)) {
+				return result;
+			}
+			char identity[SteamNetworkingIdentity::k_cchMaxString] = {};
+			info.m_identityRemote.ToString(identity, sizeof(identity));
+			char address[SteamNetworkingIPAddr::k_cchMaxString] = {};
+			info.m_addrRemote.ToString(address, sizeof(address), true);
+
+			result.found = true;
+			result.state = info.m_eState;
+			result.endReason = info.m_eEndReason;
+			result.endDebug = info.m_szEndDebug;
+			result.description = info.m_szConnectionDescription;
+			result.remoteIdentity = identity;
+			result.remoteAddress = info.m_addrRemote.IsIPv6AllZeros() ? std::string() : std::string(address);
+			result.flags = info.m_nFlags;
+			result.relayPop = info.m_idPOPRelay;
+
+			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
+				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
+				{"P2P_Transport_ICE_Implementation", k_ESteamNetworkingConfig_P2P_Transport_ICE_Implementation},
+				{"LogLevel_P2PRendezvous", k_ESteamNetworkingConfig_LogLevel_P2PRendezvous},
+				{"LocalVirtualPort", k_ESteamNetworkingConfig_LocalVirtualPort},
+				{"SendBufferSize", k_ESteamNetworkingConfig_SendBufferSize},
+				{"SendRateMin", k_ESteamNetworkingConfig_SendRateMin},
+				{"SendRateMax", k_ESteamNetworkingConfig_SendRateMax},
+				{"TimeoutInitial", k_ESteamNetworkingConfig_TimeoutInitial},
+				{"TimeoutConnected", k_ESteamNetworkingConfig_TimeoutConnected},
+			};
+			for (const auto& [name, value] : numbers) {
+				result.config.push_back(std::string(name) + "=" + std::to_string(ConnectionConfigInt32(connectionIt->second, value)));
+			}
+			result.config.push_back("P2P_STUN_ServerList=\"" + ConnectionConfigString(connectionIt->second, k_ESteamNetworkingConfig_P2P_STUN_ServerList) + "\"");
+			return result;
+		}
+
+		std::string GetPeerDetailedStatus(NetPeerId peerId) {
+			const auto connectionIt = m_ConnectionsByPeer.find(peerId);
+			if (!m_Interface || connectionIt == m_ConnectionsByPeer.end()) {
+				return {};
+			}
+			std::vector<char> detail(16 * 1024, '\0');
+			if (m_Interface->GetDetailedConnectionStatus(connectionIt->second, detail.data(), static_cast<int>(detail.size())) != 0) {
+				return {};
+			}
+			return detail.data();
+		}
+
+		std::string GetLocalIdentity() {
+			SteamNetworkingIdentity identity;
+			if (!m_Interface || !m_Interface->GetIdentity(&identity)) {
+				return {};
+			}
+			char text[SteamNetworkingIdentity::k_cchMaxString] = {};
+			identity.ToString(text, sizeof(text));
+			return text;
+		}
+
+		// ResetIdentity closes every connection of the process-wide interface, so it only runs on a change.
+		bool ApplyP2PIdentity(const GnsP2PConfig& config, std::string* error) {
+			if (config.localIdentity.empty()) {
+				return true;
+			}
+			SteamNetworkingIdentity wanted;
+			if (!wanted.ParseString(config.localIdentity.c_str())) {
+				SetError(error, "GNS could not parse local identity '" + config.localIdentity + "'");
+				return false;
+			}
+			SteamNetworkingIdentity current;
+			if (!m_Interface->GetIdentity(&current) || !(current == wanted)) {
+				m_Interface->ResetIdentity(&wanted);
+			}
+			return true;
+		}
+
+		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
+			std::vector<SteamNetworkingConfigValue_t> connectionConfigs(8);
+			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
+			// The IP path's send budget and connected timeout, for the same reasons.
+			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
+			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
+			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
+			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
+			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, config.iceEnable);
+			connectionConfigs[6].SetString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());
+			connectionConfigs[7].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Implementation, config.iceImplementation);
+			if (config.rendezvousLogLevel > 0) {
+				connectionConfigs.emplace_back();
+				connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, config.rendezvousLogLevel);
+			}
+			return connectionConfigs;
+		}
+
+		static int ConnectionConfigInt32(HSteamNetConnection connection, ESteamNetworkingConfigValue value) {
+			int32 number = -1;
+			size_t size = sizeof(number);
+			ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Int32;
+			SteamNetworkingUtils()->GetConfigValue(value, k_ESteamNetworkingConfig_Connection, connection, &type, &number, &size);
+			return number;
+		}
+
+		static std::string ConnectionConfigString(HSteamNetConnection connection, ESteamNetworkingConfigValue value) {
+			char text[1024] = {};
+			size_t size = sizeof(text);
+			ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_String;
+			if (SteamNetworkingUtils()->GetConfigValue(value, k_ESteamNetworkingConfig_Connection, connection, &type, text, &size) < k_ESteamNetworkingGetConfigValue_OK) {
+				return {};
+			}
+			return text;
+		}
+
+		// Routes the callbacks of a connection that a peer's request creates to the transport that received it.
+		struct OwningRecvContext final : ISteamNetworkingSignalingRecvContext {
+			OwningRecvContext(Impl* owner, ISteamNetworkingSignalingRecvContext* inner) : m_Owner(owner), m_Inner(inner) {}
+
+			ISteamNetworkingConnectionSignaling* OnConnectRequest(HSteamNetConnection connection, const SteamNetworkingIdentity& identityPeer, int localVirtualPort) override {
+				ISteamNetworkingConnectionSignaling* signaling = m_Inner ? m_Inner->OnConnectRequest(connection, identityPeer, localVirtualPort) : nullptr;
+				if (signaling) {
+					s_ConnectionOwners[connection] = m_Owner;
+				}
+				return signaling;
+			}
+
+			void SendRejectionSignal(const SteamNetworkingIdentity& identityPeer, const void* message, int size) override {
+				if (m_Inner) {
+					m_Inner->SendRejectionSignal(identityPeer, message, size);
+				}
+			}
+
+			Impl* m_Owner;
+			ISteamNetworkingSignalingRecvContext* m_Inner;
+		};
+
 		bool m_HasGnsRef = false;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
@@ -560,6 +782,21 @@ namespace RTE {
 		void Stop() {}
 		std::vector<NetTransportEvent> PollEvents() { return {}; }
 		uint32_t GetPeerPingMs(NetPeerId) { return 0; }
+
+		bool StartHostP2P(int, const GnsP2PConfig&, std::string* error) {
+			SetError(error, "GameNetworkingSockets support is not compiled in; rebuild with CCCP_WITH_GNS");
+			return false;
+		}
+
+		bool ConnectP2P(ISteamNetworkingConnectionSignaling*, const std::string&, int, const GnsP2PConfig&, std::string* error) {
+			SetError(error, "GameNetworkingSockets support is not compiled in; rebuild with CCCP_WITH_GNS");
+			return false;
+		}
+
+		bool ReceiveP2PSignal(const void*, int, ISteamNetworkingSignalingRecvContext*) { return false; }
+		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId) { return {}; }
+		std::string GetPeerDetailedStatus(NetPeerId) { return {}; }
+		std::string GetLocalIdentity() { return {}; }
 	};
 
 #endif
@@ -597,6 +834,30 @@ namespace RTE {
 
 	uint32_t GnsTransport::GetPeerPingMs(NetPeerId peerId) const {
 		return m_Impl->GetPeerPingMs(peerId);
+	}
+
+	bool GnsTransport::StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error) {
+		return m_Impl->StartHostP2P(virtualPort, config, error);
+	}
+
+	bool GnsTransport::ConnectP2P(ISteamNetworkingConnectionSignaling* signaling, const std::string& peerIdentity, int remoteVirtualPort, const GnsP2PConfig& config, std::string* error) {
+		return m_Impl->ConnectP2P(signaling, peerIdentity, remoteVirtualPort, config, error);
+	}
+
+	bool GnsTransport::ReceiveP2PSignal(const void* blob, int size, ISteamNetworkingSignalingRecvContext* context) {
+		return m_Impl->ReceiveP2PSignal(blob, size, context);
+	}
+
+	GnsPeerConnectionInfo GnsTransport::GetPeerConnectionInfo(NetPeerId peerId) const {
+		return m_Impl->GetPeerConnectionInfo(peerId);
+	}
+
+	std::string GnsTransport::GetPeerDetailedStatus(NetPeerId peerId) const {
+		return m_Impl->GetPeerDetailedStatus(peerId);
+	}
+
+	std::string GnsTransport::GetLocalIdentity() const {
+		return m_Impl->GetLocalIdentity();
 	}
 
 	bool GnsTransport::IsCompiledIn() {
