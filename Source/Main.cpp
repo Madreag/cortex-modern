@@ -1383,6 +1383,23 @@ void ProcessMenuScript() {
 		std::getline(iss, text);
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
 		if (!menu->AutomationSetText(control, text)) { return MenuScriptFail("settext failed (textbox missing): " + control); }
+	} else if (cmd == "setcheck") {
+		std::string control;
+		int checked = 0;
+		iss >> control >> checked;
+		if (!menu->AutomationSetCheck(control, checked != 0)) { return MenuScriptFail("setcheck failed (checkbox missing or hidden): " + control); }
+		std::cout << "[menu-script] setcheck " << control << " " << checked << std::endl;
+	} else if (cmd == "assert_label") {
+		std::string control;
+		std::string sub;
+		iss >> control;
+		std::getline(iss, sub);
+		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
+		std::string text;
+		const bool found = menu->AutomationLabelText(control, text);
+		const bool pass = found && text.find(sub) != std::string::npos;
+		std::cout << "[menu-script] assert_label " << control << " \"" << sub << "\" text=\"" << text << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail("assert_label " + control + " missing substring: " + sub); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;

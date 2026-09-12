@@ -26,6 +26,7 @@
 #include "GUILabel.h"
 #include "GUIListBox.h"
 #include "GUITextBox.h"
+#include "GUICheckbox.h"
 
 #include "Resources/Credits.h"
 
@@ -67,6 +68,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostPortTextBox = nullptr;
 	m_MultiplayerHostPlayersTextBox = nullptr;
 	m_MultiplayerHostInputDelayTextBox = nullptr;
+	m_MultiplayerHostPortMapCheckbox = nullptr;
 	m_MultiplayerHostModeButton = nullptr;
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
@@ -198,6 +200,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
 	m_MultiplayerHostPlayersTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPlayers"));
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
+	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
 	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
@@ -243,6 +246,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayTextBox->SetNumericOnly(true);
 	m_MultiplayerHostInputDelayTextBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
 	m_MultiplayerHostInputDelayTextBox->SetMaxTextLength(2);
+	m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	m_MultiplayerJoinPortTextBox->SetText("41010");
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
 	m_MultiplayerJoinPortTextBox->SetMaxNumericValue(65535);
@@ -596,6 +600,8 @@ bool MainMenuGUI::HandleInputEvents() {
 			g_GUISound.SelectionChangeSound()->Play();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_MultiplayerLanGamesList) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
+			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
 	return false;
@@ -635,6 +641,7 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl) {
 	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
 		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 		m_MultiplayerSubScreen = MultiplayerSubScreen::HostSetup;
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton]) {
@@ -648,6 +655,11 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		StartMultiplayer(true);
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerConnectButton]) {
 		StartMultiplayer(false);
+	} else if (guiEventControl == m_MultiplayerHostPortMapCheckbox) {
+		// The host panel persists nothing else; this key goes through the one settings save path.
+		g_SettingsMan.SetNetworkPortMapEnable(m_MultiplayerHostPortMapCheckbox->GetCheck() == GUICheckbox::Checked);
+		g_SettingsMan.UpdateSettingsFile();
+		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MultiplayerHostModeButton) {
 		// Cycle PvP -> Co-op PvE -> PvPvE. PvE modes add a CPU team the host's AI drives.
 		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
@@ -1073,6 +1085,45 @@ bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::s
 	GUITextBox* textBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
 	if (textBox && IsControlClickable(textBox)) {
 		textBox->SetText(text);
+		return true;
+	}
+	return false;
+}
+
+bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checked) {
+	GUICheckbox* checkbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
+	if (!checkbox) {
+		checkbox = dynamic_cast<GUICheckbox*>(m_MainMenuScreenGUIControlManager->GetControl(controlName));
+	}
+	if (!checkbox || !IsControlClickable(checkbox)) {
+		return false;
+	}
+	checkbox->SetCheck(checked ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+	// SetCheck raises no event; the click path is the Changed notification routed to the screen handler.
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen) {
+		HandleMultiplayerScreenInputEvents(checkbox);
+	}
+	return true;
+}
+
+bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
+	}
+	if (!control) {
+		return false;
+	}
+	if (const GUILabel* label = dynamic_cast<GUILabel*>(control)) {
+		text = label->GetText();
+		return true;
+	}
+	if (const GUIButton* button = dynamic_cast<GUIButton*>(control)) {
+		text = button->GetText();
+		return true;
+	}
+	if (const GUICheckbox* checkbox = dynamic_cast<GUICheckbox*>(control)) {
+		text = checkbox->GetText();
 		return true;
 	}
 	return false;
