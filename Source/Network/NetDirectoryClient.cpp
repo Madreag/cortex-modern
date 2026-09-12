@@ -455,7 +455,23 @@ namespace RTE {
 			row.players = std::to_string(host.playerCount) + "/" + std::to_string(host.maxPlayers);
 			row.address = host.address;
 			row.port = host.port;
-			row.joinable = true;
+			if (!host.hasCompatibility) {
+				// A v1 beacon carries nothing to judge: the host still lists but is never joinable.
+				row.reason = "beacon";
+			} else {
+				NetDirectorySessionRow lanIdentity;
+				lanIdentity.networkProtocolVersion = host.compatibility.networkProtocolVersion;
+				lanIdentity.lockstepCodecVersion = host.compatibility.lockstepCodecVersion;
+				lanIdentity.controllerFrameVersion = host.compatibility.controllerFrameVersion;
+				lanIdentity.sessionIdentityHash = host.compatibility.sessionIdentityHash;
+				lanIdentity.moduleManifestHash = host.compatibility.moduleManifestHash;
+				std::string why;
+				if (NetDirectoryCodec::IsJoinable(lanIdentity, local, &why)) {
+					row.joinable = true;
+				} else {
+					row.reason = MapMismatchReason(why);
+				}
+			}
 			rows.push_back(std::move(row));
 		}
 		for (const NetDirectorySessionRow& session : directory) {

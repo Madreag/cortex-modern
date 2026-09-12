@@ -452,8 +452,9 @@ namespace RTE {
 		if (row.networkProtocolVersion != local.networkProtocolVersion) return mismatch("network_protocol_version");
 		if (row.lockstepCodecVersion != local.lockstepCodecVersion) return mismatch("lockstep_codec_version");
 		if (row.controllerFrameVersion != local.controllerFrameVersion) return mismatch("controller_frame_version");
-		if (row.sessionIdentityHash != local.sessionIdentityHash) return mismatch("session_identity_hash");
+		// The session identity hash contains the module manifest hash, so it names only a difference the specific fields did not.
 		if (row.moduleManifestHash != local.moduleManifestHash) return mismatch("module_manifest_hash");
+		if (row.sessionIdentityHash != local.sessionIdentityHash) return mismatch("session_identity_hash");
 		if (reason) reason->clear();
 		return true;
 	}
