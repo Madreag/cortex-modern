@@ -38,12 +38,14 @@ end
 
 function Create(self)
     self.testCreate, self.testUpdate = 1, 0
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
 end
 
 function Update(self)
     self.testUpdate = self.testUpdate + 1
     self:SetNumberValue("TestUpdates", self.testUpdate)
-    if self.UniqueID ~= 1048577 or self.activityContracts or os.getenv("CC_CONTRACT_FRESH_DEFAULTS") then return end
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if self.UniqueID ~= _ContractAuditOwner or self.activityContracts or os.getenv("CC_CONTRACT_FRESH_DEFAULTS") then return end
     local a = ToGameActivity(ActivityMan:GetActivity())
     a.InCampaignStage = 3
     a.Difficulty = 77
@@ -81,6 +83,7 @@ function Update(self)
     MovableMan.MaxDroppedItems = 247
     MovableMan:EnableParticleSettling(false)
     self.activityContracts = readState()
+    print("[activity-contract-check] ARMED uid=" .. tostring(self.UniqueID))
     local n=0; for _ in pairs(self.activityContracts) do n=n+1 end
     print("[activity-contract-fixture] constructed checks=" .. n)
 end
