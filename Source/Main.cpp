@@ -4422,6 +4422,12 @@ int RunNetDirectoryList() {
 	return 0;
 }
 
+/// Whether an argument starts a run whose Lua-side world must agree with another run's: a net session, a hash trace, a replay, a controller log or the determinism check.
+static bool IsDeterministicRunArgument(const std::string& argument) {
+	static const std::array<std::string, 13> c_Arguments = {"-deterministic-gc", "-tick-hashes", "-net-host", "-net-join", "-net-dedicated", "-net-lockstep", "-net-match", "-net-match-service-e2e", "-net-replay", "-net-replay-out", "-controller-log-out", "-controller-log-in", "-determinism-selftest-perturb"};
+	return std::find(c_Arguments.begin(), c_Arguments.end(), argument) != c_Arguments.end();
+}
+
 /// <summary>
 /// Implementation of the main function.
 /// </summary>
@@ -4515,6 +4521,14 @@ int main(int argc, char** argv) {
 	}
 	if (netSessionRequested && !explicitLuaStateOverride) {
 		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
+	}
+
+	// Decided before LuaMan starts, so its startup line names the collector this run uses.
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] != nullptr && IsDeterministicRunArgument(argv[i])) {
+			LuaMan::SetDeterministicCollection(true);
+			break;
+		}
 	}
 
 	// Headless: -tick-hashes (the determinism trace mode, set on every -determinism-check child)

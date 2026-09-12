@@ -46,6 +46,7 @@
 
 #include "luabind/detail/object_rep.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <charconv>
 #include <cstdlib>
@@ -4669,6 +4670,23 @@ void LuaMan::Clear() {
 	ResetPathCallbacks();
 }
 
+static std::atomic<bool> s_DeterministicCollection{false};
+static std::atomic<bool> s_CollectorModeAnnounced{false};
+
+static void PrintCollectorMode(bool deterministic) {
+	std::cout << "[lua] collector: " << (deterministic ? "full collection" : "incremental step") << " at every tick end" << std::endl;
+}
+
+void LuaMan::SetDeterministicCollection(bool deterministic) {
+	if (s_DeterministicCollection.exchange(deterministic) != deterministic && s_CollectorModeAnnounced) {
+		PrintCollectorMode(deterministic);
+	}
+}
+
+bool LuaMan::IsDeterministicCollection() {
+	return s_DeterministicCollection;
+}
+
 void LuaMan::Initialize() {
 	m_MasterScriptState.Initialize();
 
@@ -4682,6 +4700,9 @@ void LuaMan::Initialize() {
 	m_ScriptStates = std::vector<LuaStateWrapper>(luaStateCount);
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
 		luaState.Initialize();
+	}
+	if (!s_CollectorModeAnnounced.exchange(true)) {
+		PrintCollectorMode(s_DeterministicCollection);
 	}
 }
 
@@ -4807,12 +4828,19 @@ static bool RunTickEndCollectionSelfTest() {
 		g_LuaMan.CollectGarbageForCheckpoint();
 		return uid > 0 ? passes : -1;
 	};
+	const bool previousMode = LuaMan::IsDeterministicCollection();
+	LuaMan::SetDeterministicCollection(true);
 	const int smallHeap = passesToDestroy(0);
 	const int largeHeap = passesToDestroy(200000);
+	LuaMan::SetDeterministicCollection(false);
+	const int largeHeapIncremental = passesToDestroy(200000);
+	LuaMan::SetDeterministicCollection(previousMode);
 	MovableObject::PinUniqueIDCounter(counter);
-	const bool pass = smallHeap == 1 && largeHeap == 1;
-	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << " dropped_lua_owned_object_dies_at_the_next_tick_end states=" << states.size() << " passes_small_heap=" << smallHeap << " passes_large_heap=" << largeHeap << std::endl;
-	return pass;
+	const bool fullPass = smallHeap == 1 && largeHeap == 1;
+	const bool incrementalPass = largeHeapIncremental > 1;
+	std::cout << "[script-graph-selftest] " << (fullPass ? "PASS" : "FAIL") << " dropped_lua_owned_object_dies_at_the_next_tick_end states=" << states.size() << " passes_small_heap=" << smallHeap << " passes_large_heap=" << largeHeap << std::endl;
+	std::cout << "[script-graph-selftest] " << (incrementalPass ? "PASS" : "FAIL") << " incremental_step_needs_more_than_one_tick_end_on_a_large_heap states=" << states.size() << " passes_large_heap=" << largeHeapIncremental << std::endl;
+	return fullPass && incrementalPass;
 }
 
 bool LuaMan::RunScriptGraphSelfTest() {
@@ -6875,14 +6903,19 @@ void LuaMan::StartAsyncGarbageCollection() {
 		allStates.push_back(&wrapper);
 	}
 
+	const bool fullCollection = IsDeterministicCollection();
 	m_GarbageCollectionTask = BS::multi_future<void>();
 	for (LuaStateWrapper* luaState: allStates) {
 		m_GarbageCollectionTask.push_back(
-		    g_ThreadMan.GetPriorityThreadPool().submit([luaState]() {
+		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
-			    // A whole cycle every tick, so the tick a dropped object dies on does not follow its state's heap size.
-			    lua_gc(luaState->GetLuaState(), LUA_GCCOLLECT, 0);
+			    if (fullCollection) {
+				    // A whole cycle every tick, so the tick a dropped object dies on does not follow its state's heap size.
+				    lua_gc(luaState->GetLuaState(), LUA_GCCOLLECT, 0);
+			    } else {
+				    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
+			    }
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTOP, 0);
 		    }));
 	}
