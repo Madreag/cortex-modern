@@ -631,6 +631,7 @@ namespace RTE {
 
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
