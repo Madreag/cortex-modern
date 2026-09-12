@@ -122,8 +122,9 @@ namespace RTE {
 		Trace("preview start");
 
 		const auto start = std::chrono::steady_clock::now();
-		// The seeing pass reads the terrain the clone may carve; let it finish first.
+		// The seeing pass and the MOID draw still walk the live actor trees.
 		g_MovableMan.WaitForActorsSeeTask();
+		g_MovableMan.CompleteQueuedMOIDDrawings();
 		// Fence everything a preview tick can touch; all of it goes back before the canonical sim resumes.
 		const long long simCount = g_TimerMan.GetSimUpdateCount();
 		const long long simTicks = g_TimerMan.GetSimTimeTicks();
