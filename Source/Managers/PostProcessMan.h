@@ -183,6 +183,10 @@ namespace RTE {
 		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmaps; //!< Owns restored effect pixels; queued and standard glow pointers may alias these images.
 
 	private:
+		/// Whether this effect is registered now: a previewed actor's is shown on the preview that
+		/// produces it, and its canonical registration adopts that showing instead of adding a second.
+		static bool TakePreviewEffect(size_t hash);
+
 		GLuint m_BackBuffer8; //!< Backbuffer texture for incoming indexed drawings.
 		GLuint m_Palette8Texture; //!< Palette texture for incoming indexed drawings.
 		std::shared_ptr<RenderTarget> m_BlitFramebuffer; //!< Framebuffer for blitting the 8bpp backbuffer to the 32bpp backbuffer.
