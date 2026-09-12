@@ -1617,6 +1617,243 @@ namespace RTE {
 			return true;
 		}
 
+		// A rematch after a peer leaves re-forms the round on the peers still connected: the match config
+		// drops to the survivor count and their lockstep ids close up, or the relaunch cannot start.
+		bool TestRematchRebuildsTheSurvivingRoster(std::string* error) {
+			struct ClientPeer {
+				LoopbackTransport transport;
+				NetSession session;
+				NetLobbySession lobby;
+				NetLockstepCoordinator coordinator;
+				uint8_t peerId = 0;
+				bool lobbyActive = false;
+				bool coordinatorActive = false;
+				bool left = false;
+				uint64_t lobbyStartedAt = 0;
+			};
+			std::array<ClientPeer, 3> clients;
+			LoopbackTransport hostTransport;
+			StateTransferTap tap(hostTransport);
+			NetSession hostSession;
+			NetLockstepCoordinator round1, round2;
+			NetMatchRunner runner;
+			const auto startedAt = std::chrono::steady_clock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+
+			NetMatchRunnerConfig config;
+			config.host = true;
+			config.matchConfig = MakeConfig();
+			config.matchConfig.peerCount = 4;
+			config.matchConfig.players = {
+			    NetMatchPlayerSlot{1, 0, false, "Host"},
+			    NetMatchPlayerSlot{2, 1, false, "Client 2"},
+			    NetMatchPlayerSlot{3, 2, false, "Client 3"},
+			    NetMatchPlayerSlot{4, 3, false, "Client 4"},
+			};
+			config.useLobbyProtocol = true;
+			config.sessionWaitMs = 8000;
+			config.lobbyWaitMs = 8000;
+			config.lockstepWaitMs = 4000;
+			config.missingFrameGraceMs = 30000;
+			config.postSessionSettleMs = config.postLobbySettleMs = 0;
+			config.startFrame = 1;
+			config.scenario = "rematch-roster-selftest";
+			config.nowMs = nowMs;
+			config.sessionConfig.port = 43140;
+			config.sessionConfig.maxPeers = 3;
+			config.sessionConfig.timeoutMs = 30000;
+			config.sessionConfig.heartbeatIntervalMs = 25;
+			config.sessionConfig.sessionId = config.matchConfig.sessionId;
+			config.sessionConfig.displayName = "Host";
+			auto& identity = config.sessionConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "rematch-roster-selftest";
+			identity.platform = "test";
+
+			std::string peerError;
+			uint64_t transportClock = 0;
+			NetMatchConfig clientRoster = config.matchConfig;
+			auto advance = [&] {
+				const uint64_t now = nowMs();
+				const uint64_t delta = now >= transportClock ? now - transportClock : 0;
+				hostTransport.AdvanceTimeMs(delta);
+				for (ClientPeer& client: clients) client.transport.AdvanceTimeMs(delta);
+				transportClock = now;
+			};
+			auto pumpClient = [&](ClientPeer& client) {
+				const uint64_t now = nowMs();
+				if (client.left || !peerError.empty()) return;
+				if (!client.session.IsReady()) {
+					client.session.Tick(now);
+					return;
+				}
+				if (client.peerId == 0) client.peerId = static_cast<uint8_t>(client.session.GetLocalPeerId() + 1);
+				if (!client.lobbyActive) {
+					NetLobbySessionConfig lobbyConfig;
+					lobbyConfig.localPeerId = client.peerId;
+					lobbyConfig.remotePeerId = config.matchConfig.hostPeerId;
+					lobbyConfig.remoteTransportPeerId = client.session.GetRemoteTransportPeerId();
+					lobbyConfig.matchConfig = clientRoster;
+					lobbyConfig.session = &client.session;
+					lobbyConfig.sessionNowMs = nowMs;
+					lobbyConfig.timeoutMs = 30000;
+					lobbyConfig.displayName = "Client " + std::to_string(client.peerId);
+					client.lobbyActive = client.lobby.Start(client.transport, lobbyConfig, &peerError);
+					client.lobbyStartedAt = now;
+				}
+				if (!client.lobbyActive) return;
+				if (!client.coordinatorActive) {
+					client.lobby.Tick(now - client.lobbyStartedAt);
+					if (!client.lobby.IsStarted()) return;
+					NetLockstepConfig lockstepConfig;
+					lockstepConfig.sessionId = client.session.GetSessionId();
+					lockstepConfig.localPeerId = client.peerId;
+					lockstepConfig.peerCount = client.lobby.GetMatchConfig().peerCount;
+					lockstepConfig.remoteTransportPeerIds = {{config.matchConfig.hostPeerId, client.session.GetRemoteTransportPeerId()}};
+					lockstepConfig.matchConfig = client.lobby.GetMatchConfig();
+					lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, client.peerId);
+					lockstepConfig.startFrame = client.lobby.GetStartFrame();
+					lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
+					lockstepConfig.scenario = config.scenario;
+					lockstepConfig.timeoutMs = 30000;
+					client.coordinatorActive = client.coordinator.Start(client.transport, lockstepConfig, &peerError);
+				}
+				if (client.coordinatorActive) client.coordinator.Tick(NetLockstepNowMs());
+			};
+			auto pumpClients = [&] {
+				advance();
+				for (ClientPeer& client: clients) pumpClient(client);
+			};
+			tap.beforePoll = pumpClients;
+			tap.afterLobbyStart = pumpClients;
+			tap.afterHostStart = [&](uint16_t, std::string* startError) {
+				for (ClientPeer& client: clients) {
+					NetSessionConfig clientConfig = config.sessionConfig;
+					clientConfig.displayName = "Client";
+					clientConfig.localNonce += 1 + static_cast<uint64_t>(&client - clients.data());
+					if (!client.session.StartClient(client.transport, "loopback", clientConfig, startError)) return false;
+				}
+				return true;
+			};
+
+			if (!runner.Start(tap, hostSession, round1, config, error)) {
+				*error = "four-peer round 1 setup failed: " + *error + "; peer=" + peerError;
+				return false;
+			}
+			for (int spin = 0; spin < 400 && (!clients[0].coordinator.IsRunning() || !clients[1].coordinator.IsRunning() || !clients[2].coordinator.IsRunning()); ++spin) {
+				pumpClients();
+				round1.Tick(NetLockstepNowMs());
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (!clients[0].coordinator.IsRunning() || !clients[1].coordinator.IsRunning() || !clients[2].coordinator.IsRunning()) {
+				*error = "four-peer round 1 did not reach Running on every client; peer=" + peerError;
+				return false;
+			}
+			// The middle seat leaves, so the survivors' ids are sparse (1, 2, 4) and renumbering is the
+			// only way to a dense 1..3 roster.
+			ClientPeer* leaver = nullptr;
+			for (ClientPeer& client: clients) {
+				if (client.peerId == 3) leaver = &client;
+			}
+			if (!leaver) {
+				*error = "no client took lockstep peer 3";
+				return false;
+			}
+			const uint8_t leaverPeerId = leaver->peerId;
+			leaver->coordinator.Leave("player left");
+			for (int spin = 0; spin < 400 && !round1.GetPeerLeaveFrames().contains(leaverPeerId); ++spin) {
+				pumpClients();
+				round1.Tick(NetLockstepNowMs());
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (!round1.GetPeerLeaveFrames().contains(leaverPeerId)) {
+				*error = "the host round never saw the clean leave";
+				return false;
+			}
+			leaver->left = true;
+			leaver->transport.Stop();
+			round1.Complete("round over");
+			for (int spin = 0; spin < 400 && hostSession.GetReadyPeerCount() != 2; ++spin) {
+				advance();
+				hostSession.Tick(nowMs());
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (hostSession.GetReadyPeerCount() != 2) {
+				*error = "the host session still holds the leaver: ready=" + std::to_string(hostSession.GetReadyPeerCount());
+				return false;
+			}
+
+			// The survivors' own derivation of the rematch roster: the round-1 ids that did not leave,
+			// in their old order, renumbered 1..N.
+			std::vector<uint8_t> survivors{config.matchConfig.hostPeerId};
+			for (ClientPeer& client: clients) {
+				if (!client.left) survivors.push_back(client.peerId);
+			}
+			std::sort(survivors.begin(), survivors.end());
+			clientRoster = config.matchConfig;
+			clientRoster.peerCount = static_cast<uint8_t>(survivors.size());
+			clientRoster.players.clear();
+			for (size_t index = 0; index < survivors.size(); ++index) {
+				for (const NetMatchPlayerSlot& slot: config.matchConfig.players) {
+					if (slot.peerId != survivors[index]) continue;
+					NetMatchPlayerSlot moved = slot;
+					moved.peerId = static_cast<uint8_t>(index + 1);
+					clientRoster.players.push_back(moved);
+				}
+			}
+			for (ClientPeer& client: clients) {
+				if (client.left) continue;
+				const auto found = std::find(survivors.begin(), survivors.end(), client.peerId);
+				client.peerId = static_cast<uint8_t>(std::distance(survivors.begin(), found) + 1);
+				client.lobbyActive = client.coordinatorActive = false;
+				client.lobby = NetLobbySession{};
+			}
+			runner.SetStartFrame(1);
+			std::string rematchError;
+			const bool relaunched = runner.StartNextMatch(tap, hostSession, round2, &rematchError);
+			if (!relaunched) {
+				*error = "rematch relaunch failed: " + rematchError + "; peer=" + peerError;
+				return false;
+			}
+			const NetMatchConfig& rematchConfig = runner.GetMatchConfig();
+			if (rematchConfig.peerCount != 3) {
+				*error = "rematch config kept peer_count " + std::to_string(rematchConfig.peerCount);
+				return false;
+			}
+			std::vector<uint8_t> seated;
+			for (const NetMatchPlayerSlot& slot: rematchConfig.players) {
+				if (!slot.cpu) seated.push_back(slot.peerId);
+				if (slot.displayName == "Client 3") {
+					*error = "the leaver kept a seat in the rematch roster";
+					return false;
+				}
+			}
+			std::sort(seated.begin(), seated.end());
+			if (seated != std::vector<uint8_t>{1, 2, 3}) {
+				*error = "rematch roster ids are not dense 1..3";
+				return false;
+			}
+			for (ClientPeer& client: clients) {
+				if (client.left) continue;
+				for (int spin = 0; spin < 400 && !client.coordinator.IsRunning(); ++spin) {
+					pumpClients();
+					round2.Tick(NetLockstepNowMs());
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+				if (!client.coordinator.IsRunning() || client.coordinator.GetConfig().peerCount != 3) {
+					*error = "a survivor did not reach Running on the rematch roster; peer=" + peerError;
+					return false;
+				}
+			}
+			round2.Complete("rematch over");
+			for (ClientPeer& client: clients) client.transport.Stop();
+			hostTransport.Stop();
+			return true;
+		}
+
 		bool TestLobbyThreePeer(std::string* error) {
 			const uint16_t port = 43007;
 			LoopbackTransport hostT, clientAT, clientBT;
@@ -2275,6 +2512,7 @@ namespace RTE {
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
+		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestServiceDedicatedRequest(&error)) return fail(error);
 		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);
