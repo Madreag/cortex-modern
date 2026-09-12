@@ -179,7 +179,9 @@ namespace RTE {
 
 		int TestKnownAnswers() {
 			const NetAuthBytes32 credential = Ramp<32>(0);
-			const NetH4Transcript reclaim = MakeTranscript();
+			// The known answers were computed for protocol version 1; the transcript layout test covers the live version.
+			NetH4Transcript reclaim = MakeTranscript();
+			reclaim.protocolVersion = 1;
 			NetAuthBytes32 mac{};
 			if (!NetH4ComputeProof(credential, reclaim, mac)) {
 				return Fail("proof refused under the real provider");
