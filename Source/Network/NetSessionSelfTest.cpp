@@ -824,6 +824,333 @@ namespace RTE {
 			return true;
 		}
 
+		void SetModules(NetSessionConfig& config, const std::vector<std::string>& fileNames, int version = 1, uint8_t hashSeed = 129) {
+			config.localIdentity.modules.clear();
+			int index = 0;
+			for (const std::string& fileName : fileNames) {
+				NetIdentityModuleEntry module;
+				module.index = index;
+				module.fileName = fileName;
+				module.friendlyName = fileName.substr(0, fileName.find('.'));
+				module.author = "selftest";
+				module.version = version;
+				module.official = index == 0;
+				module.root = "Mods/" + fileName;
+				module.fileCount = 2;
+				module.totalBytes = 42;
+				module.contentHash = MakeHash(static_cast<uint8_t>(hashSeed + index));
+				config.localIdentity.modules.push_back(std::move(module));
+				++index;
+			}
+			config.localIdentity.moduleManifestHash = NetIdentity::HashModuleManifest(config.localIdentity.modules);
+		}
+
+		bool SendEncoded(LoopbackTransport& transport, NetPeerId peerId, uint32_t sequence, NetPayload payload, std::string* error) {
+			std::vector<uint8_t> bytes;
+			NetProtocolError encodeError;
+			NetMessage message;
+			message.sequence = sequence;
+			message.payload = std::move(payload);
+			if (!NetProtocol::Encode(message, bytes, &encodeError)) {
+				*error = "scripted encode failed: " + encodeError.message;
+				return false;
+			}
+			return transport.Send(peerId, NetTransportLane::ControlReliable, bytes, error);
+		}
+
+		template <class T>
+		const T* FindSent(const std::vector<NetTransportEvent>& events, NetMessage& outMessage) {
+			for (const NetTransportEvent& event : events) {
+				if (event.type != NetTransportEventType::PacketReceived) {
+					continue;
+				}
+				const NetDecodeResult decoded = NetProtocol::Decode(event.bytes);
+				if (decoded.ok && std::holds_alternative<T>(decoded.message.payload)) {
+					outMessage = decoded.message;
+					return std::get_if<T>(&outMessage.payload);
+				}
+			}
+			return nullptr;
+		}
+
+		bool TestModuleMismatchNamesModules(std::string* error) {
+			const uint16_t port = 42210;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			NetSessionConfig hostConfig = MakeConfig(port, 2101, "Host");
+			NetSessionConfig clientConfig = MakeConfig(port, 2102, "Player");
+			SetModules(hostConfig, {"Base.rte", "Coalition.rte", "Ronin.rte"});
+			SetModules(clientConfig, {"Base.rte", "MyTestMod.rte", "Ronin.rte"});
+			// Same name, different content and version: the joiner is told to update it, not remove it.
+			clientConfig.localIdentity.modules[2].version = 3;
+			clientConfig.localIdentity.modules[2].contentHash = MakeHash(200);
+			clientConfig.localIdentity.moduleManifestHash = NetIdentity::HashModuleManifest(clientConfig.localIdentity.modules);
+			hostConfig.localIdentity.modules[2].version = 5;
+			hostConfig.localIdentity.moduleManifestHash = NetIdentity::HashModuleManifest(hostConfig.localIdentity.modules);
+			if (!StartPair(port, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DrivePair(hostTransport, clientTransport, host, client, [&] { return client.IsRejected(); }, error)) {
+				return false;
+			}
+			if (client.GetRejectReason() != NetRejectReason::ModuleManifestMismatch || client.GetMismatchKey() != "module_manifest_hash") {
+				*error = "the module refusal stopped deciding on the manifest hash: " +
+				         std::string(NetProtocol::RejectReasonName(client.GetRejectReason())) + "/" + client.GetMismatchKey();
+				return false;
+			}
+			const std::string summary = client.GetRejectSummary();
+			if (summary.find("Install: Coalition.rte") == std::string::npos ||
+			    summary.find("Remove: MyTestMod.rte") == std::string::npos ||
+			    summary.find("Update: Ronin.rte (you 3, host 5)") == std::string::npos) {
+				*error = "the module mismatch refusal did not name the modules: \"" + summary + "\"";
+				return false;
+			}
+			if (client.BuildRejectText().find("module_manifest_hash") == std::string::npos) {
+				*error = "the refusal text lost the hash pair the admission decided on: \"" + client.BuildRejectText() + "\"";
+				return false;
+			}
+			if (host.GetStats().moduleDigestRequestsSent != 1 || host.GetStats().moduleDigestsReceived != 1 || host.GetStats().moduleDigestsSent != 1) {
+				*error = "the host's digest exchange counters were " + std::to_string(host.GetStats().moduleDigestRequestsSent) + "/" +
+				         std::to_string(host.GetStats().moduleDigestsReceived) + "/" + std::to_string(host.GetStats().moduleDigestsSent) + ", not 1/1/1";
+				return false;
+			}
+			if (host.GetReadyPeerCount() != 0 || host.GetState() == NetSessionState::Ready) {
+				*error = "a peer refused on its module manifest was still seated";
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS module mismatch names the modules: " << summary << std::endl;
+			return true;
+		}
+
+		bool TestModuleDigestJoinerSideMirror(std::string* error) {
+			const uint16_t port = 42211;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			if (!hostTransport.StartHost(port, error)) {
+				return false;
+			}
+			NetSession client;
+			NetSessionConfig clientConfig = MakeConfig(port, 2103, "Player");
+			SetModules(clientConfig, {"Base.rte", "MyTestMod.rte"});
+			if (!client.StartClient(clientTransport, "loopback", clientConfig, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto step = [&] {
+				client.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				now += 10;
+			};
+			std::vector<NetTransportEvent> events;
+			for (int i = 0; i < 10 && events.empty(); ++i) {
+				step();
+				events = hostTransport.PollEvents();
+			}
+			NetMessage carrier;
+			const NetClientHello* hello = FindSent<NetClientHello>(events, carrier);
+			for (int i = 0; i < 10 && hello == nullptr; ++i) {
+				step();
+				events = hostTransport.PollEvents();
+				hello = FindSent<NetClientHello>(events, carrier);
+			}
+			if (hello == nullptr) {
+				*error = "the scripted host never saw a ClientHello";
+				return false;
+			}
+
+			// A host that accepted the hello and only then answers with a different module manifest:
+			// the joiner must mirror the exchange instead of dropping on the hash pair.
+			NetSessionConfig hostView = MakeConfig(port, 2104, "Host");
+			SetModules(hostView, {"Base.rte", "Coalition.rte"});
+			NetHostHello hostHello;
+			hostHello.sessionId = 0x5123456789ABCDEFULL;
+			hostHello.hostNonce = 2104;
+			hostHello.selectedProtocolVersion = NetProtocol::c_Version;
+			hostHello.controllerFrameVersion = clientConfig.localIdentity.controllerFrameVersion;
+			hostHello.controllerFrameEncodedSize = clientConfig.localIdentity.controllerFrameEncodedSize;
+			hostHello.assignedPeerId = 1;
+			hostHello.maxPeers = 2;
+			hostHello.gameVersion = clientConfig.localIdentity.gameVersion;
+			hostHello.hostName = "Host";
+			hostHello.buildId = clientConfig.localIdentity.buildId;
+			hostHello.deterministicConfigHash = clientConfig.localIdentity.deterministicConfigHash;
+			hostHello.moduleManifestHash = hostView.localIdentity.moduleManifestHash;
+			hostHello.sessionRulesHash = clientConfig.localIdentity.sessionRulesHash;
+			hostHello.sessionIdentityHash = clientConfig.localIdentity.sessionIdentityHash;
+			if (!SendEncoded(hostTransport, 1, 1, hostHello, error)) {
+				return false;
+			}
+			const NetModuleDigestRequest* request = nullptr;
+			for (int i = 0; i < 20 && request == nullptr; ++i) {
+				step();
+				events = hostTransport.PollEvents();
+				request = FindSent<NetModuleDigestRequest>(events, carrier);
+			}
+			if (request == nullptr) {
+				*error = "the joiner dropped on the hash pair instead of asking the host for its modules";
+				return false;
+			}
+			if (client.IsRejected()) {
+				*error = "the joiner refused before the digests it asked for arrived";
+				return false;
+			}
+
+			NetModuleDigests digests;
+			digests.entries = NetIdentity::BuildModuleDigests(hostView.localIdentity.modules, request->maxEntries);
+			if (!SendEncoded(hostTransport, 1, 2, digests, error)) {
+				return false;
+			}
+			for (int i = 0; i < 20 && !client.IsRejected(); ++i) {
+				step();
+			}
+			if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::ModuleManifestMismatch) {
+				*error = "the joiner did not refuse after the host listed its modules; state " + std::string(NetSession::StateName(client.GetState()));
+				return false;
+			}
+			const std::string summary = client.GetRejectSummary();
+			if (summary.find("Install: Coalition.rte") == std::string::npos || summary.find("Remove: MyTestMod.rte") == std::string::npos) {
+				*error = "the joiner-side refusal did not name the modules: \"" + summary + "\"";
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS joiner-side module mismatch names the modules: " << summary << std::endl;
+			return true;
+		}
+
+		bool TestModuleDigestSilentPeerExpires(std::string* error) {
+			const uint16_t port = 42212;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSessionConfig hostConfig = MakeConfig(port, 2105, "Host");
+			SetModules(hostConfig, {"Base.rte", "Coalition.rte"});
+			if (!host.StartHost(hostTransport, hostConfig, error)) {
+				return false;
+			}
+			if (!clientTransport.Connect("loopback", port, error)) {
+				return false;
+			}
+			NetSessionConfig joinerConfig = MakeConfig(port, 2106, "Player");
+			SetModules(joinerConfig, {"Base.rte", "MyTestMod.rte"});
+			uint64_t now = 0;
+			auto step = [&] {
+				host.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				now += 10;
+			};
+			step();
+			clientTransport.PollEvents();
+			if (!SendEncoded(clientTransport, 1, 1, MakeClientHello(joinerConfig), error)) {
+				return false;
+			}
+			// The joiner never answers the digest request; the refusal must still be the manifest one.
+			const NetModuleDigestRequest* request = nullptr;
+			NetMessage carrier;
+			for (int i = 0; i < 10 && request == nullptr; ++i) {
+				step();
+				request = FindSent<NetModuleDigestRequest>(clientTransport.PollEvents(), carrier);
+			}
+			if (request == nullptr) {
+				*error = "the host never asked the silent joiner for its modules";
+				return false;
+			}
+			const uint64_t askedAtMs = now;
+			for (int i = 0; i < 200 && !host.HasReject(); ++i) {
+				step();
+			}
+			if (!host.HasReject() || host.GetRejectReason() != NetRejectReason::ModuleManifestMismatch || host.GetMismatchKey() != "module_manifest_hash") {
+				*error = "a silent parked peer was not refused on its module manifest: " +
+				         std::string(NetProtocol::RejectReasonName(host.GetRejectReason())) + "/" + host.GetMismatchKey();
+				return false;
+			}
+			if (now - askedAtMs > 4 * hostConfig.timeoutMs) {
+				*error = "the parked peer outlived the handshake budget by " + std::to_string(now - askedAtMs) + "ms";
+				return false;
+			}
+			if (host.GetStats().moduleDigestExchangesExpired != 1 || host.GetStats().moduleDigestsReceived != 0) {
+				*error = "the expired exchange was not counted";
+				return false;
+			}
+			if (host.GetRejectSummary() != "module manifest hash does not match") {
+				*error = "an unanswered exchange invented module names: \"" + host.GetRejectSummary() + "\"";
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS silent parked peer expires into its module refusal after "
+			          << (now - askedAtMs) << "ms, budget " << hostConfig.timeoutMs << "ms" << std::endl;
+			return true;
+		}
+
+		bool TestOldWirePeerGetsItsRejection(std::string* error) {
+			const uint16_t port = 42213;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			if (!host.StartHost(hostTransport, MakeConfig(port, 2107, "Host"), error)) {
+				return false;
+			}
+			if (!clientTransport.Connect("loopback", port, error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto step = [&] {
+				host.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				now += 10;
+			};
+			step();
+			clientTransport.PollEvents();
+			NetMessage v1Hello;
+			v1Hello.sequence = 1;
+			v1Hello.payload = MakeClientHello(MakeConfig(port, 2108, "OldPlayer"));
+			std::vector<uint8_t> bytes;
+			NetProtocolError encodeError;
+			if (!NetProtocol::EncodeAtVersion(v1Hello, 1, bytes, &encodeError)) {
+				*error = "could not mint a v1 hello: " + encodeError.message;
+				return false;
+			}
+			if (!clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			std::vector<uint8_t> answer;
+			for (int i = 0; i < 20 && answer.empty(); ++i) {
+				step();
+				for (const NetTransportEvent& event : clientTransport.PollEvents()) {
+					if (event.type == NetTransportEventType::PacketReceived) {
+						answer = event.bytes;
+					}
+				}
+			}
+			if (answer.empty()) {
+				*error = "a v1 peer got no answer at all";
+				return false;
+			}
+			uint16_t stamped = 0;
+			if (!NetProtocol::PeekHeaderVersion(answer.data(), answer.size(), stamped) || stamped != 1U) {
+				*error = "the answer to a v1 peer was not stamped at v1";
+				return false;
+			}
+			// Read it as its own build would: only the envelope's version byte differs from ours.
+			answer[4] = static_cast<uint8_t>(NetProtocol::c_Version & 0xFFU);
+			answer[5] = static_cast<uint8_t>((NetProtocol::c_Version >> 8) & 0xFFU);
+			const NetDecodeResult decoded = NetProtocol::Decode(answer);
+			const auto* rejection = decoded.ok ? std::get_if<NetJoinRejected>(&decoded.message.payload) : nullptr;
+			if (rejection == nullptr || rejection->rejectReason != NetRejectReason::ProtocolMismatch || rejection->mismatchKey != "protocol_version") {
+				*error = "the v1 answer was not a readable protocol-version rejection";
+				return false;
+			}
+			if (host.GetStats().oldWireRejectionsSent != 1 || host.GetStats().oldWireDisconnects != 0) {
+				*error = "the old-wire rejection was not counted: sent " + std::to_string(host.GetStats().oldWireRejectionsSent) +
+				         ", silent " + std::to_string(host.GetStats().oldWireDisconnects);
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS v1 peer gets a v1-stamped rejection: " << rejection->humanMessage << std::endl;
+			return true;
+		}
+
 		bool TestLatencyAndCleanDisconnect(std::string* error) {
 			const uint16_t port = 42206;
 			LoopbackTransport hostTransport;
@@ -879,6 +1206,10 @@ namespace RTE {
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
+		if (!TestModuleMismatchNamesModules(&error)) return fail(error);
+		if (!TestModuleDigestJoinerSideMirror(&error)) return fail(error);
+		if (!TestModuleDigestSilentPeerExpires(&error)) return fail(error);
+		if (!TestOldWirePeerGetsItsRejection(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;

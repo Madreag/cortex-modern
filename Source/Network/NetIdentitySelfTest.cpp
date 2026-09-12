@@ -173,6 +173,141 @@ namespace RTE {
 			return true;
 		}
 
+		NetIdentityModuleEntry MakeModule(int index, const std::string& fileName, int version, uint8_t hashSeed) {
+			NetIdentityModuleEntry module;
+			module.index = index;
+			module.fileName = fileName;
+			module.friendlyName = fileName.substr(0, fileName.find('.'));
+			module.author = "selftest";
+			module.version = version;
+			module.official = false;
+			module.root = "Mods/" + fileName;
+			module.fileCount = 2;
+			module.totalBytes = 42;
+			module.contentHash = MakeHash(hashSeed);
+			return module;
+		}
+
+		std::string NameList(const std::vector<std::string>& names) {
+			std::string text;
+			for (const std::string& name : names) {
+				text += (text.empty() ? "" : ",") + name;
+			}
+			return text;
+		}
+
+		bool ExpectDiff(const std::vector<NetIdentityModuleEntry>& local, const std::vector<NetIdentityModuleEntry>& remote,
+		                const std::string& missing, const std::string& extra, const std::string& differing, const std::string& what, std::string* error) {
+			const NetModuleDiff diff = NetIdentity::DiffModules(
+				NetIdentity::BuildModuleDigests(local, NetProtocol::c_MaxModuleDigestEntries),
+				NetIdentity::BuildModuleDigests(remote, NetProtocol::c_MaxModuleDigestEntries));
+			std::vector<std::string> differingNames;
+			for (const NetModuleVersionDifference& difference : diff.differing) {
+				differingNames.push_back(difference.fileName);
+			}
+			if (NameList(diff.missingOnRemote) != missing || NameList(diff.extraOnRemote) != extra || NameList(differingNames) != differing) {
+				*error = what + ": expected missing=[" + missing + "] extra=[" + extra + "] differing=[" + differing + "], got missing=[" +
+				         NameList(diff.missingOnRemote) + "] extra=[" + NameList(diff.extraOnRemote) + "] differing=[" + NameList(differingNames) + "]";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestDiffModules(std::string* error) {
+			// T1: the host loads Base/Coalition/Ronin, the joiner Base/Ronin/MyMod with a different
+			// Ronin. Name-keyed, so the extra module does not shift every module after it.
+			const std::vector<NetIdentityModuleEntry> host = {
+				MakeModule(0, "Base.rte", 1, 129), MakeModule(1, "Coalition.rte", 2, 145), MakeModule(2, "Ronin.rte", 5, 161)};
+			std::vector<NetIdentityModuleEntry> joiner = {
+				MakeModule(0, "Base.rte", 1, 129), MakeModule(1, "Ronin.rte", 3, 177), MakeModule(2, "MyMod.rte", 1, 193)};
+			if (!ExpectDiff(host, joiner, "Coalition.rte", "MyMod.rte", "Ronin.rte", "T1 host to joiner", error)) return false;
+			if (!ExpectDiff(joiner, host, "MyMod.rte", "Coalition.rte", "Ronin.rte", "T1 joiner to host", error)) return false;
+
+			// The same sets with the extra module first in load order: index pairing calls this
+			// module_order, the name-keyed diff still names exactly one extra and one missing module.
+			std::vector<NetIdentityModuleEntry> reordered = {
+				MakeModule(0, "MyMod.rte", 1, 193), MakeModule(1, "Base.rte", 1, 129), MakeModule(2, "Ronin.rte", 3, 177)};
+			if (!ExpectDiff(host, reordered, "Coalition.rte", "MyMod.rte", "Ronin.rte", "T1 reordered", error)) return false;
+			NetIdentityManifest indexPaired = MakeManifest();
+			indexPaired.modules = host;
+			NetIdentityManifest indexPairedOther = indexPaired;
+			indexPairedOther.modules = reordered;
+			const std::optional<NetIdentityMismatch> compare = NetIdentity::Compare(indexPaired, indexPairedOther);
+			if (!compare || compare->key != "module_order") {
+				*error = "index-paired Compare no longer reports module_order for a reordered list";
+				return false;
+			}
+
+			// Load order alone is not a difference for the name-keyed diff.
+			std::vector<NetIdentityModuleEntry> shuffled = {host[2], host[0], host[1]};
+			if (!ExpectDiff(host, shuffled, "", "", "", "load order only", error)) return false;
+
+			// A version-only difference is a difference; the content hash alone is not the whole test.
+			std::vector<NetIdentityModuleEntry> newerRonin = host;
+			newerRonin[2].version = 6;
+			if (!ExpectDiff(host, newerRonin, "", "", "Ronin.rte", "version only", error)) return false;
+
+			const NetModuleDiff diff = NetIdentity::DiffModules(
+				NetIdentity::BuildModuleDigests(host, NetProtocol::c_MaxModuleDigestEntries),
+				NetIdentity::BuildModuleDigests(joiner, NetProtocol::c_MaxModuleDigestEntries));
+			if (diff.differing.size() != 1 || diff.differing[0].localVersion != 5 || diff.differing[0].remoteVersion != 3 || !diff.differing[0].contentDiffers) {
+				*error = "the differing entry did not carry both versions and the content flag";
+				return false;
+			}
+			const std::string sentence = NetIdentity::DescribeModuleDiff(diff);
+			if (sentence.find("Install: Coalition.rte") == std::string::npos ||
+			    sentence.find("Remove: MyMod.rte") == std::string::npos ||
+			    sentence.find("Update: Ronin.rte (you 3, host 5)") == std::string::npos) {
+				*error = "the joiner-facing sentence did not name the modules: \"" + sentence + "\"";
+				return false;
+			}
+			if (!NetIdentity::DescribeModuleDiff(NetModuleDiff{}).empty()) {
+				*error = "an empty diff produced a sentence";
+				return false;
+			}
+			NetModuleDiff wide;
+			for (int i = 0; i < 9; ++i) {
+				wide.missingOnRemote.push_back("Mod" + std::to_string(i) + ".rte");
+			}
+			const std::string elided = NetIdentity::DescribeModuleDiff(wide, 6, true);
+			if (elided.find("and 3 more differences") == std::string::npos) {
+				*error = "a long diff did not count the differences it left out: \"" + elided + "\"";
+				return false;
+			}
+
+			// The sentence rides NetJoinRejected::humanMessage, so it must always fit that field: a
+			// sentence the encoder refuses would cost the joiner its refusal, not just the names.
+			NetModuleDiff worst;
+			for (int i = 0; i < 80; ++i) {
+				const std::string name = std::to_string(100000 + i) + std::string(NetProtocol::c_MaxModuleNameBytes - 6U, 'n');
+				worst.missingOnRemote.push_back(name);
+				worst.extraOnRemote.push_back(name);
+				worst.differing.push_back({name, 1, 2, true});
+			}
+			const std::string bounded = NetIdentity::DescribeModuleDiff(worst, 6, true);
+			if (bounded.size() > NetProtocol::c_MaxDiagnosticTextBytes || bounded.find("more differences") == std::string::npos) {
+				*error = "the worst-case sentence was " + std::to_string(bounded.size()) + " bytes, cap " +
+				         std::to_string(NetProtocol::c_MaxDiagnosticTextBytes) + ": \"" + bounded + "\"";
+				return false;
+			}
+			NetProtocolError encodeError;
+			std::vector<uint8_t> encoded;
+			if (!NetProtocol::Encode({1, 0, NetJoinRejected{NetRejectReason::ModuleManifestMismatch, bounded, "module_manifest_hash", "a", "b"}}, encoded, &encodeError)) {
+				*error = "the worst-case sentence could not be encoded into a refusal: " + encodeError.message;
+				return false;
+			}
+
+			// The digest builder is what feeds the diff: sorted, deduplicated and capped.
+			bool truncated = false;
+			const std::vector<NetModuleDigestEntry> capped = NetIdentity::BuildModuleDigests(host, 2, &truncated);
+			if (capped.size() != 2 || capped[0].fileName != "Base.rte" || capped[1].fileName != "Coalition.rte" || !truncated) {
+				*error = "the digest builder did not cap the sorted list and mark it truncated";
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS diff_modules by file name: " << sentence << std::endl;
+			return true;
+		}
+
 		bool TestLuaStateCountOutOfIdentity(std::string* error) {
 			NetIdentityDeterministicConfig four;
 			four.gameVersion = "7.0.0";
@@ -268,7 +403,7 @@ namespace RTE {
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
-		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestLuaStateCountOutOfIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
+		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountOutOfIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}
