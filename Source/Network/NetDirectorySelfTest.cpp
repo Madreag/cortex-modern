@@ -39,6 +39,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -497,26 +498,36 @@ namespace RTE {
 			void CloseSocket(SocketHandle socketHandle) { close(socketHandle); }
 #endif
 
-			bool TestHttpClientCancel(std::string* error) {
+			// A listener that never accepts: the TCP handshake completes in the kernel and the
+			// TLS ClientHello sits unread, so the request is guaranteed to be stalled.
+			bool OpenSilentListener(SocketHandle* listener, std::string* url, std::string* error) {
 #ifdef _WIN32
 				WSADATA wsaData;
 				(void)WSAStartup(MAKEWORD(2, 2), &wsaData);
 #endif
-				// A listener that never accepts: the TCP handshake completes in the kernel and the
-				// TLS ClientHello sits unread, so the request is guaranteed to be stalled.
-				SocketHandle listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+				SocketHandle opened = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 				sockaddr_in addr{};
 				addr.sin_family = AF_INET;
 				addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 				addr.sin_port = 0;
-				if (listener == c_InvalidSocket || bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(listener, 1) != 0) {
+				if (opened == c_InvalidSocket || bind(opened, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(opened, 1) != 0) {
 					*error = "could not open the stall listener";
 					return false;
 				}
 				sockaddr_in bound{};
 				SocketLength boundSize = sizeof(bound);
-				(void)getsockname(listener, reinterpret_cast<sockaddr*>(&bound), &boundSize);
-				const std::string url = "https://127.0.0.1:" + std::to_string(ntohs(bound.sin_port)) + "/";
+				(void)getsockname(opened, reinterpret_cast<sockaddr*>(&bound), &boundSize);
+				*listener = opened;
+				*url = "https://127.0.0.1:" + std::to_string(ntohs(bound.sin_port)) + "/";
+				return true;
+			}
+
+			bool TestHttpClientCancel(std::string* error) {
+				SocketHandle listener = c_InvalidSocket;
+				std::string url;
+				if (!OpenSilentListener(&listener, &url, error)) {
+					return false;
+				}
 				const bool stalled = MeasureCancel(url, error);
 				CloseSocket(listener);
 				if (error->empty() && !stalled) {
@@ -531,6 +542,62 @@ namespace RTE {
 				(void)MeasureCancel("https://10.255.255.1:8443/", error);
 				return error->empty();
 			}
+
+			// 200 quick cancels on a stalled request then 200 refusals: as close as a selftest
+			// gets to a late HANDLE_CLOSING racing the state free; it cannot force the race.
+#ifdef _WIN32
+			bool TestHttpClientStress(std::string* error) {
+				SocketHandle listener = c_InvalidSocket;
+				std::string stalledUrl;
+				if (!OpenSilentListener(&listener, &stalledUrl, error)) {
+					return false;
+				}
+				for (int i = 0; i < 200; ++i) {
+					NetHttpClient client;
+					client.Start("GET", stalledUrl, {}, "", "");
+					std::this_thread::sleep_for(std::chrono::milliseconds(1 + (i % 5)));
+					client.Cancel();
+					const NetHttpClient::Response response = client.GetResponse();
+					if (client.Poll() != NetHttpClient::PollResult::Done) {
+						CloseSocket(listener);
+						*error = "cancelled request " + std::to_string(i) + " never reported done";
+						return false;
+					}
+					if (response.error.empty()) {
+						CloseSocket(listener);
+						*error = "cancelled request " + std::to_string(i) + " finished without an error";
+						return false;
+					}
+				}
+				CloseSocket(listener);
+				// A refused async connect takes ~2 s to report here, so the 200 are issued
+				// together and joined in order; run strictly serial they would take minutes.
+				std::vector<std::unique_ptr<NetHttpClient>> refused;
+				refused.reserve(200);
+				for (int i = 0; i < 200; ++i) {
+					auto client = std::make_unique<NetHttpClient>();
+					client->Start("GET", "https://127.0.0.1:1/", {}, "", "");
+					refused.push_back(std::move(client));
+				}
+				const auto joinDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+				for (int i = 0; i < 200; ++i) {
+					NetHttpClient& client = *refused[i];
+					while (client.Poll() == NetHttpClient::PollResult::Pending && std::chrono::steady_clock::now() < joinDeadline) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					}
+					const NetHttpClient::Response response = client.GetResponse();
+					if (client.Poll() != NetHttpClient::PollResult::Done) {
+						*error = "refused request " + std::to_string(i) + " never reported done";
+						return false;
+					}
+					if (response.error.empty()) {
+						*error = "refused request " + std::to_string(i) + " finished without an error";
+						return false;
+					}
+				}
+				return true;
+			}
+#endif
 #endif
 
 			std::string ReadWholeFile(const std::filesystem::path& path) {
@@ -1392,6 +1459,9 @@ namespace RTE {
 			if (!TestSignalDrain(&error)) return fail(error);
 #if defined(_WIN32) || defined(__APPLE__)
 			if (!TestHttpClientCancel(&error)) return fail(error);
+#ifdef _WIN32
+			if (!TestHttpClientStress(&error)) return fail(error);
+#endif
 #endif
 			if (!TestInstallKeyIsLazy(&error)) return fail(error);
 
