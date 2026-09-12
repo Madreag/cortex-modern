@@ -49,7 +49,7 @@ namespace RTE {
 			if (firstTick == UINT64_MAX) {
 				return 0;
 			}
-			const uint64_t origin = (segmentFirstFrame > 0 && segmentFirstFrame < firstTick) ? segmentFirstFrame : firstTick;
+			const uint64_t origin = segmentFirstFrame > 0 ? segmentFirstFrame : firstTick;
 			return lastTick >= origin ? lastTick - origin + 1 : 0;
 		}
 		// The healed round replays from resumeFrame, so the frames before it are the round's and are
@@ -99,8 +99,8 @@ namespace RTE {
 
 	/// Whether an e2e round's stop is the round reaching its planned end rather than a break.
 	inline bool NetMatchE2ERoundReachedPlannedEnd(const std::string& error, uint64_t runningTicks, uint64_t matchTick, uint64_t cap) {
-		// Only the peer that ran the round to its plan sends this stop, so it ends the round on every
-		// peer whatever tick the local sim is on when it lands.
+		// This stop originates from the peer that ran the round to its plan, so it ends the round on
+		// every peer whatever tick the local sim is on when it lands.
 		if (error.find(c_NetMatchE2ECompleteStop) != std::string::npos) {
 			return true;
 		}
