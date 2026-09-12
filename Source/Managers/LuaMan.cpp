@@ -7745,10 +7745,10 @@ namespace {
 		MovableObject* mapped = nullptr;
 		if (const auto found = s_PreviewRootByUID.find(mo->GetUniqueID()); found != s_PreviewRootByUID.end() && found->second != mo) {
 			mapped = found->second;
-		} else if (LiveWorldMO(mo)) {
-			mapped = g_MovableMan.ViewIfSpeculating(mo);
 		} else if (const auto part = s_PreviewPartByUID.find(mo->GetUniqueID()); part != s_PreviewPartByUID.end() && part->second != mo) {
 			mapped = part->second;
+		} else if (LiveWorldMO(mo)) {
+			mapped = g_MovableMan.ViewIfSpeculating(mo);
 		} else {
 			freezeClass = mo->GetClassName();
 			return false;
