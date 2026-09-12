@@ -1288,15 +1288,15 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetResumeFrame() : 0;
 	}
 
-	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, bool& outRewind, std::string* error) {
+	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, std::string* error) {
 		const uint64_t lastApplied = resumeFrame > 0 ? resumeFrame - 1 : 0;
-		if (simUpdateCount != lastApplied && simUpdateCount != resumeFrame) {
-			if (error) *error = "resync sim tick " + std::to_string(simUpdateCount) + " is neither the applied tick " + std::to_string(lastApplied) + " nor the drop frame " + std::to_string(resumeFrame);
+		// Anywhere but the boundary the live world holds a partly-simulated tick that no rewind of the
+		// clock can undo, and the snapshot would carry it under the previous tick's label.
+		if (simUpdateCount != lastApplied) {
+			if (error) *error = "resync snapshot not at a tick boundary (sim tick " + std::to_string(simUpdateCount) + ", completed tick " + std::to_string(lastApplied) + ")";
 			return false;
 		}
 		outDropFrame = resumeFrame;
-		// A failed frame wait leaves the counter on the unsimulated drop frame, a deferred stop on the applied tick.
-		outRewind = simUpdateCount == resumeFrame && resumeFrame > 0;
 		return true;
 	}
 
@@ -1782,9 +1782,11 @@ namespace RTE {
 					return false;
 				}
 			}
-			// Parked on a tick the sim has not run: the boundary FinishSimulationTick would use is here,
-			// and the frame we are waiting for may be from a peer the pump has just fenced.
-			s_LockstepCoordinator->ApplyPendingRecoveryStopWhileWaiting(tick);
+			// Parked on a tick the sim has not run with the round already ending: a frame owed by a
+			// connection the pump has fenced is never coming, so stop requiring it and let the tick commit.
+			if (s_LockstepCoordinator->WaivePendingPeersWhileWaiting(tick)) {
+				continue; // The tick just committed; take it before the give-up clock is read.
+			}
 			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;
