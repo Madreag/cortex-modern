@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import secrets
+import socket
 import ssl
 import threading
 import time
@@ -38,6 +39,7 @@ MAX_DEST_QUEUES = 16
 MAX_SESSION_PAYLOAD = 1024 * 1024
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
+HANDSHAKE_TIMEOUT_S = 5
 INSTALL_KEY_MIN = 16
 INSTALL_KEY_MAX = 32
 INSTALL_KEY_CHARS = frozenset(
@@ -597,6 +599,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
         def log_message(self, fmt: str, *args: object) -> None:
             text = fmt % args
             text = re.sub(r"token=[^&\s]+", "token=redacted", text)
+            # A client peer is client:<join nonce>, the joiner's bearer credential; only "host" is public.
+            text = re.sub(r"peer=(?!host(?:[&\s]|$))[^&\s]+", "peer=redacted", text)
             LOGGER.info("%s %s", self.address_string(), text)
 
         def _send(self, status: int, body: dict[str, Any]) -> None:
@@ -651,6 +655,17 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 return None
             return values[0]
 
+        def _signal_peer(self, query: dict[str, list[str]]) -> tuple[str, str]:
+            header = self.headers.get("X-Signal-Peer")
+            in_query = self._q1(query, "peer")
+            if header is None:
+                if in_query is None:
+                    raise FieldError("missing_field", "peer")
+                return in_query, "query"
+            if in_query is not None and in_query != header:
+                raise FieldError("invalid_field", "peer")
+            return header, "header"
+
         def _handle_error(self, exc: BaseException) -> None:
             if isinstance(exc, FieldError):
                 self._send(400, exc.body())
@@ -698,9 +713,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     and parts[3] == "signals"
                 ):
                     sid = parse_session_id(parts[2])
-                    peer = self._q1(query, "peer")
-                    if peer is None:
-                        raise FieldError("missing_field", "peer")
+                    peer, peer_via = self._signal_peer(query)
                     after_raw = self._q1(query, "after")
                     after = 0
                     if after_raw is not None:
@@ -712,7 +725,10 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                         "X-Session-Token"
                     )
                     LOGGER.info(
-                        "signal session_id=%s client=%s", sid, self._observed_ip()
+                        "signal session_id=%s client=%s peer_via=%s",
+                        sid,
+                        self._observed_ip(),
+                        peer_via,
                     )
                     self._send(200, store.get_signals(sid, peer, after, token, now))
                     return
@@ -790,6 +806,32 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class SessionHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that wraps each accepted socket in TLS on its own handler thread."""
+
+    tls_context: Optional[ssl.SSLContext] = None
+
+    def process_request_thread(
+        self, request: socket.socket, client_address: Any
+    ) -> None:
+        ctx = self.tls_context
+        if ctx is not None:
+            request.settimeout(HANDSHAKE_TIMEOUT_S)
+            try:
+                request = ctx.wrap_socket(request, server_side=True)
+            except (socket.timeout, TimeoutError):
+                LOGGER.info("tls handshake timeout from %s", client_address[0])
+                self.shutdown_request(request)
+                return
+            except OSError as exc:
+                LOGGER.info(
+                    "tls handshake failed from %s: %s", client_address[0], exc
+                )
+                self.shutdown_request(request)
+                return
+        super().process_request_thread(request, client_address)
+
+
 def make_server_ssl_context() -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -797,10 +839,10 @@ def make_server_ssl_context() -> ssl.SSLContext:
     return ctx
 
 
-def wrap_tls(httpd: ThreadingHTTPServer, cert: Path, key: Path) -> None:
+def wrap_tls(httpd: SessionHTTPServer, cert: Path, key: Path) -> None:
     ctx = make_server_ssl_context()
     ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
-    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    httpd.tls_context = ctx
 
 
 def build_httpd(
@@ -809,9 +851,9 @@ def build_httpd(
     store: SessionDirectory,
     cert: Optional[Path],
     key: Optional[Path],
-) -> ThreadingHTTPServer:
+) -> SessionHTTPServer:
     handler = make_handler(store)
-    httpd = ThreadingHTTPServer((bind, port), handler)
+    httpd = SessionHTTPServer((bind, port), handler)
     httpd.allow_reuse_address = True
     if cert is not None and key is not None:
         wrap_tls(httpd, cert, key)

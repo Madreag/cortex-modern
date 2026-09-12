@@ -682,6 +682,101 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(listed["sessions"][0]["session_id"], created["session_id"])
         self.assert_keys(listed["sessions"][0], LIST_ROW_KEYS)
 
+    def _self_signed_cert(self) -> tuple[Path, Path]:
+        openssl = shutil.which("openssl")
+        if openssl is None:
+            self.skipTest("openssl not on PATH")
+        self.tls_dir = tempfile.TemporaryDirectory()
+        root = Path(self.tls_dir.name)
+        cert = root / "cert.pem"
+        key = root / "key.pem"
+        proc = subprocess.run(
+            [
+                openssl,
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                str(key),
+                "-out",
+                str(cert),
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=127.0.0.1",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.skipTest(f"openssl failed: {proc.stderr.strip() or proc.stdout.strip()}")
+        return cert, key
+
+    def _tls_get_sessions(self, timeout: float) -> int:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        conn = http.client.HTTPSConnection(
+            "127.0.0.1", self.port, context=ctx, timeout=timeout
+        )
+        try:
+            conn.request(
+                "GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY}
+            )
+            resp = conn.getresponse()
+            resp.read()
+            return resp.status
+        finally:
+            conn.close()
+
+    def test_silent_tls_client_does_not_block(self) -> None:
+        import session_directory as sd
+
+        cert, key = self._self_signed_cert()
+        self.start(cert=cert, key=key)
+        silent = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            t0 = time.monotonic()
+            try:
+                status = self._tls_get_sessions(timeout=3.0)
+            except OSError as exc:
+                self.fail(f"second client blocked by silent connection: {exc}")
+            self.assertEqual(status, 200)
+            self.assertLess(time.monotonic() - t0, 1.0)
+            handshake_timeout = getattr(sd, "HANDSHAKE_TIMEOUT_S", 5)
+            silent.settimeout(handshake_timeout + 1.0)
+            try:
+                closed = silent.recv(1) == b""
+            except (ConnectionResetError, ConnectionAbortedError):
+                closed = True
+            except OSError:
+                closed = False
+            self.assertTrue(closed, "silent connection not closed by server")
+        finally:
+            silent.close()
+
+    def test_many_silent_tls_clients_do_not_block(self) -> None:
+        cert, key = self._self_signed_cert()
+        self.start(cert=cert, key=key)
+        silents = [
+            socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            for _ in range(16)
+        ]
+        try:
+            t0 = time.monotonic()
+            try:
+                status = self._tls_get_sessions(timeout=3.0)
+            except OSError as exc:
+                self.fail(f"real request blocked by silent connections: {exc}")
+            self.assertEqual(status, 200)
+            self.assertLess(time.monotonic() - t0, 1.0)
+        finally:
+            for sock in silents:
+                sock.close()
+
     def test_install_key_required_on_every_v1_endpoint(self) -> None:
         self.start()
         status, created = self.register()
@@ -960,6 +1055,131 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(raw_token_hits, [])
         finally:
             LOGGER.removeHandler(handler)
+
+    def capture_log(self) -> list[str]:
+        records: list[str] = []
+
+        class Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
+
+        handler = Capture()
+        handler.setLevel(logging.INFO)
+        LOGGER.addHandler(handler)
+        self.addCleanup(LOGGER.removeHandler, handler)
+        return records
+
+    def test_signal_peer_header_alternative(self) -> None:
+        records = self.capture_log()
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid = created["session_id"]
+        token = created["token"]
+        nonce = "headerNonce1"
+        client_peer = f"client:{nonce}"
+        down = base64.b64encode(b"host-reply").decode("ascii")
+        up = base64.b64encode(b"client-hello").decode("ascii")
+        for body in (
+            {"token_or_join_nonce": token, "from": "host", "to": client_peer, "payload_b64": down},
+            {"token_or_join_nonce": nonce, "from": client_peer, "to": "host", "payload_b64": up},
+        ):
+            status, _posted = self.call("POST", f"/v1/sessions/{sid}/signal", body)
+            self.assertEqual(status, 200)
+        signals = f"/v1/sessions/{sid}/signals"
+        with self.subTest("client_header_only"):
+            status, got = self.call(
+                "GET", f"{signals}?after=0", headers={"X-Signal-Peer": client_peer}
+            )
+            self.assertEqual(status, 200)
+            self.assert_keys(got, SIGNAL_GET_KEYS)
+            self.assertEqual([item["payload_b64"] for item in got["signals"]], [down])
+        with self.subTest("host_header_only"):
+            status, got = self.call(
+                "GET",
+                f"{signals}?after=0",
+                headers={"X-Signal-Peer": "host", "X-Session-Token": token},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual([item["payload_b64"] for item in got["signals"]], [up])
+        with self.subTest("header_and_query_agree"):
+            status, got = self.call(
+                "GET",
+                f"{signals}?peer={quote(client_peer, safe=':')}&after=1",
+                headers={"X-Signal-Peer": client_peer},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(got["signals"], [])
+        with self.subTest("query_only_still_accepted"):
+            status, got = self.call(
+                "GET", f"{signals}?peer={quote(client_peer, safe=':')}&after=1"
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(got["signals"], [])
+        with self.subTest("header_and_query_disagree"):
+            status, err = self.call(
+                "GET",
+                f"{signals}?peer=client:other&after=0",
+                headers={"X-Signal-Peer": client_peer},
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "peer"})
+        with self.subTest("header_peer_validated"):
+            status, err = self.call(
+                "GET", f"{signals}?after=0", headers={"X-Signal-Peer": "client:no spaces"}
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "peer"})
+        with self.subTest("header_host_still_needs_token"):
+            status, err = self.call(
+                "GET", f"{signals}?after=0", headers={"X-Signal-Peer": "host"}
+            )
+            self.assertEqual(status, 403)
+            self.assertEqual(err, {"error": "forbidden"})
+        with self.subTest("no_peer_at_all"):
+            status, err = self.call("GET", f"{signals}?after=0")
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "missing_field", "field": "peer"})
+        with self.subTest("log_names_the_path"):
+            via = "\n".join(
+                line for line in records if line.startswith("signal ") and "peer_via=" in line
+            )
+            self.assertIn("peer_via=header", via)
+            self.assertIn("peer_via=query", via)
+            self.assertNotIn(nonce, "\n".join(records))
+
+    def test_client_peer_redacted_in_log(self) -> None:
+        records = self.capture_log()
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid = created["session_id"]
+        token = created["token"]
+        nonce = "RedactMe0123456789abcdefABCDEF_-"
+        client_peer = f"client:{nonce}"
+        tiny = base64.b64encode(b"x").decode("ascii")
+        status, _posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {"token_or_join_nonce": token, "from": "host", "to": client_peer, "payload_b64": tiny},
+        )
+        self.assertEqual(status, 200)
+        signals = f"/v1/sessions/{sid}/signals"
+        status, got = self.call("GET", f"{signals}?peer={quote(client_peer, safe=':')}&after=0")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(got["signals"]), 1)
+        status, got = self.call("GET", f"{signals}?peer={quote(client_peer, safe='')}&after=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(got["signals"], [])
+        status, _host_q = self.call("GET", f"{signals}?peer=host&after=0&token={quote(token)}")
+        self.assertEqual(status, 200)
+        joined = "\n".join(records)
+        self.assertNotIn(nonce, joined)
+        self.assertNotIn(token, joined)
+        polls = [line for line in records if "/signals?" in line]
+        self.assertEqual(len(polls), 3)
+        self.assertEqual(sum("peer=redacted&after=" in line for line in polls), 2)
+        self.assertEqual(sum("peer=host&after=0&token=redacted" in line for line in polls), 1)
 
     def test_readme_documents_install_key_and_caps(self) -> None:
         text = Path(__file__).with_name("README.md").read_text(encoding="utf-8")
