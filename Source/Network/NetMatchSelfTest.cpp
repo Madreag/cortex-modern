@@ -446,6 +446,58 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyCodecDedicatedFlag(std::string* error) {
+			NetMatchConfig dedicated = MakeConfig();
+			dedicated.peerCount = 3;
+			dedicated.dedicated = true;
+			dedicated.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			if (!RoundTrip(NetLobbyMatchConfig{dedicated}, error)) {
+				return false;
+			}
+			// The config's reserved u16 sits 16 bytes into the payload (after mode/ownership).
+			const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
+			NetLobbyMessage message;
+			message.payload = NetLobbyMatchConfig{dedicated};
+			std::vector<uint8_t> bytes;
+			NetLobbyError encodeError;
+			if (!NetLobbyProtocol::Encode(message, bytes, &encodeError) ||
+			    bytes.size() <= reservedOffset + 1 || bytes[reservedOffset] != 1 || bytes[reservedOffset + 1] != 0) {
+				*error = "dedicated config did not encode reserved bit 0";
+				return false;
+			}
+			const NetLobbyDecodeResult dedicatedDecoded = NetLobbyProtocol::Decode(bytes);
+			const NetLobbyMatchConfig* dedicatedConfig = dedicatedDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&dedicatedDecoded.message.payload) : nullptr;
+			if (!dedicatedConfig || !dedicatedConfig->config.dedicated) {
+				*error = "a reserved word of 1 did not decode to dedicated=true";
+				return false;
+			}
+			message.payload = NetLobbyMatchConfig{MakeConfig()};
+			if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) {
+				*error = "could not encode a non-dedicated config";
+				return false;
+			}
+			if (bytes[reservedOffset] != 0 || bytes[reservedOffset + 1] != 0) {
+				*error = "non-dedicated config wrote a nonzero reserved word";
+				return false;
+			}
+			const NetLobbyDecodeResult plainDecoded = NetLobbyProtocol::Decode(bytes);
+			const NetLobbyMatchConfig* plainConfig = plainDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&plainDecoded.message.payload) : nullptr;
+			if (!plainConfig || plainConfig->config.dedicated) {
+				*error = "a reserved word of 0 did not decode to dedicated=false";
+				return false;
+			}
+			bytes[reservedOffset] = 2;
+			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
+			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
+				*error = "a reserved word of 2 was not refused";
+				return false;
+			}
+			return true;
+		}
+
 		bool CaptureLoopbackPeers(LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetPeerId& hostRemotePeer, NetPeerId& clientRemotePeer, std::string* error) {
 			hostRemotePeer = c_InvalidNetPeerId;
 			clientRemotePeer = c_InvalidNetPeerId;
@@ -1780,6 +1832,7 @@ namespace RTE {
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
 		if (!TestLobbyCodecRoundTrips(&error)) return fail(error);
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
+		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
