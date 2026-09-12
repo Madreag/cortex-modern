@@ -2,6 +2,11 @@
 
 #include "NetActorOwnership.h"
 #include "GnsTransport.h"
+#include "NetMuxTransport.h"
+#include "SettingsMan.h"
+#ifdef CCCP_WITH_GNS
+#include "GnsSignaling.h"
+#endif
 #include "NetIdentity.h"
 #include "NetLobbySession.h"
 #include "NetLobbyProtocol.h"
@@ -2545,6 +2550,324 @@ namespace RTE {
 		return true;
 	}
 
+	namespace {
+		// Records every call the mux routes to it, so a test can name the half and the untagged id.
+		class TransportTap final: public INetTransport {
+		public:
+			explicit TransportTap(std::string name, std::vector<std::string>* log) : m_Name(std::move(name)), m_Log(log) {}
+
+			bool StartHost(uint16_t port, std::string* = nullptr) override {
+				m_Log->push_back(m_Name + ".StartHost(" + std::to_string(port) + ")");
+				return true;
+			}
+			bool Connect(const std::string& address, uint16_t port, std::string* = nullptr) override {
+				m_Log->push_back(m_Name + ".Connect(" + address + ":" + std::to_string(port) + ")");
+				return true;
+			}
+			bool Send(NetPeerId peerId, NetTransportLane, const std::vector<uint8_t>& bytes, std::string* = nullptr, bool* = nullptr) override {
+				m_Log->push_back(m_Name + ".Send(" + std::to_string(peerId) + "," + std::to_string(bytes.size()) + ")");
+				return true;
+			}
+			void Disconnect(NetPeerId peerId, const std::string& reason) override {
+				m_Log->push_back(m_Name + ".Disconnect(" + std::to_string(peerId) + "," + reason + ")");
+			}
+			void Stop() override { m_Log->push_back(m_Name + ".Stop()"); }
+			std::vector<NetTransportEvent> PollEvents() override {
+				std::vector<NetTransportEvent> events;
+				events.swap(m_Pending);
+				return events;
+			}
+			uint32_t GetPeerPingMs(NetPeerId peerId) const override { return m_Ping + peerId; }
+
+			void Queue(NetTransportEvent event) { m_Pending.push_back(std::move(event)); }
+			void SetPing(uint32_t ping) { m_Ping = ping; }
+
+		private:
+			std::string m_Name;
+			std::vector<std::string>* m_Log;
+			std::vector<NetTransportEvent> m_Pending;
+			uint32_t m_Ping = 0;
+		};
+
+		std::unique_ptr<NetMuxTransport> MakeTappedMux(std::vector<std::string>* log, TransportTap** ip, TransportTap** p2p) {
+			auto ipTap = std::make_unique<TransportTap>("ip", log);
+			auto p2pTap = std::make_unique<TransportTap>("p2p", log);
+			*ip = ipTap.get();
+			*p2p = p2pTap.get();
+			return std::make_unique<NetMuxTransport>(std::move(ipTap), std::move(p2pTap));
+		}
+	} // namespace
+
+	// The ICE listen must open before the IP one: binding the session identity is a process-wide
+	// ResetIdentity that GNS refuses once any listen socket of the process is up.
+	bool TestMuxOpensIceListenFirst(std::string* error) {
+		std::vector<std::string> log;
+		TransportTap* ip = nullptr;
+		TransportTap* p2p = nullptr;
+		std::unique_ptr<NetMuxTransport> mux = MakeTappedMux(&log, &ip, &p2p);
+
+		GnsP2PConfig config;
+		config.localIdentity = "str:h-deadbeef";
+		mux->SetHostP2P(41011, config);
+		if (!mux->HostP2PArmed() || mux->HostP2PConfig().localIdentity != "str:h-deadbeef") {
+			*error = "mux listen order: the armed host identity did not stick";
+			return false;
+		}
+		std::string startError;
+		if (!mux->StartHost(41010, &startError)) {
+			*error = "mux listen order: StartHost failed: " + startError;
+			return false;
+		}
+		if (log.size() != 2 || log[0] != "p2p.StartHost(41010)" || log[1] != "ip.StartHost(41010)") {
+			std::string seen;
+			for (const std::string& line: log) seen += line + " ";
+			*error = "mux listen order: calls were [" + seen + "], expected the ICE half first";
+			return false;
+		}
+		std::cout << "[net-match-selftest] mux listen order: the ICE half opens first (identity bound there), then the IP listen" << std::endl;
+		return true;
+	}
+
+	bool TestMuxRoutesByTag(std::string* error) {
+		std::vector<std::string> log;
+		TransportTap* ip = nullptr;
+		TransportTap* p2p = nullptr;
+		std::unique_ptr<NetMuxTransport> mux = MakeTappedMux(&log, &ip, &p2p);
+
+		const NetPeerId tagged = NetMuxTransport::Tag(3);
+		if (!NetMuxTransport::IsP2P(tagged) || NetMuxTransport::Untag(tagged) != 3 || NetMuxTransport::IsP2P(3)) {
+			*error = "mux routing: the peer-id tag does not round-trip";
+			return false;
+		}
+		(void)mux->Send(7, NetTransportLane::ControlReliable, std::vector<uint8_t>(4), nullptr, nullptr);
+		(void)mux->Send(tagged, NetTransportLane::InputUnreliable, std::vector<uint8_t>(9), nullptr, nullptr);
+		mux->Disconnect(7, "ip-side");
+		mux->Disconnect(tagged, "ice-side");
+		const std::vector<std::string> wanted = {"ip.Send(7,4)", "p2p.Send(3,9)", "ip.Disconnect(7,ip-side)", "p2p.Disconnect(3,ice-side)"};
+		if (log != wanted) {
+			std::string seen;
+			for (const std::string& line: log) seen += line + " ";
+			*error = "mux routing: calls were [" + seen + "]";
+			return false;
+		}
+
+		NetTransportEvent fromIp;
+		fromIp.type = NetTransportEventType::PeerConnected;
+		fromIp.peerId = 2;
+		NetTransportEvent fromP2P;
+		fromP2P.type = NetTransportEventType::PeerConnected;
+		fromP2P.peerId = 5;
+		NetTransportEvent localFault;
+		localFault.type = NetTransportEventType::LocalTransportFault;
+		localFault.peerId = c_InvalidNetPeerId;
+		ip->Queue(fromIp);
+		p2p->Queue(fromP2P);
+		p2p->Queue(localFault);
+		const std::vector<NetTransportEvent> events = mux->PollEvents();
+		if (events.size() != 3 || events[0].peerId != 2 || events[1].peerId != NetMuxTransport::Tag(5) || events[2].peerId != c_InvalidNetPeerId) {
+			*error = "mux routing: the polled events did not carry the ICE half's tag";
+			return false;
+		}
+
+		// GnsTransport has no locks, so another thread's work runs here and nowhere else.
+		int ran = 0;
+		mux->Post([&ran] { ++ran; });
+		if (mux->PendingTasks() != 1 || ran != 0) {
+			*error = "mux routing: a posted task ran before PollEvents";
+			return false;
+		}
+		(void)mux->PollEvents();
+		if (ran != 1 || mux->PendingTasks() != 0) {
+			*error = "mux routing: PollEvents did not drain the posted task";
+			return false;
+		}
+		std::cout << "[net-match-selftest] mux routing: Send/Disconnect/ping follow the peer-id tag, ICE events come back tagged, an unbound fault stays invalid, posted tasks run inside PollEvents" << std::endl;
+		return true;
+	}
+
+	bool TestIceRowJoinMode(std::string* error) {
+		struct Case {
+			bool enabled;
+			bool direct;
+			const char* bound;
+			const char* row;
+			const char* want;
+			const char* what;
+		};
+		const Case cases[] = {
+			{false, true, "", "s1", "ip", "ICE off"},
+			{false, false, "", "s1", "ip", "ICE off without an address"},
+			{true, true, "", "", "either", "ICE on before the register reply"},
+			{true, false, "", "", "ice", "ICE on with no direct address"},
+			{true, true, "s1", "s1", "either", "the bound session id"},
+			{true, false, "s1", "s1", "ice", "the bound session id, ICE only"},
+			{true, true, "s1", "s2", "ip", "a rematch under a new session id"},
+			{true, false, "s1", "s2", "ip", "a rematch with no direct address"},
+		};
+		for (const Case& c: cases) {
+			const std::string got = NetIceRowJoinMode(c.enabled, c.direct, c.bound, c.row);
+			if (got != c.want) {
+				*error = std::string("ice join_mode: ") + c.what + " gave \"" + got + "\", expected \"" + c.want + "\"";
+				return false;
+			}
+		}
+		std::cout << "[net-match-selftest] ice join_mode: either with a direct address, ice without one, and ip once a rematch re-registers under a session id the pinned GNS identity no longer matches" << std::endl;
+		return true;
+	}
+
+	bool TestSessionIdJoinRefusals(std::string* error) {
+		NetDirectoryLocalIdentity local;
+		local.networkProtocolVersion = 1;
+		local.lockstepCodecVersion = 20;
+		local.controllerFrameVersion = 6;
+		local.sessionIdentityHash = std::string(64, 'b');
+		local.moduleManifestHash = std::string(64, 'c');
+
+		auto sample = [&local](const std::string& id) {
+			NetDirectorySessionRow row;
+			row.name = "Erol";
+			row.peerCount = 2;
+			row.seatsFree = 1;
+			row.networkProtocolVersion = local.networkProtocolVersion;
+			row.lockstepCodecVersion = local.lockstepCodecVersion;
+			row.controllerFrameVersion = local.controllerFrameVersion;
+			row.sessionIdentityHash = local.sessionIdentityHash;
+			row.moduleManifestHash = local.moduleManifestHash;
+			row.joinMode = "ice";
+			row.sessionId = id;
+			return row;
+		};
+
+		NetDirectorySessionRow ok = sample("live");
+		NetDirectorySessionRow full = sample("full");
+		full.seatsFree = 0;
+		NetDirectorySessionRow codec = sample("codec");
+		codec.lockstepCodecVersion = 99;
+		NetDirectorySessionRow ipOnly = sample("iponly");
+		ipOnly.joinMode = "ip";
+		NetDirectorySessionRow eitherRow = sample("either");
+		eitherRow.joinMode = "either";
+		eitherRow.listenAddrs = {"127.0.0.1"};
+		eitherRow.listenPort = 41010;
+		const std::vector<NetDirectorySessionRow> rows = {ok, full, codec, ipOnly, eitherRow};
+
+		struct Case {
+			const char* id;
+			const char* reason;
+		};
+		const Case refusals[] = {{"absent", "no such session"}, {"full", "full"}, {"codec", "codec"}, {"iponly", "address"}};
+		for (const Case& c: refusals) {
+			NetIceJoinTarget target;
+			const std::string why = NetIceResolveSessionRow(rows, local, c.id, &target);
+			if (why != c.reason) {
+				*error = std::string("session-id join: \"") + c.id + "\" was refused with \"" + why + "\", expected \"" + c.reason + "\"";
+				return false;
+			}
+		}
+		NetIceJoinTarget target;
+		if (!NetIceResolveSessionRow(rows, local, "live", &target).empty() || target.identity != "str:h-live" || target.joinMode != "ice") {
+			*error = "session-id join: the joinable ice row did not resolve to its host identity";
+			return false;
+		}
+#ifdef CCCP_WITH_GNS
+		// One rule for the identity: the resolver's copy must not drift from the dispatcher's.
+		const std::string sampleId = "7B8C9D2E-1111-4222-8333-4444555566667777";
+		if (NetIceHostIdentity(sampleId) != GnsDirectorySignalDispatcher::HostIdentity(sampleId)) {
+			*error = "session-id join: NetIceHostIdentity and GnsDirectorySignalDispatcher::HostIdentity disagree on " + sampleId;
+			return false;
+		}
+#endif
+		NetIceJoinTarget either;
+		if (!NetIceResolveSessionRow(rows, local, "either", &either).empty() || either.address != "127.0.0.1" || either.port != 41010) {
+			*error = "session-id join: an either row did not carry its direct address too";
+			return false;
+		}
+		std::cout << "[net-match-selftest] session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
+		return true;
+	}
+
+	// -net-ice is a run override: it decides this run and never reaches the saved settings.
+	bool TestIceSettingsOverrideIsNotPersisted(std::string* error) {
+		// This selftest runs before the managers are built.
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		const bool savedEnable = g_SettingsMan.GetNetworkIceEnableSetting();
+		const std::string savedStun = g_SettingsMan.GetNetworkStunServers();
+		g_SettingsMan.SetNetworkIceEnable(false);
+		g_SettingsMan.SetNetworkStunServers("");
+		if (g_SettingsMan.GetNetworkIceEnable()) {
+			*error = "ice settings: the default was not off";
+			return false;
+		}
+		g_SettingsMan.SetNetworkIceEnableOverride(true);
+		if (!g_SettingsMan.GetNetworkIceEnable() || g_SettingsMan.GetNetworkIceEnableSetting()) {
+			*error = "ice settings: the -net-ice override did not decide the run, or it reached the saved setting";
+			return false;
+		}
+		g_SettingsMan.SetNetworkStunServersOverride("stun.example:3478");
+		if (g_SettingsMan.GetNetworkStunServers() != "stun.example:3478" || !g_SettingsMan.GetNetworkStunServersSetting().empty()) {
+			*error = "ice settings: the -net-stun override did not decide the run, or it reached the saved setting";
+			return false;
+		}
+		g_SettingsMan.ClearNetworkIceOverrides();
+		if (g_SettingsMan.GetNetworkIceEnable() || !g_SettingsMan.GetNetworkStunServers().empty()) {
+			*error = "ice settings: clearing the overrides did not fall back to the saved settings";
+			return false;
+		}
+		g_SettingsMan.SetNetworkIceEnable(savedEnable);
+		g_SettingsMan.SetNetworkStunServers(savedStun);
+		std::cout << "[net-match-selftest] ice settings: NetworkIceEnable defaults off; -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
+		return true;
+	}
+
+	// The runner's SessionFull retry calls StartClient again, so the join spec has to ride the config.
+	bool TestP2PJoinSpecRidesTheSessionConfig(std::string* error) {
+		std::vector<std::string> log;
+		TransportTap tap("tap", &log);
+		int dialled = 0;
+
+		NetSessionConfig config;
+		config.displayName = "Client";
+		config.p2pJoin.identity = "str:h-abc";
+		config.p2pJoin.remoteVirtualPort = 41011;
+		config.p2pJoin.connect = [&dialled](INetTransport&, std::string*) {
+			++dialled;
+			return true;
+		};
+
+		NetSession session;
+		std::string startError;
+		if (!session.StartClientP2P(tap, config, &startError)) {
+			*error = "p2p join spec: StartClientP2P failed: " + startError;
+			return false;
+		}
+		if (dialled != 1 || !log.empty()) {
+			*error = "p2p join spec: the session dialled the address instead of the spec";
+			return false;
+		}
+		if (session.GetRole() != NetSessionRole::Client || session.GetState() != NetSessionState::Connecting) {
+			*error = "p2p join spec: the session did not enter the client connecting state";
+			return false;
+		}
+		// Exactly what the runner's retry does, with the config it kept.
+		NetSessionConfig retry = config;
+		if (!session.StartClient(tap, "203.0.113.9", retry, &startError)) {
+			*error = "p2p join spec: the retry failed: " + startError;
+			return false;
+		}
+		if (dialled != 2 || !log.empty()) {
+			*error = "p2p join spec: the retry dialled the address instead of replaying the spec";
+			return false;
+		}
+		NetSessionConfig plain;
+		NetSession ip;
+		if (!ip.StartClient(tap, "203.0.113.9", plain, &startError) || log.size() != 1 || log[0] != "tap.Connect(203.0.113.9:41010)") {
+			*error = "p2p join spec: a config without a spec no longer takes the direct-IP path";
+			return false;
+		}
+		std::cout << "[net-match-selftest] p2p join spec: StartClient dials the config's spec and replays it on the SessionFull retry; without a spec the direct-IP Connect is unchanged" << std::endl;
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -2624,6 +2947,12 @@ namespace RTE {
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
+		if (!TestMuxOpensIceListenFirst(&error)) return fail(error);
+		if (!TestMuxRoutesByTag(&error)) return fail(error);
+		if (!TestIceRowJoinMode(&error)) return fail(error);
+		if (!TestSessionIdJoinRefusals(&error)) return fail(error);
+		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
+		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
