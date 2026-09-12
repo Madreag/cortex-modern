@@ -892,6 +892,7 @@ namespace RTE {
 		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
 		MovableObject* ShadowOf(MovableObject* resident);
 		MovableObject* SpeculativeView(MovableObject* found);
+		MovableObject* ViewIfSpeculating(MovableObject* found) const;
 		MovableObject* TakeShadow(MovableObject* mo, int kind);
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;

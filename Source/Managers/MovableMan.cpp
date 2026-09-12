@@ -1364,21 +1364,43 @@ void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
 	g_LuaMan.ForgetDestroyedRegisteredMO(mo);
 }
 
+MovableObject* MovableMan::ViewIfSpeculating(MovableObject* found) const {
+	if (!found || !m_Speculation.active) {
+		return found;
+	}
+	return const_cast<MovableMan*>(this)->SpeculativeView(found);
+}
+
 const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsInBox(box, ignoreTeam, getsHitByMOsOnly));
+	if (m_Speculation.active) {
+		for (MovableObject*& mo: *vectorForLua) {
+			mo = ViewIfSpeculating(mo);
+		}
+	}
 	return vectorForLua;
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsInRadius(const Vector& centre, float radius, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsInRadius(centre, radius, ignoreTeam, getsHitByMOsOnly));
+	if (m_Speculation.active) {
+		for (MovableObject*& mo: *vectorForLua) {
+			mo = ViewIfSpeculating(mo);
+		}
+	}
 	return vectorForLua;
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsAtPosition(int pixelX, int pixelY, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsAtPosition(pixelX, pixelY, ignoreTeam, getsHitByMOsOnly));
+	if (m_Speculation.active) {
+		for (MovableObject*& mo: *vectorForLua) {
+			mo = ViewIfSpeculating(mo);
+		}
+	}
 	return vectorForLua;
 }
 
@@ -2356,6 +2378,9 @@ void MovableMan::PurgeAllMOs() {
 }
 
 Actor* MovableMan::GetNextActorInGroup(std::string group, Actor* pAfterThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetNextActorInGroup", pAfterThis);
+	}
 	if (group.empty())
 		return 0;
 
@@ -2402,6 +2427,9 @@ Actor* MovableMan::GetNextActorInGroup(std::string group, Actor* pAfterThis) {
 }
 
 Actor* MovableMan::GetPrevActorInGroup(std::string group, Actor* pBeforeThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetPrevActorInGroup", pBeforeThis);
+	}
 	if (group.empty())
 		return 0;
 
@@ -2448,6 +2476,9 @@ Actor* MovableMan::GetPrevActorInGroup(std::string group, Actor* pBeforeThis) {
 }
 
 Actor* MovableMan::GetNextTeamActor(int team, Actor* pAfterThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetNextTeamActor", pAfterThis);
+	}
 	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount || m_ActorRoster[team].empty())
 		return 0;
 	/*
@@ -2523,6 +2554,9 @@ Actor* MovableMan::GetNextTeamActor(int team, Actor* pAfterThis) {
 }
 
 Actor* MovableMan::GetPrevTeamActor(int team, Actor* pBeforeThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetPrevTeamActor", pBeforeThis);
+	}
 	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount || m_Actors.empty() || m_ActorRoster[team].empty())
 		return 0;
 	/* Obsolete, now uses team rosters which are sorted
@@ -2640,7 +2674,7 @@ Actor* MovableMan::GetClosestTeamActor(int team, int player, const Vector& scene
 		}
 	}
 
-	return pClosestActor;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestActor));
 }
 
 Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int maxRadius, Vector& getDistance) {
@@ -2667,7 +2701,7 @@ Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int 
 		}
 	}
 
-	return pClosestActor;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestActor));
 }
 
 Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vector& getDistance, const Actor* pExcludeThis) {
@@ -2694,7 +2728,7 @@ Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vect
 		}
 	}
 
-	return pClosestActor;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestActor));
 }
 
 Actor* MovableMan::GetClosestBrainActor(int team, const Vector& scenePoint) const {
@@ -2718,7 +2752,7 @@ Actor* MovableMan::GetClosestBrainActor(int team, const Vector& scenePoint) cons
 		}
 	}
 
-	return pClosestBrain;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestBrain));
 }
 
 Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& scenePoint) const {
@@ -2741,7 +2775,7 @@ Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& sceneP
 			}
 		}
 	}
-	return pClosestBrain;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestBrain));
 }
 
 Actor* MovableMan::GetUnassignedBrain(int team) const {
@@ -2750,7 +2784,7 @@ Actor* MovableMan::GetUnassignedBrain(int team) const {
 
 	for (std::list<Actor*>::const_iterator aIt = m_ActorRoster[team].begin(); aIt != m_ActorRoster[team].end(); ++aIt) {
 		if ((*aIt)->HasObjectInGroup("Brains") && !g_ActivityMan.GetActivity()->IsAssignedBrain(*aIt))
-			return *aIt;
+			return static_cast<Actor*>(ViewIfSpeculating(*aIt));
 	}
 
 	// Also need to look through all the actors added this frame, one might be a brain.
@@ -2759,7 +2793,7 @@ Actor* MovableMan::GetUnassignedBrain(int team) const {
 		int actorTeam = (*aaIt)->GetTeam();
 		// Accept no-team brains too - ACTUALLY, DON'T
 		if ((actorTeam == team /* || actorTeam == Activity::NoTeam*/) && (*aaIt)->HasObjectInGroup("Brains") && !g_ActivityMan.GetActivity()->IsAssignedBrain(*aaIt))
-			return *aaIt;
+			return static_cast<Actor*>(ViewIfSpeculating(*aaIt));
 	}
 
 	return 0;

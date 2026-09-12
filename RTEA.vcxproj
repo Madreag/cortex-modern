@@ -1615,6 +1615,7 @@
     <ClCompile Include="Source\Managers\MovableMan.cpp" />
     <ClCompile Include="Source\Managers\LocalPrediction.cpp" />
     <ClCompile Include="Source\Managers\PreviewEventLedger.cpp" />
+    <ClCompile Include="Source\Managers\PreviewScriptSelfTest.cpp" />
     <ClCompile Include="Source\Managers\TerrainLayerSnapshot.cpp" />
     <ClCompile Include="Source\Managers\PresetMan.cpp" />
     <ClCompile Include="Source\Managers\SceneMan.cpp" />
