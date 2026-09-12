@@ -7,7 +7,9 @@
 #include "FrameMan.h"
 #include "GUIInput.h"
 #include "GnsTransport.h"
+#include "NetHttpClient.h"
 #include "NetIdentity.h"
+#include "NetPortMap.h"
 #include "NetProtocol.h"
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
@@ -126,6 +128,59 @@ static std::string ResyncSaveName() {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		}
 
+		// The port mapper is file-scope because NetMatchService.h is outside this lane's edit set and
+		// the service is a process singleton: one mapping belongs to one hosted match at a time.
+		NetPortMap s_PortMap;
+		bool s_PortMapRequested = false; //!< This match's host asked the router for a mapping.
+		bool s_PortMapApplied = false;   //!< The row already carries the mapped external address.
+
+		std::mutex s_ObservedIpMutex;
+		std::string s_DirectoryObservedIp; //!< The address the directory saw the register come from.
+
+		/// NetDirectoryClient's register reply carries observed_ip but drops it; this transport is a
+		/// pass-through NetHttpClient that copies the field out of the 200 reply so the report can
+		/// show it without touching the client.
+		class ObservedIpTransport final : public NetDirectoryClient::Transport {
+		public:
+			ObservedIpTransport(std::string baseUrl, std::string installKey, std::string certPinSha256) :
+				m_BaseUrl(std::move(baseUrl)), m_CertPinSha256(std::move(certPinSha256)) {
+				m_Headers = {
+					{"Content-Type", "application/json"},
+					{"X-Install-Key", std::move(installKey)},
+				};
+			}
+
+			void Start(const NetDirectoryClient::Request& request) override {
+				m_Method = request.method;
+				m_Path = request.path;
+				m_Client.Start(request.method, m_BaseUrl + request.path, m_Headers, request.body, m_CertPinSha256);
+			}
+			bool Finished() override { return m_Client.Poll() == NetHttpClient::PollResult::Done; }
+			NetDirectoryClient::Reply Take() override {
+				const NetHttpClient::Response response = m_Client.GetResponse();
+				if (m_Method == "POST" && m_Path == "/v1/sessions" && response.statusCode == 200) {
+					try {
+						const json parsed = json::parse(response.body);
+						if (parsed.is_object() && parsed.contains("observed_ip") && parsed["observed_ip"].is_string()) {
+							std::lock_guard<std::mutex> lock(s_ObservedIpMutex);
+							s_DirectoryObservedIp = parsed["observed_ip"].get<std::string>();
+						}
+					} catch (...) {
+					}
+				}
+				return {response.statusCode, response.body, response.error};
+			}
+			void Abort() override { m_Client.Cancel(); }
+
+		private:
+			NetHttpClient m_Client;
+			std::string m_BaseUrl;
+			std::string m_CertPinSha256;
+			std::vector<std::pair<std::string, std::string>> m_Headers;
+			std::string m_Method;
+			std::string m_Path;
+		};
+
 		uint64_t UnixNowMs(void*) {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		}
@@ -233,6 +288,16 @@ static std::string ResyncSaveName() {
 			}
 			m_DirectoryRetracted = false;
 		}
+		// The mapping request must land before the first directory register: the heartbeat never
+		// resends listen_addrs/join_mode, so the row goes out once with its final addresses.
+		if (request.host && g_SettingsMan.GetNetworkPortMapEnable()) {
+			s_PortMap.Request(request.port, NetPortMap::c_DefaultLeaseS, NetPortMap::ProbeOverrides());
+			s_PortMapRequested = true;
+		} else {
+			s_PortMapRequested = false;
+			s_PortMap.Release();
+		}
+		s_PortMapApplied = false;
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest));
 		return true;
@@ -764,6 +829,7 @@ static std::string ResyncSaveName() {
 		RunCleanLeave();
 		m_LanDiscovery.Stop();
 		m_Directory.Shutdown(); // the DELETE goes out before the row would expire
+		s_PortMap.Release();    // the router mapping goes out with the listing
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
@@ -991,16 +1057,42 @@ static std::string ResyncSaveName() {
 		// keeps beating while the match runs so a late joiner (or a dedicated host's row) resolves.
 		// Configure runs unconditionally so an empty URL lands the client in Disabled, which is what
 		// the report's service.directory.state must show.
+		if (s_PortMapRequested) {
+			s_PortMap.Update(nowMs);
+		}
+		if (!s_PortMapApplied && s_PortMapRequested && s_PortMap.Mapped()) {
+			// The public endpoint leads; the LAN address stays as the fallback join path.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_DirectoryRow.listenAddrs.insert(m_DirectoryRow.listenAddrs.begin(), s_PortMap.GetResult().externalIp);
+			m_DirectoryRow.joinMode = "either";
+			s_PortMapApplied = true;
+		}
 		const std::string& directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		// The install key is minted on the first directory use, so only a listing host asks for it.
 		const std::string directoryKey = (directoryWanted && !directoryUrl.empty()) ? g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() : g_SettingsMan.GetSessionDirectoryInstallKey();
-		m_Directory.Configure(directoryUrl, directoryKey, g_SettingsMan.GetSessionDirectoryCertSha256());
-		if (directoryWanted) {
+		const std::string directoryCertPin = g_SettingsMan.GetSessionDirectoryCertSha256();
+		m_Directory.SetTransportFactory([directoryUrl, directoryKey, directoryCertPin]() {
+			// The factory sees the raw settings value; Configure's own copy gets this normalization.
+			std::string baseUrl = directoryUrl;
+			while (!baseUrl.empty() && baseUrl.back() == '/') {
+				baseUrl.pop_back();
+			}
+			if (!baseUrl.empty() && baseUrl.rfind("https://", 0) != 0) {
+				baseUrl = "https://" + baseUrl;
+			}
+			return std::make_unique<ObservedIpTransport>(baseUrl, directoryKey, directoryCertPin);
+		});
+		m_Directory.Configure(directoryUrl, directoryKey, directoryCertPin);
+		// While the mapper is still working the register must wait: the row is sent exactly once.
+		if (directoryWanted && (!s_PortMapRequested || s_PortMap.Done())) {
 			m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 			m_DirectoryRow.seatsFree = directorySeatsFree;
 			m_Directory.Advertise(m_DirectoryRow, directoryRunning);
-		} else {
+		} else if (!directoryWanted) {
 			m_Directory.Retract();
+			if (s_PortMapRequested) {
+				s_PortMap.Release();
+			}
 		}
 		m_Directory.Update(nowMs);
 		DriveReconnectUx(nowMs);
@@ -1591,7 +1683,23 @@ static std::string ResyncSaveName() {
 		report["session_events"] = {{"drained_at_teardown", m_SessionEventsDrained}, {"discarded", m_SessionEventsDiscarded}};
 		// The directory client's own counters; the member is game-thread only and this report is only
 		// ever built there, so reading it here is safe.
-		report["directory"] = json::parse(m_Directory.BuildReportJson());
+		{
+			json directoryReport = json::parse(m_Directory.BuildReportJson());
+			std::lock_guard<std::mutex> observedLock(s_ObservedIpMutex);
+			directoryReport["observed_ip"] = s_DirectoryObservedIp;
+			report["directory"] = std::move(directoryReport);
+		}
+		{
+			const NetPortMap::Result& mapped = s_PortMap.GetResult();
+			report["port_map"] = {
+				{"enabled", s_PortMapRequested},
+				{"method", NetPortMap::MethodName(mapped.method)},
+				{"external_ip", mapped.externalIp},
+				{"external_port", mapped.externalPort},
+				{"lease_s", mapped.leaseS},
+				{"error", mapped.error},
+			};
+		}
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
