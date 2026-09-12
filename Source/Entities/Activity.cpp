@@ -1264,3 +1264,18 @@ bool Activity::ResolveCheckpointReferences() {
 	m_HasCheckpointActorIDs = false;
 	return true;
 }
+
+int Activity::CountStaleRelaunchSlots(int tick) const {
+	int stale = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] && !g_MovableMan.ValidMO(m_Brain[player]) && !g_MovableMan.IsActor(m_Brain[player])) {
+			std::cout << "[net-match] relaunch: player " << player << " brain slot names a dead actor at tick " << tick << std::endl;
+			++stale;
+		}
+		if (m_ControlledActor[player] && !g_MovableMan.ValidMO(m_ControlledActor[player]) && !g_MovableMan.IsActor(m_ControlledActor[player])) {
+			std::cout << "[net-match] relaunch: player " << player << " controlled slot names a dead actor at tick " << tick << std::endl;
+			++stale;
+		}
+	}
+	return stale;
+}
