@@ -1,5 +1,6 @@
 #pragma once
 
+#include "NetDirectoryClient.h"
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
@@ -226,6 +227,7 @@ namespace RTE {
 		bool BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error = nullptr);
 
 		NetMatchServiceState GetState() const;
+		bool IsHost() const { std::lock_guard<std::mutex> lock(m_Mutex); return m_IsHost; }
 		bool WasEverStarted() const { return m_EverStarted.load(); }
 		NetLobbySnapshot GetLobbySnapshot() const;
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
@@ -250,6 +252,9 @@ namespace RTE {
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
+		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
+		/// Game-thread only, like the client it drives.
+		void RetractDirectoryListing();
 		void JoinWorkerIfDone();
 		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
 		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
@@ -382,6 +387,11 @@ namespace RTE {
 		uint32_t m_SessionEventsDiscarded = 0; //!< Handover events a relaunch found undelivered; must stay zero.
 		NetAdmissionClock m_AdmissionClock; //!< One elapsed-time source for setup, play, stalls and resync.
 		NetLanDiscovery m_LanDiscovery; //!< Game-thread only: the hosting lobby's LAN beacon.
+		/// Game-thread only, like the beacon: the host's session-directory row. Unlike the beacon it
+		/// stays listed while the match runs so a late joiner can still resolve it.
+		NetDirectoryClient m_Directory;
+		NetDirectoryRegisterRequest m_DirectoryRow; //!< The listing template; counts refresh per Update.
+		bool m_DirectoryRetracted = false;          //!< The match ended while the state was still Running.
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};
