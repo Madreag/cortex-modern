@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <wincrypt.h>
 #include <winhttp.h>
 #include <bcrypt.h>
 #endif
@@ -60,12 +61,37 @@ namespace RTE {
 			operator HINTERNET() const { return handle; }
 		};
 
+		// NONLS is defined project-wide, so MultiByteToWideChar is unavailable; decode UTF-8 here.
 		std::wstring ToWide(const std::string& text) {
-			if (text.empty()) return {};
-			const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-			if (size <= 0) return std::wstring(text.begin(), text.end());
-			std::wstring out(static_cast<size_t>(size), L'\0');
-			MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), size);
+			std::wstring out;
+			out.reserve(text.size());
+			size_t i = 0;
+			while (i < text.size()) {
+				const unsigned char lead = static_cast<unsigned char>(text[i]);
+				uint32_t cp = 0;
+				size_t extra = 0;
+				if (lead < 0x80) { cp = lead; }
+				else if ((lead & 0xE0) == 0xC0) { cp = lead & 0x1F; extra = 1; }
+				else if ((lead & 0xF0) == 0xE0) { cp = lead & 0x0F; extra = 2; }
+				else if ((lead & 0xF8) == 0xF0) { cp = lead & 0x07; extra = 3; }
+				else { out.push_back(L'?'); ++i; continue; }
+				if (i + extra >= text.size()) { out.push_back(L'?'); break; }
+				bool valid = true;
+				for (size_t k = 1; k <= extra; ++k) {
+					const unsigned char cont = static_cast<unsigned char>(text[i + k]);
+					if ((cont & 0xC0) != 0x80) { valid = false; break; }
+					cp = (cp << 6) | (cont & 0x3F);
+				}
+				if (!valid) { out.push_back(L'?'); ++i; continue; }
+				i += extra + 1;
+				if (cp <= 0xFFFF) {
+					out.push_back(static_cast<wchar_t>(cp));
+				} else {
+					cp -= 0x10000;
+					out.push_back(static_cast<wchar_t>(0xD800 + (cp >> 10)));
+					out.push_back(static_cast<wchar_t>(0xDC00 + (cp & 0x3FF)));
+				}
+			}
 			return out;
 		}
 
@@ -147,20 +173,20 @@ namespace RTE {
 		if (parts.dwExtraInfoLength > 0) path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
 		if (path.empty()) path = L"/";
 
-		WinHttpHandle session = WinHttpOpen(L"CortexCommand/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+		WinHttpHandle session{WinHttpOpen(L"CortexCommand/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
 		if (!session) {
 			response.error = WinHttpError("open", GetLastError());
 			Finish(response);
 			return;
 		}
 		WinHttpSetTimeouts(session, c_ConnectTimeoutMs, c_ConnectTimeoutMs, c_TotalTimeoutMs, c_TotalTimeoutMs);
-		WinHttpHandle connection = WinHttpConnect(session, host.c_str(), parts.nPort, 0);
+		WinHttpHandle connection{WinHttpConnect(session, host.c_str(), parts.nPort, 0)};
 		if (!connection) {
 			response.error = WinHttpError("connect", GetLastError());
 			Finish(response);
 			return;
 		}
-		WinHttpHandle request = WinHttpOpenRequest(connection, ToWide(method).c_str(), path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+		WinHttpHandle request{WinHttpOpenRequest(connection, ToWide(method).c_str(), path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)};
 		if (!request) {
 			response.error = WinHttpError("open request", GetLastError());
 			Finish(response);
