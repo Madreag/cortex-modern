@@ -4,6 +4,7 @@
 #include <chrono>
 #include <limits>
 #include <map>
+#include <set>
 #include <thread>
 #include <utility>
 
@@ -674,9 +675,25 @@ namespace RTE {
 			}
 			SteamNetworkingIdentity current;
 			if (!m_Interface->GetIdentity(&current) || !(current == wanted)) {
+				if (const std::string live = DescribeLiveGnsObjects(); !live.empty()) {
+					SetError(error, "GNS will not ResetIdentity to '" + config.localIdentity + "' while this process has " + live + " open: the identity is set once, before the first connection");
+					return false;
+				}
 				m_Interface->ResetIdentity(&wanted);
 			}
 			return true;
+		}
+
+		// ResetIdentity destroys every connection and listen socket of the process, not only this transport's.
+		static std::string DescribeLiveGnsObjects() {
+			size_t listenSockets = 0;
+			for (const Impl* impl : s_LiveImpls) {
+				listenSockets += impl->m_ListenSocket != k_HSteamListenSocket_Invalid ? 1 : 0;
+			}
+			if (s_ConnectionOwners.empty() && listenSockets == 0) {
+				return {};
+			}
+			return std::to_string(s_ConnectionOwners.size()) + " connection(s) and " + std::to_string(listenSockets) + " listen socket(s)";
 		}
 
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
@@ -754,10 +771,19 @@ namespace RTE {
 
 		static Impl* s_CallbackInstance;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
+		static std::set<const Impl*> s_LiveImpls;
+
+		// Lists every transport for the identity guard without a change to the IP path's code.
+		struct LiveImplRegistration {
+			explicit LiveImplRegistration(const Impl* impl) : m_Impl(impl) { s_LiveImpls.insert(m_Impl); }
+			~LiveImplRegistration() { s_LiveImpls.erase(m_Impl); }
+			const Impl* m_Impl;
+		} m_LiveImplRegistration{this};
 	};
 
 	GnsTransport::Impl* GnsTransport::Impl::s_CallbackInstance = nullptr;
 	std::map<HSteamNetConnection, GnsTransport::Impl*> GnsTransport::Impl::s_ConnectionOwners;
+	std::set<const GnsTransport::Impl*> GnsTransport::Impl::s_LiveImpls;
 
 #else
 
