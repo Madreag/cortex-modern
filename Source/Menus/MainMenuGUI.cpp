@@ -5,6 +5,7 @@
 #include "ActivityMan.h"
 #include "UInputMan.h"
 #include "SettingsMan.h"
+#include "TimerMan.h"
 #include "ConsoleMan.h"
 #include "NetMatchService.h"
 #include "NetIdentity.h"
@@ -1150,6 +1151,8 @@ void MainMenuGUI::RefreshGamesList() {
 	// A NET row can only be judged against the local identity; build it once, on first need.
 	if (!m_DirectoryIdentity && !m_DirectoryIdentityTried) {
 		m_DirectoryIdentityTried = true;
+		// The row's identity is what NetMatchService::Start would compute; it pins the default dt first.
+		g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions identityOptions;
 		identityOptions.buildId = "stage2-p2d-local";
