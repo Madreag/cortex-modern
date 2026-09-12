@@ -4076,6 +4076,9 @@ int main(int argc, char** argv) {
 
 	InitializeManagers();
 	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
+	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
+	const char* netUiProbeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
+	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 
