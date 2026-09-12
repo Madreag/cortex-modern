@@ -4937,10 +4937,13 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	for (int id = 0; id < 5; ++id) clean.contiguousActorIDs.emplace(1001 + id, id);
 	WorldStructure orphaned = clean;
 	orphaned.contiguousActorIDs.emplace(0, 5);
+	WorldStructure stale = clean;
+	stale.contiguousActorIDs.emplace(4242, 5);
 	CheckpointWriter cleanWriter("WorldStructure1"); clean.Fields(cleanWriter);
 	CheckpointWriter orphanedWriter("WorldStructure1"); orphaned.Fields(orphanedWriter);
+	CheckpointWriter staleWriter("WorldStructure1"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
-	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true);
+	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
 
 	AddActor(craft);
 	const bool passed = indexed && cleared && archived && accepted && refused;
