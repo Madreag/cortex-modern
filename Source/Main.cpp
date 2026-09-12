@@ -96,6 +96,7 @@
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "LocalPredictionHudSelfTest.h"
 #include "PreviewEventLedger.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
@@ -946,6 +947,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
+		if (!lastArg && currentArg == "-local-prediction-hud") {
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[preview-hud-selftest] bad press tick '" << text << "': expected a whole number" << std::endl;
+				return false;
+			}
+			LocalPredictionHudSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
+			continue;
+		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
 			// T:d1,d2,...:r1,r2,... — at tick T run previews of each depth, each repeat count, and prove the canonical world untouched.
 			const std::string spec = argValue[++i];
@@ -1783,13 +1793,17 @@ static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
+	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
+	LocalPredictionHudSelfTest::SampleDuringRender();
 	g_FrameMan.Draw();
+	LocalPredictionHudSelfTest::SampleAfterDraw();
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	LocalPrediction::EndRender();
+	LocalPredictionHudSelfTest::SampleAfterRender();
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
 	NetModerationGUIProbe::AfterDraw();
@@ -1962,7 +1976,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 // -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
 // match has; a replay run pumps its ticks without frames, so nothing would preview at all.
 static void PreviewEventLedgerFrameOnTick() {
-	if (s_eventLedgerPressTick <= 0) {
+	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0) {
 		return;
 	}
 	LocalPrediction::RunPreview();
@@ -2026,6 +2040,15 @@ static void CheckPreviewEventLedgerSelfTest() {
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
 	CheckPreviewEventLedgerSelfTest();
+	if (LocalPredictionHudSelfTest::g_PressTick > 0) {
+		if (!LocalPredictionHudSelfTest::g_Sampled && !LocalPredictionHudSelfTest::g_Checked) {
+			std::cout << "[preview-hud-selftest] FAIL: hud sample at tick " << LocalPredictionHudSelfTest::g_PressTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
+			s_netReplayExitCode = 5;
+			LocalPredictionHudSelfTest::g_Checked = true;
+		} else if (!LocalPredictionHudSelfTest::Check()) {
+			s_netReplayExitCode = 5;
+		}
+	}
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
 		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");
