@@ -2,7 +2,9 @@
 
 #include "AHuman.h"
 #include "Controller.h"
+#include "MovableMan.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -28,16 +30,41 @@ namespace RTE {
 			if (op == "equip-loaded" || op == "scene-waypoint") {
 				return 2;
 			}
+			if (op == "scene-waypoint-for") {
+				return 3;
+			}
 			return 0;
 		}
 
 		bool KnownOp(const std::string& op) {
-			for (const char* known: {"equip-firearm", "equip-group", "equip-loaded", "equip-named", "equip-throwable", "equip-digger", "equip-shield", "equip-shield-bg", "unequip-fg", "unequip-bg", "flip", "aim", "scene-waypoint", "clear-waypoints"}) {
+			for (const char* known: {"equip-firearm", "equip-group", "equip-loaded", "equip-named", "equip-throwable", "equip-digger", "equip-shield", "equip-shield-bg", "unequip-fg", "unequip-bg", "flip", "aim", "scene-waypoint", "scene-waypoint-for", "clear-waypoints"}) {
 				if (op == known) {
 					return true;
 				}
 			}
 			return false;
+		}
+
+		Actor* ResolveWaypointTarget(const std::string& token, const std::deque<Actor*>& actors, const Actor* writer) {
+			if (token.rfind("slot=", 0) == 0) {
+				const int slot = std::atoi(token.c_str() + 5);
+				std::vector<Actor*> ranked(actors.begin(), actors.end());
+				std::sort(ranked.begin(), ranked.end(), [](const Actor* left, const Actor* right) {
+					return left->GetUniqueID() < right->GetUniqueID();
+				});
+				int index = 0;
+				for (Actor* actor: ranked) {
+					if (actor == writer) {
+						continue;
+					}
+					if (index++ == slot) {
+						return actor;
+					}
+				}
+				return nullptr;
+			}
+			const long uid = std::strtol(token.c_str(), nullptr, 10);
+			return dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid));
 		}
 
 		void Perform(AHuman& human, const Line& line) {
@@ -136,6 +163,22 @@ namespace RTE {
 			}
 			// The write happens the way a script's would: inside the AI pass of the actor's owner.
 			g_CurrentAIActor = target;
+			if (line.op == "scene-waypoint-for") {
+				Actor* dest = ResolveWaypointTarget(line.args[0], actors, target);
+				if (!dest) {
+					g_CurrentAIActor = nullptr;
+					std::cout << "[ai-write-script] tick " << simTick << " team " << line.team << " " << line.op << ": no target " << line.args[0] << std::endl;
+					continue;
+				}
+				dest->AddAISceneWaypoint(Vector(std::strtof(line.args[1].c_str(), nullptr), std::strtof(line.args[2].c_str(), nullptr)));
+				g_CurrentAIActor = nullptr;
+				std::cout << "[ai-write-script] tick " << simTick << " team " << line.team << " " << line.op;
+				for (const std::string& arg: line.args) {
+					std::cout << " " << arg;
+				}
+				std::cout << " writer " << target->GetUniqueID() << " target " << dest->GetUniqueID() << std::endl;
+				continue;
+			}
 			Perform(*target, line);
 			g_CurrentAIActor = nullptr;
 			std::cout << "[ai-write-script] tick " << simTick << " team " << line.team << " " << line.op;
