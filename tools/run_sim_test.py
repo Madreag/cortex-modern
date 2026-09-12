@@ -8,10 +8,18 @@ import re
 import subprocess
 import sys
 
-if __package__:
-    from .win32_test_runner import IsolatedRun
+if sys.platform == "win32":
+    if __package__:
+        from .win32_test_runner import IsolatedRun
+    else:
+        from win32_test_runner import IsolatedRun
 else:
-    from win32_test_runner import IsolatedRun
+    if __package__:
+        from .posix_test_runner import IsolatedRun
+        from .posix_test_runner import make_run as posix_make_run
+    else:
+        from posix_test_runner import IsolatedRun
+        from posix_test_runner import make_run as posix_make_run
 
 
 def prepare_runtime(repo, out):
@@ -36,6 +44,8 @@ def prepare_runtime(repo, out):
 
 
 def make_run(repo, args, out, timeout=120, env=None, expected=None):
+    if sys.platform != "win32":
+        return posix_make_run(repo, args, out, timeout, env, expected)
     out = Path(out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     runtime = prepare_runtime(repo, out)
