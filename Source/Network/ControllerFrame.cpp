@@ -2,7 +2,15 @@
 
 #include "Actor.h"
 #include "AHuman.h"
+#include "ConsoleMan.h"
 #include "HeldDevice.h"
+#include "LuaMan.h"
+#include "MovableMan.h"
+#include "NetLockstep.h"
+#include "NetTransport.h"
+#include "PieSlice.h"
+#include "ScenarioRunner.h"
+#include "SettingsMan.h"
 #include "TimerMan.h"
 
 #include <algorithm>
@@ -14,6 +22,16 @@
 namespace RTE {
 
 	namespace {
+		class SelfTestTransport final : public INetTransport {
+		public:
+			bool StartHost(uint16_t, std::string*) override { return true; }
+			bool Connect(const std::string&, uint16_t, std::string*) override { return true; }
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return true; }
+			void Disconnect(NetPeerId, const std::string&) override {}
+			void Stop() override {}
+			std::vector<NetTransportEvent> PollEvents() override { return {}; }
+		};
+
 		void SetError(std::string* error, const std::string& message) {
 			if (error) {
 				*error = message;
@@ -634,6 +652,45 @@ namespace RTE {
 			if (!validated.LoadCheckpoint(saved, true) || validated.IsSyncedOrderDisableHeld()) {
 				return fail("a validation pass armed an order hold");
 			}
+		}
+
+		// The FormSquad pie slice resolves on every peer through Actor::HandlePieCommand while the
+		// ordering seat is still inside its unit pick, so it arms the same hold; a frame sampled
+		// before the slice must not re-enable the controller meanwhile. A replay coordinator puts
+		// IsLockstepControllerSyncActive on.
+		{
+			SelfTestTransport transport;
+			NetLockstepConfig config;
+			config.sessionId = 7;
+			config.localPeerId = 1;
+			config.peerCount = 2;
+			NetLockstepCoordinator coordinator;
+			if (!coordinator.StartReplay(transport, config, &error)) {
+				return fail(error);
+			}
+			ScenarioRunner::SetLockstepCoordinator(&coordinator);
+			// The actor ctor/dtor chain reads g_SettingsMan/g_MovableMan/g_LuaMan; this selftest runs
+			// before manager init and main() returns right after, so construct what is missing here.
+			if (!ConsoleMan::IsConstructed()) { ConsoleMan::Construct(); }
+			if (!SettingsMan::IsConstructed()) { SettingsMan::Construct(); }
+			if (!MovableMan::IsConstructed()) { MovableMan::Construct(); }
+			if (!LuaMan::IsConstructed()) { LuaMan::Construct(); }
+			{
+				AHuman squadLead;
+				squadLead.GetController()->SetInputMode(Controller::CIM_PLAYER);
+				squadLead.GetController()->SetPlayer(Players::PlayerOne);
+				const ControllerFrame prePick = ControllerFrameCodec::Snapshot(4242, *squadLead.GetController());
+				squadLead.HandlePieCommand(PieSliceType::FormSquad);
+				if (!squadLead.GetController()->IsSyncedOrderDisableHeld() || !squadLead.GetController()->IsDisabled()) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					return fail("the synced FormSquad slice did not disable the picking controller");
+				}
+				if (!ControllerFrameCodec::Apply(prePick, *squadLead.GetController(), &error) || !squadLead.GetController()->IsDisabled()) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					return fail("a frame sampled before the FormSquad slice re-enabled the picking controller");
+				}
+			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
 		}
 
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;
