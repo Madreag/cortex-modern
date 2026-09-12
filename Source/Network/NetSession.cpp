@@ -245,6 +245,51 @@ namespace RTE {
 		return peers;
 	}
 
+	bool NetSession::RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error) {
+		if (m_Role != NetSessionRole::Host) {
+			if (error) *error = "only a hosted session re-seats a rematch roster";
+			return false;
+		}
+		std::vector<uint8_t> taken;
+		for (const auto& [seated, reseated] : assignedIdBySeatedId) {
+			if (reseated == 0 || reseated > m_Config.maxPeers || std::find(taken.begin(), taken.end(), reseated) != taken.end()) {
+				if (error) *error = "a rematch seat id is out of range or claimed twice";
+				return false;
+			}
+			taken.push_back(reseated);
+		}
+		for (const PeerState& peer : m_Peers) {
+			if (peer.state == NetSessionState::Ready) {
+				if (!assignedIdBySeatedId.contains(peer.assignedPeerId)) {
+					if (error) *error = "the rematch roster has no seat for a connected peer";
+					return false;
+				}
+			} else if (IsActive(peer.state) && std::find(taken.begin(), taken.end(), peer.assignedPeerId) != taken.end()) {
+				if (error) *error = "a peer that has not finished joining holds a rematch seat id";
+				return false;
+			}
+		}
+		for (PeerState& peer : m_Peers) {
+			if (peer.state == NetSessionState::Ready) {
+				peer.assignedPeerId = assignedIdBySeatedId.at(peer.assignedPeerId);
+			}
+		}
+		return true;
+	}
+
+	bool NetSession::AdoptRematchPeerId(uint8_t assignedPeerId, std::string* error) {
+		if (m_Role != NetSessionRole::Client) {
+			if (error) *error = "only a joined session adopts a rematch seat id";
+			return false;
+		}
+		if (assignedPeerId == 0) {
+			if (error) *error = "a rematch seat id must be nonzero";
+			return false;
+		}
+		m_LocalPeerId = assignedPeerId;
+		return true;
+	}
+
 	uint32_t NetSession::GetReadyPeerCount() const {
 		if (m_Role == NetSessionRole::Host) {
 			return static_cast<uint32_t>(std::count_if(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
