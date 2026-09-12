@@ -455,6 +455,14 @@ namespace RTE {
 		/// @param newMode The new AI mode.
 		void RequestAIMode(AIMode newMode);
 
+		/// Puts this into Go-To mode for a pie order, clearing the old waypoints and, under lockstep,
+		/// disabling the controller here so every peer does it on the tick the order lands.
+		void BeginGoToOrder();
+
+		/// Whether a Go-To order is still waiting for the seat to pick its destination.
+		/// @return Whether this is in Go-To mode with no destination and a disabled player seat.
+		bool IsAwaitingGoToPoint() const;
+
 		/// Adds an absolute scene point to the list of waypoints this is going to
 		/// go to, in order
 		/// @param m_Waypoints.push_back(std::pair<Vector The new scene point this should try to get to after all other waypoints

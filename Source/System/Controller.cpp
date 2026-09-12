@@ -33,6 +33,7 @@ void Controller::Clear() {
 	m_Player = 0;
 	m_SeatPlayer = 0;
 	m_Disabled = false;
+	m_SyncedOrderDisableTick = -1;
 	m_WireApplyTick = -1;
 	m_WireSchemeValid = false;
 	m_WireDeviceClass = WireDeviceClass::None;
@@ -77,6 +78,7 @@ int Controller::Create(const Controller& reference) {
 	m_Player = reference.m_Player;
 	m_SeatPlayer = reference.m_SeatPlayer;
 	m_Disabled = reference.m_Disabled;
+	m_SyncedOrderDisableTick = reference.m_SyncedOrderDisableTick;
 	m_WireApplyTick = reference.m_WireApplyTick;
 	m_WireSchemeValid = reference.m_WireSchemeValid;
 	m_WireDeviceClass = reference.m_WireDeviceClass;
@@ -370,7 +372,11 @@ void Controller::ApplyWireState(const std::array<bool, ControlState::CONTROLSTAT
 	m_MouseMovement = mouseMovement;
 	m_InputMode = inputMode;
 	m_Player = playerRaw;
-	m_Disabled = quickDisabled;
+	// A frame sampled before a synced order cannot undo the disable the order applied on every peer.
+	m_Disabled = quickDisabled || m_SyncedOrderDisableTick >= 0;
+	if (quickDisabled) {
+		m_SyncedOrderDisableTick = -1;
+	}
 }
 
 Controller& Controller::operator=(const Controller& rhs) {
