@@ -566,6 +566,141 @@ namespace RTE {
 		return std::nullopt;
 	}
 
+	std::vector<NetModuleDigestEntry> NetIdentity::BuildModuleDigests(const std::vector<NetIdentityModuleEntry>& modules, size_t maxEntries, bool* outTruncated) {
+		// A name with a tab or a 300-byte friendly name would fail the encode and cost the exchange
+		// entirely, so the text is cut to what the wire takes.
+		auto sanitize = [](const std::string& value) {
+			std::string text = value.substr(0, NetProtocol::c_MaxModuleNameBytes);
+			std::replace_if(text.begin(), text.end(), [](unsigned char c) { return c < 0x20U || c == 0x7FU; }, ' ');
+			return text;
+		};
+		std::vector<NetModuleDigestEntry> digests;
+		digests.reserve(std::min(modules.size(), maxEntries));
+		for (const NetIdentityModuleEntry& module : modules) {
+			NetModuleDigestEntry entry;
+			entry.fileName = sanitize(module.fileName);
+			entry.friendlyName = sanitize(module.friendlyName);
+			entry.version = module.version < 0 ? 0U : static_cast<uint32_t>(module.version);
+			entry.official = module.official;
+			entry.contentHash = module.contentHash;
+			if (!entry.fileName.empty()) {
+				digests.push_back(std::move(entry));
+			}
+		}
+		std::sort(digests.begin(), digests.end(), [](const NetModuleDigestEntry& a, const NetModuleDigestEntry& b) {
+			return a.fileName < b.fileName;
+		});
+		digests.erase(std::unique(digests.begin(), digests.end(), [](const NetModuleDigestEntry& a, const NetModuleDigestEntry& b) {
+			return a.fileName == b.fileName;
+		}), digests.end());
+
+		const size_t entryCap = std::min(maxEntries, NetProtocol::c_MaxModuleDigestEntries);
+		size_t kept = 0;
+		size_t bytes = 6;
+		while (kept < digests.size() && kept < entryCap) {
+			const size_t entryBytes = 2 + digests[kept].fileName.size() + 2 + digests[kept].friendlyName.size() + 4 + 1 + 32;
+			if (bytes + entryBytes > NetProtocol::c_MaxModuleDigestBytes) {
+				break;
+			}
+			bytes += entryBytes;
+			++kept;
+		}
+		if (outTruncated) {
+			*outTruncated = kept < digests.size();
+		}
+		digests.resize(kept);
+		return digests;
+	}
+
+	NetModuleDiff NetIdentity::DiffModules(const std::vector<NetModuleDigestEntry>& local, const std::vector<NetModuleDigestEntry>& remote) {
+		std::map<std::string, const NetModuleDigestEntry*> remoteByName;
+		for (const NetModuleDigestEntry& entry : remote) {
+			remoteByName.emplace(entry.fileName, &entry);
+		}
+		NetModuleDiff diff;
+		std::set<std::string> localNames;
+		for (const NetModuleDigestEntry& entry : local) {
+			localNames.insert(entry.fileName);
+			const auto it = remoteByName.find(entry.fileName);
+			if (it == remoteByName.end()) {
+				diff.missingOnRemote.push_back(entry.fileName);
+				continue;
+			}
+			const NetModuleDigestEntry& other = *it->second;
+			if (entry.contentHash != other.contentHash || entry.version != other.version) {
+				diff.differing.push_back({entry.fileName, entry.version, other.version, entry.contentHash != other.contentHash});
+			}
+		}
+		for (const NetModuleDigestEntry& entry : remote) {
+			if (localNames.find(entry.fileName) == localNames.end()) {
+				diff.extraOnRemote.push_back(entry.fileName);
+			}
+		}
+		std::sort(diff.missingOnRemote.begin(), diff.missingOnRemote.end());
+		std::sort(diff.extraOnRemote.begin(), diff.extraOnRemote.end());
+		std::sort(diff.differing.begin(), diff.differing.end(), [](const NetModuleVersionDifference& a, const NetModuleVersionDifference& b) {
+			return a.fileName < b.fileName;
+		});
+		return diff;
+	}
+
+	std::string NetIdentity::DescribeModuleDiff(const NetModuleDiff& diff, size_t maxNamedPerGroup, bool truncated) {
+		if (diff.Empty()) {
+			return truncated ? "This host's mods do not match yours, and the mod list was too long to compare." : "";
+		}
+		// The sentence travels in NetJoinRejected::humanMessage, so it has to fit that field or the
+		// refusal itself would fail to encode. Names past the budget are counted, not written.
+		const size_t budget = NetProtocol::c_MaxDiagnosticTextBytes - 128;
+		size_t used = 0;
+		size_t elided = 0;
+		auto join = [&](const std::vector<std::string>& names) {
+			std::string text;
+			for (size_t i = 0; i < names.size(); ++i) {
+				if (i >= maxNamedPerGroup || used + text.size() + names[i].size() + 2 > budget) {
+					elided += names.size() - i;
+					break;
+				}
+				text += (text.empty() ? "" : ", ") + names[i];
+			}
+			used += text.size();
+			return text;
+		};
+		std::vector<std::string> updates;
+		for (const NetModuleVersionDifference& difference : diff.differing) {
+			updates.push_back(difference.localVersion == difference.remoteVersion
+				? difference.fileName
+				: difference.fileName + " (you " + std::to_string(difference.remoteVersion) + ", host " + std::to_string(difference.localVersion) + ")");
+		}
+		const std::string install = join(diff.missingOnRemote);
+		const std::string remove = join(diff.extraOnRemote);
+		const std::string update = join(updates);
+
+		// U+00B7 as bytes, so the separator does not depend on how this file is decoded.
+		const std::string separator = " \xC2\xB7 ";
+		std::string text = "This host's mods do not match yours.";
+		const std::pair<const char*, std::string> groups[] = {{"Install: ", install}, {"Remove: ", remove}, {"Update: ", update}};
+		for (const auto& [label, group] : groups) {
+			if (!group.empty()) {
+				text += (text.back() == '.' ? " " : separator) + label + group;
+			}
+		}
+		if (elided > 0) {
+			text += separator + "and " + std::to_string(elided) + " more differences";
+		} else if (truncated) {
+			text += separator + "and more differences not listed";
+		}
+		if (text.size() > NetProtocol::c_MaxDiagnosticTextBytes) {
+			text.resize(NetProtocol::c_MaxDiagnosticTextBytes);
+			while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0U) == 0x80U) {
+				text.pop_back();
+			}
+			if (!text.empty() && (static_cast<unsigned char>(text.back()) & 0x80U) != 0U) {
+				text.pop_back();
+			}
+		}
+		return text;
+	}
+
 	NetHash32 NetIdentity::HashCanonicalText(const std::string& domain, const std::vector<std::pair<std::string, std::string>>& fields) {
 		CanonicalHasher hasher;
 		hasher.UpdateLine("NetIdentityCanonicalText/v1");
