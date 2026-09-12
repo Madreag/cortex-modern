@@ -2395,6 +2395,7 @@ namespace RTE {
 		m_ResyncPrimeInputs.clear();
 		m_InstalledResyncTargets.clear();
 		m_PeerLeaveFrames.clear();
+		m_PeerFrameWaivers.clear();
 		m_SeatSnapshot.reset();
 		m_SeatSnapshotUnread = false;
 		m_PendingSeatSnapshotPeers.clear();
@@ -3417,13 +3418,57 @@ namespace RTE {
 		return false;
 	}
 
-	bool NetLockstepCoordinator::ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick) {
-		if (!m_DeferStops || !IsRunning() || m_Config.localPeerId != m_Config.matchConfig.hostPeerId || !m_PendingRecoveryStop) {
+	bool NetLockstepCoordinator::WaivePendingPeersWhileWaiting(uint64_t waitingTick) {
+		if (!m_DeferStops || !IsRunning() || !m_RelayHost || m_Config.localPeerId != m_Config.matchConfig.hostPeerId ||
+		    !m_PendingRecoveryStop || m_Stats.nextFrame != waitingTick) {
 			return false;
 		}
-		const NetLockstepStop stop = *m_PendingRecoveryStop;
-		m_PendingRecoveryStop.reset();
-		Fail(stop.reason, waitingTick, stop.message);
+		const uint64_t nowMs = NetLockstepNowMs();
+		const auto remoteIt = m_RemoteFrames.find(waitingTick);
+		bool waived = false;
+		for (uint8_t peerId: m_RemotePeerIds) {
+			if (!IsRemoteRequiredForFrame(peerId, waitingTick)) {
+				continue;
+			}
+			if (remoteIt != m_RemoteFrames.end() && remoteIt->second.find(peerId) != remoteIt->second.end()) {
+				continue;
+			}
+			// Only a superseded incarnation: a live peer that is merely slow still owes this frame.
+			const auto transportIt = m_RemoteTransports.find(peerId);
+			if (transportIt != m_RemoteTransports.end() && !SeatStateOf(peerId, transportIt->second).fencedTransport) {
+				continue;
+			}
+			waived = WaiveRemoteFrames(peerId, waitingTick, nowMs, true) || waived;
+		}
+		if (waived) {
+			AdvanceReadyFrames(nowMs);
+		}
+		return waived;
+	}
+
+	bool NetLockstepCoordinator::IsFrameWaiver(const NetLockstepStop& stop) {
+		return stop.reason == NetLockstepStopReason::PeerDropped && stop.message.starts_with(c_FrameWaiverPrefix);
+	}
+
+	// The seat keeps everything a drop would take: the holder is on another connection and the resync
+	// brings it into the next round. All the round gives up is this tick's input from the dead handle.
+	bool NetLockstepCoordinator::WaiveRemoteFrames(uint8_t peerId, uint64_t fromFrame, uint64_t nowMs, bool announce) {
+		const auto existing = m_PeerFrameWaivers.find(peerId);
+		if (existing != m_PeerFrameWaivers.end() && existing->second <= fromFrame) {
+			return false;
+		}
+		m_PeerFrameWaivers[peerId] = fromFrame;
+		++m_Stats.peerFramesWaived;
+		std::cout << "[net-match] " << DescribePeer(peerId) << "'s fenced connection is not owed frame " << fromFrame << std::endl;
+		if (announce && m_RelayHost && m_Transport) {
+			NetLockstepStop notice;
+			notice.senderPeerId = peerId;
+			notice.reason = NetLockstepStopReason::PeerDropped;
+			notice.frame = fromFrame;
+			notice.message = std::string(c_FrameWaiverPrefix) + std::to_string(peerId);
+			RelayToOtherRemotes({notice}, peerId);
+		}
+		(void)nowMs;
 		return true;
 	}
 
@@ -3557,6 +3602,10 @@ namespace RTE {
 		if (frame < EffectiveStartOf(peerId)) {
 			return false;
 		}
+		const auto waiverIt = m_PeerFrameWaivers.find(peerId);
+		if (waiverIt != m_PeerFrameWaivers.end() && frame >= waiverIt->second) {
+			return false;
+		}
 		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
 		return leaveIt == m_PeerLeaveFrames.end() || frame < leaveIt->second;
 	}
@@ -3634,6 +3683,7 @@ namespace RTE {
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";
+		out << "\"peer_frames_waived\":" << m_Stats.peerFramesWaived << ",";
 		out << "\"connections_closed_on_eviction\":" << m_Stats.connectionsClosedOnEviction << ",";
 		out << "\"peers_left\":" << m_PeerLeaveFrames.size() << ",";
 		out << "\"peer_leave_frames\":{";
@@ -4334,6 +4384,12 @@ namespace RTE {
 			return;
 		}
 		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
+		// The host's waiver, not a leave: every survivor stops requiring the fenced incarnation's frames
+		// at the same frame, and nothing else about the seat moves.
+		if (IsFrameWaiver(stop)) {
+			if (WaiveRemoteFrames(stop.senderPeerId, stop.frame, nowMs, false)) AdvanceReadyFrames(nowMs);
+			return;
+		}
 		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
 		// peer able to send, and its own grace runs out on a round it is no longer in.
 		const auto leftIt = m_PeerLeaveFrames.find(stop.senderPeerId);
