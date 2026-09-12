@@ -22,7 +22,7 @@ python tools/session_directory/test_session_directory.py -v
 - `test_session_directory.py` — loopback tests (`python test_session_directory.py -v`)
 - `com.cortex.session-directory.plist` — macOS LaunchDaemon
 
-Listen address and port: `--bind` and `--port` (default `8443`). TLS when both `--cert` and `--key` are set. Plain HTTP only with `--insecure-http` (tests and LAN trials). `--expiry-s` default 15. `--heartbeat-s` default 5 (also returned on register). `--log-file` is a rotating log (5 × 5 MB).
+Listen address and port: `--bind` and `--port` (default `0`, an ephemeral port printed at start; the daemon and the Windows task pass `--port 8443`). TLS when both `--cert` and `--key` are set. Plain HTTP only with `--insecure-http` (tests and LAN trials). `--expiry-s` default 15. `--heartbeat-s` default 5 (also returned on register). `--log-file` is a rotating log (5 × 5 MB).
 
 ## What the install key is
 
