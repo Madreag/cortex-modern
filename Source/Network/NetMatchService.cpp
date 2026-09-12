@@ -959,7 +959,10 @@ static std::string ResyncSaveName() {
 		// keeps beating while the match runs so a late joiner (or a dedicated host's row) resolves.
 		// Configure runs unconditionally so an empty URL lands the client in Disabled, which is what
 		// the report's service.directory.state must show.
-		m_Directory.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+		const std::string& directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		// The install key is minted on the first directory use, so only a listing host asks for it.
+		const std::string directoryKey = (directoryWanted && !directoryUrl.empty()) ? g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() : g_SettingsMan.GetSessionDirectoryInstallKey();
+		m_Directory.Configure(directoryUrl, directoryKey, g_SettingsMan.GetSessionDirectoryCertSha256());
 		if (directoryWanted) {
 			m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 			m_DirectoryRow.seatsFree = directorySeatsFree;

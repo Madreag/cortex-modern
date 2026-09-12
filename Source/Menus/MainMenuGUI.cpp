@@ -1220,19 +1220,25 @@ void MainMenuGUI::RefreshGamesList() {
 		hosts = m_LanBrowser.GetHosts(m_LanBrowserNowMs);
 	}
 	// The directory half: the browse client issues one GET every c_ListIntervalMs while polled.
-	m_DirectoryBrowser.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+	const std::string& directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
+	// Browsing is a directory use: the list GET carries the install key too.
+	m_DirectoryBrowser.Configure(directoryUrl, directoryUrl.empty() ? std::string() : g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
 	m_DirectoryBrowser.PollList(m_LanBrowserNowMs);
 	// A NET row can only be judged against the local identity; build it once, on first need.
 	if (!m_DirectoryIdentity && !m_DirectoryIdentityTried) {
 		m_DirectoryIdentityTried = true;
-		// The row's identity is what NetMatchService::Start would compute; it pins the default dt first.
+		// The row's identity is what NetMatchService::Start computes at the pinned default dt; the
+		// menu's own dt comes back after, so browsing never changes a single-player setting.
+		const float menuDeltaTime = g_TimerMan.GetDeltaTimeSecs();
 		g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions identityOptions;
 		identityOptions.buildId = "stage2-p2d-local";
 		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
 		std::string identityError;
-		if (NetIdentity::BuildCurrentManifest(manifest, &identityError, identityOptions)) {
+		const bool identityBuilt = NetIdentity::BuildCurrentManifest(manifest, &identityError, identityOptions);
+		g_TimerMan.SetDeltaTimeSecs(menuDeltaTime);
+		if (identityBuilt) {
 			NetDirectoryLocalIdentity local;
 			local.networkProtocolVersion = manifest.networkProtocolVersion;
 			local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
