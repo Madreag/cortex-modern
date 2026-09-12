@@ -70,6 +70,7 @@ namespace RTE {
 		void ClearNonOwnedActorSlots() override;
 		void RebindNonOwnedActorSlots() override;
 		void ForgetDestroyedActor(const Actor* actor) override;
+		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
 		ClassInfoGetters;

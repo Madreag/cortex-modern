@@ -4237,6 +4237,7 @@ void MovableMan::Update() {
 
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) activity->RebindNonOwnedActorSlots();
+		g_ActivityMan.EndLockstepRelaunch();
 	}
 
 	// Feed each actor's stable end-of-tick state into the `actors` checksum subsystem.

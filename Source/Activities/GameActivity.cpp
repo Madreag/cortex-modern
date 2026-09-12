@@ -2761,6 +2761,11 @@ void GameActivity::RebindNonOwnedActorSlots() {
 	}
 }
 
+void GameActivity::ClearCheckpointActorIDs() {
+	Activity::ClearCheckpointActorIDs();
+	m_HasCheckpointMarkedActorIDs = false;
+}
+
 void GameActivity::ForgetDestroyedActor(const Actor* actor) {
 	Activity::ForgetDestroyedActor(actor);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
