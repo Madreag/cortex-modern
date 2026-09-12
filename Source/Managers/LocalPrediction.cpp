@@ -14,8 +14,10 @@
 #include "LuaMan.h"
 #include "MOSRotating.h"
 #include "MovableMan.h"
+#include "OwnedMovableObjects.h"
 #include "PostProcessMan.h"
 #include "PreviewEventLedger.h"
+#include "PreviewScriptSelfTest.h"
 #include "RTETools.h"
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
@@ -27,6 +29,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 
 namespace RTE {
 
@@ -59,6 +62,20 @@ namespace RTE {
 	static void Trace(const char* what) {
 		if (TraceEnabled()) {
 			std::cout << "[localpred] " << what << " tick=" << g_TimerMan.GetSimUpdateCount() << std::endl;
+		}
+	}
+
+	static void CollectPreviewedEmitterUIDs(const MovableObject* root, std::vector<uint64_t>& emitters) {
+		if (!root) {
+			return;
+		}
+		std::unordered_set<const Entity*> visited;
+		std::unordered_set<const MovableObject*> objects;
+		CollectOwnedMovableObjects(root, visited, objects);
+		for (const MovableObject* mo: objects) {
+			if (mo && mo->GetUniqueID() > 0) {
+				emitters.push_back(static_cast<uint64_t>(mo->GetUniqueID()));
+			}
 		}
 	}
 
@@ -143,11 +160,20 @@ namespace RTE {
 		AudioMan::SetPlaybackSuppressed(true);
 		PostProcessMan::SetRegistrationSuppressed(true);
 		std::vector<uint64_t> emitters;
-		emitters.reserve(targets.size());
+		emitters.reserve(targets.size() * 8);
 		for (const Preview& preview: targets) {
-			emitters.push_back(static_cast<uint64_t>(preview.original->GetUniqueID()));
+			CollectPreviewedEmitterUIDs(preview.original, emitters);
 		}
 		PreviewEventLedger::Arm(static_cast<uint64_t>(simCount), soundIdentityCursor, std::move(emitters));
+		if (PreviewScriptSelfTest::SubtreeProbeEnabled() && !targets.empty()) {
+			PreviewScriptSelfTest::ProbeArmedEmitters(targets.front().original);
+		}
+		std::vector<const MovableObject*> originals;
+		originals.reserve(targets.size());
+		for (const Preview& preview: targets) {
+			originals.push_back(preview.original);
+		}
+		LuaMan::CapturePreviewSelfCopies(originals, PreviewScriptSelfTest::SharedSlot());
 		g_MovableMan.BeginSpeculation();
 		{
 			MovableObject::FaithfulCloneScope scope(false);
@@ -156,6 +182,19 @@ namespace RTE {
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		std::vector<MovableObject*> clones;
+		clones.reserve(targets.size());
+		for (const Preview& preview: targets) {
+			if (preview.clone) {
+				clones.push_back(preview.clone);
+			}
+		}
+		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot());
+		if (PreviewScriptSelfTest::StrideCounterRequested()) {
+			for (MovableObject* clone: clones) {
+				PreviewScriptSelfTest::InstallStrideCounter(clone);
+			}
+		}
 		Trace("cloned");
 		for (Preview& preview: targets) {
 			// Links into the world resolve to the overlay's shadows; links inside the clone stay inside it.
@@ -228,9 +267,9 @@ namespace RTE {
 		std::vector<MovableObject*> taken;
 		g_MovableMan.EndSpeculation(&taken);
 		std::vector<uint64_t> takenEmitters;
-		takenEmitters.reserve(taken.size());
+		takenEmitters.reserve(taken.size() * 8);
 		for (const MovableObject* resident: taken) {
-			takenEmitters.push_back(static_cast<uint64_t>(resident->GetRootParent()->GetUniqueID()));
+			CollectPreviewedEmitterUIDs(resident, takenEmitters);
 		}
 		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
@@ -261,6 +300,7 @@ namespace RTE {
 		PreviewEventLedger::Disarm();
 		PostProcessMan::SetRegistrationSuppressed(false);
 		AudioMan::SetPlaybackSuppressed(false);
+		LuaMan::EndPreviewScripts();
 		LuaMan::SetScriptsFrozen(false);
 
 		for (const Preview& preview: targets) {
@@ -355,6 +395,7 @@ namespace RTE {
 		const MovableMan::SpeculationStats& stats = g_MovableMan.GetSpeculationStats();
 		const std::string events = PreviewEventLedger::Describe();
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
-		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + (events.empty() ? std::string() : " " + events);
+		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
+		       (events.empty() ? std::string() : " " + events);
 	}
 } // namespace RTE

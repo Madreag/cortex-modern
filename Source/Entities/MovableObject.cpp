@@ -20,6 +20,7 @@
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "LuaMan.h"
+#include "PreviewScriptSelfTest.h"
 #include "Atom.h"
 #include "Actor.h"
 #include "SLTerrain.h"
@@ -1179,8 +1180,11 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		SceneMan::TraceTerrainEvent("lua", packed, static_cast<int>(functionName.size()), 0, 0, static_cast<int>(GetUniqueID()));
 	}
 
-	if (LuaMan::AreScriptsFrozen()) {
+	if (LuaMan::AreScriptsFrozen() && !LuaMan::ShouldRunPreviewHook(this, functionName)) {
 		return 0;
+	}
+	if (functionName == "OnStride" && LuaMan::IsPreviewClone(this)) {
+		PreviewScriptSelfTest::NotePreviewStride(ObjectScriptsInitialized());
 	}
 	int status = 0;
 
@@ -1206,13 +1210,15 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
 		const bool presentation = functionName == "WhilePieMenuOpen";
 		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), presentation ? SoundExecutionDomain::Presentation : (localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation));
+		LuaMan::PreviewHookScope previewHookScope(LuaMan::IsPreviewClone(this));
+		const std::string selfKey = LuaMan::PreviewScriptKey(this);
 
 		for (const LuaFunction& luaFunction: itr->second) {
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {
 				LuaStateWrapper& usedState = GetAndLockStateForScript(luabindObjectWrapper->GetFilePath(), &luaFunction);
 				std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
-				status = usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", std::to_string(m_UniqueID), functionEntityArguments, functionLiteralArguments, functionObjectArguments);
+				status = usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", selfKey, functionEntityArguments, functionLiteralArguments, functionObjectArguments);
 				if (status < 0 && stopOnError) {
 					return status;
 				}
@@ -1223,6 +1229,9 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 }
 
 int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std::string& functionName, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments) {
+	if (LuaMan::AreScriptsFrozen() && !LuaMan::ShouldRunPreviewHook(this, functionName)) {
+		return -1;
+	}
 	if (m_AllLoadedScripts.empty() || !ObjectScriptsInitialized()) {
 		return -1;
 	}
@@ -1232,7 +1241,7 @@ int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std:
 
 	for (const LuaFunction& luaFunction: m_FunctionsAndScripts.at(functionName)) {
 		const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
-		if (scriptPath == luabindObjectWrapper->GetFilePath() && usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", std::to_string(m_UniqueID), functionEntityArguments, functionLiteralArguments) < 0) {
+		if (scriptPath == luabindObjectWrapper->GetFilePath() && usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", LuaMan::PreviewScriptKey(this), functionEntityArguments, functionLiteralArguments) < 0) {
 			g_ConsoleMan.PrintString("ERROR: An error occured while trying to run the " + functionName + " function for script at path " + scriptPath);
 			return -2;
 		}
