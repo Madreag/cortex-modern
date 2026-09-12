@@ -167,7 +167,7 @@ namespace RTE {
 			return hasher.Finalize();
 		}
 
-		NetHash32 HashSessionIdentity(const NetIdentityManifest& manifest) {
+		NetHash32 HashIdentity(const NetIdentityManifest& manifest) {
 			CanonicalHasher hasher;
 			hasher.UpdateLine("NetIdentitySession/v1");
 			AppendField(hasher, "game_version", manifest.gameVersion);
@@ -387,6 +387,10 @@ namespace RTE {
 		return HashConfig(config);
 	}
 
+	NetHash32 NetIdentity::HashSessionIdentity(const NetIdentityManifest& manifest) {
+		return HashIdentity(manifest);
+	}
+
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
 		const auto started = std::chrono::steady_clock::now();
 
@@ -467,7 +471,7 @@ namespace RTE {
 		manifest.deterministicConfigHash = HashDeterministicConfig(manifest.deterministicConfig);
 		manifest.moduleManifestHash = HashModuleManifest(manifest.modules);
 		manifest.sessionRulesHash = HashSessionRulesTag(options.sessionRulesTag);
-		manifest.sessionIdentityHash = HashSessionIdentity(manifest);
+		manifest.sessionIdentityHash = HashIdentity(manifest);
 		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
 
 		outManifest = std::move(manifest);
