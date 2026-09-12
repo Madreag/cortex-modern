@@ -661,9 +661,16 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	std::string error;
 	const bool memory = captured && advanced && g_MovableMan.RestoreScriptGraphs(graphs, &error) && dispatch(2222);
 	const bool file = saved && LoadAndLaunchGame("global_callbacks") && dispatch(2222);
-	const bool passed = guards && initial && memory && file;
+	auto* indexCraft = dynamic_cast<ACraft*>(craftPreset->Clone());
+	if (indexCraft) {
+		indexCraft->SetPos(Vector(500, 100));
+		indexCraft->SetTeam(Activity::TeamOne);
+		indexCraft->SetPinStrength(10000);
+	}
+	const bool index = g_MovableMan.RunContiguousActorIndexSelfTest(indexCraft);
+	const bool passed = guards && initial && memory && file && index;
 	std::cout << "[global-callback-selftest] " << (passed ? "PASS" : "FAIL") << " guards=" << guards << " initial=" << initial
-	          << " memory=" << memory << " file=" << file << " error=" << error << std::endl;
+	          << " memory=" << memory << " file=" << file << " index=" << index << " error=" << error << std::endl;
 	return passed;
 }
 
