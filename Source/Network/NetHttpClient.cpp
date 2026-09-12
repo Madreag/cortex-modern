@@ -6,6 +6,9 @@
 #include <winhttp.h>
 #include <bcrypt.h>
 #endif
+#ifdef __APPLE__
+#include "NetHttpClientApple.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -27,6 +30,16 @@ namespace RTE {
 		m_Done = false;
 		m_CancelRequested = false;
 		m_Worker = std::thread(&NetHttpClient::WorkerMain, this, method, url, headers, body, certPinSha256);
+#elif defined(__APPLE__)
+		m_Done = false;
+		m_CancelRequested = false;
+		std::vector<const char*> names;
+		std::vector<const char*> values;
+		for (const auto& [name, value] : headers) {
+			names.push_back(name.c_str());
+			values.push_back(value.c_str());
+		}
+		m_Apple = NetHttpAppleStart(method.c_str(), url.c_str(), names.data(), values.data(), headers.size(), body.data(), body.size(), certPinSha256.c_str(), c_ConnectTimeoutMs, c_TotalTimeoutMs, &NetHttpClient::AppleDone, this);
 #else
 		(void)method; (void)url; (void)headers; (void)body; (void)certPinSha256;
 		Finish(Response{0, "", "http client not available on this platform"});
@@ -559,6 +572,29 @@ namespace RTE {
 			}
 		}
 		finish(response);
+	}
+
+#elif defined(__APPLE__)
+
+	void NetHttpClient::AppleDone(void* context, long statusCode, const char* body, size_t bodySize, const char* error) {
+		NetHttpClient* client = static_cast<NetHttpClient*>(context);
+		try {
+			client->Finish(Response{statusCode, std::string(body, bodySize), error});
+		} catch (...) {
+			// Nothing may unwind into the NSURLSession frames; this short error needs no allocation.
+			try { client->Finish(Response{0, "", "out of memory"}); } catch (...) {}
+		}
+	}
+
+	void NetHttpClient::Cancel() {
+		m_CancelRequested = true;
+		if (m_Apple != nullptr) {
+			// A completion that misses the 2 s wait is dropped, so the result is settled here.
+			if (!NetHttpAppleCancel(m_Apple, 2000)) {
+				Finish(Response{0, "", "cancelled"});
+			}
+			m_Apple = nullptr;
+		}
 	}
 
 #else
