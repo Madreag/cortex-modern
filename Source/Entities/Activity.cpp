@@ -12,6 +12,7 @@
 #include "MetaMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "NetGameCommand.h"
 #include "LuaMan.h"
 
 #include "ACraft.h"
@@ -722,35 +723,71 @@ void Activity::ReassignSquadLeader(const int player, const int team) {
 		MOID leaderID = m_ControlledActor[player]->GetAIMOWaypointID();
 
 		if (leaderID != g_NoMOID) {
+			const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool send = !lockstep || ScenarioRunner::IsLockstepTeamCommandSender(team, ScenarioRunner::GetLockstepLocalPeerId());
+			auto enqueue = [](Actor* target, uint8_t op, const Vector& point, const MovableObject* mo) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(target->GetUniqueID()), target->GetTeam(), op, point.m_X, point.m_Y, mo ? static_cast<int64_t>(mo->GetUniqueID()) : 0}});
+			};
+			auto clearWP = [&](Actor* target) {
+				if (!lockstep) {
+					target->ClearAIWaypoints();
+				} else if (send) {
+					enqueue(target, NetGameAIOrder::ClearWaypoints, Vector(), nullptr);
+				}
+			};
+			auto addMO = [&](Actor* target, const MovableObject* mo) {
+				if (!mo) {
+					return;
+				}
+				if (!lockstep) {
+					target->AddAIMOWaypoint(mo);
+				} else if (send) {
+					enqueue(target, NetGameAIOrder::MOWaypoint, mo->GetPos(), mo);
+				}
+			};
+			auto addScene = [&](Actor* target, const Vector& point) {
+				if (!lockstep) {
+					target->AddAISceneWaypoint(point);
+				} else if (send) {
+					enqueue(target, NetGameAIOrder::SceneWaypoint, point, nullptr);
+				}
+			};
+			auto setMode = [&](Actor* target, Actor::AIMode mode) {
+				if (!lockstep) {
+					target->SetAIMode(mode);
+				} else if (send) {
+					target->RequestAIMode(mode);
+				}
+			};
 			Actor* actor = g_MovableMan.GetNextTeamActor(team, m_ControlledActor[player]);
 
 			do {
 				// Set the controlled actor as new leader if actor follow the old leader, and not player controlled and not brain
 				if (actor && (actor->GetAIMode() == Actor::AIMODE_SQUAD) && (actor->GetAIMOWaypointID() == leaderID) && !actor->GetController()->IsPlayerControlled() && !actor->IsInGroup("Brains")) {
-					actor->ClearAIWaypoints();
-					actor->AddAIMOWaypoint(m_ControlledActor[player]);
-					// Make sure actor has m_ControlledActor registered as an AIMOWaypoint
-					actor->SetMovePathToUpdate();
+					clearWP(actor);
+					addMO(actor, m_ControlledActor[player]);
+					if (!lockstep) {
+						actor->SetMovePathToUpdate();
+					}
 				} else if (actor && actor->GetID() == leaderID) {
 					// Set the old leader to follow the controlled actor and inherit his AI mode
-					m_ControlledActor[player]->ClearAIWaypoints();
-					m_ControlledActor[player]->SetAIMode(static_cast<Actor::AIMode>(actor->GetAIMode()));
+					clearWP(m_ControlledActor[player]);
+					const Actor::AIMode inherited = static_cast<Actor::AIMode>(actor->GetAIMode());
+					setMode(m_ControlledActor[player], inherited);
 
-					if (m_ControlledActor[player]->GetAIMode() == Actor::AIMODE_GOTO) {
-						// Copy the old leaders move orders
+					if (inherited == Actor::AIMODE_GOTO) {
 						if (actor->GetAIMOWaypointID() != g_NoMOID) {
-							const MovableObject* targetMO = g_MovableMan.GetMOFromID(actor->GetAIMOWaypointID());
-							if (targetMO) {
-								m_ControlledActor[player]->AddAIMOWaypoint(targetMO);
-							}
+							addMO(m_ControlledActor[player], g_MovableMan.GetMOFromID(actor->GetAIMOWaypointID()));
 						} else if ((actor->GetLastAIWaypoint() - actor->GetPos()).GetLargest() > 1) {
-							m_ControlledActor[player]->AddAISceneWaypoint(actor->GetLastAIWaypoint());
+							addScene(m_ControlledActor[player], actor->GetLastAIWaypoint());
 						}
 					}
-					actor->ClearAIWaypoints();
-					actor->SetAIMode(Actor::AIMODE_SQUAD);
-					actor->AddAIMOWaypoint(m_ControlledActor[player]);
-					actor->SetMovePathToUpdate();
+					clearWP(actor);
+					setMode(actor, Actor::AIMODE_SQUAD);
+					addMO(actor, m_ControlledActor[player]);
+					if (!lockstep) {
+						actor->SetMovePathToUpdate();
+					}
 				}
 				actor = g_MovableMan.GetNextTeamActor(team, actor);
 			} while (actor && actor != m_ControlledActor[player]);
