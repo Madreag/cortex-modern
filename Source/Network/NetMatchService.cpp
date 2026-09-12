@@ -314,7 +314,9 @@ static std::string ResyncSaveName() {
 			// The healed round resumes at the first frame the sim has not applied, and the world may only
 			// be saved where no tick is in flight.
 			const uint64_t resumeFrame = ScenarioRunner::GetLockstepResumeFrame();
-			if (!ScenarioRunner::ResolveResyncDropFrame(resumeFrame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), dropFrame, error)) {
+			// The tick the live world actually stands on; equal to the label only where no tick is in flight.
+			const uint64_t simTickAtSave = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (!ScenarioRunner::ResolveResyncDropFrame(resumeFrame, simTickAtSave, dropFrame, error)) {
 				return false;
 			}
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
@@ -323,8 +325,8 @@ static std::string ResyncSaveName() {
 			}
 			const uint64_t savedTick = dropFrame > 0 ? dropFrame - 1 : 0;
 			m_ResyncSavedTick.store(savedTick);
-			m_ResyncBoundaryTick.store(resumeFrame > 0 ? resumeFrame - 1 : 0);
-			std::cout << "[net-match] resync snapshot at tick " << savedTick << " (completed " << m_ResyncBoundaryTick.load() << ")" << std::endl;
+			m_ResyncBoundaryTick.store(simTickAtSave);
+			std::cout << "[net-match] resync snapshot at tick " << savedTick << " (completed " << simTickAtSave << ")" << std::endl;
 			if (FaultInjected("slow_resync_save")) {
 				// Keep the snapshot frozen across a save longer than the receive timeout.
 				std::this_thread::sleep_for(std::chrono::seconds(7));
