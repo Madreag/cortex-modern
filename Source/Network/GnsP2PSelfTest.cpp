@@ -5,6 +5,8 @@
 #include <iostream>
 
 #ifdef CCCP_WITH_GNS
+#include "GnsSignaling.h"
+
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
@@ -20,6 +22,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -943,6 +946,235 @@ namespace RTE {
 			return Finish(failure);
 		}
 
+		constexpr const char* c_RefusalReason = "net-p2p-selftest: this host refuses the join";
+
+		enum class DirectoryCase { Plain, Reject, Dup };
+
+		uint64_t NowMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+		}
+
+		double SinceStartMs(uint64_t steadyMs) {
+			return static_cast<double>(steadyMs) - std::chrono::duration<double, std::milli>(s_Start.time_since_epoch()).count();
+		}
+
+		long long WallMs() {
+			return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		}
+
+		std::string MintInstallKey() {
+			static const char digits[] = "0123456789abcdef";
+			std::random_device device;
+			std::string key(32, '0');
+			for (char& ch : key) {
+				ch = digits[device() & 0x0F];
+			}
+			return key;
+		}
+
+		bool ChannelFailed(const GnsDirectorySignalDispatcher& dispatcher) {
+			return dispatcher.Channel().GetState() == NetDirectorySignalChannel::State::Failed;
+		}
+
+		std::string ChannelText(const GnsDirectorySignalDispatcher& dispatcher) {
+			return std::string("channel ") + NetDirectorySignalChannel::StateName(dispatcher.Channel().GetState()) + " \"" + dispatcher.Channel().GetLastError() + "\"";
+		}
+
+		std::string RunDirectoryHost(DirectoryCase variant, int port, GnsDirectorySignalDispatcher& dispatcher, Side& side) {
+			GnsP2PConfig config;
+			config.rendezvousLogLevel = c_LogLevel;
+			config.localIdentity = dispatcher.LocalIdentity();
+			PrintConfig("host", config);
+			const auto firstRefusalWallMs = std::make_shared<long long>(0);
+			if (variant == DirectoryCase::Reject) {
+				dispatcher.SetAdmission([firstRefusalWallMs](const std::string&, const std::string&) {
+					if (*firstRefusalWallMs == 0) {
+						*firstRefusalWallMs = WallMs();
+					}
+					return std::string(c_RefusalReason);
+				});
+			}
+			std::string error;
+			if (!side.transport.StartHostP2P(port, config, &error)) {
+				return "StartHostP2P: " + error;
+			}
+			Say("host StartHostP2P(" + std::to_string(port) + ") succeeded; identity " + side.transport.GetLocalIdentity() + ", str:h- and the first 24 hex digits of the session id");
+			// Armed while no joiner is Connected: from StartHostP2P to Connected, and again after a close.
+			const auto pump = [&] {
+				dispatcher.Update(NowMs());
+				Drain(side);
+				dispatcher.SetPolling(!IsConnected(side), NowMs());
+			};
+			pump();
+			if (variant == DirectoryCase::Reject) {
+				if (!WaitUntil(30000, pump, [&] { return ChannelFailed(dispatcher) || side.connected || dispatcher.GetCounters().refusals > 0; }) || dispatcher.GetCounters().refusals == 0) {
+					return "no connect request was refused within 30s (" + ChannelText(dispatcher) + (side.connected ? ", a joiner was accepted" : "") + ")";
+				}
+				Say("host refused the first connect request at wall_ms=" + std::to_string(*firstRefusalWallMs) + "; pumping 3s more so the refusal is posted and any retry is refused too");
+				WaitUntil(3000, pump, [] { return false; });
+				Say("host answered " + std::to_string(dispatcher.GetCounters().connectRequests) + " connect request(s) with " + std::to_string(dispatcher.GetCounters().refusals) + " refusal frame(s)");
+				return side.connected ? "the host accepted a joiner it was to refuse" : std::string();
+			}
+			const std::vector<uint8_t> mine = Payload('H');
+			const std::vector<uint8_t> theirs = Payload('J');
+			if (!WaitUntil(30000, pump, [&] { return ChannelFailed(dispatcher) || side.closed || (IsConnected(side) && !side.received.empty()); }) || ChannelFailed(dispatcher) || side.closed) {
+				return "no joiner connected and sent its 64 bytes within 30s (" + ChannelText(dispatcher) + ")";
+			}
+			if (side.received.front() != theirs) {
+				return "the joiner's 64 bytes arrived altered";
+			}
+			if (!side.transport.Send(side.peer, NetTransportLane::ControlReliable, mine, &error)) {
+				return "host Send: " + error;
+			}
+			Say("host is Connected, received the joiner's 64 bytes intact and sent its own 64 bytes back");
+			PrintConnection(side);
+			std::string failure;
+			if (!CheckHostRoute(side, &failure)) {
+				return failure;
+			}
+			if (!WaitUntil(15000, pump, [&] { return side.closed; })) {
+				return "the joiner did not close within 15s";
+			}
+			if (side.closeReason.find("net-p2p-selftest done") == std::string::npos) {
+				return "the host saw the close with reason \"" + side.closeReason + "\"";
+			}
+			Say("host saw the joiner's close with the joiner's reason");
+			pump();
+			const GnsDirectorySignalDispatcher::Counters& counters = dispatcher.GetCounters();
+			if (counters.connectRequests != 1) {
+				return "OnConnectRequest ran " + std::to_string(counters.connectRequests) + " times, expected once";
+			}
+			if (variant == DirectoryCase::Dup && counters.duplicatesIn == 0) {
+				return "no byte-identical frame arrived, so no duplicate was delivered";
+			}
+			return {};
+		}
+
+		std::string RunDirectoryJoiner(DirectoryCase variant, int port, const std::string& sessionId, GnsDirectorySignalDispatcher& dispatcher, Side& side) {
+			GnsP2PConfig config;
+			config.rendezvousLogLevel = c_LogLevel;
+			config.localIdentity = dispatcher.LocalIdentity();
+			config.localVirtualPort = port + 1;
+			PrintConfig("joiner", config);
+			if (variant == DirectoryCase::Dup) {
+				dispatcher.SetCopiesForTest(2);
+				Say("test flag: the joiner's signaling object posts every rendezvous blob twice");
+			}
+			const std::string hostIdentity = GnsDirectorySignalDispatcher::HostIdentity(sessionId);
+			std::string error;
+			const double connectMs = ElapsedMs();
+			if (!side.transport.ConnectP2P(dispatcher.CreateJoinSignaling(), hostIdentity, port, config, &error)) {
+				return "ConnectP2P: " + error;
+			}
+			side.peer = 1;
+			Say("joiner ConnectP2P(peer " + hostIdentity + " from the session id, remote virtual port " + std::to_string(port) + ") returned a connection; identity " +
+			    side.transport.GetLocalIdentity() + ", str:c- and the first 24 characters of the join nonce");
+			bool rendezvousOver = false;
+			// Armed from ConnectP2P until the connection is Connected or closed.
+			const auto pump = [&] {
+				dispatcher.Update(NowMs());
+				Drain(side);
+				rendezvousOver = rendezvousOver || side.closed || IsConnected(side);
+				dispatcher.SetPolling(!rendezvousOver, NowMs());
+			};
+			pump();
+			if (variant == DirectoryCase::Reject) {
+				if (!WaitUntil(15000, pump, [&] { return side.closed || ChannelFailed(dispatcher); }) || !side.closed) {
+					return "the joiner's connect did not end within 15s (" + ChannelText(dispatcher) + ")";
+				}
+				const double endedMs = side.closedMs - connectMs;
+				const long long endedWallMs = WallMs() - static_cast<long long>(ElapsedMs() - side.closedMs);
+				Say("joiner connect ended " + Ms(endedMs) + "ms after ConnectP2P, at wall_ms=" + std::to_string(endedWallMs) + ": \"" + side.closeReason + "\"; refusal frames received: " +
+				    std::to_string(dispatcher.GetCounters().refusals));
+				if (side.closeReason.find(c_RefusalReason) == std::string::npos) {
+					return "the joiner's connect ended with \"" + side.closeReason + "\", not with the host's refusal";
+				}
+				if (endedMs > c_PromptMs) {
+					return "the refusal did not end the joiner's connect within " + Ms(c_PromptMs) + "ms: it ended " + Ms(endedMs) + "ms after ConnectP2P";
+				}
+				return {};
+			}
+			if (!WaitUntil(30000, pump, [&] { return side.closed || ChannelFailed(dispatcher) || (side.connected && IsConnected(side)); }) || side.closed || ChannelFailed(dispatcher)) {
+				return "the joiner did not reach Connected within 30s: \"" + side.closeReason + "\" (" + ChannelText(dispatcher) + ")";
+			}
+			const std::vector<uint8_t> mine = Payload('J');
+			const std::vector<uint8_t> theirs = Payload('H');
+			if (!side.transport.Send(side.peer, NetTransportLane::ControlReliable, mine, &error)) {
+				return "joiner Send: " + error;
+			}
+			Say("joiner Connected " + Ms(ElapsedMs() - connectMs) + "ms after ConnectP2P; sent 64 bytes");
+			if (!WaitUntil(10000, pump, [&] { return side.closed || !side.received.empty(); }) || side.received.empty()) {
+				return "the host's 64 bytes did not arrive within 10s";
+			}
+			if (side.received.front() != theirs) {
+				return "the host's 64 bytes arrived altered";
+			}
+			Say("joiner received the host's 64 bytes intact");
+			PrintConnection(side);
+			std::string failure;
+			if (!CheckHostRoute(side, &failure)) {
+				return failure;
+			}
+			side.transport.Disconnect(side.peer, "net-p2p-selftest done");
+			Say("joiner Disconnect: CloseConnection with linger");
+			Drain(side);
+			// GNS sends the close over the ICE route itself; polling the closed client transport only repeats a receive fault.
+			WaitUntil(1000, [&] { dispatcher.Update(NowMs()); }, [] { return false; });
+			if (variant == DirectoryCase::Dup && dispatcher.GetCounters().duplicatesOut == 0) {
+				return "the test flag posted no duplicate";
+			}
+			return {};
+		}
+
+		/// dir-*: one end of a two-process connect whose rendezvous rides the session directory's signal relay.
+		int RunDirectory(DirectoryCase variant, bool isHost, int port, const std::string& url, const std::string& pin, const std::string& sessionId, const std::string& token) {
+			static const char* const c_Names[] = {"dir", "dir-reject", "dir-dup"};
+			const std::string role = isHost ? "host" : "joiner";
+			Say(std::string("mode: ") + c_Names[static_cast<int>(variant)] + ", two processes signaling through the session directory at " + url + "; this one the " + role + " of session " + sessionId);
+			EnableGnsOutput();
+			GnsDirectorySignalDispatcher::Config directory;
+			directory.role = isHost ? GnsDirectorySignalDispatcher::Role::Host : GnsDirectorySignalDispatcher::Role::Joiner;
+			directory.baseUrl = url;
+			directory.installKey = MintInstallKey();
+			directory.certPinSha256 = pin;
+			directory.sessionId = sessionId;
+			directory.sessionToken = token;
+			std::string failure;
+			std::shared_ptr<const GnsSignalingTally> tally;
+			{
+				GnsDirectorySignalDispatcher dispatcher;
+				dispatcher.SetTrace([role](const std::string& line) { Say(role + " signaling " + line); });
+				tally = dispatcher.Tally();
+				Side side(isHost ? "host" : "joiner");
+				if (!dispatcher.Start(side.transport, directory)) {
+					failure = "the signal channel did not open (" + ChannelText(dispatcher) + ")";
+				} else {
+					Say(role + " signal channel open as " + dispatcher.Channel().GetLocalPeer() + " with a fresh 32-hex-digit install key");
+					failure = isHost ? RunDirectoryHost(variant, port, dispatcher, side) : RunDirectoryJoiner(variant, port, sessionId, dispatcher, side);
+				}
+				dispatcher.Stop();
+				Say(role + " signaling after Stop: " + dispatcher.BuildReportJson());
+				int index = 0;
+				for (const GnsDirectorySignalDispatcher::PollWindow& window : dispatcher.PollWindows()) {
+					Say(role + " polling window " + std::to_string(++index) + ": armed at t=" + Ms(SinceStartMs(window.armedMs)) + "ms for " + std::to_string(window.disarmedMs - window.armedMs) +
+					    "ms: " + std::to_string(window.polls) + " poll(s), " + std::to_string(window.signalsPosted) + " post(s)");
+				}
+				if (failure.empty() && dispatcher.Channel().GetState() != NetDirectorySignalChannel::State::Closed) {
+					failure = "the signal channel did not drain and close (" + ChannelText(dispatcher) + ")";
+				}
+				side.transport.Stop();
+			}
+			const int created = tally->created;
+			const int released = tally->released;
+			const int deleted = tally->deleted;
+			Say(role + " transport destroyed; signaling objects created " + std::to_string(created) + ", released by GNS " + std::to_string(released) + ", deleted " + std::to_string(deleted) +
+			    "; frames GNS queued at or after teardown and never posted: " + std::to_string(tally->dropped.load()));
+			if (failure.empty() && (released != created || deleted != created)) {
+				failure = "signaling objects created " + std::to_string(created) + " but released " + std::to_string(released) + " and deleted " + std::to_string(deleted);
+			}
+			return Finish(failure);
+		}
+
 	} // namespace
 
 	int GnsP2PSelfTest::Run(const std::vector<std::string>& args) {
@@ -969,7 +1201,19 @@ namespace RTE {
 		if (args.size() == 1 && args[0] == "identity-guard") {
 			return RunIdentityGuard();
 		}
-		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard]" << std::endl;
+		if (args[0] == "dir-host" || args[0] == "dir-join" || args[0] == "dir-reject" || args[0] == "dir-dup") {
+			const DirectoryCase variant = args[0] == "dir-reject" ? DirectoryCase::Reject : args[0] == "dir-dup" ? DirectoryCase::Dup : DirectoryCase::Plain;
+			const bool plain = variant == DirectoryCase::Plain;
+			const bool roleNamed = plain || (args.size() > 1 && (args[1] == "host" || args[1] == "join"));
+			const bool isHost = plain ? args[0] == "dir-host" : roleNamed && args[1] == "host";
+			const size_t at = plain ? 1 : 2;
+			if (roleNamed && args.size() == at + (isHost ? 5 : 4) && ParseNumber(args[at], &value) && value < 0xffff) {
+				return RunDirectory(variant, isHost, value, args[at + 1], args[at + 2], args[at + 3], isHost ? args[at + 4] : std::string());
+			}
+		}
+		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard"
+		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
+		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;
 		return 1;
 	}
 
