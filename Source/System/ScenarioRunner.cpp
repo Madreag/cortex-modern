@@ -403,6 +403,11 @@ namespace RTE {
 			s_Args.selftestLeave = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-leave-tick" && hasValue) {
+			// The tick -net-match-e2e-leave fires at; default 300 keeps today's behaviour.
+			s_Args.selftestLeaveTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
 		if (a == "-net-match-e2e-snapshot") {
 			// Arm the full-game save at tick 300 (both peers pass it: same synced frame). Boolean flag.
 			s_Args.selftestSnapshot = true;
@@ -427,6 +432,16 @@ namespace RTE {
 			// Arm the synced pause + unpause. Boolean flag.
 			s_Args.selftestPauseCommand = true;
 			return 1;
+		}
+		if (a == "-net-match-e2e-pause-tick" && hasValue) {
+			// The tick the synced pause command is issued at; default 250 keeps today's arming.
+			s_Args.selftestPauseTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
+		if (a == "-net-match-e2e-end-round-tick" && hasValue) {
+			// The tick every armed peer ends the round at through the natural end path; 0 = never.
+			s_Args.selftestEndRoundTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
 		}
 		return 0;
 	}
