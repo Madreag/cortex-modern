@@ -35,6 +35,18 @@ Two limiters apply on every `/v1/` request; the stricter wins (`429 {"error":"ra
 
 Per session signal caps: at most 16 destination queues and at most 1 MiB of undrained decoded payload. A destination queue that is not drained for 120 s is dropped. The host queue is never dropped while the session lives. Over those caps: `400 {"error":"queue_full"}`. Per-queue cap remains 256 entries; per-signal decoded payload remains 64 KiB.
 
+Idle rate-limit buckets (install key or address with no refill for 10 minutes) are dropped on every 256th check or when a limiter map exceeds 10 000 entries. A pruned key starts with a fresh budget.
+
+## Listing sessions
+
+`GET /v1/sessions` returns live rows ordered by `(created_at, session_id)` ascending.
+
+- `limit` — page size, 1..200, default 100.
+- `cursor` — opaque token from a previous `next_cursor` (base64 of `created_at:session_id`). A malformed cursor is `400 {"error":"invalid_field","field":"cursor"}`.
+- The reply always includes `total` (live rows matching the filters). When more rows remain it also includes `next_cursor`.
+
+Optional filters `mode`, `activity`, and `state` still apply before the page is cut.
+
 ## Mac install
 
 Working directory is `/Users/erol/cortex-directory`.

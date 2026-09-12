@@ -35,6 +35,11 @@ REQ_PER_MIN = 120
 IP_REG_PER_MIN = 30
 IP_REQ_PER_MIN = 300
 RATE_WINDOW_S = 60.0
+RATE_IDLE_S = 600.0
+PRUNE_EVERY_N = 256
+PRUNE_MAP_MAX = 10000
+LIST_LIMIT_DEFAULT = 100
+LIST_LIMIT_MAX = 200
 MAX_DEST_QUEUES = 16
 MAX_SESSION_PAYLOAD = 1024 * 1024
 QUEUE_IDLE_S = 120.0
@@ -156,12 +161,33 @@ def as_json_int(value: float) -> int:
     return int(value)
 
 
+def encode_list_cursor(created_at: float, session_id: str) -> str:
+    raw = f"{created_at}:{session_id}"
+    return base64.b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_list_cursor(cursor: str) -> tuple[float, str]:
+    try:
+        raw = base64.b64decode(cursor.encode("ascii"), validate=True).decode("utf-8")
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise FieldError("invalid_field", "cursor") from exc
+    created_s, sep, session_id = raw.partition(":")
+    if not sep or not created_s or not session_id:
+        raise FieldError("invalid_field", "cursor")
+    try:
+        created_at = float(created_s)
+    except ValueError as exc:
+        raise FieldError("invalid_field", "cursor") from exc
+    return created_at, session_id
+
+
 class RateLimiter:
     def __init__(self, req_per_min: int, reg_per_min: int) -> None:
         self.req_per_min = req_per_min
         self.reg_per_min = reg_per_min
         self._requests: dict[str, list[float]] = {}
         self._registers: dict[str, list[float]] = {}
+        self._last: dict[str, float] = {}
 
     def _trim(self, bucket: dict[str, list[float]], key: str, now: float) -> list[float]:
         kept = [ts for ts in bucket.get(key, []) if now - ts < RATE_WINDOW_S]
@@ -202,10 +228,19 @@ class RateLimiter:
         reqs = self._trim(self._requests, key, now)
         reqs.append(now)
         self._requests[key] = reqs
+        self._last[key] = now
         if is_register:
             regs = self._trim(self._registers, key, now)
             regs.append(now)
             self._registers[key] = regs
+
+    def prune_idle(self, now: float) -> None:
+        cutoff = now - RATE_IDLE_S
+        dead = [key for key, ts in self._last.items() if ts < cutoff]
+        for key in dead:
+            self._requests.pop(key, None)
+            self._registers.pop(key, None)
+            self._last.pop(key, None)
 
 
 class DualRateLimiter:
@@ -213,6 +248,7 @@ class DualRateLimiter:
         self._lock = threading.Lock()
         self._by_key = RateLimiter(REQ_PER_MIN, REG_PER_MIN)
         self._by_ip = RateLimiter(IP_REQ_PER_MIN, IP_REG_PER_MIN)
+        self._checks = 0
 
     def _stricter(
         self,
@@ -227,10 +263,22 @@ class DualRateLimiter:
         right_wait = int(right[1]["retry_after_s"])
         return left if left_wait >= right_wait else right
 
+    def _map_size(self) -> int:
+        return max(
+            len(self._by_key._requests),
+            len(self._by_key._registers),
+            len(self._by_ip._requests),
+            len(self._by_ip._registers),
+        )
+
     def check(
         self, install_key: str, client_ip: str, now: float, is_register: bool
     ) -> Optional[tuple[int, dict[str, Any]]]:
         with self._lock:
+            self._checks += 1
+            if self._checks % PRUNE_EVERY_N == 0 or self._map_size() > PRUNE_MAP_MAX:
+                self._by_key.prune_idle(now)
+                self._by_ip.prune_idle(now)
             key_hit = self._by_key.probe(install_key, now, is_register)
             ip_hit = self._by_ip.probe(client_ip, now, is_register)
             blocked = self._stricter(key_hit, ip_hit)
@@ -432,10 +480,15 @@ class SessionDirectory:
         mode: Optional[str],
         activity: Optional[str],
         state: Optional[str],
+        limit: int = LIST_LIMIT_DEFAULT,
+        cursor: Optional[str] = None,
     ) -> dict[str, Any]:
+        start_key: Optional[tuple[float, str]] = None
+        if cursor is not None:
+            start_key = decode_list_cursor(cursor)
         with self._lock:
             self.prune(now)
-            rows: list[dict[str, Any]] = []
+            matched: list[Session] = []
             for sess in self._sessions.values():
                 if mode is not None and sess.fields["mode"] != mode:
                     continue
@@ -443,8 +496,24 @@ class SessionDirectory:
                     continue
                 if state is not None and sess.state != state:
                     continue
-                rows.append(sess.as_list_row(now))
-        return {"sessions": rows}
+                matched.append(sess)
+            matched.sort(key=lambda item: (item.created_at, item.session_id))
+            total = len(matched)
+            if start_key is not None:
+                matched = [
+                    sess
+                    for sess in matched
+                    if (sess.created_at, sess.session_id) > start_key
+                ]
+            page = matched[:limit]
+            body: dict[str, Any] = {
+                "sessions": [sess.as_list_row(now) for sess in page],
+                "total": total,
+            }
+            if len(matched) > limit:
+                last = page[-1]
+                body["next_cursor"] = encode_list_cursor(last.created_at, last.session_id)
+        return body
 
     def post_signal(
         self, session_id: str, data: dict[str, Any], now: float
@@ -716,6 +785,15 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     return
                 now = time.monotonic()
                 if parts == ["v1", "sessions"]:
+                    limit = LIST_LIMIT_DEFAULT
+                    limit_raw = self._q1(query, "limit")
+                    if limit_raw is not None:
+                        try:
+                            limit = int(limit_raw)
+                        except ValueError:
+                            raise FieldError("invalid_field", "limit") from None
+                        if limit < 1 or limit > LIST_LIMIT_MAX:
+                            raise FieldError("invalid_field", "limit")
                     self._send(
                         200,
                         store.list_sessions(
@@ -723,6 +801,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                             self._q1(query, "mode"),
                             self._q1(query, "activity"),
                             self._q1(query, "state"),
+                            limit,
+                            self._q1(query, "cursor"),
                         ),
                     )
                     return
