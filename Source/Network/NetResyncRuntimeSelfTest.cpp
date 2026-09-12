@@ -707,12 +707,11 @@ namespace RTE {
 				committed.push_back(host.at(target));
 				committed.push_back(client.at(target));
 			}
-			// Both ways into a heal snapshot the same applied tick: a frame wait that failed inside the
-			// drop frame, and a deferred stop that ended the last applied tick.
+			// A heal snapshots the applied tick a deferred stop ended; the counter sitting anywhere else
+			// means a tick is in flight and the save is refused.
 			const auto heal = [&](uint64_t simUpdateCount, const std::string& entry) {
 				uint64_t dropFrame = 0;
-				bool rewind = false;
-				if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), simUpdateCount, dropFrame, rewind, error)) return false;
+				if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), simUpdateCount, dropFrame, error)) return false;
 				NetResyncState captured, decoded;
 				std::vector<uint8_t> envelope, archive;
 				if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, captured, error)) return false;
@@ -721,18 +720,22 @@ namespace RTE {
 					*error = entry + ": " + *error;
 					return false;
 				}
-				return Check(dropFrame == applied + 1 && rewind == (simUpdateCount == dropFrame) && decoded.savedTick == applied &&
+				return Check(dropFrame == applied + 1 && decoded.savedTick == applied &&
 					SameInputs(decoded.pendingInputs, committed), error,
 					entry + " healed at frame " + std::to_string(dropFrame) + " from tick " + std::to_string(decoded.savedTick) +
 					" with " + std::to_string(decoded.pendingInputs.size()) + " pending inputs");
 			};
-			if (!heal(applied, "deferred stop") || !heal(applied + 1, "frame wait failure")) return false;
+			if (!heal(applied, "deferred stop")) return false;
 			uint64_t rejectedFrame = 0;
-			bool rejectedRewind = false;
+			std::string refused;
+			const bool wait = !ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied + 1, rejectedFrame, &refused);
+			const std::string waitReason = refused;
 			std::string rejected;
-			return Check(!ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied - 1, rejectedFrame, rejectedRewind, &rejected) && !rejected.empty() &&
-				!ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied + 2, rejectedFrame, rejectedRewind, &rejected), error,
-				"a sim tick that is neither the applied tick nor the drop frame was accepted");
+			return Check(wait && waitReason == "resync snapshot not at a tick boundary (sim tick " + std::to_string(applied + 1) +
+					", completed tick " + std::to_string(applied) + ")" &&
+				!ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied - 1, rejectedFrame, &rejected) && !rejected.empty() &&
+				!ScenarioRunner::ResolveResyncDropFrame(applied + 1, applied + 2, rejectedFrame, &rejected), error,
+				"frame wait failure was refused with \"" + waitReason + "\" instead of the boundary reason");
 		}
 
 		bool TestThreePeerCapture(std::string* error) {

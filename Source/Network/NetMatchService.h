@@ -259,6 +259,9 @@ namespace RTE {
 		std::optional<NetResyncState> m_PendingResyncState;
 		bool m_ResyncRetainsLocalState = false;
 		uint64_t m_ResyncSourceRound = 0;
+		//!< The last host snapshot's tick label and the completed tick it was taken at; a gate asserts they match.
+		std::atomic<uint64_t> m_ResyncSavedTick{UINT64_MAX};
+		std::atomic<uint64_t> m_ResyncBoundaryTick{UINT64_MAX};
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.

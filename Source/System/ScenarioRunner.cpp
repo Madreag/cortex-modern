@@ -1161,15 +1161,15 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetResumeFrame() : 0;
 	}
 
-	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, bool& outRewind, std::string* error) {
+	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, std::string* error) {
 		const uint64_t lastApplied = resumeFrame > 0 ? resumeFrame - 1 : 0;
-		if (simUpdateCount != lastApplied && simUpdateCount != resumeFrame) {
-			if (error) *error = "resync sim tick " + std::to_string(simUpdateCount) + " is neither the applied tick " + std::to_string(lastApplied) + " nor the drop frame " + std::to_string(resumeFrame);
+		// Anywhere but the boundary the live world holds a partly-simulated tick that no rewind of the
+		// clock can undo, and the snapshot would carry it under the previous tick's label.
+		if (simUpdateCount != lastApplied) {
+			if (error) *error = "resync snapshot not at a tick boundary (sim tick " + std::to_string(simUpdateCount) + ", completed tick " + std::to_string(lastApplied) + ")";
 			return false;
 		}
 		outDropFrame = resumeFrame;
-		// A failed frame wait leaves the counter on the unsimulated drop frame, a deferred stop on the applied tick.
-		outRewind = simUpdateCount == resumeFrame && resumeFrame > 0;
 		return true;
 	}
 
