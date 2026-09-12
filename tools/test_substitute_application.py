@@ -49,8 +49,26 @@ def main():
         raise RuntimeError(f"{run.out.name} did not reach {marker}")
 
     try:
+        # The host's own seats panel is the moderation view; it is pumped by the lockstep wait while
+        # the dropped seat is held, which is exactly the window the applicant arrives in.
+        signal = root / "applicant.signal.json"
+        probe = {"schema": 1, "timeout_ms": 180000, "steps": [
+            {"op": "wait", "service": "Running"},
+            {"op": "wait_file", "path": str(signal)},
+            {"op": "key_down", "key": "F6"},
+            {"op": "key_up", "key": "F6"},
+            {"op": "wait", "panel_open": True},
+            {"op": "wait", "renders": 3},
+            {"op": "assert_control", "control": "NetworkSeatApplicant0", "equals": {"visible": True},
+             "text_contains": "Applicant"},
+            {"op": "screenshot", "name": "applicant-on-the-panel"},
+            {"op": "finish"},
+        ]}
+        probe_path = root / "probe.json"
+        probe_path.write_text(json.dumps(probe, indent=2), encoding="utf-8")
         host = start("host", peer_args(options.port, root / "host.ticket", root / "host_report.json",
-                                       ["-net-host", "-net-match-e2e-resync"], players, ticks))
+                                       ["-net-host", "-net-match-e2e-resync"], players, ticks),
+                     env={"CC_TEST_NET_UI_SCRIPT": str(probe_path)})
         start("departing", peer_args(options.port, root / "departing.ticket", root / "departing_report.json",
                                      ["-net-join", "127.0.0.1", "-net-match-e2e-resync"], players, ticks))
         start("stayer", peer_args(options.port, root / "stayer.ticket", root / "stayer_report.json",
@@ -77,6 +95,7 @@ def main():
         wait_for(host, "left the match at frame", 180)
         trigger.write_text("{}", encoding="utf-8")
         result["checks"]["host_registered_an_applicant"] = wait_for(host, "[net-reconnect] applicant", 90)
+        signal.write_text("{}", encoding="utf-8")
         for name in ("host", "stayer", "applicant"):
             result["details"][name] = {"exit": runs[name].finish()["exit_code"]}
         applicant_log = (root / "applicant/stdout.log").read_text(errors="replace")
@@ -94,7 +113,15 @@ def main():
         result["checks"]["apply_pressed"] = "activate ButtonMultiplayerReconnect ok=1" in applicant_log
         result["checks"]["no_script_failure"] = "[menu-script] FAILED:" not in applicant_log
         result["checks"]["applications_sent"] = (applicant_reconnect.get("client_applications_sent") or 0) >= 1
-        result["checks"]["applicant_on_the_moderation_view"] = "Applicant" in names
+        admission = service.get("runner", {}).get("session", {}).get("admission", {})
+        result["details"]["applicants_registered"] = admission.get("applicants_registered")
+        result["checks"]["applicant_registered_on_the_host"] = (admission.get("applicants_registered") or 0) >= 1
+        probe_result = json.loads((root / "net-ui-result.json").read_text(errors="replace"))
+        result["details"]["probe"] = {"complete": probe_result.get("complete"), "error": probe_result.get("error"),
+                                      "failed_step": probe_result.get("failed_step")}
+        # The applicant is gone from the view by the time the report is written: its record expires
+        # with the hold, so the live view is what the panel showed during it.
+        result["checks"]["applicant_on_the_moderation_panel"] = probe_result.get("pass") is True
         result["checks"]["host_exit"] = result["details"]["host"]["exit"] == 0
         result["pass"] = all(result["checks"].values())
     except Exception as error:
