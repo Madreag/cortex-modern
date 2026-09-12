@@ -24,10 +24,11 @@ namespace RTE {
 
 	/// What the startup scan of the recovery record found. The protocol does not care; the player does.
 	enum class NetReconnectOffer : uint8_t {
-		None = 0,
+		None = 0,      //!< Nothing to say: no scan has run, or the player dismissed what it found.
 		Available = 1, //!< A usable record: offer to rejoin the match it names.
 		Corrupt = 2,
 		Stale = 3,
+		Missing = 4, //!< The scan ran and found no record; §11 says so rather than saying nothing.
 	};
 
 	/// The reconnect UX (§11): the automatic-retry schedule with its cancel and manual-retry controls,
@@ -43,7 +44,7 @@ namespace RTE {
 
 		void NoteConnected(uint64_t nowMs);
 		/// The link is gone and a recovery record exists: the automatic schedule starts, first attempt
-		/// immediately.
+		/// immediately. Ignored while a schedule is already running, cancelled or spent.
 		void NoteDropped(uint64_t nowMs, std::string reason);
 		void NoteReconnected(uint64_t nowMs);
 		/// @return Whether an attempt is due now. The caller starts it and reports back.
@@ -100,6 +101,10 @@ namespace RTE {
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
 	};
+
+	/// The seats panel's title line. The hold it reports is the ROUND's pause state, so the panel and
+	/// the stall overlay cannot say different things about the same moment.
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds);
 
 	/// §9b's moderation panel as a model: the rows the host sees and the three actions it can take.
 	/// The panel renders this and the headless driver drives this, so a gate exercises the path a

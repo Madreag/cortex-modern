@@ -20,6 +20,7 @@
 #include "MetagameGUI.h"
 #include "LoadingScreen.h"
 #include "System.h"
+#include "NetMatchService.h"
 
 using namespace RTE;
 
@@ -82,6 +83,10 @@ void MenuMan::SetActiveMenu() {
 	if (newActiveMenu != m_ActiveMenu) {
 		m_ActiveMenu = newActiveMenu;
 		switch (m_ActiveMenu) {
+			case ActiveMenu::MainMenuActive:
+				// §11: the rejoin offer is put up on the way in, at process start and after a match.
+				m_MainMenu->OfferStoredRejoinOnEntry();
+				break;
 			case ActiveMenu::ScenarioMenuActive:
 				m_ScenarioMenu->SetEnabled(m_TitleScreen->GetPlanetPos(), m_TitleScreen->GetPlanetRadius());
 				break;
@@ -118,6 +123,12 @@ bool MenuMan::IsNetworkPanelOpen() const { return m_NetworkPanel && m_NetworkPan
 bool MenuMan::ToggleNetworkPanel() { return m_NetworkPanel && m_NetworkPanel->SetOpen(!m_NetworkPanel->IsOpen()); }
 
 void MenuMan::HandleTransitionIntoMenuLoop() {
+	// §11: a match this peer was dropped from sends the player to the main menu, where the rejoin
+	// offer and the retry status are, rather than to the planet screen the preset would pick.
+	if (g_NetMatchService.NeedsRecoveryPump()) {
+		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+		return;
+	}
 	if (g_MetaMan.GameInProgress()) {
 		if (g_ActivityMan.SkipPauseMenuWhenPausingActivity()) {
 			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::MetaGameFadeIn);
@@ -143,6 +154,11 @@ void MenuMan::HandleTransitionIntoMenuLoop() {
 }
 
 bool MenuMan::Update() {
+	// §11's retry schedule belongs to the service, not to a screen: it runs whatever menu is up, so a
+	// dropped player recovers without having to walk back to the multiplayer screen.
+	if (g_NetMatchService.NeedsRecoveryPump()) {
+		g_NetMatchService.Update();
+	}
 	m_TitleScreen->Update();
 	SetActiveMenu();
 

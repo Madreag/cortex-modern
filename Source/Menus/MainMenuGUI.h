@@ -3,6 +3,7 @@
 #include "Controller.h"
 #include "NetLanDiscovery.h"
 #include "NetMatchConfig.h"
+#include "NetMatchService.h"
 #include "NetReconnectUx.h"
 
 #include "SaveLoadMenuGUI.h"
@@ -62,6 +63,10 @@ namespace RTE {
 
 		/// Draws the MainMenuGUI to the screen.
 		void Draw();
+
+		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
+		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
+		void OfferStoredRejoinOnEntry();
 #pragma endregion
 
 #pragma region Automation
@@ -91,6 +96,8 @@ namespace RTE {
 		/// Whether the skin defines the control at all, whatever screen is up. "Enabled" cannot answer
 		/// this: a control that is merely on a hidden panel reads the same as one that does not exist.
 		bool AutomationControlExists(const std::string& controlName) const;
+		/// Leaves whatever sub-screen is up for the main screen, without the back button's side effects.
+		void AutomationGoToMainScreen();
 #pragma endregion
 
 	private:
@@ -216,6 +223,9 @@ namespace RTE {
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
 		MultiplayerSubScreen m_MultiplayerSubScreen;
+		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
+		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
+		bool m_MultiplayerApplyOffered = false;          //!< A join of this host may still be answered by applying (§9b).
 		GUICollectionBox* m_CreditsScrollPanel;
 		std::array<GUICollectionBox*, MenuScreen::ScreenCount> m_MainMenuScreens;
 		std::array<GUIButton*, MenuButton::ButtonCount> m_MainMenuButtons;
@@ -329,6 +339,8 @@ namespace RTE {
 
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.
 		void StartMultiplayer(bool host);
+		/// §9b: answers a live match's refusal by asking the host for a seat instead of a new one.
+		void ApplyToSubstitute();
 
 		/// Launches the activity once the multiplayer runtime reaches lockstep ready.
 		void MaybeLaunchMultiplayerActivity();

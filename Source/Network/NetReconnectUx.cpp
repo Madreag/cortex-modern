@@ -16,7 +16,9 @@ namespace RTE {
 	}
 
 	void NetReconnectUx::NoteDropped(uint64_t nowMs, std::string reason) {
-		if (m_State == NetReconnectUxState::Waiting || m_State == NetReconnectUxState::Retrying) {
+		// A schedule that is already running, has been stopped by the player, or has run out is not
+		// re-armed by the same loss being reported again.
+		if (IsActive()) {
 			return;
 		}
 		m_State = NetReconnectUxState::Waiting;
@@ -103,7 +105,7 @@ namespace RTE {
 				m_Offer = NetReconnectOffer::Stale;
 				break;
 			case NetH4TicketLoadResult::Missing:
-				m_Offer = NetReconnectOffer::None;
+				m_Offer = NetReconnectOffer::Missing;
 				break;
 		}
 		m_OfferAddress.clear();
@@ -119,6 +121,7 @@ namespace RTE {
 			case NetReconnectOffer::Available: return "Rejoin your match at " + m_OfferAddress + "?";
 			case NetReconnectOffer::Corrupt: return "The saved reconnect ticket is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved reconnect ticket is too old to use.";
+			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
 			case NetReconnectOffer::None: break;
 		}
 		return "";
@@ -150,6 +153,17 @@ namespace RTE {
 			return " - Reconnecting";
 		}
 		return dropped ? " - Disconnected" : "";
+	}
+
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+		if (!running) {
+			return "SEATS  /  Resynchronizing the match...";
+		}
+		if (!holdPause) {
+			return "SEATS  /  The match continues while this panel is open";
+		}
+		return "SEATS  /  Match paused: waiting for " + (holdName.empty() ? std::string("a player") : holdName) +
+		       " to return (" + std::to_string(holdSeconds) + "s left)";
 	}
 
 	const char* NetModerationActionName(NetModerationAction action) {
