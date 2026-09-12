@@ -3998,7 +3998,7 @@ int main(int argc, char** argv) {
 			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
 			explicitLuaStateOverride = true;
 			++i;
-		} else if (arg == "-net-host" || arg == "-net-join") {
+		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join") {
 			netSessionRequested = true;
 		}
 	}
