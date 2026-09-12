@@ -236,6 +236,8 @@ namespace RTE {
 		void DrainPendingSessionEventsLocked(bool atTickBoundary);
 		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
 		void DiscardUndeliveredSessionEventsLocked();
+		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
+		void AccumulateLockstepTotalsLocked();
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();
@@ -325,6 +327,13 @@ namespace RTE {
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
+		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
+		struct LockstepTotals {
+			uint64_t peerFramesWaived = 0;
+			uint64_t peersDroppedSilent = 0;
+			uint64_t connectionsClosedOnEviction = 0;
+		};
+		LockstepTotals m_LockstepTotals;
 		uint32_t m_SessionEventsDrained = 0;   //!< Handover events delivered by a teardown instead of the pump.
 		uint32_t m_SessionEventsDiscarded = 0; //!< Handover events a relaunch found undelivered; must stay zero.
 		NetAdmissionClock m_AdmissionClock; //!< One elapsed-time source for setup, play, stalls and resync.
