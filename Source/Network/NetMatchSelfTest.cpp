@@ -1711,6 +1711,7 @@ namespace RTE {
 		coordinator.m_State = NetLockstepState::Running;
 		coordinator.m_RemotePeerIds = {2};
 		coordinator.m_RemoteTransports[2] = fencedTransportPeer;
+		coordinator.m_Stats.peerFramesWaived = 1;
 		coordinator.SetSeatStateSource(&FencedSeatState, nullptr);
 		service.AttachCoordinatorSessionSink();
 		const NetTransportEvent closed{NetTransportEventType::PeerDisconnected, fencedTransportPeer,
@@ -1749,11 +1750,16 @@ namespace RTE {
 			*error = "event lost: teardown drain counters read " + events.dump();
 			return false;
 		}
+		const nlohmann::json totals = report.value("lockstep_totals", nlohmann::json::object());
+		if (totals.value("peer_frames_waived", 0) != 1) {
+			*error = "the waiver count died with the coordinator; lockstep_totals=" + totals.dump();
+			return false;
+		}
 		if (!service.m_PendingSessionEvents.empty()) {
 			*error = "the teardown left the handover queue filled";
 			return false;
 		}
-		std::cout << "PASS pending_session_event_survives_teardown peer_state=Closed drained=1 discarded=0" << std::endl;
+		std::cout << "PASS pending_session_event_survives_teardown peer_state=Closed drained=1 discarded=0 peer_frames_waived=1" << std::endl;
 		return true;
 	}
 

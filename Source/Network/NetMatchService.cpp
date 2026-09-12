@@ -228,6 +228,7 @@ static std::string ResyncSaveName() {
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
 			DrainPendingSessionEventsLocked(false);
+			AccumulateLockstepTotalsLocked();
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -377,6 +378,7 @@ static std::string ResyncSaveName() {
 			// The round the resync destroys may be holding a fenced peer's disconnect it took off the
 			// transport; the session is the only thing here that outlives the coordinator.
 			DrainPendingSessionEventsLocked(true);
+			AccumulateLockstepTotalsLocked();
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -648,6 +650,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			DrainPendingSessionEventsLocked(false);
+			AccumulateLockstepTotalsLocked();
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -691,6 +694,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			DrainPendingSessionEventsLocked(false);
+			AccumulateLockstepTotalsLocked();
 			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
 				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
 			}
@@ -1011,6 +1015,16 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::AccumulateLockstepTotalsLocked() {
+		if (!m_Coordinator) {
+			return;
+		}
+		const NetLockstepStats& stats = m_Coordinator->GetStats();
+		m_LockstepTotals.peerFramesWaived += stats.peerFramesWaived;
+		m_LockstepTotals.peersDroppedSilent += stats.peersDroppedSilent;
+		m_LockstepTotals.connectionsClosedOnEviction += stats.connectionsClosedOnEviction;
+	}
+
 	void NetMatchService::PumpSessionEvents() {
 		PumpSeatPresence();
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
@@ -1304,6 +1318,17 @@ static std::string ResyncSaveName() {
 		if (m_ResyncSavedTick.load() != UINT64_MAX) {
 			report["resync"] = {{"saved_tick", m_ResyncSavedTick.load()}, {"boundary_tick", m_ResyncBoundaryTick.load()}};
 		}
+		// Every round's counters summed, so a resync that replaces the coordinator does not zero them.
+		LockstepTotals totals = m_LockstepTotals;
+		if (m_Coordinator) {
+			const NetLockstepStats& live = m_Coordinator->GetStats();
+			totals.peerFramesWaived += live.peerFramesWaived;
+			totals.peersDroppedSilent += live.peersDroppedSilent;
+			totals.connectionsClosedOnEviction += live.connectionsClosedOnEviction;
+		}
+		report["lockstep_totals"] = {{"peer_frames_waived", totals.peerFramesWaived},
+		                             {"peers_dropped_silent", totals.peersDroppedSilent},
+		                             {"connections_closed_on_eviction", totals.connectionsClosedOnEviction}};
 		report["session_events"] = {{"drained_at_teardown", m_SessionEventsDrained}, {"discarded", m_SessionEventsDiscarded}};
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
