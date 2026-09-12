@@ -117,7 +117,7 @@ def first_diff_token(before: Path, after: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=("lpinv-write", "lpinv-control", "deferral", "script-graph", "crash-green"))
+    parser.add_argument("kind", choices=("lpinv-write", "lpinv-control", "lpinv-fallback", "deferral", "script-graph", "crash-green"))
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--shared-slot", action="store_true")
@@ -147,6 +147,31 @@ def main() -> int:
                 *extra,
             ],
             {"preview_held_ref_write.lua": script},
+            args.timeout,
+        )
+    elif args.kind == "lpinv-fallback":
+        script = fixtures / "preview_held_ref_fallback.lua"
+        record = launch(
+            args.out,
+            [
+                "-net-replay",
+                "D:/Projects/stage2_p4/fixtures/pickup_fire.ccreplay",
+                "-tick-hashes",
+                "-max-ticks",
+                "221",
+                "-input-script",
+                "D:/Projects/stage2_p4/fixtures/pickup_fire.txt",
+                "-out",
+                str(args.out / "trace.json"),
+                "-local-prediction-depth",
+                "7",
+                "-local-prediction-invariance",
+                "153:1,4,7,12:1,3",
+                "-test-script",
+                "UserScenes.rte/preview_held_ref_fallback.lua",
+                *extra,
+            ],
+            {"preview_held_ref_fallback.lua": script},
             args.timeout,
         )
     elif args.kind == "lpinv-control":
