@@ -4880,7 +4880,14 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection;
+	LuaStatesArray setAside;
+	setAside.swap(m_ScriptStates);
+	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
+	const bool emptySetPicksMaster = emptyPick == &m_MasterScriptState;
+	emptyPick->GetMutex().unlock();
+	m_ScriptStates.swap(setAside);
+	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
@@ -5820,6 +5827,13 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 		// We're creating this object in a multithreaded environment, ensure that it's assigned to the same script state as us
 		bool success = s_luaStateOverride->GetMutex().try_lock();
 		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!") return s_luaStateOverride;
+	}
+
+	// With no threaded states every object script shares the master state.
+	if (m_ScriptStates.empty()) {
+		bool masterLocked = m_MasterScriptState.GetMutex().try_lock();
+		RTEAssert(masterLocked, "Script mutex was already locked while in a non-multithreaded environment!");
+		return &m_MasterScriptState;
 	}
 
 	// TODO
