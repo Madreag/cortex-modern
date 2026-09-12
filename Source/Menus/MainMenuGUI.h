@@ -237,6 +237,8 @@ namespace RTE {
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		GUILabel* m_MultiplayerLobbyPortMapLabel;
+		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
