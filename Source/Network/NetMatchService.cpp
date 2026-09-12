@@ -261,6 +261,19 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			// The round that just ended is the only thing that knows who left it; the next lobby is
+			// formed from the peers it still had. The host derives its own roster from the live session.
+			if (!m_IsHost) {
+				const NetMatchConfig& played = m_Runner->GetMatchConfig();
+				std::vector<uint8_t> survivors{played.hostPeerId}; // the star's hub cannot have left
+				for (const NetMatchPlayerSlot& slot : played.players) {
+					if (!slot.cpu && slot.peerId != 0 && slot.peerId != played.hostPeerId &&
+					    (!m_Coordinator || !m_Coordinator->GetPeerLeaveFrames().contains(slot.peerId))) {
+						survivors.push_back(slot.peerId);
+					}
+				}
+				m_Runner->SetRematchRoster(std::move(survivors));
+			}
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
 			transport = std::move(m_Transport);
@@ -602,6 +615,25 @@ static std::string ResyncSaveName() {
 		const bool started = runner->StartNextMatch(*transport, *session, *coordinator, &error);
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (started) {
+				// A rematch may be played on fewer seats than the last round, so everything keyed on the
+				// roster is re-read from the config the round actually starts on.
+				const NetMatchConfig& roster = runner->GetMatchConfig();
+				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
+				m_LocalPeerId = localLockstepId;
+				for (const NetMatchPlayerSlot& slot : roster.players) {
+					if (slot.peerId == localLockstepId) {
+						m_LocalTeam = slot.team;
+						break;
+					}
+				}
+				m_HumanSeats = roster.dedicated ? std::max(0, static_cast<int>(roster.peerCount) - 1) : static_cast<int>(roster.peerCount);
+				if (m_IsHost) {
+					// The beacon and the directory row take their counts from these at the next pump.
+					m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats));
+					m_DirectoryRow.matchConfigHash = NetIdentity::HashHex(runner->GetMatchConfigHash());
+				}
+			}
 			m_Transport = std::move(transport);
 			m_Session = std::move(session);
 			m_Coordinator = std::move(coordinator);
