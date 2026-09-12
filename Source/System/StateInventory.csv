@@ -77,4 +77,5 @@ PieMenu,m_BGPieSlicesWithSubPieMenuBitmap,render,menu background bitmap
 PieMenu,m_BGBitmapNeedsRedrawing,render,menu background redraw flag
 PieMenu,m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing,render,menu background redraw flag
 PieSlice,m_OriginalSource,link,the entity that added the slice; the quadrant copy and SetOwner re-point it
+Actor,m_PendingDeferredWaypoints,transient,queued during the AI pass and drained the same tick
 Actor,m_WaypointCursor,outside,the owner AI's lead over the replicated waypoint queue while its pop commands are in flight (per-machine)
