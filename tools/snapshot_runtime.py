@@ -38,6 +38,7 @@ SCHEMAS["Controller1"] = [
     *fields("disabled wire_tick wire_scheme_valid wire_device_class wire_digital_aim_speed input_mode seat_mode player seat_player team "
             "next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore"),
     *fields("release_timer joy_accel_timer key_accel_timer", TIMER), ("mouse_movement", VECTOR), ("cursor_angle_limits", array(3))]
+SCHEMAS["Controller2"] = [*SCHEMAS["Controller1"], ("synced_order_disable_tick", "n")]
 SCHEMAS["TimerMan1"] = fields("ticks_per_second real_time sim_time sim_update_count sim_accumulator delta_time delta_time_seconds delta_buffer "
     "sim_updates_since_drawn drawn_sim_update sim_speed time_scale sim_paused sim_time_frozen free_run_sim "
     "pace_accrued pace_trimmed pace_wall_seen pace_cap_lost pace_paused_lost pace_update_calls pace_reset_calls")
@@ -447,6 +448,7 @@ _MULTIBAND_EQ, _MULTIBAND_EQ_LOWPASS = 36, 1
 _LOCAL_FIELDS = {
     "TimerMan1": set("real_time sim_accumulator sim_updates_since_drawn drawn_sim_update sim_speed pace_accrued pace_trimmed pace_wall_seen pace_cap_lost pace_paused_lost pace_update_calls pace_reset_calls".split()),
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
+    "Controller2": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Screen1": {name for name, _ in SCHEMAS["Screen1"]},
     "FrameMan1": {"flashed_last_frame", "flash_timer"},
     "FrameMan2": {"flashed_last_frame", "flash_timer"},
@@ -498,7 +500,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 if isinstance(parameter, dict) and parameter.get("index") == _MULTIBAND_EQ_LOWPASS:
                     parameter["number"] = "LOCAL"
                     masked.append((*path, "parameters", index, "number"))
-        if version == "Controller1":
+        if version in ("Controller1", "Controller2"):
             for key in ("release_timer", "joy_accel_timer", "key_accel_timer"):
                 result[key]["sim_start"] = "LOCAL"
                 masked.append((*path, key, "sim_start"))
@@ -544,3 +546,58 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
         if entity.get("preset_name") == snapshot_name:
             entity["preset_name"] = b"SNAPSHOT"
     return result
+
+
+def _emit(kind):
+    """Minimal zero bytes for a schema kind, for the selftest's synthetic payloads."""
+    if kind == "n":
+        return b"0 "
+    if kind in ("s", "o"):
+        return b"0  "
+    if kind == "tail":
+        return b""
+    head = kind[0]
+    if head == "optional":
+        return b"0 "
+    if head == "structure":
+        return b"".join(_emit(sub) for _name, sub in kind[1])
+    if head == "array":
+        return _emit(kind[2]) * kind[1]
+    return b"0 "  # sequence: a zero count
+
+
+def _payload(version):
+    tag = version.encode()
+    return str(len(tag)).encode() + b" " + tag + b" " + b"".join(_emit(kind) for _name, kind in SCHEMAS[version])
+
+
+def selftest():
+    checks = []
+
+    def check(name, ok):
+        checks.append(ok)
+        print(f"[snapshot-runtime-selftest] {'PASS' if ok else 'FAIL'} {name}")
+
+    one = decode(_payload("Controller1"))
+    raw_two = _payload("Controller2")
+    held_two = raw_two[:-2] + b"305 "  # the last field is the synced-order hold tick
+    two = decode(held_two)
+    check("controller1_decodes", isinstance(one, dict) and one["version"] == "Controller1" and "synced_order_disable_tick" not in one)
+    check("controller2_decodes", isinstance(two, dict) and two["version"] == "Controller2" and two["synced_order_disable_tick"] == 305)
+
+    stale = raw_two.replace(b"Controller2", b"Controller1", 1)
+    try:
+        decode(stale)
+        check("controller2_refused_as_controller1", False)
+    except ValueError as error:
+        check("controller2_refused_as_controller1", "trailing" in str(error))
+
+    masked = []
+    projected = project(two, shared=True, masked=masked)
+    check("controller2_local_fields_masked", projected["player"] == "LOCAL" and projected["input_mode"] == "LOCAL" and
+          projected["synced_order_disable_tick"] == 305 and projected["release_timer"]["sim_start"] == "LOCAL")
+    return all(checks)
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if selftest() else 1)

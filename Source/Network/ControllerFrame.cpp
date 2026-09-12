@@ -594,6 +594,48 @@ namespace RTE {
 			}
 		}
 
+		// The order hold rides the Controller2 checkpoint, so a resync inside the hold window
+		// restores it with its arming tick on every peer instead of re-deriving or losing it.
+		{
+			Controller held(Controller::CIM_PLAYER, Players::PlayerOne);
+			const ControllerFrame preOrder = ControllerFrameCodec::Snapshot(4242, held);
+			held.HoldDisabledForSyncedOrder(305);
+			const std::string saved = held.SaveCheckpoint();
+
+			Controller restored(Controller::CIM_DISABLED, Players::NoPlayer);
+			if (!restored.LoadCheckpoint(saved) || !restored.IsSyncedOrderDisableHeld()) {
+				return fail("a checkpointed order hold did not restore");
+			}
+			restored.ExpireSyncedOrderDisable(364);
+			if (!restored.IsSyncedOrderDisableHeld()) {
+				return fail("a restored order hold lost its arming tick");
+			}
+			if (!ControllerFrameCodec::Apply(preOrder, restored, &error) || !restored.IsDisabled()) {
+				return fail("a frame sampled before the order re-enabled a restored hold");
+			}
+			restored.ExpireSyncedOrderDisable(365);
+			if (restored.IsSyncedOrderDisableHeld()) {
+				return fail("a restored order hold outlived the input-delay cap");
+			}
+
+			// A Controller1 payload has no hold field and restores as none; a stale reader refuses the wider payload.
+			std::string legacyText = saved;
+			legacyText.replace(legacyText.find("Controller2"), 11, "Controller1");
+			legacyText = legacyText.substr(0, legacyText.rfind(' ', legacyText.size() - 2) + 1);
+			Controller legacyRestored(Controller::CIM_DISABLED, Players::NoPlayer);
+			if (!legacyRestored.LoadCheckpoint(legacyText) || legacyRestored.IsSyncedOrderDisableHeld()) {
+				return fail("a Controller1 payload did not restore cleanly");
+			}
+			Controller rejected(Controller::CIM_DISABLED, Players::NoPlayer);
+			if (rejected.LoadCheckpoint(legacyText + "305 ")) {
+				return fail("a Controller1-tagged payload with a trailing field was accepted");
+			}
+			Controller validated(Controller::CIM_DISABLED, Players::NoPlayer);
+			if (!validated.LoadCheckpoint(saved, true) || validated.IsSyncedOrderDisableHeld()) {
+				return fail("a validation pass armed an order hold");
+			}
+		}
+
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;
 		return 0;
 	}
