@@ -897,6 +897,9 @@ void Actor::SetControllerMode(Controller::InputMode newMode, int newPlayer) {
 void Actor::OnControllerInputModeChanged(Controller::InputMode previousMode, int previousPlayer) {
 	RunScriptedFunctionInAppropriateScripts("OnControllerInputModeChange", false, false, {}, {std::to_string(previousMode), std::to_string(previousPlayer)});
 	m_NewControlTmr.Reset();
+	// A handoff hands the actor over enabled: a disable the seat it just left was under is not its own.
+	m_Controller.ClearSyncedOrderDisable();
+	m_Controller.SetDisabled(false);
 	// The selection wobble is sim state, so it plays where the handoff lands: on every peer at the same tick.
 	if (m_PieMenu && m_Controller.GetInputMode() == Controller::CIM_PLAYER) {
 		m_PieMenu->DoDisableAnimation();

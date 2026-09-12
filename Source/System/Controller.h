@@ -214,6 +214,9 @@ namespace RTE {
 		/// @return Whether the hold is armed.
 		bool IsSyncedOrderDisableHeld() const { return m_SyncedOrderDisableTick >= 0; }
 
+		/// Drops the hold at a point every peer reaches at the same tick, like a control handoff.
+		void ClearSyncedOrderDisable() { m_SyncedOrderDisableTick = -1; }
+
 		/// Shows whether the current controller is in a specific state.
 		/// @param controlState What control state to check for.
 		/// @return Whether the controller is in the specified state.
