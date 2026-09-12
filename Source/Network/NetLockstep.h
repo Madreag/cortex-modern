@@ -538,11 +538,17 @@ namespace RTE {
 		void Leave(const std::string& message = "player left");
 		/// Ends the round on every peer so the match reconvenes and reloads the host's snapshot
 		/// (a rejoin or an operator-forced heal). Host-initiated.
-		void RequestResync(const std::string& message = "resync requested");
+		void RequestResync(const std::string& message = "resync requested", bool immediate = false);
 		/// Keeps recovery and completion aligned with applied simulation ticks, while input may be prefetched.
 		void DeferStopsToTickBoundary() { m_DeferStops = true; }
 		bool HasPendingRecoveryStop() const { return m_PendingRecoveryStop.has_value(); }
+		/// The first frame the sim has not applied: a heal resumes the round here.
+		uint64_t GetResumeFrame() const { return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
 		bool FinishSimulationTick(uint64_t completedTick);
+		/// Applies a pending recovery stop from inside the host's wait for a tick it has not simulated:
+		/// a parked wait is a tick boundary too, and the tick it waits on may never arrive.
+		/// @return Whether a stop was applied.
+		bool ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick);
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
 		/// would otherwise discard while it owns the transport queue.
 		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { m_SessionEventSink = std::move(sink); }
@@ -699,6 +705,12 @@ namespace RTE {
 		void RefreshLeftSeatHolds();
 		/// Whether any peer that has left still holds a seat a returning player can reclaim.
 		bool AnyLeftSeatHeld() const;
+		/// A resync round already named this peer; a leftover drop or the old socket's close is not a new hold.
+		bool IgnoreStaleRefillLeave(uint8_t peerId, uint64_t nowMs) const;
+		/// A Reclaimed or Substituted seat is being refilled; it is not a last-player close.
+		bool SeatIsRefilling(uint8_t peerId) const;
+		bool AnySeatRefilling() const;
+		size_t LeftPeersNotRefilling() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
 		void EndRoundIfNobodyIsComingBack();
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;

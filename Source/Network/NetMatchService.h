@@ -12,11 +12,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #define g_NetMatchService NetMatchService::Instance()
@@ -60,6 +62,7 @@ namespace RTE {
 		}
 		uint64_t Total() const { return priorTicks + SegmentTicks(); }
 		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
+		bool EarlyOverIsSetupFailure(uint64_t matchTick) const { return matchTick < 100; }
 	};
 
 	inline uint64_t ParseLockstepStopTick(const std::string& error, uint64_t fallbackTick) {
@@ -126,6 +129,13 @@ namespace RTE {
 		/// Phase B, host: stand in for the moderator in an unattended gate - approve the first
 		/// applicant for this seat after the delay, and optionally withdraw the approval again.
 		static void SetAutoSubstitute(bool enabled, uint16_t stableSeat, uint64_t delayMs, bool thenCancel);
+		/// A joiner finishes its startup and then waits for this file before it connects, so a gate can
+		/// place a second holder of one ticket at a chosen moment of the match instead of at boot time.
+		static void SetJoinWaitPath(std::string path);
+		/// Polls `path` every 100 ms until it exists. False (with `error`) when `budgetMs` runs out.
+		static bool WaitForJoinTrigger(const std::string& path, uint64_t budgetMs, std::string* error);
+		static constexpr uint64_t c_JoinWaitBudgetMs = 120000;
+		static constexpr uint64_t c_JoinWaitPollMs = 100;
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
 		bool CanSealA7Journal() const;
@@ -214,6 +224,8 @@ namespace RTE {
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
+		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();
@@ -222,6 +234,8 @@ namespace RTE {
 		/// Ends the hosted session: tells every peer with the one reason that permits deleting a
 		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
 		void EndAdmissionSession();
+		void ResetRosterTransitionHistory();
+		void RecordRosterTransitions(uint64_t observedAtMs);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
 		/// Elapsed milliseconds since this session began, for every admission deadline.
@@ -255,6 +269,16 @@ namespace RTE {
 		NetReconnectTicketStore m_TicketStore;
 		NetReconnectUx m_ReconnectUx;
 		NetSeatPresence m_SeatPresence;
+		struct RosterTransition {
+			uint8_t peerId = 0;
+			std::string state;
+			std::string line;
+			uint64_t appliedFrame = 0;
+			uint64_t observedAtMs = 0;
+		};
+		std::vector<RosterTransition> m_RosterTransitions;
+		uint32_t m_RosterTransitionsDropped = 0;
+		std::map<uint8_t, std::pair<std::string, std::string>> m_LastRosterPair;
 		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
@@ -273,6 +297,7 @@ namespace RTE {
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
+		static std::string s_JoinWaitPath;
 		static bool s_ApplyForSeat;
 		static uint16_t s_ApplySeat;
 		static bool s_AutoSubstitute;
