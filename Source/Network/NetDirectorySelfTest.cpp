@@ -22,6 +22,11 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#elif defined(__APPLE__)
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -461,7 +466,7 @@ namespace RTE {
 				return true;
 			}
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 			bool MeasureCancel(const std::string& url, std::string* error) {
 				NetHttpClient client;
 				client.Start("GET", url, {}, "", "");
@@ -478,26 +483,40 @@ namespace RTE {
 				return inFlight;
 			}
 
+#ifdef _WIN32
+			using SocketHandle = SOCKET;
+			using SocketLength = int;
+			constexpr SocketHandle c_InvalidSocket = INVALID_SOCKET;
+			void CloseSocket(SocketHandle socketHandle) { closesocket(socketHandle); }
+#else
+			using SocketHandle = int;
+			using SocketLength = socklen_t;
+			constexpr SocketHandle c_InvalidSocket = -1;
+			void CloseSocket(SocketHandle socketHandle) { close(socketHandle); }
+#endif
+
 			bool TestHttpClientCancel(std::string* error) {
+#ifdef _WIN32
 				WSADATA wsaData;
 				(void)WSAStartup(MAKEWORD(2, 2), &wsaData);
+#endif
 				// A listener that never accepts: the TCP handshake completes in the kernel and the
 				// TLS ClientHello sits unread, so the request is guaranteed to be stalled.
-				SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+				SocketHandle listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 				sockaddr_in addr{};
 				addr.sin_family = AF_INET;
 				addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 				addr.sin_port = 0;
-				if (listener == INVALID_SOCKET || bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(listener, 1) != 0) {
+				if (listener == c_InvalidSocket || bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(listener, 1) != 0) {
 					*error = "could not open the stall listener";
 					return false;
 				}
 				sockaddr_in bound{};
-				int boundSize = sizeof(bound);
+				SocketLength boundSize = sizeof(bound);
 				(void)getsockname(listener, reinterpret_cast<sockaddr*>(&bound), &boundSize);
 				const std::string url = "https://127.0.0.1:" + std::to_string(ntohs(bound.sin_port)) + "/";
 				const bool stalled = MeasureCancel(url, error);
-				closesocket(listener);
+				CloseSocket(listener);
 				if (error->empty() && !stalled) {
 					*error = "the silent-listener request was not in flight when Cancel was measured";
 					return false;
@@ -870,7 +889,7 @@ namespace RTE {
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);
 			if (!TestMergeGameLists(&error)) return fail(error);
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #endif
 			if (!TestInstallKeyIsLazy(&error)) return fail(error);
