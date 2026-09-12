@@ -497,6 +497,18 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 	return result;
 }
 
+void MainMenuGUI::OfferStoredRejoinOnEntry() {
+	if (g_NetMatchService.GetState() == NetMatchServiceState::Idle) {
+		g_NetMatchService.ScanStoredTicket();
+	}
+	const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+	if (reconnect.GetOffer() != NetReconnectOffer::Available && !reconnect.IsActive()) {
+		return;
+	}
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+}
+
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != MenuScreen::MainScreen) {

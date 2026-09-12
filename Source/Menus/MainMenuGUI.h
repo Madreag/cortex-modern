@@ -62,6 +62,10 @@ namespace RTE {
 
 		/// Draws the MainMenuGUI to the screen.
 		void Draw();
+
+		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
+		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
+		void OfferStoredRejoinOnEntry();
 #pragma endregion
 
 #pragma region Automation
