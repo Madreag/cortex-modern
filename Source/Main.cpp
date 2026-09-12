@@ -54,6 +54,7 @@
 #include "GLResourceMan.h"
 #include "CameraMan.h"
 #include "ActivityMan.h"
+#include "Actor.h"
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
@@ -1876,6 +1877,14 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	const int savedDepth = LocalPrediction::GetDepthOverride();
 	g_MovableMan.WaitForActorsSeeTask();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
+	PreviewScriptSelfTest::SetStrideCounter(true);
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (Actor* actor = activity->GetControlledActor(player)) {
+				PreviewScriptSelfTest::InstallStrideCounter(actor);
+			}
+		}
+	}
 	std::vector<std::string> problems;
 	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	if (!problems.empty()) {
@@ -1956,6 +1965,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		}
 	}
 	LocalPrediction::SetDepthOverride(savedDepth);
+	PreviewScriptSelfTest::SetStrideCounter(false);
 	s_lpInvarianceFailures = failures;
 	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases left the canonical world untouched" << std::endl;
 	g_MetricsCollector.RecordString("lpinv_result", failures == 0 ? "pass" : "fail");
