@@ -516,10 +516,6 @@ namespace RTE {
 				SetError(error, NetLockstepErrorCode::StringTooLong, offset, "value observation string exceeds max encoded length");
 				return false;
 			}
-			if (observation.mapKind == 0 && observation.op == 0 && !std::isfinite(observation.numberValue)) {
-				SetError(error, NetLockstepErrorCode::InvalidValue, offset, "value observation number is not finite");
-				return false;
-			}
 			return true;
 		}
 
@@ -3402,8 +3398,10 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::FinishSimulationTick(uint64_t completedTick) {
-		if (!m_DeferStops || !IsRunning()) return false;
-		m_LastCompletedSimulationTick = completedTick;
+		if (!m_DeferStops) return false;
+		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
+		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (!IsRunning()) return false;
 		if (m_PendingRecoveryStop && m_Config.localPeerId == m_Config.matchConfig.hostPeerId) {
 			const NetLockstepStop stop = *m_PendingRecoveryStop;
 			m_PendingRecoveryStop.reset();
@@ -3417,6 +3415,16 @@ namespace RTE {
 			return true;
 		}
 		return false;
+	}
+
+	bool NetLockstepCoordinator::ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick) {
+		if (!m_DeferStops || !IsRunning() || m_Config.localPeerId != m_Config.matchConfig.hostPeerId || !m_PendingRecoveryStop) {
+			return false;
+		}
+		const NetLockstepStop stop = *m_PendingRecoveryStop;
+		m_PendingRecoveryStop.reset();
+		Fail(stop.reason, waitingTick, stop.message);
+		return true;
 	}
 
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
