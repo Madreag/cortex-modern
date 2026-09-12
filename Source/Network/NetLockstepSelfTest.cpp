@@ -9301,7 +9301,9 @@ namespace RTE {
 			actor->SetControllerMode(Controller::CIM_AI);
 		}
 
-		void ApplyReadySwitchCommands(const NetLockstepReadyFrame& ready) {
+		// The engine's command apply, driven on the second peer's copy of the actor too: the views are
+		// separate objects here, so each one takes the handoff its own machine would.
+		void ApplyReadySwitchCommands(const NetLockstepReadyFrame& ready, Actor* mirrorView = nullptr) {
 			std::vector<NetGameCommand> commands;
 			commands.insert(commands.end(), ready.localCommands.begin(), ready.localCommands.end());
 			commands.insert(commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
@@ -9310,15 +9312,22 @@ namespace RTE {
 			});
 			for (const NetGameCommand& command: commands) {
 				if (const NetGameSwitchControl* switchControl = std::get_if<NetGameSwitchControl>(&command.payload)) {
-					if (switchControl->newOwnerPeerId == command.senderPeerId) {
-						ScenarioRunner::SetLockstepControlOverride(switchControl->actorUID, switchControl->newOwnerPeerId);
+					if (MovableMan::ApplyLockstepControlClaim(switchControl->actorUID, command.senderPeerId, switchControl->newOwnerPeerId, ready.frame) && mirrorView) {
+						MovableMan::ApplyLockstepControlHandoffToActor(*mirrorView, switchControl->newOwnerPeerId == command.senderPeerId);
 					}
 				}
 			}
+			MovableMan::ReconcileLockstepControlBindings();
 		}
 
-		void ApplyOwnerFramesToViews(const NetLockstepReadyFrame& ready, Actor& hostView, Actor& clientView, int64_t uid) {
-			auto applyAll = [&](const std::vector<ControllerFrame>& frames) {
+		// MovableMan applies a committed frame only to actors the producing side owns; a frame the old
+		// owner still had in flight is dropped, so the views mirror that gate.
+		void ApplyOwnerFramesToViews(const NetLockstepReadyFrame& ready, Actor& hostView, Actor& clientView, int64_t uid, int team) {
+			const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, team, !clientView.IsPlayerControlled());
+			auto applyAll = [&](const std::vector<ControllerFrame>& frames, uint8_t producerPeerId) {
+				if (producerPeerId != owner) {
+					return;
+				}
 				for (ControllerFrame frame: frames) {
 					if (frame.actorUniqueID != uid) {
 						continue;
@@ -9328,8 +9337,8 @@ namespace RTE {
 					MovableMan::ApplyLockstepFrameToActor(clientView, frame, ready.frame, &applyError);
 				}
 			};
-			applyAll(ready.localFrames);
-			applyAll(ready.remoteFrames);
+			applyAll(ready.localFrames, 1);
+			applyAll(ready.remoteFrames, 2);
 		}
 
 		bool DriveTrio(LoopbackTransport& hostT, LoopbackTransport& aT, LoopbackTransport& bT, NetLockstepCoordinator& host, NetLockstepCoordinator& peerA, NetLockstepCoordinator& peerB, const std::function<bool()>& done, std::string* error, uint64_t maxMs = 4000) {
@@ -9451,8 +9460,8 @@ namespace RTE {
 			std::string firstDiffer;
 			for (uint64_t frame = switchFrame; frame <= switchFrame + 2 * delay; ++frame) {
 				if (hostReady.count(frame)) {
-					ApplyReadySwitchCommands(hostReady[frame]);
-					ApplyOwnerFramesToViews(hostReady[frame], *hostView, *clientView, uid);
+					ApplyReadySwitchCommands(hostReady[frame], hostView);
+					ApplyOwnerFramesToViews(hostReady[frame], *hostView, *clientView, uid, Activity::TeamTwo);
 				}
 				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !hostView->IsPlayerControlled());
 				const std::string hostTuple = ControlTuple(*hostView, owner);
@@ -9697,7 +9706,16 @@ namespace RTE {
 				return finish("switch away refused");
 			}
 			ScenarioRunner::DrainLocalGameCommands();
+			// The owner samples the abandoned actor at the switch; that frame commits delay ticks later
+			// on every peer, which is where its mode leaves the seat.
+			ControllerFrame abandonedFrame = ControllerFrameCodec::Snapshot(uid, *clientAbandoned->GetController(), clientAbandoned);
+			abandonedFrame.actorUniqueID = uid;
 			for (uint64_t frame = holdFrame + 1; frame <= holdFrame + delay; ++frame) {
+				if (frame == holdFrame + delay) {
+					std::string applyError;
+					MovableMan::ApplyLockstepFrameToActor(*hostAbandoned, abandonedFrame, frame, &applyError);
+					MovableMan::ApplyLockstepFrameToActor(*clientAbandoned, abandonedFrame, frame, &applyError);
+				}
 				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !clientAbandoned->IsPlayerControlled());
 				const std::string hostTuple = ControlTuple(*hostAbandoned, owner);
 				const std::string clientTuple = ControlTuple(*clientAbandoned, owner);
@@ -9709,6 +9727,118 @@ namespace RTE {
 					               (holdOutlived ? " hold outlived the seat" : " disabled diverged"))
 					                  .c_str());
 				}
+			}
+			return finish(nullptr);
+		}
+
+		bool TestCoopTakeoverOfHostCpuActor(std::string* error) {
+			const char* name = "coop_takeover_host_cpu_actor";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint64_t switchFrame = 4;
+			const uint16_t port = 43224;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573134ULL);
+			// Both humans share TeamOne, so the CPU actor's policy owner is the host.
+			matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 0, false, "Client"}};
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "host-cpu-remote-human";
+			clientConfig.ownershipPolicy = "host-cpu-remote-human";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* hostView = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* clientView = MakeSwitchTestActor(Activity::TeamOne);
+			if (!hostView || !clientView) {
+				return finish("selftest actors could not be created");
+			}
+			const int64_t uid = static_cast<int64_t>(clientView->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			AddSwitchTestActor(hostView);
+			AddSwitchTestActor(clientView);
+			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, true) != 1) {
+				return finish("the CPU actor did not start on the host");
+			}
+			std::string queueError;
+			for (uint64_t produced = 0; produced < switchFrame; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted >= switchFrame && client.GetStats().framesAccepted >= switchFrame; }, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(clientView, Players::PlayerOne, Activity::TeamOne)) {
+				return finish("SwitchToActor refused the co-op takeover");
+			}
+			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
+			if (switchCommands.empty()) {
+				return finish("the takeover produced no SwitchControl command");
+			}
+			ControllerFrame hostSnap = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
+			hostSnap.actorUniqueID = uid;
+			if (!host.QueueLocalInput(switchFrame, {hostSnap}, {}, &queueError) ||
+			    !client.QueueLocalInput(switchFrame, {MakeFrame(200, switchFrame + 1)}, switchCommands, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			std::map<uint64_t, NetLockstepReadyFrame> hostReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady[ready.frame] = ready;
+					}
+					while (client.PopReadyFrame(ready)) {
+					}
+					return hostReady.count(switchFrame + delay) != 0;
+				}, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			for (uint64_t frame = switchFrame; frame <= switchFrame + delay; ++frame) {
+				if (hostReady.count(frame)) {
+					ApplyReadySwitchCommands(hostReady[frame], hostView);
+					ApplyOwnerFramesToViews(hostReady[frame], *hostView, *clientView, uid, Activity::TeamOne);
+				}
+			}
+			const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, !hostView->IsPlayerControlled());
+			const std::string hostTuple = ControlTuple(*hostView, owner);
+			const std::string clientTuple = ControlTuple(*clientView, owner);
+			if (owner != 2 || hostTuple != clientTuple ||
+			    hostView->GetController()->GetInputMode() != Controller::CIM_PLAYER ||
+			    clientView->GetController()->GetInputMode() != Controller::CIM_PLAYER) {
+				return finish(("frame=" + std::to_string(switchFrame + delay) + " host=" + hostTuple + " client=" + clientTuple +
+				               " expected mode=CIM_PLAYER owner=2")
+				                  .c_str());
 			}
 			return finish(nullptr);
 		}
@@ -9830,10 +9960,12 @@ namespace RTE {
 		std::string switchLandsError;
 		std::string claimTieError;
 		std::string switchHoldError;
+		std::string coopTakeoverError;
 		const bool switchLands = TestSwitchLandsOnOneTick(&switchLandsError);
 		const bool claimTie = TestSimultaneousClaimTieBreak(&claimTieError);
 		const bool switchHold = TestSwitchUnderSyncedHold(&switchHoldError);
-		if (!switchLands || !claimTie || !switchHold) {
+		const bool coopTakeover = TestCoopTakeoverOfHostCpuActor(&coopTakeoverError);
+		if (!switchLands || !claimTie || !switchHold || !coopTakeover) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;

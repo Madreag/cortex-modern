@@ -675,6 +675,20 @@ namespace RTE {
 		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
 		static bool ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error);
 
+		/// Moves an actor's frame production at a committed frame. A peer claims only for itself and
+		/// the lowest peer id wins an actor two of them claim at the same frame; an owner may also
+		/// release its actor back to the owner the world seeded for it.
+		/// @return Whether the claim was accepted.
+		static bool ApplyLockstepControlClaim(int64_t actorUniqueID, uint8_t senderPeerId, uint8_t newOwnerPeerId, uint64_t frame);
+
+		/// Lands a control handoff on one peer's copy of an actor: the sim-facing mode follows the
+		/// owner at the committed tick, the local seat is left alone.
+		/// @param seated Whether the new owner seats a player on it.
+		static void ApplyLockstepControlHandoffToActor(Actor& actor, bool seated);
+
+		/// Lets go of this peer's control bindings for actors another peer now owns.
+		static void ReconcileLockstepControlBindings();
+
 		/// Moves the pending added MOs into the live lists immediately. The per-tick update does
 		/// this at its transfer point; a rollback restore does it before the first re-run tick so
 		/// the world enters it structurally identical to the first pass.
