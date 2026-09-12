@@ -64,7 +64,7 @@ def main():
             "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Applicant\n"
             "activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
             f"settext TextJoinPort {options.port}\nactivate ButtonMultiplayerConnect\n"
-            "wait_state Failed\nwait 5\nassert_substate Landing\n"
+            "wait_state Failed 240\nwait 5\nassert_substate Landing\n"
             "assert_error The match is already in progress\n"
             "assert_enabled ButtonMultiplayerReconnect 1\n"
             "activate ButtonMultiplayerReconnect\nwait_ms 12000\ndump_lobby\nexit\n", encoding="utf-8")
