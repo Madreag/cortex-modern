@@ -87,6 +87,7 @@ void MainMenuGUI::Clear() {
 	m_PressedModeration.clear();
 	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+	m_ReconnectStatusShown.clear();
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -797,8 +798,12 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
 	// scan of the recovery record found - including precisely why it cannot be used.
 	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
-	if (!status.empty()) {
-		m_MultiplayerLandingStatusLabel->SetText(status);
+	if (status != m_ReconnectStatusShown) {
+		// A dismissed offer clears its own line, but never another screen's message.
+		if (!status.empty() || m_MultiplayerLandingStatusLabel->GetText() == m_ReconnectStatusShown) {
+			m_MultiplayerLandingStatusLabel->SetText(status);
+		}
+		m_ReconnectStatusShown = status;
 	}
 }
 
