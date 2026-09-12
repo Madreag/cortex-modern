@@ -7,6 +7,7 @@
 #include "SettingsMan.h"
 #include "ConsoleMan.h"
 #include "NetMatchService.h"
+#include "NetIdentity.h"
 #include "NetConnectionQuality.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
@@ -69,7 +70,11 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
 	m_MultiplayerLanGamesList = nullptr;
-	m_LanHosts.clear();
+	m_MultiplayerLanGamesLabel = nullptr;
+	m_LanGamesLabelText.clear();
+	m_GameRows.clear();
+	m_DirectoryIdentity.reset();
+	m_DirectoryIdentityTried = false;
 	m_LanBrowserNowMs = 0;
 	m_MultiplayerLandingPanel = nullptr;
 	m_MultiplayerHostPanel = nullptr;
@@ -194,6 +199,10 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
 	m_MultiplayerLanGamesList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListLanGames"));
+	m_MultiplayerLanGamesLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLanGames"));
+	if (m_MultiplayerLanGamesLabel) {
+		m_LanGamesLabelText = m_MultiplayerLanGamesLabel->GetText();
+	}
 
 	m_MultiplayerStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerStatus"));
 	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerError"));
@@ -663,12 +672,24 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MultiplayerLanGamesList) {
-		// Clicking a discovered host fills the join fields; Connect stays the explicit action.
+		// Clicking a listed host fills the join fields; Connect stays the explicit action. A row the
+		// merge marked non-joinable is refused here, before any connection is attempted.
 		const int selected = m_MultiplayerLanGamesList->GetSelectedIndex();
-		if (selected >= 0 && static_cast<size_t>(selected) < m_LanHosts.size()) {
-			m_MultiplayerJoinAddressTextBox->SetText(m_LanHosts[static_cast<size_t>(selected)].address);
-			m_MultiplayerJoinPortTextBox->SetText(std::to_string(m_LanHosts[static_cast<size_t>(selected)].port));
-			g_GUISound.ItemChangeSound()->Play();
+		if (selected >= 0 && static_cast<size_t>(selected) < m_GameRows.size()) {
+			const NetDirectoryClient::GameRow& row = m_GameRows[static_cast<size_t>(selected)];
+			if (!row.joinable) {
+				if (m_MultiplayerLanGamesLabel) {
+					m_MultiplayerLanGamesLabel->SetText("Cannot join this game: " + row.reason);
+				}
+				g_GUISound.BackButtonPressSound()->Play();
+			} else {
+				m_MultiplayerJoinAddressTextBox->SetText(row.address);
+				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port));
+				if (m_MultiplayerLanGamesLabel) {
+					m_MultiplayerLanGamesLabel->SetText(m_LanGamesLabelText);
+				}
+				g_GUISound.ItemChangeSound()->Play();
+			}
 		}
 	}
 	// §9b's three actions, one row per disconnected seat.
@@ -806,7 +827,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
 	m_MultiplayerModerationPanel->SetVisible(moderating);
-	RefreshLanGamesList();
+	RefreshGamesList();
 	RefreshReconnectControls();
 	if (moderating) {
 		RefreshModerationControls(snapshot);
@@ -1097,41 +1118,78 @@ void MainMenuGUI::UpdateMainScreenHoveredButton(const GUIButton* hoveredButton) 
 	}
 }
 
-void MainMenuGUI::RefreshLanGamesList() {
+void MainMenuGUI::RefreshGamesList() {
 	if (!m_MultiplayerLanGamesList) {
 		return;
 	}
-	// The browser only runs while the join screen is up; the beacon side lives in the service.
+	// The browser and the directory lister only run while the join screen is up.
 	if (m_MultiplayerSubScreen != MultiplayerSubScreen::JoinSetup) {
 		if (m_LanBrowser.IsBrowsing()) {
 			m_LanBrowser.Stop();
-			m_LanHosts.clear();
+			m_GameRows.clear();
 			m_MultiplayerLanGamesList->ClearList();
+		}
+		m_DirectoryBrowser.StopBrowsing();
+		if (m_MultiplayerLanGamesLabel) {
+			m_MultiplayerLanGamesLabel->SetText(m_LanGamesLabelText);
 		}
 		return;
 	}
 	std::string ignored;
-	if (!m_LanBrowser.IsBrowsing() && !m_LanBrowser.StartBrowser(&ignored)) {
-		return;
-	}
+	(void)m_LanBrowser.StartBrowser(&ignored); // idempotent; a failed LAN half still shows NET rows
 	// A real monotonic clock, so host expiry holds at any frame rate and while minimized.
 	m_LanBrowserNowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
-	m_LanBrowser.Tick(m_LanBrowserNowMs);
-	std::vector<NetLanHostInfo> hosts = m_LanBrowser.GetHosts(m_LanBrowserNowMs);
-	const auto describe = [](const NetLanHostInfo& host) {
-		return host.hostName + " - " + host.activity + " (" + std::to_string(host.playerCount) + "/" + std::to_string(host.maxPlayers) + ") " + host.address;
+	std::vector<NetLanHostInfo> hosts;
+	if (m_LanBrowser.IsBrowsing()) {
+		m_LanBrowser.Tick(m_LanBrowserNowMs);
+		hosts = m_LanBrowser.GetHosts(m_LanBrowserNowMs);
+	}
+	// The directory half: the browse client issues one GET every c_ListIntervalMs while polled.
+	m_DirectoryBrowser.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+	m_DirectoryBrowser.PollList(m_LanBrowserNowMs);
+	// A NET row can only be judged against the local identity; build it once, on first need.
+	if (!m_DirectoryIdentity && !m_DirectoryIdentityTried) {
+		m_DirectoryIdentityTried = true;
+		NetIdentityManifest manifest;
+		NetIdentityBuildOptions identityOptions;
+		identityOptions.buildId = "stage2-p2d-local";
+		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+		std::string identityError;
+		if (NetIdentity::BuildCurrentManifest(manifest, &identityError, identityOptions)) {
+			NetDirectoryLocalIdentity local;
+			local.networkProtocolVersion = manifest.networkProtocolVersion;
+			local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
+			local.controllerFrameVersion = manifest.controllerFrameVersion;
+			local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
+			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+			m_DirectoryIdentity = local;
+		}
+	}
+	std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(hosts, m_DirectoryBrowser.Rows(), m_DirectoryIdentity.value_or(NetDirectoryLocalIdentity{}));
+	if (!m_DirectoryIdentity) {
+		// Without the local identity no NET row can be proven compatible.
+		for (NetDirectoryClient::GameRow& row: rows) {
+			if (row.source == "NET") {
+				row.joinable = false;
+				row.reason = "identity";
+			}
+		}
+	}
+	const auto describe = [](const NetDirectoryClient::GameRow& row) {
+		return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ") " + row.address + ":" + std::to_string(row.port) +
+		       (row.joinable ? "" : " [" + row.reason + "]");
 	};
-	bool changed = hosts.size() != m_LanHosts.size();
-	for (size_t i = 0; !changed && i < hosts.size(); ++i) {
-		changed = describe(hosts[i]) != describe(m_LanHosts[i]);
+	bool changed = rows.size() != m_GameRows.size();
+	for (size_t i = 0; !changed && i < rows.size(); ++i) {
+		changed = describe(rows[i]) != describe(m_GameRows[i]);
 	}
 	if (!changed) {
 		return;
 	}
-	m_LanHosts = std::move(hosts);
+	m_GameRows = std::move(rows);
 	m_MultiplayerLanGamesList->ClearList();
-	for (const NetLanHostInfo& host: m_LanHosts) {
-		m_MultiplayerLanGamesList->AddItem(describe(host));
+	for (const NetDirectoryClient::GameRow& row: m_GameRows) {
+		m_MultiplayerLanGamesList->AddItem(describe(row));
 	}
 }
 

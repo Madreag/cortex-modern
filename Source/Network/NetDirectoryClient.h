@@ -96,6 +96,8 @@ namespace RTE {
 		const std::vector<NetDirectorySessionRow>& Rows() const { return m_Rows; }
 		/// Non-empty when the last list GET failed or answered an undecodable body.
 		const std::string& ListError() const { return m_ListError; }
+		/// How many list GETs have completed, so a caller can tell unreachable from empty.
+		uint64_t ListReplies() const { return m_ListReplies; }
 
 		static std::vector<GameRow> MergeGameLists(const std::vector<NetLanHostInfo>& lan,
 		                                         const std::vector<NetDirectorySessionRow>& directory,
@@ -149,6 +151,7 @@ namespace RTE {
 		uint64_t m_BrowseNextMs = 0;
 		std::vector<NetDirectorySessionRow> m_Rows;
 		std::string m_ListError;
+		uint64_t m_ListReplies = 0;
 
 		std::unique_ptr<Transport> m_Request;
 		RequestKind m_RequestKind = RequestKind::None;
