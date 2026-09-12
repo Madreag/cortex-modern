@@ -166,6 +166,7 @@ void Actor::Clear() {
 	m_AIMode = AIMODE_NONE;
 	m_Waypoints.clear();
 	m_PendingDeferredWaypoints.clear();
+	m_InflightWaypoints.clear();
 	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
@@ -1073,6 +1074,7 @@ void Actor::AddAISceneWaypoint(const Vector& waypoint) {
 		m_PendingDeferredWaypoints.push_back({Actor::DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0});
 		return;
 	}
+	ConsumeInflightWaypoint(DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0);
 	m_Waypoints.push_back(std::pair<Vector, MovableObject*>(waypoint, (MovableObject*)NULL));
 }
 
@@ -1083,15 +1085,15 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 		}
 		// Same no-duplicate-tail rule as the direct path, read off the queue the pending calls will leave.
 		const int64_t identity = static_cast<int64_t>(pMOWaypoint->GetUniqueID());
-		const DeferredWaypoint* last = m_PendingDeferredWaypoints.empty() ? nullptr : &m_PendingDeferredWaypoints.back();
-		const bool tailIsSameMO = last ? (last->op == DeferredWaypoint::MOTarget && last->targetUID == identity)
-		                               : (!m_Waypoints.empty() && m_Waypoints.back().second == pMOWaypoint);
-		if (!tailIsSameMO) {
+		std::vector<std::pair<Vector, const MovableObject*>> items;
+		BuildLogicalWaypoints(items);
+		if (items.empty() || items.back().second != pMOWaypoint) {
 			m_PendingDeferredWaypoints.push_back({DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, identity});
 		}
 		return;
 	}
 	if (g_MovableMan.ValidMO(pMOWaypoint) && (m_Waypoints.empty() || m_Waypoints.back().second != pMOWaypoint)) {
+		ConsumeInflightWaypoint(DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, static_cast<int64_t>(pMOWaypoint->GetUniqueID()));
 		m_Waypoints.push_back(std::pair<Vector, const MovableObject*>(pMOWaypoint->GetPos(), pMOWaypoint));
 	}
 }
@@ -1101,12 +1103,124 @@ void Actor::ClearAIWaypoints() {
 		m_PendingDeferredWaypoints.push_back({DeferredWaypoint::Clear, 0.0F, 0.0F, 0});
 		return;
 	}
+	ConsumeInflightWaypoint(DeferredWaypoint::Clear, 0.0F, 0.0F, 0);
 	m_pMOMoveTarget = 0;
 	m_Waypoints.clear();
 	m_WaypointCursor = 0;
 	m_MovePath.clear();
 	m_MoveTarget = m_Pos;
 	m_MoveVector.Reset();
+}
+
+bool Actor::SeeingLogicalWaypoints() const {
+	return g_CurrentAIActor == this && ScenarioRunner::IsLockstepControllerSyncActive();
+}
+
+void Actor::BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const {
+	items.clear();
+	for (const auto& [point, target]: m_Waypoints) {
+		items.push_back({point, target});
+	}
+	auto apply = [&](const DeferredWaypoint& waypoint) {
+		if (waypoint.op == DeferredWaypoint::Clear) {
+			items.clear();
+			return;
+		}
+		const MovableObject* target = nullptr;
+		if (waypoint.op == DeferredWaypoint::MOTarget && waypoint.targetUID) {
+			target = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID));
+		}
+		items.push_back({Vector(waypoint.x, waypoint.y), target});
+	};
+	for (const DeferredWaypoint& waypoint: m_InflightWaypoints) {
+		apply(waypoint);
+	}
+	for (const DeferredWaypoint& waypoint: m_PendingDeferredWaypoints) {
+		apply(waypoint);
+	}
+}
+
+bool Actor::LogicalWaypointClearSeen() const {
+	if (!SeeingLogicalWaypoints()) {
+		return false;
+	}
+	auto lastClear = [](const std::vector<DeferredWaypoint>& calls) {
+		bool seen = false;
+		for (const DeferredWaypoint& waypoint: calls) {
+			if (waypoint.op == DeferredWaypoint::Clear) {
+				seen = true;
+			} else {
+				seen = false;
+			}
+		}
+		return seen;
+	};
+	if (lastClear(m_PendingDeferredWaypoints)) {
+		return true;
+	}
+	if (!m_PendingDeferredWaypoints.empty()) {
+		return false;
+	}
+	return lastClear(m_InflightWaypoints);
+}
+
+void Actor::ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID) {
+	for (auto it = m_InflightWaypoints.begin(); it != m_InflightWaypoints.end(); ++it) {
+		if (it->op != op) {
+			continue;
+		}
+		if (op == DeferredWaypoint::Scene && (it->x != x || it->y != y)) {
+			continue;
+		}
+		if (op == DeferredWaypoint::MOTarget && it->targetUID != targetUID) {
+			continue;
+		}
+		m_InflightWaypoints.erase(it);
+		return;
+	}
+}
+
+Vector Actor::GetLastAIWaypoint() const {
+	if (SeeingLogicalWaypoints()) {
+		std::vector<std::pair<Vector, const MovableObject*>> items;
+		BuildLogicalWaypoints(items);
+		if (!items.empty()) {
+			return items.back().first;
+		}
+		if (!LogicalWaypointClearSeen() && !m_MovePath.empty()) {
+			return m_MovePath.back();
+		}
+		return m_Pos;
+	}
+	if (!m_Waypoints.empty()) {
+		return m_Waypoints.back().first;
+	} else if (!m_MovePath.empty()) {
+		return m_MovePath.back();
+	}
+	return m_Pos;
+}
+
+const std::list<std::pair<Vector, MovableObjectReference>>& Actor::GetWaypointList() const {
+	if (!SeeingLogicalWaypoints()) {
+		return m_Waypoints;
+	}
+	static thread_local std::list<std::pair<Vector, MovableObjectReference>> logicalList;
+	logicalList.clear();
+	std::vector<std::pair<Vector, const MovableObject*>> items;
+	BuildLogicalWaypoints(items);
+	for (const auto& item: items) {
+		logicalList.emplace_back(item.first, item.second);
+	}
+	return logicalList;
+}
+
+int Actor::GetWaypointsSize() {
+	if (SeeingLogicalWaypoints()) {
+		std::vector<std::pair<Vector, const MovableObject*>> items;
+		BuildLogicalWaypoints(items);
+		return static_cast<int>(items.size());
+	}
+	return static_cast<int>(m_Waypoints.size());
 }
 
 std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
@@ -1143,6 +1257,7 @@ void Actor::SendDeferredWaypoints() {
 		}
 		const uint8_t op = waypoint.op == DeferredWaypoint::Scene ? NetGameAIOrder::SceneWaypoint : (waypoint.op == DeferredWaypoint::MOTarget ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::ClearWaypoints);
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID}});
+		m_InflightWaypoints.push_back(waypoint);
 	}
 }
 
@@ -1531,6 +1646,9 @@ BITMAP* Actor::GetAIModeIcon() {
 }
 
 MOID Actor::GetAIMOWaypointID() const {
+	if (SeeingLogicalWaypoints() && LogicalWaypointClearSeen()) {
+		return g_NoMOID;
+	}
 	if (g_MovableMan.ValidMO(m_pMOMoveTarget))
 		return m_pMOMoveTarget->GetID();
 	else

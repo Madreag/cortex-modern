@@ -507,14 +507,7 @@ namespace RTE {
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
 		/// @return The furthest set AI waypoint of this.
-		Vector GetLastAIWaypoint() const {
-			if (!m_Waypoints.empty()) {
-				return m_Waypoints.back().first;
-			} else if (!m_MovePath.empty()) {
-				return m_MovePath.back();
-			}
-			return m_Pos;
-		}
+		Vector GetLastAIWaypoint() const;
 
 		/// Gets the ID of the last set AI MO waypoint of this. If none, g_NoMOID is returned.
 		/// @return The furthest set AI MO waypoint of this.
@@ -522,11 +515,11 @@ namespace RTE {
 
 		/// Gets the list of waypoints for this Actor.
 		/// @return The list of waypoints for this Actor.
-		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const { return m_Waypoints; }
+		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const;
 
 		/// Gets how many waypoints this actor have.
 		/// @return How many waypoints.
-		int GetWaypointsSize() { return m_Waypoints.size(); };
+		int GetWaypointsSize();
 
 		/// Clears the list of coordinates in this' current MovePath, ie the path
 		/// to the next Waypoint.
@@ -1175,6 +1168,8 @@ namespace RTE {
 		std::list<std::pair<Vector, MovableObjectReference>> m_Waypoints;
 		// Waypoint calls the AI pass queued; the owner sends them over the wire so every peer's queue matches.
 		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
+		// Sent calls still in flight; the running actor's reads keep seeing them until the apply lands.
+		std::vector<DeferredWaypoint> m_InflightWaypoints;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
@@ -1205,6 +1200,11 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool SeeingLogicalWaypoints() const;
+		void BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const;
+		bool LogicalWaypointClearSeen() const;
+		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
+
 		std::string m_PersistedActorRuntime;
 		std::array<std::string, 2> m_PersistedActorIconReferences;
 		std::string SaveActorRuntime() const;
