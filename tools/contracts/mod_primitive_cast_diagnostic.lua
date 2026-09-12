@@ -1,9 +1,17 @@
 -- Diagnostic only: isolate ownership/casting before any checkpoint assertion.
-function Create(self) self.testCreate, self.testUpdate = 1, 0 end
+function Create(self)
+    self.testCreate, self.testUpdate = 1, 0
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+end
 function Update(self)
     self.testUpdate = self.testUpdate + 1
     self:SetNumberValue("TestUpdates", self.testUpdate)
-    if self.UniqueID ~= 1048577 then return end
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if self.UniqueID ~= _ContractAuditOwner then return end
+    if not self.contractArmed then
+        print("[primitive-cast-contract-check] ARMED uid=" .. tostring(self.UniqueID))
+        self.contractArmed = true
+    end
     local state = {source=CreateAHuman("Green Dummy", "Base.rte")}
     state.source:SetSpritePixelIndex(1, 1, 0, 19, -1, false)
     local p = Vector(81.25, 107.5)
