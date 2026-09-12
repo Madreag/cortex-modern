@@ -4379,17 +4379,22 @@ namespace RTE {
 			ApplyHoldResolution(stop.senderPeerId, HoldResolutionOf(stop.reason), nowMs, false);
 			return;
 		}
+		// The host's waiver, not a leave: every survivor stops requiring the fenced incarnation's frames
+		// at the same frame, and nothing else about the seat moves. Only the round authority issues it.
+		if (IsFrameWaiver(stop)) {
+			if (m_RelayHost || !IsRoundAuthority(m_Config.matchConfig.hostPeerId, fromTransport) || !IsKnownRemotePeer(stop.senderPeerId)) {
+				return;
+			}
+			if (WaiveRemoteFrames(stop.senderPeerId, stop.frame, nowMs, false)) {
+				AdvanceReadyFrames(nowMs);
+			}
+			return;
+		}
 		if (!SenderOwnsTransport(stop.senderPeerId, fromTransport)) {
 			std::cout << "[lockstep] dropped a stop claiming peer " << static_cast<int>(stop.senderPeerId) << " from the wrong transport" << std::endl;
 			return;
 		}
 		if (!IsKnownRemotePeer(stop.senderPeerId)) return;
-		// The host's waiver, not a leave: every survivor stops requiring the fenced incarnation's frames
-		// at the same frame, and nothing else about the seat moves.
-		if (IsFrameWaiver(stop)) {
-			if (WaiveRemoteFrames(stop.senderPeerId, stop.frame, nowMs, false)) AdvanceReadyFrames(nowMs);
-			return;
-		}
 		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
 		// peer able to send, and its own grace runs out on a round it is no longer in.
 		const auto leftIt = m_PeerLeaveFrames.find(stop.senderPeerId);
