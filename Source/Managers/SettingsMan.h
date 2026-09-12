@@ -132,6 +132,60 @@ namespace RTE {
 		/// @param pin The cert pin; empty validates against the system chain.
 		void SetSessionDirectoryCertSha256(const std::string& pin) { m_SessionDirectoryCertSha256 = pin; }
 
+		/// Gets whether a host also offers an ICE (session-id) join, override included.
+		/// @return Whether this run offers an ICE join.
+		bool GetNetworkIceEnable() const { return m_NetworkIceEnableOverridden ? m_NetworkIceEnableOverride : m_NetworkIceEnable; }
+
+		/// Gets the saved NetworkIceEnable, ignoring any run override.
+		/// @return The saved setting.
+		bool GetNetworkIceEnableSetting() const { return m_NetworkIceEnable; }
+
+		/// Sets and saves whether a host also offers an ICE join.
+		void SetNetworkIceEnable(bool enable) { m_NetworkIceEnable = enable; }
+
+		/// Decides ICE for this run only (-net-ice); never saved.
+		void SetNetworkIceEnableOverride(bool enable) {
+			m_NetworkIceEnableOverride = enable;
+			m_NetworkIceEnableOverridden = true;
+		}
+
+		/// Gets the STUN servers ICE gathers reflexive candidates from, override included.
+		/// @return Comma-separated host:port; empty means no STUN and no DNS lookup.
+		const std::string& GetNetworkStunServers() const { return m_NetworkStunServersOverridden ? m_NetworkStunServersOverride : m_NetworkStunServers; }
+		const std::string& GetNetworkStunServersSetting() const { return m_NetworkStunServers; }
+		void SetNetworkStunServers(const std::string& servers) { m_NetworkStunServers = servers; }
+		/// Decides the STUN list for this run only (-net-stun); never saved.
+		void SetNetworkStunServersOverride(const std::string& servers) {
+			m_NetworkStunServersOverride = servers;
+			m_NetworkStunServersOverridden = true;
+		}
+
+		/// Gets the TURN servers ICE relays through when no direct path is found, override included.
+		/// @return Comma-separated host:port; empty means no relay.
+		const std::string& GetNetworkTurnServers() const { return m_NetworkTurnServersOverridden ? m_NetworkTurnServersOverride : m_NetworkTurnServers; }
+		const std::string& GetNetworkTurnServersSetting() const { return m_NetworkTurnServers; }
+		void SetNetworkTurnServers(const std::string& servers) { m_NetworkTurnServers = servers; }
+		/// Decides the TURN list for this run only (-net-turn); never saved.
+		void SetNetworkTurnServersOverride(const std::string& servers) {
+			m_NetworkTurnServersOverride = servers;
+			m_NetworkTurnServersOverridden = true;
+		}
+
+		/// Gets the TURN user names, one per TURN server.
+		const std::string& GetNetworkTurnUser() const { return m_NetworkTurnUser; }
+		void SetNetworkTurnUser(const std::string& user) { m_NetworkTurnUser = user; }
+
+		/// Gets the TURN passwords, one per TURN server.
+		const std::string& GetNetworkTurnPass() const { return m_NetworkTurnPass; }
+		void SetNetworkTurnPass(const std::string& pass) { m_NetworkTurnPass = pass; }
+
+		/// Drops every -net-ice/-net-stun/-net-turn run override.
+		void ClearNetworkIceOverrides() {
+			m_NetworkIceEnableOverridden = false;
+			m_NetworkStunServersOverridden = false;
+			m_NetworkTurnServersOverridden = false;
+		}
+
 		/// Whether the local player's actors are drawn ahead through the input-delay pipeline.
 		bool LocalPredictionEnabled() const { return m_LocalPrediction; }
 		void SetLocalPredictionEnabled(bool enabled) { m_LocalPrediction = enabled; }
@@ -458,6 +512,18 @@ namespace RTE {
 		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
 		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on the first directory use.
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
+		bool m_NetworkIceEnable = false; //!< Whether a host also offers a session-id (ICE) join beside its direct address.
+		std::string m_NetworkStunServers; //!< Comma-separated host:port; empty means ICE gathers host candidates only.
+		std::string m_NetworkTurnServers;
+		std::string m_NetworkTurnUser;
+		std::string m_NetworkTurnPass;
+		//!< The command line decides a run without touching what is saved.
+		bool m_NetworkIceEnableOverride = false;
+		bool m_NetworkIceEnableOverridden = false;
+		std::string m_NetworkStunServersOverride;
+		bool m_NetworkStunServersOverridden = false;
+		std::string m_NetworkTurnServersOverride;
+		bool m_NetworkTurnServersOverridden = false;
 		bool m_LocalPrediction; //!< Whether the local player's actors are previewed through the input delay.
 		int m_LocalPredictionMaxTicks; //!< Cap on how many ticks ahead the preview runs.
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
