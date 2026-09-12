@@ -71,9 +71,13 @@ def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks
         if next(iter(ticks)) != first_tick:
             result["reasons"].append(f"{label}: first tick is {next(iter(ticks))}, expected {first_tick}")
         if expected_ticks is not None and (len(ticks) < expected_ticks if prefix else len(ticks) != expected_ticks):
-            result["reasons"].append(f"{label}: has {len(ticks)} ticks, expected {'at least' if prefix else 'exactly'} {expected_ticks}")
+            kind = "at least" if prefix else "exactly"
+            if len(ticks) < expected_ticks:
+                result["reasons"].append(f"{label}: too few ticks ({len(ticks)}, expected {kind} {expected_ticks})")
+            else:
+                result["reasons"].append(f"{label}: has {len(ticks)} ticks, expected {kind} {expected_ticks}")
         if len(ticks) < min_ticks:
-            result["reasons"].append(f"{label}: has {len(ticks)} ticks, minimum is {min_ticks}")
+            result["reasons"].append(f"{label}: too few ticks ({len(ticks)}, minimum is {min_ticks})")
     if result["reasons"]:
         return False, result
     ht, ct = traces
