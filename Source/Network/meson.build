@@ -11,6 +11,7 @@ sources += files(
 'NetDirectoryClient.cpp',
 'NetDirectoryCodec.cpp',
 'NetDirectorySelfTest.cpp',
+'NetDirectorySignalChannel.cpp',
 'NetHttpClient.cpp',
 'NetGameCommand.cpp',
 'NetResyncState.cpp',
